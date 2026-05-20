@@ -116,6 +116,7 @@ class DevPageState:
     suggestion_dom_alias: str = "idle"
     suggestion_allowed_transitions: list[str] | None = None
     suggestion_composer_enabled: bool = True
+    suggestion_apply_transition_path: list[str] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -328,6 +329,75 @@ class RealNoteWorkspaceDevPage:
         self._trusted_hash_refresh_notes.add(note_path)
         return self.load(NoteLoadIntent(note_path=note_path))
 
+    def apply_body_suggestion(
+        self,
+        *,
+        suggestion_id: str,
+        session_id: str,
+        note_path: str,
+    ) -> DevPageState:
+        """Apply a staged body suggestion through the Canvas edit API."""
+        if self.state.shell is None:
+            self.state.error = "No workspace note is loaded"
+            self.state.is_loaded = False
+            return self.state
+        if self.state.suggestion_state != "staged_body":
+            self.state.error = "Body suggestion apply requires staged_body state"
+            self.state.is_loaded = False
+            return self.state
+
+        insertion = next(
+            (
+                item
+                for item in (self.state.suggested_insertions or [])
+                if item.get("data_suggestion_id") == suggestion_id
+            ),
+            None,
+        )
+        if insertion is None:
+            self.state.error = f"Unknown body suggestion: {suggestion_id}"
+            self.state.is_loaded = False
+            return self.state
+
+        machine = CanvasRailStateMachine(self.state.suggestion_state)
+        transition_path = [machine.state]
+        machine.transition("apply_pending")
+        transition_path.append(machine.state)
+
+        try:
+            self._http.post(
+                f"/api/canvas/sessions/{session_id}/edits",
+                json={
+                    "new_body": str(insertion.get("proposed_text") or ""),
+                    "change_summary": f"Applied body suggestion {suggestion_id}",
+                    "content_hash": self.state.shell.content_hash,
+                },
+            )
+        except WorkspaceClientError as exc:
+            machine.transition("staged_body", error=str(exc))
+            self.state.suggestion_state = machine.state
+            self.state.suggestion_dom_alias = machine.dom_alias
+            self.state.suggestion_allowed_transitions = sorted(machine.allowed_transitions())
+            self.state.suggestion_composer_enabled = machine.composer_enabled
+            self.state.suggestion_apply_transition_path = transition_path + [machine.state]
+            self.state.error = str(exc)
+            self.state.is_loaded = False
+            return self.state
+
+        machine.transition("applied")
+        transition_path.append(machine.state)
+        machine.transition("idle")
+        transition_path.append(machine.state)
+
+        self._trusted_hash_refresh_notes.add(note_path)
+        refreshed = self.load(NoteLoadIntent(note_path=note_path))
+        refreshed.suggestion_state = machine.state
+        refreshed.suggestion_dom_alias = machine.dom_alias
+        refreshed.suggestion_allowed_transitions = sorted(machine.allowed_transitions())
+        refreshed.suggestion_composer_enabled = machine.composer_enabled
+        refreshed.suggestion_apply_transition_path = transition_path
+        return refreshed
+
     def acknowledge_canvas_recovery(self, *, note_path: str) -> DevPageState:
         """Acknowledge recovery/conflict state before body edits resume."""
         if self.state.shell is not None and self.state.shell.note_path == note_path:
@@ -486,6 +556,8 @@ class RealNoteWorkspaceDevPage:
             "suggestion_dom_alias": self.state.suggestion_dom_alias,
             "suggestion_allowed_transitions": self.state.suggestion_allowed_transitions or [],
             "suggestion_composer_enabled": self.state.suggestion_composer_enabled,
+            "suggestion_apply_transition_path": self.state.suggestion_apply_transition_path
+            or [],
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
