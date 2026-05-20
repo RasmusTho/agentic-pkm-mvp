@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.routes.artifacts import _content_hash
+from app.services.artifact_identity import resolve_note_artifact_identity
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError, _split_frontmatter
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.session_log import SessionLog, SessionLogWriter
@@ -245,8 +246,20 @@ def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResp
         raise HTTPException(status_code=422, detail=f"Unknown action_type: {req.action_type!r}")
     vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
-    artifact_id = str(session.note_path.relative_to(vault_root))
-    pipeline = CanvasPanelPipeline(proposal_store=_panel_proposal_store, artifact_id=artifact_id)
+    safe_note_path = str(session.note_path.relative_to(vault_root))
+    identity = resolve_note_artifact_identity(
+        artifact_path=session.note_path,
+        vault_root=vault_root,
+        safe_note_path=safe_note_path,
+    )
+    if identity.artifact_id is None:
+        raise HTTPException(status_code=409, detail="artifact identity unresolved")
+    artifact_id = identity.artifact_id
+    pipeline = CanvasPanelPipeline(
+        proposal_store=_panel_proposal_store,
+        artifact_id=artifact_id,
+        note_path=safe_note_path,
+    )
     gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
     pending = gov.request_governance_action(session, action_type, req.payload)
     return GovernanceResponse(

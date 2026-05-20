@@ -34,6 +34,35 @@ When the system must determine the canonical UUID for a note, it follows this pr
 
 Steps 1–3 are automatic. Steps 4–5 are logged and flagged. Step 6 is never automatic — it surfaces as a diagnostic. Step 7 is always safe: new identity, no data loss.
 
+## Runtime Identity Field Rules
+
+`artifact_id` is the canonical runtime field for a resolved human vault-note
+identity. For normal human-authored vault notes, `artifact_id` must resolve to
+the note's frontmatter `uuid`; when an eligible note is missing `uuid`, the
+runtime should use the approved UUID assignment/healing path before returning
+active workspace state.
+
+Paths and hashes are not artifact identity:
+
+- `note_path` and `source_ref` are locators. They may move and must not be used
+  as `artifact_id`.
+- `content_hash` is a version/staleness marker. It may detect body drift and
+  support repair scenarios, but it must not be used as `artifact_id`.
+- `session_id`, `proposal_id`, and DB `objects.id` are runtime-local handles or
+  projection identifiers. They do not define the semantic identity of the human
+  vault note.
+
+Companion notes are system-plane continuity artifacts tied to the main vault
+note UUID. A companion note does not own an independent human-artifact identity,
+and its path or content hash must not become `artifact_id`. Runtime surfaces
+that need to refer to a companion note may expose a clearly typed companion
+state or a namespaced derived handle such as `companion:<note_uuid>`, but that
+handle is not a new UUID rule for all artifacts.
+
+Attachments, images, recordings, and other embedded files remain locator
+entries in the companion attachment manifest in this baseline. This document
+does not define independent attachment UUIDs.
+
 ## Healing Scenarios and Authority Matrix
 
 ### Scenario A: Normal ingest (no prior companion)

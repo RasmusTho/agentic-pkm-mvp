@@ -65,11 +65,16 @@ Panel state, receipts, or write-guard state.
 ```json
 {
   "artifact": {
-    "artifact_id": "string",
+    "artifact_id": "string | null",
+    "artifact_kind": "human_note | companion_note",
     "note_path": "string",
     "title": "string",
     "body": "string",
-    "content_hash": "string"
+    "content_hash": "string",
+    "identity_source": "frontmatter.uuid | frontmatter.id | uuid_healing | companion_path | missing",
+    "identity_state": "resolved | legacy_resolved | healed | unresolved_missing_uuid | companion_of_resolved",
+    "companion_of": "string | null",
+    "owns_identity": true
   },
   "runtime": {
     "environment_label": "dev | test | prod | unknown",
@@ -115,11 +120,23 @@ workspace.
 
 | Field | Rule |
 |---|---|
-| `artifact_id` | Stable artifact identifier when available. Empty string is allowed only for legacy/read-only note loads where the runtime cannot resolve an ID. |
+| `artifact_id` | Stable artifact identifier when available. For normal human vault notes this is the frontmatter `uuid` or a UUID written by the approved healing path. `null` means identity is explicitly unresolved. Path strings and content hashes must not be used as fallback artifact IDs. |
+| `artifact_kind` | `human_note` for normal vault notes; `companion_note` for system-plane companion continuity artifacts. |
 | `note_path` | Browser-safe runtime-relative path or opaque note reference. It must not be an absolute vault path. |
 | `title` | Display title extracted or supplied by the runtime. |
 | `body` | Current note body at the time of aggregation. |
 | `content_hash` | Hash of the body returned in this payload. Browser edit flows must use it as the stale-read baseline before full-body replacement. |
+| `identity_source` | Source of the resolved or unresolved identity decision. |
+| `identity_state` | Server-declared identity state. Missing UUID notes that cannot be healed must surface an unresolved state rather than a path/hash fallback. |
+| `companion_of` | Main note UUID when the loaded artifact is a companion note; otherwise `null`. |
+| `owns_identity` | `true` when the loaded artifact owns human-note identity; `false` for companion notes and other system-plane continuity records. |
+
+Canvas-origin governance proposals and Panel proposal lookup must use the same
+resolved `artifact_id` as this workspace aggregate for the same human note.
+Companion notes may be represented as companion state, but their path or content
+hash must not be treated as human-note artifact identity. Attachment manifest
+entries remain locators/version markers in this contract, not independent
+artifact UUIDs.
 
 ### `runtime`
 
