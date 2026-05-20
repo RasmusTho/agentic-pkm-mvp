@@ -79,7 +79,15 @@ Panel state, receipts, or write-guard state.
   "runtime": {
     "environment_label": "dev | test | prod | unknown",
     "api_base_url_label": "string",
-    "trace_id": "string"
+    "trace_id": "string",
+    "reorient": {
+      "facts": [],
+      "inferences": [],
+      "candidates": [],
+      "stale_context": [],
+      "recent_deltas": [],
+      "open_loops": []
+    }
   },
   "canvas": {
     "session_id": "string | null",
@@ -148,6 +156,7 @@ runtime.
 | `environment_label` | Safe label only. It must not include vault root paths. |
 | `api_base_url_label` | Safe display label such as `local-dev`, `local-test`, `local-prod`, or an operator-provided alias. It must not expose filesystem paths or secrets. |
 | `trace_id` | Correlation ID for this aggregate read. |
+| `reorient` | Read-only Reorient-mode projection derived from the orientation runtime. Items are grouped as facts, inferences, candidates, stale context, recent deltas, and open loops. Each item must carry a source link; actionable items may expose a Panel handoff hint, but the workspace aggregate does not execute or mutate from Reorient mode. |
 
 ### `canvas`
 

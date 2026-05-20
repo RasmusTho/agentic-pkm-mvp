@@ -138,7 +138,8 @@ As of 2026-05-19 (after PR #1101, PR #1108, PR #1119 merged):
 | Panel models and confirmation service | Shipped — `companion_ui/panel/`, `app/panel/confirmation.py`, `POST /api/panel/confirm` |
 | Canvas governance pipeline (stub replaced) | Shipped — `app/panel/canvas_pipeline.py`, wired into `app/api/routes/canvas.py` |
 | Panel correction path | Shipped — `app/panel/confirmation.py` (correction.enabled=true now supported) |
-| Production Companion UI | **Not yet shipped** — browser wiring, workspace state API, product modes are next |
+| Product modes | Partially shipped — Find and Reorient render in the dev/staging workspace shell; Resurface and Act remain pending |
+| Production Companion UI | **Not yet shipped** — production hardening and remaining product modes are next |
 | Auth / TLS / reverse proxy for Companion UI | **Not yet shipped** — deferred until workspace state endpoint ships |
 | PWA packaging | **Not yet shipped** |
 | Native app wrapper (Tauri, Electron, etc.) | **Not yet shipped** |
@@ -160,7 +161,7 @@ Summary of next work:
 6. Bind browser shell to workspace state endpoint
 7. Docs: decide editor integration for shipped Canvas API (gate: after #3)
 8. Canvas/Panel/Suggestion Flow browser integration (wire existing models, not rebuild)
-9. Product modes (Find/Reorient/Resurface/Act) on top of wired surfaces
+9. Remaining product modes (Resurface/Act) on top of wired surfaces
 
 All future Companion UI implementation must be preceded by a bounded GitHub issue.
 Docs-first where contracts are undecided. Agents must rescope to integration if they discover

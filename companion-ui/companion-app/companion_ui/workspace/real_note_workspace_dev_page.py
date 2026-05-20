@@ -126,6 +126,7 @@ class DevPageState:
     portrait_sheet: dict[str, Any] | None = None
     keyboard_shortcuts: dict[str, Any] | None = None
     find_candidates: list[dict[str, Any]] | None = None
+    reorient_sections: dict[str, list[dict[str, Any]]] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -187,6 +188,7 @@ class RealNoteWorkspaceDevPage:
         guards = raw.get("guards") or {}
         runtime = raw.get("runtime") or {}
         find_payload = raw.get("find") or runtime.get("find") or {}
+        reorient_payload = raw.get("reorient") or runtime.get("reorient") or {}
 
         # The runtime echoes artifact_id only when supplied in the request.
         # Fall back to note_path so note-path-only loads don't fail the shell's
@@ -286,6 +288,7 @@ class RealNoteWorkspaceDevPage:
                 rail_state=suggestion_machine.state,
             ),
             find_candidates=_find_candidates_from_payload(find_payload),
+            reorient_sections=_reorient_sections_from_payload(reorient_payload),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
@@ -671,6 +674,7 @@ class RealNoteWorkspaceDevPage:
             "portrait_sheet": self.state.portrait_sheet or {},
             "keyboard_shortcuts": self.state.keyboard_shortcuts or {},
             "find_candidates": self.state.find_candidates or [],
+            "reorient_sections": self.state.reorient_sections or {},
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
@@ -748,6 +752,39 @@ def _suggestion_payloads(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in raw if isinstance(item, dict)]
     return []
 
+
+def _reorient_sections_from_payload(
+    reorient: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    sections: dict[str, list[dict[str, Any]]] = {}
+    for section in (
+        "facts",
+        "inferences",
+        "candidates",
+        "stale_context",
+        "recent_deltas",
+        "open_loops",
+    ):
+        raw_items = reorient.get(section) or []
+        items: list[dict[str, Any]] = []
+        for index, raw in enumerate(raw_items, start=1):
+            if isinstance(raw, str):
+                raw = {"label": raw}
+            if not isinstance(raw, dict):
+                continue
+            label = str(raw.get("label") or raw.get("text") or "").strip()
+            if not label:
+                continue
+            items.append(
+                {
+                    "item_id": str(raw.get("item_id") or f"{section}-{index}"),
+                    "label": label,
+                    "source_link": str(raw.get("source_link") or raw.get("source") or ""),
+                    "panel_handoff": bool(raw.get("panel_handoff", False)),
+                }
+            )
+        sections[section] = items
+    return sections
 
 def _suggestion_cards_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []

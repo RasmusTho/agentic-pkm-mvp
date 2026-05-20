@@ -13,6 +13,7 @@ import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.config.paths import resolve_vault_root
+from app.orientation.runtime import build_orientation_frame
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
@@ -36,6 +37,7 @@ class RuntimeState(BaseModel):
     environment_label: str
     api_base_url_label: str
     trace_id: str
+    reorient: dict[str, list[dict[str, str | bool]]] = Field(default_factory=dict)
 
 
 class CanvasState(BaseModel):
@@ -228,6 +230,56 @@ def _writeguard_status() -> str:
     return "ok"
 
 
+def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
+    frame = build_orientation_frame()
+
+    def item(
+        label: str,
+        *,
+        source_link: str = "runtime:orientation",
+        panel_handoff: bool = False,
+    ) -> dict[str, str | bool]:
+        return {
+            "label": label,
+            "source_link": source_link,
+            "panel_handoff": panel_handoff,
+        }
+
+    open_loops = [
+        item(loop, panel_handoff=not loop.startswith("No unresolved"))
+        for loop in frame.explanation.open_items
+    ]
+    candidates = [
+        item(intent, panel_handoff=True)
+        for intent in frame.mutation_intents
+    ]
+    if not candidates:
+        candidates = [
+            item(
+                "No direct action candidate is staged by the orientation runtime.",
+                panel_handoff=False,
+            )
+        ]
+    return {
+        "facts": [
+            item(frame.explanation.leave_point),
+        ],
+        "inferences": [
+            item(frame.frame),
+        ],
+        "candidates": candidates,
+        "stale_context": [
+            item(
+                "No stale context marker is present in the current orientation runtime snapshot.",
+            )
+        ],
+        "recent_deltas": [
+            item(frame.explanation.notable_change),
+        ],
+        "open_loops": open_loops,
+    }
+
+
 @router.get("/workspace", response_model=WorkspaceStateResponse)
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
@@ -276,6 +328,7 @@ def read_companion_workspace(
             environment_label=_safe_environment_label(),
             api_base_url_label=_safe_api_label(),
             trace_id=trace_id,
+            reorient=_reorient_state(),
         ),
         canvas=_canvas_state(safe_note_path, vault_root, canvas_enabled),
         panel=_panel_state(identity.artifact_id),
