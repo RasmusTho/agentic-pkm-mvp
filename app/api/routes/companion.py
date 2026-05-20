@@ -14,6 +14,7 @@ import app.panel.confirmation as confirm_module
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.config.paths import resolve_vault_root
 from app.orientation.runtime import build_orientation_frame
+from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
@@ -38,6 +39,7 @@ class RuntimeState(BaseModel):
     api_base_url_label: str
     trace_id: str
     reorient: dict[str, list[dict[str, str | bool]]] = Field(default_factory=dict)
+    resurface: dict[str, list[dict[str, str | list[str]]]] = Field(default_factory=dict)
 
 
 class CanvasState(BaseModel):
@@ -295,6 +297,28 @@ def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
     }
 
 
+def _resurface_state(safe_note_path: str) -> dict[str, list[dict[str, str | list[str]]]]:
+    evaluation = evaluate_resurfacing_candidates()
+    candidates: list[dict[str, str | list[str]]] = []
+    for candidate in evaluation.candidates:
+        signals = candidate.why_now.signals
+        source_link = signals[0].source if signals else "runtime:resurfacing"
+        signal_labels = [f"{signal.name}={signal.value}" for signal in signals]
+        candidates.append(
+            {
+                "candidate_id": candidate.candidate_id,
+                "label": candidate.label,
+                "why_now": candidate.why_now.explanation,
+                "relation_to_active_artifact": (
+                    f"Runtime resurfacing signal evaluated while {safe_note_path} is active."
+                ),
+                "source_link": source_link,
+                "signal_labels": signal_labels,
+            }
+        )
+    return {"candidates": candidates}
+
+
 @router.get("/workspace", response_model=WorkspaceStateResponse)
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
@@ -344,6 +368,7 @@ def read_companion_workspace(
             api_base_url_label=_safe_api_label(),
             trace_id=trace_id,
             reorient=_reorient_state(),
+            resurface=_resurface_state(safe_note_path),
         ),
         canvas=_canvas_state(safe_note_path, vault_root, canvas_enabled),
         panel=_panel_state(identity.artifact_id),
