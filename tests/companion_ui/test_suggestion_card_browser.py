@@ -136,3 +136,21 @@ def test_no_reclassification_controls() -> None:
     lowered = html.lower()
     assert "reclassify" not in lowered
     assert "classification-control" not in lowered
+
+
+def test_body_proposal_without_text_skips_insertion() -> None:
+    html = _html_for_suggestions(
+        {
+            "proposals": [
+                {
+                    "suggestion_id": "s-empty",
+                    "server_declared_classification": "body",
+                    "title": "Metadata-only body proposal",
+                }
+            ]
+        }
+    )
+
+    assert 'data-testid="suggestion-card"' in html
+    assert 'data-variant="body"' in html
+    assert 'data-testid="suggested-insertion-block"' not in html

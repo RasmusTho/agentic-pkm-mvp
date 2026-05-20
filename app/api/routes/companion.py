@@ -172,6 +172,7 @@ def _canvas_state(safe_note_path: str, vault_root: Path, canvas_enabled: bool) -
     log_path = _vault_relative(Path(session.log_path), vault_root)
     applied_edits = getattr(canvas_module, "_edit_history", {}).get(session.session_id, [])
     undone_edits = getattr(canvas_module, "_undone_history", {}).get(session.session_id, [])
+    undo_available = _undo_available_for_session(session=session, applied_edits=applied_edits)
     return CanvasState(
         session_id=session.session_id,
         session_state="active",
@@ -179,10 +180,21 @@ def _canvas_state(safe_note_path: str, vault_root: Path, canvas_enabled: bool) -
         can_edit_body=canvas_enabled,
         recovery_needed=False,
         session_log_path=log_path,
-        undo_available=bool(applied_edits),
+        undo_available=undo_available,
         applied_edit_count=len(applied_edits),
         undone_edit_count=len(undone_edits),
     )
+
+
+def _undo_available_for_session(*, session: object, applied_edits: list[object]) -> bool:
+    if not applied_edits:
+        return False
+    latest = applied_edits[-1]
+    try:
+        current_body = canvas_module._note_body(Path(session.note_path))
+    except Exception:
+        return False
+    return current_body == getattr(latest, "body_after", None)
 
 
 def _proposal_count_for_artifact(artifact_id: str) -> int:

@@ -90,3 +90,10 @@ def test_suggestion_state_attribute() -> None:
 
     assert 'data-testid="workspace-suggestion-flow"' in html
     assert 'data-suggestion-state="staged_body"' in html
+
+
+def test_unknown_suggestion_state_falls_back_to_idle() -> None:
+    html = _html_for_state("future_runtime_state")
+
+    assert 'data-testid="workspace-suggestion-flow"' in html
+    assert 'data-suggestion-state="idle"' in html

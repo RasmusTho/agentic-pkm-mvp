@@ -148,3 +148,30 @@ def test_edits_resume_after_recovery_ack() -> None:
             },
         ),
     ]
+
+
+def test_hash_drift_blocks_without_recovery_flag() -> None:
+    client = _FakeClient([
+        _workspace_payload(content_hash="hash-1"),
+        _workspace_payload(content_hash="hash-2", recovery_needed=False),
+    ])
+    page = _load_page(client)
+    state = page.load(NoteLoadIntent(note_path="Notes/canvas.md"))
+
+    assert state.canvas_conflict_detected is True
+    assert state.canvas_can_edit_body is False
+
+
+def test_recovery_ack_resets_for_new_conflict_cycle() -> None:
+    client = _FakeClient([
+        _workspace_payload(content_hash="hash-1", recovery_needed=True),
+        _workspace_payload(content_hash="hash-2", recovery_needed=True),
+    ])
+    page = _load_page(client)
+    page.acknowledge_canvas_recovery(note_path="Notes/canvas.md")
+
+    state = page.load(NoteLoadIntent(note_path="Notes/canvas.md"))
+
+    assert state.canvas_conflict_detected is True
+    assert state.canvas_recovery_acknowledged is False
+    assert state.canvas_can_edit_body is False

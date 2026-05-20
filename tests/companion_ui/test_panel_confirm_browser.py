@@ -79,6 +79,20 @@ def _workspace_payload() -> dict[str, Any]:
     }
 
 
+def _workspace_payload_for_note(
+    *,
+    artifact_id: str,
+    note_path: str,
+) -> dict[str, Any]:
+    payload = _workspace_payload()
+    payload["artifact"] = {
+        **payload["artifact"],
+        "artifact_id": artifact_id,
+        "note_path": note_path,
+    }
+    return payload
+
+
 def _loaded_page(client: _FakeClient) -> RealNoteWorkspaceDevPage:
     page = RealNoteWorkspaceDevPage(client)  # type: ignore[arg-type]
     state = page.load(NoteLoadIntent(note_path="Notes/panel.md"))
@@ -181,3 +195,22 @@ def test_blocked_reason_rendered() -> None:
 
     assert 'data-testid="workspace-panel-blocked-reason"' in html
     assert "Writes blocked" in html
+
+
+def test_panel_response_cleared_when_switching_notes() -> None:
+    client = _FakeClient([
+        _workspace_payload_for_note(artifact_id="art-1138-a", note_path="Notes/a.md"),
+        _workspace_payload_for_note(artifact_id="art-1138-a", note_path="Notes/a.md"),
+        _workspace_payload_for_note(artifact_id="art-1138-b", note_path="Notes/b.md"),
+    ])
+    page = RealNoteWorkspaceDevPage(client)  # type: ignore[arg-type]
+    page.load(NoteLoadIntent(note_path="Notes/a.md"))
+    page.confirm_panel_proposal(
+        proposal_id="proposal-1",
+        artifact_id="art-1138-a",
+        note_path="Notes/a.md",
+    )
+
+    state = page.load(NoteLoadIntent(note_path="Notes/b.md"))
+
+    assert state.panel_last_response is None
