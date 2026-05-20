@@ -125,6 +125,7 @@ class DevPageState:
     governance_receipts: list[dict[str, Any]] | None = None
     portrait_sheet: dict[str, Any] | None = None
     keyboard_shortcuts: dict[str, Any] | None = None
+    find_candidates: list[dict[str, Any]] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -184,6 +185,8 @@ class RealNoteWorkspaceDevPage:
         panel = raw.get("panel") or {}
         suggestions = raw.get("suggestions") or {}
         guards = raw.get("guards") or {}
+        runtime = raw.get("runtime") or {}
+        find_payload = raw.get("find") or runtime.get("find") or {}
 
         # The runtime echoes artifact_id only when supplied in the request.
         # Fall back to note_path so note-path-only loads don't fail the shell's
@@ -282,6 +285,7 @@ class RealNoteWorkspaceDevPage:
                 suggestion_cards,
                 rail_state=suggestion_machine.state,
             ),
+            find_candidates=_find_candidates_from_payload(find_payload),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
@@ -666,6 +670,7 @@ class RealNoteWorkspaceDevPage:
             "governance_receipts": self.state.governance_receipts or [],
             "portrait_sheet": self.state.portrait_sheet or {},
             "keyboard_shortcuts": self.state.keyboard_shortcuts or {},
+            "find_candidates": self.state.find_candidates or [],
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
@@ -817,6 +822,41 @@ def _shortcut_map_from_cards(
         rail_state=rail_state,
         terminal_state=rail_state in {"applied", "discarded", "blocked"},
     ).to_render_dict()
+
+
+def _find_candidates_from_payload(find_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_candidates = find_payload.get("candidates") or find_payload.get("hits") or []
+    if isinstance(raw_candidates, dict):
+        raw_candidates = [raw_candidates]
+    if not isinstance(raw_candidates, list):
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_candidates, start=1):
+        if not isinstance(raw, dict):
+            continue
+        payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        citation = raw.get("citation") or raw.get("source_ref") or payload.get("source_ref")
+        scope = raw.get("scope") or payload.get("scope") or find_payload.get("scope")
+        why = (
+            raw.get("why")
+            or raw.get("why_this_source")
+            or raw.get("explanation")
+            or payload.get("why")
+            or "Matched the current Find query."
+        )
+        candidates.append(
+            {
+                "candidate_id": str(raw.get("candidate_id") or raw.get("id") or f"find-{index}"),
+                "title": str(raw.get("title") or raw.get("doc_id") or raw.get("object_id") or "Source"),
+                "snippet": str(raw.get("snippet") or raw.get("text") or ""),
+                "citation": str(citation or "uncited"),
+                "scope": str(scope or "workspace"),
+                "why": str(why),
+                "panel_handoff": bool(raw.get("panel_handoff", True)),
+            }
+        )
+    return candidates
 
 
 def _suggested_insertions_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:

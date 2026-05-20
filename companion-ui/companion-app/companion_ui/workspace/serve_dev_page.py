@@ -143,6 +143,7 @@ def _render_note_section(fields: dict) -> str:
     governance_receipts_html = _render_governance_receipts(
         fields.get("governance_receipts") or []
     )
+    find_mode_html = _render_find_mode(fields.get("find_candidates") or [])
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
     )
@@ -207,6 +208,7 @@ def _render_note_section(fields: dict) -> str:
         {suggestion_cards_html}
         {shortcut_html}
         {governance_receipts_html}
+        {find_mode_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -286,6 +288,46 @@ def _render_keyboard_shortcuts(shortcuts: dict) -> str:
           data-ignore-input-focus="true">
           {rows}
         </div>"""
+
+
+def _render_find_mode(candidates: list[dict]) -> str:
+    if not candidates:
+        return ""
+    rows: list[str] = []
+    for candidate in candidates:
+        handoff = ""
+        if candidate.get("panel_handoff", True):
+            handoff = (
+                '<button type="button" class="find-panel-handoff" '
+                'data-testid="find-panel-handoff" data-intent="find.panelHandoff">'
+                "Panel</button>"
+            )
+        rows.append(
+            f"""
+        <article
+          class="find-candidate"
+          data-testid="find-candidate"
+          data-candidate-id="{_e(candidate.get("candidate_id", ""))}">
+          <div class="find-candidate-title">{_e(candidate.get("title", ""))}</div>
+          <div class="find-candidate-snippet">{_e(candidate.get("snippet", ""))}</div>
+          <div class="find-candidate-meta">
+            <span data-testid="find-candidate-citation">{_e(candidate.get("citation", ""))}</span>
+            <span data-testid="find-candidate-scope">{_e(candidate.get("scope", ""))}</span>
+          </div>
+          <div class="find-candidate-why" data-testid="find-candidate-why">
+            {_e(candidate.get("why", ""))}
+          </div>
+          {handoff}
+        </article>"""
+        )
+    return f"""
+        <section class="find-mode" data-testid="find-mode">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Find</span>
+            <span class="rail-state-value">{len(candidates)} candidates</span>
+          </div>
+          {"".join(rows)}
+        </section>"""
 
 
 def _render_suggestion_cards(cards: list[dict]) -> str:
@@ -1074,6 +1116,39 @@ def render_index_html(
     }}
     .portrait-sheet {{
       display: none;
+    }}
+    .find-mode, .find-candidate {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+    }}
+    .find-candidate-title {{
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+    }}
+    .find-candidate-snippet, .find-candidate-why, .find-candidate-meta {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .find-candidate-meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .find-panel-handoff {{
+      align-self: flex-start;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-size: var(--text-xs);
+      padding: 4px 7px;
+      text-transform: uppercase;
     }}
     @media (max-width: 899px) {{
       .workspace-shell {{
