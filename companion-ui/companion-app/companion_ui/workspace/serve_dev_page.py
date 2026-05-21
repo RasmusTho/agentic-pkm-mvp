@@ -206,7 +206,10 @@ def _render_note_section(fields: dict) -> str:
     governance_receipts_html = _render_governance_receipts(
         fields.get("governance_receipts") or []
     )
-    find_mode_html = _render_find_mode(fields.get("find_candidates") or [])
+    find_mode_html = _render_find_mode(
+        fields.get("find_candidates") or [],
+        payload_available=bool(fields.get("find_payload_available", False)),
+    )
     reorient_mode_html = _render_reorient_mode(fields.get("reorient_sections") or {})
     resurface_mode_html = _render_resurface_mode(
         fields.get("resurface_candidates") or [],
@@ -388,45 +391,68 @@ def _render_keyboard_shortcuts(shortcuts: dict) -> str:
         </div>"""
 
 
-def _render_find_mode(candidates: list[dict]) -> str:
+def _render_find_mode(candidates: list[dict], *, payload_available: bool = False) -> str:
     if not candidates:
+        state_value = "empty" if payload_available else "unavailable"
+        affordance_status = "read-only" if payload_available else "unavailable"
+        testid = "find-empty-state" if payload_available else "find-unavailable-state"
+        copy = (
+            "Find returned no candidates for this note. This is an empty read-side result, not an action."
+            if payload_available
+            else "Find is unavailable because no backend candidate payload is available yet."
+        )
         return """
         <section
           class="find-mode"
           data-testid="find-mode"
-          data-affordance-status="unavailable"
+          data-affordance-status="{affordance_status}"
           data-capability="find">
           <div class="rail-state-row">
             <span class="rail-state-label">Find</span>
-            <span class="rail-state-value">unavailable</span>
+            <span class="rail-state-value">{state_value}</span>
           </div>
-          <div class="find-unavailable" data-testid="find-unavailable-state">
-            Find is unavailable because no backend candidate payload is available yet.
+          <div class="find-unavailable" data-testid="{testid}">
+            {copy}
           </div>
-        </section>"""
+        </section>""".format(
+            affordance_status=affordance_status,
+            state_value=state_value,
+            testid=testid,
+            copy=copy,
+        )
     rows: list[str] = []
     for candidate in candidates:
         handoff = ""
+        handoff_status = str(candidate.get("panel_handoff_status") or "unavailable")
+        if handoff_status not in {"read-only", "staged", "actionable", "unavailable"}:
+            handoff_status = "unavailable"
         if candidate.get("panel_handoff", True):
             handoff = (
                 '<button type="button" class="find-panel-handoff" '
                 'data-testid="find-panel-handoff" '
                 'data-intent="find.panelHandoff" '
-                'data-affordance-status="unavailable" '
+                f'data-affordance-status="{_e(handoff_status)}" '
                 'data-runtime-backed="false" '
                 'aria-disabled="true" disabled>'
-                "Panel unavailable</button>"
+                f"Panel {handoff_status}</button>"
             )
+        citation_state = "missing" if candidate.get("citation_missing") else "available"
         rows.append(
             f"""
         <article
           class="find-candidate"
           data-testid="find-candidate"
+          data-affordance-status="read-only"
+          data-runtime-backed="true"
           data-candidate-id="{_e(candidate.get("candidate_id", ""))}">
           <div class="find-candidate-title">{_e(candidate.get("title", ""))}</div>
           <div class="find-candidate-snippet">{_e(candidate.get("snippet", ""))}</div>
           <div class="find-candidate-meta">
-            <span data-testid="find-candidate-citation">{_e(candidate.get("citation", ""))}</span>
+            <span
+              data-testid="find-candidate-citation"
+              data-citation-state="{_e(citation_state)}">
+              {_e(candidate.get("citation", ""))}
+            </span>
             <span data-testid="find-candidate-scope">{_e(candidate.get("scope", ""))}</span>
           </div>
           <div class="find-candidate-why" data-testid="find-candidate-why">

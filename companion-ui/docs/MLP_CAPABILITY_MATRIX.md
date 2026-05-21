@@ -94,8 +94,8 @@ Out of scope:
 | Resurface dismiss | `render_only`, `unavailable` | Shell renders a disabled dismiss control; no persistence endpoint is present in current MLP. | Explicitly marked unavailable and not persistence-backed until persistence exists. |
 | Resurface snooze | `render_only`, `unavailable` | Shell renders a disabled snooze control; no persistence endpoint is present in current MLP. | Explicitly marked unavailable and not persistence-backed until persistence exists. |
 | Resurface pin | `render_only`, `unavailable` | Shell renders a disabled pin control; no persistence endpoint is present in current MLP. | Explicitly marked unavailable and not persistence-backed until persistence exists. |
-| Render Find candidates | `render_only`, `unavailable`, `experimental` | Shell can render candidates if a payload exists, but workspace aggregate does not provide a full Find backend payload today. | Candidate display only; no full search product claim. |
-| Find unavailable state | `render_only`, `unavailable` | Required MLP state for missing backend payload. | Should be explicit rather than silent absence. |
+| Render Find candidates | `runtime_read`, `render_only`, `experimental` | Shell renders runtime-provided Find candidates, including citation/source marker, scope, why-this-source, missing-citation marker, and empty result state. | Candidate display only; no full search product or memory-promotion claim. |
+| Find unavailable state | `render_only`, `unavailable` | Shell renders unavailable when no backend candidate payload is present. | Distinct from empty results when a payload exists with zero candidates. |
 | Production launch profile | `unavailable`, `experimental` | Dev server documents port/bind defaults; production safety issue #1188 remains open. | Not `production_ready` until #1188 defines and verifies launch safety. |
 
 ## Current implementation notes
@@ -107,14 +107,13 @@ Out of scope:
 - Canvas governance suggestions queue/stage Panel proposals; they do not execute governance mutations from Canvas.
 - Panel confirmation uses `POST /api/panel/confirm`; runtime owns policy, WriteGuard, idempotency, events, receipts, and durable projection.
 - Reorient and Resurface are read-side in the current workspace shell.
-- Find candidate rendering exists as a shell capability, but no full backend Find payload is claimed by this matrix.
+- Find candidate rendering exists as a shell capability for runtime-provided payloads, but no full backend Find/search product is claimed by this matrix.
 - Resurface dismiss/snooze/pin controls are currently not backed by durable persistence and render as unavailable/not persistence-backed.
 
 ## Known MLP gaps
 
 - No capability in this matrix is marked `production_ready`.
 - Vault/channel identity is not yet exposed as a dedicated safe read-only workspace field.
-- Find unavailable and empty states still need explicit UI treatment under #1187.
 - Affordance status markers for all major rail cards/actionable sections are handled by #1179.
 - Real-note shell metadata and runtime/channel identity polish are handled by #1182.
 - Canvas recovery/conflict acknowledgement is currently local/volatile in the shell.

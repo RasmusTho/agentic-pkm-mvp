@@ -135,6 +135,7 @@ class DevPageState:
     portrait_sheet: dict[str, Any] | None = None
     keyboard_shortcuts: dict[str, Any] | None = None
     find_candidates: list[dict[str, Any]] | None = None
+    find_payload_available: bool = False
     reorient_sections: dict[str, list[dict[str, Any]]] | None = None
     resurface_candidates: list[dict[str, Any]] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
@@ -198,7 +199,13 @@ class RealNoteWorkspaceDevPage:
         suggestions = raw.get("suggestions") or {}
         guards = raw.get("guards") or {}
         runtime = raw.get("runtime") or {}
-        find_payload = raw.get("find") or runtime.get("find") or {}
+        raw_find_payload = raw.get("find")
+        runtime_find_payload = runtime.get("find")
+        find_payload_available = isinstance(raw_find_payload, dict) or isinstance(
+            runtime_find_payload,
+            dict,
+        )
+        find_payload = raw_find_payload or runtime_find_payload or {}
         reorient_payload = raw.get("reorient") or runtime.get("reorient") or {}
         resurface_payload = raw.get("resurface") or runtime.get("resurface") or {}
 
@@ -308,6 +315,7 @@ class RealNoteWorkspaceDevPage:
                 rail_state=suggestion_machine.state,
             ),
             find_candidates=_find_candidates_from_payload(find_payload),
+            find_payload_available=find_payload_available,
             reorient_sections=_reorient_sections_from_payload(reorient_payload),
             resurface_candidates=_resurface_candidates_from_payload(resurface_payload),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
@@ -727,6 +735,7 @@ class RealNoteWorkspaceDevPage:
             "portrait_sheet": self.state.portrait_sheet or {},
             "keyboard_shortcuts": self.state.keyboard_shortcuts or {},
             "find_candidates": self.state.find_candidates or [],
+            "find_payload_available": self.state.find_payload_available,
             "reorient_sections": self.state.reorient_sections or {},
             "resurface_candidates": self.state.resurface_candidates or [],
             "suggestion_cards": self.state.suggestion_cards or [],
@@ -965,6 +974,7 @@ def _find_candidates_from_payload(find_payload: dict[str, Any]) -> list[dict[str
             continue
         payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
         citation = raw.get("citation") or raw.get("source_ref") or payload.get("source_ref")
+        citation_missing = not bool(str(citation or "").strip())
         scope = raw.get("scope") or payload.get("scope") or find_payload.get("scope")
         why = (
             raw.get("why")
@@ -979,9 +989,13 @@ def _find_candidates_from_payload(find_payload: dict[str, Any]) -> list[dict[str
                 "title": str(raw.get("title") or raw.get("doc_id") or raw.get("object_id") or "Source"),
                 "snippet": str(raw.get("snippet") or raw.get("text") or ""),
                 "citation": str(citation or "uncited"),
+                "citation_missing": citation_missing,
                 "scope": str(scope or "workspace"),
                 "why": str(why),
                 "panel_handoff": bool(raw.get("panel_handoff", True)),
+                "panel_handoff_status": str(
+                    raw.get("panel_handoff_status") or "unavailable"
+                ),
             }
         )
     return candidates
