@@ -100,6 +100,7 @@ def _render_note_section(fields: dict) -> str:
     panel_message = _e(panel_render.get("message") or "")
     proposal_count = int(fields.get("panel_proposal_count", 0) or 0)
     writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
+    writeguard_blocked = writeguard_status.lower() == "blocked"
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
     guard_messages: list[str] = []
     if writeguard_status.lower() == "blocked":
@@ -132,6 +133,7 @@ def _render_note_section(fields: dict) -> str:
         )
     proposal_rows_html = _render_panel_proposal_rows(
         fields.get("panel_proposals") or [],
+        writeguard_blocked=writeguard_blocked,
     )
     panel_response_html = _render_panel_confirm_response(
         fields.get("panel_last_response") or {},
@@ -149,6 +151,7 @@ def _render_note_section(fields: dict) -> str:
     act_mode_html = _render_act_mode(
         proposals=fields.get("panel_proposals") or [],
         response=fields.get("panel_last_response") or {},
+        writeguard_blocked=writeguard_blocked,
     )
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
@@ -163,6 +166,8 @@ def _render_note_section(fields: dict) -> str:
         recovery_needed=recovery_needed,
         recovery_acknowledged=recovery_acknowledged,
         conflict_detected=conflict_detected,
+        canvas_enabled=canvas_enabled,
+        writeguard_blocked=writeguard_blocked,
         session_log_path=session_log_path,
         undo_available=undo_available,
         applied_edit_count=applied_edit_count,
@@ -301,15 +306,32 @@ def _render_keyboard_shortcuts(shortcuts: dict) -> str:
 
 def _render_find_mode(candidates: list[dict]) -> str:
     if not candidates:
-        return ""
+        return """
+        <section
+          class="find-mode"
+          data-testid="find-mode"
+          data-affordance-status="unavailable"
+          data-capability="find">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Find</span>
+            <span class="rail-state-value">unavailable</span>
+          </div>
+          <div class="find-unavailable" data-testid="find-unavailable-state">
+            Find is unavailable because no backend candidate payload is available yet.
+          </div>
+        </section>"""
     rows: list[str] = []
     for candidate in candidates:
         handoff = ""
         if candidate.get("panel_handoff", True):
             handoff = (
                 '<button type="button" class="find-panel-handoff" '
-                'data-testid="find-panel-handoff" data-intent="find.panelHandoff">'
-                "Panel</button>"
+                'data-testid="find-panel-handoff" '
+                'data-intent="find.panelHandoff" '
+                'data-affordance-status="unavailable" '
+                'data-runtime-backed="false" '
+                'aria-disabled="true" disabled>'
+                "Panel unavailable</button>"
             )
         rows.append(
             f"""
@@ -330,7 +352,11 @@ def _render_find_mode(candidates: list[dict]) -> str:
         </article>"""
         )
     return f"""
-        <section class="find-mode" data-testid="find-mode">
+        <section
+          class="find-mode"
+          data-testid="find-mode"
+          data-affordance-status="read-only"
+          data-capability="find">
           <div class="rail-state-row">
             <span class="rail-state-label">Find</span>
             <span class="rail-state-value">{len(candidates)} candidates</span>
@@ -361,7 +387,10 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
                 handoff = (
                     '<button type="button" class="reorient-panel-handoff" '
                     'data-testid="reorient-panel-handoff" '
-                    'data-intent="reorient.panelHandoff">Panel</button>'
+                    'data-intent="reorient.panelHandoff" '
+                    'data-affordance-status="unavailable" '
+                    'data-runtime-backed="false" '
+                    'aria-disabled="true" disabled>Panel unavailable</button>'
                 )
             rows.append(
                 f"""
@@ -413,7 +442,11 @@ def _render_resurface_mode(candidates: list[dict]) -> str:
             (
                 '<button type="button" class="resurface-action" '
                 f'data-testid="resurface-action-{intent}" '
-                f'data-intent="resurface.{intent}">{label}</button>'
+                f'data-intent="resurface.{intent}" '
+                'data-affordance-status="unavailable" '
+                'data-runtime-backed="false" '
+                'aria-disabled="true" disabled>'
+                f"{label} unavailable</button>"
             )
             for intent, label in (
                 ("dismiss", "Dismiss"),
@@ -446,7 +479,11 @@ def _render_resurface_mode(candidates: list[dict]) -> str:
           </article>"""
         )
     return f"""
-        <section class="resurface-mode" data-testid="resurface-mode">
+        <section
+          class="resurface-mode"
+          data-testid="resurface-mode"
+          data-affordance-status="read-only"
+          data-capability="resurface">
           <div class="rail-state-row">
             <span class="rail-state-label">Resurface</span>
             <span class="rail-state-value">low-pressure</span>
@@ -455,7 +492,12 @@ def _render_resurface_mode(candidates: list[dict]) -> str:
         </section>"""
 
 
-def _render_act_mode(*, proposals: list[dict], response: dict) -> str:
+def _render_act_mode(
+    *,
+    proposals: list[dict],
+    response: dict,
+    writeguard_blocked: bool,
+) -> str:
     if not proposals and not response:
         return ""
 
@@ -465,6 +507,9 @@ def _render_act_mode(*, proposals: list[dict], response: dict) -> str:
         proposal_id = _e(proposal.get("proposal_id", ""))
         artifact_id = _e(proposal.get("artifact_id", ""))
         affordances = proposal.get("affordances") or {}
+        proposal_status = str(proposal.get("status") or "staged")
+        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
+        proposal_affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
         actions = "".join(
             (
                 '<button type="button" class="act-panel-action" '
@@ -472,19 +517,28 @@ def _render_act_mode(*, proposals: list[dict], response: dict) -> str:
                 f'data-panel-action="{_e(label)}" '
                 'data-api-method="POST" '
                 'data-api-path="/api/panel/confirm" '
+                f'data-affordance-status="{proposal_affordance_status}" '
                 f'data-proposal-id="{proposal_id}" '
                 f'data-artifact-id="{artifact_id}" '
                 'data-writeguard-bypass="false">'
                 f"{_e(label)}</button>"
             )
             for label in ("confirm", "correct", "reject")
-            if affordances.get(label, True)
+            if affordances.get(label, True) and proposal_available
         )
+        if not proposal_available:
+            actions = (
+                '<span class="act-panel-unavailable" '
+                'data-testid="act-panel-unavailable" '
+                f'data-affordance-status="{proposal_affordance_status}">'
+                f"{_e(proposal_status)} proposal unavailable</span>"
+            )
         proposal_rows.append(
             f"""
           <article
             class="act-proposal"
             data-testid="act-proposal-review"
+            data-affordance-status="{proposal_affordance_status}"
             data-proposal-id="{proposal_id}"
             data-artifact-id="{artifact_id}">
             <div class="act-proposal-title">{_e(proposal.get("description", ""))}</div>
@@ -524,6 +578,7 @@ def _render_act_mode(*, proposals: list[dict], response: dict) -> str:
           class="act-mode"
           data-testid="act-mode"
           data-authority-surface="panel"
+          data-affordance-status="{'blocked' if writeguard_blocked else 'active'}"
           data-writeguard-bypass="false">
           <div class="rail-state-row">
             <span class="rail-state-label">Act</span>
@@ -646,15 +701,24 @@ def _render_canvas_session_controls(
     recovery_needed: bool,
     recovery_acknowledged: bool,
     conflict_detected: bool,
+    canvas_enabled: bool,
+    writeguard_blocked: bool,
     session_log_path: str,
     undo_available: bool,
     applied_edit_count: int,
     undone_edit_count: int,
 ) -> str:
-    start_disabled = " disabled" if session_id else ""
+    canvas_blocked = not canvas_enabled or writeguard_blocked
+    start_status = "blocked" if not canvas_enabled else "experimental" if not session_id else "unavailable"
+    close_status = "blocked" if not canvas_enabled else "experimental" if session_id else "unavailable"
+    edit_status = "blocked" if canvas_blocked else "active" if can_edit_body else "unavailable"
+    undo_status = "blocked" if canvas_blocked else "active" if undo_available else "unavailable"
+    start_disabled = " disabled" if session_id or not canvas_enabled else ""
     close_disabled = "" if session_id else " disabled"
-    edit_disabled = "" if can_edit_body else " disabled"
-    undo_disabled = "" if undo_available else " disabled"
+    if not canvas_enabled:
+        close_disabled = " disabled"
+    edit_disabled = "" if can_edit_body and not canvas_blocked else " disabled"
+    undo_disabled = "" if undo_available and not canvas_blocked else " disabled"
     edit_api_path = f"/api/canvas/sessions/{session_id}/edits" if session_id else ""
     undo_api_path = f"/api/canvas/sessions/{session_id}/edits/last" if session_id else ""
     present_text = "user present" if user_present else "user not present"
@@ -680,23 +744,31 @@ def _render_canvas_session_controls(
           <button
             type="button"
             data-testid="workspace-canvas-start"
+            data-affordance-status="{start_status}"
+            data-capability="canvas.openSession"
             data-api-method="POST"
             data-api-path="/api/canvas/sessions"
             data-note-path="{note_path}"{start_disabled}>Start</button>
           <button
             type="button"
             data-testid="workspace-canvas-close"
+            data-affordance-status="{close_status}"
+            data-capability="canvas.closeSession"
             data-api-method="DELETE"
             data-api-path="/api/canvas/sessions/{session_id}"{close_disabled}>Close</button>
           <button
             type="button"
             data-testid="workspace-canvas-edit-submit"
+            data-affordance-status="{edit_status}"
+            data-capability="canvas.applyBodyEdit"
             data-api-method="POST"
             data-api-path="{edit_api_path}"
             data-content-hash="{content_hash}"{edit_disabled}>Apply body edit</button>
           <button
             type="button"
             data-testid="workspace-canvas-undo"
+            data-affordance-status="{undo_status}"
+            data-capability="canvas.undoBodyEdit"
             data-api-method="DELETE"
             data-api-path="{undo_api_path}"{undo_disabled}>Undo</button>
           <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
@@ -710,7 +782,11 @@ def _render_canvas_session_controls(
         </div>"""
 
 
-def _render_panel_proposal_rows(proposals: list[dict]) -> str:
+def _render_panel_proposal_rows(
+    proposals: list[dict],
+    *,
+    writeguard_blocked: bool,
+) -> str:
     if not proposals:
         return ""
 
@@ -718,25 +794,40 @@ def _render_panel_proposal_rows(proposals: list[dict]) -> str:
     for proposal in proposals:
         evidence = proposal.get("evidence") or {}
         affordances = proposal.get("affordances") or {}
+        proposal_status = str(proposal.get("status") or "staged")
+        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
+        affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
         enabled_affordances = [
             label
             for label in ("confirm", "correct", "reject")
-            if affordances.get(label)
+            if affordances.get(label) and proposal_available
         ]
         buttons = "".join(
             (
                 '<button type="button" class="panel-proposal-action" '
                 'data-testid="workspace-panel-action" '
                 f'data-panel-action="{_e(label)}" '
+                f'data-affordance-status="{affordance_status}" '
+                'data-runtime-backed="true" '
                 'data-api-method="POST" '
                 'data-api-path="/api/panel/confirm">'
                 f"{_e(label)}</button>"
             )
             for label in enabled_affordances
         )
+        if not proposal_available:
+            buttons = (
+                '<span class="panel-proposal-unavailable" '
+                'data-testid="workspace-panel-proposal-unavailable" '
+                f'data-affordance-status="{affordance_status}">'
+                f"{_e(proposal_status)} proposal unavailable</span>"
+            )
         rows.append(
             f"""
-        <div class="panel-proposal-row" data-testid="workspace-panel-proposal-row">
+        <div
+          class="panel-proposal-row"
+          data-testid="workspace-panel-proposal-row"
+          data-affordance-status="{affordance_status}">
           <div class="panel-proposal-title">{_e(proposal.get("description", ""))}</div>
           <div class="panel-proposal-meta">
             <span>{_e(proposal.get("proposal_id", ""))}</span>

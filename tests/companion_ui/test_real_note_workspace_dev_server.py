@@ -299,6 +299,48 @@ class TestRenderIndexHtml:
         )
         assert "rail" in html.lower() or "panel" in html.lower()
 
+    def test_workspace_renders_affordance_status_markers(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        fields = {
+            "title": "T",
+            "note_path": "N.md",
+            "artifact_id": "a",
+            "content_hash": "h",
+            "body": "b",
+            "panel_rail": "Panel / agent rail placeholder",
+            "canvas_session_id": "session-1",
+            "canvas_session_state": "active",
+            "canvas_can_edit_body": True,
+            "canvas_user_present": True,
+            "canvas_session_persistence": "in_memory",
+            "panel_state": "proposals-staged",
+            "panel_proposal_count": 1,
+            "panel_render": {"state": "proposals-staged", "label": "Proposal staged"},
+            "panel_proposals": [
+                {
+                    "proposal_id": "proposal-1",
+                    "artifact_id": "a",
+                    "description": "Do thing",
+                    "status": "staged",
+                    "affordances": {"confirm": True, "correct": True, "reject": True},
+                }
+            ],
+            "guard_canvas_enabled": True,
+            "guard_writeguard_status": "ok",
+            "is_production_ui": False,
+            "dev_page_label": "dev/staging",
+        }
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=fields,
+        )
+
+        assert 'data-affordance-status="active"' in html
+        assert 'data-affordance-status="experimental"' in html
+        assert 'data-capability="canvas.applyBodyEdit"' in html
+        assert 'data-runtime-backed="true"' in html
+
     def test_error_state_is_visible(self) -> None:
         from companion_ui.workspace.serve_dev_page import render_index_html
 

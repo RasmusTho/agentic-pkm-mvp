@@ -21,6 +21,7 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
 )
+from companion_ui.workspace.serve_dev_page import render_index_html
 from companion_ui.workspace.real_note_workspace_shell import (
     REGION_AGENT_RAIL,
     REGION_NOTE_BODY,
@@ -166,6 +167,47 @@ def test_loads_from_workspace_aggregate() -> None:
     assert fields["artifact_id"] == "note-uuid-42"
     assert "Detailed body" in fields["body"]
     assert fields["content_hash"] == "deadbeef0042"
+
+
+def test_writeguard_blocked_marks_mutating_affordances_blocked() -> None:
+    page = _loaded_page(response=_workspace_response(
+        artifact=_artifact_response(title="Guarded Note"),
+        canvas={
+            "session_id": "session-1",
+            "session_state": "active",
+            "user_present": True,
+            "can_edit_body": True,
+            "session_persistence": "in_memory",
+        },
+        panel={
+            "state": "proposals-staged",
+            "proposal_count": 1,
+            "proposals": [
+                {
+                    "proposal_id": "proposal-1",
+                    "artifact_id": "note-uuid-42",
+                    "description": "Apply guarded change",
+                    "status": "staged",
+                    "affordances": {"confirm": True, "correct": True, "reject": True},
+                }
+            ],
+        },
+        guards={"canvas_enabled": True, "writeguard_status": "blocked"},
+    ))
+    fields = page.render_fields()
+    assert fields is not None
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/research.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-guard-indicator"' in html
+    assert "WriteGuard blocked" in html
+    assert 'data-capability="canvas.applyBodyEdit"' in html
+    assert 'data-affordance-status="blocked"' in html
+    assert 'data-testid="workspace-panel-proposal-unavailable"' in html
 
 
 # ---------------------------------------------------------------------------
