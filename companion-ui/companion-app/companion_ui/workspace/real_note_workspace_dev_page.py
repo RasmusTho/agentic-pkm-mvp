@@ -127,6 +127,7 @@ class DevPageState:
     keyboard_shortcuts: dict[str, Any] | None = None
     find_candidates: list[dict[str, Any]] | None = None
     reorient_sections: dict[str, list[dict[str, Any]]] | None = None
+    resurface_candidates: list[dict[str, Any]] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -189,6 +190,7 @@ class RealNoteWorkspaceDevPage:
         runtime = raw.get("runtime") or {}
         find_payload = raw.get("find") or runtime.get("find") or {}
         reorient_payload = raw.get("reorient") or runtime.get("reorient") or {}
+        resurface_payload = raw.get("resurface") or runtime.get("resurface") or {}
 
         # The runtime echoes artifact_id only when supplied in the request.
         # Fall back to note_path so note-path-only loads don't fail the shell's
@@ -289,6 +291,7 @@ class RealNoteWorkspaceDevPage:
             ),
             find_candidates=_find_candidates_from_payload(find_payload),
             reorient_sections=_reorient_sections_from_payload(reorient_payload),
+            resurface_candidates=_resurface_candidates_from_payload(resurface_payload),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
@@ -675,6 +678,7 @@ class RealNoteWorkspaceDevPage:
             "keyboard_shortcuts": self.state.keyboard_shortcuts or {},
             "find_candidates": self.state.find_candidates or [],
             "reorient_sections": self.state.reorient_sections or {},
+            "resurface_candidates": self.state.resurface_candidates or [],
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
@@ -785,6 +789,42 @@ def _reorient_sections_from_payload(
             )
         sections[section] = items
     return sections
+
+
+def _resurface_candidates_from_payload(resurface: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_candidates = resurface.get("candidates") or []
+    if isinstance(raw_candidates, dict):
+        raw_candidates = [raw_candidates]
+    if not isinstance(raw_candidates, list):
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_candidates, start=1):
+        if not isinstance(raw, dict):
+            continue
+        why_now = str(raw.get("why_now") or raw.get("why") or "").strip()
+        relation = str(
+            raw.get("relation_to_active_artifact") or raw.get("relation") or ""
+        ).strip()
+        source_link = str(raw.get("source_link") or raw.get("source") or "").strip()
+        if not why_now or not relation or not source_link:
+            continue
+        signal_labels = raw.get("signal_labels") or raw.get("signals") or []
+        if not isinstance(signal_labels, list):
+            signal_labels = [str(signal_labels)]
+        candidates.append(
+            {
+                "candidate_id": str(
+                    raw.get("candidate_id") or raw.get("id") or f"resurface-{index}"
+                ),
+                "label": str(raw.get("label") or raw.get("title") or "Resurfacing candidate"),
+                "why_now": why_now,
+                "relation_to_active_artifact": relation,
+                "source_link": source_link,
+                "signal_labels": [str(label) for label in signal_labels],
+            }
+        )
+    return candidates
 
 def _suggestion_cards_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []

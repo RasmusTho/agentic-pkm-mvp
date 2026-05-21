@@ -145,6 +145,7 @@ def _render_note_section(fields: dict) -> str:
     )
     find_mode_html = _render_find_mode(fields.get("find_candidates") or [])
     reorient_mode_html = _render_reorient_mode(fields.get("reorient_sections") or {})
+    resurface_mode_html = _render_resurface_mode(fields.get("resurface_candidates") or [])
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
     )
@@ -211,6 +212,7 @@ def _render_note_section(fields: dict) -> str:
         {governance_receipts_html}
         {find_mode_html}
         {reorient_mode_html}
+        {resurface_mode_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -387,6 +389,64 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
             <span class="rail-state-value">read-only</span>
           </div>
           {"".join(section_html)}
+        </section>"""
+
+
+def _render_resurface_mode(candidates: list[dict]) -> str:
+    if not candidates:
+        return ""
+    rows: list[str] = []
+    for candidate in candidates:
+        signals = "".join(
+            (
+                '<span class="resurface-signal" data-testid="resurface-signal">'
+                f"{_e(signal)}</span>"
+            )
+            for signal in candidate.get("signal_labels", [])
+        )
+        actions = "".join(
+            (
+                '<button type="button" class="resurface-action" '
+                f'data-testid="resurface-action-{intent}" '
+                f'data-intent="resurface.{intent}">{label}</button>'
+            )
+            for intent, label in (
+                ("dismiss", "Dismiss"),
+                ("snooze", "Snooze"),
+                ("pin", "Pin"),
+            )
+        )
+        rows.append(
+            f"""
+          <article
+            class="resurface-candidate"
+            data-testid="resurface-candidate"
+            data-candidate-id="{_e(candidate.get("candidate_id", ""))}">
+            <div class="resurface-title">{_e(candidate.get("label", ""))}</div>
+            <div class="resurface-why" data-testid="resurface-why-now">
+              {_e(candidate.get("why_now", ""))}
+            </div>
+            <div class="resurface-relation" data-testid="resurface-relation">
+              {_e(candidate.get("relation_to_active_artifact", ""))}
+            </div>
+            <a
+              class="resurface-source"
+              data-testid="resurface-source-link"
+              href="#"
+              data-source-link="{_e(candidate.get("source_link", ""))}">
+              {_e(candidate.get("source_link", ""))}
+            </a>
+            <div class="resurface-signals">{signals}</div>
+            <div class="resurface-actions">{actions}</div>
+          </article>"""
+        )
+    return f"""
+        <section class="resurface-mode" data-testid="resurface-mode">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Resurface</span>
+            <span class="rail-state-value">low-pressure</span>
+          </div>
+          {"".join(rows)}
         </section>"""
 
 
