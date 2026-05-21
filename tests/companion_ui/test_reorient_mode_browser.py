@@ -89,6 +89,14 @@ def test_orientation_fields_rendered() -> None:
     html = _render_reorient()
 
     assert 'data-testid="reorient-mode"' in html
+    assert 'data-affordance-status="read-only"' in html
+    assert 'data-capability="reorient"' in html
+    assert 'data-reorient-group="where-am-i"' in html
+    assert 'data-reorient-group="what-changed"' in html
+    assert 'data-reorient-group="what-next"' in html
+    assert "Where am I?" in html
+    assert "What changed?" in html
+    assert "What next?" in html
     assert 'data-reorient-section="facts"' in html
     assert 'data-reorient-section="inferences"' in html
     assert 'data-reorient-section="candidates"' in html
@@ -97,6 +105,19 @@ def test_orientation_fields_rendered() -> None:
     assert 'data-reorient-section="open_loops"' in html
     assert "Last leave-point came from runtime activity." in html
     assert "One promotion intent remains open." in html
+
+
+def test_reorient_kinds_distinguish_facts_inferences_candidates_and_stale_context() -> None:
+    html = _render_reorient()
+
+    assert 'data-reorient-kind="fact"' in html
+    assert 'data-reorient-kind="inference"' in html
+    assert 'data-reorient-kind="candidate"' in html
+    assert 'data-reorient-kind="stale-caution"' in html
+    assert 'data-reorient-kind="recent-delta"' in html
+    assert 'data-reorient-kind="open-loop"' in html
+    assert "Stale context" in html
+    assert "Candidates" in html
 
 
 def test_source_links_present() -> None:
@@ -112,6 +133,30 @@ def test_panel_handoff() -> None:
 
     assert 'data-testid="reorient-panel-handoff"' in html
     assert 'data-intent="reorient.panelHandoff"' in html
+    assert 'data-affordance-status="read-only"' in html
+    assert 'data-runtime-backed="false"' in html
+    assert "Panel handoff candidate" in html
+
+
+def test_reorient_empty_state_visible() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/reorient.md",
+        fields={
+            "title": "Reorient Note",
+            "note_path": "Notes/reorient.md",
+            "artifact_id": "art-1141",
+            "content_hash": "hash-reorient",
+            "body": "# Reorient Note",
+            "panel_rail": "Panel ready",
+            "reorient_sections": {},
+            "guard_canvas_enabled": True,
+            "guard_writeguard_status": "ok",
+        },
+    )
+
+    assert 'data-testid="reorient-empty-state"' in html
+    assert "no orientation payload is available" in html
 
 
 def test_workspace_reorient_failure_degrades_without_blocking_note_load(
