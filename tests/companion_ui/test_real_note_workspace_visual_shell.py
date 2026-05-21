@@ -41,20 +41,35 @@ def _fields(
     panel_proposal_count: int = 0,
     guard_writeguard_status: str = "ok",
     guard_canvas_enabled: bool = True,
+    guard_degraded: bool = False,
+    artifact_identity_source: str = "frontmatter.uuid",
+    artifact_identity_state: str = "resolved",
+    runtime_environment_label: str = "dev",
+    runtime_api_base_url_label: str = "local-dev",
+    runtime_trace_id: str = "trace-visual-1",
 ) -> dict:
     return {
         "title": title,
         "note_path": note_path,
         "artifact_id": artifact_id,
+        "artifact_kind": "human_note",
+        "artifact_identity_source": artifact_identity_source,
+        "artifact_identity_state": artifact_identity_state,
+        "artifact_companion_of": None,
+        "artifact_owns_identity": True,
         "content_hash": content_hash,
         "body": body,
         "panel_rail": panel_rail,
+        "runtime_environment_label": runtime_environment_label,
+        "runtime_api_base_url_label": runtime_api_base_url_label,
+        "runtime_trace_id": runtime_trace_id,
         "canvas_session_state": canvas_session_state,
         "canvas_session_persistence": canvas_session_persistence,
         "panel_state": panel_state,
         "panel_proposal_count": panel_proposal_count,
         "guard_writeguard_status": guard_writeguard_status,
         "guard_canvas_enabled": guard_canvas_enabled,
+        "guard_degraded": guard_degraded,
         "is_production_ui": False,
         "dev_page_label": "dev/staging",
     }
@@ -155,6 +170,27 @@ class TestNoteHeader:
     def test_content_hash_in_provenance(self) -> None:
         html = _html_with_note(content_hash="sha256-aabbcc")
         assert "sha256-aabbcc" in html
+
+    def test_artifact_identity_pill_present(self) -> None:
+        html = _html_with_note(
+            artifact_identity_source="uuid_healing",
+            artifact_identity_state="healed",
+        )
+        assert 'data-testid="workspace-artifact-identity-pill"' in html
+        assert 'data-identity-source="uuid_healing"' in html
+        assert 'data-identity-state="healed"' in html
+
+    def test_content_hash_pill_present(self) -> None:
+        html = _html_with_note(content_hash="sha256-aabbcc")
+        assert 'data-testid="workspace-content-hash-pill"' in html
+
+    def test_unresolved_identity_caution_visible(self) -> None:
+        html = _html_with_note(
+            artifact_identity_source="missing",
+            artifact_identity_state="unresolved_missing_uuid",
+        )
+        assert 'data-testid="workspace-artifact-identity-caution"' in html
+        assert "Artifact identity unresolved" in html
 
     def test_provenance_labels_are_lowercase(self) -> None:
         """Provenance labels must use subdued lowercase (path, artifact, hash)."""
@@ -261,6 +297,30 @@ class TestAgentRail:
         html = _html_with_note(canvas_session_persistence="in_memory")
         assert 'data-testid="workspace-session-persistence"' in html
         assert "Session persistence: in_memory" in html
+
+
+class TestRuntimeSafetyStrip:
+    def test_runtime_safety_strip_present(self) -> None:
+        html = _html_with_note()
+        assert 'data-testid="workspace-runtime-safety-strip"' in html
+        assert 'data-testid="workspace-runtime-channel"' in html
+        assert 'data-testid="workspace-writeguard-state"' in html
+        assert 'data-testid="workspace-canvas-enabled-state"' in html
+
+    def test_runtime_channel_and_vault_fallback_visible(self) -> None:
+        html = _html_with_note(
+            runtime_environment_label="dev",
+            runtime_api_base_url_label="local-dev",
+        )
+        assert "dev" in html
+        assert "local-dev" in html
+        assert 'data-testid="workspace-vault-identity"' in html
+        assert "vault identity unavailable" in html
+
+    def test_guard_degraded_state_visible(self) -> None:
+        html = _html_with_note(guard_degraded=True, guard_canvas_enabled=False)
+        assert 'data-testid="workspace-guard-degraded-state"' in html
+        assert "degraded" in html
 
 
 # ---------------------------------------------------------------------------

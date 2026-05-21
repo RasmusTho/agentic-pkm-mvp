@@ -37,10 +37,15 @@ from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 def _artifact_response(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "artifact_id": "note-uuid-42",
+        "artifact_kind": "human_note",
         "note_path": "/vault/notes/research.md",
         "title": "Research Note",
         "body": "# Research Note\n\nDetailed body.",
         "content_hash": "deadbeef0042",
+        "identity_source": "frontmatter.uuid",
+        "identity_state": "resolved",
+        "companion_of": None,
+        "owns_identity": True,
     }
     base.update(overrides)
     return base
@@ -58,7 +63,11 @@ def _workspace_response(
         "canvas": canvas or {"session_state": "idle", "session_persistence": "in_memory"},
         "panel": panel or {"state": "idle", "proposal_count": 0},
         "guards": guards or {"canvas_enabled": True, "writeguard_status": "ok"},
-        "runtime": {},
+        "runtime": {
+            "environment_label": "dev",
+            "api_base_url_label": "local-dev",
+            "trace_id": "trace-42",
+        },
         "suggestions": {},
     }
 
@@ -167,6 +176,35 @@ def test_loads_from_workspace_aggregate() -> None:
     assert fields["artifact_id"] == "note-uuid-42"
     assert "Detailed body" in fields["body"]
     assert fields["content_hash"] == "deadbeef0042"
+    assert fields["artifact_identity_source"] == "frontmatter.uuid"
+    assert fields["artifact_identity_state"] == "resolved"
+    assert fields["runtime_environment_label"] == "dev"
+    assert fields["runtime_api_base_url_label"] == "local-dev"
+    assert fields["runtime_trace_id"] == "trace-42"
+
+
+def test_artifact_identity_states_render_from_workspace_payload() -> None:
+    page = _loaded_page(response=_workspace_response(artifact=_artifact_response(
+        artifact_id=None,
+        note_path="notes/blocked.md",
+        title="Blocked Note",
+        identity_source="missing",
+        identity_state="unresolved_missing_uuid",
+    )))
+    fields = page.render_fields()
+    assert fields is not None
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/blocked.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-artifact-identity-pill"' in html
+    assert 'data-identity-state="unresolved_missing_uuid"' in html
+    assert 'data-identity-source="missing"' in html
+    assert 'data-testid="workspace-artifact-identity-caution"' in html
+    assert "Artifact identity unresolved" in html
 
 
 def test_writeguard_blocked_marks_mutating_affordances_blocked() -> None:
