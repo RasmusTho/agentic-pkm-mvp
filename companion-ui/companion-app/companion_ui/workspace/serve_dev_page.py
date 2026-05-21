@@ -208,7 +208,10 @@ def _render_note_section(fields: dict) -> str:
     )
     find_mode_html = _render_find_mode(fields.get("find_candidates") or [])
     reorient_mode_html = _render_reorient_mode(fields.get("reorient_sections") or {})
-    resurface_mode_html = _render_resurface_mode(fields.get("resurface_candidates") or [])
+    resurface_mode_html = _render_resurface_mode(
+        fields.get("resurface_candidates") or [],
+        degraded=guard_degraded,
+    )
     act_mode_html = _render_act_mode(
         proposals=fields.get("panel_proposals") or [],
         response=fields.get("panel_last_response") or {},
@@ -546,9 +549,31 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
         </section>"""
 
 
-def _render_resurface_mode(candidates: list[dict]) -> str:
+def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) -> str:
     if not candidates:
-        return ""
+        affordance_status = "unavailable" if degraded else "read-only"
+        state_label = "degraded" if degraded else "empty"
+        state_testid = "resurface-degraded-state" if degraded else "resurface-empty-state"
+        state_copy = (
+            "Resurface is degraded because the runtime reported degraded guard state; "
+            "no candidate payload is actionable here."
+            if degraded
+            else "No Resurface candidates are available for this note. Nothing needs action here."
+        )
+        return f"""
+        <section
+          class="resurface-mode"
+          data-testid="resurface-mode"
+          data-affordance-status="{affordance_status}"
+          data-capability="resurface">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Resurface</span>
+            <span class="rail-state-value">{state_label}</span>
+          </div>
+          <div class="resurface-empty" data-testid="{state_testid}">
+            {state_copy}
+          </div>
+        </section>"""
     rows: list[str] = []
     for candidate in candidates:
         signals = "".join(
@@ -565,8 +590,9 @@ def _render_resurface_mode(candidates: list[dict]) -> str:
                 f'data-intent="resurface.{intent}" '
                 'data-affordance-status="unavailable" '
                 'data-runtime-backed="false" '
+                'data-persistence-backed="false" '
                 'aria-disabled="true" disabled>'
-                f"{label} unavailable</button>"
+                f"{label} unavailable (no persistence)</button>"
             )
             for intent, label in (
                 ("dismiss", "Dismiss"),
@@ -579,8 +605,12 @@ def _render_resurface_mode(candidates: list[dict]) -> str:
           <article
             class="resurface-candidate"
             data-testid="resurface-candidate"
+            data-affordance-status="read-only"
+            data-runtime-backed="true"
             data-candidate-id="{_e(candidate.get("candidate_id", ""))}">
-            <div class="resurface-title">{_e(candidate.get("label", ""))}</div>
+            <div class="resurface-title" data-testid="resurface-candidate-label">
+              {_e(candidate.get("label", ""))}
+            </div>
             <div class="resurface-why" data-testid="resurface-why-now">
               {_e(candidate.get("why_now", ""))}
             </div>

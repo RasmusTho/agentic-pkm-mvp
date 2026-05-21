@@ -67,6 +67,9 @@ def test_why_now_explanation() -> None:
 
     assert 'data-testid="resurface-mode"' in html
     assert 'data-testid="resurface-candidate"' in html
+    assert 'data-testid="resurface-candidate-label"' in html
+    assert 'data-affordance-status="read-only"' in html
+    assert 'data-runtime-backed="true"' in html
     assert 'data-testid="resurface-why-now"' in html
     assert "Derived relevance changed" in html
     assert "should act now" not in html.lower()
@@ -94,9 +97,11 @@ def test_resurface_actions_marked_read_only_or_unavailable_without_persistence()
     assert 'data-testid="resurface-action-pin"' in html
     assert html.count('data-affordance-status="unavailable"') >= 3
     assert html.count('data-runtime-backed="false"') >= 3
+    assert html.count('data-persistence-backed="false"') >= 3
     assert "Dismiss unavailable" in html
     assert "Snooze unavailable" in html
     assert "Pin unavailable" in html
+    assert "no persistence" in html
 
 
 def test_relation_to_active_artifact() -> None:
@@ -155,3 +160,62 @@ def test_workspace_resurface_source_link_uses_logical_identifier(
     candidate = response.runtime.resurface["candidates"][0]
     assert candidate["source_link"] == "status.worker_queue"
     assert "secret" not in str(candidate)
+
+
+class _EmptyResurfaceClient:
+    def __init__(self, *, degraded: bool = False) -> None:
+        self.degraded = degraded
+
+    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        assert url == "/api/companion/workspace"
+        assert params == {"note_path": "Notes/resurface.md"}
+        return {
+            "artifact": {
+                "artifact_id": "art-1186",
+                "note_path": "Notes/resurface.md",
+                "title": "Resurface Note",
+                "body": "# Resurface Note",
+                "content_hash": "hash-resurface-empty",
+            },
+            "canvas": {"session_state": "idle", "can_edit_body": False},
+            "panel": {"state": "idle", "proposal_count": 0},
+            "guards": {
+                "canvas_enabled": True,
+                "writeguard_status": "ok",
+                "degraded": self.degraded,
+            },
+            "runtime": {"resurface": {"candidates": []}},
+            "suggestions": {},
+        }
+
+
+def _render_empty_resurface(*, degraded: bool = False) -> str:
+    page = RealNoteWorkspaceDevPage(_EmptyResurfaceClient(degraded=degraded))  # type: ignore[arg-type]
+    state = page.load(NoteLoadIntent(note_path="Notes/resurface.md"))
+    assert state.is_loaded is True
+    fields = page.render_fields()
+    assert fields is not None
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/resurface.md",
+        fields=fields,
+    )
+
+
+def test_resurface_empty_state_is_visible() -> None:
+    html = _render_empty_resurface()
+
+    assert 'data-testid="resurface-mode"' in html
+    assert 'data-testid="resurface-empty-state"' in html
+    assert 'data-affordance-status="read-only"' in html
+    assert "No Resurface candidates are available" in html
+    assert "Nothing needs action" in html
+
+
+def test_resurface_degraded_state_is_visible() -> None:
+    html = _render_empty_resurface(degraded=True)
+
+    assert 'data-testid="resurface-mode"' in html
+    assert 'data-testid="resurface-degraded-state"' in html
+    assert 'data-affordance-status="unavailable"' in html
+    assert "runtime reported degraded guard state" in html

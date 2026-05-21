@@ -90,10 +90,10 @@ Out of scope:
 | Display Panel block reason | `runtime_read`, `render_only`, `receipt_bearing`, `experimental` | Panel confirm response and workspace panel state expose block reason. | Blocked state must remain visible. |
 | Render Reorient sections | `runtime_read`, `render_only`, `experimental` | Workspace API calls orientation runtime and maps facts/inferences/candidates/stale context. | Read-side recovery only. |
 | Reorient Panel handoff | `render_only`, `unavailable`, `experimental` | Shell can render a Panel handoff button from payload marker. | No distinct durable handoff behavior is claimed in current MLP. |
-| Render Resurface candidates | `runtime_read`, `render_only`, `experimental` | Workspace API calls read-only resurfacing runtime and shell renders candidates. | Low-pressure candidate display; no urgency unless payload says so. |
-| Resurface dismiss | `render_only`, `unavailable` | Shell renders a dismiss control; no persistence endpoint is present in current MLP. | Must not look durable until persistence exists. |
-| Resurface snooze | `render_only`, `unavailable` | Shell renders a snooze control; no persistence endpoint is present in current MLP. | Must not look durable until persistence exists. |
-| Resurface pin | `render_only`, `unavailable` | Shell renders a pin control; no persistence endpoint is present in current MLP. | Must not look durable until persistence exists. |
+| Render Resurface candidates | `runtime_read`, `render_only`, `experimental` | Workspace API calls read-only resurfacing runtime and shell renders candidates, empty state, or degraded state. | Low-pressure candidate display; no urgency unless payload says so. |
+| Resurface dismiss | `render_only`, `unavailable` | Shell renders a disabled dismiss control; no persistence endpoint is present in current MLP. | Explicitly marked unavailable and not persistence-backed until persistence exists. |
+| Resurface snooze | `render_only`, `unavailable` | Shell renders a disabled snooze control; no persistence endpoint is present in current MLP. | Explicitly marked unavailable and not persistence-backed until persistence exists. |
+| Resurface pin | `render_only`, `unavailable` | Shell renders a disabled pin control; no persistence endpoint is present in current MLP. | Explicitly marked unavailable and not persistence-backed until persistence exists. |
 | Render Find candidates | `render_only`, `unavailable`, `experimental` | Shell can render candidates if a payload exists, but workspace aggregate does not provide a full Find backend payload today. | Candidate display only; no full search product claim. |
 | Find unavailable state | `render_only`, `unavailable` | Required MLP state for missing backend payload. | Should be explicit rather than silent absence. |
 | Production launch profile | `unavailable`, `experimental` | Dev server documents port/bind defaults; production safety issue #1188 remains open. | Not `production_ready` until #1188 defines and verifies launch safety. |
@@ -108,14 +108,13 @@ Out of scope:
 - Panel confirmation uses `POST /api/panel/confirm`; runtime owns policy, WriteGuard, idempotency, events, receipts, and durable projection.
 - Reorient and Resurface are read-side in the current workspace shell.
 - Find candidate rendering exists as a shell capability, but no full backend Find payload is claimed by this matrix.
-- Resurface dismiss/snooze/pin controls are currently not backed by durable persistence and must be treated as unavailable/read-only.
+- Resurface dismiss/snooze/pin controls are currently not backed by durable persistence and render as unavailable/not persistence-backed.
 
 ## Known MLP gaps
 
 - No capability in this matrix is marked `production_ready`.
 - Vault/channel identity is not yet exposed as a dedicated safe read-only workspace field.
 - Find unavailable and empty states still need explicit UI treatment under #1187.
-- Resurface dismiss/snooze/pin need read-only/unavailable treatment under #1186 unless persistence exists by then.
 - Affordance status markers for all major rail cards/actionable sections are handled by #1179.
 - Real-note shell metadata and runtime/channel identity polish are handled by #1182.
 - Canvas recovery/conflict acknowledgement is currently local/volatile in the shell.
