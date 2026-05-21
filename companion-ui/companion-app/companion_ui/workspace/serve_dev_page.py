@@ -144,6 +144,7 @@ def _render_note_section(fields: dict) -> str:
         fields.get("governance_receipts") or []
     )
     find_mode_html = _render_find_mode(fields.get("find_candidates") or [])
+    reorient_mode_html = _render_reorient_mode(fields.get("reorient_sections") or {})
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
     )
@@ -209,6 +210,7 @@ def _render_note_section(fields: dict) -> str:
         {shortcut_html}
         {governance_receipts_html}
         {find_mode_html}
+        {reorient_mode_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -327,6 +329,64 @@ def _render_find_mode(candidates: list[dict]) -> str:
             <span class="rail-state-value">{len(candidates)} candidates</span>
           </div>
           {"".join(rows)}
+        </section>"""
+
+
+def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
+    if not any(sections.get(name) for name in sections):
+        return ""
+
+    labels = {
+        "facts": "Facts",
+        "inferences": "Inferences",
+        "candidates": "Candidates",
+        "stale_context": "Stale context",
+        "recent_deltas": "Recent deltas",
+        "open_loops": "Open loops",
+    }
+    section_html: list[str] = []
+    for name, label in labels.items():
+        items = sections.get(name) or []
+        rows: list[str] = []
+        for item in items:
+            handoff = ""
+            if item.get("panel_handoff"):
+                handoff = (
+                    '<button type="button" class="reorient-panel-handoff" '
+                    'data-testid="reorient-panel-handoff" '
+                    'data-intent="reorient.panelHandoff">Panel</button>'
+                )
+            rows.append(
+                f"""
+              <li class="reorient-item" data-testid="reorient-item">
+                <span class="reorient-item-label">{_e(item.get("label", ""))}</span>
+                <a
+                  class="reorient-source"
+                  data-testid="reorient-source-link"
+                  href="#"
+                  data-source-link="{_e(item.get("source_link", ""))}">
+                  {_e(item.get("source_link", ""))}
+                </a>
+                {handoff}
+              </li>"""
+            )
+        section_html.append(
+            f"""
+            <section
+              class="reorient-section"
+              data-testid="reorient-section"
+              data-reorient-section="{_e(name)}">
+              <div class="reorient-section-title">{_e(label)}</div>
+              <ul class="reorient-list">{"".join(rows)}</ul>
+            </section>"""
+        )
+    return f"""
+        <section class="reorient-mode" data-testid="reorient-mode">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Reorient</span>
+            <span class="rail-state-value">read-only</span>
+          </div>
+          {"".join(section_html)}
         </section>"""
 
 

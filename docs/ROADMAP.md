@@ -371,6 +371,7 @@ All six task specs are complete and closed; promotion and rollback skills are au
 - First visual alignment pass delivered (#1119): Yggdrasil design tokens, note body as primary surface, companion rail placeholder, dev/staging marker. This is a dev/staging shell, not a production Companion UI contract.
 - Existing model/runtime foundations confirmed shipped and not to be rebuilt: Canvas Core models and session API (`canvas_core/`, `app/api/routes/canvas.py`), Panel models and confirmation service (`panel/`, `app/panel/confirmation.py`), Canvas Suggestion Flow models (`canvas_suggestion_flow/`), `GET /api/artifacts/note` artifact read endpoint. Remaining Companion UI work is browser wiring, read-side state discovery, stub replacement, and production shell hardening.
 - Governance stub replaced: `_StubPipeline` in `app/api/routes/canvas.py` wired to real `CanvasPanelPipeline` that stages proposals in `ProposalStore`; Panel correction path in `PanelConfirmationService` implemented.
+- Product mode integration has begun in the dev/staging workspace shell: Find renders source candidates with explanation and Panel handoff, and Reorient renders read-only orientation sections from the orientation runtime with source links and Panel handoff hints. Resurface and Act remain pending.
 - **Issue-first policy**: all future Companion UI implementation changes must be governed by a bounded GitHub issue before implementation begins. Docs-first where contracts are undecided. Any issue that discovers a shipped model must be rescoped as integration work, not reimplementation.
 - Next implementation sequence (immediate queue — items 7–8 shipped above; items 3–6 and 9–10 are the active forward line):
   1. `docs(companion-ui)`: define post-dev-server implementation roadmap
@@ -384,4 +385,4 @@ All six task specs are complete and closed; promotion and rollback skills are au
   9. `docs(canvas-ui)`: decide browser editor integration for shipped Canvas API (blocked on #3)
   10. `docs(panel-ui)`: define missing Panel state discovery delta — scoped as gap analysis against existing `PANEL_COMPANION_UI_CONTRACT.md`; not a new contract from scratch
   - Items 3–6 and items 9–10 are sequential; items in each group can run in parallel where independent.
-  - Then: Canvas browser integration (wire existing models), suggestion-flow browser integration, Panel browser data-binding, product modes (Find/Reorient/Resurface/Act).
+  - Then: remaining product modes (Resurface/Act) on top of the wired browser surfaces.
