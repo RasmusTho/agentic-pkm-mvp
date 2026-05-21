@@ -9,6 +9,7 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.workspace_http_client import WorkspaceClientHTTPError
 
 
 class _FakeClient:
@@ -16,7 +17,7 @@ class _FakeClient:
         self,
         payloads: list[dict[str, Any]],
         *,
-        post_response: dict[str, Any] | None = None,
+        post_response: dict[str, Any] | Exception | None = None,
     ) -> None:
         self.payloads = payloads
         self.post_response = post_response or {
@@ -24,7 +25,11 @@ class _FakeClient:
             "artifact_id": "art-1138",
             "status": "executed",
             "outcome": "success",
-            "receipt": {"message": "Done", "outcome": "success"},
+            "receipt": {
+                "message": "Done",
+                "outcome": "success",
+                "timestamp": "2026-05-21T19:00:00Z",
+            },
             "idempotency_key": "server-key",
         }
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
@@ -36,6 +41,8 @@ class _FakeClient:
 
     def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
         self.post_calls.append((url, json))
+        if isinstance(self.post_response, Exception):
+            raise self.post_response
         return self.post_response
 
 
@@ -73,6 +80,11 @@ def _workspace_payload(
                     "artifact_id": "art-1138",
                     "description": "Do the thing",
                     "status": proposal_status,
+                    "evidence": {
+                        "trigger_summary": "Trigger summary",
+                        "action_class": "bounded.panel_action",
+                        "cognition_route": "rule",
+                    },
                     "affordances": {"confirm": True, "correct": True, "reject": True},
                 }
             ],
@@ -173,7 +185,13 @@ def test_receipt_rendered_after_executed() -> None:
     html = _html(page)
 
     assert 'data-testid="workspace-panel-receipt"' in html
+    assert 'data-receipt-persistence="durable-runtime-projection"' in html
+    assert 'data-testid="workspace-panel-receipt-outcome"' in html
+    assert 'data-testid="workspace-panel-receipt-message"' in html
+    assert 'data-testid="workspace-panel-receipt-timestamp"' in html
+    assert "success" in html
     assert "Done" in html
+    assert "2026-05-21T19:00:00Z" in html
 
 
 def test_blocked_reason_rendered() -> None:
@@ -198,7 +216,33 @@ def test_blocked_reason_rendered() -> None:
     html = _html(page)
 
     assert 'data-testid="workspace-panel-blocked-reason"' in html
+    assert 'data-testid="workspace-panel-block-gate"' in html
+    assert "writeguard" in html
     assert "Writes blocked" in html
+
+
+def test_same_turn_blocked_copy_rendered_without_page_error() -> None:
+    client = _FakeClient(
+        [_workspace_payload()],
+        post_response=WorkspaceClientHTTPError(422, "same-turn confirmation denied"),
+    )
+    page = _loaded_page(client)
+    state = page.confirm_panel_proposal(
+        proposal_id="proposal-1",
+        artifact_id="art-1138",
+        note_path="Notes/panel.md",
+    )
+
+    html = _html(page)
+
+    assert state.is_loaded is True
+    assert state.error is None
+    assert 'data-testid="workspace-panel-blocked-reason"' in html
+    assert "same-turn" in html
+    assert (
+        "Same-turn confirmation is not allowed. "
+        "The proposal must be confirmed in a later interaction."
+    ) in html
 
 
 def test_panel_response_cleared_when_switching_notes() -> None:
@@ -224,11 +268,60 @@ def test_panel_actions_active_only_for_staged_proposal() -> None:
     html = _html(_loaded_page(_FakeClient([_workspace_payload()])))
 
     assert 'data-testid="workspace-panel-proposal-row"' in html
+    assert 'data-proposal-id="proposal-1"' in html
+    assert 'data-artifact-id="art-1138"' in html
+    assert 'data-testid="workspace-panel-proposal-id"' in html
+    assert 'data-testid="workspace-panel-artifact-id"' in html
     assert 'data-affordance-status="active"' in html
     assert 'data-panel-action="confirm"' in html
     assert 'data-panel-action="correct"' in html
     assert 'data-panel-action="reject"' in html
     assert 'data-runtime-backed="true"' in html
+
+
+def test_panel_evidence_disclosure_contains_route_fields() -> None:
+    html = _html(_loaded_page(_FakeClient([_workspace_payload()])))
+
+    assert 'data-testid="workspace-panel-evidence"' in html
+    assert 'data-testid="workspace-panel-evidence-disclosure"' in html
+    assert 'data-testid="workspace-panel-trigger-summary"' in html
+    assert 'data-testid="workspace-panel-action-class"' in html
+    assert 'data-testid="workspace-panel-cognition-route"' in html
+    assert "Trigger summary" in html
+    assert "bounded.panel_action" in html
+    assert "rule" in html
+
+
+def test_inverse_action_is_display_only_when_declared() -> None:
+    client = _FakeClient(
+        [_workspace_payload(), _workspace_payload()],
+        post_response={
+            "proposal_id": "proposal-1",
+            "artifact_id": "art-1138",
+            "status": "executed",
+            "outcome": "success",
+            "receipt": {
+                "message": "Done",
+                "outcome": "success",
+                "inverse_action": "undo-panel-action-1",
+            },
+            "idempotency_key": "server-key",
+        },
+    )
+    page = _loaded_page(client)
+    page.confirm_panel_proposal(
+        proposal_id="proposal-1",
+        artifact_id="art-1138",
+        note_path="Notes/panel.md",
+    )
+
+    html = _html(page)
+
+    assert 'data-testid="workspace-panel-inverse-action"' in html
+    assert 'data-affordance-status="read-only"' in html
+    assert 'data-runtime-backed="false"' in html
+    assert "undo-panel-action-1" in html
+    assert 'data-panel-action="inverse"' not in html
 
 
 def test_unknown_or_expired_panel_proposal_state_is_unavailable() -> None:
