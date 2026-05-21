@@ -146,6 +146,10 @@ def _render_note_section(fields: dict) -> str:
     find_mode_html = _render_find_mode(fields.get("find_candidates") or [])
     reorient_mode_html = _render_reorient_mode(fields.get("reorient_sections") or {})
     resurface_mode_html = _render_resurface_mode(fields.get("resurface_candidates") or [])
+    act_mode_html = _render_act_mode(
+        proposals=fields.get("panel_proposals") or [],
+        response=fields.get("panel_last_response") or {},
+    )
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
     )
@@ -213,6 +217,7 @@ def _render_note_section(fields: dict) -> str:
         {find_mode_html}
         {reorient_mode_html}
         {resurface_mode_html}
+        {act_mode_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -447,6 +452,85 @@ def _render_resurface_mode(candidates: list[dict]) -> str:
             <span class="rail-state-value">low-pressure</span>
           </div>
           {"".join(rows)}
+        </section>"""
+
+
+def _render_act_mode(*, proposals: list[dict], response: dict) -> str:
+    if not proposals and not response:
+        return ""
+
+    proposal_rows: list[str] = []
+    for proposal in proposals:
+        evidence = proposal.get("evidence") or {}
+        proposal_id = _e(proposal.get("proposal_id", ""))
+        artifact_id = _e(proposal.get("artifact_id", ""))
+        affordances = proposal.get("affordances") or {}
+        actions = "".join(
+            (
+                '<button type="button" class="act-panel-action" '
+                f'data-testid="act-{label}" '
+                f'data-panel-action="{_e(label)}" '
+                'data-api-method="POST" '
+                'data-api-path="/api/panel/confirm" '
+                f'data-proposal-id="{proposal_id}" '
+                f'data-artifact-id="{artifact_id}" '
+                'data-writeguard-bypass="false">'
+                f"{_e(label)}</button>"
+            )
+            for label in ("confirm", "correct", "reject")
+            if affordances.get(label, True)
+        )
+        proposal_rows.append(
+            f"""
+          <article
+            class="act-proposal"
+            data-testid="act-proposal-review"
+            data-proposal-id="{proposal_id}"
+            data-artifact-id="{artifact_id}">
+            <div class="act-proposal-title">{_e(proposal.get("description", ""))}</div>
+            <div class="act-bundle" data-testid="act-action-bundle-context">
+              <span>{_e(evidence.get("trigger_summary", ""))}</span>
+              <span>{_e(evidence.get("action_class", ""))}</span>
+              <span>{_e(evidence.get("cognition_route", ""))}</span>
+            </div>
+            <div class="act-flow" data-testid="act-governed-flow">
+              intent &rarr; propose &rarr; decide &rarr; execute &rarr; receipt
+            </div>
+            <div class="act-actions">{actions}</div>
+          </article>"""
+        )
+
+    receipt_html = ""
+    if response:
+        receipt = response.get("receipt") or {}
+        block_reason = response.get("block_reason") or {}
+        receipt_message = (
+            receipt.get("message")
+            or receipt.get("outcome")
+            or block_reason.get("message")
+            or response.get("outcome")
+            or response.get("status")
+            or ""
+        )
+        receipt_html = f"""
+          <div class="act-receipt" data-testid="act-durable-receipt">
+            <span data-testid="act-receipt-status">{_e(response.get("status", ""))}</span>
+            <span data-testid="act-receipt-outcome">{_e(response.get("outcome", ""))}</span>
+            <span>{_e(receipt_message)}</span>
+          </div>"""
+
+    return f"""
+        <section
+          class="act-mode"
+          data-testid="act-mode"
+          data-authority-surface="panel"
+          data-writeguard-bypass="false">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Act</span>
+            <span class="rail-state-value">Panel confirm path</span>
+          </div>
+          {"".join(proposal_rows)}
+          {receipt_html}
         </section>"""
 
 
