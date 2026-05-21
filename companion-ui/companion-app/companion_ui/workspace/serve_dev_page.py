@@ -34,6 +34,7 @@ LAN/Tailscale (explicit operator action required — not the default):
 """
 
 import html as _html
+import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -69,6 +70,11 @@ def _e(value: str) -> str:
     return _html.escape(str(value))
 
 
+def _status_label(value: object, *, fallback: str = "unknown") -> str:
+    text = str(value or "").strip()
+    return text if text else fallback
+
+
 def _render_note_section(fields: dict) -> str:
     """Render the workspace shell from render_fields() output.
 
@@ -80,6 +86,15 @@ def _render_note_section(fields: dict) -> str:
     note_path_val = _e(fields.get("note_path", ""))
     artifact_id = _e(fields.get("artifact_id", ""))
     content_hash = _e(fields.get("content_hash", ""))
+    artifact_kind = _e(_status_label(fields.get("artifact_kind"), fallback="human_note"))
+    identity_source = _e(_status_label(fields.get("artifact_identity_source")))
+    identity_state_raw = _status_label(fields.get("artifact_identity_state"))
+    identity_state = _e(identity_state_raw)
+    companion_of = _e(fields.get("artifact_companion_of") or "")
+    owns_identity = bool(fields.get("artifact_owns_identity", True))
+    runtime_environment = _e(_status_label(fields.get("runtime_environment_label")))
+    runtime_channel = _e(_status_label(fields.get("runtime_api_base_url_label"), fallback="local-dev"))
+    runtime_trace_id = _e(fields.get("runtime_trace_id") or "")
     body = _e(fields.get("body", ""))
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
@@ -102,6 +117,52 @@ def _render_note_section(fields: dict) -> str:
     writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
     writeguard_blocked = writeguard_status.lower() == "blocked"
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
+    guard_degraded = bool(fields.get("guard_degraded", False))
+    identity_caution_html = ""
+    if identity_state_raw.startswith("unresolved"):
+        identity_caution_html = (
+            '<div class="identity-caution" data-testid="workspace-artifact-identity-caution">'
+            "Artifact identity unresolved; runtime may block governed actions until identity is resolved."
+            "</div>"
+        )
+    companion_html = (
+        f'<span class="identity-meta" data-testid="workspace-companion-of">companion of {companion_of}</span>'
+        if companion_of
+        else ""
+    )
+    safety_strip_html = f"""
+      <section
+        class="runtime-safety-strip"
+        data-testid="workspace-runtime-safety-strip"
+        data-affordance-status="read-only"
+        data-runtime-backed="true">
+        <div class="safety-item" data-testid="workspace-runtime-channel">
+          <span class="safety-label">runtime</span>
+          <span>{runtime_environment}</span>
+          <span class="safety-sep">/</span>
+          <span>{runtime_channel}</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-vault-identity">
+          <span class="safety-label">vault/channel</span>
+          <span>vault identity unavailable</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-writeguard-state">
+          <span class="safety-label">WriteGuard</span>
+          <span>{writeguard_status}</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-canvas-enabled-state">
+          <span class="safety-label">Canvas</span>
+          <span>{'enabled' if canvas_enabled else 'disabled'}</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-guard-degraded-state">
+          <span class="safety-label">guard</span>
+          <span>{'degraded' if guard_degraded else 'normal'}</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-runtime-trace-id">
+          <span class="safety-label">trace</span>
+          <code>{runtime_trace_id or 'unavailable'}</code>
+        </div>
+      </section>"""
     guard_messages: list[str] = []
     if writeguard_status.lower() == "blocked":
         guard_messages.append("WriteGuard blocked")
@@ -177,15 +238,35 @@ def _render_note_section(fields: dict) -> str:
     return f"""
   <div class="workspace-layout">
     <div class="workspace-main">
-      <header class="note-header" data-testid="workspace-note-header" data-region="note-header">
+      {safety_strip_html}
+      <header
+        class="note-header active-note-header"
+        data-testid="workspace-note-header"
+        data-region="note-header">
         <h1 class="note-title">{title}</h1>
         <div class="note-provenance">
           <span class="prov-item"><span class="prov-label">path</span><code>{note_path_val}</code></span>
           <span class="prov-sep">&middot;</span>
-          <span class="prov-item"><span class="prov-label">artifact</span><code>{artifact_id}</code></span>
+          <span
+            class="prov-item artifact-identity-pill"
+            data-testid="workspace-artifact-identity-pill"
+            data-identity-state="{identity_state}"
+            data-identity-source="{identity_source}"
+            data-artifact-kind="{artifact_kind}"
+            data-owns-identity="{'true' if owns_identity else 'false'}">
+            <span class="prov-label">artifact</span><code>{artifact_id or 'unresolved'}</code>
+            <span class="identity-meta">{identity_state}</span>
+            <span class="identity-meta">{identity_source}</span>
+            {companion_html}
+          </span>
           <span class="prov-sep">&middot;</span>
-          <span class="prov-item"><span class="prov-label">hash</span><code>{content_hash}</code></span>
+          <span
+            class="prov-item content-hash-pill"
+            data-testid="workspace-content-hash-pill">
+            <span class="prov-label">hash</span><code>{content_hash or 'unavailable'}</code>
+          </span>
         </div>
+        {identity_caution_html}
       </header>
       <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
         <pre class="note-body-content">{body}</pre>
@@ -881,11 +962,48 @@ def _render_panel_confirm_response(response: dict) -> str:
         </div>"""
 
 
+def _error_detail(error: str) -> dict:
+    if not error.startswith("HTTP "):
+        return {}
+    _, _, maybe_json = error.partition(": ")
+    if not maybe_json:
+        return {}
+    try:
+        payload = json.loads(maybe_json)
+    except json.JSONDecodeError:
+        return {}
+    detail = payload.get("detail")
+    return detail if isinstance(detail, dict) else {}
+
+
 def _render_error_section(error: str) -> str:
     """Render a visible error state using Yggdrasil destructive tokens."""
+    detail = _error_detail(error)
+    error_kind = str(detail.get("error") or "")
+    if error_kind == "note_not_found":
+        note_path = _e(detail.get("note_path") or "")
+        message = _e(detail.get("message") or "No note exists for the requested note_path")
+        return f"""
+  <div class="error-state note-not-found-state" data-testid="workspace-note-not-found-state">
+    <span class="error-label">Note not found</span>
+    <span class="error-message">
+      <code>{note_path}</code> — {message}. Check the runtime-relative path and load again.
+    </span>
+  </div>"""
+    runtime_unavailable = any(
+        marker in error.lower()
+        for marker in ("connection refused", "timed out", "timeout", "network")
+    )
+    runtime_label = "Runtime unavailable" if runtime_unavailable else "API Error"
+    runtime_marker = (
+        '<span data-testid="workspace-runtime-unavailable-state"></span>'
+        if runtime_unavailable
+        else ""
+    )
     return f"""
-  <div class="error-state" data-testid="workspace-error-state">
-    <span class="error-label">API Error</span>
+  <div class="error-state" data-testid="workspace-error-state" data-error-kind="{'runtime-unavailable' if runtime_unavailable else 'api-error'}">
+    <span class="error-label">{runtime_label}</span>
+    {runtime_marker}
     <span class="error-message"><code>{_e(error)}</code></span>
   </div>"""
 
@@ -1096,6 +1214,11 @@ def render_index_html(
     }}
     .error-message {{ color: var(--fg-2); }}
     .error-message code {{ background: none; border: none; padding: 0; color: var(--fg-1); }}
+    .note-not-found-state {{
+      background: rgba(212,168,67,0.08);
+      border-color: rgba(212,168,67,0.35);
+    }}
+    .note-not-found-state .error-label {{ color: var(--accent); }}
 
     /* ---- Workspace layout ---- */
     .workspace-layout {{
@@ -1111,6 +1234,40 @@ def render_index_html(
       flex-direction: column;
       overflow: hidden;
     }}
+    .runtime-safety-strip {{
+      align-items: center;
+      background: rgba(17,26,46,0.65);
+      border-bottom: 1px solid var(--border);
+      color: var(--fg-2);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      padding: 8px 24px;
+    }}
+    .safety-item {{
+      align-items: baseline;
+      display: inline-flex;
+      gap: 5px;
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .safety-label {{
+      color: var(--fg-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .safety-item code {{
+      background: none;
+      border: none;
+      color: var(--fg-2);
+      max-width: 18ch;
+      overflow: hidden;
+      padding: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .safety-sep {{ color: var(--border-strong); }}
 
     /* ---- Note header ---- */
     .note-header {{
@@ -1136,6 +1293,29 @@ def render_index_html(
       color: var(--fg-3);
     }}
     .prov-item {{ display: inline-flex; align-items: baseline; gap: 4px; }}
+    .artifact-identity-pill, .content-hash-pill {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 2px 6px;
+    }}
+    .artifact-identity-pill[data-identity-state^="unresolved"] {{
+      border-color: rgba(212,168,67,0.35);
+    }}
+    .identity-meta {{
+      color: var(--fg-3);
+      font-size: var(--text-xs);
+    }}
+    .identity-caution {{
+      background: rgba(212,168,67,0.08);
+      border: 1px solid rgba(212,168,67,0.35);
+      border-radius: var(--radius-md);
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      margin-top: 10px;
+      padding: 8px 10px;
+    }}
     .prov-label {{
       letter-spacing: 0.06em;
       text-transform: uppercase;
@@ -1160,11 +1340,14 @@ def render_index_html(
       background: var(--bg-raised);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
-      padding: 20px;
+      margin: 0 auto;
+      max-width: 920px;
+      min-height: 100%;
+      padding: 28px 32px;
       font-family: var(--font-mono);
       font-size: var(--text-sm);
       color: var(--fg-1);
-      line-height: 1.65;
+      line-height: 1.75;
       white-space: pre-wrap;
       word-break: break-word;
     }}

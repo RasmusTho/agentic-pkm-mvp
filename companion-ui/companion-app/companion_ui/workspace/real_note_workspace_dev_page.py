@@ -97,6 +97,14 @@ class DevPageState:
     shell: Optional[RealNoteWorkspaceShell] = None
     error: Optional[str] = None
     panel_rail_placeholder: str = "Panel / agent rail — placeholder (dev)"
+    artifact_kind: str = "human_note"
+    artifact_identity_source: str = "unknown"
+    artifact_identity_state: str = "unknown"
+    artifact_companion_of: str | None = None
+    artifact_owns_identity: bool = True
+    runtime_environment_label: str = "unknown"
+    runtime_api_base_url_label: str = "local-dev"
+    runtime_trace_id: str = ""
     canvas_session_id: str | None = None
     canvas_session_state: str = "idle"
     canvas_user_present: bool = False
@@ -132,6 +140,7 @@ class DevPageState:
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
     guard_canvas_enabled: bool = True
+    guard_degraded: bool = False
     is_loaded: bool = False
 
 
@@ -257,6 +266,14 @@ class RealNoteWorkspaceDevPage:
         self.state = DevPageState(
             shell=shell,
             panel_rail_placeholder=panel_render.get("label", "Panel ready"),
+            artifact_kind=artifact.get("artifact_kind") or "human_note",
+            artifact_identity_source=artifact.get("identity_source") or "unknown",
+            artifact_identity_state=artifact.get("identity_state") or "unknown",
+            artifact_companion_of=artifact.get("companion_of"),
+            artifact_owns_identity=bool(artifact.get("owns_identity", True)),
+            runtime_environment_label=runtime.get("environment_label") or "unknown",
+            runtime_api_base_url_label=runtime.get("api_base_url_label") or "local-dev",
+            runtime_trace_id=runtime.get("trace_id") or "",
             canvas_session_id=canvas.get("session_id"),
             canvas_session_state=session_state,
             canvas_user_present=bool(canvas.get("user_present", False)),
@@ -295,6 +312,7 @@ class RealNoteWorkspaceDevPage:
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
+            guard_degraded=bool(guards.get("degraded", False)),
             is_loaded=True,
         )
         return self.state
@@ -648,6 +666,14 @@ class RealNoteWorkspaceDevPage:
             "body": shell.body,
             "content_hash": shell.content_hash,
             "panel_rail": self.state.panel_rail_placeholder,
+            "artifact_kind": self.state.artifact_kind,
+            "artifact_identity_source": self.state.artifact_identity_source,
+            "artifact_identity_state": self.state.artifact_identity_state,
+            "artifact_companion_of": self.state.artifact_companion_of,
+            "artifact_owns_identity": self.state.artifact_owns_identity,
+            "runtime_environment_label": self.state.runtime_environment_label,
+            "runtime_api_base_url_label": self.state.runtime_api_base_url_label,
+            "runtime_trace_id": self.state.runtime_trace_id,
             "canvas_session_id": self.state.canvas_session_id,
             "canvas_session_state": self.state.canvas_session_state,
             "canvas_user_present": self.state.canvas_user_present,
@@ -683,6 +709,7 @@ class RealNoteWorkspaceDevPage:
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
             "guard_canvas_enabled": self.state.guard_canvas_enabled,
+            "guard_degraded": self.state.guard_degraded,
             "is_production_ui": self.is_production_ui,
             "dev_page_label": self.dev_page_label,
         }

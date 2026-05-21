@@ -30,7 +30,10 @@ from typing import Any, Optional
 import httpx
 import pytest
 
-from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
+from companion_ui.workspace.workspace_http_client import (
+    WorkspaceClientHTTPError,
+    WorkspaceClientNetworkError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -73,13 +76,22 @@ def _note_payload(
             "note_path": note_path,
             "title": title,
             "artifact_id": artifact_id,
+            "artifact_kind": "human_note",
             "content_hash": content_hash,
             "body": body,
+            "identity_source": "frontmatter.uuid",
+            "identity_state": "resolved",
+            "companion_of": None,
+            "owns_identity": True,
         },
         "canvas": {"session_state": "idle", "session_persistence": "in_memory"},
         "panel": {"state": "idle", "proposal_count": 0},
         "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
-        "runtime": {},
+        "runtime": {
+            "environment_label": "dev",
+            "api_base_url_label": "local-dev",
+            "trace_id": "trace-server-1",
+        },
         "suggestions": {},
     }
 
@@ -341,6 +353,47 @@ class TestRenderIndexHtml:
         assert 'data-capability="canvas.applyBodyEdit"' in html
         assert 'data-runtime-backed="true"' in html
 
+    def test_renders_runtime_safety_strip_and_identity_pills(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        fields = {
+            "title": "Some Note",
+            "note_path": "Some/Note.md",
+            "artifact_id": "art-123",
+            "artifact_kind": "human_note",
+            "artifact_identity_source": "frontmatter.uuid",
+            "artifact_identity_state": "resolved",
+            "content_hash": "sha256-deadbeef",
+            "body": "This is the note body.",
+            "panel_rail": "Panel / agent rail placeholder",
+            "runtime_environment_label": "dev",
+            "runtime_api_base_url_label": "local-dev",
+            "runtime_trace_id": "trace-123",
+            "guard_canvas_enabled": False,
+            "guard_writeguard_status": "blocked",
+            "guard_degraded": True,
+            "is_production_ui": False,
+            "dev_page_label": "dev/staging",
+        }
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=fields,
+        )
+
+        assert 'data-testid="workspace-runtime-safety-strip"' in html
+        assert 'data-testid="workspace-runtime-channel"' in html
+        assert "dev" in html
+        assert "local-dev" in html
+        assert 'data-testid="workspace-vault-identity"' in html
+        assert "vault identity unavailable" in html
+        assert 'data-testid="workspace-writeguard-state"' in html
+        assert "blocked" in html
+        assert 'data-testid="workspace-canvas-enabled-state"' in html
+        assert "disabled" in html
+        assert 'data-testid="workspace-artifact-identity-pill"' in html
+        assert 'data-identity-state="resolved"' in html
+        assert 'data-testid="workspace-content-hash-pill"' in html
+
     def test_error_state_is_visible(self) -> None:
         from companion_ui.workspace.serve_dev_page import render_index_html
 
@@ -351,6 +404,25 @@ class TestRenderIndexHtml:
         )
         assert "error" in html.lower() or "Error" in html
         assert "Connection refused" in html
+
+    def test_note_not_found_renders_distinct_state(self) -> None:
+        from companion_ui.workspace.serve_dev_page import handle_get
+
+        client = _FakeClient(
+            get_error=WorkspaceClientHTTPError(
+                404,
+                '{"detail":{"error":"note_not_found","message":"No note exists for the requested note_path","note_path":"Missing/Note.md","trace_id":"trace-missing"}}',
+            ),
+        )
+        html = handle_get(
+            query_string="note_path=Missing%2FNote.md",
+            client=client,
+            api_base_url="http://127.0.0.1:18001",
+        )
+
+        assert 'data-testid="workspace-note-not-found-state"' in html
+        assert "Note not found" in html
+        assert "Missing/Note.md" in html
 
     def test_note_content_not_shown_when_only_error(self) -> None:
         from companion_ui.workspace.serve_dev_page import render_index_html
