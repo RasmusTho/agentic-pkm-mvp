@@ -448,7 +448,20 @@ def _render_find_mode(candidates: list[dict]) -> str:
 
 def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
     if not any(sections.get(name) for name in sections):
-        return ""
+        return """
+        <section
+          class="reorient-mode"
+          data-testid="reorient-mode"
+          data-affordance-status="read-only"
+          data-capability="reorient">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Reorient</span>
+            <span class="rail-state-value">read-only</span>
+          </div>
+          <div class="reorient-empty" data-testid="reorient-empty-state">
+            Reorient is available, but no orientation payload is available for this note yet.
+          </div>
+        </section>"""
 
     labels = {
         "facts": "Facts",
@@ -458,24 +471,46 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
         "recent_deltas": "Recent deltas",
         "open_loops": "Open loops",
     }
+    groups = [
+        ("where-am-i", "Where am I?", ("facts", "inferences")),
+        ("what-changed", "What changed?", ("recent_deltas", "stale_context")),
+        ("what-next", "What next?", ("candidates", "open_loops")),
+    ]
     section_html: list[str] = []
-    for name, label in labels.items():
-        items = sections.get(name) or []
+    for group_id, group_label, section_names in groups:
         rows: list[str] = []
-        for item in items:
-            handoff = ""
-            if item.get("panel_handoff"):
-                handoff = (
-                    '<button type="button" class="reorient-panel-handoff" '
-                    'data-testid="reorient-panel-handoff" '
-                    'data-intent="reorient.panelHandoff" '
-                    'data-affordance-status="unavailable" '
-                    'data-runtime-backed="false" '
-                    'aria-disabled="true" disabled>Panel unavailable</button>'
-                )
-            rows.append(
-                f"""
-              <li class="reorient-item" data-testid="reorient-item">
+        for name in section_names:
+            items = sections.get(name) or []
+            if not items:
+                continue
+            item_kind = {
+                "facts": "fact",
+                "inferences": "inference",
+                "candidates": "candidate",
+                "stale_context": "stale-caution",
+                "recent_deltas": "recent-delta",
+                "open_loops": "open-loop",
+            }[name]
+            for item in items:
+                handoff = ""
+                if item.get("panel_handoff"):
+                    handoff = (
+                        '<button type="button" class="reorient-panel-handoff" '
+                        'data-testid="reorient-panel-handoff" '
+                        'data-intent="reorient.panelHandoff" '
+                        'data-affordance-status="read-only" '
+                        'data-runtime-backed="false" '
+                        'aria-disabled="true" disabled>'
+                        "Panel handoff candidate</button>"
+                    )
+                rows.append(
+                    f"""
+              <li
+                class="reorient-item"
+                data-testid="reorient-item"
+                data-reorient-section="{_e(name)}"
+                data-reorient-kind="{_e(item_kind)}">
+                <span class="reorient-kind" data-testid="reorient-kind">{_e(labels[name])}</span>
                 <span class="reorient-item-label">{_e(item.get("label", ""))}</span>
                 <a
                   class="reorient-source"
@@ -486,19 +521,23 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
                 </a>
                 {handoff}
               </li>"""
-            )
+                )
         section_html.append(
             f"""
             <section
               class="reorient-section"
               data-testid="reorient-section"
-              data-reorient-section="{_e(name)}">
-              <div class="reorient-section-title">{_e(label)}</div>
+              data-reorient-group="{_e(group_id)}">
+              <div class="reorient-section-title">{_e(group_label)}</div>
               <ul class="reorient-list">{"".join(rows)}</ul>
             </section>"""
         )
     return f"""
-        <section class="reorient-mode" data-testid="reorient-mode">
+        <section
+          class="reorient-mode"
+          data-testid="reorient-mode"
+          data-affordance-status="read-only"
+          data-capability="reorient">
           <div class="rail-state-row">
             <span class="rail-state-label">Reorient</span>
             <span class="rail-state-value">read-only</span>
