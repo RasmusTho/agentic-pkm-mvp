@@ -51,9 +51,12 @@ def test_review_queue_requires_human_decision() -> None:
     assert queue.decided() == []
 
     # An entry is only promoted when a reviewer makes an explicit decision.
-    # Calling decide(..., decided_by="") is not a real decision and must be refused.
+    # Empty and whitespace-only decided_by values are not real decisions and must be refused.
     with pytest.raises(ReviewQueueError):
         queue.decide(candidate.candidate_id, ReviewDecision.PROMOTE, decided_by="")
+
+    with pytest.raises(ReviewQueueError):
+        queue.decide(candidate.candidate_id, ReviewDecision.PROMOTE, decided_by="   ")
 
     # Without a recorded decision the queue continues to treat the candidate as pending.
     assert queue.get(candidate.candidate_id).status is ReviewStatus.PENDING

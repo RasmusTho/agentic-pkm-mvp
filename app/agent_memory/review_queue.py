@@ -33,6 +33,9 @@ class ReviewDecision(str, Enum):
 
 class ReviewStatus(str, Enum):
     PENDING = "pending"
+    # PROMOTED means the review queue recorded a promote decision for this candidate.
+    # It does not mean a durable promoted memory artifact has been created —
+    # durable promotion semantics and storage are owned by #1081.
     PROMOTED = "promoted"
     REJECTED = "rejected"
     REVISED = "revised"
@@ -147,9 +150,9 @@ class MemoryCandidateReviewQueue:
         """Record an explicit review decision for ``candidate_id``.
 
         ``decided_by`` is required: a review decision must name its reviewer
-        (human ID, policy identifier, or system reviewer ID). Empty values are
-        refused because they collapse the human-decision boundary the queue
-        exists to enforce.
+        (human ID, policy identifier, or system reviewer ID). Empty or
+        whitespace-only values are refused because they collapse the
+        human-decision boundary the queue exists to enforce.
 
         ``ReviewDecision.REVISE`` requires a revised :class:`MemoryCandidate`
         which is enqueued as a new pending entry whose ``revision_of`` points
@@ -157,7 +160,7 @@ class MemoryCandidateReviewQueue:
         ``REVISED`` so its evidence remains inspectable.
         """
 
-        if not decided_by:
+        if not decided_by.strip():
             raise ReviewQueueError(
                 "decided_by is required to record a review decision"
             )
