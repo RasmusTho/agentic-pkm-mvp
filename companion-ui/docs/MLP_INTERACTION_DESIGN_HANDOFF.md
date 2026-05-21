@@ -20,11 +20,11 @@ This document curates the Claude Design MLP handoff into a repo-readable impleme
 
 - This document is design input, not source of truth.
 - It is subordinate to:
-  - `/Users/rasmusthornberg/code/agentic-pkm-mvp/docs/COMPANION_UI_PRODUCT_SPEC.md`
-  - `/Users/rasmusthornberg/code/agentic-pkm-mvp/companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md`
-  - `/Users/rasmusthornberg/code/agentic-pkm-mvp/companion-ui/docs/CANVAS_SUGGESTION_FLOW.md`
-  - `/Users/rasmusthornberg/code/agentic-pkm-mvp/companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md`
-  - `/Users/rasmusthornberg/code/agentic-pkm-mvp/companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`
+  - `docs/COMPANION_UI_PRODUCT_SPEC.md`
+  - `companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md`
+  - `companion-ui/docs/CANVAS_SUGGESTION_FLOW.md`
+  - `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md`
+  - `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`
   - shipped runtime and UI behavior
 - Companion UI is a shell/host, not a fourth authority surface.
 - Vault/Markdown remains the human-readable canonical surface.
@@ -283,6 +283,7 @@ Each state includes: when it appears, copy guidance, allowed actions, forbidden 
 ## 14. MLP definition of done
 
 - [ ] Handoff doc exists at `/Users/rasmusthornberg/code/agentic-pkm-mvp/companion-ui/docs/MLP_INTERACTION_DESIGN_HANDOFF.md`.
+- [ ] Handoff doc exists at `companion-ui/docs/MLP_INTERACTION_DESIGN_HANDOFF.md`.
 - [ ] Doc states it is design input, not source of truth.
 - [ ] Doc references #1177, #1178, #1179, #1180.
 - [ ] Vertical slice is exactly `Open note -> Reorient -> Canvas body edit -> Panel Act -> Receipt`.
