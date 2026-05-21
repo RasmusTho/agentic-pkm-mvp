@@ -20,6 +20,10 @@ from companion_ui.workspace.serve_dev_page import (
 
 _PRODUCTION_PORT = 8113
 _PRODUCTION_API_BASE_URL = "http://127.0.0.1:18000"
+_PRODUCTION_SAFETY_WARNING = (
+    "Local-only default. Public internet exposure is not supported; "
+    "this profile does not provide auth, TLS, or a reverse proxy."
+)
 _PRODUCTION_STATIC_ASSETS = {
     "/static/companion-workspace.css": (
         "text/css; charset=utf-8",
@@ -69,6 +73,7 @@ def main() -> None:
     )
     server = HTTPServer((config["host"], config["port"]), handler)
     print("[companion-ui] Production profile", flush=True)
+    print(f"[companion-ui] Safety:     {_PRODUCTION_SAFETY_WARNING}", flush=True)
     print(
         f"[companion-ui] Listening:   http://{config['host']}:{config['port']}/",
         flush=True,

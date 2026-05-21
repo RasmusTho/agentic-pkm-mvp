@@ -10,6 +10,20 @@ def test_production_port(monkeypatch) -> None:
     assert load_config()["port"] == 8113
 
 
+def test_production_default_host_is_local_only(monkeypatch) -> None:
+    monkeypatch.delenv("HOST", raising=False)
+    from companion_ui.workspace.serve_production_page import load_config
+
+    assert load_config()["host"] == "127.0.0.1"
+
+
+def test_production_default_api_points_at_prod_runtime(monkeypatch) -> None:
+    monkeypatch.delenv("COMPANION_API_BASE_URL", raising=False)
+    from companion_ui.workspace.serve_production_page import load_config
+
+    assert load_config()["api_base_url"] == "http://127.0.0.1:18000"
+
+
 def test_no_dev_marker_in_production() -> None:
     from companion_ui.workspace.serve_production_page import render_production_index_html
 
@@ -33,3 +47,58 @@ def test_production_output_links_static_asset() -> None:
     html = render_production_index_html(api_base_url="http://127.0.0.1:18000")
 
     assert 'href="/static/companion-workspace.css"' in html
+
+
+def test_production_safety_warning_is_explicit() -> None:
+    from companion_ui.workspace.serve_production_page import _PRODUCTION_SAFETY_WARNING
+
+    warning = _PRODUCTION_SAFETY_WARNING.lower()
+    assert "local-only" in warning
+    assert "public internet exposure is not supported" in warning
+    assert "auth" in warning
+    assert "tls" in warning
+    assert "reverse proxy" in warning
+
+
+def test_production_shell_shows_runtime_channel_and_guard_state() -> None:
+    from companion_ui.workspace.serve_production_page import render_production_index_html
+
+    html = render_production_index_html(
+        api_base_url="http://127.0.0.1:18000",
+        fields={
+            "title": "Prod Note",
+            "note_path": "Notes/prod.md",
+            "artifact_id": "art-prod",
+            "content_hash": "hash-prod",
+            "body": "# Prod Note",
+            "runtime_environment_label": "prod",
+            "runtime_api_base_url_label": "local-prod",
+            "guard_writeguard_status": "ok",
+            "guard_canvas_enabled": True,
+            "guard_degraded": False,
+        },
+    )
+
+    assert 'data-testid="workspace-runtime-channel"' in html
+    assert "prod" in html
+    assert "local-prod" in html
+    assert 'data-testid="workspace-writeguard-state"' in html
+    assert 'data-testid="workspace-guard-degraded-state"' in html
+
+
+def test_production_launch_safety_doc_covers_operator_requirements() -> None:
+    from pathlib import Path
+
+    doc = Path("companion-ui/docs/MLP_PRODUCTION_LAUNCH_SAFETY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "python -m companion_ui.workspace.serve_production_page" in doc
+    assert "Runtime API | 18001 | 18002 | 18000" in doc
+    assert "Companion UI | 8111 | 8112 | 8113" in doc
+    assert "HOST=127.0.0.1" in doc
+    assert "Tailscale" in doc
+    assert "Do not expose this profile to the public internet." in doc
+    assert "curl -fsS http://127.0.0.1:18000/health" in doc
+    assert "Ctrl-C" in doc
+    assert "No direct UI vault writes" in doc
