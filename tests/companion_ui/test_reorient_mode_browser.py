@@ -112,3 +112,28 @@ def test_panel_handoff() -> None:
 
     assert 'data-testid="reorient-panel-handoff"' in html
     assert 'data-intent="reorient.panelHandoff"' in html
+
+
+def test_workspace_reorient_failure_degrades_without_blocking_note_load(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from app.api.routes import companion
+
+    note = tmp_path / "Notes" / "reorient.md"
+    note.parent.mkdir()
+    note.write_text("---\nuuid: note-1141\n---\n# Reorient Note\n", encoding="utf-8")
+
+    monkeypatch.setattr(companion, "resolve_vault_root", lambda: tmp_path)
+
+    def fail_orientation() -> None:
+        raise RuntimeError("orientation unavailable")
+
+    monkeypatch.setattr(companion, "build_orientation_frame", fail_orientation)
+
+    response = companion.read_companion_workspace(note_path="Notes/reorient.md")
+
+    assert response.artifact.artifact_id == "note-1141"
+    assert response.runtime.reorient["stale_context"][0]["source_link"] == (
+        "runtime:orientation#unavailable"
+    )

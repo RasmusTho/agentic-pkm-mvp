@@ -231,8 +231,6 @@ def _writeguard_status() -> str:
 
 
 def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
-    frame = build_orientation_frame()
-
     def item(
         label: str,
         *,
@@ -243,6 +241,23 @@ def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
             "label": label,
             "source_link": source_link,
             "panel_handoff": panel_handoff,
+        }
+
+    try:
+        frame = build_orientation_frame()
+    except Exception:
+        return {
+            "facts": [],
+            "inferences": [],
+            "candidates": [],
+            "stale_context": [
+                item(
+                    "Orientation runtime unavailable; Reorient metadata is degraded.",
+                    source_link="runtime:orientation#unavailable",
+                )
+            ],
+            "recent_deltas": [],
+            "open_loops": [],
         }
 
     open_loops = [
