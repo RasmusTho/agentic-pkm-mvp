@@ -242,6 +242,19 @@ def test_unknown_or_expired_panel_proposal_state_is_unavailable() -> None:
     assert 'data-panel-action="confirm"' not in html
 
 
+def test_corrected_panel_proposal_remains_confirmable_and_rejectable() -> None:
+    html = _html(
+        _loaded_page(_FakeClient([_workspace_payload(proposal_status="corrected")]))
+    )
+
+    assert 'data-testid="workspace-panel-proposal-row"' in html
+    assert 'data-affordance-status="active"' in html
+    assert 'data-panel-action="confirm"' in html
+    assert 'data-panel-action="reject"' in html
+    assert 'data-panel-action="correct"' not in html
+    assert 'data-testid="workspace-panel-proposal-unavailable"' not in html
+
+
 def test_writeguard_blocked_panel_actions_are_marked_blocked() -> None:
     html = _html(
         _loaded_page(_FakeClient([_workspace_payload(writeguard_status="blocked")]))

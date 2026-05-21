@@ -508,7 +508,7 @@ def _render_act_mode(
         artifact_id = _e(proposal.get("artifact_id", ""))
         affordances = proposal.get("affordances") or {}
         proposal_status = str(proposal.get("status") or "staged")
-        proposal_available = proposal_status == "staged" and not writeguard_blocked
+        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
         proposal_affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
         actions = "".join(
             (
@@ -795,7 +795,7 @@ def _render_panel_proposal_rows(
         evidence = proposal.get("evidence") or {}
         affordances = proposal.get("affordances") or {}
         proposal_status = str(proposal.get("status") or "staged")
-        proposal_available = proposal_status == "staged" and not writeguard_blocked
+        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
         affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
         enabled_affordances = [
             label
