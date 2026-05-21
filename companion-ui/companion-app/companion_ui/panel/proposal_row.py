@@ -24,6 +24,8 @@ PROPOSAL_STATUS_VALUES: set[str] = {
     "corrected",
     "rejected",
     "blocked",
+    "expired",
+    "unknown",
 }
 
 # Valid receipt outcome values.

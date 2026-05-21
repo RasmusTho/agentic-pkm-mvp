@@ -8,6 +8,7 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
 )
+from companion_ui.workspace.serve_dev_page import render_index_html
 from companion_ui.workspace.workspace_http_client import WorkspaceClientHTTPError
 
 
@@ -39,6 +40,8 @@ def _workspace_payload(
     body: str = "# Canvas Note\n\nBody.",
     content_hash: str = "hash-1",
     can_edit_body: bool = True,
+    canvas_enabled: bool = True,
+    writeguard_status: str = "ok",
 ) -> dict[str, Any]:
     return {
         "artifact": {
@@ -58,7 +61,7 @@ def _workspace_payload(
             "session_persistence": "in_memory",
         },
         "panel": {"state": "idle", "proposal_count": 0},
-        "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
+        "guards": {"canvas_enabled": canvas_enabled, "writeguard_status": writeguard_status},
         "runtime": {},
         "suggestions": {},
     }
@@ -113,6 +116,47 @@ def test_edit_disabled_outside_active_session() -> None:
     assert state.is_loaded is False
     assert "unavailable" in (state.error or "")
     assert client.post_calls == []
+
+
+def _render_canvas(client: _FakeClient) -> str:
+    page = _loaded_page(client)
+    fields = page.render_fields()
+    assert fields is not None
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/canvas.md",
+        fields=fields,
+    )
+
+
+def test_canvas_body_edit_apply_disabled_outside_active_editable_session() -> None:
+    html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=False)]))
+
+    assert 'data-testid="workspace-canvas-edit-submit"' in html
+    assert 'data-capability="canvas.applyBodyEdit"' in html
+    assert 'data-affordance-status="unavailable"' in html
+    assert 'data-testid="workspace-canvas-edit-submit"' in html
+    assert "Apply body edit</button>" in html
+    assert 'disabled>Apply body edit</button>' in html
+
+
+def test_canvas_in_memory_session_volatility_visible() -> None:
+    html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=True)]))
+
+    assert 'data-testid="workspace-session-persistence"' in html
+    assert "Session persistence: in_memory" in html
+
+
+def test_canvas_disabled_blocks_body_edit_affordances() -> None:
+    html = _render_canvas(
+        _FakeClient([_workspace_payload(can_edit_body=True, canvas_enabled=False)])
+    )
+
+    assert 'data-testid="workspace-guard-indicator"' in html
+    assert "Canvas disabled" in html
+    assert 'data-capability="canvas.applyBodyEdit"' in html
+    assert 'data-affordance-status="blocked"' in html
+    assert 'disabled>Apply body edit</button>' in html
 
 
 def test_workspace_refreshed_after_edit() -> None:

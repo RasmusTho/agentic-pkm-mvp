@@ -84,6 +84,21 @@ def test_dismiss_snooze_pin() -> None:
     assert 'data-intent="resurface.pin"' in html
 
 
+def test_resurface_actions_marked_read_only_or_unavailable_without_persistence() -> None:
+    html = _render_resurface()
+
+    assert 'data-testid="resurface-mode"' in html
+    assert 'data-affordance-status="read-only"' in html
+    assert 'data-testid="resurface-action-dismiss"' in html
+    assert 'data-testid="resurface-action-snooze"' in html
+    assert 'data-testid="resurface-action-pin"' in html
+    assert html.count('data-affordance-status="unavailable"') >= 3
+    assert html.count('data-runtime-backed="false"') >= 3
+    assert "Dismiss unavailable" in html
+    assert "Snooze unavailable" in html
+    assert "Pin unavailable" in html
+
+
 def test_relation_to_active_artifact() -> None:
     html = _render_resurface()
 

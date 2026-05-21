@@ -39,7 +39,11 @@ class _FakeClient:
         return self.post_response
 
 
-def _workspace_payload() -> dict[str, Any]:
+def _workspace_payload(
+    *,
+    proposal_status: str = "staged",
+    writeguard_status: str = "ok",
+) -> dict[str, Any]:
     return {
         "artifact": {
             "artifact_id": "art-1138",
@@ -68,12 +72,12 @@ def _workspace_payload() -> dict[str, Any]:
                     "proposal_id": "proposal-1",
                     "artifact_id": "art-1138",
                     "description": "Do the thing",
-                    "status": "staged",
-                    "affordances": {"confirm": True, "reject": True},
+                    "status": proposal_status,
+                    "affordances": {"confirm": True, "correct": True, "reject": True},
                 }
             ],
         },
-        "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
+        "guards": {"canvas_enabled": True, "writeguard_status": writeguard_status},
         "runtime": {},
         "suggestions": {},
     }
@@ -214,3 +218,37 @@ def test_panel_response_cleared_when_switching_notes() -> None:
     state = page.load(NoteLoadIntent(note_path="Notes/b.md"))
 
     assert state.panel_last_response is None
+
+
+def test_panel_actions_active_only_for_staged_proposal() -> None:
+    html = _html(_loaded_page(_FakeClient([_workspace_payload()])))
+
+    assert 'data-testid="workspace-panel-proposal-row"' in html
+    assert 'data-affordance-status="active"' in html
+    assert 'data-panel-action="confirm"' in html
+    assert 'data-panel-action="correct"' in html
+    assert 'data-panel-action="reject"' in html
+    assert 'data-runtime-backed="true"' in html
+
+
+def test_unknown_or_expired_panel_proposal_state_is_unavailable() -> None:
+    html = _html(
+        _loaded_page(_FakeClient([_workspace_payload(proposal_status="expired")]))
+    )
+
+    assert 'data-testid="workspace-panel-proposal-unavailable"' in html
+    assert 'data-affordance-status="unavailable"' in html
+    assert "expired proposal unavailable" in html
+    assert 'data-panel-action="confirm"' not in html
+
+
+def test_writeguard_blocked_panel_actions_are_marked_blocked() -> None:
+    html = _html(
+        _loaded_page(_FakeClient([_workspace_payload(writeguard_status="blocked")]))
+    )
+
+    assert 'data-testid="workspace-guard-indicator"' in html
+    assert "WriteGuard blocked" in html
+    assert 'data-testid="workspace-panel-proposal-unavailable"' in html
+    assert 'data-affordance-status="blocked"' in html
+    assert 'data-panel-action="confirm"' not in html
