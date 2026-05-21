@@ -111,6 +111,8 @@ def test_conflict_indicator_visible() -> None:
         assert 'data-testid="workspace-canvas-recovery-conflict"' in html
         assert session_state in html
         assert 'data-testid="workspace-canvas-recovery-ack"' in html
+        assert 'data-testid="workspace-canvas-recovery-copy"' in html
+        assert "Acknowledge recovery before applying body edits." in html
 
 
 def test_edits_resume_after_recovery_ack() -> None:

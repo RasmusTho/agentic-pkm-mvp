@@ -118,6 +118,24 @@ def test_edit_disabled_outside_active_session() -> None:
     assert client.post_calls == []
 
 
+def test_edit_requires_preview_confirmation() -> None:
+    client = _FakeClient([_workspace_payload(content_hash="hash-1")])
+    page = _loaded_page(client)
+
+    state = page.apply_canvas_edit(
+        session_id="session-1",
+        note_path="Notes/canvas.md",
+        new_body="Updated.",
+        change_summary="apply without preview",
+        content_hash="hash-1",
+        preview_confirmed=False,
+    )
+
+    assert state.is_loaded is False
+    assert "requires preview" in (state.error or "")
+    assert client.post_calls == []
+
+
 def _render_canvas(client: _FakeClient) -> str:
     page = _loaded_page(client)
     fields = page.render_fields()
@@ -133,11 +151,27 @@ def test_canvas_body_edit_apply_disabled_outside_active_editable_session() -> No
     html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=False)]))
 
     assert 'data-testid="workspace-canvas-edit-submit"' in html
+    assert 'data-testid="workspace-canvas-body-edit-composer"' not in html
+    assert 'data-testid="workspace-canvas-body-edit-unavailable"' in html
     assert 'data-capability="canvas.applyBodyEdit"' in html
     assert 'data-affordance-status="unavailable"' in html
     assert 'data-testid="workspace-canvas-edit-submit"' in html
     assert "Apply body edit</button>" in html
     assert 'disabled>Apply body edit</button>' in html
+
+
+def test_canvas_body_edit_composer_preview_and_discard_visible_when_editable() -> None:
+    html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=True)]))
+
+    assert 'data-testid="workspace-canvas-body-edit-composer"' in html
+    assert 'data-testid="workspace-canvas-body-edit-textarea"' in html
+    assert 'data-testid="workspace-canvas-body-edit-preview"' in html
+    assert 'data-preview-state="required"' in html
+    assert "Preview required before apply" in html
+    assert 'data-testid="workspace-canvas-edit-discard"' in html
+    assert 'data-runtime-backed="false"' in html
+    assert 'data-api-method="LOCAL"' in html
+    assert 'name="content_hash" value="hash-1"' in html
 
 
 def test_canvas_in_memory_session_volatility_visible() -> None:
@@ -157,6 +191,16 @@ def test_canvas_disabled_blocks_body_edit_affordances() -> None:
     assert 'data-capability="canvas.applyBodyEdit"' in html
     assert 'data-affordance-status="blocked"' in html
     assert 'disabled>Apply body edit</button>' in html
+    assert 'data-testid="workspace-canvas-body-edit-composer"' not in html
+
+
+def test_canvas_body_edit_lane_does_not_render_governance_queue_action() -> None:
+    html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=True)]))
+
+    canvas_region = html.split('data-testid="workspace-canvas-session-controls"', 1)[1]
+    canvas_region = canvas_region.split('data-testid="workspace-canvas-provenance"', 1)[0]
+    assert "governance.queue" not in canvas_region
+    assert "/governance" not in canvas_region
 
 
 def test_workspace_refreshed_after_edit() -> None:

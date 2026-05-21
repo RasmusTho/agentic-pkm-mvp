@@ -354,10 +354,15 @@ class RealNoteWorkspaceDevPage:
         new_body: str,
         change_summary: str,
         content_hash: str,
+        preview_confirmed: bool = True,
     ) -> DevPageState:
         """Apply a body-safe Canvas edit, then refresh workspace state."""
         if not self.state.canvas_can_edit_body:
             self.state.error = "Canvas body edit unavailable outside an active editable session"
+            self.state.is_loaded = False
+            return self.state
+        if not preview_confirmed:
+            self.state.error = "Canvas body edit requires preview before apply"
             self.state.is_loaded = False
             return self.state
         try:

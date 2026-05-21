@@ -804,6 +804,52 @@ def _render_canvas_session_controls(
     undo_api_path = f"/api/canvas/sessions/{session_id}/edits/last" if session_id else ""
     present_text = "user present" if user_present else "user not present"
     log_text = session_log_path or "no session log"
+    undo_state_html = (
+        '<span class="canvas-undo-state" data-testid="workspace-canvas-undo-state">'
+        + ("Undo available" if undo_available else "No undo available")
+        + "</span>"
+    )
+    composer_html = ""
+    if can_edit_body and not canvas_blocked:
+        composer_html = f"""
+          <form
+            class="canvas-body-edit-composer"
+            data-testid="workspace-canvas-body-edit-composer"
+            data-affordance-status="active"
+            data-capability="canvas.applyBodyEdit"
+            data-api-method="POST"
+            data-api-path="{edit_api_path}"
+            data-requires-preview="true">
+            <label for="canvas_new_body">Body edit draft</label>
+            <textarea
+              id="canvas_new_body"
+              name="new_body"
+              data-testid="workspace-canvas-body-edit-textarea"
+              aria-label="Body edit draft"></textarea>
+            <input type="hidden" name="content_hash" value="{content_hash}">
+            <div
+              class="canvas-body-edit-preview"
+              data-testid="workspace-canvas-body-edit-preview"
+              data-preview-state="required">
+              Preview required before apply. Runtime owns the writer path.
+            </div>
+            <div class="canvas-body-edit-actions">
+              <button
+                type="button"
+                data-testid="workspace-canvas-edit-discard"
+                data-affordance-status="active"
+                data-runtime-backed="false"
+                data-api-method="LOCAL">Discard draft</button>
+            </div>
+          </form>"""
+    else:
+        composer_html = """
+          <div
+            class="canvas-body-edit-unavailable"
+            data-testid="workspace-canvas-body-edit-unavailable"
+            data-affordance-status="blocked">
+            Body edit composer unavailable until Canvas has an active editable session.
+          </div>"""
     recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
     recovery_html = ""
     if conflict_detected:
@@ -814,6 +860,9 @@ def _render_canvas_session_controls(
             <span data-testid="workspace-canvas-conflict-session-state">{session_state}</span>
             <span>{recovery_reason}</span>
             <span data-testid="workspace-canvas-recovery-state">{recovery_state}</span>
+            <span data-testid="workspace-canvas-recovery-copy">
+              Acknowledge recovery before applying body edits.
+            </span>
             <button
               type="button"
               data-testid="workspace-canvas-recovery-ack"
@@ -853,7 +902,9 @@ def _render_canvas_session_controls(
             data-api-method="DELETE"
             data-api-path="{undo_api_path}"{undo_disabled}>Undo</button>
           <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
+          {composer_html}
           {recovery_html}
+          {undo_state_html}
           <div class="canvas-provenance" data-testid="workspace-canvas-provenance">
             <span class="canvas-provenance-label">log</span>
             <code data-testid="workspace-canvas-session-log-path">{log_text}</code>
@@ -1483,6 +1534,49 @@ def render_index_html(
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       grid-column: 1 / -1;
+    }}
+    .canvas-body-edit-composer, .canvas-body-edit-unavailable {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      grid-column: 1 / -1;
+      padding: 10px;
+    }}
+    .canvas-body-edit-composer label, .canvas-undo-state {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .canvas-body-edit-composer textarea {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      min-height: 108px;
+      padding: 8px 10px;
+      resize: vertical;
+      width: 100%;
+    }}
+    .canvas-body-edit-preview, .canvas-body-edit-unavailable {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .canvas-body-edit-actions {{
+      display: flex;
+      justify-content: flex-end;
+    }}
+    .canvas-undo-state {{
+      grid-column: 1 / -1;
+      letter-spacing: 0;
+      text-transform: none;
     }}
     .canvas-recovery-conflict {{
       background: var(--destructive-muted);
