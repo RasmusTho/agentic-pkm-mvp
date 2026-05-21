@@ -302,7 +302,7 @@ def _resurface_state(safe_note_path: str) -> dict[str, list[dict[str, str | list
     candidates: list[dict[str, str | list[str]]] = []
     for candidate in evaluation.candidates:
         signals = candidate.why_now.signals
-        source_link = signals[0].source if signals else "runtime:resurfacing"
+        source_link = _safe_resurface_source_link(candidate.candidate_id)
         signal_labels = [f"{signal.name}={signal.value}" for signal in signals]
         candidates.append(
             {
@@ -317,6 +317,14 @@ def _resurface_state(safe_note_path: str) -> dict[str, list[dict[str, str | list
             }
         )
     return {"candidates": candidates}
+
+
+def _safe_resurface_source_link(candidate_id: str) -> str:
+    if candidate_id == "resurface-worker-queue":
+        return "status.worker_queue"
+    if candidate_id in {"resurface-pending-promotions", "resurface-new-activity"}:
+        return "status.events"
+    return "runtime:resurfacing"
 
 
 @router.get("/workspace", response_model=WorkspaceStateResponse)

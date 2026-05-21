@@ -91,3 +91,52 @@ def test_relation_to_active_artifact() -> None:
     assert "Evaluated while Notes/resurface.md is active." in html
     assert 'data-testid="resurface-source-link"' in html
     assert "status.worker_queue" in html
+
+
+def test_workspace_resurface_source_link_uses_logical_identifier(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from app.api.routes import companion
+    from app.resurfacing.runtime import (
+        ResurfacingCandidate,
+        ResurfacingEvaluation,
+        ResurfacingSignal,
+        ResurfacingWhyNow,
+    )
+
+    note = tmp_path / "Notes" / "resurface.md"
+    note.parent.mkdir()
+    note.write_text("---\nuuid: note-1142\n---\n# Resurface Note\n", encoding="utf-8")
+
+    monkeypatch.setattr(companion, "resolve_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        companion,
+        "evaluate_resurfacing_candidates",
+        lambda: ResurfacingEvaluation(
+            generated_at="2026-05-21T00:00:00Z",
+            status_summary="resurfacing_candidates=1",
+            candidates=[
+                ResurfacingCandidate(
+                    candidate_id="resurface-worker-queue",
+                    label="Queued runtime work remains unresolved",
+                    why_now=ResurfacingWhyNow(
+                        explanation="Worker queue has unresolved pending items.",
+                        signals=[
+                            ResurfacingSignal(
+                                name="worker_queue_pending",
+                                value=2,
+                                source="postgresql://user:secret@example/app",
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+    )
+
+    response = companion.read_companion_workspace(note_path="Notes/resurface.md")
+
+    candidate = response.runtime.resurface["candidates"][0]
+    assert candidate["source_link"] == "status.worker_queue"
+    assert "secret" not in str(candidate)
