@@ -934,12 +934,16 @@ def _render_panel_proposal_rows(
             for label in ("confirm", "correct", "reject")
             if affordances.get(label) and proposal_available
         ]
+        proposal_id = _e(proposal.get("proposal_id", ""))
+        artifact_id = _e(proposal.get("artifact_id", ""))
         buttons = "".join(
             (
                 '<button type="button" class="panel-proposal-action" '
                 'data-testid="workspace-panel-action" '
                 f'data-panel-action="{_e(label)}" '
                 f'data-affordance-status="{affordance_status}" '
+                f'data-proposal-id="{proposal_id}" '
+                f'data-artifact-id="{artifact_id}" '
                 'data-runtime-backed="true" '
                 'data-api-method="POST" '
                 'data-api-path="/api/panel/confirm">'
@@ -959,17 +963,21 @@ def _render_panel_proposal_rows(
         <div
           class="panel-proposal-row"
           data-testid="workspace-panel-proposal-row"
-          data-affordance-status="{affordance_status}">
+          data-affordance-status="{affordance_status}"
+          data-proposal-id="{proposal_id}"
+          data-artifact-id="{artifact_id}">
           <div class="panel-proposal-title">{_e(proposal.get("description", ""))}</div>
           <div class="panel-proposal-meta">
-            <span>{_e(proposal.get("proposal_id", ""))}</span>
+            <span data-testid="workspace-panel-proposal-id">{proposal_id}</span>
+            <span data-testid="workspace-panel-artifact-id">{artifact_id}</span>
             <span>{_e(proposal.get("status", ""))}</span>
           </div>
-          <div class="panel-proposal-evidence" data-testid="workspace-panel-evidence">
-            <span>{_e(evidence.get("trigger_summary", ""))}</span>
-            <span>{_e(evidence.get("action_class", ""))}</span>
-            <span>{_e(evidence.get("cognition_route", ""))}</span>
-          </div>
+          <details class="panel-proposal-evidence" data-testid="workspace-panel-evidence" open>
+            <summary data-testid="workspace-panel-evidence-disclosure">Evidence</summary>
+            <span data-testid="workspace-panel-trigger-summary">{_e(evidence.get("trigger_summary", ""))}</span>
+            <span data-testid="workspace-panel-action-class">{_e(evidence.get("action_class", ""))}</span>
+            <span data-testid="workspace-panel-cognition-route">{_e(evidence.get("cognition_route", ""))}</span>
+          </details>
           <div class="panel-proposal-affordances">
             {buttons}
           </div>
@@ -987,24 +995,46 @@ def _render_panel_confirm_response(response: dict) -> str:
     receipt_html = ""
     if status in {"executed", "logged"} and receipt:
         corrected_badge = ""
-        if receipt.get("message") == "corrected":
+        if receipt.get("message") == "corrected" or receipt.get("corrected") or response.get("corrected"):
             corrected_badge = (
                 '<span class="panel-confirm-corrected" '
                 'data-testid="workspace-panel-corrected-receipt">corrected</span>'
             )
-        receipt_html = (
-            '<div class="panel-confirm-receipt" data-testid="workspace-panel-receipt">'
-            + _e(receipt.get("message") or receipt.get("outcome") or status)
-            + corrected_badge
-            + "</div>"
-        )
+        inverse_html = ""
+        inverse_action = receipt.get("inverse_action") or receipt.get("inverse_action_id")
+        if inverse_action:
+            inverse_html = (
+                '<div class="panel-confirm-inverse" '
+                'data-testid="workspace-panel-inverse-action" '
+                'data-affordance-status="read-only" '
+                'data-runtime-backed="false">'
+                + _e(inverse_action)
+                + "</div>"
+            )
+        receipt_html = f"""
+          <div
+            class="panel-confirm-receipt"
+            data-testid="workspace-panel-receipt"
+            data-receipt-persistence="durable-runtime-projection">
+            <span data-testid="workspace-panel-receipt-outcome">{_e(receipt.get("outcome") or response.get("outcome") or status)}</span>
+            <span data-testid="workspace-panel-receipt-message">{_e(receipt.get("message") or receipt.get("action_taken") or status)}</span>
+            <span data-testid="workspace-panel-receipt-timestamp">{_e(receipt.get("timestamp") or response.get("timestamp") or "timestamp unavailable")}</span>
+            {corrected_badge}
+            {inverse_html}
+          </div>"""
     blocked_html = ""
     if status == "blocked" and block_reason:
-        blocked_html = (
-            '<div class="panel-confirm-blocked" data-testid="workspace-panel-blocked-reason">'
-            + _e(block_reason.get("message") or "")
-            + "</div>"
-        )
+        message = str(block_reason.get("message") or "")
+        if block_reason.get("gate") == "same-turn" or "same-turn" in message.lower():
+            message = (
+                "Same-turn confirmation is not allowed. "
+                "The proposal must be confirmed in a later interaction."
+            )
+        blocked_html = f"""
+          <div class="panel-confirm-blocked" data-testid="workspace-panel-blocked-reason">
+            <span data-testid="workspace-panel-block-gate">{_e(block_reason.get("gate") or "unknown")}</span>
+            <span data-testid="workspace-panel-block-message">{_e(message)}</span>
+          </div>"""
     return f"""
         <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response">
           <span data-testid="workspace-panel-confirm-status">{status}</span>

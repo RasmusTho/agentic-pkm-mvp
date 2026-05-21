@@ -138,6 +138,33 @@ def test_corrected_receipt_marked() -> None:
     assert "corrected" in html
 
 
+def test_corrected_response_signal_marked() -> None:
+    client = _FakeClient(
+        [_workspace_payload(), _workspace_payload()],
+        post_response={
+            "proposal_id": "proposal-1",
+            "artifact_id": "art-1139",
+            "status": "executed",
+            "outcome": "success",
+            "corrected": True,
+            "receipt": {"message": "Done", "outcome": "success"},
+            "idempotency_key": "server-key",
+        },
+    )
+    page = _loaded_page(client)
+    page.correct_panel_proposal(
+        proposal_id="proposal-1",
+        artifact_id="art-1139",
+        note_path="Notes/panel.md",
+        corrected_action_id="proposal-1",
+        corrected_parameters={"value": "evergreen"},
+    )
+
+    html = _html(page)
+
+    assert 'data-testid="workspace-panel-corrected-receipt"' in html
+
+
 def test_invalid_correction_rejected() -> None:
     client = _FakeClient([_workspace_payload()])
     page = _loaded_page(client)

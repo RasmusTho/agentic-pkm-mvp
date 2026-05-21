@@ -55,6 +55,7 @@ from companion_ui.workspace.real_note_workspace_shell import (
 )
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
+    WorkspaceClientHTTPError,
     WorkspaceHttpClient,
 )
 
@@ -648,6 +649,24 @@ class RealNoteWorkspaceDevPage:
                 "/api/panel/confirm",
                 json=request_payload,
             )
+        except WorkspaceClientHTTPError as exc:
+            if exc.status_code == 422 and "same-turn" in exc.detail.lower():
+                self.state.panel_last_response = {
+                    "proposal_id": proposal_id,
+                    "artifact_id": artifact_id,
+                    "status": "blocked",
+                    "outcome": "blocked",
+                    "block_reason": {
+                        "gate": "same-turn",
+                        "message": (
+                            "Same-turn confirmation is not allowed. "
+                            "The proposal must be confirmed in a later interaction."
+                        ),
+                    },
+                }
+                return self.state
+            self.state = DevPageState(error=str(exc))
+            return self.state
         except WorkspaceClientError as exc:
             self.state = DevPageState(error=str(exc))
             return self.state
