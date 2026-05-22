@@ -17,14 +17,12 @@ Boundary:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Optional
 
 from companion_ui.panel.render_model import PanelRenderState, render_panel_state
 from companion_ui.panel.proposal_row import (
     ProposalRow,
     ProposalReceipt,
-    ProposalEvidence,
     make_stub_proposal_row,
     make_stub_receipt,
 )
@@ -158,7 +156,7 @@ def build_confirming_view(artifact_id: str) -> PanelShellView:
     )
     session = PanelInteractionSession(artifact_id=artifact_id)
     for p in proposals:
-        s = session.register_proposal(p.proposal_id)
+        session.register_proposal(p.proposal_id)
     # Simulate user confirming prop-001
     session.get("prop-001").confirm()
     return PanelShellView(
