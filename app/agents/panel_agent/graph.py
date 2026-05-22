@@ -461,9 +461,13 @@ def _apply_actions(state: PanelAgentState, *, selected_ids: set[str] | None, rea
     # Only emit no-match when there was real input AND a cognition decision was
     # made this pass (freeform LLM returned empty, or checked-but-unmapped). A
     # rule-mode passthrough with empty actions is not a no-match.
+    # Unchecked actions in actions_to_process are not user-triggered input;
+    # they are panel suggestions that the user hasn't acted on yet. Only
+    # count them as "had input" when at least one is checked — i.e., the
+    # user explicitly requested something this pass (#1201).
     cognition_decided = bool(state.cognition_decision_made)
     had_input = (
-        bool(actions_to_process)
+        any(a.checked for a in actions_to_process)
         or (bool(instruction_text) and cognition_decided)
     ) and not converged_rerun
     if had_input and not produced_any and not proposed_ids_now:
