@@ -134,5 +134,31 @@ def test_proposal_outputs_remain_bounded(monkeypatch) -> None:
         and getattr(evt, "payload", {}).get("action", {}).get("id") == "proposal.next_actions"
     ]
     assert logged_events, "expected a panel.action.logged receipt for the proposal"
-    payload_keys = set(logged_events[0].payload.keys())
-    assert payload_keys <= {"note", "panel_id", "action", "reason", "mapping"}
+    logged_payload = logged_events[0].payload
+    payload_keys = set(logged_payload.keys())
+    # `cognition_metadata` is a bounded scalar observability field (provider,
+    # model, route, mode, counts, fallback flags) attached by #984. It is not
+    # raw model output and is part of the bounded receipt contract.
+    assert payload_keys <= {
+        "note",
+        "panel_id",
+        "action",
+        "reason",
+        "mapping",
+        "cognition_metadata",
+    }
+    cognition_metadata = logged_payload.get("cognition_metadata") or {}
+    assert set(cognition_metadata).issubset(
+        {
+            "cognition_mode",
+            "route",
+            "provider",
+            "model",
+            "fallback_used",
+            "fallback_reason",
+            "proposal_candidate_count",
+            "proposal_accepted_count",
+            "proposal_rejected_count",
+            "no_match",
+        }
+    ), f"cognition_metadata leaked unexpected keys: {sorted(cognition_metadata)}"
