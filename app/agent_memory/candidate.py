@@ -10,9 +10,25 @@ from pydantic import BaseModel, Field
 
 class ReviewState(str, Enum):
     UNREVIEWED = "unreviewed"
+    REVIEWED = "reviewed"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     REVISED = "revised"
+
+
+class ActivationPolicy(str, Enum):
+    """Activation policy values per CONTEXT_ACTIVATION_SEMANTICS.md §4.3.1.
+
+    Controls under what conditions an artifact may be activated into agent
+    working context.  Unreviewed candidates default to review_queue_only,
+    which prevents them from entering agent task working context.
+    """
+
+    EXPLICIT_ONLY = "explicit_only"
+    EXPLICIT_OR_CONTEXTUAL = "explicit_or_contextual"
+    ON_RESUME = "on_resume"
+    REVIEW_QUEUE_ONLY = "review_queue_only"
+    BLOCKED = "blocked"
 
 
 class MemoryType(str, Enum):
@@ -46,6 +62,12 @@ class MemoryCandidate(BaseModel):
     memory_type: MemoryType
     artifact_type: Optional[str] = None
     review_state: ReviewState = Field(default=ReviewState.UNREVIEWED)
+    # Unreviewed candidates default to review_queue_only — they may enter the
+    # review surface but must not enter agent task working context.
+    # See CONTEXT_ACTIVATION_SEMANTICS.md §4.3.1.
+    activation_policy: ActivationPolicy = Field(
+        default=ActivationPolicy.REVIEW_QUEUE_ONLY
+    )
     inferred: bool = Field(default=True)
 
     # Source provenance — first-class fields, not optional comment text
