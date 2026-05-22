@@ -128,13 +128,15 @@ def execute_panel_intent(
         executed_ids = set(payload.get("executed_action_ids") or [])
 
     original_action_count = len(list(intent_event.payload.actions))
-    # Filter executed actions by comparing against stable_action_id hash (same hash
-    # used for persisting executed_ids). action.id (e.g. "proposal.next_actions") is
-    # distinct from the persisted hash of action.label.
+    # Filter executed actions. Accept both formats in executed_ids:
+    #   - stable_action_id hash of action.label (new format written by upsert_executed_ids)
+    #   - action.id string (legacy format from notes written before #1204)
+    # Both checks are required so restart deduplication is backward-compatible.
     from app.agents.panel.writeback import stable_action_id
     actions = [
         action for action in intent_event.payload.actions
         if stable_action_id(action.label) not in executed_ids
+        and action.id not in executed_ids
     ]
     converged_rerun = bool(executed_ids) and original_action_count > 0 and not actions
     payload = intent_event.payload.model_copy(update={"actions": list(actions)})
