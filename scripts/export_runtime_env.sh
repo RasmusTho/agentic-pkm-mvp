@@ -54,45 +54,6 @@ DATABASE_URL=$DATABASE_URL
 DB_DSN=$DB_DSN
 ENV
 
-if [ -n "${LLM_PROVIDER:-}" ]; then
-  printf "%s\n" "LLM_PROVIDER=$LLM_PROVIDER" >> "$runtime_env_path"
-fi
-
-providers_md="${VAULT_ROOT}/@Settings/providers.md"
-if [ -f "$providers_md" ]; then
-  provider_kind="$(awk '
-    /default_chat:/ {in_chat=1; next}
-    in_chat && /^[^[:space:]]/ {in_chat=0}
-    in_chat && /kind:/ {sub(/^[^:]*:[[:space:]]*/, "", $0); gsub(/"/, "", $0); print $0; exit}
-  ' "$providers_md" | xargs)"
-  provider_model="$(awk '
-    /default_chat:/ {in_chat=1; next}
-    in_chat && /^[^[:space:]]/ {in_chat=0}
-    in_chat && /model:/ {sub(/^[^:]*:[[:space:]]*/, "", $0); gsub(/"/, "", $0); print $0; exit}
-  ' "$providers_md" | xargs)"
-  provider_base_url="$(awk '
-    /default_chat:/ {in_chat=1; next}
-    in_chat && /^[^[:space:]]/ {in_chat=0}
-    in_chat && /base_url:/ {sub(/^[^:]*:[[:space:]]*/, "", $0); gsub(/"/, "", $0); print $0; exit}
-  ' "$providers_md" | xargs)"
-
-  if [ -z "${LLM_PROVIDER:-}" ] && [ -n "$provider_kind" ]; then
-    case "$provider_kind" in
-      openai_compat|openai) printf "%s\n" "LLM_PROVIDER=openai" >> "$runtime_env_path" ;;
-      *) printf "%s\n" "LLM_PROVIDER=$provider_kind" >> "$runtime_env_path" ;;
-    esac
-  fi
-  if [ -z "${LLM_MODEL:-}" ] && [ -n "$provider_model" ]; then
-    printf "%s\n" "LLM_MODEL=$provider_model" >> "$runtime_env_path"
-  fi
-  if [ -z "${OPENAI_BASE_URL:-}" ] && [ -n "$provider_base_url" ]; then
-    printf "%s\n" "OPENAI_BASE_URL=$provider_base_url" >> "$runtime_env_path"
-    if [ -z "${OPENAI_BASE:-}" ]; then
-      printf "%s\n" "OPENAI_BASE=${provider_base_url%/}/chat/completions" >> "$runtime_env_path"
-    fi
-  fi
-fi
-
 python3 - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations
 
@@ -110,23 +71,19 @@ except Exception:
 
 
 def _load_providers(vault_root: Path) -> object | None:
-    if compile_file is None or merge is None or Providers is None:
-        return None
     path = vault_root / "@Settings" / "providers.md"
     if not path.exists():
         return None
-    try:
-        sections = compile_file(path)
-        payload: dict[str, object] = {}
-        for value in sections.values():
-            if isinstance(value, dict):
-                merge(payload, value)
-        return Providers(**payload)
-    except Exception:
-        pass
-    path = vault_root / "@Settings" / "providers.md"
-    if not path.exists():
-        return None
+    if compile_file is not None and merge is not None and Providers is not None:
+        try:
+            sections = compile_file(path)
+            payload: dict[str, object] = {}
+            for value in sections.values():
+                if isinstance(value, dict):
+                    merge(payload, value)
+            return Providers(**payload)
+        except Exception:
+            pass
     try:
         text = path.read_text(encoding="utf-8")
     except Exception:
@@ -174,13 +131,7 @@ def _load_providers(vault_root: Path) -> object | None:
 
 
 providers = _load_providers(Path(os.environ.get("VAULT_ROOT", "vault")))
-if not providers:
-    raise SystemExit(0)
-
-llm_ref = providers.llm.get("default_chat")
-embed_ref = providers.embedding.get("default")
-if not llm_ref:
-    raise SystemExit(0)
+llm_ref = providers.llm.get("default_chat") if providers else None
 
 env = os.environ
 
@@ -244,9 +195,15 @@ fi
 # URL by stripping a trailing slash and appending /chat/completions.
 if [ -n "${OPENAI_BASE:-}" ]; then
   printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
-elif [ -n "${OPENAI_BASE_URL:-}" ]; then
-  _derived_openai_base="${OPENAI_BASE_URL%/}/chat/completions"
-  printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+else
+  _resolved_openai_base_url="${OPENAI_BASE_URL:-}"
+  if [ -z "$_resolved_openai_base_url" ]; then
+    _resolved_openai_base_url="$(awk -F= '/^OPENAI_BASE_URL=/{print substr($0, index($0,$2)); exit}' "$runtime_env_path")"
+  fi
+  if [ -n "$_resolved_openai_base_url" ]; then
+    _derived_openai_base="${_resolved_openai_base_url%/}/chat/completions"
+    printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+  fi
 fi
 
 # Propagate OPENAI_API_KEY if set; required by route health checks for the openai provider.
@@ -278,20 +235,20 @@ def _strip_v1(url: str) -> str:
 
 
 def _load_providers(vault_root: Path) -> object | None:
-    if compile_file is None or merge is None or Providers is None:
-        return None
     path = vault_root / "@Settings" / "providers.md"
     if not path.exists():
         return None
-    try:
-        sections = compile_file(path)
-        payload: dict[str, object] = {}
-        for value in sections.values():
-            if isinstance(value, dict):
-                merge(payload, value)
-        return Providers(**payload)
-    except Exception:
-        return None
+    if compile_file is not None and merge is not None and Providers is not None:
+        try:
+            sections = compile_file(path)
+            payload: dict[str, object] = {}
+            for value in sections.values():
+                if isinstance(value, dict):
+                    merge(payload, value)
+            return Providers(**payload)
+        except Exception:
+            return None
+    return None
 
 
 vault_root = Path(os.environ.get("VAULT_ROOT", "vault"))

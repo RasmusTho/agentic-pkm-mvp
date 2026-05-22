@@ -195,3 +195,40 @@ def test_emit_settings_explain_does_not_print_raw_secret(monkeypatch, tmp_path, 
     assert "hunter2" not in out
     parsed = json.loads(out)
     assert parsed["database_url"] == "***"
+
+
+def test_settings_explain_includes_settings_backed_llm_provider_provenance(monkeypatch, tmp_path) -> None:
+    vault = tmp_path / "vault"
+    settings_dir = vault / "@Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "watchers.md").write_text("---\n---\n", encoding="utf-8")
+    (settings_dir / "providers.md").write_text(
+        "---\n---\n"
+        "```yaml settings\n"
+        "llm:\n"
+        "  default_chat:\n"
+        "    kind: openai_compat\n"
+        "    model: llama3.1:8b\n"
+        "    base_url: http://127.0.0.1:11434/v1\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    panel_actions = tmp_path / "panel-actions.md"
+    panel_actions.write_text(
+        "---\nmappings:\n  - id: promote.evergreen\n    label: Promote\n"
+        "    intent_type: promotion\n    downstream_event: promote.intent.created\n"
+        "    params:\n      maturity: evergreen\n---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(panel_actions))
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    payload = build_settings_explain_payload()
+    llm = payload["llm_provider"]
+    assert llm["resolved"]["provider"] == "openai"
+    assert llm["resolved"]["model"] == "llama3.1:8b"
+    assert llm["resolved"]["openai_base_url"] == "http://127.0.0.1:11434/v1"
+    assert llm["provenance"]["provider"] == "settings:providers.default_chat.kind"
