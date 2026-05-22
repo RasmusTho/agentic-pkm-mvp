@@ -27,12 +27,16 @@ This task defines the implementation contract for post-review memory decisions. 
 
 ## Concretely
 
-A later implementation should be able to:
+`app/agent_memory/promotion.py` implements the post-review lifecycle decisions:
 
-- promote a reviewed candidate into a more durable memory class,
-- reject a candidate without erasing the evidence trail,
-- revise a candidate when the content or classification was partly right but incomplete,
-- and preserve enough history to explain why the state changed.
+- `promote(entry)` — promotes a reviewed candidate, producing a `PromotedMemory` with
+  `outcome=ACCEPTED` and full provenance embedded.
+- `reject(entry)` — records a visible rejection, producing a `PromotedMemory` with
+  `outcome=REJECTED`; the candidate is retained, not deleted.
+- `revise(original_entry, revised_entry)` — records a correction, producing a `PromotedMemory`
+  with `outcome=REVISED`; earlier evidence is preserved and the correction chain is traceable.
+- `PromotedMemory` — the immutable receipt type that preserves provenance and review context
+  across all three outcomes.
 
 ## Why This Matters
 
@@ -42,13 +46,13 @@ memory can drift into opaque state and rejected memory can disappear without exp
 
 ## Acceptance Criteria
 
-- [ ] Promotion is specified as preserving provenance and review context rather than copying only a
+- [x] Promotion is specified as preserving provenance and review context rather than copying only a
   final memory value. Verify: `tests/agent_memory/test_memory_promotion.py::test_promoted_memory_preserves_provenance`
-- [ ] Rejection is specified as a visible lifecycle outcome rather than silent deletion of the
+- [x] Rejection is specified as a visible lifecycle outcome rather than silent deletion of the
   candidate. Verify: `tests/agent_memory/test_memory_promotion.py::test_rejected_memory_preserves_review_receipt`
-- [ ] Revision is specified as a correction path that can narrow or reclassify a candidate without
+- [x] Revision is specified as a correction path that can narrow or reclassify a candidate without
   erasing earlier evidence. Verify: `tests/agent_memory/test_memory_promotion.py::test_revised_memory_preserves_prior_context`
-- [ ] Promotion into stronger knowledge posture is stricter than simple episodic retention. Verify: `tests/agent_memory/test_memory_promotion.py::test_semantic_promotion_requires_stricter_review_than_episodic_retention`
+- [x] Promotion into stronger knowledge posture is stricter than simple episodic retention. Verify: `tests/agent_memory/test_memory_promotion.py::test_semantic_promotion_requires_stricter_review_than_episodic_retention`
 
 ## How to Verify (Pre-Merge)
 
@@ -71,5 +75,4 @@ memory can drift into opaque state and rejected memory can disappear without exp
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for promotion, rejection, and revision flows.
+Implemented by #1081.
