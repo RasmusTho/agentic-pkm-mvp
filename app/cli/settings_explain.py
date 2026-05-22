@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import quote
 
@@ -11,6 +12,7 @@ from app.config.environment import ENV_DEV, ENV_TEST, active_environment
 from app.health_contract import DEFAULT_CONTRACT
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
+from app.settings.runtime import get_settings_bundle
 
 
 # group 1 = "://user:", group 2 = "@" — replaces only the password portion
@@ -63,6 +65,50 @@ def build_settings_explain_payload() -> dict[str, Any]:
     allowed_action_ids = sorted(panel_action_ids(panel_settings))
     invalid_actions = invalid_allowed_actions(watcher_settings, allowed_action_ids)
     write_guard = DEFAULT_CONTRACT.evaluate()
+    settings_provider = None
+    settings_model = None
+    settings_base_url = None
+    try:
+        default_chat = get_settings_bundle().providers.llm.get("default_chat")
+        if default_chat is not None:
+            kind = (default_chat.kind or "").strip().lower()
+            settings_provider = "openai" if kind in {"openai", "openai_compat"} else kind or None
+            settings_model = (default_chat.model or "").strip() or None
+            settings_base_url = (default_chat.base_url or "").strip() or None
+    except Exception:
+        pass
+    if settings_provider is None and settings_model is None and settings_base_url is None:
+        providers_md = Path(os.getenv("VAULT_ROOT", "vault")) / "@Settings" / "providers.md"
+        if providers_md.exists():
+            text = providers_md.read_text(encoding="utf-8")
+            m = re.search(r"```yaml settings\s*(.*?)```", text, re.S)
+            if m:
+                block = m.group(1)
+                in_default_chat = False
+                for raw in block.splitlines():
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    if line.startswith("default_chat:"):
+                        in_default_chat = True
+                        continue
+                    if not in_default_chat:
+                        continue
+                    key, _, value = line.partition(":")
+                    if not _:
+                        continue
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key == "kind":
+                        kind = value.lower()
+                        settings_provider = "openai" if kind in {"openai", "openai_compat"} else (kind or None)
+                    elif key == "model":
+                        settings_model = value or None
+                    elif key == "base_url":
+                        settings_base_url = value or None
+    env_provider = (os.getenv("LLM_PROVIDER") or "").strip() or None
+    env_model = (os.getenv("LLM_MODEL") or "").strip() or None
+    env_base_url = (os.getenv("OPENAI_BASE_URL") or "").strip() or None
     return {
         "environment": active_environment(),
         "database_url": db_url,
@@ -101,6 +147,18 @@ def build_settings_explain_payload() -> dict[str, Any]:
             "write_guard": {
                 "writes_allowed": write_guard.get("writes_allowed"),
                 "mode": write_guard.get("state"),
+            },
+        },
+        "llm_provider": {
+            "resolved": {
+                "provider": env_provider or settings_provider,
+                "model": env_model or settings_model,
+                "openai_base_url": env_base_url or settings_base_url,
+            },
+            "provenance": {
+                "provider": "env:LLM_PROVIDER" if env_provider else ("settings:providers.default_chat.kind" if settings_provider else "unresolved"),
+                "model": "env:LLM_MODEL" if env_model else ("settings:providers.default_chat.model" if settings_model else "unresolved"),
+                "openai_base_url": "env:OPENAI_BASE_URL" if env_base_url else ("settings:providers.default_chat.base_url" if settings_base_url else "unresolved"),
             },
         },
     }

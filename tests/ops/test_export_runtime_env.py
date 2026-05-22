@@ -16,6 +16,30 @@ def _runtime_env_base(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     return repo_root, out_path, env
 
 
+def _write_default_provider_settings(vault_root: Path) -> None:
+    settings_dir = vault_root / "@Settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "providers.md").write_text(
+        """---
+uuid: 00000000-0000-0000-0000-000000000002
+title: Providers
+origin: user
+review_state: evergreen
+trust: internal
+---
+## Provider defaults
+```yaml settings
+llm:
+  default_chat:
+    kind: openai_compat
+    base_url: "http://127.0.0.1:11434/v1"
+    model: "llama3.1:8b"
+```
+""",
+        encoding="utf-8",
+    )
+
+
 def test_export_runtime_env_emits_uid_gid(tmp_path: Path) -> None:
     repo_root, out_path, env = _runtime_env_base(tmp_path)
     env.pop("LOCAL_UID", None)
@@ -101,3 +125,52 @@ def test_export_runtime_env_propagates_openai_api_key(tmp_path: Path) -> None:
 
     text = out_path.read_text(encoding="utf-8")
     assert re.search(r"^OPENAI_API_KEY=sk-local$", text, re.M)
+
+
+def test_export_runtime_env_resolves_llm_provider_from_settings_when_env_missing(tmp_path: Path) -> None:
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    _write_default_provider_settings(Path(env["VAULT_ROOT"]))
+    env["LLM_PROVIDER"] = ""
+    env["LLM_MODEL"] = ""
+    env["OPENAI_BASE_URL"] = ""
+    env["OPENAI_BASE"] = ""
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert re.search(r"^LLM_PROVIDER=openai$", text, re.M)
+    assert re.search(r"^LLM_MODEL=llama3\.1:8b$", text, re.M)
+    assert re.search(r"^OPENAI_BASE_URL=http://127\.0\.0\.1:11434/v1$", text, re.M)
+    assert re.search(r"^OPENAI_BASE=http://127\.0\.0\.1:11434/v1/chat/completions$", text, re.M)
+
+
+def test_export_runtime_env_operator_env_overrides_settings(tmp_path: Path) -> None:
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    _write_default_provider_settings(Path(env["VAULT_ROOT"]))
+    env["LLM_PROVIDER"] = "mock"
+    env["LLM_MODEL"] = "operator-model"
+    env["OPENAI_BASE_URL"] = "https://operator.example/v1"
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert re.search(r"^LLM_PROVIDER=mock$", text, re.M)
+    assert re.search(r"^LLM_MODEL=operator-model$", text, re.M)
+    assert re.search(r"^OPENAI_BASE_URL=https://operator\.example/v1$", text, re.M)
+    assert re.search(r"^OPENAI_BASE=https://operator\.example/v1/chat/completions$", text, re.M)
+
+
+def test_export_runtime_env_no_duplicate_provider_keys(tmp_path: Path) -> None:
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    _write_default_provider_settings(Path(env["VAULT_ROOT"]))
+    env["LLM_PROVIDER"] = ""
+    env["LLM_MODEL"] = ""
+    env["OPENAI_BASE_URL"] = ""
+    env["OPENAI_BASE"] = ""
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    lines = out_path.read_text(encoding="utf-8").splitlines()
+    assert sum(1 for line in lines if line.startswith("LLM_PROVIDER=")) == 1
+    assert sum(1 for line in lines if line.startswith("LLM_MODEL=")) == 1
+    assert sum(1 for line in lines if line.startswith("OPENAI_BASE_URL=")) == 1

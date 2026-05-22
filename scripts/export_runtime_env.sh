@@ -54,9 +54,102 @@ DATABASE_URL=$DATABASE_URL
 DB_DSN=$DB_DSN
 ENV
 
-if [ -n "${LLM_PROVIDER:-}" ]; then
-  printf "%s\n" "LLM_PROVIDER=$LLM_PROVIDER" >> "$runtime_env_path"
-fi
+python3 - <<'PY' >> "$runtime_env_path"
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+try:
+    from app.settings.compiler import compile_file, merge
+    from app.settings.models import Providers
+except Exception:
+    compile_file = None
+    merge = None
+    Providers = None
+
+
+def _load_providers(vault_root: Path) -> object | None:
+    path = vault_root / "@Settings" / "providers.md"
+    if not path.exists():
+        return None
+    if compile_file is not None and merge is not None and Providers is not None:
+        try:
+            sections = compile_file(path)
+            payload: dict[str, object] = {}
+            for value in sections.values():
+                if isinstance(value, dict):
+                    merge(payload, value)
+            return Providers(**payload)
+        except Exception:
+            pass
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    m = re.search(r"```yaml settings\s*(.*?)```", text, re.S)
+    if not m:
+        return None
+    block = m.group(1)
+    kind = model = base_url = None
+    in_default_chat = False
+    for raw in block.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("default_chat:"):
+            in_default_chat = True
+            continue
+        if not in_default_chat:
+            continue
+        key, _, value = line.partition(":")
+        if not _:
+            continue
+        value = value.strip().strip('"').strip("'")
+        key = key.strip()
+        if key == "kind":
+            kind = value
+        elif key == "model":
+            model = value
+        elif key == "base_url":
+            base_url = value
+    if not kind:
+        return None
+    class _Ref:
+        pass
+    class _Providers:
+        pass
+    ref = _Ref()
+    ref.kind = kind
+    ref.model = model
+    ref.base_url = base_url
+    p = _Providers()
+    p.llm = {"default_chat": ref}
+    p.embedding = {}
+    return p
+
+
+providers = _load_providers(Path(os.environ.get("VAULT_ROOT", "vault")))
+llm_ref = providers.llm.get("default_chat") if providers else None
+
+env = os.environ
+
+provider = (env.get("LLM_PROVIDER") or "").strip()
+if not provider:
+    kind = (getattr(llm_ref, "kind", "") or "").strip().lower()
+    provider = "openai" if kind in {"openai", "openai_compat"} else kind
+if provider:
+    print(f"LLM_PROVIDER={provider}")
+
+model = (env.get("LLM_MODEL") or "").strip() or (getattr(llm_ref, "model", None) or "").strip()
+if model:
+    print(f"LLM_MODEL={model}")
+
+base_url = (env.get("OPENAI_BASE_URL") or "").strip() or (getattr(llm_ref, "base_url", None) or "").strip()
+if base_url:
+    print(f"OPENAI_BASE_URL={base_url}")
+PY
 
 if [ -n "${WATCHER_AUTO_EXEC+x}" ]; then
   printf "%s\n" "WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC}" >> "$runtime_env_path"
@@ -102,9 +195,15 @@ fi
 # URL by stripping a trailing slash and appending /chat/completions.
 if [ -n "${OPENAI_BASE:-}" ]; then
   printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
-elif [ -n "${OPENAI_BASE_URL:-}" ]; then
-  _derived_openai_base="${OPENAI_BASE_URL%/}/chat/completions"
-  printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+else
+  _resolved_openai_base_url="${OPENAI_BASE_URL:-}"
+  if [ -z "$_resolved_openai_base_url" ]; then
+    _resolved_openai_base_url="$(awk -F= '/^OPENAI_BASE_URL=/{print substr($0, index($0,$2)); exit}' "$runtime_env_path")"
+  fi
+  if [ -n "$_resolved_openai_base_url" ]; then
+    _derived_openai_base="${_resolved_openai_base_url%/}/chat/completions"
+    printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+  fi
 fi
 
 # Propagate OPENAI_API_KEY if set; required by route health checks for the openai provider.
@@ -112,7 +211,7 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
   printf "%s\n" "OPENAI_API_KEY=${OPENAI_API_KEY}" >> "$runtime_env_path"
 fi
 
-if [ "${LLM_PROVIDER:-}" = "ollama" ]; then
+if grep -q '^LLM_PROVIDER=ollama$' "$runtime_env_path"; then
   python3 - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations
 
@@ -136,20 +235,20 @@ def _strip_v1(url: str) -> str:
 
 
 def _load_providers(vault_root: Path) -> object | None:
-    if compile_file is None or merge is None or Providers is None:
-        return None
     path = vault_root / "@Settings" / "providers.md"
     if not path.exists():
         return None
-    try:
-        sections = compile_file(path)
-        payload: dict[str, object] = {}
-        for value in sections.values():
-            if isinstance(value, dict):
-                merge(payload, value)
-        return Providers(**payload)
-    except Exception:
-        return None
+    if compile_file is not None and merge is not None and Providers is not None:
+        try:
+            sections = compile_file(path)
+            payload: dict[str, object] = {}
+            for value in sections.values():
+                if isinstance(value, dict):
+                    merge(payload, value)
+            return Providers(**payload)
+        except Exception:
+            return None
+    return None
 
 
 vault_root = Path(os.environ.get("VAULT_ROOT", "vault"))

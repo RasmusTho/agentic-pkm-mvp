@@ -91,12 +91,12 @@ make start
    - on failure, prints `docker compose ps`, tails api/worker/watcher logs, and dumps `/api/health`
    - startup summary prints `obsidian gate: enabled=<...> status=<...>` and `tmp/startup_status.json` includes `obsidian_gate_enabled|ok|detail`
 
-## Config externalization follow-up
+## LLM config source
 
-The current prod startup requires operators to supply LLM env vars (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, etc.)
-manually before running the startup script. A separate settings/config gap-analysis PR will externalize
-configuration through the existing settings model (`vault/@Settings/providers.md` and related surfaces).
-Do not perform that gap analysis in this runbook; handle it through the standard docs-to-issue workflow.
+Runtime env export resolves LLM provider defaults from the settings model (`vault/@Settings/providers.md`)
+when raw env vars are not set. Operator env vars remain supported and override settings-derived values.
+`OPENAI_BASE_URL`/`OPENAI_BASE` compatibility remains unchanged: explicit `OPENAI_BASE` wins, otherwise
+`OPENAI_BASE` is derived from `OPENAI_BASE_URL`.
 
 ## Alpha Compose Runtime (canonical)
 - Services: `db`, `api`, `watcher`, `worker`.
