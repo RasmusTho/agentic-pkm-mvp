@@ -45,7 +45,46 @@ def test_iter_tail_lines_missing_file(tmp_path: Path) -> None:
 def test_count_outbox_events_capped(tmp_path: Path) -> None:
     path = tmp_path / "outbox.jsonl"
     _write_lines(path, "{}", _STATUS_MAX_OUTBOX_LINES + 500)
-    assert _count_outbox_events(path) == _STATUS_MAX_OUTBOX_LINES
+    count, truncated = _count_outbox_events(path)
+    assert count == _STATUS_MAX_OUTBOX_LINES
+    assert truncated is True
+
+
+def test_count_outbox_events_under_cap(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.jsonl"
+    _write_lines(path, "{}", 10)
+    count, truncated = _count_outbox_events(path)
+    assert count == 10
+    assert truncated is False
+
+
+def test_outbox_lag_hides_pending_when_truncated(tmp_path: Path, monkeypatch) -> None:
+    """Regression for #1209 review: capped counts must not yield wrong pending=0."""
+    import json as _json
+    outbox = tmp_path / "outbox.jsonl"
+    _write_lines(outbox, _json.dumps({"event": "x"}), _STATUS_MAX_OUTBOX_LINES + 100)
+    heartbeat = tmp_path / "heartbeat.json"
+    heartbeat.write_text(
+        _json.dumps({"processed_total": _STATUS_MAX_OUTBOX_LINES + 5000, "outbox_path": str(outbox)}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(
+        "app.observability.status_service.resolve_worker_heartbeat_path",
+        lambda: heartbeat,
+    )
+
+    from app.observability.status_service import _get_outbox_lag
+
+    lag = _get_outbox_lag()
+    # processed_total >> capped count, so naive subtraction would yield 0.
+    # The truncated signal must short-circuit that derivation.
+    assert lag.pending_estimate is None
+    assert lag.outbox_events is None
 
 
 def test_count_events_does_not_read_entire_file(tmp_path: Path) -> None:

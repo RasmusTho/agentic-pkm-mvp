@@ -399,12 +399,14 @@ def _read_worker_heartbeat() -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _count_outbox_events(path: Path) -> int | None:
-    """Return a bounded line count for the outbox file.
+def _count_outbox_events(path: Path) -> tuple[int | None, bool]:
+    """Return a bounded ``(count, truncated)`` line count for the outbox file.
 
-    Caps the scan at ``_STATUS_MAX_OUTBOX_LINES`` so a multi-hundred-MB file
-    never blocks the status request path. Returns the cap value when the file
-    has at least that many lines.
+    The scan stops at ``_STATUS_MAX_OUTBOX_LINES`` so a multi-hundred-MB file
+    never blocks the status request path. When the cap is hit, ``truncated``
+    is ``True`` and the count reflects only the scanned prefix — callers must
+    treat the true total as unknown (e.g. omit derived lag estimates) to
+    avoid masking real backlog (see #1206 review feedback).
     """
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -413,12 +415,12 @@ def _count_outbox_events(path: Path) -> int | None:
                 if line.strip():
                     count += 1
                     if count >= _STATUS_MAX_OUTBOX_LINES:
-                        return count
-            return count
+                        return count, True
+            return count, False
     except FileNotFoundError:
-        return 0
+        return 0, False
     except Exception:
-        return None
+        return None, False
 
 
 def _get_outbox_lag() -> OutboxLagStatus:
@@ -440,12 +442,20 @@ def _get_outbox_lag() -> OutboxLagStatus:
         heartbeat_path = heartbeat.get("outbox_path")
         if heartbeat_path:
             outbox_path = Path(str(heartbeat_path))
-    outbox_events = _count_outbox_events(outbox_path)
+    outbox_events, truncated = _count_outbox_events(outbox_path)
+    # When the count was capped, the true total is unknown; reporting a derived
+    # pending_estimate from it can mask large backlogs (e.g. processed_total
+    # exceeds the cap, producing pending=0 even when the file is huge).
+    reported_total = None if truncated else outbox_events
     pending = None
-    if isinstance(outbox_events, int) and isinstance(processed_total, int):
+    if (
+        not truncated
+        and isinstance(outbox_events, int)
+        and isinstance(processed_total, int)
+    ):
         pending = max(outbox_events - processed_total, 0)
     return OutboxLagStatus(
-        outbox_events=outbox_events,
+        outbox_events=reported_total,
         worker_processed_total=processed_total if isinstance(processed_total, int) else None,
         pending_estimate=pending,
     )
@@ -516,8 +526,13 @@ def _get_panel_diagnostics() -> PanelDiagnostics:
 
 def _events_log_status() -> EventsLogStatus:
     outbox_path = Path(INDEX_OUTBOX_PATH)
-    total_lines = _count_outbox_events(outbox_path)
-    return EventsLogStatus(path=str(outbox_path), total_lines=total_lines)
+    total_lines, truncated = _count_outbox_events(outbox_path)
+    # Hide the capped count from the events_log surface; consumers read this
+    # as the true total and a capped value would be misleading.
+    return EventsLogStatus(
+        path=str(outbox_path),
+        total_lines=None if truncated else total_lines,
+    )
 
 
 def _read_last_json_record(path: Path) -> dict | None:
@@ -618,8 +633,14 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
         pending = _count_outbox_pending_db()
     elif mode == "jsonl":
         source_path = os.getenv("INDEX_OUTBOX_PATH") or str(Path(INDEX_OUTBOX_PATH))
-        total_lines = _count_outbox_events(Path(source_path)) if source_path else None
-        if isinstance(total_lines, int) and isinstance(processed_total, int):
+        total_lines, truncated = (
+            _count_outbox_events(Path(source_path)) if source_path else (None, False)
+        )
+        # If the line count was capped we cannot derive an honest pending
+        # estimate; leave pending unset rather than report a misleading 0.
+        if truncated:
+            pending = None
+        elif isinstance(total_lines, int) and isinstance(processed_total, int):
             pending = max(total_lines - processed_total, 0)
         elif isinstance(total_lines, int):
             pending = total_lines
