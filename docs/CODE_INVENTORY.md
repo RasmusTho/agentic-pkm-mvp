@@ -123,15 +123,13 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 ### `app/stores`
 
-**Files (10):** `base.py`, `db_health.py`, `decisions.py`, `decisions.py.bak`, `memory.py`, `pg.py`, `plan_store.py`, `postgres.py`, `provider.py`, `relation_index.py`
+**Files (9):** `base.py`, `db_health.py`, `decisions.py`, `memory.py`, `pg.py`, `plan_store.py`, `postgres.py`, `provider.py`, `relation_index.py`
 
 **Current role:** Transitional store layer; many canonical packages call it directly. Not ready for removal.
 
-**Notable finding:** `decisions.py.bak` is a backup artifact committed to the tree. Contains no imports of it found in the codebase. Safe to remove in a small one-file PR.
-
 **Removal blocker:** Active canonical caller surface. Retirement requires service/outbox boundary migration work that is out of scope here.
 
-**Recommended cleanup:** Remove `decisions.py.bak` as a standalone one-file PR. Track broader `app/stores` retirement separately, after the `app/store` caller migration is complete.
+**Recommended cleanup:** Track broader `app/stores` retirement separately, after the `app/store` caller migration is complete.
 
 ---
 
@@ -159,8 +157,6 @@ Issues recommended by the 2026-05-18 audit. Each is bounded and safe to implemen
 | Migrate `app/store` callers — agents area | Update `app/agents/**` to import from `app/stores` or canonical boundaries instead of `app.store.object_store` | `DomainObject` must be re-exported from a stable location first |
 | Migrate `app/store` callers — ingest + indexer area | Update `app/ingest/`, `app/indexer/`, `app/services/indexer.py`, `app/promotion/consumer.py` | Same as above |
 | Migrate `app/store` callers — cli + domain area | Update `app/cli/`, `app/domain/plan.py`, `app/orchestrator/executor.py`, `app/watcher/vault_watcher.py` | Same as above |
-| Remove `decisions.py.bak` | Delete `app/stores/decisions.py.bak`; one-file PR | None |
-
 These issues are not yet created in GitHub. When created, they should be `type:refactor`, scoped to one area each, and carry explicit `Verify:` targets before being marked `agent:ready`.
 
 ---
