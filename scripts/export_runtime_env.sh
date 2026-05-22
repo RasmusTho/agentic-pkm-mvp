@@ -95,8 +95,8 @@ if [ -n "$scope_glob_raw" ]; then
   printf "%s\n" "WATCHER_SCOPE_GLOB=$scope_glob_raw" >> "$runtime_env_path"
 fi
 
-# OPENAI_BASE is the full chat-completions URL used directly by the adapter and health checks
-# (e.g. http://host.docker.internal:11434/v1/chat/completions).
+# OPENAI_BASE is the full chat-completions URL used directly by the adapter and health checks.
+# See `.env.example` and `config/runtime.defaults.env` for canonical example values.
 # If the operator set it explicitly, write it as-is.
 # Otherwise, if OPENAI_BASE_URL is set (OpenAI-compatible base), derive the chat-completions
 # URL by stripping a trailing slash and appending /chat/completions.
