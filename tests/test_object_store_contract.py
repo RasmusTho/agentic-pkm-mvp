@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from app.store.object_store import DomainObject
+from app.objects import DomainObject
 from tests.fakes.fake_object_store import FakeObjectStore
 
 

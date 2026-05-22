@@ -107,15 +107,17 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 **Current role:** `object_store.py` is a compatibility shim — it delegates actual storage to `app/stores` (imports `get_object_store`, `resolve_store_backend`) but re-exports `DomainObject`, `ObjectStore`, and index types that callers import directly.
 
+**Stable canonical import boundary (shipped v5.6.1+):** `app/objects` — the new canonical home for `DomainObject`, `ObjectStore`, `RelationEdge`, `GraphSlice`, `RelationIndex`, `ScoredNeighbor`, and `VectorIndex`. New code must import from `app.objects`, not from `app.store.object_store`. Existing callers migrate per-area in follow-up issues; the `app/store` compatibility shims remain until all callers are migrated.
+
 **Residual callers outside `app/store/` (production code):**
 
 `app/agents/` (chunker, citation_checker, classifier, deduper, indexer, normalizer, panel, panel_agent/agent+execution+runtime, planner, projector, reviewer, set_evaluator), `app/cli/index_rebuild.py`, `app/cli/smoke.py`, `app/domain/plan.py`, `app/indexer/consumer.py`, `app/ingest/api.py`, `app/ingest/vault_alpha.py`, `app/orchestrator/executor.py`, `app/promotion/consumer.py`, `app/services/indexer.py`, `app/watcher/vault_watcher.py`
 
-**Test callers:** Very broad — `tests/fakes/`, `tests/agents/`, `tests/cli/`, `tests/e2e/`, `tests/indexer/`, `tests/panel/`, `tests/quality_wave/`, `tests/runtime/`, `tests/stores/`, `tests/test_domain_write_boundary.py`, `tests/test_object_store_contract.py`, `tests/test_relation_index_contract.py`, `tests/test_vector_index_contract.py`
+**Test callers:** Very broad — `tests/fakes/`, `tests/agents/`, `tests/cli/`, `tests/e2e/`, `tests/indexer/`, `tests/panel/`, `tests/quality_wave/`, `tests/runtime/`, `tests/stores/`, `tests/test_domain_write_boundary.py`, `tests/test_relation_index_contract.py`, `tests/test_vector_index_contract.py`. `tests/test_object_store_contract.py` has been migrated to `app.objects`.
 
 **Doc references:** `docs/CODE_INVENTORY.md`, `docs/STATUS.md`, `docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md`
 
-**Removal blocker:** Very broad caller surface across canonical packages. Migration requires relocating `DomainObject` and type aliases to a canonical home (e.g. `app/domain` or `app/stores`) and updating all callers. Too large for a single slice.
+**Removal blocker:** Very broad caller surface across canonical packages. Follow-up migration issues should update callers to import from `app.objects`; once complete, `app/store` shims can be removed.
 
 **Recommended cleanup:** One issue per package area (agents, ingest+indexer, cli, tests/fakes). Do not attempt in a single PR. See [Cleanup follow-ups](#cleanup-follow-ups).
 
