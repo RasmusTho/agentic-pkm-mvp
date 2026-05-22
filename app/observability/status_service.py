@@ -41,6 +41,7 @@ from app.observability.status_model import (
     ContextDimensionsStatus,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
+from app.health_contract import DEFAULT_CONTRACT, WRITE_BLOCKED_STATES
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.runtime import get_settings_bundle
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
@@ -48,7 +49,6 @@ from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_
 from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores import get_object_store
 from app.version import SOT_FORWARD, get_sot_version, get_sot_metadata
-from app.health_contract import DEFAULT_CONTRACT
 
 _ASK_LATENCIES: list[tuple[float, float]] = []
 _ASK_ERRORS: list[float] = []
@@ -63,6 +63,45 @@ _WATCHER_EVENT_NAMES = {"watcher.run", "watcher.run.completed"}
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+# Status endpoint bounded-read caps. Status helpers must never load full
+# multi-hundred-MB JSONL files into memory; cap line counts and tail reads.
+_STATUS_MAX_OUTBOX_LINES = 5000
+_STATUS_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB tail is enough for recent records
+
+
+def _iter_tail_lines(path: Path, max_bytes: int = _STATUS_TAIL_BYTES) -> list[str]:
+    """Read at most ``max_bytes`` from the end of ``path`` and return non-empty lines.
+
+    Drops the (possibly partial) first line so callers always see complete JSONL
+    records. Returns an empty list on FileNotFoundError or read errors.
+    """
+    try:
+        with path.open("rb") as handle:
+            try:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+            except OSError:
+                size = 0
+            if size > max_bytes:
+                handle.seek(size - max_bytes)
+                partial = True
+            else:
+                handle.seek(0)
+                partial = False
+            data = handle.read()
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:
+        return []
+    lines = text.splitlines()
+    if partial and lines:
+        lines = lines[1:]
+    return [line for line in lines if line.strip()]
 
 
 @dataclass(frozen=True)
@@ -204,61 +243,30 @@ def _count_events(outbox_path: Path) -> EventCounters:
     promotion_done_total = promotion_done_recent = 0
     source = str(outbox_path) if outbox_path else None
     cutoff = datetime.now(timezone.utc) - _EVENT_WINDOW
-    try:
-        with outbox_path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except Exception:
-                    continue
-                event = record.get("event") or record.get("event_type") or record.get("topic") or ""
-                ts = _parse_timestamp(record.get("timestamp") or record.get("created_at"))
-                is_recent = ts is not None and ts >= cutoff
-                if event == "panel.intent.executed":
-                    panel_total += 1
-                    if is_recent:
-                        panel_recent += 1
-                if event == PROMOTE_INTENT_CREATED:
-                    promote_total += 1
-                    if is_recent:
-                        promote_recent += 1
-                if event == PROMOTE_DONE:
-                    promotion_done_total += 1
-                    if is_recent:
-                        promotion_done_recent += 1
-                if event in _WATCHER_EVENT_NAMES:
-                    watcher_total += 1
-                    if is_recent:
-                        watcher_recent += 1
-    except FileNotFoundError:
-        return EventCounters(
-            watcher_runs_total=0,
-            watcher_runs_24h=0,
-            panel_runs_total=0,
-            panel_runs_24h=0,
-            promote_created_total=0,
-            promote_created_24h=0,
-            promotion_executed_total=0,
-            promotion_executed_24h=0,
-            ingest_runs_by_plane={},
-            source_path=source,
-        )
-    except Exception:
-        return EventCounters(
-            watcher_runs_total=watcher_total,
-            watcher_runs_24h=watcher_recent,
-            panel_runs_total=panel_total,
-            panel_runs_24h=panel_recent,
-            promote_created_total=promote_total,
-            promote_created_24h=promote_recent,
-            promotion_executed_total=promotion_done_total,
-            promotion_executed_24h=promotion_done_recent,
-            ingest_runs_by_plane={},
-            source_path=source,
-        )
+    for line in _iter_tail_lines(outbox_path):
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        event = record.get("event") or record.get("event_type") or record.get("topic") or ""
+        ts = _parse_timestamp(record.get("timestamp") or record.get("created_at"))
+        is_recent = ts is not None and ts >= cutoff
+        if event == "panel.intent.executed":
+            panel_total += 1
+            if is_recent:
+                panel_recent += 1
+        if event == PROMOTE_INTENT_CREATED:
+            promote_total += 1
+            if is_recent:
+                promote_recent += 1
+        if event == PROMOTE_DONE:
+            promotion_done_total += 1
+            if is_recent:
+                promotion_done_recent += 1
+        if event in _WATCHER_EVENT_NAMES:
+            watcher_total += 1
+            if is_recent:
+                watcher_recent += 1
     return EventCounters(
         watcher_runs_total=watcher_total,
         watcher_runs_24h=watcher_recent,
@@ -280,27 +288,18 @@ def _delivery_sla_status(outbox_path: Path) -> DeliverySLAStatus:
         DELIVERY_SLA_FAILED: 0,
         DELIVERY_SLA_ROLLED_BACK: 0,
     }
-    try:
-        with outbox_path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except Exception:
-                    continue
-                event = record.get("event") or record.get("event_type") or record.get("topic") or ""
-                if event not in {ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED}:
-                    continue
-                state = map_delivery_sla_from_event_record(record)
-                if not state:
-                    continue
-                outcomes[state] = outcomes.get(state, 0) + 1
-    except FileNotFoundError:
-        pass
-    except Exception:
-        pass
+    for line in _iter_tail_lines(outbox_path):
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        event = record.get("event") or record.get("event_type") or record.get("topic") or ""
+        if event not in {ORCHESTRATOR_STEP_ERROR, ORCHESTRATOR_STEP_FINISHED}:
+            continue
+        state = map_delivery_sla_from_event_record(record)
+        if not state:
+            continue
+        outcomes[state] = outcomes.get(state, 0) + 1
     return DeliverySLAStatus(outcomes_total=outcomes, source_path=str(outbox_path))
 
 
@@ -400,14 +399,28 @@ def _read_worker_heartbeat() -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _count_outbox_events(path: Path) -> int | None:
+def _count_outbox_events(path: Path) -> tuple[int | None, bool]:
+    """Return a bounded ``(count, truncated)`` line count for the outbox file.
+
+    The scan stops at ``_STATUS_MAX_OUTBOX_LINES`` so a multi-hundred-MB file
+    never blocks the status request path. When the cap is hit, ``truncated``
+    is ``True`` and the count reflects only the scanned prefix — callers must
+    treat the true total as unknown (e.g. omit derived lag estimates) to
+    avoid masking real backlog (see #1206 review feedback).
+    """
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return sum(1 for line in handle if line.strip())
+            count = 0
+            for line in handle:
+                if line.strip():
+                    count += 1
+                    if count >= _STATUS_MAX_OUTBOX_LINES:
+                        return count, True
+            return count, False
     except FileNotFoundError:
-        return 0
+        return 0, False
     except Exception:
-        return None
+        return None, False
 
 
 def _get_outbox_lag() -> OutboxLagStatus:
@@ -429,26 +442,36 @@ def _get_outbox_lag() -> OutboxLagStatus:
         heartbeat_path = heartbeat.get("outbox_path")
         if heartbeat_path:
             outbox_path = Path(str(heartbeat_path))
-    outbox_events = _count_outbox_events(outbox_path)
+    outbox_events, truncated = _count_outbox_events(outbox_path)
+    # When the count was capped, the true total is unknown; reporting a derived
+    # pending_estimate from it can mask large backlogs (e.g. processed_total
+    # exceeds the cap, producing pending=0 even when the file is huge).
+    reported_total = None if truncated else outbox_events
     pending = None
-    if isinstance(outbox_events, int) and isinstance(processed_total, int):
+    if (
+        not truncated
+        and isinstance(outbox_events, int)
+        and isinstance(processed_total, int)
+    ):
         pending = max(outbox_events - processed_total, 0)
     return OutboxLagStatus(
-        outbox_events=outbox_events,
+        outbox_events=reported_total,
         worker_processed_total=processed_total if isinstance(processed_total, int) else None,
         pending_estimate=pending,
     )
 
 
 def _get_write_guard_status() -> WriteGuardStatus:
+    # Read the cached state-machine value directly. Calling
+    # DEFAULT_CONTRACT.evaluate() here triggers read_outbox() (full-file load
+    # of the JSONL outbox) plus diagnose_index(); both are unbounded and have
+    # hung the status request path under large outbox conditions (#1206).
     try:
-        snapshot = DEFAULT_CONTRACT.evaluate()
+        state = DEFAULT_CONTRACT.state_machine.state
     except Exception:
         return WriteGuardStatus()
-    return WriteGuardStatus(
-        writes_allowed=snapshot.get("writes_allowed"),
-        mode=snapshot.get("state"),
-    )
+    writes_allowed = state not in WRITE_BLOCKED_STATES if state else None
+    return WriteGuardStatus(writes_allowed=writes_allowed, mode=state)
 
 
 def _get_index_status() -> IndexStatus | None:
@@ -457,7 +480,7 @@ def _get_index_status() -> IndexStatus | None:
     except Exception:
         return None
     try:
-        diag = diagnose_index()
+        diag = diagnose_index(use_cache=True)
     except Exception:
         return None
     issues = diag.get("issues") or []
@@ -503,53 +526,40 @@ def _get_panel_diagnostics() -> PanelDiagnostics:
 
 def _events_log_status() -> EventsLogStatus:
     outbox_path = Path(INDEX_OUTBOX_PATH)
-    total_lines = _count_outbox_events(outbox_path)
-    return EventsLogStatus(path=str(outbox_path), total_lines=total_lines)
+    total_lines, truncated = _count_outbox_events(outbox_path)
+    # Hide the capped count from the events_log surface; consumers read this
+    # as the true total and a capped value would be misleading.
+    return EventsLogStatus(
+        path=str(outbox_path),
+        total_lines=None if truncated else total_lines,
+    )
 
 
 def _read_last_json_record(path: Path) -> dict | None:
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            last: dict | None = None
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(payload, dict):
-                    last = payload
-            return last
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
+    last: dict | None = None
+    for line in _iter_tail_lines(path):
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            last = payload
+    return last
 
 
 def _last_watcher_run_record(path: Path) -> dict | None:
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            last: dict | None = None
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                event_name = payload.get("event") or payload.get("event_type") or payload.get("topic")
-                if event_name in _WATCHER_EVENT_NAMES:
-                    last = payload
-            return last
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
+    last: dict | None = None
+    for line in _iter_tail_lines(path):
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        event_name = payload.get("event") or payload.get("event_type") or payload.get("topic")
+        if event_name in _WATCHER_EVENT_NAMES:
+            last = payload
+    return last
 
 
 def _worker_queue_mode() -> str:
@@ -623,8 +633,14 @@ def _get_worker_queue_status() -> WorkerQueueStatus:
         pending = _count_outbox_pending_db()
     elif mode == "jsonl":
         source_path = os.getenv("INDEX_OUTBOX_PATH") or str(Path(INDEX_OUTBOX_PATH))
-        total_lines = _count_outbox_events(Path(source_path)) if source_path else None
-        if isinstance(total_lines, int) and isinstance(processed_total, int):
+        total_lines, truncated = (
+            _count_outbox_events(Path(source_path)) if source_path else (None, False)
+        )
+        # If the line count was capped we cannot derive an honest pending
+        # estimate; leave pending unset rather than report a misleading 0.
+        if truncated:
+            pending = None
+        elif isinstance(total_lines, int) and isinstance(processed_total, int):
             pending = max(total_lines - processed_total, 0)
         elif isinstance(total_lines, int):
             pending = total_lines
@@ -693,7 +709,9 @@ def classify_view_freshness(
     )
 
 
-def _get_watcher_automation_status() -> WatcherAutomationStatus:
+def _get_watcher_automation_status(
+    write_guard: WriteGuardStatus | None = None,
+) -> WatcherAutomationStatus:
     try:
         watcher_settings = load_watcher_settings()
     except Exception:
@@ -707,7 +725,8 @@ def _get_watcher_automation_status() -> WatcherAutomationStatus:
     except Exception:
         invalid_actions = []
 
-    write_guard = _get_write_guard_status()
+    if write_guard is None:
+        write_guard = _get_write_guard_status()
     tick_record = _read_last_json_record(watcher_settings.paths.watcher_tick_log)
     watcher_run_record = _last_watcher_run_record(watcher_settings.paths.panel_event_log)
     watcher_payload = watcher_run_record.get("payload") if isinstance(watcher_run_record, dict) else {}
@@ -775,13 +794,8 @@ def _normalize_context_dimensions(value: object) -> ContextDimensionsStatus | No
 
 
 def _status_context_dimensions(outbox_path: Path) -> ContextDimensionsStatus | None:
-    try:
-        lines = outbox_path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return None
+    lines = _iter_tail_lines(outbox_path)
     for line in reversed(lines):
-        if not line.strip():
-            continue
         try:
             record = json.loads(line)
         except Exception:
@@ -811,51 +825,33 @@ def _read_watcher_heartbeat_watchers() -> dict[str, dict]:
 
 
 def _last_panel_run_record(path: Path) -> dict | None:
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            last: dict | None = None
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
-                if topic == PANEL_INTENT_EXECUTED:
-                    last = payload
-            return last
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
+    last: dict | None = None
+    for line in _iter_tail_lines(path):
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
+        if topic == PANEL_INTENT_EXECUTED:
+            last = payload
+    return last
 
 
 def _last_panel_log_record(path: Path) -> dict | None:
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            last: dict | None = None
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
-                if topic == PANEL_LOG_CREATED:
-                    last = payload
-            return last
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
+    last: dict | None = None
+    for line in _iter_tail_lines(path):
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        topic = payload.get("event") or payload.get("event_type") or payload.get("topic")
+        if topic == PANEL_LOG_CREATED:
+            last = payload
+    return last
 
 
 def _newer_panel_record(a: dict | None, b: dict | None) -> dict | None:
@@ -960,6 +956,7 @@ def get_system_status() -> SystemStatus:
     intent_status = _get_intent_status(counters)
     stores = get_store_status()
     worker_queue = _get_worker_queue_status()
+    write_guard = _get_write_guard_status()
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         environment=active_environment(),
@@ -977,7 +974,7 @@ def get_system_status() -> SystemStatus:
         delivery_sla=_delivery_sla_status(Path(INDEX_OUTBOX_PATH)),
         index=_get_index_status(),
         panel_diagnostics=_get_panel_diagnostics(),
-        write_guard=_get_write_guard_status(),
+        write_guard=write_guard,
         outbox_lag=_get_outbox_lag(),
         events_log=_events_log_status(),
         worker_queue=worker_queue,
@@ -986,7 +983,7 @@ def get_system_status() -> SystemStatus:
             ingestion=ingestion,
             worker_queue=worker_queue,
         ),
-        watcher_automation=_get_watcher_automation_status(),
+        watcher_automation=_get_watcher_automation_status(write_guard=write_guard),
         watcher_lifecycle=_get_watcher_lifecycle_status(),
         instance_provenance=_get_instance_provenance_status(),
         context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),

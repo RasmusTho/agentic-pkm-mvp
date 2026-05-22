@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import threading
 import time
 from typing import Any, Dict
 
@@ -30,7 +32,35 @@ def _identity_to_dict(identity: EmbeddingIdentity | None) -> Dict[str, Any] | No
     }
 
 
-def diagnose_index() -> Dict[str, Any]:
+_DIAGNOSE_TTL_S = float(os.getenv("INDEX_DOCTOR_TTL_S", "10"))
+_diagnose_cache: tuple[float, Dict[str, Any]] | None = None
+_diagnose_lock = threading.Lock()
+
+
+def _cached_diagnose() -> Dict[str, Any] | None:
+    global _diagnose_cache
+    cache = _diagnose_cache
+    if cache is None:
+        return None
+    ts, value = cache
+    if (time.monotonic() - ts) > _DIAGNOSE_TTL_S:
+        return None
+    return value
+
+
+def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
+    """Return embedding-index diagnostics.
+
+    The status-request path passes ``use_cache=True`` to bound diagnostic
+    work to one DB inspection per ``INDEX_DOCTOR_TTL_S`` seconds (default
+    10s). Other callers default to fresh evaluation so changes in identity
+    configuration are immediately visible.
+    """
+    global _diagnose_cache
+    if use_cache:
+        cached = _cached_diagnose()
+        if cached is not None:
+            return cached
     client = get_embeddings_client(LLMTaskIntent(task_kind="embed", determinism_required=False))
     expected_identity = client.identity
     vector_index = get_vector_index()
@@ -88,7 +118,7 @@ def diagnose_index() -> Dict[str, Any]:
     rebuild_required = bool(issues)
     rebuild_reason = issues[0] if issues else None
 
-    return {
+    result: Dict[str, Any] = {
         "timestamp": time.time(),
         "backend": backend,
         "expected_identity": _identity_to_dict(expected_identity),
@@ -103,6 +133,16 @@ def diagnose_index() -> Dict[str, Any]:
         "status": status,
         "pg_state": pg_state,
     }
+    with _diagnose_lock:
+        _diagnose_cache = (time.monotonic(), result)
+    return result
 
 
-__all__ = ["diagnose_index"]
+def reset_diagnose_cache() -> None:
+    """Drop any cached diagnose_index result. Intended for tests."""
+    global _diagnose_cache
+    with _diagnose_lock:
+        _diagnose_cache = None
+
+
+__all__ = ["diagnose_index", "reset_diagnose_cache"]
