@@ -1,4 +1,4 @@
-State: SoT v5.6 baseline (audit pass 2026-05-18: residual-caller map and cleanup follow-ups added; package status unchanged).
+State: SoT v5.6 baseline (audit pass 2026-05-18: residual-caller map and cleanup follow-ups added; package status unchanged). Updated 2026-05-22: `app/agent`, `app/plugins`, and `run_agent.py` removed (#1171).
 Doc role: Reference
 Authority: Canonical map of app/ package status for the current baseline; use it to determine whether a package is canonical runtime, deprecated, planned, or production support. Wins over ad-hoc comments or import graphs on current-state package classification questions.
 
@@ -45,8 +45,6 @@ These packages are retained for compatibility or historical reference. **Do not 
 
 | Package | Replacement direction |
 | --- | --- |
-| `app/agent` | Superseded by `app/agents` and the orchestrator runtime. No new callers. |
-| `app/plugins` | Plugin adapter pattern replaced by the MCP adapter and component entrypoints. No new callers. |
 | `app/store` | Superseded by `app/stores` and bounded service/outbox patterns. No new callers. |
 | `app/stores` | Transitional store layer. Migrate callers toward service + outbox boundaries. No new extensions. |
 
@@ -64,40 +62,9 @@ These packages are seams reserved for future capabilities. They contain minimal 
 
 Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: residual callers, blocker conditions, and recommended cleanup scope.
 
-### `app/agent`
+### `app/agent` — **Removed** (#1171, 2026-05-22)
 
-**Files (10):** `actions.py`, `execute.py`, `graph.py`, `interestingness.py`, `models.py`, `nodes.py`, `plan.py`, `reflect.py`, `repository.py`, `service.py`
-
-**Residual callers outside `app/agent/`:**
-
-| File | Symbol imported | Notes |
-| --- | --- | --- |
-| `app/health.py` | `AgentRepository` | Canonical health package; must be decoupled before removal |
-| `app/plugins/base.py` | `AgentRepository` | Conditional import inside deprecated `app/plugins`; co-removed with `app/agent` |
-| `run_agent.py` | `invoke` from `app.agent.graph` | Top-level entrypoint script; must be retired before package removal |
-| `tests/stub_repositories.py` | `InterestingnessResult` | Shared test helper; update when removing `app/agent` |
-| `tests/test_agent_service.py` | `AgentService` | Direct test of deprecated service; remove with package |
-
-**Doc references:** `docs/CODE_INVENTORY.md` (this file), `docs/legacy/ALIGNMENT.md`, `docs/legacy/PROJECT_OVERVIEW.md`
-
-**Removal blocker:** `app/health.py` and `run_agent.py` must be decoupled first. `app/plugins` can be co-removed in the same slice.
-
-**Recommended cleanup:** One bounded slice — decouple `app/health.py` from `AgentRepository`, retire `run_agent.py`, remove `app/agent` and `app/plugins` and their tests. See [Cleanup follow-ups](#cleanup-follow-ups).
-
----
-
-### `app/plugins`
-
-**Files (5):** `base.py`, `loader.py`, `retriever.py`, `web_get.py`, `write_note.py`
-
-**Residual callers outside `app/plugins/`:**
-
-| File | Notes |
-| --- | --- |
-| `app/agent/execute.py`, `app/agent/interestingness.py`, `app/agent/reflect.py`, `app/agent/service.py` | All within deprecated `app/agent`; no canonical callers |
-| `tests/test_agent_service.py` | Test of deprecated `app/agent`; co-removed |
-
-**No canonical callers remain.** Safe to remove together with `app/agent`.
+`app/agent`, `app/plugins`, `run_agent.py`, `tests/test_agent_service.py`, and `tests/stub_repositories.py` were removed in this slice. `app/health.py` was decoupled from `AgentRepository` in the same change.
 
 ---
 
@@ -155,7 +122,7 @@ Issues recommended by the 2026-05-18 audit. Each is bounded and safe to implemen
 
 | Issue | Scope | Blocker |
 | --- | --- | --- |
-| Remove `app/agent` + `app/plugins` | Decouple `app/health.py` from `AgentRepository`, retire `run_agent.py`, delete both packages and their tests | None beyond the decoupling work above |
+| ~~Remove `app/agent` + `app/plugins`~~ | **Done** — removed in #1171 (2026-05-22) | — |
 | Migrate `app/store` callers — agents area | Update `app/agents/**` to import from `app/stores` or canonical boundaries instead of `app.store.object_store` | `DomainObject` must be re-exported from a stable location first |
 | Migrate `app/store` callers — ingest + indexer area | Update `app/ingest/`, `app/indexer/`, `app/services/indexer.py`, `app/promotion/consumer.py` | Same as above |
 | Migrate `app/store` callers — cli + domain area | Update `app/cli/`, `app/domain/plan.py`, `app/orchestrator/executor.py`, `app/watcher/vault_watcher.py` | Same as above |

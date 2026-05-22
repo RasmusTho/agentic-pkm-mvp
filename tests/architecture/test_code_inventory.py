@@ -37,7 +37,9 @@ def _section_lines(text: str, heading: str) -> list[str]:
 
 
 def test_code_inventory_classifies_known_legacy_candidates() -> None:
-    """app/agent, app/plugins, and app/store are each a distinct row in the Deprecated section."""
+    """app/store is a distinct row in the Deprecated section.
+    app/agent and app/plugins were removed in #1171 and are no longer in the deprecated table.
+    """
     assert CODE_INVENTORY.exists(), "docs/CODE_INVENTORY.md is missing"
     text = CODE_INVENTORY.read_text(encoding="utf-8")
     assert "Deprecated" in text, (
@@ -45,7 +47,7 @@ def test_code_inventory_classifies_known_legacy_candidates() -> None:
     )
     deprecated_lines = _section_lines(text, "Deprecated Packages")
     # Match backtick-quoted cells so `app/store` cannot falsely match inside `app/stores`
-    for pkg in ("app/agent", "app/plugins", "app/store"):
+    for pkg in ("app/store",):
         cell = f"`{pkg}`"
         assert any(cell in line for line in deprecated_lines), (
             f"docs/CODE_INVENTORY.md must have a '{cell}' row in the Deprecated section "
