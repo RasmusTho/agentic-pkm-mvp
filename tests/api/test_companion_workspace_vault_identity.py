@@ -4,7 +4,8 @@ Covers:
 - vault_identity field present in runtime response
 - vault_name derived from last path component of VAULT_ROOT
 - channel read from PKM_ENVIRONMENT, CHANNEL, PKM_CHANNEL (in that order)
-- provenance="env" when VAULT_ROOT is set, "unresolved" when absent
+- provenance="env" when VAULT_ROOT is set and used, "default" when absent
+- provenance="fallback" when VAULT_ROOT is invalid and runtime falls back
 - vault paths containing spaces (iCloud Mobile Documents)
 """
 from __future__ import annotations
@@ -119,15 +120,39 @@ def test_vault_provenance_env_when_vault_root_set(
     assert identity["provenance"] == "env"
 
 
-def test_vault_provenance_unresolved_when_vault_root_absent(
+def test_vault_provenance_default_when_vault_root_absent(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("VAULT_ROOT", raising=False)
+    default_vault = Path("vault").resolve()
+    default_note = default_vault / "notes" / "note.md"
+    default_note.parent.mkdir(parents=True, exist_ok=True)
+    default_note.write_text(
+        "---\nuuid: default-uuid-1\n---\n\n# Default Note\n\nBody.\n",
+        encoding="utf-8",
+    )
     resp = _workspace(client)
-    # May 404 if vault root is unresolvable, but identity should reflect it
-    if resp.status_code == 200:
-        identity = resp.json()["runtime"]["vault_identity"]
-        assert identity["provenance"] == "unresolved"
+    assert resp.status_code == 200
+    identity = resp.json()["runtime"]["vault_identity"]
+    assert identity["provenance"] == "default"
+
+
+def test_vault_provenance_fallback_when_vault_root_invalid(
+    client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "missing-vault"))
+    fallback_vault = Path("vault").resolve()
+    fallback_note = fallback_vault / "notes" / "note.md"
+    fallback_note.parent.mkdir(parents=True, exist_ok=True)
+    fallback_note.write_text(
+        "---\nuuid: fallback-uuid-1\n---\n\n# Fallback Note\n\nBody.\n",
+        encoding="utf-8",
+    )
+    resp = _workspace(client)
+    assert resp.status_code == 200
+    identity = resp.json()["runtime"]["vault_identity"]
+    assert identity["vault_name"] == "vault"
+    assert identity["provenance"] == "fallback"
 
 
 def test_vault_name_safe_for_path_with_spaces(
