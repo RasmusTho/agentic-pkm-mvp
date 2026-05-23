@@ -44,8 +44,19 @@ def _resolve_and_validate(
     note_path_raw: str,
     vault_root: Path,
 ) -> Path:
-    """Resolve note path and reject traversal or outside-vault paths."""
+    """Resolve note path and reject traversal, absolute paths, or outside-vault paths.
+
+    Only vault-relative paths are accepted. Absolute paths are rejected so that
+    the resolved path is always constructed from the trusted vault_root, never
+    directly from user-supplied input (eliminates CodeQL py/path-injection taint).
+    """
     candidate = Path(note_path_raw)
+
+    if candidate.is_absolute():
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "absolute_path_not_allowed"},
+        )
 
     # Reject explicit traversal components before any resolution
     if ".." in candidate.parts:
@@ -55,31 +66,25 @@ def _resolve_and_validate(
         )
 
     vault_resolved = vault_root.resolve()
+    # Constructed entirely from trusted vault_resolved; user input contributes
+    # only the relative components already validated above.
+    resolved = (vault_resolved / candidate).resolve()
 
-    if candidate.is_absolute():
-        candidate_resolved = candidate.resolve()
-    else:
-        candidate_resolved = (vault_root / candidate).resolve()
-
-    # Reject paths that escape the vault root; capture the vault-relative part.
+    # Belt-and-suspenders containment check.
     try:
-        contained = candidate_resolved.relative_to(vault_resolved)
+        resolved.relative_to(vault_resolved)
     except ValueError:
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "outside_vault"},
         )
 
-    # Reconstruct the final path from the trusted vault root so that downstream
-    # file I/O is not tainted by the raw user-supplied value (fixes CodeQL
-    # py/path-injection: the returned path flows from vault_resolved, not from
-    # user input).
-    return vault_resolved / contained
+    return resolved
 
 
 @router.get("/note", response_model=ArtifactNoteResponse)
 def read_artifact_note(
-    note_path: str = Query(..., description="Vault-relative or absolute path to the note"),
+    note_path: str = Query(..., description="Vault-relative path to the note (absolute paths are rejected)"),
     artifact_id: Optional[str] = Query(None, description="Artifact UUID; echoed back in response"),
 ) -> ArtifactNoteResponse:
     vault_root = resolve_vault_root()
