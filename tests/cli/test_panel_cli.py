@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 
 def _seed_panel_note(note_uuid: str, markdown: str) -> None:

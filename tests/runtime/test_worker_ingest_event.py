@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.services.companion_note import read_companion
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.workers import outbox_worker
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from scripts.yaml_roundtrip import load_frontmatter
