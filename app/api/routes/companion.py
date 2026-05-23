@@ -119,6 +119,7 @@ class WorkspaceUpdateCapabilityState(BaseModel):
 class GuardState(BaseModel):
     canvas_enabled: bool
     writeguard_status: str
+    update_flow_available: bool
     degraded: bool
     workspace_update: WorkspaceUpdateCapabilityState
 
@@ -739,6 +740,7 @@ def read_companion_workspace(
         guards=GuardState(
             canvas_enabled=canvas_enabled,
             writeguard_status=writeguard_status,
+            update_flow_available=workspace_update.available,
             degraded=not canvas_enabled or writeguard_status == "unknown",
             workspace_update=workspace_update,
         ),

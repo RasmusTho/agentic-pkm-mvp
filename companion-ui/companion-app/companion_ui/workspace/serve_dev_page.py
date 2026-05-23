@@ -120,6 +120,7 @@ def _render_note_section(fields: dict) -> str:
     writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
     writeguard_blocked = writeguard_status.lower() == "blocked"
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
+    update_flow_available = bool(fields.get("guard_update_flow_available", False))
     guard_degraded = bool(fields.get("guard_degraded", False))
     workspace_update_available = bool(fields.get("guard_workspace_update_available", False))
     workspace_update_state = _e(fields.get("guard_workspace_update_state") or "disabled")
@@ -171,6 +172,11 @@ def _render_note_section(fields: dict) -> str:
         <div class="safety-item" data-testid="workspace-canvas-enabled-state">
           <span class="safety-label">Canvas</span>
           <span>{'enabled' if canvas_enabled else 'disabled'}</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-update-flow-state"
+             data-update-flow="{'available' if update_flow_available else 'disabled'}">
+          <span class="safety-label">Update flow</span>
+          <span>{'available' if update_flow_available else 'disabled'}</span>
         </div>
         <div class="safety-item" data-testid="workspace-guard-degraded-state">
           <span class="safety-label">guard</span>

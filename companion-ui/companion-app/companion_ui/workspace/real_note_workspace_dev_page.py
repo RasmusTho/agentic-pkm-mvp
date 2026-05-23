@@ -145,6 +145,7 @@ class DevPageState:
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
     guard_canvas_enabled: bool = True
+    guard_update_flow_available: bool = False
     guard_degraded: bool = False
     guard_workspace_update_available: bool = False
     guard_workspace_update_state: str = "disabled"
@@ -378,6 +379,7 @@ class RealNoteWorkspaceDevPage:
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
+            guard_update_flow_available=bool(guards.get("update_flow_available", False)),
             guard_degraded=bool(guards.get("degraded", False)),
             guard_workspace_update_available=workspace_update_available,
             guard_workspace_update_state=workspace_update_state,
@@ -876,6 +878,7 @@ class RealNoteWorkspaceDevPage:
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
             "guard_canvas_enabled": self.state.guard_canvas_enabled,
+            "guard_update_flow_available": self.state.guard_update_flow_available,
             "guard_degraded": self.state.guard_degraded,
             "guard_workspace_update_available": self.state.guard_workspace_update_available,
             "guard_workspace_update_state": self.state.guard_workspace_update_state,
