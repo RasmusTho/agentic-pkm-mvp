@@ -282,7 +282,6 @@ Each state includes: when it appears, copy guidance, allowed actions, forbidden 
 
 ## 14. MLP definition of done
 
-- [ ] Handoff doc exists at `/Users/rasmusthornberg/code/agentic-pkm-mvp/companion-ui/docs/MLP_INTERACTION_DESIGN_HANDOFF.md`.
 - [ ] Handoff doc exists at `companion-ui/docs/MLP_INTERACTION_DESIGN_HANDOFF.md`.
 - [ ] Doc states it is design input, not source of truth.
 - [ ] Doc references #1177, #1178, #1179, #1180.

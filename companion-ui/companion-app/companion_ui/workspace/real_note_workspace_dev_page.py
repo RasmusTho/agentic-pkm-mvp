@@ -522,6 +522,9 @@ class RealNoteWorkspaceDevPage:
             message=action.get("summary"),
         ).to_render_dict()
 
+        machine.transition("idle")
+        transition_path.append(machine.state)
+
         refreshed = self.load(NoteLoadIntent(note_path=note_path))
         refreshed.suggestion_state = machine.state
         refreshed.suggestion_dom_alias = machine.dom_alias
