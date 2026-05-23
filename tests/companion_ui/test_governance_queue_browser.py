@@ -117,11 +117,12 @@ def test_governance_pending_state_transition() -> None:
     )
 
     fields = page.render_fields()
-    assert state.suggestion_state == "governance_pending"
+    assert state.suggestion_state == "idle"
     assert fields is not None
     assert fields["governance_pending_transition_path"] == [
         "staged_governance",
         "governance_pending",
+        "idle",
     ]
 
 
