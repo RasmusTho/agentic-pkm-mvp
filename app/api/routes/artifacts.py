@@ -9,6 +9,7 @@ Rejects path traversal and paths outside the configured vault root.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -46,9 +47,9 @@ def _resolve_and_validate(
 ) -> Path:
     """Resolve note path and reject traversal, absolute paths, or outside-vault paths.
 
-    Only vault-relative paths are accepted. Absolute paths are rejected so that
-    the resolved path is always constructed from the trusted vault_root, never
-    directly from user-supplied input (eliminates CodeQL py/path-injection taint).
+    Only vault-relative paths are accepted. Absolute paths are rejected before any
+    path construction occurs. The containment check uses os.path.realpath + startswith,
+    which is the CodeQL-recognized sanitizer pattern for py/path-injection.
     """
     candidate = Path(note_path_raw)
 
@@ -65,21 +66,18 @@ def _resolve_and_validate(
             detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "path_traversal"},
         )
 
-    vault_resolved = vault_root.resolve()
-    # Constructed entirely from trusted vault_resolved; user input contributes
-    # only the relative components already validated above.
-    resolved = (vault_resolved / candidate).resolve()
+    # os.path.realpath + startswith is the CodeQL-recognized path traversal sanitizer.
+    vault_abs = os.path.realpath(str(vault_root))
+    resolved_str = os.path.realpath(os.path.join(vault_abs, str(candidate)))
+    vault_prefix = vault_abs + os.sep
 
-    # Belt-and-suspenders containment check.
-    try:
-        resolved.relative_to(vault_resolved)
-    except ValueError:
+    if not resolved_str.startswith(vault_prefix):
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "outside_vault"},
         )
 
-    return resolved
+    return Path(resolved_str)
 
 
 @router.get("/note", response_model=ArtifactNoteResponse)
