@@ -141,6 +141,10 @@ class TestBlockedVariantIsAlertRole:
         card = make_stub_blocked_card()
         assert "blocked.acknowledge" in card.available_intents
 
+    def test_blocked_has_open_panel_intent(self) -> None:
+        card = make_stub_blocked_card()
+        assert "blocked.openPanel" in card.available_intents
+
     def test_blocked_requires_denial_reason(self) -> None:
         with pytest.raises(ValueError, match="denial_reason is required"):
             SuggestionCard(

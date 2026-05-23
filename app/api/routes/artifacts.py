@@ -55,7 +55,7 @@ def _resolve_and_validate(
         )
 
     if candidate.is_absolute():
-        resolved = candidate
+        resolved = candidate.resolve()
     else:
         resolved = (vault_root / candidate).resolve()
 
