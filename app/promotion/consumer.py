@@ -12,7 +12,7 @@ from app.events.models import new_event
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.note_update import apply_promotion_frontmatter
 from app.components.concurrency import EventDedupStore
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.services.outbox import write_outbox_event
 
 

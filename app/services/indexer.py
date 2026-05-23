@@ -9,7 +9,7 @@ from typing import Dict
 from app.components.embeddings import get_embedding_client, get_embedding_identity
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)

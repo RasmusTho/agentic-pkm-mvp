@@ -106,7 +106,7 @@ def ingest_object(
     payload_out.setdefault("emergent_tags", [])
 
     # Persist object so the indexer stage can load text by object_id.
-    from app.store.object_store import DomainObject, ObjectStore
+    from app.objects import DomainObject, ObjectStore
 
     store = ObjectStore()
     store.save_object(
