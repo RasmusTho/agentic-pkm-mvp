@@ -919,3 +919,12 @@ For Niflheim dev UAT, Companion workspace update capability must be visible as r
 - the runtime safety strip must declare workspace update availability as `available` or `disabled`
 - disabled state must remain non-mutating in the UI (no active body-update composer)
 - workspace update capability is scoped to active-note body updates and must not authorize governance-bearing actions
+
+## Companion Niflheim dev UAT active note body update check
+
+For Niflheim dev UAT, active-note body updates in Companion workspace must stay bounded and guarded:
+- entering the active-note body update flow must be explicit and note-local
+- update attempts must be scoped to the active note path only
+- successful updates must preserve frontmatter and UUID while changing body content
+- blocked updates must show a clear guard reason (for example WriteGuard or capability disabled)
+- failed updates must show a clear failure state distinct from blocked

@@ -13,7 +13,9 @@ from pydantic import BaseModel, Field
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.api.routes.artifacts import _content_hash, _extract_title
+from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
 from app.config.paths import resolve_vault_root
+from app.knowledge.write_ops import write_note_from_absolute
 from app.orientation.runtime import build_orientation_frame
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
@@ -101,6 +103,22 @@ class WorkspaceStateResponse(BaseModel):
     panel: PanelState
     suggestions: SuggestionsState
     guards: GuardState
+
+
+class WorkspaceBodyUpdateRequest(BaseModel):
+    active_note_path: str
+    target_note_path: str
+    new_body: str
+    content_hash: str | None = None
+
+
+class WorkspaceBodyUpdateResponse(BaseModel):
+    ok: bool
+    state: str
+    note_path: str
+    reason: str | None = None
+    content_hash_before: str
+    content_hash_after: str
 
 
 class VaultBrowserNoteState(BaseModel):
@@ -543,6 +561,25 @@ def _browser_title(body: str, *, fallback: str) -> str:
     return _extract_title(body, fallback=fallback)
 
 
+def _compose_note_with_preserved_frontmatter(*, original_content: str, new_body: str) -> str:
+    if _body_contains_frontmatter(new_body):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "frontmatter_update_not_allowed",
+                "state": "failure",
+                "message": (
+                    "active-note body update only accepts body content; "
+                    "frontmatter changes require a governed flow"
+                ),
+            },
+        )
+    frontmatter_inner, _ = _split_frontmatter(original_content)
+    if frontmatter_inner is not None:
+        return f"---{frontmatter_inner}\n---\n{new_body}"
+    return new_body if new_body.endswith("\n") else f"{new_body}\n"
+
+
 @router.get("/vault-browser", response_model=VaultBrowserStateResponse)
 def read_companion_vault_browser(
     q: str = Query("", description="Case-insensitive path/title filter"),
@@ -635,6 +672,106 @@ def read_companion_workspace(
             degraded=not canvas_enabled or writeguard_status == "unknown",
             workspace_update=workspace_update,
         ),
+    )
+
+
+@router.post("/workspace/update", response_model=WorkspaceBodyUpdateResponse)
+def update_companion_workspace_note_body(
+    req: WorkspaceBodyUpdateRequest,
+) -> WorkspaceBodyUpdateResponse:
+    safe_active_note_path = _validate_workspace_note_path(req.active_note_path)
+    safe_target_note_path = _validate_workspace_note_path(req.target_note_path)
+    if safe_active_note_path != safe_target_note_path:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "active_note_scope_mismatch",
+                "state": "blocked",
+                "message": "Body update is scoped to the active note only.",
+                "active_note_path": safe_active_note_path,
+                "target_note_path": safe_target_note_path,
+            },
+        )
+
+    vault_root = resolve_vault_root()
+    note_path = _find_workspace_note(vault_root, safe_active_note_path)
+    if note_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "note_not_found",
+                "state": "failure",
+                "message": "No note exists for the requested active note path.",
+                "note_path": safe_active_note_path,
+            },
+        )
+
+    writeguard_status = _writeguard_status()
+    workspace_update = _workspace_update_capability(
+        canvas_enabled=_truthy_env("CANVAS_ENABLED"),
+        writeguard_status=writeguard_status,
+    )
+    if not workspace_update.available:
+        writeguard_blocked = workspace_update.reason == "writeguard_blocked"
+        error = (
+            "writeguard_blocked"
+            if writeguard_blocked
+            else "workspace_update_unavailable"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": error,
+                "state": "blocked",
+                "message": (
+                    "WriteGuard blocked active-note body update."
+                    if writeguard_blocked
+                    else "Workspace update capability is disabled for this runtime."
+                ),
+                "reason": workspace_update.reason,
+            },
+        )
+
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed("companion.workspace.update.active_note_body")
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "writeguard_blocked",
+                "state": "blocked",
+                "message": str(exc),
+                "reason": exc.reason,
+            },
+        ) from exc
+
+    original_content = note_path.read_text(encoding="utf-8")
+    content_hash_before = _content_hash(original_content)
+    if req.content_hash is not None and req.content_hash != content_hash_before:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "content_hash_mismatch",
+                "state": "failure",
+                "message": "Active note changed since it was loaded; refresh before updating.",
+                "content_hash_before": content_hash_before,
+            },
+        )
+
+    new_content = _compose_note_with_preserved_frontmatter(
+        original_content=original_content,
+        new_body=req.new_body,
+    )
+    write_note_from_absolute(note_path, new_content, vault_root=vault_root)
+    updated_content = note_path.read_text(encoding="utf-8")
+    content_hash_after = _content_hash(updated_content)
+    return WorkspaceBodyUpdateResponse(
+        ok=True,
+        state="success",
+        note_path=safe_active_note_path,
+        reason="active_note_body_updated",
+        content_hash_before=content_hash_before,
+        content_hash_after=content_hash_after,
     )
 
 

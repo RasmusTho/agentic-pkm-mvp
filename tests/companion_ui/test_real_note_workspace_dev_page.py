@@ -127,10 +127,11 @@ def test_dev_page_exposes_note_path_load_intent() -> None:
         state = page.load(NoteLoadIntent(note_path="Notes/test.md"))
 
     assert state.is_loaded is True
-    call_args = mock_get.call_args
-    assert call_args.args[0] == "http://localhost:18001/api/companion/workspace"
-    assert "note_path" in call_args.kwargs["params"]
-    assert call_args.kwargs["params"]["note_path"] == "Notes/test.md"
+    assert len(mock_get.call_args_list) >= 1
+    workspace_call = mock_get.call_args_list[0]
+    assert workspace_call.args[0] == "http://localhost:18001/api/companion/workspace"
+    assert "note_path" in workspace_call.kwargs["params"]
+    assert workspace_call.kwargs["params"]["note_path"] == "Notes/test.md"
 
 
 # ---------------------------------------------------------------------------
