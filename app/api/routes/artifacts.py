@@ -54,23 +54,27 @@ def _resolve_and_validate(
             detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "path_traversal"},
         )
 
-    if candidate.is_absolute():
-        resolved = candidate.resolve()
-    else:
-        resolved = (vault_root / candidate).resolve()
-
     vault_resolved = vault_root.resolve()
 
-    # Reject paths that escape the vault root
+    if candidate.is_absolute():
+        candidate_resolved = candidate.resolve()
+    else:
+        candidate_resolved = (vault_root / candidate).resolve()
+
+    # Reject paths that escape the vault root; capture the vault-relative part.
     try:
-        resolved.relative_to(vault_resolved)
+        contained = candidate_resolved.relative_to(vault_resolved)
     except ValueError:
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "outside_vault"},
         )
 
-    return resolved
+    # Reconstruct the final path from the trusted vault root so that downstream
+    # file I/O is not tainted by the raw user-supplied value (fixes CodeQL
+    # py/path-injection: the returned path flows from vault_resolved, not from
+    # user input).
+    return vault_resolved / contained
 
 
 @router.get("/note", response_model=ArtifactNoteResponse)
