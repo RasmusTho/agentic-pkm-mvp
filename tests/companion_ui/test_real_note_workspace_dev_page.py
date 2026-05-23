@@ -62,7 +62,18 @@ def _workspace_response(
         "artifact": artifact or _artifact_response(),
         "canvas": canvas or {"session_state": "idle", "session_persistence": "in_memory"},
         "panel": panel or {"state": "idle", "proposal_count": 0},
-        "guards": guards or {"canvas_enabled": True, "writeguard_status": "ok"},
+        "guards": guards or {
+            "canvas_enabled": True,
+            "writeguard_status": "ok",
+            "workspace_update": {
+                "available": True,
+                "state": "available",
+                "reason": "explicit_dev_config",
+                "scope": "active_note_body",
+                "governance_actions_enabled": False,
+                "config_mode": "explicit",
+            },
+        },
         "runtime": {
             "environment_label": "dev",
             "api_base_url_label": "local-dev",
@@ -443,3 +454,77 @@ def test_render_fields_vault_identity_path_with_spaces() -> None:
     fields = page.render_fields()
     assert fields is not None
     assert fields["runtime_vault_name"] == "Mobile Documents"
+
+
+def test_workspace_renders_update_flow_availability() -> None:
+    page = _loaded_page(
+        response=_workspace_response(
+            guards={
+                "canvas_enabled": True,
+                "writeguard_status": "ok",
+                "workspace_update": {
+                    "available": True,
+                    "state": "available",
+                    "reason": "explicit_dev_config",
+                    "scope": "active_note_body",
+                    "governance_actions_enabled": False,
+                    "config_mode": "explicit",
+                },
+            }
+        )
+    )
+    fields = page.render_fields()
+    assert fields is not None
+    assert fields["guard_workspace_update_available"] is True
+    assert fields["guard_workspace_update_state"] == "available"
+    assert fields["guard_workspace_update_scope"] == "active_note_body"
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/research.md",
+        fields=fields,
+    )
+    assert 'data-testid="workspace-update-flow-state"' in html
+    assert 'data-update-state="available"' in html
+    assert 'data-testid="workspace-update-governance-state"' in html
+    assert "governance via update" in html
+
+
+def test_workspace_update_flow_disabled_state_is_non_mutating() -> None:
+    page = _loaded_page(
+        response=_workspace_response(
+            canvas={
+                "session_id": "session-1",
+                "session_state": "active",
+                "user_present": True,
+                "can_edit_body": True,
+                "session_persistence": "in_memory",
+            },
+            guards={
+                "canvas_enabled": True,
+                "writeguard_status": "ok",
+                "workspace_update": {
+                    "available": False,
+                    "state": "disabled",
+                    "reason": "disabled_by_config",
+                    "scope": "active_note_body",
+                    "governance_actions_enabled": False,
+                    "config_mode": "explicit",
+                },
+            },
+        )
+    )
+    fields = page.render_fields()
+    assert fields is not None
+    assert fields["guard_workspace_update_available"] is False
+    assert fields["guard_workspace_update_state"] == "disabled"
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/research.md",
+        fields=fields,
+    )
+    assert 'data-testid="workspace-update-flow-state"' in html
+    assert 'data-update-state="disabled"' in html
+    assert 'data-testid="workspace-canvas-body-edit-unavailable"' in html
+    assert 'data-testid="workspace-canvas-body-edit-composer"' not in html

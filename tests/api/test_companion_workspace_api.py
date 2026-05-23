@@ -350,6 +350,37 @@ def test_workspace_guards(
     assert guards["writeguard_status"] == "blocked"
 
 
+def test_workspace_update_capability_exposed_for_dev_config(
+    client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CANVAS_ENABLED", "1")
+    monkeypatch.setenv("COMPANION_WORKSPACE_UPDATE_ENABLED", "1")
+
+    resp = _workspace(client)
+
+    assert resp.status_code == 200
+    workspace_update = resp.json()["guards"]["workspace_update"]
+    assert workspace_update["available"] is True
+    assert workspace_update["state"] == "available"
+    assert workspace_update["reason"] == "explicit_dev_config"
+    assert workspace_update["scope"] == "active_note_body"
+    assert workspace_update["config_mode"] == "explicit"
+
+
+def test_workspace_update_capability_does_not_enable_governance_actions(
+    client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CANVAS_ENABLED", "1")
+    monkeypatch.setenv("COMPANION_WORKSPACE_UPDATE_ENABLED", "1")
+
+    resp = _workspace(client)
+
+    assert resp.status_code == 200
+    workspace_update = resp.json()["guards"]["workspace_update"]
+    assert workspace_update["governance_actions_enabled"] is False
+    assert workspace_update["scope"] == "active_note_body"
+
+
 def test_workspace_note_not_found(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
