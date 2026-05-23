@@ -152,6 +152,16 @@ class DevPageState:
     guard_workspace_update_scope: str = "active_note_body"
     guard_workspace_update_governance_actions_enabled: bool = False
     guard_workspace_update_config_mode: str = "inherited"
+    vault_browser_notes: list[dict[str, Any]] | None = None
+    vault_browser_query: str = ""
+    vault_browser_total_notes: int = 0
+    vault_browser_filtered_notes: int = 0
+    vault_browser_error: str | None = None
+    vault_browser_read_only: bool = True
+    vault_browser_identity_available: bool = False
+    vault_browser_vault_name: str = "unresolved"
+    vault_browser_vault_channel: str = "unknown"
+    vault_browser_vault_provenance: str = "unresolved"
     is_loaded: bool = False
 
 
@@ -209,6 +219,15 @@ class RealNoteWorkspaceDevPage:
         guards = raw.get("guards") or {}
         runtime = raw.get("runtime") or {}
         workspace_update_guard = guards.get("workspace_update") or {}
+        vault_browser_error: str | None = None
+        try:
+            vault_browser = self._http.get(
+                "/api/companion/vault-browser",
+                params={"q": "", "limit": 250},
+            )
+        except WorkspaceClientError as exc:
+            vault_browser = {}
+            vault_browser_error = str(exc)
         raw_find_payload = raw.get("find")
         runtime_find_payload = runtime.get("find")
         find_payload_available = isinstance(raw_find_payload, dict) or isinstance(
@@ -218,6 +237,7 @@ class RealNoteWorkspaceDevPage:
         find_payload = raw_find_payload or runtime_find_payload or {}
         reorient_payload = raw.get("reorient") or runtime.get("reorient") or {}
         resurface_payload = raw.get("resurface") or runtime.get("resurface") or {}
+        vault_browser_identity = vault_browser.get("vault_identity") or {}
 
         # The runtime echoes artifact_id only when supplied in the request.
         # Fall back to note_path so note-path-only loads don't fail the shell's
@@ -362,6 +382,16 @@ class RealNoteWorkspaceDevPage:
             guard_workspace_update_scope=workspace_update_scope,
             guard_workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
             guard_workspace_update_config_mode=workspace_update_config_mode,
+            vault_browser_notes=list(vault_browser.get("notes") or []),
+            vault_browser_query=str(vault_browser.get("query") or ""),
+            vault_browser_total_notes=int(vault_browser.get("total_notes") or 0),
+            vault_browser_filtered_notes=int(vault_browser.get("filtered_notes") or 0),
+            vault_browser_error=vault_browser_error,
+            vault_browser_read_only=bool(vault_browser.get("read_only", True)),
+            vault_browser_identity_available=bool(vault_browser.get("identity_available", False)),
+            vault_browser_vault_name=str(vault_browser_identity.get("vault_name") or "unresolved"),
+            vault_browser_vault_channel=str(vault_browser_identity.get("channel") or "unknown"),
+            vault_browser_vault_provenance=str(vault_browser_identity.get("provenance") or "unresolved"),
             is_loaded=True,
         )
         return self.state
@@ -797,6 +827,16 @@ class RealNoteWorkspaceDevPage:
                 self.state.guard_workspace_update_governance_actions_enabled
             ),
             "guard_workspace_update_config_mode": self.state.guard_workspace_update_config_mode,
+            "vault_browser_notes": self.state.vault_browser_notes or [],
+            "vault_browser_query": self.state.vault_browser_query,
+            "vault_browser_total_notes": self.state.vault_browser_total_notes,
+            "vault_browser_filtered_notes": self.state.vault_browser_filtered_notes,
+            "vault_browser_error": self.state.vault_browser_error,
+            "vault_browser_read_only": self.state.vault_browser_read_only,
+            "vault_browser_identity_available": self.state.vault_browser_identity_available,
+            "vault_browser_vault_name": self.state.vault_browser_vault_name,
+            "vault_browser_vault_channel": self.state.vault_browser_vault_channel,
+            "vault_browser_vault_provenance": self.state.vault_browser_vault_provenance,
             "is_production_ui": self.is_production_ui,
             "dev_page_label": self.dev_page_label,
         }

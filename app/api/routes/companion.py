@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import heapq
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -100,6 +101,22 @@ class WorkspaceStateResponse(BaseModel):
     panel: PanelState
     suggestions: SuggestionsState
     guards: GuardState
+
+
+class VaultBrowserNoteState(BaseModel):
+    note_path: str
+    title: str
+    zone: str
+
+
+class VaultBrowserStateResponse(BaseModel):
+    notes: list[VaultBrowserNoteState]
+    query: str
+    total_notes: int
+    filtered_notes: int
+    read_only: bool = True
+    vault_identity: VaultIdentityState
+    identity_available: bool
 
 
 def _truthy_env(name: str, default: bool = False) -> bool:
@@ -414,6 +431,143 @@ def _safe_resurface_source_link(candidate_id: str) -> str:
     if candidate_id in {"resurface-pending-promotions", "resurface-new-activity"}:
         return "status.events"
     return "runtime:resurfacing"
+
+
+def _zone_for_path(note_path: str) -> str:
+    parts = PurePosixPath(note_path).parts
+    return parts[0] if parts else "root"
+
+
+def _list_markdown_notes(vault_root: Path) -> list[VaultBrowserNoteState]:
+    notes: list[VaultBrowserNoteState] = []
+    for candidate in vault_root.rglob("*.md"):
+        if not candidate.is_file():
+            continue
+        safe_path = _vault_relative(candidate, vault_root)
+        if safe_path is None:
+            continue
+        body = candidate.read_text(encoding="utf-8")
+        notes.append(
+            VaultBrowserNoteState(
+                note_path=safe_path,
+                title=_browser_title(body, fallback=candidate.stem),
+                zone=_zone_for_path(safe_path),
+            )
+        )
+    notes.sort(key=lambda note: note.note_path)
+    return notes
+
+
+def _safe_vault_browse_max_notes() -> int:
+    raw = os.getenv("VAULT_BROWSE_MAX_NOTES")
+    if raw is None:
+        return 250
+    try:
+        parsed = int(raw.strip())
+    except (TypeError, ValueError):
+        return 250
+    return max(1, min(parsed, 1000))
+
+
+def _select_vault_notes(
+    vault_root: Path,
+    *,
+    query: str,
+    limit: int,
+) -> tuple[list[VaultBrowserNoteState], int, int]:
+    needle = query.strip().lower()
+    total_notes = 0
+    filtered_notes = 0
+    # Keep only the lexicographically-smallest `limit` note paths without
+    # materializing the full sorted collection in memory.
+    selected_heap: list[tuple[str, VaultBrowserNoteState]] = []
+    for candidate in vault_root.rglob("*.md"):
+        if not candidate.is_file():
+            continue
+        safe_path = _vault_relative(candidate, vault_root)
+        if safe_path is None:
+            continue
+        total_notes += 1
+        body = candidate.read_text(encoding="utf-8")
+        title = _browser_title(body, fallback=candidate.stem)
+        if needle and needle not in safe_path.lower() and needle not in title.lower():
+            continue
+        filtered_notes += 1
+        note = VaultBrowserNoteState(
+            note_path=safe_path,
+            title=title,
+            zone=_zone_for_path(safe_path),
+        )
+        key = note.note_path
+        if len(selected_heap) < limit:
+            heapq.heappush(selected_heap, (_invert_lex(key), note))
+        elif _invert_lex(key) > selected_heap[0][0]:
+            heapq.heapreplace(selected_heap, (_invert_lex(key), note))
+
+    selected = sorted((item[1] for item in selected_heap), key=lambda note: note.note_path)
+    return selected, total_notes, filtered_notes
+
+
+def _invert_lex(value: str) -> str:
+    return "".join(chr(0x10FFFF - ord(ch)) for ch in value)
+
+
+def _filter_notes(
+    notes: list[VaultBrowserNoteState],
+    *,
+    query: str,
+) -> list[VaultBrowserNoteState]:
+    if not query:
+        return notes
+    needle = query.strip().lower()
+    if not needle:
+        return notes
+    return [
+        note
+        for note in notes
+        if needle in note.note_path.lower() or needle in note.title.lower()
+    ]
+
+
+def _browser_title(body: str, *, fallback: str) -> str:
+    if body.startswith("---\n"):
+        lines = body.splitlines()
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            key, sep, value = line.partition(":")
+            if sep and key.strip().lower() == "title":
+                parsed = value.strip().strip('"').strip("'")
+                if parsed:
+                    return parsed
+    return _extract_title(body, fallback=fallback)
+
+
+@router.get("/vault-browser", response_model=VaultBrowserStateResponse)
+def read_companion_vault_browser(
+    q: str = Query("", description="Case-insensitive path/title filter"),
+    limit: int = Query(250, ge=1, le=1000),
+) -> VaultBrowserStateResponse:
+    vault_root = resolve_vault_root()
+    effective_limit = min(limit, _safe_vault_browse_max_notes())
+    selected, total_notes, filtered_notes = _select_vault_notes(
+        vault_root,
+        query=q,
+        limit=effective_limit,
+    )
+    identity = _vault_identity_state(vault_root)
+    identity_available = (
+        bool(identity.vault_name.strip()) and identity.channel in {"dev", "test", "prod"}
+    )
+    return VaultBrowserStateResponse(
+        notes=selected,
+        query=q,
+        total_notes=total_notes,
+        filtered_notes=filtered_notes,
+        read_only=True,
+        vault_identity=identity,
+        identity_available=identity_available,
+    )
 
 
 @router.get("/workspace", response_model=WorkspaceStateResponse)

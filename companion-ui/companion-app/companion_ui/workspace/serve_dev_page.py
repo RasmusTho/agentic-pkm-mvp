@@ -39,7 +39,7 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
@@ -251,6 +251,19 @@ def _render_note_section(fields: dict) -> str:
         response=fields.get("panel_last_response") or {},
         writeguard_blocked=writeguard_blocked,
     )
+    vault_browser_html = _render_vault_browser(
+        note_path=fields.get("note_path") or "",
+        notes=fields.get("vault_browser_notes") or [],
+        query=str(fields.get("vault_browser_query") or ""),
+        total_notes=int(fields.get("vault_browser_total_notes") or 0),
+        filtered_notes=int(fields.get("vault_browser_filtered_notes") or 0),
+        error=fields.get("vault_browser_error"),
+        read_only=bool(fields.get("vault_browser_read_only", True)),
+        identity_available=bool(fields.get("vault_browser_identity_available", False)),
+        vault_name=str(fields.get("vault_browser_vault_name") or "unresolved"),
+        vault_channel=str(fields.get("vault_browser_vault_channel") or "unknown"),
+        vault_provenance=str(fields.get("vault_browser_vault_provenance") or "unresolved"),
+    )
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
     )
@@ -343,6 +356,7 @@ def _render_note_section(fields: dict) -> str:
         {reorient_mode_html}
         {resurface_mode_html}
         {act_mode_html}
+        {vault_browser_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -350,6 +364,91 @@ def _render_note_section(fields: dict) -> str:
     </aside>
     {portrait_sheet_html}
   </div>"""
+
+
+def _render_vault_browser(
+    *,
+    note_path: str,
+    notes: list[dict],
+    query: str,
+    total_notes: int,
+    filtered_notes: int,
+    error: object,
+    read_only: bool,
+    identity_available: bool,
+    vault_name: str,
+    vault_channel: str,
+    vault_provenance: str,
+) -> str:
+    query_text = _e(query or "")
+    identity_label = f"{vault_name}/{vault_channel}"
+    identity_html = (
+        f'<span data-testid="workspace-vault-browser-active-identity">{_e(identity_label)}</span>'
+    )
+    if error:
+        state_html = (
+            '<div class="vault-browser-state" data-testid="workspace-vault-browser-state-error">'
+            + _e(str(error))
+            + "</div>"
+        )
+    elif not identity_available:
+        state_html = (
+            '<div class="vault-browser-state" '
+            'data-testid="workspace-vault-browser-state-identity-unavailable">'
+            "Vault identity unavailable; browsing context is unresolved."
+            "</div>"
+        )
+    elif filtered_notes == 0:
+        state_html = (
+            '<div class="vault-browser-state" data-testid="workspace-vault-browser-state-empty">'
+            "No notes matched the current filter."
+            "</div>"
+        )
+    else:
+        state_html = (
+            '<div class="vault-browser-state" data-testid="workspace-vault-browser-state-ready">'
+            f"{filtered_notes} matches from {total_notes} markdown notes."
+            "</div>"
+        )
+
+    rows: list[str] = []
+    for note in notes:
+        path = str(note.get("note_path") or "").strip()
+        if not path:
+            continue
+        title = _e(note.get("title") or path)
+        zone = _e(note.get("zone") or "root")
+        href = "/?note_path=" + quote(path, safe="/")
+        active = "true" if path == note_path else "false"
+        rows.append(
+            f"""
+          <li class="vault-browser-row" data-testid="workspace-vault-browser-note-row" data-active="{active}">
+            <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
+            <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
+            <span data-testid="workspace-vault-browser-note-zone">{zone}</span>
+          </li>"""
+        )
+
+    list_html = (
+        '<ul class="vault-browser-list" data-testid="workspace-vault-browser-list">'
+        + "".join(rows)
+        + "</ul>"
+        if rows
+        else ""
+    )
+    read_only_text = "read-only" if read_only else "mutating"
+    return f"""
+        <details class="vault-browser" data-testid="workspace-vault-browser" open>
+          <summary data-testid="workspace-vault-browser-toggle">Browse vault notes</summary>
+          <div class="vault-browser-meta" data-testid="workspace-vault-browser-meta">
+            {identity_html}
+            <span data-testid="workspace-vault-browser-read-only">{read_only_text}</span>
+            <span data-testid="workspace-vault-browser-query">{query_text}</span>
+            <span data-testid="workspace-vault-browser-provenance">{_e(vault_provenance)}</span>
+          </div>
+          {state_html}
+          {list_html}
+        </details>"""
 
 
 def _render_suggestion_flow_region(fields: dict) -> str:
