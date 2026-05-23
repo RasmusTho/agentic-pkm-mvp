@@ -1,4 +1,4 @@
-"""Read-side Companion UI workspace aggregate endpoint."""
+"""Companion UI workspace endpoints: read aggregate, vault browser, body update."""
 
 from __future__ import annotations
 
@@ -844,6 +844,75 @@ def update_companion_workspace_note_body(
         reason="active_note_body_updated",
         content_hash_before=content_hash_before,
         content_hash_after=content_hash_after,
+    )
+
+
+class BodyUpdateRequest(BaseModel):
+    note_path: str
+    new_body: str
+
+
+class BodyUpdateResponse(BaseModel):
+    status: str
+    note_path: str
+    content_hash: str
+
+
+@router.post("/workspace/body", response_model=BodyUpdateResponse)
+def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse:
+    if not _truthy_env("WORKSPACE_UPDATE_FLOW_ENABLED", default=False):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "flow_disabled", "message": "WORKSPACE_UPDATE_FLOW_ENABLED is not set"},
+        )
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed("companion.workspace.body")
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "writes_blocked", "message": str(exc)},
+        ) from exc
+
+    safe_note_path = _validate_workspace_note_path(req.note_path)
+    if not safe_note_path.endswith(".md"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "not_a_note_file",
+                "message": "Body updates are restricted to markdown note files (.md)",
+            },
+        )
+    vault_root = resolve_vault_root()
+    note_path = _find_workspace_note(vault_root, safe_note_path)
+    if note_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "note_not_found", "message": "No note exists for the requested note_path"},
+        )
+
+    if _body_contains_frontmatter(req.new_body):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "frontmatter_in_body",
+                "message": "new_body must not contain a frontmatter block; frontmatter is governed separately",
+            },
+        )
+
+    current = note_path.read_text(encoding="utf-8")
+    frontmatter_block, _ = _split_frontmatter(current)
+    if frontmatter_block is not None:
+        new_content = f"---{frontmatter_block}\n---\n{req.new_body}"
+    else:
+        new_content = req.new_body if req.new_body.endswith("\n") else req.new_body + "\n"
+
+    write_note_from_absolute(note_path, new_content, vault_root=vault_root)
+
+    written = note_path.read_text(encoding="utf-8")
+    return BodyUpdateResponse(
+        status="ok",
+        note_path=safe_note_path,
+        content_hash=_content_hash(written),
     )
 
 
