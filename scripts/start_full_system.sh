@@ -10,6 +10,19 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 source "scripts/lib/load_env_defaults.sh"
+
+# Load channel-specific local env override BEFORE base defaults so that
+# per-channel vault paths (which may contain spaces) take precedence.
+# Operators create .env.dev.local (or .env.test.local) with channel-specific
+# VAULT_ROOT and layout vars; these files are gitignored and never committed.
+# load_env_defaults_file handles paths with spaces safely (Python-based parser).
+_pkm_initial_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
+_pkm_initial_channel_lower="$(printf '%s' "${_pkm_initial_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_initial_channel}")"
+if [ -n "${_pkm_initial_channel_lower:-}" ]; then
+  load_env_defaults_file ".env.${_pkm_initial_channel_lower}.local"
+fi
+unset _pkm_initial_channel _pkm_initial_channel_lower
+
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
 
@@ -594,7 +607,7 @@ if [ -z "${START_WORKER:-}" ]; then
 fi
 resolve_channel_defaults() {
   local raw_env normalized_env
-  raw_env="${PKM_ENVIRONMENT:-${ENVIRONMENT:-}}"
+  raw_env="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
   normalized_env="$(printf "%s" "$raw_env" | tr '[:upper:]' '[:lower:]' | xargs)"
   case "$normalized_env" in
     dev)
@@ -715,6 +728,11 @@ fi
 vault_host_path="$(cd "$vault_host_path" && pwd)"
 export VAULT_ROOT="$vault_host_path"
 apply_start_full_system_vault_defaults "$vault_host_path"
+
+echo "Vault env: VAULT_ROOT=${VAULT_ROOT}"
+echo "Vault env: VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-<not set>}"
+echo "Vault env: VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-<not set>}"
+echo "Vault env: VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL:-<not set>}"
 
 if [ -z "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
   layout_count=$(find "$vault_host_path" -mindepth 2 -maxdepth 2 -type f -name "vault.layout.md" 2>/dev/null | wc -l | tr -d '[:space:]')
