@@ -2152,6 +2152,99 @@ def render_index_html(
     }}
     .panel-confirm-receipt {{ color: var(--fg-1); }}
     .panel-confirm-blocked {{ color: var(--destructive); }}
+    /* Vault note browser overlay */
+    .vault-browser-overlay {{
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(7, 11, 18, 0.85);
+      z-index: 1000;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 40px 16px;
+    }}
+    .vault-browser-overlay.open {{ display: flex; }}
+    .vault-browser-panel {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-height: 80vh;
+      max-width: 640px;
+      overflow: hidden;
+      padding: 20px;
+      width: 100%;
+    }}
+    .vault-browser-header {{
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+    }}
+    .vault-browser-title {{
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      font-weight: 600;
+    }}
+    .vault-browser-identity {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .vault-browser-close {{
+      background: transparent;
+      border: none;
+      color: var(--fg-2);
+      cursor: pointer;
+      font-size: 1.2rem;
+      line-height: 1;
+      padding: 0 4px;
+    }}
+    .vault-browser-search {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      padding: 8px 12px;
+      width: 100%;
+    }}
+    .vault-browser-list {{
+      flex: 1;
+      list-style: none;
+      margin: 0;
+      overflow-y: auto;
+      padding: 0;
+    }}
+    .vault-browser-item {{
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px 4px;
+    }}
+    .vault-browser-item:hover {{ background: var(--bg-raised); }}
+    .vault-browser-item-title {{
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+    }}
+    .vault-browser-item-path {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .vault-browser-status {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      text-align: center;
+    }}
   </style>
 </head>
 <body>
@@ -2173,9 +2266,130 @@ def render_index_html(
         placeholder="Some/Note.md"
         autocomplete="off">
       <button type="submit">Load</button>
+      <button type="button"
+        id="vault-browse-btn"
+        data-testid="vault-browse-button"
+        onclick="vaultBrowser.open()">Browse vault</button>
     </form>
   </div>
   {content_section}
+
+  <!-- Vault note browser overlay -->
+  <div class="vault-browser-overlay" id="vault-browser-overlay"
+       data-testid="vault-browser-overlay" role="dialog" aria-modal="true">
+    <div class="vault-browser-panel">
+      <div class="vault-browser-header">
+        <span class="vault-browser-title">Browse vault</span>
+        <span class="vault-browser-identity" id="vault-browser-identity"
+              data-testid="vault-browser-identity"></span>
+        <button class="vault-browser-close" onclick="vaultBrowser.close()"
+                data-testid="vault-browser-close" aria-label="Close">&times;</button>
+      </div>
+      <input type="text" class="vault-browser-search" id="vault-browser-search"
+             data-testid="vault-browser-search"
+             placeholder="Search by title or path…"
+             autocomplete="off">
+      <ul class="vault-browser-list" id="vault-browser-list"
+          data-testid="vault-browser-list"></ul>
+      <div class="vault-browser-status" id="vault-browser-status"
+           data-testid="vault-browser-status"></div>
+    </div>
+  </div>
+
+  <script>
+  (function() {{
+    var API_BASE = {repr(_e(api_base_url))};
+    var overlay = document.getElementById('vault-browser-overlay');
+    var list    = document.getElementById('vault-browser-list');
+    var status  = document.getElementById('vault-browser-status');
+    var search  = document.getElementById('vault-browser-search');
+    var identity = document.getElementById('vault-browser-identity');
+    var debounceTimer = null;
+
+    function setStatus(msg) {{ status.textContent = msg; }}
+
+    function renderNotes(notes, vaultIdentity) {{
+      list.innerHTML = '';
+      if (vaultIdentity && vaultIdentity.vault_name && vaultIdentity.channel) {{
+        identity.textContent = vaultIdentity.vault_name + ' / ' + vaultIdentity.channel;
+      }}
+      if (!notes || notes.length === 0) {{
+        setStatus('No notes found.');
+        return;
+      }}
+      setStatus(notes.length + ' note' + (notes.length === 1 ? '' : 's'));
+      notes.forEach(function(note) {{
+        var li = document.createElement('li');
+        li.className = 'vault-browser-item';
+        li.setAttribute('data-note-path', note.path);
+        li.innerHTML = '<span class="vault-browser-item-title">' +
+          _esc(note.title) + '</span><span class="vault-browser-item-path">' +
+          _esc(note.path) + '</span>';
+        li.addEventListener('click', function() {{
+          vaultBrowser.selectNote(note.path);
+        }});
+        list.appendChild(li);
+      }});
+    }}
+
+    function _esc(s) {{
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }}
+
+    function fetchNotes(q) {{
+      setStatus('Loading…');
+      list.innerHTML = '';
+      var url = API_BASE + '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
+      fetch(url)
+        .then(function(r) {{
+          if (!r.ok) throw new Error('API error ' + r.status);
+          return r.json();
+        }})
+        .then(function(data) {{
+          renderNotes(data.notes, data.vault_identity);
+        }})
+        .catch(function(err) {{
+          setStatus('Error: ' + err.message);
+        }});
+    }}
+
+    window.vaultBrowser = {{
+      open: function() {{
+        overlay.classList.add('open');
+        search.value = '';
+        fetchNotes('');
+        search.focus();
+      }},
+      close: function() {{
+        overlay.classList.remove('open');
+      }},
+      selectNote: function(path) {{
+        vaultBrowser.close();
+        var input = document.getElementById('note_path');
+        if (input) {{ input.value = path; input.form.submit(); }}
+      }}
+    }};
+
+    search.addEventListener('input', function() {{
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function() {{
+        fetchNotes(search.value.trim());
+      }}, 300);
+    }});
+
+    overlay.addEventListener('click', function(e) {{
+      if (e.target === overlay) vaultBrowser.close();
+    }});
+
+    document.addEventListener('keydown', function(e) {{
+      if (e.key === 'Escape') vaultBrowser.close();
+    }});
+  }})();
+  </script>
 </body>
 </html>"""
 

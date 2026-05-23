@@ -43,6 +43,33 @@ class VaultIdentityState(BaseModel):
     provenance: str
 
 
+_BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
+
+
+def _parse_browse_max_notes() -> int:
+    raw = (os.getenv("VAULT_BROWSE_MAX_NOTES") or "").strip()
+    try:
+        value = int(raw) if raw else 500
+    except ValueError:
+        return 500
+    return value if value > 0 else 500
+
+
+_BROWSE_MAX_NOTES = _parse_browse_max_notes()
+
+
+class VaultNoteEntry(BaseModel):
+    path: str
+    title: str
+    size_bytes: int
+
+
+class VaultNoteListResponse(BaseModel):
+    notes: list[VaultNoteEntry]
+    vault_identity: VaultIdentityState
+    total_count: int
+
+
 class RuntimeState(BaseModel):
     environment_label: str
     api_base_url_label: str
@@ -157,12 +184,15 @@ def _safe_api_label() -> str:
 
 def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
     vault_root_raw = os.getenv("VAULT_ROOT", "").strip()
-    resolved_vault_name = vault_root.name or str(vault_root)
+    vault_name = vault_root.name or str(vault_root)
     if not vault_root_raw:
         provenance = "default"
     else:
-        env_path = Path(vault_root_raw).resolve()
-        provenance = "env" if env_path == vault_root.resolve() else "fallback"
+        try:
+            env_path = Path(vault_root_raw).resolve()
+            provenance = "env" if env_path == vault_root.resolve() else "fallback"
+        except Exception:
+            provenance = "fallback"
     raw_channel = (
         os.getenv("PKM_ENVIRONMENT")
         or os.getenv("CHANNEL")
@@ -171,9 +201,49 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
     ).strip().lower()
     channel = raw_channel if raw_channel in {"dev", "test", "prod"} else "unknown"
     return VaultIdentityState(
-        vault_name=resolved_vault_name,
+        vault_name=vault_name,
         channel=channel,
         provenance=provenance,
+    )
+
+
+def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
+    if not vault_root.exists():
+        return []
+    q_lower = q.strip().lower()
+    notes: list[VaultNoteEntry] = []
+    for path in vault_root.rglob("*.md"):
+        try:
+            parts = path.relative_to(vault_root).parts
+            if any(p.startswith(_BROWSE_EXCLUDE_DIR_PREFIXES) for p in parts):
+                continue
+            rel = path.relative_to(vault_root).as_posix()
+            if q_lower and q_lower not in rel.lower():
+                body_preview = path.read_text(encoding="utf-8", errors="replace")
+                title = _extract_title(body_preview, fallback=path.stem)
+                if q_lower not in title.lower():
+                    continue
+            else:
+                body_preview = path.read_text(encoding="utf-8", errors="replace")
+                title = _extract_title(body_preview, fallback=path.stem)
+            notes.append(VaultNoteEntry(path=rel, title=title, size_bytes=path.stat().st_size))
+            if len(notes) >= _BROWSE_MAX_NOTES:
+                break
+        except Exception:
+            continue
+    return notes
+
+
+@router.get("/vault/notes", response_model=VaultNoteListResponse)
+def list_vault_notes(
+    q: str = Query("", description="Optional search filter by title or path"),
+) -> VaultNoteListResponse:
+    vault_root = resolve_vault_root()
+    notes = _list_vault_notes(vault_root, q=q)
+    return VaultNoteListResponse(
+        notes=notes,
+        vault_identity=_vault_identity_state(vault_root),
+        total_count=len(notes),
     )
 
 
