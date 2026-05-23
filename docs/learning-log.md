@@ -125,3 +125,8 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** issue-to-code / pr-integration
 **Diverged:** After CI went green on PR #988, the plan (hot-path step 3) required triaging review feedback before handoff — instead the agent declared "awaiting human review" without checking whether a review was already posted. A Codex P2 comment (stale-log masking in `_get_watcher_lifecycle_status`) was present and needed addressing before merge.
 **Upstream artifact:** `docs/development/PR_HOT_PATH.md` §"Review feedback triage" — make explicit that the agent must check for existing review comments immediately after CI is confirmed green, before any handoff or merge recommendation. The normal next step after CI green + review triage is `verification-and-closure`, not a park for human review.
+
+## 2026-05-23 — #1082 (Agent Memory recall explanation)
+**Source:** issue-to-code
+**Diverged:** The plan delegated #1226 in parallel, but the worker changed the shared checkout branch/worktree state, which collided with in-flight #1082 edits and required branch recovery.
+**Upstream artifact:** `.codex/skills/issue-to-code/SKILL.md` — strengthen the multi-agent rule to require a dedicated per-issue worktree before spawning any coding worker, not only before commit/push.
