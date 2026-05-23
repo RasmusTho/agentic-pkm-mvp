@@ -19,7 +19,7 @@ rank-bm25==0.2.2
 numpy==1.26.4
 tqdm==4.66.4
 rapidfuzz==3.9.6
-idna==3.11
+idna==3.15
 iniconfig==2.1.0
 jsonpatch==1.33
 jsonschema==4.23.0
