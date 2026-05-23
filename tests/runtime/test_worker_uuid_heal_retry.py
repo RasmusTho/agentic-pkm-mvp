@@ -4,7 +4,7 @@ import errno
 from pathlib import Path
 
 from app.services.note_uuid import ensure_note_uuid as real_ensure_note_uuid
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.workers import outbox_worker
 from scripts.yaml_roundtrip import load_frontmatter
 from tests.runtime.test_worker_ingest_event import _write_layout_note

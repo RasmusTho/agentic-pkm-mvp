@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from app.store.object_store import DomainObject
+from app.objects import DomainObject
 
 
 PlanStatus = Literal["planned", "in_progress", "done", "failed"]

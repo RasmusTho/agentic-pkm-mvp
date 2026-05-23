@@ -8,7 +8,7 @@ from uuid import uuid4
 from click.testing import CliRunner
 
 from app.cli import cli
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 
 def _seed_note(note_uuid: str, markdown: str) -> None:

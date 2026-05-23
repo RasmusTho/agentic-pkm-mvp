@@ -16,7 +16,7 @@ from app.events.panel import NoteRef, PanelActionMapping, PanelIntentAction, Pan
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 from app.cli import cli
 from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.stores.plan_store import get_plan_store, reset_plan_store
 
 

@@ -18,7 +18,7 @@ from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.planner.tools import MCP_TOOL_DESCRIPTORS
 from app.retrieval.hybrid import get_store, hybrid_search
 from app.settings.validate import validate_settings
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.stores.plan_store import get_plan_store, reset_plan_store
 
 _DEFAULT_VAULT = Path("tmp/vault_smoke")

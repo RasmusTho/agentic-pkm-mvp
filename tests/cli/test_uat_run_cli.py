@@ -5,7 +5,7 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.cli.uat import DEFAULT_FOLDER_NAME, DEFAULT_TARGET_SUBDIR
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.store import object_store as object_store_module
 from scripts.yaml_roundtrip import load_frontmatter
 

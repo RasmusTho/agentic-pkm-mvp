@@ -20,7 +20,7 @@ AgentHandler = Callable[[AgentRequest], AgentResponse]
 from app.policy.enforce import assert_tool_allowed, is_policy_enforced
 from app.quality import timeout_wrapper
 from app.outbox.events import INDEX_OUTBOX_PATH
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.events.schema import OutboxEvent
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
