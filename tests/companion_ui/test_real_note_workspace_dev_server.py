@@ -804,3 +804,64 @@ class TestVaultBrowserOverlay:
     def test_vault_browser_status_element_present(self) -> None:
         html = self._html()
         assert 'data-testid="vault-browser-status"' in html
+
+
+# ---------------------------------------------------------------------------
+# Body edit panel rendering
+# ---------------------------------------------------------------------------
+
+
+class TestBodyEditPanelRendering:
+    """Body edit panel renders based on update_flow_available."""
+
+    def _fields(self, update_flow_available: bool = False, note_path: str = "N.md") -> dict:
+        return {
+            "title": "T",
+            "note_path": note_path,
+            "artifact_id": "a",
+            "content_hash": "h",
+            "body": "b",
+            "guard_update_flow_available": update_flow_available,
+        }
+
+    def _html(self, update_flow_available: bool = False) -> str:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+        return render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=self._fields(update_flow_available=update_flow_available),
+        )
+
+    def test_edit_panel_present_when_flow_available(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'data-testid="workspace-body-edit-panel"' in html
+        assert 'data-update-flow="available"' in html
+
+    def test_edit_panel_disabled_state_when_flow_off(self) -> None:
+        html = self._html(update_flow_available=False)
+        assert 'data-testid="workspace-body-edit-panel"' in html
+        assert 'data-update-flow="disabled"' in html
+
+    def test_textarea_present_when_flow_available(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'data-testid="workspace-body-edit-textarea"' in html
+
+    def test_submit_button_present_when_flow_available(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'data-testid="workspace-body-edit-submit"' in html
+
+    def test_status_div_present_when_flow_available(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'data-testid="workspace-body-edit-status"' in html
+
+    def test_api_base_url_in_body_editor_script(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert "127.0.0.1:18001" in html
+        assert "/api/companion/workspace/body" in html
+
+    def test_note_path_in_textarea_data_attribute(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=self._fields(update_flow_available=True, note_path="Inbox/Todo.md"),
+        )
+        assert 'data-note-path="Inbox/Todo.md"' in html

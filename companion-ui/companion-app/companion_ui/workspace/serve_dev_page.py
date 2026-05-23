@@ -75,6 +75,38 @@ def _status_label(value: object, *, fallback: str = "unknown") -> str:
     return text if text else fallback
 
 
+def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
+    if not update_flow_available:
+        return (
+            '<div class="body-edit-panel body-edit-disabled" '
+            'data-testid="workspace-body-edit-panel" data-update-flow="disabled">'
+            '<span class="body-edit-label">Update flow disabled '
+            '(set WORKSPACE_UPDATE_FLOW_ENABLED=1 to enable)</span>'
+            "</div>"
+        )
+    return f"""<div class="body-edit-panel" data-testid="workspace-body-edit-panel"
+         data-update-flow="available">
+  <div class="body-edit-header">
+    <span class="body-edit-label">Edit note body</span>
+    <span class="body-edit-note">Frontmatter and UUID are preserved. WriteGuard is authoritative.</span>
+  </div>
+  <textarea class="body-edit-textarea" id="body-edit-textarea"
+            data-testid="workspace-body-edit-textarea"
+            rows="10" placeholder="Enter new note body…"
+            data-note-path="{note_path}"></textarea>
+  <div class="body-edit-actions">
+    <button class="body-edit-submit"
+            data-testid="workspace-body-edit-submit"
+            onclick="bodyEditor.submit()">Apply update</button>
+    <button class="body-edit-reset"
+            data-testid="workspace-body-edit-reset"
+            onclick="bodyEditor.reset()">Reset</button>
+  </div>
+  <div class="body-edit-status" id="body-edit-status"
+       data-testid="workspace-body-edit-status"></div>
+</div>"""
+
+
 def _render_note_section(fields: dict) -> str:
     """Render the workspace shell from render_fields() output.
 
@@ -343,6 +375,7 @@ def _render_note_section(fields: dict) -> str:
         <pre class="note-body-content">{body}</pre>
         {suggested_insertions_html}
       </div>
+      {_render_body_edit_panel(update_flow_available, note_path_val)}
     </div>
     <aside
       class="agent-rail"
@@ -2158,6 +2191,64 @@ def render_index_html(
     }}
     .panel-confirm-receipt {{ color: var(--fg-1); }}
     .panel-confirm-blocked {{ color: var(--destructive); }}
+    /* Body edit panel */
+    .body-edit-panel {{
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 12px;
+    }}
+    .body-edit-disabled {{
+      border-color: var(--border);
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .body-edit-header {{ display: flex; flex-direction: column; gap: 2px; }}
+    .body-edit-label {{ color: var(--fg-1); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 600; }}
+    .body-edit-note {{ color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-xs); }}
+    .body-edit-textarea {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      padding: 8px;
+      resize: vertical;
+      width: 100%;
+    }}
+    .body-edit-actions {{ display: flex; gap: 8px; }}
+    .body-edit-submit {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      padding: 5px 12px;
+    }}
+    .body-edit-reset {{
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      padding: 5px 12px;
+    }}
+    .body-edit-status {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      min-height: 1em;
+    }}
+    .body-edit-status.ok {{ color: var(--cyan); }}
+    .body-edit-status.error {{ color: var(--destructive); }}
     /* Vault note browser overlay */
     .vault-browser-overlay {{
       display: none;
@@ -2394,6 +2485,51 @@ def render_index_html(
     document.addEventListener('keydown', function(e) {{
       if (e.key === 'Escape') vaultBrowser.close();
     }});
+  }})();
+  </script>
+
+  <script>
+  (function() {{
+    var API_BASE = {repr(_e(api_base_url))};
+
+    window.bodyEditor = {{
+      submit: function() {{
+        var ta = document.getElementById('body-edit-textarea');
+        var statusEl = document.getElementById('body-edit-status');
+        if (!ta || !statusEl) return;
+        var notePath = ta.getAttribute('data-note-path');
+        var newBody = ta.value;
+        statusEl.className = 'body-edit-status';
+        statusEl.textContent = 'Submitting…';
+        fetch(API_BASE + '/api/companion/workspace/body', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{note_path: notePath, new_body: newBody}})
+        }})
+        .then(function(r) {{ return r.json().then(function(d) {{ return {{ok: r.ok, data: d}}; }}); }})
+        .then(function(res) {{
+          if (res.ok) {{
+            statusEl.className = 'body-edit-status ok';
+            statusEl.textContent = 'Updated. hash=' + res.data.content_hash;
+          }} else {{
+            var detail = res.data.detail || res.data;
+            var msg = detail.message || detail.error || JSON.stringify(detail);
+            statusEl.className = 'body-edit-status error';
+            statusEl.textContent = 'Error: ' + msg;
+          }}
+        }})
+        .catch(function(err) {{
+          statusEl.className = 'body-edit-status error';
+          statusEl.textContent = 'Network error: ' + err.message;
+        }});
+      }},
+      reset: function() {{
+        var ta = document.getElementById('body-edit-textarea');
+        var statusEl = document.getElementById('body-edit-status');
+        if (ta) ta.value = '';
+        if (statusEl) {{ statusEl.className = 'body-edit-status'; statusEl.textContent = ''; }}
+      }}
+    }};
   }})();
   </script>
 </body>
