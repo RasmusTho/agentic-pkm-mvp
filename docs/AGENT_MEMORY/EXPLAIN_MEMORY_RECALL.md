@@ -8,6 +8,7 @@ prerequisites: [AGENT-MEMORY-01, AGENT-MEMORY-03]
 depends_on: [DEFINE_MEMORY_CANDIDATE_MODEL.md, PROMOTE_REJECT_AND_REVISE_MEMORY.md]
 can_parallelize_with: []
 ---
+State: Implemented. Delivered by PR #1240 (issue #1082, 2026-05-23).
 
 # EXPLAIN_MEMORY_RECALL
 
@@ -73,5 +74,4 @@ becomes hidden state instead of inspectable support material.
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for recall explanation.
+- #1082 — [Impl] Agent Memory — Explainable Recall Surfaces
