@@ -302,3 +302,40 @@ def test_companion_human_sections_preserved_on_system_update() -> None:
 
     # artifact_class always remains companion_metadata
     assert refreshed.artifact_class == COMPANION_ARTIFACT_CLASS
+
+
+def test_companion_human_sections_with_subheadings_preserved_on_system_update() -> None:
+    """Human-authored sections that start with ### (deeper heading) must not be
+    swallowed by the _MANAGED_SECTION_RE regex when they follow ## Candidate Memories.
+
+    Regression: the original regex only looked for \\n## as a terminator, so any
+    sub-heading like ### would extend the managed block and cause data loss.
+    """
+    human_subsection = (
+        "### Key Observations\n\n"
+        "This note connects to the Q2 planning thread.\n"
+    )
+    initial_body = human_subsection
+
+    companion = _make_companion(body=initial_body)
+    candidate = _make_candidate()
+
+    # System adds a candidate — ## Candidate Memories section is created
+    updated = add_candidate_to_companion(companion, candidate)
+
+    # The human ### subsection must survive the update
+    assert "### Key Observations" in updated.body
+    assert "This note connects to the Q2 planning thread." in updated.body
+
+    # The managed section is present with the candidate
+    assert CANDIDATE_MEMORIES_HEADING in updated.body
+    assert candidate.candidate_id in updated.body
+
+    # Add a second candidate — the ### subsection must survive a second update
+    candidate2 = _make_candidate(title="Second candidate", memory_type=MemoryType.POLICY_MEMORY)
+    updated2 = add_candidate_to_companion(updated, candidate2)
+
+    assert "### Key Observations" in updated2.body
+    assert "This note connects to the Q2 planning thread." in updated2.body
+    assert candidate.candidate_id in updated2.body
+    assert candidate2.candidate_id in updated2.body

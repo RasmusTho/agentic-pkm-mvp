@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from app.agent_memory.candidate import ContradictionState, MemoryCandidate, MemoryType, ReviewState
+import pytest
+
+from app.agent_memory.candidate import (
+    ActivationPolicy,
+    ContradictionState,
+    MemoryCandidate,
+    MemoryType,
+    ReviewState,
+)
 
 
 def test_memory_candidate_preserves_source_and_review_state():
@@ -75,3 +83,39 @@ def test_memory_candidate_supports_contradiction_and_revision_state():
     )
     assert rejected.contradiction_state == ContradictionState.REJECTED
     assert rejected.review_state == ReviewState.REJECTED
+
+
+def test_unreviewed_candidate_rejects_activatable_policy() -> None:
+    """Unreviewed candidates must not bypass the review queue via activation_policy.
+
+    §4.3.1: unreviewed artifacts must stay in review_queue_only or blocked.
+    """
+    with pytest.raises(ValueError, match="unreviewed candidates must use activation_policy"):
+        MemoryCandidate(
+            title="Candidate that tries to bypass review",
+            memory_type=MemoryType.PREFERENCE_MEMORY,
+            source_refs=["session:abc"],
+            review_state=ReviewState.UNREVIEWED,
+            activation_policy=ActivationPolicy.EXPLICIT_OR_CONTEXTUAL,
+        )
+
+
+def test_unreviewed_candidate_allows_review_queue_only_and_blocked() -> None:
+    """REVIEW_QUEUE_ONLY and BLOCKED are both valid for unreviewed candidates."""
+    c1 = MemoryCandidate(
+        title="Queue candidate",
+        memory_type=MemoryType.PREFERENCE_MEMORY,
+        source_refs=["session:abc"],
+        review_state=ReviewState.UNREVIEWED,
+        activation_policy=ActivationPolicy.REVIEW_QUEUE_ONLY,
+    )
+    assert c1.activation_policy is ActivationPolicy.REVIEW_QUEUE_ONLY
+
+    c2 = MemoryCandidate(
+        title="Blocked candidate",
+        memory_type=MemoryType.PREFERENCE_MEMORY,
+        source_refs=["session:abc"],
+        review_state=ReviewState.UNREVIEWED,
+        activation_policy=ActivationPolicy.BLOCKED,
+    )
+    assert c2.activation_policy is ActivationPolicy.BLOCKED

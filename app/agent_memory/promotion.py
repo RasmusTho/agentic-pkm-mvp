@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent_memory.candidate import MemoryCandidate, MemoryType, ReviewState
 from app.agent_memory.review_queue import (
@@ -45,6 +45,8 @@ class PromotedMemory(BaseModel):
     and the review decision receipt are preserved alongside the promoted content.
     The artifact is immutable once created; it is a record, not a cursor.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     promotion_id: str = Field(default_factory=lambda: uuid4().hex)
     outcome: ReviewState  # ACCEPTED, REJECTED, or REVISED
@@ -175,6 +177,13 @@ def revise(original_entry: ReviewEntry, revised_entry: ReviewEntry) -> PromotedM
     accessible via the returned artifact's ``candidate`` field.
     """
     _require_decided(original_entry, ReviewDecision.REVISE)
+
+    _VALID_REVISED_STATUSES = {ReviewStatus.PENDING, ReviewStatus.PROMOTED}
+    if revised_entry.status not in _VALID_REVISED_STATUSES:
+        raise PromotionError(
+            f"revised entry {revised_entry.candidate_id!r} has status "
+            f"{revised_entry.status!r}; expected PENDING or PROMOTED"
+        )
 
     if revised_entry.revision_of != original_entry.candidate_id:
         raise PromotionError(

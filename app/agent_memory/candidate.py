@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ReviewState(str, Enum):
@@ -84,3 +84,16 @@ class MemoryCandidate(BaseModel):
     contradiction_notes: Optional[str] = None
 
     observed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def _enforce_unreviewed_activation_policy(self) -> "MemoryCandidate":
+        _UNREVIEWED_ALLOWED = {ActivationPolicy.REVIEW_QUEUE_ONLY, ActivationPolicy.BLOCKED}
+        if (
+            self.review_state is ReviewState.UNREVIEWED
+            and self.activation_policy not in _UNREVIEWED_ALLOWED
+        ):
+            raise ValueError(
+                f"unreviewed candidates must use activation_policy "
+                f"'review_queue_only' or 'blocked', got {self.activation_policy!r}"
+            )
+        return self

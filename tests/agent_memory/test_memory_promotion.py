@@ -346,3 +346,56 @@ def test_semantic_promotion_requires_stricter_review_than_episodic_retention() -
     reject_entry = _rejected_entry(queue, reject_semantic_candidate)
     with pytest.raises(PromotionError):
         promote(reject_entry)
+
+
+# ---------------------------------------------------------------------------
+# Immutability and lifecycle invariants
+# ---------------------------------------------------------------------------
+
+
+def test_promoted_memory_is_immutable() -> None:
+    """PromotedMemory must be frozen — it is an audit receipt, not a cursor."""
+    queue = MemoryCandidateReviewQueue()
+    candidate = _candidate()
+    entry = _promoted_entry(queue, candidate)
+    result = promote(entry)
+
+    with pytest.raises(Exception):
+        result.outcome = ReviewState.REJECTED  # type: ignore[misc]
+
+    with pytest.raises(Exception):
+        result.decided_by = "tampered"  # type: ignore[misc]
+
+
+def test_revise_rejects_already_rejected_revised_entry() -> None:
+    """revise() must reject a revised_entry whose status is REJECTED — the lifecycle
+    chain would otherwise be inconsistent (a rejected entry cannot be a valid successor).
+    """
+    from app.agent_memory.review_queue import ReviewStatus as RS
+
+    queue = MemoryCandidateReviewQueue()
+    original = _candidate(title="Original candidate")
+    revision_candidate = _candidate(title="Revision candidate")
+
+    queue.enqueue(original)
+    # Queue API: REVISE records a decision on original and auto-enqueues revision_candidate
+    queue.decide(
+        original.candidate_id,
+        ReviewDecision.REVISE,
+        decided_by="reviewer:rasmus",
+        revision=revision_candidate,
+    )
+    # Now reject the revision successor
+    queue.decide(
+        revision_candidate.candidate_id,
+        ReviewDecision.REJECT,
+        decided_by="reviewer:rasmus",
+    )
+
+    original_entry = queue.get(original.candidate_id)
+    revision_entry = queue.get(revision_candidate.candidate_id)
+
+    assert revision_entry.status is RS.REJECTED
+
+    with pytest.raises(PromotionError, match="PENDING or PROMOTED"):
+        revise(original_entry, revision_entry)

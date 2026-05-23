@@ -52,7 +52,7 @@ CANDIDATE_MEMORIES_HEADING = "## Candidate Memories"
 # Regex that matches the managed section block (heading + everything up to
 # the next ## heading or end-of-string).  Non-greedy, DOTALL.
 _MANAGED_SECTION_RE = re.compile(
-    r"(## Candidate Memories\n)(.*?)(?=\n## |\Z)",
+    r"(## Candidate Memories\n)(.*?)(?=\n#{1,6} |\Z)",
     re.DOTALL,
 )
 
