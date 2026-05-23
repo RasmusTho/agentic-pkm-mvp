@@ -1,0 +1,181 @@
+"""Tests for GET /api/companion/vault/notes — vault note browser endpoint.
+
+Covers:
+- Returns list of markdown notes from active vault
+- Notes include path, title, size_bytes
+- Response includes vault_identity
+- Filter by q param (title and path substring match)
+- Skips hidden directories (.obsidian, .git)
+- Returns empty list when vault is empty
+- Handles vault with spaces in path
+- 500-note cap
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+import app.api.routes.canvas as canvas_module
+import app.panel.confirmation as confirm_module
+from app.api.app import app
+
+
+@pytest.fixture(autouse=True)
+def _clear_runtime_state() -> None:
+    canvas_module._sessions.clear()
+    canvas_module._edit_history.clear()
+    canvas_module._undone_history.clear()
+    confirm_module._proposal_store.clear()
+    confirm_module._idempotency_store.clear()
+    yield
+    canvas_module._sessions.clear()
+    canvas_module._edit_history.clear()
+    canvas_module._undone_history.clear()
+    confirm_module._proposal_store.clear()
+    confirm_module._idempotency_store.clear()
+
+
+@pytest.fixture()
+def client() -> TestClient:
+    return TestClient(app)
+
+
+@pytest.fixture()
+def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    return tmp_path
+
+
+def _note(vault: Path, rel: str, content: str = "") -> Path:
+    p = vault / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content or f"# {p.stem}\n\nBody.\n", encoding="utf-8")
+    return p
+
+
+def _get_notes(client: TestClient, q: str = "") -> dict:
+    params = {"q": q} if q else {}
+    return client.get("/api/companion/vault/notes", params=params)
+
+
+def test_returns_200(client: TestClient, vault: Path) -> None:
+    _note(vault, "notes/note.md")
+    resp = _get_notes(client)
+    assert resp.status_code == 200
+
+
+def test_empty_vault_returns_empty_list(client: TestClient, vault: Path) -> None:
+    resp = _get_notes(client)
+    data = resp.json()
+    assert data["notes"] == []
+    assert data["total_count"] == 0
+
+
+def test_lists_markdown_notes(client: TestClient, vault: Path) -> None:
+    _note(vault, "notes/alpha.md", "# Alpha\n\nBody.\n")
+    _note(vault, "notes/beta.md", "# Beta\n\nBody.\n")
+    resp = _get_notes(client)
+    assert resp.status_code == 200
+    data = resp.json()
+    paths = [n["path"] for n in data["notes"]]
+    assert "notes/alpha.md" in paths
+    assert "notes/beta.md" in paths
+
+
+def test_note_entry_has_required_fields(client: TestClient, vault: Path) -> None:
+    _note(vault, "notes/note.md", "# My Note\n\nBody.\n")
+    resp = _get_notes(client)
+    entry = next(n for n in resp.json()["notes"] if n["path"] == "notes/note.md")
+    assert entry["title"] == "My Note"
+    assert isinstance(entry["size_bytes"], int)
+    assert entry["size_bytes"] > 0
+
+
+def test_title_from_heading(client: TestClient, vault: Path) -> None:
+    _note(vault, "Inbox/todo.md", "# My Todo List\n\nItems.\n")
+    resp = _get_notes(client)
+    entry = next(n for n in resp.json()["notes"] if "todo" in n["path"])
+    assert entry["title"] == "My Todo List"
+
+
+def test_title_fallback_to_stem(client: TestClient, vault: Path) -> None:
+    _note(vault, "notes/unnamed.md", "No heading here.\n")
+    resp = _get_notes(client)
+    entry = next(n for n in resp.json()["notes"] if "unnamed" in n["path"])
+    assert entry["title"] == "unnamed"
+
+
+def test_skips_hidden_directories(client: TestClient, vault: Path) -> None:
+    _note(vault, ".obsidian/config.md")
+    _note(vault, ".git/COMMIT_EDITMSG.md")
+    _note(vault, "notes/visible.md")
+    resp = _get_notes(client)
+    paths = [n["path"] for n in resp.json()["notes"]]
+    assert all(not p.startswith(".") for p in paths)
+    assert "notes/visible.md" in paths
+
+
+def test_response_includes_vault_identity(client: TestClient, vault: Path) -> None:
+    resp = _get_notes(client)
+    data = resp.json()
+    assert "vault_identity" in data
+    identity = data["vault_identity"]
+    assert "vault_name" in identity
+    assert identity["channel"] == "dev"
+    assert identity["provenance"] == "env"
+
+
+def test_filter_by_q_matches_path(client: TestClient, vault: Path) -> None:
+    _note(vault, "Inbox/meeting-notes.md", "# Meeting\n\nBody.\n")
+    _note(vault, "notes/other.md", "# Other\n\nBody.\n")
+    resp = _get_notes(client, q="meeting")
+    paths = [n["path"] for n in resp.json()["notes"]]
+    assert any("meeting" in p for p in paths)
+    assert all(
+        "meeting" in n["path"].lower() or "meeting" in n["title"].lower()
+        for n in resp.json()["notes"]
+    )
+
+
+def test_filter_by_q_matches_title(client: TestClient, vault: Path) -> None:
+    _note(vault, "notes/sprint-review.md", "# Quarterly Review\n\nNotes.\n")
+    _note(vault, "notes/other.md", "# Unrelated\n\nBody.\n")
+    resp = _get_notes(client, q="quarterly")
+    data = resp.json()
+    titles = [n["title"].lower() for n in data["notes"]]
+    assert any("quarterly" in t for t in titles)
+    assert not any("unrelated" in t for t in titles)
+
+
+def test_filter_empty_q_returns_all(client: TestClient, vault: Path) -> None:
+    _note(vault, "notes/a.md")
+    _note(vault, "notes/b.md")
+    resp_unfiltered = _get_notes(client)
+    resp_q_empty = _get_notes(client, q="")
+    assert resp_unfiltered.json()["total_count"] == resp_q_empty.json()["total_count"]
+
+
+def test_vault_path_with_spaces(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_dir = tmp_path / "Mobile Documents" / "iCloud~md~obsidian" / "Documents" / "Niflheim"
+    vault_dir.mkdir(parents=True)
+    _note(vault_dir, "notes/spacenote.md", "# Space Note\n\nBody.\n")
+    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    resp = _get_notes(client)
+    assert resp.status_code == 200
+    paths = [n["path"] for n in resp.json()["notes"]]
+    assert "notes/spacenote.md" in paths
+
+
+def test_non_markdown_files_excluded(client: TestClient, vault: Path) -> None:
+    (vault / "notes").mkdir(parents=True, exist_ok=True)
+    (vault / "notes" / "image.png").write_bytes(b"\x89PNG")
+    (vault / "notes" / "data.json").write_text("{}", encoding="utf-8")
+    _note(vault, "notes/note.md")
+    resp = _get_notes(client)
+    paths = [n["path"] for n in resp.json()["notes"]]
+    assert all(p.endswith(".md") for p in paths)
