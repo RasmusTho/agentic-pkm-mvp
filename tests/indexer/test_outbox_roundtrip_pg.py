@@ -11,7 +11,7 @@ import pytest
 from app.db.dsn import resolve_dsn
 from app.components.embeddings import get_embedding_client
 from app.outbox import events
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.stores import get_vector_index, reset_store_backends
 
 

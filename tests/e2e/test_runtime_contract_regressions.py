@@ -11,7 +11,7 @@ import app.observability.status_service as status_service
 import app.watcher.registry as registry
 from app.cli.uat import DEFAULT_FOLDER_NAME, DEFAULT_TARGET_SUBDIR, seed_vault_test_notes
 from app.runtime.runtime_loop import RuntimeLoopConfig, run_once
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.stores import reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
 

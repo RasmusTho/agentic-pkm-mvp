@@ -34,7 +34,7 @@ from app.services.companion_note import (
     write_companion,
 )
 from app.services.note_uuid import ensure_note_uuid
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel

@@ -10,7 +10,7 @@ import pytest
 from app.components.embeddings import get_embedding_client
 from app.outbox import events
 from app.stores import get_vector_index, reset_store_backends
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 
 def test_emit_index_embedding_requested_writes_db_outbox_and_audit(tmp_path, monkeypatch) -> None:

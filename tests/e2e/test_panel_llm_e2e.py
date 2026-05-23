@@ -177,7 +177,7 @@ def _read_outbox(path: Path) -> list[dict]:
 
 def _seed_note(note_uuid: str, markdown: str) -> None:
     from datetime import datetime, timezone
-    from app.store.object_store import DomainObject, ObjectStore
+    from app.objects import DomainObject, ObjectStore
 
     obj = DomainObject(
         uuid=note_uuid,

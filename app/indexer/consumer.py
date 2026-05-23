@@ -10,7 +10,7 @@ from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import coerce_floats
 from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)

@@ -9,7 +9,7 @@ import app.observability.status_service as status_service
 from app.promotion.consumer import consume_promotion_intents
 from app.runtime.runtime_loop import RuntimeLoopConfig, run_once
 from app.store import object_store as object_store_module
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from scripts.yaml_roundtrip import load_frontmatter
 
 PROMOTE_UUID = "11111111-1111-4111-8111-111111111111"
