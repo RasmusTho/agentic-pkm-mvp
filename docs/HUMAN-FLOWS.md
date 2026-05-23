@@ -912,3 +912,10 @@ document should continue to hold.
 Converse interaction design handoff materials are now available at `companion-ui/design_handoff/2026-05-03-converse/`.
 The handoff reinforces the document-first Converse behavior: vault note remains primary, dialogue operates as a secondary rail/sheet, and suggestion moments are staged for explicit user action.
 That direction is no longer handoff-only: a bounded implementation now exists in `companion-ui/companion-app/` with rail-state geometry, thread/composer states, the staged suggestion moment (apply/discard intents, mirrored proposal identity cues, and dimmed non-focused region), the session-drawer/portrait-sheet interaction slices, a read-only real-note workspace shell, and confirm-response artifact refresh delivered by PRs #745, #746, #750, #762, #1069, and #1070. The supporting runtime path now exposes `GET /api/artifacts/note` for read-only artifact hydration and `POST /api/panel/confirm` for explicit governed panel confirmation.
+
+## Companion Niflheim dev UAT workspace update check
+
+For Niflheim dev UAT, Companion workspace update capability must be visible as runtime-declared state before mutation testing proceeds:
+- the runtime safety strip must declare workspace update availability as `available` or `disabled`
+- disabled state must remain non-mutating in the UI (no active body-update composer)
+- workspace update capability is scoped to active-note body updates and must not authorize governance-bearing actions

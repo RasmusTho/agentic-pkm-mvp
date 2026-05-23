@@ -77,10 +77,20 @@ class SuggestionsState(BaseModel):
     pending_receipts: list[dict[str, str]] = Field(default_factory=list)
 
 
+class WorkspaceUpdateCapabilityState(BaseModel):
+    available: bool
+    state: str
+    reason: str
+    scope: str = "active_note_body"
+    governance_actions_enabled: bool = False
+    config_mode: str = "inherited"
+
+
 class GuardState(BaseModel):
     canvas_enabled: bool
     writeguard_status: str
     degraded: bool
+    workspace_update: WorkspaceUpdateCapabilityState
 
 
 class WorkspaceStateResponse(BaseModel):
@@ -261,6 +271,56 @@ def _writeguard_status() -> str:
     return "ok"
 
 
+def _workspace_update_capability(
+    *,
+    canvas_enabled: bool,
+    writeguard_status: str,
+) -> WorkspaceUpdateCapabilityState:
+    raw = os.getenv("COMPANION_WORKSPACE_UPDATE_ENABLED")
+    explicit = raw is not None
+    if explicit:
+        config_enabled = raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        # Backwards-compatible fallback when older clients only reason about Canvas.
+        config_enabled = canvas_enabled
+
+    if not canvas_enabled:
+        return WorkspaceUpdateCapabilityState(
+            available=False,
+            state="disabled",
+            reason="canvas_disabled",
+            config_mode="explicit" if explicit else "inherited",
+        )
+    if not config_enabled:
+        return WorkspaceUpdateCapabilityState(
+            available=False,
+            state="disabled",
+            reason="disabled_by_config" if explicit else "disabled_by_canvas_policy",
+            config_mode="explicit" if explicit else "inherited",
+        )
+    if writeguard_status == "blocked":
+        return WorkspaceUpdateCapabilityState(
+            available=False,
+            state="disabled",
+            reason="writeguard_blocked",
+            config_mode="explicit" if explicit else "inherited",
+        )
+    if writeguard_status == "unknown":
+        return WorkspaceUpdateCapabilityState(
+            available=False,
+            state="degraded",
+            reason="writeguard_unknown",
+            config_mode="explicit" if explicit else "inherited",
+        )
+
+    return WorkspaceUpdateCapabilityState(
+        available=True,
+        state="available",
+        reason="explicit_dev_config" if explicit else "canvas_inherited",
+        config_mode="explicit" if explicit else "inherited",
+    )
+
+
 def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
     def item(
         label: str,
@@ -386,6 +446,10 @@ def read_companion_workspace(
         body = artifact_path.read_text(encoding="utf-8")
     canvas_enabled = _truthy_env("CANVAS_ENABLED")
     writeguard_status = _writeguard_status()
+    workspace_update = _workspace_update_capability(
+        canvas_enabled=canvas_enabled,
+        writeguard_status=writeguard_status,
+    )
 
     return WorkspaceStateResponse(
         artifact=ArtifactState(
@@ -415,6 +479,7 @@ def read_companion_workspace(
             canvas_enabled=canvas_enabled,
             writeguard_status=writeguard_status,
             degraded=not canvas_enabled or writeguard_status == "unknown",
+            workspace_update=workspace_update,
         ),
     )
 

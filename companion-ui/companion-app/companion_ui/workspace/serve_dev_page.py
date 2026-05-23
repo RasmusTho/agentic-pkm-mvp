@@ -121,6 +121,14 @@ def _render_note_section(fields: dict) -> str:
     writeguard_blocked = writeguard_status.lower() == "blocked"
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
     guard_degraded = bool(fields.get("guard_degraded", False))
+    workspace_update_available = bool(fields.get("guard_workspace_update_available", False))
+    workspace_update_state = _e(fields.get("guard_workspace_update_state") or "disabled")
+    workspace_update_reason = _e(fields.get("guard_workspace_update_reason") or "not_declared")
+    workspace_update_scope = _e(fields.get("guard_workspace_update_scope") or "active_note_body")
+    workspace_update_governance_actions_enabled = bool(
+        fields.get("guard_workspace_update_governance_actions_enabled", False)
+    )
+    workspace_update_config_mode = _e(fields.get("guard_workspace_update_config_mode") or "inherited")
     identity_caution_html = ""
     if identity_state_raw.startswith("unresolved"):
         identity_caution_html = (
@@ -163,6 +171,22 @@ def _render_note_section(fields: dict) -> str:
           <span class="safety-label">guard</span>
           <span>{'degraded' if guard_degraded else 'normal'}</span>
         </div>
+        <div class="safety-item" data-testid="workspace-update-flow-state" data-update-state="{workspace_update_state}">
+          <span class="safety-label">workspace update</span>
+          <span>{'available' if workspace_update_available else 'disabled'}</span>
+          <span class="safety-sep">/</span>
+          <span>{workspace_update_scope}</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-update-flow-reason">
+          <span class="safety-label">update reason</span>
+          <span>{workspace_update_reason}</span>
+          <span class="safety-sep">/</span>
+          <span>{workspace_update_config_mode}</span>
+        </div>
+        <div class="safety-item" data-testid="workspace-update-governance-state">
+          <span class="safety-label">governance via update</span>
+          <span>{'enabled' if workspace_update_governance_actions_enabled else 'disabled'}</span>
+        </div>
         <div class="safety-item" data-testid="workspace-runtime-trace-id">
           <span class="safety-label">trace</span>
           <code>{runtime_trace_id or 'unavailable'}</code>
@@ -173,6 +197,8 @@ def _render_note_section(fields: dict) -> str:
         guard_messages.append("WriteGuard blocked")
     if not canvas_enabled:
         guard_messages.append("Canvas disabled")
+    if not workspace_update_available:
+        guard_messages.append("Workspace update disabled")
     guard_html = ""
     if guard_messages:
         guard_html = (
@@ -239,6 +265,8 @@ def _render_note_section(fields: dict) -> str:
         recovery_acknowledged=recovery_acknowledged,
         conflict_detected=conflict_detected,
         canvas_enabled=canvas_enabled,
+        workspace_update_available=workspace_update_available,
+        workspace_update_reason=workspace_update_reason,
         writeguard_blocked=writeguard_blocked,
         session_log_path=session_log_path,
         undo_available=undo_available,
@@ -883,13 +911,15 @@ def _render_canvas_session_controls(
     recovery_acknowledged: bool,
     conflict_detected: bool,
     canvas_enabled: bool,
+    workspace_update_available: bool,
+    workspace_update_reason: str,
     writeguard_blocked: bool,
     session_log_path: str,
     undo_available: bool,
     applied_edit_count: int,
     undone_edit_count: int,
 ) -> str:
-    canvas_blocked = not canvas_enabled or writeguard_blocked
+    canvas_blocked = not canvas_enabled or writeguard_blocked or (not workspace_update_available)
     start_status = "blocked" if not canvas_enabled else "experimental" if not session_id else "unavailable"
     close_status = "blocked" if not canvas_enabled else "experimental" if session_id else "unavailable"
     edit_status = "blocked" if canvas_blocked else "active" if can_edit_body else "unavailable"
@@ -943,12 +973,18 @@ def _render_canvas_session_controls(
             </div>
           </form>"""
     else:
+        unavailable_copy = "Body edit composer unavailable until Canvas has an active editable session."
+        if not workspace_update_available:
+            unavailable_copy = (
+                "Body edit composer disabled by workspace update capability: "
+                f"{workspace_update_reason}."
+            )
         composer_html = """
           <div
             class="canvas-body-edit-unavailable"
             data-testid="workspace-canvas-body-edit-unavailable"
             data-affordance-status="blocked">
-            Body edit composer unavailable until Canvas has an active editable session.
+            """ + unavailable_copy + """
           </div>"""
     recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
     recovery_html = ""

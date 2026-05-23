@@ -146,6 +146,12 @@ class DevPageState:
     guard_writeguard_status: str = "ok"
     guard_canvas_enabled: bool = True
     guard_degraded: bool = False
+    guard_workspace_update_available: bool = False
+    guard_workspace_update_state: str = "disabled"
+    guard_workspace_update_reason: str = "not_declared"
+    guard_workspace_update_scope: str = "active_note_body"
+    guard_workspace_update_governance_actions_enabled: bool = False
+    guard_workspace_update_config_mode: str = "inherited"
     is_loaded: bool = False
 
 
@@ -202,6 +208,7 @@ class RealNoteWorkspaceDevPage:
         suggestions = raw.get("suggestions") or {}
         guards = raw.get("guards") or {}
         runtime = raw.get("runtime") or {}
+        workspace_update_guard = guards.get("workspace_update") or {}
         raw_find_payload = raw.get("find")
         runtime_find_payload = runtime.get("find")
         find_payload_available = isinstance(raw_find_payload, dict) or isinstance(
@@ -249,7 +256,28 @@ class RealNoteWorkspaceDevPage:
         state_conflict = session_state in {"paused", "interrupted"}
         conflict_detected = recovery_needed or hash_conflict or state_conflict
         runtime_can_edit_body = bool(canvas.get("can_edit_body", False))
-        can_edit_body = runtime_can_edit_body and (not conflict_detected or recovery_acknowledged)
+        if workspace_update_guard:
+            workspace_update_available = bool(workspace_update_guard.get("available", False))
+            workspace_update_state = str(workspace_update_guard.get("state") or "disabled")
+            workspace_update_reason = str(workspace_update_guard.get("reason") or "not_declared")
+            workspace_update_scope = str(workspace_update_guard.get("scope") or "active_note_body")
+            workspace_update_governance_actions_enabled = bool(
+                workspace_update_guard.get("governance_actions_enabled", False)
+            )
+            workspace_update_config_mode = str(workspace_update_guard.get("config_mode") or "inherited")
+        else:
+            # Compatibility fallback for runtime payloads without explicit workspace_update capability.
+            workspace_update_available = runtime_can_edit_body and bool(guards.get("canvas_enabled", True))
+            workspace_update_state = "legacy_inferred" if workspace_update_available else "disabled"
+            workspace_update_reason = "legacy_payload"
+            workspace_update_scope = "active_note_body"
+            workspace_update_governance_actions_enabled = False
+            workspace_update_config_mode = "inherited"
+        can_edit_body = (
+            runtime_can_edit_body
+            and workspace_update_available
+            and (not conflict_detected or recovery_acknowledged)
+        )
         if content_hash:
             self._last_content_hash_by_note[resolved_note_path] = content_hash
         shell = RealNoteWorkspaceShell(payload=payload, agent_rail_state=None)
@@ -328,6 +356,12 @@ class RealNoteWorkspaceDevPage:
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
             guard_degraded=bool(guards.get("degraded", False)),
+            guard_workspace_update_available=workspace_update_available,
+            guard_workspace_update_state=workspace_update_state,
+            guard_workspace_update_reason=workspace_update_reason,
+            guard_workspace_update_scope=workspace_update_scope,
+            guard_workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
+            guard_workspace_update_config_mode=workspace_update_config_mode,
             is_loaded=True,
         )
         return self.state
@@ -755,6 +789,14 @@ class RealNoteWorkspaceDevPage:
             "guard_writeguard_status": self.state.guard_writeguard_status,
             "guard_canvas_enabled": self.state.guard_canvas_enabled,
             "guard_degraded": self.state.guard_degraded,
+            "guard_workspace_update_available": self.state.guard_workspace_update_available,
+            "guard_workspace_update_state": self.state.guard_workspace_update_state,
+            "guard_workspace_update_reason": self.state.guard_workspace_update_reason,
+            "guard_workspace_update_scope": self.state.guard_workspace_update_scope,
+            "guard_workspace_update_governance_actions_enabled": (
+                self.state.guard_workspace_update_governance_actions_enabled
+            ),
+            "guard_workspace_update_config_mode": self.state.guard_workspace_update_config_mode,
             "is_production_ui": self.is_production_ui,
             "dev_page_label": self.dev_page_label,
         }
