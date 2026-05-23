@@ -152,6 +152,9 @@ class DevPageState:
     guard_workspace_update_scope: str = "active_note_body"
     guard_workspace_update_governance_actions_enabled: bool = False
     guard_workspace_update_config_mode: str = "inherited"
+    active_note_body_update_enabled: bool = False
+    active_note_body_update_state: str = "idle"
+    active_note_body_update_message: str = ""
     vault_browser_notes: list[dict[str, Any]] | None = None
     vault_browser_query: str = ""
     vault_browser_total_notes: int = 0
@@ -382,6 +385,7 @@ class RealNoteWorkspaceDevPage:
             guard_workspace_update_scope=workspace_update_scope,
             guard_workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
             guard_workspace_update_config_mode=workspace_update_config_mode,
+            active_note_body_update_enabled=workspace_update_available,
             vault_browser_notes=list(vault_browser.get("notes") or []),
             vault_browser_query=str(vault_browser.get("query") or ""),
             vault_browser_total_notes=int(vault_browser.get("total_notes") or 0),
@@ -526,6 +530,60 @@ class RealNoteWorkspaceDevPage:
         refreshed.suggestion_allowed_transitions = sorted(machine.allowed_transitions())
         refreshed.suggestion_composer_enabled = machine.composer_enabled
         refreshed.suggestion_apply_transition_path = transition_path
+        return refreshed
+
+    def update_active_note_body(self, *, new_body: str) -> DevPageState:
+        """Update the currently loaded note body through the workspace update API."""
+        if self.state.shell is None:
+            self.state.error = "No workspace note is loaded"
+            self.state.is_loaded = False
+            self.state.active_note_body_update_state = "failure"
+            self.state.active_note_body_update_message = "No active note loaded."
+            return self.state
+
+        note_path = self.state.shell.note_path
+        if not self.state.guard_workspace_update_available:
+            self.state.active_note_body_update_state = "blocked"
+            self.state.active_note_body_update_message = (
+                "Workspace update capability is disabled for the active runtime."
+            )
+            return self.state
+
+        try:
+            response = self._http.post(
+                "/api/companion/workspace/update",
+                json={
+                    "active_note_path": note_path,
+                    "target_note_path": note_path,
+                    "new_body": new_body,
+                    "content_hash": self.state.shell.content_hash,
+                },
+            )
+        except WorkspaceClientHTTPError as exc:
+            lowered = exc.detail.lower()
+            is_blocked = exc.status_code in {403, 409} and (
+                "blocked" in lowered
+                or "writeguard" in lowered
+                or "scope" in lowered
+                or "unavailable" in lowered
+            )
+            self.state.active_note_body_update_state = "blocked" if is_blocked else "failure"
+            self.state.active_note_body_update_message = exc.detail
+            self.state.error = str(exc)
+            self.state.is_loaded = False
+            return self.state
+        except WorkspaceClientError as exc:
+            self.state.active_note_body_update_state = "failure"
+            self.state.active_note_body_update_message = str(exc)
+            self.state.error = str(exc)
+            self.state.is_loaded = False
+            return self.state
+
+        refreshed = self.load(NoteLoadIntent(note_path=note_path))
+        refreshed.active_note_body_update_state = "success"
+        refreshed.active_note_body_update_message = (
+            str(response.get("reason") or "active_note_body_updated")
+        )
         return refreshed
 
     def queue_governance_suggestion(
@@ -827,6 +885,9 @@ class RealNoteWorkspaceDevPage:
                 self.state.guard_workspace_update_governance_actions_enabled
             ),
             "guard_workspace_update_config_mode": self.state.guard_workspace_update_config_mode,
+            "active_note_body_update_enabled": self.state.active_note_body_update_enabled,
+            "active_note_body_update_state": self.state.active_note_body_update_state,
+            "active_note_body_update_message": self.state.active_note_body_update_message,
             "vault_browser_notes": self.state.vault_browser_notes or [],
             "vault_browser_query": self.state.vault_browser_query,
             "vault_browser_total_notes": self.state.vault_browser_total_notes,

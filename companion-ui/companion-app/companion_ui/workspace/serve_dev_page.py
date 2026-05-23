@@ -129,6 +129,11 @@ def _render_note_section(fields: dict) -> str:
         fields.get("guard_workspace_update_governance_actions_enabled", False)
     )
     workspace_update_config_mode = _e(fields.get("guard_workspace_update_config_mode") or "inherited")
+    active_note_body_update_enabled = bool(
+        fields.get("active_note_body_update_enabled", workspace_update_available)
+    )
+    active_note_body_update_state = _e(fields.get("active_note_body_update_state") or "idle")
+    active_note_body_update_message = _e(fields.get("active_note_body_update_message") or "")
     identity_caution_html = ""
     if identity_state_raw.startswith("unresolved"):
         identity_caution_html = (
@@ -286,6 +291,14 @@ def _render_note_section(fields: dict) -> str:
         applied_edit_count=applied_edit_count,
         undone_edit_count=undone_edit_count,
     )
+    active_note_body_update_html = _render_active_note_body_update_flow(
+        note_path=note_path_val,
+        content_hash=content_hash,
+        enabled=active_note_body_update_enabled,
+        state=active_note_body_update_state,
+        message=active_note_body_update_message,
+        reason=workspace_update_reason,
+    )
 
     return f"""
   <div class="workspace-layout">
@@ -340,6 +353,7 @@ def _render_note_section(fields: dict) -> str:
           <span class="rail-state-value">{canvas_state}</span>
         </div>
         {canvas_controls_html}
+        {active_note_body_update_html}
         <div class="rail-state-row">
           <span class="rail-state-label">Panel</span>
           <span class="rail-state-value" data-testid="workspace-panel-label">{panel_label}</span>
@@ -364,6 +378,74 @@ def _render_note_section(fields: dict) -> str:
     </aside>
     {portrait_sheet_html}
   </div>"""
+
+
+def _render_active_note_body_update_flow(
+    *,
+    note_path: str,
+    content_hash: str,
+    enabled: bool,
+    state: str,
+    message: str,
+    reason: str,
+) -> str:
+    safe_state = _e(state or "idle")
+    safe_message = _e(message)
+    if not enabled:
+        return f"""
+        <section
+          class="active-note-body-update-flow"
+          data-testid="workspace-active-note-body-update-flow"
+          data-flow-state="disabled">
+          <div
+            class="active-note-body-update-blocked"
+            data-testid="workspace-active-note-body-update-state-blocked">
+            Active-note body update unavailable: {_e(reason)}.
+          </div>
+        </section>"""
+
+    status_html = ""
+    if safe_state == "success":
+        status_html = (
+            '<div class="active-note-body-update-success" '
+            'data-testid="workspace-active-note-body-update-state-success">'
+            + (safe_message or "Body update saved.")
+            + "</div>"
+        )
+    elif safe_state == "blocked":
+        status_html = (
+            '<div class="active-note-body-update-blocked" '
+            'data-testid="workspace-active-note-body-update-state-blocked">'
+            + (safe_message or "Body update blocked by runtime guard.")
+            + "</div>"
+        )
+    elif safe_state == "failure":
+        status_html = (
+            '<div class="active-note-body-update-failure" '
+            'data-testid="workspace-active-note-body-update-state-failure">'
+            + (safe_message or "Body update failed.")
+            + "</div>"
+        )
+
+    return f"""
+        <section
+          class="active-note-body-update-flow"
+          data-testid="workspace-active-note-body-update-flow"
+          data-flow-state="enabled">
+          <label for="active_note_body_update_input">Active note body update</label>
+          <textarea
+            id="active_note_body_update_input"
+            data-testid="workspace-active-note-body-update-input"
+            aria-label="Active note body update input"></textarea>
+          <button
+            type="button"
+            data-testid="workspace-active-note-body-update-submit"
+            data-api-method="POST"
+            data-api-path="/api/companion/workspace/update"
+            data-note-path="{_e(note_path)}"
+            data-content-hash="{_e(content_hash)}">Update body</button>
+          {status_html}
+        </section>"""
 
 
 def _render_vault_browser(
