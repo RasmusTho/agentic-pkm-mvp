@@ -138,38 +138,13 @@ def migrate_if_needed() -> None:
 
 
 def launch_agent_once() -> int:
-    cmd = [sys.executable, "-u", str(REPO_ROOT / "run_agent.py")]
-    log_file_mode = "a" if not DRY_RUN else "w"
-    logger.info("Launching agent process: %s", " ".join(cmd))
-
-    if DRY_RUN:
-        logger.info("[dry-run] Would append agent output to %s", AGENT_LOG_PATH)
-        return 0
-
-    AGENT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    process = subprocess.Popen(
-        cmd,
-        cwd=str(REPO_ROOT),
-        stdout=AGENT_LOG_PATH.open(log_file_mode, encoding="utf-8"),
-        stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+    # run_agent.py was retired when app/agent was removed in #1171.
+    # Update this function to invoke the replacement runner before using this script.
+    raise RuntimeError(
+        "start_agent_service.py still references the retired run_agent.py entry point "
+        "(removed in #1171). Update launch_agent_once() to use the replacement runner "
+        "before invoking this script."
     )
-    try:
-        while True:
-            try:
-                return process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                if stop_event.is_set():
-                    logger.info("Stop signal received; terminating agent process.")
-                    process.terminate()
-                    try:
-                        return process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        logger.warning("Agent process did not terminate; sending SIGKILL.")
-                        process.kill()
-                        return process.wait()
-    finally:
-        pass
 
 
 def agent_loop() -> None:
