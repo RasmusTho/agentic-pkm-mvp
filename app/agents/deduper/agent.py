@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 from app.components.embeddings import get_embedding_client
 from app.events.types import CURATION_DEDUPE_DONE
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 
 
 AGENT = "deduper"

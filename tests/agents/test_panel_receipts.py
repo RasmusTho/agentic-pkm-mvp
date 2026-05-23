@@ -8,7 +8,7 @@ import pytest
 from app.agents.panel.agent import handle_note_update
 from app.settings.panel_actions import PanelActionMapping
 import app.store.object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.stores import reset_store_backends
 
 

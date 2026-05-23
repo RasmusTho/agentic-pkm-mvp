@@ -12,7 +12,7 @@ from app.agents.panel_agent.execution import run_panel_note_execution
 from app.agents.panel_agent.runtime import PanelRuntimeResult, _write_proposals_to_panel, execute_panel_intent
 from app.components.concurrency import IdempotencyGuard
 from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 
 class _StubReasoningFacade:

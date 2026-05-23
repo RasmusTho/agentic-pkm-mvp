@@ -7,7 +7,7 @@ import logging
 from app.agents.base.audit import audit_log
 from app.components.reasoning.facade import ReasoningTaskKind, _heuristic_classify, get_reasoning_facade
 from app.memory.store import remember, recall
-from app.store.object_store import ObjectStore, DomainObject
+from app.objects import ObjectStore, DomainObject
 from app.stores.decisions import put_decision
 
 logger = logging.getLogger(__name__)

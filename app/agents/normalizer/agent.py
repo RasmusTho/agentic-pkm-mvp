@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from app.events.types import INGEST_NORMALIZE_DONE
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.services.audit import audit_event
 
 

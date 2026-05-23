@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
 from app.events.types import PROMOTION_EVALUATE_DONE
 from app.stores import get_object_store
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.services.decisions import insert_decision, latest_decision
 from app.services.audit import audit_event
 from app.services import llm as llm_service

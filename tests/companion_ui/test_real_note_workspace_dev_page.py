@@ -394,3 +394,52 @@ def test_dev_page_note_path_only_load_succeeds_without_artifact_id() -> None:
     # Artifact ID falls back to note_path when API returns empty
     assert state.shell.artifact_id == "notes/test.md"
     assert state.shell.title == "Test Note"
+
+
+# ---------------------------------------------------------------------------
+# Vault identity fields in render_fields()
+# ---------------------------------------------------------------------------
+
+
+def _workspace_response_with_vault_identity(
+    vault_name: str = "Niflheim",
+    channel: str = "dev",
+    provenance: str = "env",
+) -> dict:
+    base = _workspace_response()
+    base["runtime"]["vault_identity"] = {
+        "vault_name": vault_name,
+        "channel": channel,
+        "provenance": provenance,
+    }
+    return base
+
+
+def test_render_fields_includes_vault_identity() -> None:
+    page = _loaded_page(response=_workspace_response_with_vault_identity())
+    fields = page.render_fields()
+    assert fields is not None
+    assert fields["runtime_vault_name"] == "Niflheim"
+    assert fields["runtime_vault_channel"] == "dev"
+    assert fields["runtime_vault_provenance"] == "env"
+
+
+def test_render_fields_vault_identity_defaults_when_absent() -> None:
+    """Existing API responses without vault_identity must not break render_fields."""
+    page = _loaded_page(response=_workspace_response())  # no vault_identity in runtime
+    fields = page.render_fields()
+    assert fields is not None
+    assert fields["runtime_vault_name"] == "unresolved"
+    assert fields["runtime_vault_channel"] == "unknown"
+    assert fields["runtime_vault_provenance"] == "unresolved"
+
+
+def test_render_fields_vault_identity_path_with_spaces() -> None:
+    page = _loaded_page(response=_workspace_response_with_vault_identity(
+        vault_name="Mobile Documents",
+        channel="dev",
+        provenance="env",
+    ))
+    fields = page.render_fields()
+    assert fields is not None
+    assert fields["runtime_vault_name"] == "Mobile Documents"

@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, List, Tuple, Optional
 
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.store.membership_store import save_membership
 from app.services.decisions import latest_decision
 from app.events.types import (
