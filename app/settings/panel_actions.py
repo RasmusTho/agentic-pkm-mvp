@@ -132,8 +132,8 @@ def get_panel_actions_diagnostics(root: Optional[Path] = None) -> Dict[str, Any]
         if resolved.exists():
             try:
                 mappings = load_panel_action_mappings(resolved)
-            except Exception as exc:
-                _set_last_error(f"{exc.__class__.__name__}: {exc}")
+            except Exception:
+                _set_last_error("mapping load failed")
                 mappings = {}
         else:
             _set_last_error(f"missing: {resolved}")
