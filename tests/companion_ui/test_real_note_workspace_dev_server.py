@@ -489,10 +489,13 @@ class TestHandleGet:
             client=client,
             api_base_url="http://127.0.0.1:18001",
         )
-        assert len(client.get_calls) == 1
-        url, params = client.get_calls[0]
-        assert url == "/api/companion/workspace"
-        assert params.get("note_path") == "Some/Note.md"
+        assert len(client.get_calls) == 2
+        workspace_url, workspace_params = client.get_calls[0]
+        assert workspace_url == "/api/companion/workspace"
+        assert workspace_params.get("note_path") == "Some/Note.md"
+        browser_url, browser_params = client.get_calls[1]
+        assert browser_url == "/api/companion/vault-browser"
+        assert browser_params.get("q") == ""
 
     def test_successful_load_renders_note_fields(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
@@ -720,6 +723,41 @@ class TestVaultIdentityRendering:
         )
         assert "Mobile Documents" in html
         assert 'data-testid="workspace-vault-identity"' in html
+
+
+# ---------------------------------------------------------------------------
+# Update flow state rendering in safety strip
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateFlowStateRendering:
+    """Update flow safety-strip item reflects guard_update_flow_available."""
+
+    def _html(self, update_flow_available: bool = False, **extra) -> str:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+        fields = {
+            "title": "T",
+            "note_path": "N.md",
+            "artifact_id": "a",
+            "content_hash": "h",
+            "body": "b",
+            "guard_update_flow_available": update_flow_available,
+            **extra,
+        }
+        return render_index_html(api_base_url="http://127.0.0.1:18001", fields=fields)
+
+    def test_update_flow_item_present(self) -> None:
+        assert 'data-testid="workspace-update-flow-state"' in self._html()
+
+    def test_update_flow_shows_disabled_by_default(self) -> None:
+        html = self._html(update_flow_available=False)
+        assert 'data-update-flow="disabled"' in html
+        assert ">disabled<" in html
+
+    def test_update_flow_shows_available_when_true(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'data-update-flow="available"' in html
+        assert ">available<" in html
 
 
 # ---------------------------------------------------------------------------
