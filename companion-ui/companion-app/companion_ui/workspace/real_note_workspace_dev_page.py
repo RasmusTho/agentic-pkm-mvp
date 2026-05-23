@@ -106,6 +106,9 @@ class DevPageState:
     runtime_environment_label: str = "unknown"
     runtime_api_base_url_label: str = "local-dev"
     runtime_trace_id: str = ""
+    runtime_vault_name: str = "unresolved"
+    runtime_vault_channel: str = "unknown"
+    runtime_vault_provenance: str = "unresolved"
     canvas_session_id: str | None = None
     canvas_session_state: str = "idle"
     canvas_user_present: bool = False
@@ -282,6 +285,9 @@ class RealNoteWorkspaceDevPage:
             runtime_environment_label=runtime.get("environment_label") or "unknown",
             runtime_api_base_url_label=runtime.get("api_base_url_label") or "local-dev",
             runtime_trace_id=runtime.get("trace_id") or "",
+            runtime_vault_name=(runtime.get("vault_identity") or {}).get("vault_name") or "unresolved",
+            runtime_vault_channel=(runtime.get("vault_identity") or {}).get("channel") or "unknown",
+            runtime_vault_provenance=(runtime.get("vault_identity") or {}).get("provenance") or "unresolved",
             canvas_session_id=canvas.get("session_id"),
             canvas_session_state=session_state,
             canvas_user_present=bool(canvas.get("user_present", False)),
@@ -706,6 +712,9 @@ class RealNoteWorkspaceDevPage:
             "runtime_environment_label": self.state.runtime_environment_label,
             "runtime_api_base_url_label": self.state.runtime_api_base_url_label,
             "runtime_trace_id": self.state.runtime_trace_id,
+            "runtime_vault_name": self.state.runtime_vault_name,
+            "runtime_vault_channel": self.state.runtime_vault_channel,
+            "runtime_vault_provenance": self.state.runtime_vault_provenance,
             "canvas_session_id": self.state.canvas_session_id,
             "canvas_session_state": self.state.canvas_session_state,
             "canvas_user_present": self.state.canvas_user_present,

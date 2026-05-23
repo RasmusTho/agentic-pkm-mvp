@@ -385,7 +385,7 @@ class TestRenderIndexHtml:
         assert "dev" in html
         assert "local-dev" in html
         assert 'data-testid="workspace-vault-identity"' in html
-        assert "vault identity unavailable" in html
+        assert "unresolved" in html
         assert 'data-testid="workspace-writeguard-state"' in html
         assert "blocked" in html
         assert 'data-testid="workspace-canvas-enabled-state"' in html
@@ -638,3 +638,83 @@ class TestDevServerBoundaries:
         from companion_ui.workspace.serve_dev_page import _DEFAULT_API_BASE_URL
 
         assert _DEFAULT_API_BASE_URL == "http://127.0.0.1:18001"
+
+
+# ---------------------------------------------------------------------------
+# Vault identity rendering in safety strip
+# ---------------------------------------------------------------------------
+
+
+class TestVaultIdentityRendering:
+    """Safety-strip vault/channel item renders resolved vault name and channel."""
+
+    def _fields_with_vault_identity(
+        self,
+        vault_name: str = "Niflheim",
+        vault_channel: str = "dev",
+        vault_provenance: str = "env",
+    ) -> dict:
+        return {
+            "title": "T",
+            "note_path": "N.md",
+            "artifact_id": "a",
+            "content_hash": "h",
+            "body": "b",
+            "panel_rail": "Panel rail",
+            "runtime_vault_name": vault_name,
+            "runtime_vault_channel": vault_channel,
+            "runtime_vault_provenance": vault_provenance,
+        }
+
+    def test_vault_name_rendered_in_safety_strip(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=self._fields_with_vault_identity(vault_name="Niflheim"),
+        )
+        assert 'data-testid="workspace-vault-identity"' in html
+        assert "Niflheim" in html
+
+    def test_vault_channel_rendered_in_safety_strip(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=self._fields_with_vault_identity(vault_channel="dev"),
+        )
+        assert 'data-testid="workspace-vault-identity"' in html
+        assert ">dev<" in html
+
+    def test_vault_provenance_in_data_attribute(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=self._fields_with_vault_identity(vault_provenance="env"),
+        )
+        assert 'data-vault-provenance="env"' in html
+
+    def test_unresolved_vault_renders_without_crash(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=self._fields_with_vault_identity(
+                vault_name="unresolved",
+                vault_channel="unknown",
+                vault_provenance="unresolved",
+            ),
+        )
+        assert 'data-testid="workspace-vault-identity"' in html
+        assert "unresolved" in html
+
+    def test_vault_name_with_spaces_rendered_safely(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields=self._fields_with_vault_identity(vault_name="Mobile Documents"),
+        )
+        assert "Mobile Documents" in html
+        assert 'data-testid="workspace-vault-identity"' in html

@@ -95,6 +95,9 @@ def _render_note_section(fields: dict) -> str:
     runtime_environment = _e(_status_label(fields.get("runtime_environment_label")))
     runtime_channel = _e(_status_label(fields.get("runtime_api_base_url_label"), fallback="local-dev"))
     runtime_trace_id = _e(fields.get("runtime_trace_id") or "")
+    vault_name = _e(fields.get("runtime_vault_name") or "unresolved")
+    vault_channel = _e(fields.get("runtime_vault_channel") or "unknown")
+    vault_provenance = fields.get("runtime_vault_provenance") or "unresolved"
     body = _e(fields.get("body", ""))
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
@@ -142,9 +145,11 @@ def _render_note_section(fields: dict) -> str:
           <span class="safety-sep">/</span>
           <span>{runtime_channel}</span>
         </div>
-        <div class="safety-item" data-testid="workspace-vault-identity">
+        <div class="safety-item" data-testid="workspace-vault-identity" data-vault-provenance="{vault_provenance}">
           <span class="safety-label">vault/channel</span>
-          <span>vault identity unavailable</span>
+          <span>{vault_name}</span>
+          <span class="safety-sep">/</span>
+          <span>{vault_channel}</span>
         </div>
         <div class="safety-item" data-testid="workspace-writeguard-state">
           <span class="safety-label">WriteGuard</span>

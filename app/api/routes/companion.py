@@ -34,10 +34,17 @@ class ArtifactState(BaseModel):
     owns_identity: bool = True
 
 
+class VaultIdentityState(BaseModel):
+    vault_name: str
+    channel: str
+    provenance: str
+
+
 class RuntimeState(BaseModel):
     environment_label: str
     api_base_url_label: str
     trace_id: str
+    vault_identity: VaultIdentityState
     reorient: dict[str, list[dict[str, str | bool]]] = Field(default_factory=dict)
     resurface: dict[str, list[dict[str, str | list[str]]]] = Field(default_factory=dict)
 
@@ -101,6 +108,24 @@ def _safe_environment_label() -> str:
 
 def _safe_api_label() -> str:
     return (os.getenv("COMPANION_API_BASE_URL_LABEL") or "local-dev").strip() or "local-dev"
+
+
+def _vault_identity_state() -> VaultIdentityState:
+    vault_root_raw = os.getenv("VAULT_ROOT", "").strip()
+    if vault_root_raw:
+        vault_name = Path(vault_root_raw).name or vault_root_raw
+        provenance = "env"
+    else:
+        vault_name = "unresolved"
+        provenance = "unresolved"
+    raw_channel = (
+        os.getenv("PKM_ENVIRONMENT")
+        or os.getenv("CHANNEL")
+        or os.getenv("PKM_CHANNEL")
+        or ""
+    ).strip().lower()
+    channel = raw_channel if raw_channel in {"dev", "test", "prod"} else "unknown"
+    return VaultIdentityState(vault_name=vault_name, channel=channel, provenance=provenance)
 
 
 def _validate_workspace_note_path(note_path_raw: str) -> str:
@@ -375,6 +400,7 @@ def read_companion_workspace(
             environment_label=_safe_environment_label(),
             api_base_url_label=_safe_api_label(),
             trace_id=trace_id,
+            vault_identity=_vault_identity_state(),
             reorient=_reorient_state(),
             resurface=_resurface_state(safe_note_path),
         ),

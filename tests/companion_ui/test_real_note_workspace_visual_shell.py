@@ -315,7 +315,7 @@ class TestRuntimeSafetyStrip:
         assert "dev" in html
         assert "local-dev" in html
         assert 'data-testid="workspace-vault-identity"' in html
-        assert "vault identity unavailable" in html
+        assert "unresolved" in html
 
     def test_guard_degraded_state_visible(self) -> None:
         html = _html_with_note(guard_degraded=True, guard_canvas_enabled=False)
