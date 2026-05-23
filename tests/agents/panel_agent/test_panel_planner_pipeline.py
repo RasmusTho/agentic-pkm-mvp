@@ -14,7 +14,7 @@ from app.agents.panel_agent.runtime import execute_panel_intent
 from app.agents.panel_agent.settings import get_panel_agent_pipeline
 from app.events.panel import NoteRef, PanelActionMapping, PanelIntentAction
 from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from app.stores.plan_store import get_plan_store, reset_plan_store
 
 

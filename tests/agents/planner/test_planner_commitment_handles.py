@@ -6,7 +6,7 @@ from uuid import uuid4
 from app.agents.base.graph import AgentState
 from app.agents.planner.graph import PlannerGraph
 from app.domain.commitments import CommitmentHandle
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 
 def _make_note(store: ObjectStore) -> str:

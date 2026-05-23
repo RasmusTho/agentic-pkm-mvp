@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.agents.panel_agent.policy import contains_ai_panel_fence, proactive_assist_enabled
 from app.events.schema import OutboxEvent
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.settings.panel_actions import PanelActionMapping
 
 from .events import panel_intent_to_event

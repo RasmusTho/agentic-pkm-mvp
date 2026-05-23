@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 from app.services.decisions import insert_decision
 from app.events.types import CURATION_REVIEW_DONE
 from app.services.audit import audit_event

@@ -10,7 +10,7 @@ import pytest
 from app.agents.panel_agent import execute_panel_intent, run_panel_intent_for_note
 from app.agents.panel_agent.wiring import DEFAULT_PANEL_ACTION_WIRING_PATH, get_action_wiring, load_action_wiring
 from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 pytestmark = pytest.mark.not_pg
 

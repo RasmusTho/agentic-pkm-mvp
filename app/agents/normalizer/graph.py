@@ -6,7 +6,7 @@ from app.agents.base.audit import audit_log
 from app.events.types import INGEST_NORMALIZE_DONE
 from app.agents.normalizer.agent import run as normalizer_run
 from app.memory.store import recall
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 
 AGENT = "normalizer"
 

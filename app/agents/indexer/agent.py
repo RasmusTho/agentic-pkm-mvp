@@ -5,7 +5,7 @@ from typing import Any, List
 
 from app.components.embeddings import get_embedding_client
 from app.events.types import INGEST_INDEX_DONE
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 
 
 AGENT = "indexer"

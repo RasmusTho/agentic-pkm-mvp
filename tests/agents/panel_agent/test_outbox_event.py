@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.panel_agent.agent import run_panel_intent_for_note
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 
 def _seed_note(note_uuid: str, markdown: str) -> None:

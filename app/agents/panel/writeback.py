@@ -9,7 +9,7 @@ import hashlib
 import re
 from typing import Iterable
 
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 ACTION_PATTERN = re.compile(
     r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)"

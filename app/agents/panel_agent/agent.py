@@ -19,7 +19,7 @@ from app.events.panel import (
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import append_jsonl_outbox_event
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 from .parser import ParsedAction, ParsedPanel, find_panels, parse_panel
 

@@ -7,7 +7,7 @@ import pytest
 
 from app.agents.planner.graph import PlannerGraph, run_planner_for_goal
 from app.domain.plan import Plan
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 pytestmark = [pytest.mark.not_pg]
 

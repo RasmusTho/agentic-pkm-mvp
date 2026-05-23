@@ -9,7 +9,7 @@ from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.runtime import PanelRuntimeResult, execute_panel_intent
 from app.events.panel import PanelIntentEvent
 from app.services.outbox import coerce_outbox_event, write_outbox_event
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 from scripts.yaml_roundtrip import load_frontmatter
 
 

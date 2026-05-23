@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from app.events.types import CURATION_CITATION_CHECK_DONE
 from app.memory.store import remember
 from app.services.decisions import latest_decision
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 
 AGENT = "citation_checker"
 

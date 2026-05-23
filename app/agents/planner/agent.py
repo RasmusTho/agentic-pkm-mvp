@@ -6,7 +6,7 @@ from typing import Optional
 from app.domain.commitments import CommitmentHandle, CommitmentKind, make_commitment_handle
 from app.domain.state_axes import normalize_plan_state_action
 from app.domain.plan import Plan, PlanStep
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 
 _COMMITMENT_PRIORITY: dict[CommitmentKind, int] = {
     "review_return": 0,

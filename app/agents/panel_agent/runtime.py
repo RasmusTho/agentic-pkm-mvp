@@ -28,7 +28,7 @@ from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRunt
 from app.events.schema import make_outbox_event
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, write_outbox_event
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 
 logger = logging.getLogger(__name__)
 
