@@ -173,7 +173,14 @@ def _truthy_env(name: str, default: bool = False) -> bool:
 
 
 def _safe_environment_label() -> str:
-    raw = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    raw = (
+        os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or os.getenv("PKM_ENVIRONMENT")
+        or os.getenv("CHANNEL")
+        or os.getenv("PKM_CHANNEL")
+        or ""
+    ).strip().lower()
     if raw in {"dev", "test", "prod"}:
         return raw
     return "unknown"
