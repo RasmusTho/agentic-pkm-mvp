@@ -28,6 +28,8 @@ The repo provides several startup commands. Choose based on the channel and requ
 
 | Command | Channel | Compose file | Project namespace | `PKM_ENVIRONMENT` | VAULT_ROOT required | Use when |
 | --- | --- | --- | --- | --- | --- | --- |
+| `make dev-start-full` | dev | `docker-compose.yaml:docker-compose.dev.yml` | `pkm-dev` | `dev` | From `.env.dev.local` | **Canonical dev startup.** Loads `.env.dev.local` for vault defaults; no inline path needed. |
+| `make dev-up` | dev | `docker-compose.yaml:docker-compose.dev.yml` | `pkm-dev` | `dev` | No | Bring up dev containers only (no health-gate wait). Not a substitute for `dev-start-full`. |
 | `make prod-start-full VAULT_ROOT=<path>` | prod (`stable`) | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | Yes | **Canonical prod startup.** All four bindings explicit. |
 | `make prod-up` | prod | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | No | Bring up prod containers only (no health-gate wait). Not a substitute for `prod-start-full`. |
 | `make test-start-full VAULT_ROOT=<path>` | test | `docker-compose.yaml:docker-compose.test.yml` | `pkm-test` | `test` | Yes | **Canonical test startup.** All four bindings explicit. Use for staged promotion verification (see `promote-to-test` skill). |
@@ -36,7 +38,7 @@ The repo provides several startup commands. Choose based on the channel and requ
 | `make alpha-up VAULT_ROOT=<path>` | **Legacy.** Equivalent to the old prod startup before explicit env binding existed. Runs `scripts/start_full_system.sh` without explicit compose file, project name, or `PKM_ENVIRONMENT`. | — | — | — | Yes | **Do not use for new prod startups.** Use `make prod-start-full` instead. |
 | `scripts/start_full_system.sh` | Varies | Inherits caller env | Inherits caller env | Inherits caller env | Caller-supplied | Core startup script invoked by `make` targets above. Do not call directly unless you have set all four bindings explicitly. |
 
-**Rule:** for a prod startup, always use `make prod-start-full VAULT_ROOT=<path>`; for a test-channel startup, use `make test-start-full VAULT_ROOT=<path>`. These targets enforce all four explicit bindings and run the health-gate wait. `make alpha-up` and bare `scripts/start_full_system.sh` calls lack one or more of these guarantees.
+**Rule:** for a dev startup, use `make dev-start-full` (vault defaults from `.env.dev.local`). For a prod startup, use `make prod-start-full VAULT_ROOT=<path>`. For a test-channel startup, use `make test-start-full VAULT_ROOT=<path>`. These targets enforce all four explicit bindings and run the health-gate wait. `make alpha-up` and bare `scripts/start_full_system.sh` calls lack one or more of these guarantees.
 
 ## Prod startup (canonical)
 
@@ -57,6 +59,57 @@ For LLM configuration when using a local Ollama endpoint via the OpenAI-compatib
 - Set `OPENAI_BASE_URL` to the reachable Ollama base URL (e.g., `http://host.docker.internal:11434/v1`).
 - Set `OPENAI_API_KEY` to a non-empty placeholder (e.g., `sk-local`).
 - The runtime env generator derives `OPENAI_BASE` (the full chat-completions URL used by the adapter) from `OPENAI_BASE_URL` by appending `/chat/completions`. An explicitly set `OPENAI_BASE` is written as-is and takes precedence.
+
+## Dev startup (canonical — Niflheim vault or other dev vault)
+
+Use `make dev-start-full` for the dev channel. This sets `PKM_ENVIRONMENT=dev`,
+`COMPOSE_FILE=docker-compose.yaml:docker-compose.dev.yml`, and `COMPOSE_PROJECT_NAME=pkm-dev`. The vault root
+comes from `.env.dev.local` (gitignored, never committed) which the operator creates once per machine.
+
+### One-time setup: create `.env.dev.local`
+
+```bash
+cat > .env.dev.local <<'EOF'
+PKM_ENVIRONMENT=dev
+CHANNEL=dev
+PKM_CHANNEL=dev
+VAULT_ROOT=/Users/<you>/Library/Mobile Documents/iCloud~md~obsidian/Documents/Niflheim
+VAULT_SYSTEM_DIR_REL=⚙️ System
+VAULT_INBOX_DIR_REL=📥 Inbox
+VAULT_DESK_DIR_REL=🛠️ Workbench
+CANVAS_ENABLED=0
+EOF
+```
+
+- Vault paths with spaces (e.g. iCloud `Mobile Documents`) are fully supported. Do NOT use shell
+  quoting or `source` the file directly — the startup script uses a Python-based parser that handles
+  spaces in values correctly.
+- `.env.dev.local` is gitignored and must not be committed. It contains machine-specific absolute paths.
+- The file format is Docker Compose env-file format (`KEY=VALUE`), not a shell script.
+- Default dev vault: Niflheim. Default prod/stable vault: Midgård (operator-configured). Bifröst/test
+  mapping is not a confirmed default; do not encode it without explicit operator confirmation.
+
+### Dev startup after every reboot
+
+```bash
+make dev-start-full
+```
+
+This:
+1. Detects `PKM_ENVIRONMENT=dev` and loads `.env.dev.local` **before** `.env`, so dev-specific
+   `VAULT_ROOT` and layout vars take precedence.
+2. Runs `scripts/start_full_system.sh` with the dev compose file and project name.
+3. Emits resolved vault env to stdout before starting containers so the operator can verify.
+
+The API is exposed on host port **18001** for the dev channel.
+
+### How channel-specific env loading works
+
+When `PKM_ENVIRONMENT` (or `CHANNEL` / `PKM_CHANNEL`) is set, `start_full_system.sh` loads
+`.env.${channel}.local` first, before `.env`. Since the loader uses defaults semantics (first writer
+wins), the channel-specific file takes precedence. `.env` then fills in any remaining vars (LLM config,
+Postgres credentials, etc.). This means `.env.dev.local` only needs to contain the vars that differ
+from `.env` — typically `VAULT_ROOT` and vault layout dirs.
 
 ## Startup success verification
 

@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dispatcher-init dispatcher-sync
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
@@ -101,6 +101,13 @@ dev-up:
 
 dev-down:
 	@$(COMPOSE_DEV) down --remove-orphans
+
+dev-start-full:
+	@COMPOSE_FILE="docker-compose.yaml:docker-compose.dev.yml" \
+	COMPOSE_PROJECT_NAME="pkm-dev" \
+	PKM_ENVIRONMENT="dev" \
+	START_MODE=runtime \
+	scripts/start_full_system.sh
 
 prod-up:
 	@$(COMPOSE_PROD) up -d --build
