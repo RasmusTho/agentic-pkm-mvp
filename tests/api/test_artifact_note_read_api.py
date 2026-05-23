@@ -46,14 +46,16 @@ def vault_note(tmp_path: pathlib.Path, monkeypatch) -> pathlib.Path:
 def test_read_artifact_note_returns_body_payload(
     client: TestClient, vault_note: pathlib.Path, tmp_path: pathlib.Path
 ) -> None:
+    # Use a vault-relative path; absolute paths are no longer accepted.
+    relative_path = vault_note.relative_to(tmp_path)
     resp = client.get(
         "/api/artifacts/note",
-        params={"note_path": str(vault_note), "artifact_id": "note-uuid-test-1"},
+        params={"note_path": str(relative_path), "artifact_id": "note-uuid-test-1"},
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["artifact_id"] == "note-uuid-test-1"
-    assert data["note_path"] == str(vault_note)
+    assert data["note_path"] == str(vault_note.resolve())
     assert data["title"] == "My Test Note"
     assert "Some body text" in data["body"]
     assert data["content_hash"]  # non-empty version marker
@@ -71,8 +73,7 @@ def test_read_artifact_note_missing_returns_typed_error(
     client: TestClient, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    missing = tmp_path / "does_not_exist.md"
-    resp = client.get("/api/artifacts/note", params={"note_path": str(missing)})
+    resp = client.get("/api/artifacts/note", params={"note_path": "does_not_exist.md"})
     assert resp.status_code == 404
     detail = resp.json()["detail"]
     assert detail["error"] == "note_not_found"
@@ -102,11 +103,27 @@ def test_read_artifact_note_rejects_path_traversal(
 
 
 def test_read_artifact_note_does_not_mutate_file(
-    client: TestClient, vault_note: pathlib.Path
+    client: TestClient, vault_note: pathlib.Path, tmp_path: pathlib.Path
 ) -> None:
     original = vault_note.read_text(encoding="utf-8")
-    client.get("/api/artifacts/note", params={"note_path": str(vault_note)})
+    relative_path = vault_note.relative_to(tmp_path)
+    client.get("/api/artifacts/note", params={"note_path": str(relative_path)})
     assert vault_note.read_text(encoding="utf-8") == original
+
+
+# ---------------------------------------------------------------------------
+# AC 3b: absolute paths are rejected
+# ---------------------------------------------------------------------------
+
+
+def test_read_artifact_note_rejects_absolute_path(
+    client: TestClient, vault_note: pathlib.Path
+) -> None:
+    resp = client.get("/api/artifacts/note", params={"note_path": str(vault_note)})
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "invalid_path"
+    assert detail["reason"] == "absolute_path_not_allowed"
 
 
 # ---------------------------------------------------------------------------

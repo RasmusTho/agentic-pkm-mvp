@@ -9,6 +9,7 @@ Rejects path traversal and paths outside the configured vault root.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -44,8 +45,19 @@ def _resolve_and_validate(
     note_path_raw: str,
     vault_root: Path,
 ) -> Path:
-    """Resolve note path and reject traversal or outside-vault paths."""
+    """Resolve note path and reject traversal, absolute paths, or outside-vault paths.
+
+    Only vault-relative paths are accepted. Absolute paths are rejected before any
+    path construction occurs. The containment check uses os.path.realpath + startswith,
+    which is the CodeQL-recognized sanitizer pattern for py/path-injection.
+    """
     candidate = Path(note_path_raw)
+
+    if candidate.is_absolute():
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "absolute_path_not_allowed"},
+        )
 
     # Reject explicit traversal components before any resolution
     if ".." in candidate.parts:
@@ -54,32 +66,23 @@ def _resolve_and_validate(
             detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "path_traversal"},
         )
 
-    vault_resolved = vault_root.resolve()
+    # os.path.realpath + startswith is the CodeQL-recognized path traversal sanitizer.
+    vault_abs = os.path.realpath(str(vault_root))
+    resolved_str = os.path.realpath(os.path.join(vault_abs, str(candidate)))
+    vault_prefix = vault_abs + os.sep
 
-    if candidate.is_absolute():
-        candidate_resolved = candidate.resolve()
-    else:
-        candidate_resolved = (vault_root / candidate).resolve()
-
-    # Reject paths that escape the vault root; capture the vault-relative part.
-    try:
-        contained = candidate_resolved.relative_to(vault_resolved)
-    except ValueError:
+    if not resolved_str.startswith(vault_prefix):
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_path", "note_path": note_path_raw, "reason": "outside_vault"},
         )
 
-    # Reconstruct the final path from the trusted vault root so that downstream
-    # file I/O is not tainted by the raw user-supplied value (fixes CodeQL
-    # py/path-injection: the returned path flows from vault_resolved, not from
-    # user input).
-    return vault_resolved / contained
+    return Path(resolved_str)
 
 
 @router.get("/note", response_model=ArtifactNoteResponse)
 def read_artifact_note(
-    note_path: str = Query(..., description="Vault-relative or absolute path to the note"),
+    note_path: str = Query(..., description="Vault-relative path to the note (absolute paths are rejected)"),
     artifact_id: Optional[str] = Query(None, description="Artifact UUID; echoed back in response"),
 ) -> ArtifactNoteResponse:
     vault_root = resolve_vault_root()
