@@ -9,6 +9,8 @@ Covers:
 - 400 when new_body contains frontmatter
 - 404 when note_path doesn't resolve
 - 400 on invalid note_path (absolute, traversal)
+- 422 when note_path is not a .md file (.yaml, .json, .txt, extensionless)
+- rejected non-.md path does not modify any file
 """
 from __future__ import annotations
 
@@ -184,3 +186,83 @@ def test_body_update_response_includes_content_hash(
     data = resp.json()
     assert "content_hash" in data
     assert len(data["content_hash"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# File-type restriction: only .md files allowed (P1 review gate)
+# ---------------------------------------------------------------------------
+
+
+def test_body_update_md_file_is_allowed(
+    client: TestClient, vault_note: Path
+) -> None:
+    """Markdown note updates must succeed (sanity check for the allowlist)."""
+    resp = _patch_body(client, "notes/note.md", "# Test Note\n\nAllowed body.\n")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_body_update_yaml_file_rejected(
+    client: TestClient, vault: Path
+) -> None:
+    """YAML config files must be rejected with 422."""
+    config_file = vault / "_system" / "settings.yaml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("key: value\n", encoding="utf-8")
+
+    resp = _patch_body(client, "_system/settings.yaml", "injected: true\n")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "not_a_note_file"
+
+
+def test_body_update_json_file_rejected(
+    client: TestClient, vault: Path
+) -> None:
+    """JSON files must be rejected with 422."""
+    json_file = vault / "data" / "index.json"
+    json_file.parent.mkdir(parents=True, exist_ok=True)
+    json_file.write_text('{"key": "value"}\n', encoding="utf-8")
+
+    resp = _patch_body(client, "data/index.json", '{"injected": true}')
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "not_a_note_file"
+
+
+def test_body_update_txt_file_rejected(
+    client: TestClient, vault: Path
+) -> None:
+    """Plain text files must be rejected with 422."""
+    txt_file = vault / "notes" / "readme.txt"
+    txt_file.parent.mkdir(parents=True, exist_ok=True)
+    txt_file.write_text("Original content.\n", encoding="utf-8")
+
+    resp = _patch_body(client, "notes/readme.txt", "Injected content.\n")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "not_a_note_file"
+
+
+def test_body_update_extensionless_file_rejected(
+    client: TestClient, vault: Path
+) -> None:
+    """Extensionless files must be rejected with 422."""
+    bare_file = vault / "notes" / "noextension"
+    bare_file.parent.mkdir(parents=True, exist_ok=True)
+    bare_file.write_text("Original.\n", encoding="utf-8")
+
+    resp = _patch_body(client, "notes/noextension", "Injected.\n")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "not_a_note_file"
+
+
+def test_body_update_non_md_does_not_modify_file(
+    client: TestClient, vault: Path
+) -> None:
+    """Rejected non-.md requests must not modify the file on disk."""
+    config_file = vault / "config" / "app.yaml"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    original_content = "safe: original\n"
+    config_file.write_text(original_content, encoding="utf-8")
+
+    _patch_body(client, "config/app.yaml", "safe: injected\n")
+
+    assert config_file.read_text(encoding="utf-8") == original_content
