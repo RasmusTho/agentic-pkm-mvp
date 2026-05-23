@@ -8,6 +8,7 @@ prerequisites: [AGENT-MEMORY-01, AGENT-MEMORY-02, AGENT-MEMORY-03, AGENT-MEMORY-
 depends_on: [DEFINE_MEMORY_CANDIDATE_MODEL.md, ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md, PROMOTE_REJECT_AND_REVISE_MEMORY.md, EXPLAIN_MEMORY_RECALL.md]
 can_parallelize_with: []
 ---
+State: Implemented (issue #1083, 2026-05-23).
 
 # PREVENT_UNREVIEWED_MEMORY_AUTHORITY
 
@@ -72,5 +73,4 @@ unreviewed shortcut around provenance, contracts, and human authority.
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for memory authority guards.
+- #1083 — [Impl] Agent Memory — Prevent Unreviewed Memory Authority
