@@ -3,7 +3,7 @@
 Three variants driven by server-declared proposal class:
   body       — body-edit proposal; Apply + Discard + Inspect.
   governance — governance-bearing proposal; Queue + Discard + Inspect; NO Apply.
-  blocked    — CANVAS_ENABLED=0 or write-guard; Acknowledge only; role="alert".
+  blocked    — CANVAS_ENABLED=0 or write-guard; Acknowledge + Open Panel; role="alert".
 
 Hard invariant: the governance variant MUST NOT expose the suggestion.apply intent.
 The UI never re-classifies the server-declared variant.
@@ -21,7 +21,7 @@ CARD_VARIANTS: frozenset[str] = frozenset({"body", "governance", "blocked"})
 # Intent tokens per variant. Canonical names from CANVAS_SUGGESTION_FLOW.md §data-intent.
 _BODY_INTENTS: tuple[str, ...] = ("suggestion.apply", "suggestion.discard", "suggestion.inspect")
 _GOVERNANCE_INTENTS: tuple[str, ...] = ("governance.queue", "suggestion.discard", "suggestion.inspect")
-_BLOCKED_INTENTS: tuple[str, ...] = ("blocked.acknowledge",)
+_BLOCKED_INTENTS: tuple[str, ...] = ("blocked.acknowledge", "blocked.openPanel")
 
 # data-testid tokens for primary action buttons.
 _BODY_TESTIDS: dict[str, str] = {

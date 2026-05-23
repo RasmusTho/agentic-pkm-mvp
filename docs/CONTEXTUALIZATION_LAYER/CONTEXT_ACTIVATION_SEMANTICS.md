@@ -336,11 +336,11 @@ A context bundle's authority is governed by its `authority_flags` block (per `do
 | `may_orient: true` | bundle may support re-orientation (resuming a task, understanding state) |
 | `may_resurface: true` | bundle may surface prior context |
 | `may_propose: true` | bundle may support proposing candidates for human review |
-| `may_write: true` | bundle may authorize a writeback or state-change action |
+| `may_write: true` | bundle may support a writeback or state-change action (necessary, not sufficient — WriteGuard, policy, and explicit confirmation still run independently) |
 
 Omitting or setting a flag to `false` removes that permission. The flags are orthogonal: a bundle may support answering without supporting writeback.
 
-**The `may_write` flag is the action-authorizing signal for bridge artifacts.** A bundle without `may_write: true` does not authorize any writeback regardless of the use rights of its source artifacts.
+**The `may_write` flag is a necessary input to the writeback path, not an authorization bypass.** A bundle without `may_write: true` does not authorize any writeback regardless of the use rights of its source artifacts. A bundle with `may_write: true` still requires WriteGuard approval, explicit human confirmation, and policy clearance before any vault mutation occurs.
 
 ### 8.3 Assembly does not transfer memory semantics
 
