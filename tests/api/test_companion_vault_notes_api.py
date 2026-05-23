@@ -179,3 +179,32 @@ def test_non_markdown_files_excluded(client: TestClient, vault: Path) -> None:
     resp = _get_notes(client)
     paths = [n["path"] for n in resp.json()["notes"]]
     assert all(p.endswith(".md") for p in paths)
+
+
+def test_invalid_browse_max_notes_env_falls_back(
+    client: TestClient, vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "not-a-number")
+    _note(vault, "notes/a.md")
+    _note(vault, "notes/b.md")
+    import importlib
+    import app.api.routes.companion as companion_module
+
+    importlib.reload(companion_module)
+    resp = _get_notes(client)
+    assert resp.status_code == 200
+    assert resp.json()["total_count"] == 2
+
+
+def test_non_positive_browse_max_notes_env_falls_back(
+    client: TestClient, vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "-1")
+    _note(vault, "notes/a.md")
+    import importlib
+    import app.api.routes.companion as companion_module
+
+    importlib.reload(companion_module)
+    resp = _get_notes(client)
+    assert resp.status_code == 200
+    assert resp.json()["total_count"] == 1
