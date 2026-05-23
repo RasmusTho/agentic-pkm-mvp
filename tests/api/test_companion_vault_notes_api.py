@@ -9,6 +9,11 @@ Covers:
 - Returns empty list when vault is empty
 - Handles vault with spaces in path
 - 500-note cap
+- _parse_browse_max_notes: invalid env falls back to 500
+- _parse_browse_max_notes: zero/negative env falls back to 500
+- _safe_vault_browse_max_notes: invalid env falls back to 250
+- _safe_vault_browse_max_notes: clamps values to [1, 1000]
+- Cap is applied: list endpoint returns at most _BROWSE_MAX_NOTES results
 """
 from __future__ import annotations
 
@@ -208,3 +213,124 @@ def test_non_positive_browse_max_notes_env_falls_back(
     resp = _get_notes(client)
     assert resp.status_code == 200
     assert resp.json()["total_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _parse_browse_max_notes — env validation (P1 / P2 review gate)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_browse_max_notes_invalid_env_returns_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric VAULT_BROWSE_MAX_NOTES must not raise; returns 500."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "abc")
+    result = companion_module._parse_browse_max_notes()
+    assert result == 500
+
+
+def test_parse_browse_max_notes_zero_returns_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero value for VAULT_BROWSE_MAX_NOTES falls back to 500."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "0")
+    assert companion_module._parse_browse_max_notes() == 500
+
+
+def test_parse_browse_max_notes_negative_returns_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative value for VAULT_BROWSE_MAX_NOTES falls back to 500."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "-10")
+    assert companion_module._parse_browse_max_notes() == 500
+
+
+def test_parse_browse_max_notes_valid_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Valid positive value is returned as-is."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "200")
+    assert companion_module._parse_browse_max_notes() == 200
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _safe_vault_browse_max_notes — env validation (vault browser)
+# ---------------------------------------------------------------------------
+
+
+def test_safe_vault_browse_max_notes_invalid_env_returns_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric VAULT_BROWSE_MAX_NOTES must not raise; returns 250."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "notanumber")
+    assert companion_module._safe_vault_browse_max_notes() == 250
+
+
+def test_safe_vault_browse_max_notes_clamps_above_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Values above 1000 are clamped to 1000."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "99999")
+    assert companion_module._safe_vault_browse_max_notes() == 1000
+
+
+def test_safe_vault_browse_max_notes_clamps_below_min(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero and negative values are clamped to 1."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "0")
+    assert companion_module._safe_vault_browse_max_notes() == 1
+
+
+def test_safe_vault_browse_max_notes_missing_env_returns_250(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing env var returns default of 250."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.delenv("VAULT_BROWSE_MAX_NOTES", raising=False)
+    assert companion_module._safe_vault_browse_max_notes() == 250
+
+
+# ---------------------------------------------------------------------------
+# Integration test: cap is applied (avoids full-vault materialization before cap)
+# ---------------------------------------------------------------------------
+
+
+def test_cap_limits_notes_returned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint respects the _BROWSE_MAX_NOTES cap (avoids full scan before limit)."""
+    import app.api.routes.companion as companion_module
+
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+
+    # Create more notes than the cap
+    cap = 3
+    original_cap = companion_module._BROWSE_MAX_NOTES
+    companion_module._BROWSE_MAX_NOTES = cap
+    try:
+        for i in range(cap + 2):
+            _note(tmp_path, f"notes/note{i:04d}.md", f"# Note {i}\n\nBody.\n")
+        client = TestClient(app)
+        resp = client.get("/api/companion/vault/notes")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["notes"]) <= cap
+    finally:
+        companion_module._BROWSE_MAX_NOTES = original_cap
