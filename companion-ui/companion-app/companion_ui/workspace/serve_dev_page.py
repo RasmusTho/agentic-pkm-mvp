@@ -694,6 +694,130 @@ def _render_active_note_body_update_flow(
         </section>"""
 
 
+def _render_artifact_inspector(
+    note: dict,
+    *,
+    vault_name: str,
+    vault_channel: str,
+) -> str:
+    """Render a read-only artifact inspector panel for the selected note.
+
+    Tabs/sections: Metadata, Health, Provenance, Links placeholder, Receipts placeholder.
+    Inspector is read-only; no edit controls rendered. Client uses normalized server
+    payload only — no frontmatter parsing here (#1255).
+    """
+    title = _e(str(note.get("title") or ""))
+    path = _e(str(note.get("note_path") or ""))
+    kind_val = note.get("kind")
+    zone_val = note.get("zone")
+    review_state_val = note.get("review_state")
+    trust_val = note.get("trust")
+    uuid_val = note.get("uuid")
+    origin_val = note.get("origin")
+    source_ref_val = note.get("source_ref")
+    created_val = note.get("created")
+    updated_val = note.get("updated")
+    frontmatter_valid = bool(note.get("frontmatter_valid", True))
+    missing_fields: list[str] = list(note.get("missing_required_fields") or [])
+
+    uuid_html = (
+        f'<div data-testid="workspace-vault-browser-inspector-uuid" '
+        f'class="inspector-field">'
+        f'<span class="inspector-label">uuid</span>'
+        f'<code>{_e(str(uuid_val))}</code>'
+        f'</div>'
+    ) if uuid_val else ""
+
+    def _field_row(testid: str, label: str, val: object) -> str:
+        if val is None:
+            return ""
+        return (
+            f'<div data-testid="{testid}" class="inspector-field">'
+            f'<span class="inspector-label">{_e(label)}</span>'
+            f'<span>{_e(str(val))}</span>'
+            f'</div>'
+        )
+
+    metadata_rows = "".join([
+        _field_row("workspace-vault-browser-inspector-kind", "kind", kind_val),
+        _field_row("workspace-vault-browser-inspector-zone", "zone", zone_val),
+        _field_row("workspace-vault-browser-inspector-review-state", "review state", review_state_val),
+        _field_row("workspace-vault-browser-inspector-trust", "trust", trust_val),
+        _field_row("workspace-vault-browser-inspector-origin", "origin", origin_val),
+        _field_row("workspace-vault-browser-inspector-source-ref", "source ref", source_ref_val),
+        _field_row("workspace-vault-browser-inspector-created", "created", created_val),
+        _field_row("workspace-vault-browser-inspector-updated", "updated", updated_val),
+    ])
+
+    health_state = "valid" if frontmatter_valid and not missing_fields else "invalid"
+    missing_label = ", ".join(missing_fields) if missing_fields else ""
+    health_detail = (
+        f'<span class="inspector-health-missing">{_e(missing_label)}</span>'
+        if missing_label
+        else ""
+    )
+    health_copy = "Frontmatter valid." if health_state == "valid" else f"Invalid or missing required fields: {_e(missing_label or 'unknown')}."
+    health_html = (
+        f'<div data-testid="workspace-vault-browser-inspector-health" '
+        f'class="inspector-health" data-health-state="{health_state}">'
+        f'<span class="inspector-label">health</span>'
+        f'<span class="inspector-health-copy">{health_copy}</span>'
+        f'{health_detail}'
+        f'</div>'
+    )
+
+    artifact_identity_html = (
+        f'<div data-testid="workspace-vault-browser-inspector-artifact-identity" '
+        f'class="inspector-identity-artifact">'
+        f'<span class="inspector-label">artifact identity</span>'
+        f'{uuid_html}'
+        f'{_field_row("workspace-vault-browser-inspector-origin-in-identity", "origin", origin_val)}'
+        f'</div>'
+    )
+
+    vault_identity_html = (
+        f'<div data-testid="workspace-vault-browser-inspector-vault-identity" '
+        f'class="inspector-identity-vault">'
+        f'<span class="inspector-label">vault/channel</span>'
+        f'<span>{_e(vault_name)}/{_e(vault_channel)}</span>'
+        f'</div>'
+    )
+
+    links_placeholder = (
+        '<div data-testid="workspace-vault-browser-inspector-links-placeholder" '
+        'class="inspector-placeholder" data-affordance-status="unavailable">'
+        'Links: not connected yet.'
+        '</div>'
+    )
+    receipts_placeholder = (
+        '<div data-testid="workspace-vault-browser-inspector-receipts-placeholder" '
+        'class="inspector-placeholder" data-affordance-status="unavailable">'
+        'Agent receipts: not connected yet.'
+        '</div>'
+    )
+
+    return (
+        f'<section class="vault-browser-inspector" '
+        f'data-testid="workspace-vault-browser-inspector" '
+        f'data-affordance-status="read-only">'
+        f'<header class="inspector-header">'
+        f'<span data-testid="workspace-vault-browser-inspector-title" '
+        f'class="inspector-title">{title}</span>'
+        f'<code data-testid="workspace-vault-browser-inspector-path" '
+        f'class="inspector-path">{path}</code>'
+        f'</header>'
+        f'<div class="inspector-metadata">{metadata_rows}</div>'
+        f'{health_html}'
+        f'<div class="inspector-provenance">'
+        f'{artifact_identity_html}'
+        f'{vault_identity_html}'
+        f'</div>'
+        f'{links_placeholder}'
+        f'{receipts_placeholder}'
+        f'</section>'
+    )
+
+
 def _render_filter_chips(
     notes: list[dict],
     active_filters: dict[str, list[str]],
@@ -841,6 +965,12 @@ def _render_vault_browser(
     )
     read_only_text = "read-only" if read_only else "mutating"
     filters_html = _render_filter_chips(notes, active_filters or {})
+    selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
+    inspector_html = (
+        _render_artifact_inspector(selected_note, vault_name=vault_name, vault_channel=vault_channel)
+        if selected_note is not None
+        else ""
+    )
     return f"""
         <details class="vault-browser" data-testid="workspace-vault-browser" open>
           <summary data-testid="workspace-vault-browser-toggle">Browse vault notes</summary>
@@ -853,6 +983,7 @@ def _render_vault_browser(
           {filters_html}
           {state_html}
           {list_html}
+          {inspector_html}
         </details>"""
 
 
