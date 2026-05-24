@@ -800,14 +800,9 @@ def _render_artifact_inspector(
         'Links: not connected yet.'
         '</div>'
     )
-    receipts_placeholder = (
-        '<div data-testid="workspace-vault-browser-inspector-receipts-placeholder" '
-        'class="inspector-placeholder" data-affordance-status="unavailable">'
-        'Agent receipts: not connected yet.'
-        '</div>'
-    )
-
     actions_html = _render_vault_actions(note)
+    receipts_html = _render_inspector_receipts(note)
+    posture_html = _render_inspector_review_posture(note)
 
     return (
         f'<section class="vault-browser-inspector" '
@@ -825,10 +820,116 @@ def _render_artifact_inspector(
         f'{artifact_identity_html}'
         f'{vault_identity_html}'
         f'</div>'
+        f'{posture_html}'
         f'{actions_html}'
         f'{links_placeholder}'
-        f'{receipts_placeholder}'
+        f'{receipts_html}'
         f'</section>'
+    )
+
+
+def _render_inspector_review_posture(note: dict) -> str:
+    """Render review posture from existing note metadata (review_state, trust).
+
+    These fields come from the normalized server payload (#1253). Unreviewed
+    material is displayed with explicit posture but is NOT action-authorizing;
+    the authority guard remains server-side.
+    """
+    review_state = note.get("review_state")
+    trust = note.get("trust")
+    if not review_state and not trust:
+        return ""
+    review_html = (
+        f'<span class="posture-field" data-testid="workspace-vault-browser-inspector-posture-review-state">'
+        f'{_e(str(review_state))}</span>'
+    ) if review_state else ""
+    trust_html = (
+        f'<span class="posture-field" data-testid="workspace-vault-browser-inspector-posture-trust">'
+        f'{_e(str(trust))}</span>'
+    ) if trust else ""
+    return (
+        '<div class="inspector-review-posture" '
+        'data-testid="workspace-vault-browser-inspector-review-posture" '
+        'data-review-authority="non_authoritative" '
+        'data-affordance-status="read-only">'
+        '<span class="posture-label">review posture</span>'
+        f'{review_html}'
+        f'{trust_html}'
+        '</div>'
+    )
+
+
+_RECEIPT_STATES = {"queued", "applied", "blocked", "rejected", "failed"}
+
+
+def _render_inspector_receipts(note: dict) -> str:
+    """Render agent receipts from the vault browser note payload.
+
+    State determination:
+        - 'receipts' key absent from payload   → unavailable (source not connected)
+        - 'receipts' key present, value = []   → no_receipts (source connected, none found)
+        - 'receipts' key present, non-empty    → render each receipt read-only
+
+    All states are rendered inside data-testid="workspace-vault-browser-inspector-receipts".
+    No write/mutation controls are rendered. Receipt identity (receipt_id, trace_id)
+    is kept separate from artifact identity (uuid, path) per the contract.
+    """
+    _SENTINEL = object()
+    receipts_raw = note.get("receipts", _SENTINEL)
+
+    if receipts_raw is _SENTINEL:
+        # Source not connected yet — honest unavailable state
+        return (
+            '<div class="inspector-receipts" '
+            'data-testid="workspace-vault-browser-inspector-receipts" '
+            'data-receipt-state="unavailable" '
+            'data-affordance-status="read-only">'
+            '<span class="receipts-label">agent receipts</span>'
+            '<span class="receipts-unavailable">Receipt source not connected. '
+            'No receipt data available for this artifact.</span>'
+            '</div>'
+        )
+
+    receipts: list[dict] = list(receipts_raw) if receipts_raw else []
+    if not receipts:
+        return (
+            '<div class="inspector-receipts" '
+            'data-testid="workspace-vault-browser-inspector-receipts" '
+            'data-receipt-state="no_receipts" '
+            'data-affordance-status="read-only">'
+            '<span class="receipts-label">agent receipts</span>'
+            '<span class="receipts-empty">No receipts found for this artifact.</span>'
+            '</div>'
+        )
+
+    rows: list[str] = []
+    for receipt in receipts:
+        receipt_id = str(receipt.get("receipt_id") or "")
+        state = str(receipt.get("state") or "unknown")
+        action_type = str(receipt.get("action_type") or "")
+        trace_id = str(receipt.get("trace_id") or "")
+        receipt_state = state if state in _RECEIPT_STATES else "unknown"
+        rows.append(
+            f'<div class="receipt-row" '
+            f'data-testid="vault-browser-receipt-row" '
+            f'data-receipt-state="{_e(receipt_state)}">'
+            f'<span data-testid="vault-browser-receipt-id" class="receipt-id">{_e(receipt_id)}</span>'
+            f'<span data-testid="vault-browser-receipt-state" class="receipt-state">{_e(state)}</span>'
+            f'<span data-testid="vault-browser-receipt-action-type" class="receipt-action">{_e(action_type)}</span>'
+            + (
+                f'<span data-testid="vault-browser-receipt-trace-id" class="receipt-trace">{_e(trace_id)}</span>'
+                if trace_id else ""
+            )
+            + f'</div>'
+        )
+    return (
+        '<div class="inspector-receipts" '
+        'data-testid="workspace-vault-browser-inspector-receipts" '
+        f'data-receipt-state="{_e(receipts[0].get("state", "unknown") if receipts else "no_receipts")}" '
+        'data-affordance-status="read-only">'
+        '<span class="receipts-label">agent receipts</span>'
+        + "".join(rows)
+        + '</div>'
     )
 
 
