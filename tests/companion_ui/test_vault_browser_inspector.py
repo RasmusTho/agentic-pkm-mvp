@@ -261,10 +261,10 @@ def test_inspector_renders_links_placeholder() -> None:
     assert 'data-testid="workspace-vault-browser-inspector-links-placeholder"' in html
 
 
-def test_inspector_renders_receipts_placeholder() -> None:
-    """AC5: Agent receipts shown as explicit placeholder."""
+def test_inspector_renders_receipts_section() -> None:
+    """AC5: Agent receipts section is present (explicit unavailable or no-receipts state)."""
     _, _, html = _load_page()
-    assert 'data-testid="workspace-vault-browser-inspector-receipts-placeholder"' in html
+    assert 'data-testid="workspace-vault-browser-inspector-receipts"' in html
 
 
 # ---- AC6: read-only — no mutation controls ----
