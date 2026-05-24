@@ -509,6 +509,7 @@ def _render_note_section(fields: dict) -> str:
         vault_name=str(fields.get("vault_browser_vault_name") or "unresolved"),
         vault_channel=str(fields.get("vault_browser_vault_channel") or "unknown"),
         vault_provenance=str(fields.get("vault_browser_vault_provenance") or "unresolved"),
+        active_filters=dict(fields.get("vault_browser_active_filters") or {}),
     )
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
@@ -693,6 +694,48 @@ def _render_active_note_body_update_flow(
         </section>"""
 
 
+def _render_filter_chips(
+    notes: list[dict],
+    active_filters: dict[str, list[str]],
+) -> str:
+    """Render deterministic filter chips for available metadata dimensions."""
+    _CHIP_DIMS: list[tuple[str, str]] = [
+        ("kind", "Kind"),
+        ("zone", "Zone"),
+        ("review_state", "Review"),
+        ("trust", "Trust"),
+    ]
+    chips_html: list[str] = []
+    for field, label in _CHIP_DIMS:
+        values: list[str] = []
+        seen: set[str] = set()
+        for note in notes:
+            val = note.get(field)
+            if val and str(val) not in seen:
+                seen.add(str(val))
+                values.append(str(val))
+        if not values:
+            continue
+        active_set = set(active_filters.get(field, []))
+        for val in sorted(values):
+            is_active = val in active_set
+            chips_html.append(
+                f'<span class="filter-chip" '
+                f'data-testid="vault-browser-filter-chip" '
+                f'data-key="{_e(field)}" '
+                f'data-value="{_e(val)}" '
+                f'data-active="{"true" if is_active else "false"}">'
+                f'{_e(label)}: {_e(val)}</span>'
+            )
+    if not chips_html:
+        return ""
+    return (
+        '<div class="vault-browser-filters" data-testid="workspace-vault-browser-filters">'
+        + "".join(chips_html)
+        + "</div>"
+    )
+
+
 def _render_vault_browser(
     *,
     note_path: str,
@@ -706,6 +749,7 @@ def _render_vault_browser(
     vault_name: str,
     vault_channel: str,
     vault_provenance: str,
+    active_filters: dict[str, list[str]] | None = None,
 ) -> str:
     query_text = _e(query or "")
     identity_label = f"{vault_name}/{vault_channel}"
@@ -796,6 +840,7 @@ def _render_vault_browser(
         else ""
     )
     read_only_text = "read-only" if read_only else "mutating"
+    filters_html = _render_filter_chips(notes, active_filters or {})
     return f"""
         <details class="vault-browser" data-testid="workspace-vault-browser" open>
           <summary data-testid="workspace-vault-browser-toggle">Browse vault notes</summary>
@@ -805,6 +850,7 @@ def _render_vault_browser(
             <span data-testid="workspace-vault-browser-query">{query_text}</span>
             <span data-testid="workspace-vault-browser-provenance">{_e(vault_provenance)}</span>
           </div>
+          {filters_html}
           {state_html}
           {list_html}
         </details>"""
