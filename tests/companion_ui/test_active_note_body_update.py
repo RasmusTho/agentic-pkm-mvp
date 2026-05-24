@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from companion_ui.workspace.real_note_workspace_dev_page import NoteLoadIntent, RealNoteWorkspaceDevPage
 from companion_ui.workspace.serve_dev_page import render_index_html
-from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
+from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError, WorkspaceHttpClient
 
 
 def _workspace_payload(note_path: str = "notes/current.md", title: str = "Current") -> dict[str, Any]:
@@ -135,3 +135,21 @@ def test_body_update_renders_success_blocked_and_failure_states() -> None:
         fields=fields,
     )
     assert 'data-testid="workspace-active-note-body-update-state-failure"' in failure_html
+
+
+def test_blocked_body_update_preserves_loaded_state_and_renders_blocked_status() -> None:
+    page = _load_page()
+    page.state.guard_workspace_update_available = False
+    state = page.update_active_note_body(new_body="# Body\n\nBlocked")
+    assert state.is_loaded is True
+    assert state.shell is not None
+    assert state.active_note_body_update_state == "blocked"
+
+
+def test_failed_body_update_preserves_loaded_state_and_renders_failure_status() -> None:
+    page = _load_page()
+    with patch.object(page._http, "post", side_effect=WorkspaceClientNetworkError("network timeout")):
+        state = page.update_active_note_body(new_body="# Body\n\nFail")
+    assert state.is_loaded is True
+    assert state.shell is not None
+    assert state.active_note_body_update_state == "failure"

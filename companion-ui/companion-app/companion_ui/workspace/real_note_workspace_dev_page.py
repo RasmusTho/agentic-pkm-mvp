@@ -574,13 +574,11 @@ class RealNoteWorkspaceDevPage:
             self.state.active_note_body_update_state = "blocked" if is_blocked else "failure"
             self.state.active_note_body_update_message = exc.detail
             self.state.error = str(exc)
-            self.state.is_loaded = False
             return self.state
         except WorkspaceClientError as exc:
             self.state.active_note_body_update_state = "failure"
             self.state.active_note_body_update_message = str(exc)
             self.state.error = str(exc)
-            self.state.is_loaded = False
             return self.state
 
         refreshed = self.load(NoteLoadIntent(note_path=note_path))

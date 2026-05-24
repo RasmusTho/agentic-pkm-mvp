@@ -95,6 +95,15 @@ def test_body_update_preserves_frontmatter(
     assert "---" in content
 
 
+def test_body_update_preserves_frontmatter_and_uuid(
+    client: TestClient, vault_note: Path
+) -> None:
+    _patch_body(client, "notes/note.md", "# Test Note\n\nReplaced body.\n")
+    content = vault_note.read_text(encoding="utf-8")
+    assert "uuid: note-uuid-1" in content
+    assert "title: Test Note" in content
+
+
 def test_body_update_preserves_uuid(
     client: TestClient, vault_note: Path
 ) -> None:
@@ -213,6 +222,19 @@ def test_body_update_yaml_file_rejected(
     resp = _patch_body(client, "_system/settings.yaml", "injected: true\n")
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "not_a_note_file"
+
+
+def test_body_update_rejects_non_markdown_targets(
+    client: TestClient, vault: Path
+) -> None:
+    target = vault / "_system" / "settings.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    before = "key: value\n"
+    target.write_text(before, encoding="utf-8")
+    resp = _patch_body(client, "_system/settings.yaml", "injected: true\n")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "not_a_note_file"
+    assert target.read_text(encoding="utf-8") == before
 
 
 def test_body_update_json_file_rejected(

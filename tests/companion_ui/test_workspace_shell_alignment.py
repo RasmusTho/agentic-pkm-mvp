@@ -373,3 +373,20 @@ class TestRailEmptyState:
         html = _html(canvas_session_state="composing")
         rail = _rail_region(html)
         assert 'data-testid="workspace-rail-empty-state"' not in rail
+
+def test_delimiter_shaped_body_without_frontmatter_is_not_stripped() -> None:
+    body = "---\nThis is prose, not yaml: [\n---\n\nParagraph stays.\n"
+    html = _html(body=body)
+    note_body = _body_region(html)
+    assert "This is prose, not yaml" in note_body
+    assert "Paragraph stays." in note_body
+
+
+def test_rail_empty_state_uses_rendered_panel_proposals_not_stale_count() -> None:
+    html = _html(
+        panel_state="idle",
+        panel_proposal_count=0,
+        panel_proposals=[{"proposal_id": "p1", "status": "pending", "summary": "queued"}],
+    )
+    rail = _rail_region(html)
+    assert 'data-testid="workspace-rail-empty-state"' not in rail

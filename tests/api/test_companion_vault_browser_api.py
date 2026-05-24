@@ -111,3 +111,14 @@ def test_vault_browser_is_read_only(
     assert get_resp.json()["read_only"] is True
     assert post_resp.status_code == 405
     assert note_path.read_text(encoding="utf-8") == before
+
+
+def test_vault_browser_cap_preserves_lexicographic_subset(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "2")
+    _write_note(tmp_path / "z" / "late.md", title="Late")
+    _write_note(tmp_path / "a" / "first.md", title="First")
+    _write_note(tmp_path / "m" / "middle.md", title="Middle")
+    data = TestClient(app).get("/api/companion/vault-browser").json()
+    assert [n["note_path"] for n in data["notes"]] == ["a/first.md", "m/middle.md"]
