@@ -32,7 +32,7 @@ This module does NOT:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -166,6 +166,7 @@ class DevPageState:
     vault_browser_vault_name: str = "unresolved"
     vault_browser_vault_channel: str = "unknown"
     vault_browser_vault_provenance: str = "unresolved"
+    vault_browser_active_filters: dict[str, Any] = field(default_factory=dict)
     is_loaded: bool = False
 
 
@@ -398,6 +399,7 @@ class RealNoteWorkspaceDevPage:
             vault_browser_vault_name=str(vault_browser_identity.get("vault_name") or "unresolved"),
             vault_browser_vault_channel=str(vault_browser_identity.get("channel") or "unknown"),
             vault_browser_vault_provenance=str(vault_browser_identity.get("provenance") or "unresolved"),
+            vault_browser_active_filters=dict(vault_browser.get("active_filters") or {}),
             is_loaded=True,
         )
         return self.state
@@ -901,6 +903,7 @@ class RealNoteWorkspaceDevPage:
             "vault_browser_vault_name": self.state.vault_browser_vault_name,
             "vault_browser_vault_channel": self.state.vault_browser_vault_channel,
             "vault_browser_vault_provenance": self.state.vault_browser_vault_provenance,
+            "vault_browser_active_filters": self.state.vault_browser_active_filters,
             "is_production_ui": self.is_production_ui,
             "dev_page_label": self.dev_page_label,
         }

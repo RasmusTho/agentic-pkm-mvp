@@ -314,3 +314,83 @@ def test_valid_frontmatter_renders_no_health_warning() -> None:
     )
 
     assert 'data-testid="workspace-vault-browser-note-health"' not in html
+
+
+# ---- #1254: filter chip rendering ----
+
+
+def _vault_browser_payload_with_filters(
+    *,
+    notes: list[dict] | None = None,
+    active_filters: dict | None = None,
+) -> dict:
+    base = _vault_browser_payload(
+        notes=notes
+        or [
+            _note_with_metadata(kind="human_note", zone="active", review_state="needs_review"),
+            _note_with_metadata(
+                note_path="notes/companion.md",
+                kind="companion_note",
+                zone="semi_active",
+                review_state="reviewed",
+                trust="suggest",
+            ),
+        ],
+        total_notes=2,
+        filtered_notes=2,
+    )
+    base["active_filters"] = active_filters or {}
+    return base
+
+
+def test_vault_browser_renders_filter_chips_for_metadata_dimensions() -> None:
+    """#1254 AC5: filter chips are rendered for metadata dimensions in the vault browser."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="vault-browser-filter-chip"' in html
+
+
+def test_vault_browser_active_filter_chip_has_data_active_true() -> None:
+    """#1254: active filter chip has data-active=true."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(
+            active_filters={"kind": ["human_note"]},
+        ),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    # Active chip for human_note kind should have data-active="true"
+    assert 'data-active="true"' in html
+    assert 'data-key="kind"' in html
+    assert 'data-value="human_note"' in html
+
+
+def test_vault_browser_inactive_filter_chip_has_data_active_false() -> None:
+    """#1254: non-active filter chips have data-active=false."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(
+            active_filters={},
+        ),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    # Without active filters, all chips should have data-active="false"
+    assert 'data-active="false"' in html

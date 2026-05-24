@@ -177,6 +177,7 @@ class VaultBrowserStateResponse(BaseModel):
     read_only: bool = True
     vault_identity: VaultIdentityState
     identity_available: bool
+    active_filters: dict[str, list[str]] = Field(default_factory=dict)
 
 
 def _truthy_env(name: str, default: bool = False) -> bool:
@@ -661,13 +662,29 @@ def _safe_vault_browse_max_notes() -> int:
     return max(1, min(parsed, 1000))
 
 
+_FILTER_FIELDS = ("kind", "zone", "review_state", "trust")
+
+
+def _note_matches_filters(note: VaultBrowserNoteState, filters: dict[str, list[str]]) -> bool:
+    """Return True if note satisfies all active metadata filters (AND across dimensions)."""
+    for field, values in filters.items():
+        if not values:
+            continue
+        note_val = getattr(note, field, None)
+        if note_val not in values:
+            return False
+    return True
+
+
 def _select_vault_notes(
     vault_root: Path,
     *,
     query: str,
     limit: int,
+    filters: dict[str, list[str]] | None = None,
 ) -> tuple[list[VaultBrowserNoteState], int, int]:
     needle = query.strip().lower()
+    active_filters = filters or {}
     total_notes = 0
     filtered_notes = 0
     # Keep only the lexicographically-smallest `limit` note paths without
@@ -686,7 +703,6 @@ def _select_vault_notes(
         title = _browser_title(body, fallback=candidate.stem)
         if needle and needle not in safe_path.lower() and needle not in title.lower():
             continue
-        filtered_notes += 1
         path_zone = _zone_for_path(safe_path)
         metadata = _parse_note_artifact_metadata(body, path_derived_zone=path_zone)
         note = VaultBrowserNoteState(
@@ -704,6 +720,9 @@ def _select_vault_notes(
             frontmatter_valid=metadata["frontmatter_valid"],
             missing_required_fields=metadata["missing_required_fields"],
         )
+        if not _note_matches_filters(note, active_filters):
+            continue
+        filtered_notes += 1
         key = note.note_path
         if len(selected_heap) < limit:
             heapq.heappush(selected_heap, (_invert_lex(key), note))
@@ -772,18 +791,33 @@ def _compose_note_with_preserved_frontmatter(*, original_content: str, new_body:
 def read_companion_vault_browser(
     q: str = Query("", description="Case-insensitive path/title filter"),
     limit: int = Query(250, ge=1, le=1000),
+    kind: list[str] = Query(default=[], description="Filter by artifact kind (multi-value)"),
+    zone: list[str] = Query(default=[], description="Filter by zone (multi-value)"),
+    review_state: list[str] = Query(default=[], description="Filter by review_state (multi-value)"),
+    trust: list[str] = Query(default=[], description="Filter by trust tier (multi-value)"),
 ) -> VaultBrowserStateResponse:
     # Vault Browser MLP v0 surface. Contract:
     # docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md §6. Read-only Markdown
     # enumeration with deterministic title/path filtering, active-vault
     # identity, and explicit empty / error / identity-unavailable states.
     # Hidden / dot-prefixed folders are excluded.
+    # Metadata filters (kind, zone, review_state, trust) added in #1254.
     vault_root = resolve_vault_root()
     effective_limit = min(limit, _safe_vault_browse_max_notes())
+    active_filters: dict[str, list[str]] = {}
+    if kind:
+        active_filters["kind"] = list(kind)
+    if zone:
+        active_filters["zone"] = list(zone)
+    if review_state:
+        active_filters["review_state"] = list(review_state)
+    if trust:
+        active_filters["trust"] = list(trust)
     selected, total_notes, filtered_notes = _select_vault_notes(
         vault_root,
         query=q,
         limit=effective_limit,
+        filters=active_filters,
     )
     identity = _vault_identity_state(vault_root)
     identity_available = (
@@ -797,6 +831,7 @@ def read_companion_vault_browser(
         read_only=True,
         vault_identity=identity,
         identity_available=identity_available,
+        active_filters=active_filters,
     )
 
 
