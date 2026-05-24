@@ -527,7 +527,8 @@ def _zone_for_path(note_path: str) -> str:
 
 
 def _is_hidden_browser_path(safe_path: str) -> bool:
-    return any(part.startswith(".") for part in PurePosixPath(safe_path).parts)
+    parts = PurePosixPath(safe_path).parts
+    return any(part.startswith(".") for part in parts[:-1])
 
 
 def _list_markdown_notes(vault_root: Path) -> list[VaultBrowserNoteState]:

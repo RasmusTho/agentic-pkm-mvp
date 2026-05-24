@@ -77,6 +77,8 @@ def test_vault_browser_excludes_hidden_and_system_folders(
     _write_note(tmp_path / ".obsidian" / "hidden.md", title="ObsidianHidden")
     _write_note(tmp_path / ".git" / "git_hidden.md", title="GitHidden")
     _write_note(tmp_path / "projects" / ".scratch" / "nested_hidden.md", title="NestedHidden")
+    # Dot-prefixed filenames in a non-hidden folder are NOT excluded (only folders are).
+    _write_note(tmp_path / "notes" / ".daily.md", title="DotPrefixedFile")
 
     client = TestClient(app)
     resp = client.get("/api/companion/vault-browser")
@@ -85,8 +87,11 @@ def test_vault_browser_excludes_hidden_and_system_folders(
     data = resp.json()
     paths = [note["note_path"] for note in data["notes"]]
     assert "notes/visible.md" in paths
-    assert not any(p.startswith(".") for p in paths)
+    # Dot-prefixed files in normal folders remain visible.
+    assert "notes/.daily.md" in paths
+    # Dot-prefixed directories are excluded entirely.
     assert not any("/.scratch/" in p or "/.git/" in p or "/.obsidian/" in p for p in paths)
+    assert not any(p.startswith(".obsidian/") or p.startswith(".git/") for p in paths)
 
 
 def test_vault_browser_is_read_only(
