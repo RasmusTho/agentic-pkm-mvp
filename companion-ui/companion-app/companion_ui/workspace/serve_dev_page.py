@@ -75,14 +75,182 @@ def _status_label(value: object, *, fallback: str = "unknown") -> str:
     return text if text else fallback
 
 
+def _split_frontmatter(body: str) -> tuple[list[str], str]:
+    """Split a YAML frontmatter prefix off ``body``.
+
+    Returns ``(frontmatter_lines, remaining_body)``. If the body does not begin
+    with a ``---``/``---`` fenced YAML block, returns ``([], body)`` unchanged.
+
+    Frontmatter is treated as opaque text for rendering — keys are surfaced as
+    chrome but not parsed into a typed model here. The runtime owns parsing for
+    contract purposes (#1253); this helper only ensures the body region does
+    not display the frontmatter as prose.
+    """
+    if not body.startswith("---"):
+        return [], body
+    lines = body.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return [], body
+    end_idx: int | None = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        return [], body
+    fm_lines = lines[1:end_idx]
+    remaining = "\n".join(lines[end_idx + 1:])
+    return fm_lines, remaining
+
+
+def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
+    """Render frontmatter as bounded metadata chrome separate from the body.
+
+    AC1 / AC2 (#1260): the body region must not display YAML frontmatter as
+    prose; frontmatter-derived metadata remains visible in dedicated chrome.
+    """
+    if not frontmatter_lines:
+        return (
+            '<section class="note-frontmatter note-frontmatter-empty" '
+            'data-testid="workspace-note-frontmatter" '
+            'data-frontmatter-present="false">'
+            '<span class="frontmatter-label">No frontmatter</span>'
+            "</section>"
+        )
+    rows: list[str] = []
+    for line in frontmatter_lines:
+        stripped = line.rstrip()
+        if not stripped:
+            continue
+        rows.append(
+            '<div class="frontmatter-line">'
+            f'<code>{_e(stripped)}</code>'
+            "</div>"
+        )
+    body_html = "".join(rows) or '<span class="frontmatter-label">(empty frontmatter)</span>'
+    return (
+        '<section class="note-frontmatter" '
+        'data-testid="workspace-note-frontmatter" '
+        'data-frontmatter-present="true">'
+        '<span class="frontmatter-label">frontmatter</span>'
+        f"{body_html}"
+        "</section>"
+    )
+
+
+def _compute_primary_posture(
+    *,
+    writeguard_blocked: bool,
+    vault_unresolved: bool,
+    canvas_enabled: bool,
+    workspace_update_available: bool,
+    guard_degraded: bool,
+) -> tuple[str, str]:
+    """Resolve a single primary posture token + human-facing label.
+
+    Order of precedence (most severe wins):
+        blocked > unavailable > degraded > ok
+
+    AC3 / AC4 (#1260): consolidate competing safety/status rows into one
+    primary posture surface; degraded/blocked/unavailable visibly distinct
+    from ok.
+    """
+    if writeguard_blocked:
+        return "blocked", "Blocked"
+    if vault_unresolved:
+        return "unavailable", "Unavailable"
+    if guard_degraded or not canvas_enabled or not workspace_update_available:
+        return "degraded", "Degraded"
+    return "ok", "Online"
+
+
+def _render_primary_posture(
+    *,
+    posture: str,
+    label: str,
+    vault_name: str,
+    vault_channel: str,
+    runtime_trace_id: str,
+) -> str:
+    """Render the single primary posture surface above the detailed safety strip.
+
+    AC3 (#1260): one primary posture region; AC4: distinct tone class per
+    posture state; AC6: human-readable label, internal token in ``data-*``.
+    """
+    trace = runtime_trace_id or "unavailable"
+    return (
+        f'<section class="primary-posture posture-tone-{posture}" '
+        f'data-testid="workspace-primary-posture" '
+        f'data-posture="{posture}">'
+        f'<span class="primary-posture-label">{_e(label)}</span>'
+        f'<span class="primary-posture-identity" '
+        'data-testid="workspace-primary-posture-identity">'
+        f'<span class="primary-posture-vault">{_e(vault_name)}</span>'
+        f'<span class="primary-posture-sep">/</span>'
+        f'<span class="primary-posture-channel">{_e(vault_channel)}</span>'
+        "</span>"
+        '<span class="primary-posture-trace" '
+        'data-testid="workspace-primary-posture-trace">'
+        f"<code>{_e(trace)}</code>"
+        "</span>"
+        "</section>"
+    )
+
+
+def _render_rail_empty_state(
+    *,
+    panel_proposal_count: int,
+    canvas_session_state: str,
+    panel_state: str,
+    panel_message: str,
+    find_candidates_count: int,
+    reorient_present: bool,
+    resurface_count: int,
+    governance_receipts_count: int,
+    suggestion_state: str,
+) -> str:
+    """Render a single no-active-session card when the rail is fully idle.
+
+    AC7 (#1260): empty/inactive rail cards collapse to a single clear
+    no-active-session/unavailable state. Individual section placeholders may
+    still render; this card is the consolidated signal that nothing is active.
+    """
+    active = (
+        panel_proposal_count > 0
+        or canvas_session_state not in {"idle", "", "unknown"}
+        or panel_state not in {"idle", "", "unknown"}
+        or bool(panel_message)
+        or find_candidates_count > 0
+        or reorient_present
+        or resurface_count > 0
+        or governance_receipts_count > 0
+        or suggestion_state not in {"idle", "", "unknown"}
+    )
+    if active:
+        return ""
+    return (
+        '<div class="rail-empty-state" '
+        'data-testid="workspace-rail-empty-state" '
+        'data-rail-state="empty">'
+        "No active session. Nothing pending in Panel, Canvas, or governance."
+        "</div>"
+    )
+
+
 def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
     if not update_flow_available:
         return (
-            '<div class="body-edit-panel body-edit-disabled" '
-            'data-testid="workspace-body-edit-panel" data-update-flow="disabled">'
-            '<span class="body-edit-label">Update flow disabled '
-            '(set WORKSPACE_UPDATE_FLOW_ENABLED=1 to enable)</span>'
-            "</div>"
+            '<section class="body-edit-panel body-edit-disabled workspace-action-absent" '
+            'data-testid="workspace-action-absent" '
+            'data-action="body-edit" '
+            'data-reason="update_flow_disabled" '
+            'data-update-flow="disabled">'
+            '<span class="absent-label" data-testid="workspace-body-edit-panel">'
+            "Body editing unavailable</span>"
+            '<span class="absent-reason">'
+            "Update flow is currently disabled (set WORKSPACE_UPDATE_FLOW_ENABLED=1 to enable)."
+            "</span>"
+            "</section>"
         )
     return f"""<div class="body-edit-panel" data-testid="workspace-body-edit-panel"
          data-update-flow="available">
@@ -130,7 +298,10 @@ def _render_note_section(fields: dict) -> str:
     vault_name = _e(fields.get("runtime_vault_name") or "unresolved")
     vault_channel = _e(fields.get("runtime_vault_channel") or "unknown")
     vault_provenance = fields.get("runtime_vault_provenance") or "unresolved"
-    body = _e(fields.get("body", ""))
+    raw_body = str(fields.get("body", "") or "")
+    frontmatter_lines, stripped_body = _split_frontmatter(raw_body)
+    body = _e(stripped_body)
+    note_frontmatter_html = _render_note_frontmatter_region(frontmatter_lines)
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
@@ -145,9 +316,12 @@ def _render_note_section(fields: dict) -> str:
     undone_edit_count = int(fields.get("canvas_undone_edit_count", 0) or 0)
     persistence = str(fields.get("canvas_session_persistence", ""))
     panel_render = fields.get("panel_render") or {}
-    panel_state = _e(panel_render.get("state") or fields.get("panel_state", "idle"))
+    panel_state_raw = str(panel_render.get("state") or fields.get("panel_state", "idle"))
+    panel_state = _e(panel_state_raw)
+    canvas_session_state_raw = str(fields.get("canvas_session_state", "idle") or "idle")
     panel_label = _e(panel_render.get("label") or panel_rail)
-    panel_message = _e(panel_render.get("message") or "")
+    panel_message_raw = str(panel_render.get("message") or "")
+    panel_message = _e(panel_message_raw)
     proposal_count = int(fields.get("panel_proposal_count", 0) or 0)
     writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
     writeguard_blocked = writeguard_status.lower() == "blocked"
@@ -178,6 +352,35 @@ def _render_note_section(fields: dict) -> str:
         f'<span class="identity-meta" data-testid="workspace-companion-of">companion of {companion_of}</span>'
         if companion_of
         else ""
+    )
+    vault_unresolved = (
+        str(vault_provenance).lower() == "unresolved"
+        or str(fields.get("runtime_vault_name") or "").lower() == "unresolved"
+    )
+    posture_token, posture_label = _compute_primary_posture(
+        writeguard_blocked=writeguard_blocked,
+        vault_unresolved=vault_unresolved,
+        canvas_enabled=canvas_enabled,
+        workspace_update_available=workspace_update_available,
+        guard_degraded=guard_degraded,
+    )
+    primary_posture_html = _render_primary_posture(
+        posture=posture_token,
+        label=posture_label,
+        vault_name=str(fields.get("runtime_vault_name") or "unresolved"),
+        vault_channel=str(fields.get("runtime_vault_channel") or "unknown"),
+        runtime_trace_id=str(fields.get("runtime_trace_id") or ""),
+    )
+    rail_empty_state_html = _render_rail_empty_state(
+        panel_proposal_count=proposal_count,
+        canvas_session_state=canvas_session_state_raw,
+        panel_state=panel_state_raw,
+        panel_message=panel_message_raw,
+        find_candidates_count=len(fields.get("find_candidates") or []),
+        reorient_present=bool(fields.get("reorient_sections")),
+        resurface_count=len(fields.get("resurface_candidates") or []),
+        governance_receipts_count=len(fields.get("governance_receipts") or []),
+        suggestion_state=str(fields.get("suggestion_state", "idle") or "idle"),
     )
     safety_strip_html = f"""
       <section
@@ -341,6 +544,7 @@ def _render_note_section(fields: dict) -> str:
     return f"""
   <div class="workspace-layout">
     <div class="workspace-main">
+      {primary_posture_html}
       {safety_strip_html}
       <header
         class="note-header active-note-header"
@@ -371,6 +575,7 @@ def _render_note_section(fields: dict) -> str:
         </div>
         {identity_caution_html}
       </header>
+      {note_frontmatter_html}
       <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
         <pre class="note-body-content">{body}</pre>
         {suggested_insertions_html}
@@ -413,6 +618,7 @@ def _render_note_section(fields: dict) -> str:
         {guard_html}
         {persistence_html}
         {panel_rail}
+        {rail_empty_state_html}
       </div>
     </aside>
     {portrait_sheet_html}
@@ -586,17 +792,19 @@ def _render_suggestion_flow_region(fields: dict) -> str:
         )
         for target in transitions
     )
+    composer_state_token = "enabled" if composer_enabled else "locked"
     return f"""
         <div
           class="suggestion-flow"
           data-testid="workspace-suggestion-flow"
           data-suggestion-state="{suggestion_state}"
-          data-suggestion-dom-alias="{dom_alias}">
+          data-suggestion-dom-alias="{dom_alias}"
+          data-composer-state="{composer_state_token}">
           <div class="rail-state-row">
             <span class="rail-state-label">Suggestion</span>
             <span class="rail-state-value">{suggestion_state}</span>
           </div>
-          <div class="suggestion-composer-state">{composer_text}</div>
+          <div class="suggestion-composer-state" data-composer-state="{composer_state_token}">{composer_text}</div>
           <div class="suggestion-transitions">{transition_html}</div>
         </div>"""
 
