@@ -34,6 +34,11 @@ The package contains:
   ([`SECTION_TO_ISSUE_MAPPING.md`](SECTION_TO_ISSUE_MAPPING.md)) that ties each
   actionable design recommendation back to the existing implementation issues,
   flags the workspace-shell prerequisite, and lists future-backlog candidates.
+- An implementation sequence
+  ([`IMPLEMENTATION_SEQUENCE.md`](IMPLEMENTATION_SEQUENCE.md)) capturing the
+  agreed execution order for #1259 → #1260 → #1253 → #1254 → #1255 → #1256 →
+  #1257, the dependency rationale, and the future-backlog candidates that are
+  not part of this workstream.
 
 ## Authority statement
 
