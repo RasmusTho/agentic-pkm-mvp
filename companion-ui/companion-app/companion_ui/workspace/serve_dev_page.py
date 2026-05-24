@@ -807,6 +807,8 @@ def _render_artifact_inspector(
         '</div>'
     )
 
+    actions_html = _render_vault_actions(note)
+
     return (
         f'<section class="vault-browser-inspector" '
         f'data-testid="workspace-vault-browser-inspector" '
@@ -823,9 +825,92 @@ def _render_artifact_inspector(
         f'{artifact_identity_html}'
         f'{vault_identity_html}'
         f'</div>'
+        f'{actions_html}'
         f'{links_placeholder}'
         f'{receipts_placeholder}'
         f'</section>'
+    )
+
+
+def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved for future per-artifact overrides
+    """Render the VaultAction display model for the selected browser artifact.
+
+    Each action carries:
+        data-mode              — action class (read_only, ui_only, bounded_system_write,
+                                 governance_write, agent_proposal, blocked)
+        data-affordance-status — whether the action is currently operable
+        data-blocked / data-blocked-reason
+                               — present when action is disallowed for this artifact
+        data-requires-receipt / data-requires-confirmation
+                               — governance safety contract attributes (#1256)
+
+    Governance and write-class actions are disabled/blocked with explicit reasons in
+    this slice. No new write path is opened without guard/receipt semantics.
+    """
+
+    def _action(
+        testid: str,
+        label: str,
+        mode: str,
+        *,
+        affordance: str = "unavailable",
+        blocked: bool = False,
+        blocked_reason: str = "",
+        disabled: bool = False,
+        disabled_reason: str = "",
+        requires_receipt: bool = False,
+        requires_confirmation: bool = False,
+    ) -> str:
+        blocked_attr = (
+            f' data-blocked="true" data-blocked-reason="{_e(blocked_reason)}"'
+            if blocked
+            else ""
+        )
+        disabled_attr = (
+            f' data-disabled="true" data-disabled-reason="{_e(disabled_reason)}"'
+            if disabled and not blocked
+            else ""
+        )
+        receipt_attr = ' data-requires-receipt="true"' if requires_receipt else ""
+        confirm_attr = ' data-requires-confirmation="true"' if requires_confirmation else ""
+        return (
+            f'<div class="vault-action" '
+            f'data-testid="{testid}" '
+            f'data-mode="{mode}" '
+            f'data-affordance-status="{affordance}"'
+            f"{blocked_attr}"
+            f"{disabled_attr}"
+            f"{receipt_attr}"
+            f'{confirm_attr}>'
+            f'<span class="vault-action-label">{_e(label)}</span>'
+            f"</div>"
+        )
+
+    actions = [
+        _action("vault-action-open-note", "Open note", "read_only"),
+        _action("vault-action-copy-path", "Copy path", "ui_only"),
+        _action(
+            "vault-action-find-related",
+            "Find related (read-only)",
+            "read_only",
+            disabled=True,
+            disabled_reason="Find not connected for this artifact.",
+        ),
+        _action(
+            "vault-action-queue-review",
+            "Queue for review",
+            "governance_write",
+            blocked=True,
+            blocked_reason="Review queue not connected. Governed writes require a receipt.",
+            requires_receipt=True,
+            requires_confirmation=True,
+        ),
+    ]
+    return (
+        '<div class="vault-action-strip" '
+        'data-testid="workspace-vault-browser-inspector-actions">'
+        + "".join(actions)
+        + "</div>"
     )
 
 
