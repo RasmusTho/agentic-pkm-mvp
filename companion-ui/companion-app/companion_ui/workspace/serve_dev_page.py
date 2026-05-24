@@ -747,12 +747,44 @@ def _render_vault_browser(
         zone = _e(note.get("zone") or "root")
         href = "/?note_path=" + quote(path, safe="/")
         active = "true" if path == note_path else "false"
+
+        badges: list[str] = []
+        kind_val = note.get("kind")
+        if kind_val:
+            badges.append(
+                f'<span class="note-badge note-badge--kind" '
+                f'data-testid="workspace-vault-browser-note-kind">{_e(str(kind_val))}</span>'
+            )
+        review_state_val = note.get("review_state")
+        if review_state_val:
+            badges.append(
+                f'<span class="note-badge note-badge--review-state" '
+                f'data-testid="workspace-vault-browser-note-review-state">{_e(str(review_state_val))}</span>'
+            )
+        trust_val = note.get("trust")
+        if trust_val:
+            badges.append(
+                f'<span class="note-badge note-badge--trust" '
+                f'data-testid="workspace-vault-browser-note-trust">{_e(str(trust_val))}</span>'
+            )
+        frontmatter_valid = note.get("frontmatter_valid", True)
+        missing_fields = note.get("missing_required_fields") or []
+        if not frontmatter_valid or missing_fields:
+            missing_label = ", ".join(missing_fields) if missing_fields else "invalid"
+            badges.append(
+                f'<span class="note-badge note-badge--health note-badge--health-invalid" '
+                f'data-testid="workspace-vault-browser-note-health" '
+                f'data-missing-fields="{_e(missing_label)}">missing: {_e(missing_label)}</span>'
+            )
+        badges_html = "".join(badges)
+
         rows.append(
             f"""
           <li class="vault-browser-row" data-testid="workspace-vault-browser-note-row" data-active="{active}">
             <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
             <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
             <span data-testid="workspace-vault-browser-note-zone">{zone}</span>
+            {badges_html}
           </li>"""
         )
 

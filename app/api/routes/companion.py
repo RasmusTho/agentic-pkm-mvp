@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 import heapq
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
+
+import yaml
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -153,6 +156,17 @@ class VaultBrowserNoteState(BaseModel):
     note_path: str
     title: str
     zone: str
+    # Normalized artifact metadata (server-owned; client never parses YAML)
+    uuid: str | None = None
+    kind: str | None = None
+    review_state: str | None = None
+    trust: str | None = None
+    origin: str | None = None
+    source_ref: str | None = None
+    created: str | None = None
+    updated: str | None = None
+    frontmatter_valid: bool = False
+    missing_required_fields: list[str] = Field(default_factory=list)
 
 
 class VaultBrowserStateResponse(BaseModel):
@@ -529,6 +543,81 @@ def _safe_resurface_source_link(candidate_id: str) -> str:
     return "runtime:resurfacing"
 
 
+_ARTIFACT_REQUIRED_FIELDS = ("uuid",)
+_ARTIFACT_OPTIONAL_FIELDS = (
+    "kind",
+    "review_state",
+    "trust",
+    "origin",
+    "source_ref",
+    "created",
+    "updated",
+)
+
+
+def _parse_note_artifact_metadata(body: str, *, path_derived_zone: str) -> dict:
+    """Parse frontmatter from a note body and return normalized artifact metadata.
+
+    Server-side only — clients must never parse raw YAML.
+    Returns a dict with all VaultBrowserNoteState metadata fields populated.
+    Missing YAML or malformed YAML → frontmatter_valid=False + missing_required_fields.
+    """
+    fm_inner, _ = _split_frontmatter(body)
+    if fm_inner is None:
+        return {
+            "uuid": None,
+            "kind": None,
+            "zone": path_derived_zone,
+            "review_state": None,
+            "trust": None,
+            "origin": None,
+            "source_ref": None,
+            "created": None,
+            "updated": None,
+            "frontmatter_valid": False,
+            "missing_required_fields": list(_ARTIFACT_REQUIRED_FIELDS),
+        }
+
+    try:
+        fm: dict = yaml.safe_load(fm_inner) or {}
+        if not isinstance(fm, dict):
+            fm = {}
+        parse_error = False
+    except Exception:
+        fm = {}
+        parse_error = True
+
+    uuid_val = fm.get("uuid")
+    missing = [f for f in _ARTIFACT_REQUIRED_FIELDS if not fm.get(f)]
+    frontmatter_valid = not parse_error and not missing
+
+    fm_zone = fm.get("zone")
+    zone = str(fm_zone).strip() if fm_zone else path_derived_zone
+
+    return {
+        "uuid": str(uuid_val).strip() if uuid_val else None,
+        "kind": _str_or_none(fm.get("kind")),
+        "zone": zone,
+        "review_state": _str_or_none(fm.get("review_state")),
+        "trust": _str_or_none(fm.get("trust")),
+        "origin": _str_or_none(fm.get("origin")),
+        "source_ref": _str_or_none(fm.get("source_ref")),
+        "created": _str_or_none(fm.get("created")),
+        "updated": _str_or_none(fm.get("updated")),
+        "frontmatter_valid": frontmatter_valid,
+        "missing_required_fields": missing if not parse_error else list(_ARTIFACT_REQUIRED_FIELDS),
+    }
+
+
+def _str_or_none(val: object) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, (datetime.datetime, datetime.date)):
+        return val.isoformat()
+    s = str(val).strip()
+    return s if s else None
+
+
 def _zone_for_path(note_path: str) -> str:
     parts = PurePosixPath(note_path).parts
     return parts[0] if parts else "root"
@@ -598,10 +687,22 @@ def _select_vault_notes(
         if needle and needle not in safe_path.lower() and needle not in title.lower():
             continue
         filtered_notes += 1
+        path_zone = _zone_for_path(safe_path)
+        metadata = _parse_note_artifact_metadata(body, path_derived_zone=path_zone)
         note = VaultBrowserNoteState(
             note_path=safe_path,
             title=title,
-            zone=_zone_for_path(safe_path),
+            zone=metadata["zone"],
+            uuid=metadata["uuid"],
+            kind=metadata["kind"],
+            review_state=metadata["review_state"],
+            trust=metadata["trust"],
+            origin=metadata["origin"],
+            source_ref=metadata["source_ref"],
+            created=metadata["created"],
+            updated=metadata["updated"],
+            frontmatter_valid=metadata["frontmatter_valid"],
+            missing_required_fields=metadata["missing_required_fields"],
         )
         key = note.note_path
         if len(selected_heap) < limit:

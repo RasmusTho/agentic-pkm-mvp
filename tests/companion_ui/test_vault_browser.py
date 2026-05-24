@@ -200,3 +200,117 @@ def test_vault_browser_distinguishes_empty_error_and_identity_states() -> None:
         fields=identity_fields,
     )
     assert 'data-testid="workspace-vault-browser-state-identity-unavailable"' in identity_html
+
+
+# ---- AC4: metadata badges rendered per row ----
+
+
+def _note_with_metadata(
+    *,
+    note_path: str = "notes/rich.md",
+    title: str = "Rich Note",
+    kind: str | None = "human_note",
+    zone: str = "active",
+    review_state: str | None = "needs_review",
+    trust: str | None = "assert",
+    frontmatter_valid: bool = True,
+    missing_required_fields: list[str] | None = None,
+) -> dict:
+    return {
+        "note_path": note_path,
+        "title": title,
+        "kind": kind,
+        "zone": zone,
+        "review_state": review_state,
+        "trust": trust,
+        "origin": "vault",
+        "source_ref": None,
+        "created": None,
+        "updated": None,
+        "uuid": "abc-123",
+        "frontmatter_valid": frontmatter_valid,
+        "missing_required_fields": missing_required_fields or [],
+    }
+
+
+def test_vault_browser_renders_metadata_badges_when_present() -> None:
+    """AC4: Client renders metadata badges for kind, zone, review_state, trust when present."""
+    note = _note_with_metadata(
+        kind="human_note",
+        zone="active",
+        review_state="needs_review",
+        trust="assert",
+    )
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-vault-browser-note-kind"' in html
+    assert 'data-testid="workspace-vault-browser-note-review-state"' in html
+    assert 'data-testid="workspace-vault-browser-note-trust"' in html
+
+
+def test_vault_browser_omits_badge_when_metadata_absent() -> None:
+    """AC4 corollary: absent optional metadata → badge not rendered (not empty string)."""
+    note = _note_with_metadata(kind=None, review_state=None, trust=None)
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-vault-browser-note-kind"' not in html
+    assert 'data-testid="workspace-vault-browser-note-review-state"' not in html
+    assert 'data-testid="workspace-vault-browser-note-trust"' not in html
+
+
+# ---- AC5: missing/invalid metadata rendered as health state ----
+
+
+def test_vault_browser_renders_health_badge_for_invalid_frontmatter() -> None:
+    """AC5: Client renders missing/invalid metadata as visible health state."""
+    note = _note_with_metadata(
+        frontmatter_valid=False,
+        missing_required_fields=["uuid"],
+        kind=None,
+        review_state=None,
+        trust=None,
+    )
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-vault-browser-note-health"' in html
+    assert "invalid" in html or "missing" in html
+
+
+def test_valid_frontmatter_renders_no_health_warning() -> None:
+    """AC5 corollary: valid frontmatter → health warning absent."""
+    note = _note_with_metadata(frontmatter_valid=True, missing_required_fields=[])
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-vault-browser-note-health"' not in html
