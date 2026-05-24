@@ -1,3 +1,17 @@
+"""Vault Browser MLP v0 API contract tests.
+
+These tests pin the MLP v0 invariants from
+``docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`` §6:
+
+- read-only Markdown enumeration (no mutation path)
+- active vault identity in the response payload
+- deterministic case-insensitive path/title filtering via ``q``
+- hidden / dot-prefixed folder exclusion
+
+Future capabilities (metadata filters, inspector, actions, receipts, graph)
+are out of scope for this surface; see §7 of the contract.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -52,6 +66,27 @@ def test_vault_browser_filters_by_title_or_path(
     assert by_title["notes"][0]["title"] == "Daily Journal"
     assert by_path["filtered_notes"] == 1
     assert by_path["notes"][0]["note_path"] == "projects/plan.md"
+
+
+def test_vault_browser_excludes_hidden_and_system_folders(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    _write_note(tmp_path / "notes" / "visible.md", title="Visible")
+    _write_note(tmp_path / ".obsidian" / "hidden.md", title="ObsidianHidden")
+    _write_note(tmp_path / ".git" / "git_hidden.md", title="GitHidden")
+    _write_note(tmp_path / "projects" / ".scratch" / "nested_hidden.md", title="NestedHidden")
+
+    client = TestClient(app)
+    resp = client.get("/api/companion/vault-browser")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    paths = [note["note_path"] for note in data["notes"]]
+    assert "notes/visible.md" in paths
+    assert not any(p.startswith(".") for p in paths)
+    assert not any("/.scratch/" in p or "/.git/" in p or "/.obsidian/" in p for p in paths)
 
 
 def test_vault_browser_is_read_only(

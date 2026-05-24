@@ -913,6 +913,10 @@ Converse interaction design handoff materials are now available at `companion-ui
 The handoff reinforces the document-first Converse behavior: vault note remains primary, dialogue operates as a secondary rail/sheet, and suggestion moments are staged for explicit user action.
 That direction is no longer handoff-only: a bounded implementation now exists in `companion-ui/companion-app/` with rail-state geometry, thread/composer states, the staged suggestion moment (apply/discard intents, mirrored proposal identity cues, and dimmed non-focused region), the session-drawer/portrait-sheet interaction slices, a read-only real-note workspace shell, and confirm-response artifact refresh delivered by PRs #745, #746, #750, #762, #1069, and #1070. The supporting runtime path now exposes `GET /api/artifacts/note` for read-only artifact hydration and `POST /api/panel/confirm` for explicit governed panel confirmation.
 
+## Vault Browser as orientation surface
+
+The Companion UI vault browser is the human-first navigation and orientation surface over the vault for the reorient/find/return-to-context flows. Its long-term capability contract — concepts (`VaultArtifact`, `VaultView`, `VaultQuery`, `VaultRelation`, `VaultActivity`, `VaultHealth`, `VaultAction`, `VaultProposal`, `VaultReceipt`), action-mode boundary, MLP-versus-future scope, and non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Current shipped behavior is bounded as `Vault Browser MLP v0`: read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into the Companion workspace. The browser is a projection layer; the vault and Markdown/frontmatter remain the human control surface.
+
 ## Companion Niflheim dev UAT workspace update check
 
 For Niflheim dev UAT, Companion workspace update capability must be visible as runtime-declared state before mutation testing proceeds:

@@ -72,7 +72,10 @@ Panel and Canvas are both first-class Companion UI surfaces. They must not be co
 - Canvas co-authors the artifact body.
 - Panel governs what the artifact becomes or does as a system artifact.
 
-See also: `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md :: Distinction from Panel`.
+See also:
+
+- `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md :: Distinction from Panel` for Canvas vs. Panel surface ownership.
+- `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md` for the Vault Browser surface, which is a separate navigation/orientation projection over the vault and is not a Panel-class authority surface; browser actions must remain typed via the Vault Browser action-mode boundary and must not be routed through Panel confirmation without an explicit governance write.
 
 ---
 
