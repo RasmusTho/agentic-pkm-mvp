@@ -289,6 +289,19 @@ def _validate_workspace_note_path(note_path_raw: str) -> str:
     return candidate.as_posix()
 
 
+def _validate_workspace_markdown_note_path(note_path_raw: str) -> str:
+    safe_note_path = _validate_workspace_note_path(note_path_raw)
+    if not safe_note_path.endswith(".md"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "not_a_note_file",
+                "message": "Body updates are restricted to markdown note files (.md)",
+            },
+        )
+    return safe_note_path
+
+
 def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
     for candidate in vault_root.rglob("*"):
         if not candidate.is_file():
@@ -589,14 +602,15 @@ def _parse_note_artifact_metadata(body: str, *, path_derived_zone: str) -> dict:
         parse_error = True
 
     uuid_val = fm.get("uuid")
-    missing = [f for f in _ARTIFACT_REQUIRED_FIELDS if not fm.get(f)]
+    normalized_uuid = _str_or_none(uuid_val)
+    missing = ["uuid"] if normalized_uuid is None else []
     frontmatter_valid = not parse_error and not missing
 
     fm_zone = fm.get("zone")
     zone = str(fm_zone).strip() if fm_zone else path_derived_zone
 
     return {
-        "uuid": str(uuid_val).strip() if uuid_val else None,
+        "uuid": normalized_uuid,
         "kind": _str_or_none(fm.get("kind")),
         "zone": zone,
         "review_state": _str_or_none(fm.get("review_state")),
@@ -908,8 +922,8 @@ def read_companion_workspace(
 def update_companion_workspace_note_body(
     req: WorkspaceBodyUpdateRequest,
 ) -> WorkspaceBodyUpdateResponse:
-    safe_active_note_path = _validate_workspace_note_path(req.active_note_path)
-    safe_target_note_path = _validate_workspace_note_path(req.target_note_path)
+    safe_active_note_path = _validate_workspace_markdown_note_path(req.active_note_path)
+    safe_target_note_path = _validate_workspace_markdown_note_path(req.target_note_path)
     if safe_active_note_path != safe_target_note_path:
         raise HTTPException(
             status_code=409,
@@ -1030,15 +1044,7 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse:
             detail={"error": "writes_blocked", "message": str(exc)},
         ) from exc
 
-    safe_note_path = _validate_workspace_note_path(req.note_path)
-    if not safe_note_path.endswith(".md"):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "not_a_note_file",
-                "message": "Body updates are restricted to markdown note files (.md)",
-            },
-        )
+    safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
     vault_root = resolve_vault_root()
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:

@@ -40,6 +40,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
+import yaml
 
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
@@ -99,6 +100,12 @@ def _split_frontmatter(body: str) -> tuple[list[str], str]:
     if end_idx is None:
         return [], body
     fm_lines = lines[1:end_idx]
+    try:
+        parsed = yaml.safe_load("\n".join(fm_lines))
+    except Exception:
+        return [], body
+    if parsed is not None and not isinstance(parsed, dict):
+        return [], body
     remaining = "\n".join(lines[end_idx + 1:])
     return fm_lines, remaining
 
@@ -200,6 +207,7 @@ def _render_primary_posture(
 def _render_rail_empty_state(
     *,
     panel_proposal_count: int,
+    panel_proposals: list[dict] | None,
     canvas_session_state: str,
     panel_state: str,
     panel_message: str,
@@ -217,6 +225,7 @@ def _render_rail_empty_state(
     """
     active = (
         panel_proposal_count > 0
+        or bool(panel_proposals)
         or canvas_session_state not in {"idle", "", "unknown"}
         or panel_state not in {"idle", "", "unknown"}
         or bool(panel_message)
@@ -323,6 +332,7 @@ def _render_note_section(fields: dict) -> str:
     panel_message_raw = str(panel_render.get("message") or "")
     panel_message = _e(panel_message_raw)
     proposal_count = int(fields.get("panel_proposal_count", 0) or 0)
+    panel_proposals = fields.get("panel_proposals") or []
     writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
     writeguard_blocked = writeguard_status.lower() == "blocked"
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
@@ -373,6 +383,7 @@ def _render_note_section(fields: dict) -> str:
     )
     rail_empty_state_html = _render_rail_empty_state(
         panel_proposal_count=proposal_count,
+        panel_proposals=panel_proposals,
         canvas_session_state=canvas_session_state_raw,
         panel_state=panel_state_raw,
         panel_message=panel_message_raw,
@@ -394,7 +405,7 @@ def _render_note_section(fields: dict) -> str:
           <span class="safety-sep">/</span>
           <span>{runtime_channel}</span>
         </div>
-        <div class="safety-item" data-testid="workspace-vault-identity" data-vault-provenance="{vault_provenance}">
+        <div class="safety-item" data-testid="workspace-vault-identity" data-vault-provenance="{_e(vault_provenance)}">
           <span class="safety-label">vault/channel</span>
           <span>{vault_name}</span>
           <span class="safety-sep">/</span>

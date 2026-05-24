@@ -118,6 +118,31 @@ def test_body_update_preserves_frontmatter_and_uuid(
     assert "Initial active body." not in updated
 
 
+def test_workspace_update_rejects_non_markdown_targets(
+    client: TestClient,
+    workspace_notes: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    active = workspace_notes["active"]
+    other_yaml = tmp_path / "notes" / "other.yaml"
+    other_yaml.write_text("foo: bar\n", encoding="utf-8")
+    workspace = _workspace(client, "notes/active.md")
+    content_hash = workspace["artifact"]["content_hash"]
+    before = active.read_text(encoding="utf-8")
+    resp = client.post(
+        "/api/companion/workspace/update",
+        json={
+            "active_note_path": "notes/active.md",
+            "target_note_path": "notes/other.yaml",
+            "new_body": "# Active\n\nAttempted write.\n",
+            "content_hash": content_hash,
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "not_a_note_file"
+    assert active.read_text(encoding="utf-8") == before
+
+
 def test_body_update_respects_write_guard(
     client: TestClient,
     workspace_notes: dict[str, Path],

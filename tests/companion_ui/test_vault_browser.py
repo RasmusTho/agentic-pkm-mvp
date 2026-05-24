@@ -394,3 +394,17 @@ def test_vault_browser_inactive_filter_chip_has_data_active_false() -> None:
 
     # Without active filters, all chips should have data-active="false"
     assert 'data-active="false"' in html
+
+
+def test_vault_provenance_attribute_is_escaped() -> None:
+    payload = _workspace_payload()
+    payload["runtime"]["vault_identity"]["provenance"] = 'env" onmouseover="alert(1)'
+    page = _load_page(workspace_payload=payload)
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'data-vault-provenance="env&quot; onmouseover=&quot;alert(1)"' in html
+    assert 'data-vault-provenance="env" onmouseover=' not in html

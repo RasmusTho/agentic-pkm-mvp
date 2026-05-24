@@ -123,6 +123,21 @@ class TestReadModelReturnsExpectedFieldsForHealthyNote:
 
 
 class TestInvalidFrontmatterSurfacesHealthState:
+    def test_blank_uuid_is_invalid_after_normalization(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        _write_note(
+            tmp_path / "notes" / "blank-uuid.md",
+            "---\nuuid: '   '\ntitle: Blank UUID\n---\n\nBody.\n",
+        )
+        resp = TestClient(app).get("/api/companion/vault-browser")
+        note = resp.json()["notes"][0]
+        assert note["uuid"] is None
+        assert note["frontmatter_valid"] is False
+        assert "uuid" in note["missing_required_fields"]
+
     def test_no_frontmatter_surfaces_missing_uuid(
         self, tmp_path: Path, monkeypatch
     ) -> None:
