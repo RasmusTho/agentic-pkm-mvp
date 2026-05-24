@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app.agent_memory.candidate import MemoryCandidate, MemoryType, ReviewState
 from app.agent_memory.promotion import PromotedMemory
 from app.agent_memory.recall_explanation import (
@@ -110,3 +112,29 @@ def test_recall_explanation_preserves_authority_limits() -> None:
     assert "does_not_authorize_writeback" in explanation.authority_limits
     assert "requires_accepted_review_state_for_instructional_use" in explanation.authority_limits
     assert "inferred_memory_requires_review_visibility" in explanation.authority_limits
+
+
+def test_instructional_recall_accepts_promoted_accepted_memory() -> None:
+    promoted = _make_promoted_memory(outcome=ReviewState.ACCEPTED, review_state=ReviewState.UNREVIEWED)
+    explanation = build_recall_explanation(
+        promoted,
+        use_right=RecallUseRight.INSTRUCTIONAL,
+        activation_reason=ActivationReason.AUTHORITY_SIGNAL,
+        why_now="Accepted promotion should govern instructional authority posture.",
+        behavioral_claim="Keep release notes compact and factual.",
+    )
+    assert explanation.review_state is ReviewState.ACCEPTED
+
+
+def test_action_authorizing_recall_requires_behavioral_claim() -> None:
+    promoted = _make_promoted_memory(outcome=ReviewState.ACCEPTED, review_state=ReviewState.ACCEPTED)
+    with pytest.raises(ValueError, match="behavioral_claim"):
+        build_recall_explanation(
+            promoted,
+            use_right=RecallUseRight.ACTION_AUTHORIZING,
+            activation_reason=ActivationReason.AUTHORITY_SIGNAL,
+            why_now="Attempting authority escalation without instructional rationale.",
+            action_scope="active_note_body_update",
+            authority_source="review_receipt",
+            receipt_reference="receipt://authority-001",
+        )

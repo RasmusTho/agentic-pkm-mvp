@@ -155,3 +155,51 @@ def test_companion_ui_does_not_read_vault_directly() -> None:
         "companion_ui modules must not access vault files directly:\n"
         + "\n".join(violations)
     )
+
+
+def test_read_artifact_note_rejects_path_traversal_escape(
+    client: TestClient, tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    resp = client.get("/api/artifacts/note", params={"note_path": "../outside.md"})
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "invalid_path"
+    assert detail["reason"] in {"path_traversal", "outside_vault"}
+
+
+def test_read_artifact_note_rejects_symlink_escape(
+    client: TestClient, tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    outside = tmp_path.parent / "outside-target.md"
+    outside.write_text("outside", encoding="utf-8")
+    link = tmp_path / "notes" / "escape.md"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside)
+
+    resp = client.get("/api/artifacts/note", params={"note_path": "notes/escape.md"})
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "invalid_path"
+    assert detail["reason"] == "outside_vault"
+
+
+def test_read_artifact_note_uses_trusted_vault_relative_path(
+    client: TestClient, tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = tmp_path / "notes" / "trusted.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("# Trusted\n\nok\n", encoding="utf-8")
+    capture: dict[str, str] = {}
+    original = pathlib.Path.read_text
+
+    def _capture_read_text(self: pathlib.Path, *args, **kwargs) -> str:  # type: ignore[no-untyped-def]
+        capture["path"] = str(self.resolve())
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", _capture_read_text)
+    resp = client.get("/api/artifacts/note", params={"note_path": "notes/trusted.md"})
+    assert resp.status_code == 200
+    assert capture["path"] == str(note.resolve())
