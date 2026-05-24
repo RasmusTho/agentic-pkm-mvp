@@ -91,6 +91,11 @@ def _authority_limits(promoted: PromotedMemory, use_right: RecallUseRight) -> li
 
     return limits
 
+def _effective_review_state(promoted: PromotedMemory) -> ReviewState:
+    if promoted.outcome is ReviewState.ACCEPTED:
+        return ReviewState.ACCEPTED
+    return promoted.candidate.review_state
+
 
 def build_recall_explanation(
     promoted: PromotedMemory,
@@ -112,8 +117,10 @@ def build_recall_explanation(
     authority source, and receipt reference.
     """
 
+    effective_review_state = _effective_review_state(promoted)
+
     if use_right is RecallUseRight.INSTRUCTIONAL:
-        if promoted.candidate.review_state is not ReviewState.ACCEPTED:
+        if effective_review_state is not ReviewState.ACCEPTED:
             raise ValueError(
                 "instructional recall requires review_state=accepted"
             )
@@ -121,13 +128,13 @@ def build_recall_explanation(
             raise ValueError("instructional recall requires a behavioral_claim")
 
     if use_right is RecallUseRight.ACTION_AUTHORIZING:
-        if promoted.candidate.review_state is not ReviewState.ACCEPTED:
+        if effective_review_state is not ReviewState.ACCEPTED:
             raise ValueError(
                 "action_authorizing recall requires review_state=accepted"
             )
-        if not action_scope or not authority_source or not receipt_reference:
+        if not behavioral_claim or not action_scope or not authority_source or not receipt_reference:
             raise ValueError(
-                "action_authorizing recall requires action_scope, authority_source, and receipt_reference"
+                "action_authorizing recall requires behavioral_claim, action_scope, authority_source, and receipt_reference"
             )
 
     return RecallExplanation(
@@ -138,7 +145,7 @@ def build_recall_explanation(
         memory_type=promoted.candidate.memory_type.value,
         use_right=use_right,
         lifecycle_state=_lifecycle_state(promoted),
-        review_state=promoted.candidate.review_state,
+        review_state=effective_review_state,
         activation_reason=activation_reason,
         why_now=why_now,
         bundle_reference=bundle_reference,

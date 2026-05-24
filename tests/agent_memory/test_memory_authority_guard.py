@@ -109,3 +109,29 @@ def test_memory_supports_suggestion_without_escalating_to_mutation_authority() -
     assert decision.allow_suggestion is True
     assert decision.allow_mutation is False
     assert decision.authority_level is MemoryAuthorityLevel.SUGGESTION_ONLY
+
+
+def test_contradicted_memory_cannot_authorize_mutation_writeback() -> None:
+    promoted = _promoted(
+        review_state=ReviewState.ACCEPTED,
+        inferred=False,
+        contradiction_state=ContradictionState.CONTRADICTED,
+    )
+    decision = evaluate_memory_authority(
+        promoted,
+        use_right=RecallUseRight.ACTION_AUTHORIZING,
+        requested_action_scope="active_note_body_update",
+    )
+    assert decision.allow_mutation is False
+    assert "contradiction_state_blocks_mutation_authority" in decision.blocked_reasons
+
+
+def test_rejected_contradiction_state_requires_posture_visibility() -> None:
+    promoted = _promoted(
+        review_state=ReviewState.ACCEPTED,
+        inferred=False,
+        contradiction_state=ContradictionState.REJECTED,
+    )
+    decision = evaluate_memory_authority(promoted, use_right=RecallUseRight.ACTIVATABLE)
+    assert decision.posture_visibility_required is True
+    assert "rejected" in decision.posture_markers
