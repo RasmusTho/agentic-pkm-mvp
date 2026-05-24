@@ -98,8 +98,8 @@ def test_undo_enabled_only_when_available() -> None:
     disabled_html = _html_for_canvas(undo_available=False)
     enabled_html = _html_for_canvas(undo_available=True)
 
-    assert 'data-testid="workspace-canvas-undo"' in disabled_html
-    assert "disabled>Undo</button>" in disabled_html
+    assert 'data-testid="workspace-canvas-undo"' not in disabled_html
+    assert 'data-action="undo-body-edit"' in disabled_html
     assert 'data-testid="workspace-canvas-undo-state"' in disabled_html
     assert "No undo available" in disabled_html
     assert 'data-api-path="/api/canvas/sessions/session-1/edits/last">Undo</button>' in enabled_html

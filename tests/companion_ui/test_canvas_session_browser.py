@@ -92,8 +92,8 @@ def test_session_controls_rendered() -> None:
     html = _html_for_canvas(session_id="session-1", session_state="active")
 
     assert 'data-testid="workspace-canvas-session-controls"' in html
-    assert 'data-testid="workspace-canvas-start"' in html
-    assert 'data-api-path="/api/canvas/sessions"' in html
+    assert 'data-testid="workspace-canvas-start"' not in html
+    assert 'data-action="start-session"' in html
     assert 'data-testid="workspace-canvas-close"' in html
     assert 'data-api-path="/api/canvas/sessions/session-1"' in html
 
@@ -117,10 +117,7 @@ def test_session_open_and_close_call_canvas_api() -> None:
             {"total_summary": "session closed from Companion UI"},
         ),
     ]
-    workspace_get_calls = [
-        call for call in client.get_calls if call[0] == "/api/companion/workspace"
-    ]
-    assert workspace_get_calls == [
+    assert [call for call in client.get_calls if call[0] == "/api/companion/workspace"] == [
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
     ]
@@ -133,9 +130,9 @@ def test_edit_controls_disabled_outside_active() -> None:
         can_edit_body=False,
     )
 
-    assert 'data-testid="workspace-canvas-edit-submit"' in html
-    assert 'data-api-path=""' in html
-    assert "disabled>Apply body edit</button>" in html
+    assert 'data-testid="workspace-canvas-edit-submit"' not in html
+    assert 'data-testid="workspace-canvas-action-unavailable"' in html
+    assert 'data-action="apply-body-edit"' in html
 
 
 def test_session_state_indicator() -> None:

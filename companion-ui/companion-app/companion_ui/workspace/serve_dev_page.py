@@ -29,8 +29,12 @@ Local dev:
 
 LAN/Tailscale (explicit operator action required — not the default):
     cd companion-ui/companion-app
-    COMPANION_API_BASE_URL=http://<host-ip>:18001 HOST=0.0.0.0 PORT=8111 \\
+    COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=0.0.0.0 PORT=8111 \\
         python -m companion_ui.workspace.serve_dev_page
+
+Browser requests use same-origin Companion UI routes; the dev server calls
+COMPANION_API_BASE_URL server-side so remote clients never need direct access
+to the runtime localhost port.
 """
 
 import html as _html
@@ -47,6 +51,10 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
+from companion_ui.workspace.workspace_http_client import (
+    WorkspaceClientError,
+    WorkspaceClientHTTPError,
+)
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8111
@@ -74,6 +82,20 @@ def _e(value: str) -> str:
 def _status_label(value: object, *, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
     return text if text else fallback
+
+
+def _human_state_label(state: str, mapping: dict[str, str], *, fallback: str = "Unavailable") -> str:
+    token = str(state or "").strip().lower()
+    return mapping.get(token, fallback)
+
+
+def _human_reason(reason: str) -> str:
+    token = str(reason or "").strip()
+    return {
+        "not_declared": "runtime has not enabled this capability",
+        "disabled": "runtime configuration marks this capability unavailable",
+        "canvas_disabled": "Canvas editing is disabled by runtime configuration",
+    }.get(token, token.replace("_", " ") if token else "reason unavailable")
 
 
 def _split_frontmatter(body: str) -> tuple[list[str], str]:
@@ -552,6 +574,32 @@ def _render_note_section(fields: dict) -> str:
         message=active_note_body_update_message,
         reason=workspace_update_reason,
     )
+    canvas_state_copy = _e(
+        _human_state_label(
+            canvas_session_state_raw,
+            {
+                "idle": "No active Canvas session",
+                "active": "Canvas session active",
+                "composing": "Canvas session active",
+                "paused": "Canvas session paused",
+                "closed": "Canvas session closed",
+            },
+            fallback="Canvas session unavailable",
+        )
+    )
+    panel_state_copy = _e(
+        _human_state_label(
+            panel_state_raw,
+            {
+                "idle": "No active Panel proposal",
+                "running": "Panel is preparing proposals",
+                "proposals-staged": "Panel proposal ready",
+                "proposal_staged": "Panel proposal ready",
+                "blocked": "Panel blocked",
+            },
+            fallback="Panel state unavailable",
+        )
+    )
 
     return f"""
   <div class="workspace-layout">
@@ -601,12 +649,12 @@ def _render_note_section(fields: dict) -> str:
       data-layout-desktop="side-rail">
       <div class="rail-header">
         <span class="rail-label">Companion&nbsp;/ Panel</span>
-        <span class="rail-badge" data-testid="workspace-panel-state">{panel_state}</span>
+        <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
       </div>
       <div class="rail-placeholder-body">
         <div class="rail-state-row" data-testid="workspace-canvas-state">
           <span class="rail-state-label">Canvas</span>
-          <span class="rail-state-value">{canvas_state}</span>
+          <span class="rail-state-value" data-canvas-state="{canvas_state}">{canvas_state_copy}</span>
         </div>
         {canvas_controls_html}
         {active_note_body_update_html}
@@ -657,7 +705,7 @@ def _render_active_note_body_update_flow(
           <div
             class="active-note-body-update-blocked"
             data-testid="workspace-active-note-body-update-state-blocked">
-            Active-note body update unavailable: {_e(reason)}.
+            Active-note body update unavailable: {_e(_human_reason(reason))}.
           </div>
         </section>"""
 
@@ -920,7 +968,7 @@ def _render_inspector_receipts(note: dict) -> str:
                 f'<span data-testid="vault-browser-receipt-trace-id" class="receipt-trace">{_e(trace_id)}</span>'
                 if trace_id else ""
             )
-            + f'</div>'
+            + '</div>'
         )
     return (
         '<div class="inspector-receipts" '
@@ -1188,7 +1236,22 @@ def _render_suggestion_flow_region(fields: dict) -> str:
     suggestion_state = _e(fields.get("suggestion_state", "idle"))
     dom_alias = _e(fields.get("suggestion_dom_alias", suggestion_state))
     composer_enabled = bool(fields.get("suggestion_composer_enabled", True))
-    composer_text = "composer enabled" if composer_enabled else "composer locked"
+    composer_text = (
+        "Suggestion composer can be used when a suggestion is staged."
+        if composer_enabled
+        else "Suggestion composer is locked by the current suggestion state."
+    )
+    suggestion_copy = _human_state_label(
+        str(fields.get("suggestion_state", "idle")),
+        {
+            "idle": "Suggestions are idle.",
+            "thinking": "Suggestions are being prepared.",
+            "staged_body": "Body suggestion staged.",
+            "staged_governance": "Governance suggestion staged.",
+            "blocked": "Suggestions are blocked.",
+        },
+        fallback="Suggestion state is unavailable.",
+    )
     transitions = fields.get("suggestion_allowed_transitions") or []
     transition_html = "".join(
         (
@@ -1207,8 +1270,8 @@ def _render_suggestion_flow_region(fields: dict) -> str:
           data-suggestion-dom-alias="{dom_alias}"
           data-composer-state="{composer_state_token}">
           <div class="rail-state-row">
-            <span class="rail-state-label">Suggestion</span>
-            <span class="rail-state-value">{suggestion_state}</span>
+            <span class="rail-state-label">Suggestions</span>
+            <span class="rail-state-value">{_e(suggestion_copy)}</span>
           </div>
           <div class="suggestion-composer-state" data-composer-state="{composer_state_token}">{composer_text}</div>
           <div class="suggestion-transitions">{transition_html}</div>
@@ -1754,20 +1817,98 @@ def _render_canvas_session_controls(
     undone_edit_count: int,
 ) -> str:
     canvas_blocked = not canvas_enabled or writeguard_blocked or (not workspace_update_available)
-    start_status = "blocked" if not canvas_enabled else "experimental" if not session_id else "unavailable"
-    close_status = "blocked" if not canvas_enabled else "experimental" if session_id else "unavailable"
-    edit_status = "blocked" if canvas_blocked else "active" if can_edit_body else "unavailable"
-    undo_status = "blocked" if canvas_blocked else "active" if undo_available else "unavailable"
-    start_disabled = " disabled" if session_id or not canvas_enabled else ""
-    close_disabled = "" if session_id else " disabled"
-    if not canvas_enabled:
-        close_disabled = " disabled"
-    edit_disabled = "" if can_edit_body and not canvas_blocked else " disabled"
-    undo_disabled = "" if undo_available and not canvas_blocked else " disabled"
     edit_api_path = f"/api/canvas/sessions/{session_id}/edits" if session_id else ""
     undo_api_path = f"/api/canvas/sessions/{session_id}/edits/last" if session_id else ""
-    present_text = "user present" if user_present else "user not present"
+    present_text = (
+        "User is present for Canvas editing."
+        if user_present
+        else "No active Canvas session."
+    )
     log_text = session_log_path or "no session log"
+    unavailable_reasons: list[tuple[str, str, str]] = []
+    if not canvas_enabled:
+        base_reason = "Canvas editing is currently disabled by runtime configuration."
+    elif writeguard_blocked:
+        base_reason = "Canvas editing is blocked by WriteGuard."
+    elif not workspace_update_available:
+        base_reason = (
+            "Body editing is unavailable because workspace update is disabled: "
+            f"{_human_reason(workspace_update_reason)}."
+        )
+    else:
+        base_reason = "Canvas action is unavailable in the current session state."
+
+    if session_id and canvas_enabled:
+        close_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-close"
+            data-affordance-status="active"
+            data-capability="canvas.closeSession"
+            data-api-method="DELETE"
+            data-api-path="/api/canvas/sessions/{session_id}">Close</button>"""
+    else:
+        close_html = ""
+        unavailable_reasons.append(
+            (
+                "close-session",
+                "canvas.closeSession",
+                base_reason if not canvas_enabled else "No active Canvas session to close.",
+            )
+        )
+
+    if canvas_enabled and not session_id:
+        start_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-start"
+            data-affordance-status="active"
+            data-capability="canvas.openSession"
+            data-api-method="POST"
+            data-api-path="/api/canvas/sessions"
+            data-note-path="{note_path}">Start</button>"""
+    else:
+        start_html = ""
+        unavailable_reasons.append(("start-session", "canvas.openSession", base_reason if not canvas_enabled else "A Canvas session is already active."))
+
+    if can_edit_body and not canvas_blocked:
+        edit_button_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-edit-submit"
+            data-affordance-status="active"
+            data-capability="canvas.applyBodyEdit"
+            data-api-method="POST"
+            data-api-path="{edit_api_path}"
+            data-content-hash="{content_hash}">Apply body edit</button>"""
+    else:
+        edit_button_html = ""
+        unavailable_reasons.append(("apply-body-edit", "canvas.applyBodyEdit", base_reason))
+
+    if undo_available and not canvas_blocked:
+        undo_button_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-undo"
+            data-affordance-status="active"
+            data-capability="canvas.undoBodyEdit"
+            data-api-method="DELETE"
+            data-api-path="{undo_api_path}">Undo</button>"""
+    else:
+        undo_button_html = ""
+        unavailable_reasons.append(("undo-body-edit", "canvas.undoBodyEdit", "No undo is available for this session state." if not canvas_blocked else base_reason))
+
+    unavailable_html = "".join(
+        (
+            '<div class="canvas-action-unavailable" '
+            'data-testid="workspace-canvas-action-unavailable" '
+            f'data-action="{_e(action)}" '
+            f'data-capability="{_e(capability)}" '
+            'data-affordance-status="unavailable">'
+            f"{_e(reason)}</div>"
+        )
+        for action, capability, reason in unavailable_reasons
+    )
     undo_state_html = (
         '<span class="canvas-undo-state" data-testid="workspace-canvas-undo-state">'
         + ("Undo available" if undo_available else "No undo available")
@@ -1811,7 +1952,7 @@ def _render_canvas_session_controls(
         if not workspace_update_available:
             unavailable_copy = (
                 "Body edit composer disabled by workspace update capability: "
-                f"{workspace_update_reason}."
+                f"{_human_reason(workspace_update_reason)}."
             )
         composer_html = """
           <div
@@ -1841,37 +1982,12 @@ def _render_canvas_session_controls(
           </div>"""
     return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
-          <button
-            type="button"
-            data-testid="workspace-canvas-start"
-            data-affordance-status="{start_status}"
-            data-capability="canvas.openSession"
-            data-api-method="POST"
-            data-api-path="/api/canvas/sessions"
-            data-note-path="{note_path}"{start_disabled}>Start</button>
-          <button
-            type="button"
-            data-testid="workspace-canvas-close"
-            data-affordance-status="{close_status}"
-            data-capability="canvas.closeSession"
-            data-api-method="DELETE"
-            data-api-path="/api/canvas/sessions/{session_id}"{close_disabled}>Close</button>
-          <button
-            type="button"
-            data-testid="workspace-canvas-edit-submit"
-            data-affordance-status="{edit_status}"
-            data-capability="canvas.applyBodyEdit"
-            data-api-method="POST"
-            data-api-path="{edit_api_path}"
-            data-content-hash="{content_hash}"{edit_disabled}>Apply body edit</button>
-          <button
-            type="button"
-            data-testid="workspace-canvas-undo"
-            data-affordance-status="{undo_status}"
-            data-capability="canvas.undoBodyEdit"
-            data-api-method="DELETE"
-            data-api-path="{undo_api_path}"{undo_disabled}>Undo</button>
-          <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
+          {start_html}
+          {close_html}
+          {edit_button_html}
+          {undo_button_html}
+          {unavailable_html}
+          <span class="canvas-presence" data-testid="workspace-canvas-user-present" data-user-present="{'true' if user_present else 'false'}">{present_text}</span>
           {composer_html}
           {recovery_html}
           {undo_state_html}
@@ -2961,8 +3077,8 @@ def render_index_html(
 <body>
   <div class="topbar">
     <div class="topbar-api">
-      <span class="api-label">Runtime API</span>
-      <span class="api-url" title="{_e(api_base_url)}">{_e(api_base_url)}</span>
+      <span class="api-label">Server-side runtime</span>
+      <span class="api-url" title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
     </div>
     {dev_chip}
   </div>
@@ -3009,7 +3125,6 @@ def render_index_html(
 
   <script>
   (function() {{
-    var API_BASE = {repr(_e(api_base_url))};
     var overlay = document.getElementById('vault-browser-overlay');
     var list    = document.getElementById('vault-browser-list');
     var status  = document.getElementById('vault-browser-status');
@@ -3054,7 +3169,7 @@ def render_index_html(
     function fetchNotes(q) {{
       setStatus('Loading…');
       list.innerHTML = '';
-      var url = API_BASE + '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
+      var url = '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
       fetch(url)
         .then(function(r) {{
           if (!r.ok) throw new Error('API error ' + r.status);
@@ -3104,8 +3219,6 @@ def render_index_html(
 
   <script>
   (function() {{
-    var API_BASE = {repr(_e(api_base_url))};
-
     window.bodyEditor = {{
       submit: function() {{
         var ta = document.getElementById('body-edit-textarea');
@@ -3115,7 +3228,7 @@ def render_index_html(
         var newBody = ta.value;
         statusEl.className = 'body-edit-status';
         statusEl.textContent = 'Submitting…';
-        fetch(API_BASE + '/api/companion/workspace/body', {{
+        fetch('/api/companion/workspace/body', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{note_path: notePath, new_body: newBody}})
@@ -3202,6 +3315,34 @@ def make_handler(
         _production_profile = production_profile
         _static_assets = static_assets or {}
 
+        def _send_json(self, status_code: int, payload: dict) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _proxy_error(self, exc: WorkspaceClientError) -> None:
+            if isinstance(exc, WorkspaceClientHTTPError):
+                self._send_json(
+                    exc.status_code,
+                    {
+                        "error": "runtime_api_error",
+                        "message": exc.detail,
+                        "status_code": exc.status_code,
+                    },
+                )
+                return
+            self._send_json(
+                502,
+                {
+                    "error": "runtime_unavailable",
+                    "message": str(exc),
+                    "next_step": "Verify the Companion runtime API is running on the server host.",
+                },
+            )
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path in self._static_assets:
@@ -3211,6 +3352,19 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path == "/api/companion/vault/notes":
+                params = parse_qs(parsed.query)
+                q = params.get("q", [""])[0]
+                try:
+                    data = self._client.get(
+                        "/api/companion/vault/notes",
+                        params={"q": q} if q else {},
+                    )
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
                 return
             body = handle_get(
                 query_string=parsed.query,
@@ -3223,6 +3377,28 @@ def make_handler(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path != "/api/companion/workspace/body":
+                self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                length = 0
+            raw_body = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw_body.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
+                return
+            try:
+                data = self._client.post("/api/companion/workspace/body", json=payload)
+            except WorkspaceClientError as exc:
+                self._proxy_error(exc)
+                return
+            self._send_json(200, data)
 
         def log_message(self, fmt: str, *args: object) -> None:
             pass  # suppress per-request log noise; startup banner handles visibility

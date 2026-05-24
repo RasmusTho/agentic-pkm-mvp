@@ -320,16 +320,39 @@ class TestHumanFacingCopy:
         """Composer enabled/locked exposes its internal state as a data-* attribute."""
         html = _html(suggestion_composer_enabled=True)
         assert 'data-composer-state="enabled"' in html
+        assert "composer enabled" not in html.lower()
 
     def test_composer_state_data_attr_when_locked(self) -> None:
         html = _html(suggestion_composer_enabled=False)
         assert 'data-composer-state="locked"' in html
+        assert "composer locked" not in html.lower()
 
     def test_workspace_update_label_has_human_text(self) -> None:
         """A human-friendly label is used somewhere in posture chrome."""
         html = _html()
         # "Online" is the human-facing posture phrase for ok.
         assert "Online" in html
+
+    def test_internal_state_labels_not_visible_by_default(self) -> None:
+        html = _html()
+        visible_leaks = [
+            "user not present",
+            "composer enabled",
+            "suggestion</span>",
+            "find unavailable",
+            ">idle</span>",
+        ]
+        lower_html = html.lower()
+        for leak in visible_leaks:
+            assert leak not in lower_html
+
+    def test_default_canvas_unavailable_actions_are_reason_states_not_buttons(self) -> None:
+        html = _html(guard_canvas_enabled=False, guard_workspace_update_available=False)
+        assert 'data-testid="workspace-canvas-start"' not in html
+        assert 'data-testid="workspace-canvas-close"' not in html
+        assert 'data-testid="workspace-canvas-edit-submit"' not in html
+        assert 'data-testid="workspace-canvas-undo"' not in html
+        assert 'data-testid="workspace-canvas-action-unavailable"' in html
 
 
 # ---------------------------------------------------------------------------
