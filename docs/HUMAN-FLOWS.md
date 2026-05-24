@@ -915,7 +915,7 @@ That direction is no longer handoff-only: a bounded implementation now exists in
 
 ## Vault Browser as orientation surface
 
-The Companion UI vault browser is the human-first navigation and orientation surface over the vault for the reorient/find/return-to-context flows. Its long-term capability contract — concepts (`VaultArtifact`, `VaultView`, `VaultQuery`, `VaultRelation`, `VaultActivity`, `VaultHealth`, `VaultAction`, `VaultProposal`, `VaultReceipt`), action-mode boundary, MLP-versus-future scope, and non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Current shipped behavior is bounded as `Vault Browser MLP v0`: read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into the Companion workspace. The browser is a projection layer; the vault and Markdown/frontmatter remain the human control surface.
+The Companion UI vault browser is the human-first navigation and orientation surface over the vault for the reorient/find/return-to-context flows. Its long-term capability contract — concepts (`VaultArtifact`, `VaultView`, `VaultQuery`, `VaultRelation`, `VaultActivity`, `VaultHealth`, `VaultAction`, `VaultProposal`, `VaultReceipt`), action-mode boundary, MLP-versus-future scope, and non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Current shipped behavior is bounded as `Vault Browser MLP v0`: read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into the Companion workspace. When a browse cap applies, the retained subset is deterministic: lexicographically smallest matching note paths are preserved. The browser is a projection layer; the vault and Markdown/frontmatter remain the human control surface.
 
 ## Companion Niflheim dev UAT workspace update check
 
@@ -929,6 +929,8 @@ For Niflheim dev UAT, Companion workspace update capability must be visible as r
 For Niflheim dev UAT, active-note body updates in Companion workspace must stay bounded and guarded:
 - entering the active-note body update flow must be explicit and note-local
 - update attempts must be scoped to the active note path only
+- target paths must resolve to Markdown note files (`.md`) before any write occurs
 - successful updates must preserve frontmatter and UUID while changing body content
 - blocked updates must show a clear guard reason (for example WriteGuard or capability disabled)
 - failed updates must show a clear failure state distinct from blocked
+- blocked/failed update attempts must preserve loaded workspace context so the note and status surfaces remain visible
