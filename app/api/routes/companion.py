@@ -534,6 +534,11 @@ def _zone_for_path(note_path: str) -> str:
     return parts[0] if parts else "root"
 
 
+def _is_hidden_browser_path(safe_path: str) -> bool:
+    parts = PurePosixPath(safe_path).parts
+    return any(part.startswith(".") for part in parts[:-1])
+
+
 def _list_markdown_notes(vault_root: Path) -> list[VaultBrowserNoteState]:
     notes: list[VaultBrowserNoteState] = []
     for candidate in vault_root.rglob("*.md"):
@@ -541,6 +546,8 @@ def _list_markdown_notes(vault_root: Path) -> list[VaultBrowserNoteState]:
             continue
         safe_path = _vault_relative(candidate, vault_root)
         if safe_path is None:
+            continue
+        if _is_hidden_browser_path(safe_path):
             continue
         body = candidate.read_text(encoding="utf-8")
         notes.append(
@@ -582,6 +589,8 @@ def _select_vault_notes(
             continue
         safe_path = _vault_relative(candidate, vault_root)
         if safe_path is None:
+            continue
+        if _is_hidden_browser_path(safe_path):
             continue
         total_notes += 1
         body = candidate.read_text(encoding="utf-8")
@@ -663,6 +672,11 @@ def read_companion_vault_browser(
     q: str = Query("", description="Case-insensitive path/title filter"),
     limit: int = Query(250, ge=1, le=1000),
 ) -> VaultBrowserStateResponse:
+    # Vault Browser MLP v0 surface. Contract:
+    # docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md §6. Read-only Markdown
+    # enumeration with deterministic title/path filtering, active-vault
+    # identity, and explicit empty / error / identity-unavailable states.
+    # Hidden / dot-prefixed folders are excluded.
     vault_root = resolve_vault_root()
     effective_limit = min(limit, _safe_vault_browse_max_notes())
     selected, total_notes, filtered_notes = _select_vault_notes(

@@ -1,3 +1,16 @@
+"""Vault Browser MLP v0 UI contract tests.
+
+Pin the MLP v0 UI invariants from
+``docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`` §6:
+
+- opening the workspace renders a vault browser surface
+- selecting a note loads it into the Companion workspace (read path only)
+- the active vault identity is displayed
+- explicit empty / error / identity-unavailable states render distinct test IDs
+
+The browser is read-only; no UI test in this module exercises a mutation path.
+"""
+
 from __future__ import annotations
 
 from typing import Any

@@ -581,6 +581,13 @@ hybrid Chat/Panel crossings are bounded by
 - Chat itself is a canvas-shaped interaction surface, not permanently read-only; future Chat-originated mutations must still pass through the governed policy, validation, and event pipeline.
 - Should be read as an exploratory cognition surface first, not as a settled UI embodiment or unrestricted execution path.
 
+### Vault Browser
+
+- The Vault Browser is the human-first navigation and orientation projection over the vault hosted in Companion UI.
+- It is a projection layer, not authority: Markdown/frontmatter remains the human control surface; stores/DB remain machine mirrors.
+- Read-only browsing, UI-only state, bounded system writes, governance writes, agent proposals, and blocked actions are kept as distinct action modes; the browser renders server-declared modes and never reclassifies locally.
+- Current shipped behavior is `Vault Browser MLP v0` (read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, and bounded UI states). The long-term capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`.
+
 ## Capability Model
 
 - Retrieval is a capability, not an agent.

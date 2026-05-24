@@ -91,6 +91,7 @@ Interpretation note:
 - **ReasoningFacade** — Shared reasoning/tool entrypoint for LangGraph agents. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
 - **BaseLangGraphAgent** — Common agent scaffolding for LangGraph inner loops. Maturity: Planned. Forward-line only; not part of the locked v5.5 baseline.
 - **Panel agent** — Panel parsing + intent emission/execution for note interaction. Maturity: Active.
+- **Vault Browser** — Human-first navigation and orientation surface over the vault. Current shipped behavior is `Vault Browser MLP v0` (read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into Companion workspace). Long-term capability contract (concepts, action modes, MLP-vs-future boundary, non-goals) lives in `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Maturity: MLP (read-only).
 - **LLM router + fabric** — Canonical access layer for chat + embeddings (`app/components/llm/router.py`, `app/components/llm/fabric.py`). High-level modules must use `get_chat_client` / `get_embeddings_client`; routes are reported via `/api/health`. Maturity: Active.
 
 Direction note:
