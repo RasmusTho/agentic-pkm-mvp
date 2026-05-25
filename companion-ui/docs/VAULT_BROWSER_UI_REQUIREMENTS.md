@@ -62,9 +62,37 @@ future capability. It is not automatically in scope for the current issue.
 NON-GOAL means forbidden behavior or explicitly out-of-scope behavior. Implementations must not
 smuggle NON-GOAL behavior into adjacent work.
 
+## R0 Two-note rendering model
+
+The system distinguishes two note types that appear together in a loaded workspace view:
+
+- **Main note**: the human-authored vault note. Its body is clean prose. The user reads and
+  edits this content. It is the cognitive anchor of the workspace.
+- **Companion note**: a system-managed note stored in the vault companion directory
+  (`⚙️ System/companions/<uuid>.md` or equivalent). It holds artifact metadata: uuid, kind,
+  trust, review_state, provenance, origin, source_ref, created, updated, and similar fields.
+
+Requirements derived from this model:
+
+- The UI MUST load both the main note and the companion note when a note is opened.
+- The UI MUST render only the main note body as the primary reading surface.
+- Companion note content MUST NOT appear as part of the main reading area.
+- Artifact metadata displayed in the UI (uuid, kind, trust, review posture, provenance) MUST be
+  sourced from the companion note where it is available.
+- When a companion note is absent, the UI MAY fall back to frontmatter fields in the main note,
+  but MUST make it clear that companion metadata is missing.
+- Main notes SHOULD be writable as clean human prose without requiring YAML frontmatter.
+- The companion note is the authoritative metadata store. Main note frontmatter is a legacy/fallback
+  source only.
+- This separation MUST NOT be collapsed. A UI that reads metadata only from main note frontmatter
+  violates this model and must be corrected.
+- Mixing main note body with companion note metadata in the same rendering region is a NON-GOAL.
+
 ## R1 Workspace orientation and body rendering
 
 - Raw YAML/frontmatter MUST NOT render as ordinary body text.
+- Raw YAML/frontmatter MUST NOT render in any user-visible area outside the bounded
+  identity/metadata chrome — including areas adjacent to, above, or below the body frame.
 - Human-readable body content MUST be visually distinct from metadata.
 - Frontmatter-derived metadata MUST remain visible in bounded identity/metadata chrome where
   available.
@@ -74,6 +102,8 @@ smuggle NON-GOAL behavior into adjacent work.
   leaking raw implementation detail.
 - The note body remains the human cognitive anchor. Metadata chrome supports orientation; it must
   not compete with the body as prose.
+- Frontmatter that leaks outside the note body frame but is still user-visible is an R1 violation,
+  even if it is not rendered inline with the body text.
 
 ## R2 Vault Browser layout
 
@@ -106,6 +136,8 @@ smuggle NON-GOAL behavior into adjacent work.
 - Normal dev-runtime note selection SHOULD complete within 2 seconds for ordinary notes.
 - UAT for note selection SHOULD include at least three repeated selections and timings.
 - Slow or unreliable selection MUST be treated as a blocker or explicit performance follow-up.
+- UAT 2026-05-25 observed ~5s note selection latency on dev runtime. This is a documented blocker;
+  root cause investigation is required before this requirement can be marked satisfied.
 - Selection MUST NOT rely on client-side access to Mac mini localhost APIs when the UI is opened
   remotely.
 - Remote-client UAT matters when the user-visible behavior depends on a browser running on a
@@ -257,3 +289,9 @@ The Vault Browser / Workspace UI is not:
 - If issue ACs and this document conflict, stop and run `issue-maintenance-change-control`.
 - Do not use this document to silently expand an issue. Convert MAY / FUTURE requirements into
   bounded issues through the repo workflow before implementation.
+- The two-note rendering model (R0) applies to all Vault Browser / Workspace UI implementation
+  issues. Implementation must not skip companion note loading, must not mix companion metadata
+  into the main note body frame, and must not render main note frontmatter in any user-visible
+  region.
+- Note selection performance (R4) is a documented blocker as of UAT 2026-05-25. Any PR claiming
+  browse/open flow completion must resolve or explicitly defer this with a follow-up issue.
