@@ -142,7 +142,8 @@ def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
         return (
             '<section class="note-frontmatter note-frontmatter-empty" '
             'data-testid="workspace-note-frontmatter" '
-            'data-frontmatter-present="false">'
+            'data-frontmatter-present="false" '
+            'aria-hidden="true" style="display:none">'
             '<span class="frontmatter-label">No frontmatter</span>'
             "</section>"
         )
@@ -160,7 +161,8 @@ def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
     return (
         '<section class="note-frontmatter" '
         'data-testid="workspace-note-frontmatter" '
-        'data-frontmatter-present="true">'
+        'data-frontmatter-present="true" '
+        'aria-hidden="true" style="display:none">'
         '<span class="frontmatter-label">frontmatter</span>'
         f"{body_html}"
         "</section>"
@@ -277,9 +279,9 @@ def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
             'data-reason="update_flow_disabled" '
             'data-update-flow="disabled">'
             '<span class="absent-label" data-testid="workspace-body-edit-panel">'
-            "Body editing unavailable</span>"
+            "&#9998; Read only</span>"
             '<span class="absent-reason">'
-            "Update flow is currently disabled (set WORKSPACE_UPDATE_FLOW_ENABLED=1 to enable)."
+            "This note is open for reading. Editing is not enabled in this workspace."
             "</span>"
             "</section>"
         )
@@ -2932,9 +2934,20 @@ def render_index_html(
       padding: 12px;
     }}
     .body-edit-disabled {{
-      border-color: var(--border);
+      border-color: var(--border-strong);
+      color: var(--fg-2);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+    }}
+    .body-edit-disabled .absent-label {{
+      font-weight: 600;
+      white-space: nowrap;
+    }}
+    .body-edit-disabled .absent-reason {{
       color: var(--fg-3);
-      font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
     .body-edit-header {{ display: flex; flex-direction: column; gap: 2px; }}
