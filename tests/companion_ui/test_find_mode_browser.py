@@ -9,10 +9,16 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui.vault_browser_test_helpers import (
+    default_vault_browser_payload,
+    is_vault_browser_get,
+)
 
 
 class _FakeClient:
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         assert url == "/api/companion/workspace"
         assert params == {"note_path": "Notes/find.md"}
         return {
@@ -93,6 +99,8 @@ def test_panel_handoff() -> None:
 
 class _NoFindPayloadClient:
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         assert url == "/api/companion/workspace"
         assert params == {"note_path": "Notes/find.md"}
         return {
@@ -132,6 +140,8 @@ def test_find_unavailable_state_renders_without_backend_payload() -> None:
 
 class _EmptyFindPayloadClient:
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         assert url == "/api/companion/workspace"
         assert params == {"note_path": "Notes/find.md"}
         return {
@@ -172,6 +182,8 @@ def test_find_empty_state_distinct_from_unavailable() -> None:
 
 class _MissingCitationFindClient:
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         assert url == "/api/companion/workspace"
         assert params == {"note_path": "Notes/find.md"}
         return {

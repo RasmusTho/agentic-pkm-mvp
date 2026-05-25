@@ -20,13 +20,38 @@ from app.stores import get_object_store
 _HEALTH_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB
 
 
+def _count_outbox_lines_db() -> int | None:
+    """Count total outbox rows via DB when STORE_BACKEND=pg. Returns None on any error."""
+    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+    if backend != "pg":
+        return None
+    try:
+        from app.services.outbox import count_outbox_events
+
+        return count_outbox_events()
+    except Exception:
+        return None
+
+
 def _count_outbox_lines(path: Path) -> int:
-    """Count lines in outbox without loading content into memory."""
+    """Count outbox records: DB when available, else streaming file line count."""
+    db_count = _count_outbox_lines_db()
+    if db_count is not None:
+        return db_count
     if not path.exists():
         return 0
     try:
+        count = 0
+        saw_bytes = False
+        last_byte = b""
         with path.open("rb") as fh:
-            return sum(chunk.count(b"\n") for chunk in iter(lambda: fh.read(1024 * 1024), b""))
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                saw_bytes = True
+                count += chunk.count(b"\n")
+                last_byte = chunk[-1:]
+        if saw_bytes and last_byte != b"\n":
+            count += 1
+        return count
     except Exception:
         return 0
 
