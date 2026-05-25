@@ -10,6 +10,10 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui.vault_browser_test_helpers import (
+    default_vault_browser_payload,
+    is_vault_browser_get,
+)
 
 
 class _FakeClient:
@@ -19,6 +23,8 @@ class _FakeClient:
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((url, params))
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         return self.payload
 
 
@@ -44,7 +50,10 @@ def _html_for_panel(panel: dict[str, Any]) -> str:
     page = RealNoteWorkspaceDevPage(client)  # type: ignore[arg-type]
     state = page.load(NoteLoadIntent(note_path="Notes/panel.md"))
     assert state.is_loaded is True
-    assert client.calls == [
+    workspace_get_calls = [
+        call for call in client.calls if call[0] == "/api/companion/workspace"
+    ]
+    assert workspace_get_calls == [
         ("/api/companion/workspace", {"note_path": "Notes/panel.md"}),
     ]
     fields = page.render_fields()

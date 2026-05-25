@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from app.context_bundles.schema import (
     ContextBundle,
@@ -39,7 +39,7 @@ class WhyNowSignal(BaseModel):
 
     @field_validator("rationale", "signal_name")
     @classmethod
-    def _must_be_non_blank(cls, v: str, info) -> str:
+    def _must_be_non_blank(cls, v: str, info: ValidationInfo) -> str:
         if not v or not v.strip():
             raise ValueError(
                 f"{info.field_name} must be a non-empty string — "

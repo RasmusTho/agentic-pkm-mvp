@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.vault.layout import VaultLayout
-from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,7 @@ def move_note_to_zone(
     actor: str,
     intent_id: Optional[str] = None,
     trace_id: Optional[str] = None,
-    write_guard=None,
+    write_guard: WriteGuard | None = None,
 ) -> MoveResult:
     """Move a Markdown note from one vault zone to another.
 

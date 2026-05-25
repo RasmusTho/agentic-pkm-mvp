@@ -27,7 +27,8 @@ def _iso(dt: datetime | None) -> str:
 
 
 def pass_through_context_dimensions(record: dict[str, object]) -> dict[str, object]:
-    payload = dict(record.get("context_dimensions") or {})
+    raw_payload = record.get("context_dimensions")
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
     return {
         "scope": payload.get("scope"),
         "sphere_memberships": list(payload.get("sphere_memberships") or []),
