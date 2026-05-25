@@ -79,6 +79,19 @@ def _e(value: str) -> str:
     return _html.escape(str(value))
 
 
+# Maximum characters for any single rail item label / reason / relation field.
+# Prevents operator/agent note body content from leaking into the rail verbatim.
+_RAIL_ITEM_MAX: int = 280
+
+
+def _cap(text: str, max_len: int = _RAIL_ITEM_MAX) -> str:
+    """Truncate *text* to *max_len* characters, appending '…' if clipped."""
+    s = str(text)
+    if len(s) <= max_len:
+        return s
+    return s[:max_len] + "…"
+
+
 def _status_label(value: object, *, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
     return text if text else fallback
@@ -1472,7 +1485,7 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
                 data-reorient-section="{_e(name)}"
                 data-reorient-kind="{_e(item_kind)}">
                 <span class="reorient-kind" data-testid="reorient-kind">{_e(labels[name])}</span>
-                <span class="reorient-item-label">{_e(item.get("label", ""))}</span>
+                <span class="reorient-item-label">{_e(_cap(item.get("label", "")))}</span>
                 <a
                   class="reorient-source"
                   data-testid="reorient-source-link"
@@ -1567,13 +1580,13 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
             data-runtime-backed="true"
             data-candidate-id="{_e(candidate.get("candidate_id", ""))}">
             <div class="resurface-title" data-testid="resurface-candidate-label">
-              {_e(candidate.get("label", ""))}
+              {_e(_cap(candidate.get("label", "")))}
             </div>
             <div class="resurface-why" data-testid="resurface-why-now">
-              {_e(candidate.get("why_now", ""))}
+              {_e(_cap(candidate.get("why_now", "")))}
             </div>
             <div class="resurface-relation" data-testid="resurface-relation">
-              {_e(candidate.get("relation_to_active_artifact", ""))}
+              {_e(_cap(candidate.get("relation_to_active_artifact", "")))}
             </div>
             <a
               class="resurface-source"
@@ -2511,7 +2524,9 @@ def render_index_html(
       border-radius: var(--radius-md);
       margin: 0 auto;
       max-width: 920px;
-      min-height: 100%;
+      max-height: 60vh;
+      min-height: 0;
+      overflow-y: auto;
       padding: 28px 32px;
       font-family: var(--font-mono);
       font-size: var(--text-sm);
