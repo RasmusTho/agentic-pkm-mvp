@@ -20,6 +20,7 @@ Foundational documents for cognitive interaction architecture.
 
 ## Surface contracts and feature implementation specs
 - `WORKSPACE_STATE_CONTRACT.md` — read-side aggregate contract for `GET /api/companion/workspace`, combining artifact, runtime, Canvas, Panel, suggestion, and guard state without creating a new authority surface. Governing issue: #1122.
+- `VAULT_BROWSER_UI_REQUIREMENTS.md` — Companion UI requirements for Vault Browser / Workspace behavior derived from user UAT feedback and the Claude Design Vault Browser Foundation handoff; downstream Vault Browser / Workspace UI implementation issues must read it before coding. It is constrained by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md` and other SoT docs.
 - `CANVAS_BROWSER_EDITOR_DECISION.md` — decision record choosing `textarea` as the interim Canvas browser editor primitive and preserving full-body replacement semantics. Governing issue: #1126.
 - `PANEL_STATE_DISCOVERY_DELTA.md` — Panel browser discovery gap analysis; confirms the workspace aggregate is sufficient for the current slice. Governing issue: #1127.
 - `CANVAS_AGENT_MVP_CONTRACT.md` — normalized Canvas Agent MVP surface contract: co-authoring posture, session lifecycle, user-present authority, direct in-place editing, undo/rollback, `.chats/` provenance, governance-bearing escape hatch, distinction from Panel and from Canvas bounded suggestion flow. Governing issue: #1021.
