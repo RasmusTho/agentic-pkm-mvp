@@ -18,9 +18,12 @@ Foundational documents for cognitive interaction architecture.
 - `FUTURE_RESEARCH.md`
 - `DESIGN_BRIEF.md` (preserved source brief)
 
+## Obsidian-compatible note surface
+- `OBSIDIAN_COMPATIBILITY_MATRIX.md` — source-of-truth matrix for Obsidian syntax compatibility in Companion UI: compatibility target (Reading View-like), feature-by-feature phase assignments (adopt now / adopt soon / spike / diagnostic only / reject/defer), mutation/governance boundary, stop conditions. Workstream: Companion UI Obsidian-Compatible Note Surface.
+- `VAULT_MARKDOWN_RENDERER_CONTRACT.md` — contract for read-only Companion UI rendering of vault Markdown: document model (VaultMarkdownDocument, WikiLinkRef, EmbedRef, etc.), parser/renderer/resolver responsibilities, component boundaries (VaultMarkdownRenderer, ObsidianCalloutRenderer, MermaidBlockRenderer, etc.), security model, governance boundary, test contract, editor-adapter boundary. Workstream: Companion UI Obsidian-Compatible Note Surface.
+
 ## Surface contracts and feature implementation specs
 - `WORKSPACE_STATE_CONTRACT.md` — read-side aggregate contract for `GET /api/companion/workspace`, combining artifact, runtime, Canvas, Panel, suggestion, and guard state without creating a new authority surface. Governing issue: #1122.
-- `VAULT_BROWSER_UI_REQUIREMENTS.md` — Companion UI requirements for Vault Browser / Workspace behavior derived from user UAT feedback and the Claude Design Vault Browser Foundation handoff; downstream Vault Browser / Workspace UI implementation issues must read it before coding. It is constrained by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md` and other SoT docs.
 - `CANVAS_BROWSER_EDITOR_DECISION.md` — decision record choosing `textarea` as the interim Canvas browser editor primitive and preserving full-body replacement semantics. Governing issue: #1126.
 - `PANEL_STATE_DISCOVERY_DELTA.md` — Panel browser discovery gap analysis; confirms the workspace aggregate is sufficient for the current slice. Governing issue: #1127.
 - `CANVAS_AGENT_MVP_CONTRACT.md` — normalized Canvas Agent MVP surface contract: co-authoring posture, session lifecycle, user-present authority, direct in-place editing, undo/rollback, `.chats/` provenance, governance-bearing escape hatch, distinction from Panel and from Canvas bounded suggestion flow. Governing issue: #1021.
