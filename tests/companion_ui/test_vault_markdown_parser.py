@@ -114,6 +114,19 @@ def test_comment_extraction() -> None:
     assert document.comments[1].text.strip() == "Multi-word inline comment"
 
 
+def test_comment_bodies_are_not_parsed_as_active_references() -> None:
+    document = parse_vault_markdown(
+        "Visible [[LiveNote]]\n\n"
+        "%% hidden [[DraftOnly]] ![[hidden.png]] ^hidden-block %%\n\n"
+        "After [[AfterNote]]\n"
+    )
+
+    assert [link.target for link in document.wikilinks] == ["LiveNote", "AfterNote"]
+    assert document.embeds == []
+    assert document.block_ids == []
+    assert len(document.comments) == 1
+
+
 def test_malformed_frontmatter_diagnostic() -> None:
     document = parse_vault_markdown(_fixture("malformed-frontmatter.md"))
 
@@ -124,3 +137,18 @@ def test_malformed_frontmatter_diagnostic() -> None:
         and diagnostic.severity in {"warning", "error"}
         for diagnostic in document.diagnostics
     )
+
+
+def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
+    document = parse_vault_markdown(
+        "````markdown\n"
+        "```python\n"
+        "[[NotAnActiveLink]]\n"
+        "![[not-active.png]]\n"
+        "```\n"
+        "````\n\n"
+        "[[ActiveLink]]\n"
+    )
+
+    assert [link.target for link in document.wikilinks] == ["ActiveLink"]
+    assert document.embeds == []

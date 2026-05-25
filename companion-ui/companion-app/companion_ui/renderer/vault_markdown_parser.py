@@ -23,7 +23,7 @@ from companion_ui.renderer.models import (
 )
 
 
-_FENCE_RE = re.compile(r"^\s*(?:>\s*)*(```|~~~)\s*([A-Za-z0-9_-]+)?")
+_FENCE_RE = re.compile(r"^\s*(?:>\s*)*(`{3,}|~{3,})\s*([A-Za-z0-9_-]+)?")
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$")
 _EXPLICIT_ANCHOR_RE = re.compile(r"\s*\{#([A-Za-z0-9_-]+)\}\s*$")
 _BLOCK_ID_RE = re.compile(r"(?<!\S)\^([A-Za-z0-9_-]+)")
@@ -47,13 +47,14 @@ def parse_vault_markdown(raw_markdown: str) -> VaultMarkdownDocument:
         diagnostics.extend(_validate_frontmatter(frontmatter, raw_markdown))
 
     non_fenced_spans = list(_iter_non_fenced_spans(body_markdown, body_offset))
+    reference_spans = list(_iter_comment_suppressed_spans(non_fenced_spans))
     fenced_diagnostics = _detect_diagnostic_only_code_blocks(body_markdown, body_offset)
 
     headings = _extract_headings(body_markdown, body_offset)
-    block_ids = _extract_block_ids(non_fenced_spans)
-    wikilinks = _extract_wikilinks(non_fenced_spans)
-    embeds, embed_diagnostics = _extract_embeds(non_fenced_spans)
-    asset_refs = _extract_asset_refs(non_fenced_spans)
+    block_ids = _extract_block_ids(reference_spans)
+    wikilinks = _extract_wikilinks(reference_spans)
+    embeds, embed_diagnostics = _extract_embeds(reference_spans)
+    asset_refs = _extract_asset_refs(reference_spans)
     comments = _extract_comments(non_fenced_spans)
 
     return VaultMarkdownDocument(
@@ -155,7 +156,7 @@ def _iter_non_fenced_spans(body_markdown: str, body_offset: int) -> Iterator[tup
                 span_start = None
                 in_fence = True
                 fence_marker = fence_match.group(1)
-            elif fence_marker == fence_match.group(1):
+            elif _is_closing_fence(fence_marker, fence_match.group(1)):
                 in_fence = False
                 fence_marker = None
             cursor += len(line)
@@ -169,6 +170,25 @@ def _iter_non_fenced_spans(body_markdown: str, body_offset: int) -> Iterator[tup
 
     if span_parts and span_start is not None:
         yield "".join(span_parts), body_offset + span_start
+
+
+def _iter_comment_suppressed_spans(
+    spans: Iterable[tuple[str, int]],
+) -> Iterator[tuple[str, int]]:
+    for text, source_offset in spans:
+        cursor = 0
+        for match in _COMMENT_RE.finditer(text):
+            if match.start() > cursor:
+                yield text[cursor : match.start()], source_offset + cursor
+            cursor = match.end()
+        if cursor < len(text):
+            yield text[cursor:], source_offset + cursor
+
+
+def _is_closing_fence(open_marker: str | None, candidate: str) -> bool:
+    if not open_marker:
+        return False
+    return candidate[0] == open_marker[0] and len(candidate) >= len(open_marker)
 
 
 def _detect_diagnostic_only_code_blocks(
@@ -202,7 +222,7 @@ def _detect_diagnostic_only_code_blocks(
                         ),
                     )
                 )
-        elif fence_marker == marker:
+        elif _is_closing_fence(fence_marker, marker):
             in_fence = False
             fence_marker = None
         cursor += len(line)
@@ -223,7 +243,7 @@ def _extract_headings(body_markdown: str, body_offset: int) -> list[HeadingRef]:
             if not in_fence:
                 in_fence = True
                 fence_marker = marker
-            elif fence_marker == marker:
+            elif _is_closing_fence(fence_marker, marker):
                 in_fence = False
                 fence_marker = None
             cursor += len(line)
