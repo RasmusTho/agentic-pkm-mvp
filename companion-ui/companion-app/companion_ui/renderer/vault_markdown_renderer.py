@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import html
+from html.parser import HTMLParser
 import re
 from typing import Protocol
 from urllib.parse import quote
@@ -27,11 +28,6 @@ from companion_ui.renderer.vault_markdown_parser import parse_vault_markdown
 
 
 _TOKEN_RE = re.compile(r"(`[^`\n]+`|!\[[^\]\n]*\]\([^) \n][^)\n]*\)|!\[\[[^\]\n]+?\]\]|\[\[[^\]\n]+?\]\])")
-_SCRIPT_RE = re.compile(r"<script\b[^>]*>.*?</script\s*>", re.IGNORECASE | re.DOTALL)
-_STYLE_RE = re.compile(r"<style\b[^>]*>.*?</style\s*>", re.IGNORECASE | re.DOTALL)
-_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
-_EVENT_HANDLER_RE = re.compile(r"\s+on[A-Za-z]+\s*=\s*(['\"]).*?\1", re.IGNORECASE | re.DOTALL)
-_JAVASCRIPT_URL_RE = re.compile(r"javascript\s*:", re.IGNORECASE)
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_-]+)?\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$")
 _EXPLICIT_ANCHOR_RE = re.compile(r"\s*\{#([A-Za-z0-9_-]+)\}\s*$")
@@ -63,6 +59,40 @@ class LinkResolverProtocol(Protocol):
 class AssetResolverProtocol(Protocol):
     def resolve(self, *args: object, **kwargs: object) -> object:
         ...
+
+
+class _RawHtmlStripper(HTMLParser):
+    """Strip raw HTML tags and suppress script/style contents."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._suppressed_tag_stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        _ = attrs
+        if tag.lower() in {"script", "style"}:
+            self._suppressed_tag_stack.append(tag.lower())
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.lower()
+        if lowered in {"script", "style"} and lowered in self._suppressed_tag_stack:
+            self._suppressed_tag_stack.remove(lowered)
+
+    def handle_data(self, data: str) -> None:
+        if not self._suppressed_tag_stack:
+            self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if not self._suppressed_tag_stack:
+            self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if not self._suppressed_tag_stack:
+            self.parts.append(f"&#{name};")
+
+    def text(self) -> str:
+        return "".join(self.parts)
 
 
 @dataclass(frozen=True)
@@ -589,11 +619,10 @@ def _strip_obsidian_comments(text: str) -> str:
 
 
 def _strip_raw_html(text: str) -> str:
-    clean = _SCRIPT_RE.sub("", text)
-    clean = _STYLE_RE.sub("", clean)
-    clean = _EVENT_HANDLER_RE.sub("", clean)
-    clean = _JAVASCRIPT_URL_RE.sub("", clean)
-    return _HTML_TAG_RE.sub("", clean)
+    stripper = _RawHtmlStripper()
+    stripper.feed(text)
+    stripper.close()
+    return stripper.text()
 
 
 def _safe_note_path(note_path: str) -> str:
