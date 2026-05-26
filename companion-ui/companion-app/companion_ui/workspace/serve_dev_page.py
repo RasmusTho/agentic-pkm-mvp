@@ -88,6 +88,13 @@ def _e(value: str) -> str:
     return _html.escape(str(value))
 
 
+# Canonical companion kind values from COMPANION_NOTE_CONTRACT.md.
+# Exact match only — substring checks risk false-positives on arbitrary kind strings
+# (e.g. "non_companion_attachment"). Extend this set as new companion kinds are
+# introduced via the contract, not via loose substring heuristics.
+_COMPANION_KINDS: frozenset[str] = frozenset({"companion_note"})
+
+
 # Maximum characters for any single rail item label / reason / relation field.
 # Prevents operator/agent note body content from leaking into the rail verbatim.
 _RAIL_ITEM_MAX: int = 280
@@ -874,10 +881,15 @@ def _render_artifact_inspector(
     receipts_html = _render_inspector_receipts(note)
     posture_html = _render_inspector_review_posture(note)
 
+    is_companion_note = kind_val in _COMPANION_KINDS
+    inspector_kind_attr = f' data-kind="{_e(str(kind_val))}"' if kind_val else ""
+    inspector_companion_attr = ' data-companion="true"' if is_companion_note else ""
+
     return (
         f'<section class="vault-browser-inspector" '
         f'data-testid="workspace-vault-browser-inspector" '
-        f'data-affordance-status="read-only">'
+        f'data-affordance-status="read-only"'
+        f'{inspector_kind_attr}{inspector_companion_attr}>'
         f'<header class="inspector-header">'
         f'<span data-testid="workspace-vault-browser-inspector-title" '
         f'class="inspector-title">{title}</span>'
@@ -1248,9 +1260,15 @@ def _render_vault_browser(
             )
         badges_html = "".join(badges)
 
+        kind_safe = _e(str(kind_val)) if kind_val else ""
+        is_companion = kind_val in _COMPANION_KINDS
+        row_extra_class = " vault-browser-row--companion" if is_companion else ""
+        row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
+        row_companion_attr = ' data-companion="true"' if is_companion else ""
+
         rows.append(
             f"""
-          <li class="vault-browser-row" data-testid="workspace-vault-browser-note-row" data-active="{active}">
+          <li class="vault-browser-row{row_extra_class}" data-testid="workspace-vault-browser-note-row" data-active="{active}"{row_kind_attr}{row_companion_attr}>
             <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
             <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
             <span data-testid="workspace-vault-browser-note-zone">{zone}</span>
