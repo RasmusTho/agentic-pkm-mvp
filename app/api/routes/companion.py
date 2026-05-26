@@ -19,6 +19,7 @@ from app.api.routes.artifacts import _content_hash, _extract_title
 from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
 from app.config.paths import resolve_vault_root
 from app.knowledge.write_ops import write_note_from_absolute
+from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.runtime import build_orientation_frame
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
@@ -303,12 +304,8 @@ def _validate_workspace_markdown_note_path(note_path_raw: str) -> str:
 
 
 def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
-    for candidate in vault_root.rglob("*"):
-        if not candidate.is_file():
-            continue
-        if _vault_relative(candidate, vault_root) == safe_note_path:
-            return candidate
-    return None
+    candidate = vault_root / safe_note_path
+    return candidate if candidate.is_file() else None
 
 
 def _vault_relative(path: Path, vault_root: Path) -> str | None:
@@ -462,7 +459,7 @@ def _workspace_update_capability(
     )
 
 
-def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
+def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list[dict[str, str | bool]]]:
     def item(
         label: str,
         *,
@@ -476,7 +473,7 @@ def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
         }
 
     try:
-        frame = build_orientation_frame()
+        frame = build_orientation_frame(signals=signals)
     except Exception:
         return {
             "facts": [],
@@ -527,8 +524,8 @@ def _reorient_state() -> dict[str, list[dict[str, str | bool]]]:
     }
 
 
-def _resurface_state(safe_note_path: str) -> dict[str, list[dict[str, str | list[str]]]]:
-    evaluation = evaluate_resurfacing_candidates()
+def _resurface_state(safe_note_path: str, signals: OrientationSignals | None = None) -> dict[str, list[dict[str, str | list[str]]]]:
+    evaluation = evaluate_resurfacing_candidates(signals=signals)
     candidates: list[dict[str, str | list[str]]] = []
     for candidate in evaluation.candidates:
         signals = candidate.why_now.signals
@@ -883,6 +880,7 @@ def read_companion_workspace(
         canvas_enabled=canvas_enabled,
         writeguard_status=writeguard_status,
     )
+    orientation_signals = get_orientation_signals()
 
     return WorkspaceStateResponse(
         artifact=ArtifactState(
@@ -902,8 +900,8 @@ def read_companion_workspace(
             api_base_url_label=_safe_api_label(),
             trace_id=trace_id,
             vault_identity=_vault_identity_state(vault_root),
-            reorient=_reorient_state(),
-            resurface=_resurface_state(safe_note_path),
+            reorient=_reorient_state(signals=orientation_signals),
+            resurface=_resurface_state(safe_note_path, signals=orientation_signals),
         ),
         canvas=_canvas_state(safe_note_path, vault_root, canvas_enabled),
         panel=_panel_state(identity.artifact_id),
