@@ -48,6 +48,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from companion_ui.renderer import (
     PropertiesRenderer,
     VaultMarkdownDocument,
+    link_preview_css,
     note_outline_css,
     note_outline_script,
     parse_vault_markdown,
@@ -2776,6 +2777,7 @@ def render_index_html(
     .vault-callout-body > :last-child {{
       margin-bottom: 0;
     }}
+    {link_preview_css()}
     .vault-wikilink {{
       color: var(--cyan);
       text-decoration: none;
