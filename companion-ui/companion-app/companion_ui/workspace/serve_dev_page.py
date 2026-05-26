@@ -712,16 +712,17 @@ def _render_active_note_body_update_flow(
     safe_state = _e(state or "idle")
     safe_message = _e(message)
     if not enabled:
+        # Render a hidden absence marker — keeps testid selectors functional while
+        # not leaking verbose internal reason text into the visible rail.
         return f"""
         <section
           class="active-note-body-update-flow"
           data-testid="workspace-active-note-body-update-flow"
-          data-flow-state="disabled">
-          <div
-            class="active-note-body-update-blocked"
-            data-testid="workspace-active-note-body-update-state-blocked">
-            Active-note body update unavailable: {_e(_human_reason(reason))}.
-          </div>
+          data-flow-state="disabled"
+          data-reason="{_e(reason)}"
+          aria-hidden="true"
+          style="display:none">
+          <span data-testid="workspace-active-note-body-update-state-blocked"></span>
         </section>"""
 
     status_html = ""
@@ -1251,10 +1252,16 @@ def _render_suggestion_flow_region(fields: dict) -> str:
     suggestion_state = _e(fields.get("suggestion_state", "idle"))
     dom_alias = _e(fields.get("suggestion_dom_alias", suggestion_state))
     composer_enabled = bool(fields.get("suggestion_composer_enabled", True))
+    _suggestion_state_raw = str(fields.get("suggestion_state", "idle"))
+    _is_suggestion_idle = _suggestion_state_raw in ("idle", "thinking", "blocked")
     composer_text = (
-        "Suggestion composer can be used when a suggestion is staged."
-        if composer_enabled
-        else "Suggestion composer is locked by the current suggestion state."
+        ""  # suppress composer status copy when no suggestion is staged
+        if _is_suggestion_idle
+        else (
+            "Suggestion composer can be used when a suggestion is staged."
+            if composer_enabled
+            else "Suggestion composer is locked by the current suggestion state."
+        )
     )
     suggestion_copy = _human_state_label(
         str(fields.get("suggestion_state", "idle")),
@@ -1317,6 +1324,11 @@ def _render_portrait_sheet(sheet: dict) -> str:
 def _render_keyboard_shortcuts(shortcuts: dict) -> str:
     bindings = shortcuts.get("key_bindings") or {}
     if not bindings:
+        return ""
+    # Only show shortcut map when a suggestion is actively staged — not during idle,
+    # thinking, blocked, or terminal states.
+    rail_state = shortcuts.get("rail_state", "")
+    if rail_state not in ("staged_body", "staged_governance", "staged"):
         return ""
     rows = "".join(
         (
@@ -1937,6 +1949,18 @@ def _render_canvas_session_controls(
             f'data-affordance-status="unavailable">{_e(base_reason)}</div>'
             + hidden_markers
         )
+        # Early return: skip presence text, composer, undo_state — all covered by the
+        # single consolidated message above.  Log counts are kept for diagnostics.
+        return f"""
+        <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
+          {unavailable_html}
+          <div class="canvas-provenance" data-testid="workspace-canvas-provenance">
+            <span class="canvas-provenance-label">log</span>
+            <code data-testid="workspace-canvas-session-log-path">{log_text}</code>
+            <span data-testid="workspace-canvas-edit-count">{applied_edit_count} edit{'s' if applied_edit_count != 1 else ''}</span>
+            <span data-testid="workspace-canvas-undone-count">{undone_edit_count} undone</span>
+          </div>
+        </div>"""
     else:
         unavailable_html = "".join(
             (
