@@ -874,10 +874,15 @@ def _render_artifact_inspector(
     receipts_html = _render_inspector_receipts(note)
     posture_html = _render_inspector_review_posture(note)
 
+    is_companion_note = bool(kind_val and "companion" in str(kind_val))
+    inspector_kind_attr = f' data-kind="{_e(str(kind_val))}"' if kind_val else ""
+    inspector_companion_attr = ' data-companion="true"' if is_companion_note else ""
+
     return (
         f'<section class="vault-browser-inspector" '
         f'data-testid="workspace-vault-browser-inspector" '
-        f'data-affordance-status="read-only">'
+        f'data-affordance-status="read-only"'
+        f'{inspector_kind_attr}{inspector_companion_attr}>'
         f'<header class="inspector-header">'
         f'<span data-testid="workspace-vault-browser-inspector-title" '
         f'class="inspector-title">{title}</span>'
@@ -1248,9 +1253,15 @@ def _render_vault_browser(
             )
         badges_html = "".join(badges)
 
+        kind_safe = _e(str(kind_val)) if kind_val else ""
+        is_companion = bool(kind_val and "companion" in str(kind_val))
+        row_extra_class = " vault-browser-row--companion" if is_companion else ""
+        row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
+        row_companion_attr = ' data-companion="true"' if is_companion else ""
+
         rows.append(
             f"""
-          <li class="vault-browser-row" data-testid="workspace-vault-browser-note-row" data-active="{active}">
+          <li class="vault-browser-row{row_extra_class}" data-testid="workspace-vault-browser-note-row" data-active="{active}"{row_kind_attr}{row_companion_attr}>
             <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
             <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
             <span data-testid="workspace-vault-browser-note-zone">{zone}</span>

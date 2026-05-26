@@ -282,3 +282,59 @@ def test_inspector_has_no_edit_controls() -> None:
     assert 'data-intent="write' not in inspector_html
     assert 'data-intent="edit' not in inspector_html
     assert "data-affordance-status=\"active\"" not in inspector_html
+
+
+# ---- #1283: companion note visual distinction in inspector ----
+
+
+def test_inspector_companion_note_carries_data_companion_true() -> None:
+    """#1283 AC2: Inspector panel for companion_note carries data-companion="true"."""
+    note = _browser_note(
+        note_path="notes/current.md",
+        kind="companion_note",
+    )
+    _, _, html = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note]),
+    )
+    inspector_start = html.find('data-testid="workspace-vault-browser-inspector"')
+    assert inspector_start != -1
+    # Extract just the opening section tag
+    inspector_tag_end = html.find(">", inspector_start) + 1
+    inspector_tag = html[inspector_start:inspector_tag_end]
+    assert 'data-companion="true"' in inspector_tag, (
+        f"companion_note inspector must carry data-companion=\"true\"; got: {inspector_tag!r}"
+    )
+
+
+def test_inspector_companion_note_carries_data_kind() -> None:
+    """#1283 AC2: Inspector panel for companion_note carries data-kind="companion_note"."""
+    note = _browser_note(
+        note_path="notes/current.md",
+        kind="companion_note",
+    )
+    _, _, html = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note]),
+    )
+    inspector_start = html.find('data-testid="workspace-vault-browser-inspector"')
+    assert inspector_start != -1
+    inspector_tag_end = html.find(">", inspector_start) + 1
+    inspector_tag = html[inspector_start:inspector_tag_end]
+    assert 'data-kind="companion_note"' in inspector_tag, (
+        f"companion_note inspector must carry data-kind=\"companion_note\"; got: {inspector_tag!r}"
+    )
+
+
+def test_inspector_human_note_has_no_companion_attribute() -> None:
+    """#1283 AC2 boundary: Inspector panel for human_note does NOT carry data-companion="true"."""
+    note = _browser_note(
+        note_path="notes/current.md",
+        kind="human_note",
+    )
+    _, _, html = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note]),
+    )
+    inspector_start = html.find('data-testid="workspace-vault-browser-inspector"')
+    assert inspector_start != -1
+    inspector_tag_end = html.find(">", inspector_start) + 1
+    inspector_tag = html[inspector_start:inspector_tag_end]
+    assert 'data-companion="true"' not in inspector_tag
