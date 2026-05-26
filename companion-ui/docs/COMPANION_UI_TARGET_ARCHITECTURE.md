@@ -125,7 +125,7 @@ The detailed localhost/LAN/Tailscale/token/CSRF posture is defined in
 
 ## 5. Current Shipped State
 
-As of 2026-05-19 (after PR #1101, PR #1108, PR #1119 merged):
+As of 2026-05-26 (after PR #1101, PR #1108, PR #1119, and the Obsidian renderer parser/resolver slices merged):
 
 | Component | State |
 |---|---|
@@ -133,6 +133,8 @@ As of 2026-05-19 (after PR #1101, PR #1108, PR #1119 merged):
 | Real-note workspace dev page model | Shipped — `companion_ui/workspace/real_note_workspace_dev_page.py` (#1072 / PR #1101) |
 | Browser dev server | Shipped — `companion_ui/workspace/serve_dev_page.py` (#1103 / PR #1108) |
 | Real-note workspace visual shell (first alignment pass) | Shipped — Yggdrasil tokens, note body primary, companion rail placeholder (#1119). Dev/staging only. |
+| Obsidian-compatible Markdown parser and resolvers | Shipped — `companion_ui/renderer/` parser, link resolver, and asset resolver provide read-only parsing/resolution boundaries (#1296, #1297, #1298). |
+| Vault Markdown renderer core | Shipped — Python server-side read-only renderer wired into the Python-served note body. The implementation does not add a React/TypeScript frontend stack; unsafe HTML is stripped/escaped, wikilinks/assets route through resolver boundaries, and callout/Mermaid/properties upgrades remain in follow-up renderer slices (#1299). |
 | Canvas Core models and session API | Shipped — `companion_ui/canvas_core/`, `app/api/routes/canvas.py` behind `CANVAS_ENABLED` |
 | Canvas Suggestion Flow models | Shipped — `companion_ui/canvas_suggestion_flow/` (browser integration pending) |
 | Panel models and confirmation service | Shipped — `companion_ui/panel/`, `app/panel/confirmation.py`, `POST /api/panel/confirm` |

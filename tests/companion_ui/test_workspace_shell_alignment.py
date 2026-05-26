@@ -145,13 +145,13 @@ class TestFrontmatterStrippedFromBody:
         html = _html(body=_FRONTMATTER_BODY)
         body = _body_region(html)
         assert "Body paragraph here." in body
-        assert "# Heading" in body
+        assert '<h1 id="heading">Heading</h1>' in body
 
     def test_body_without_frontmatter_unchanged(self) -> None:
         body_only = "# Plain note\n\nNo frontmatter."
         html = _html(body=body_only)
         body = _body_region(html)
-        assert "# Plain note" in body
+        assert '<h1 id="plain-note">Plain note</h1>' in body
         assert "No frontmatter." in body
 
     def test_frontmatter_region_present_when_frontmatter_exists(self) -> None:
@@ -374,11 +374,12 @@ class TestRailEmptyState:
         rail = _rail_region(html)
         assert 'data-testid="workspace-rail-empty-state"' not in rail
 
-def test_delimiter_shaped_body_without_frontmatter_is_not_stripped() -> None:
+def test_malformed_frontmatter_is_omitted_from_body_with_diagnostic() -> None:
     body = "---\nThis is prose, not yaml: [\n---\n\nParagraph stays.\n"
     html = _html(body=body)
     note_body = _body_region(html)
-    assert "This is prose, not yaml" in note_body
+    assert "This is prose, not yaml" not in note_body
+    assert "frontmatter_parse_error" in note_body
     assert "Paragraph stays." in note_body
 
 
