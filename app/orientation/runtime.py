@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.observability.status_service import get_orientation_signals
+from app.observability.status_service import OrientationSignals, get_orientation_signals
 
 
 class OrientationExplanation(BaseModel):
@@ -36,8 +36,9 @@ def pass_through_context_dimensions(record: dict[str, object]) -> dict[str, obje
     }
 
 
-def build_orientation_frame() -> OrientationFrame:
-    signals = get_orientation_signals()
+def build_orientation_frame(signals: OrientationSignals | None = None) -> OrientationFrame:
+    if signals is None:
+        signals = get_orientation_signals()
     events = signals.events
     ingestion = signals.ingestion
     queue = signals.worker_queue
