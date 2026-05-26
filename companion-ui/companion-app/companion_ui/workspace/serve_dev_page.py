@@ -2428,6 +2428,61 @@ def render_index_html(
       overflow-x: auto;
       padding: 14px;
     }}
+    .vault-callout {{
+      --callout-rgb: 0, 212, 232;
+      --callout-color: rgb(var(--callout-rgb));
+      background: rgba(var(--callout-rgb), 0.08);
+      border: 1px solid rgba(var(--callout-rgb), 0.25);
+      border-left: 4px solid var(--callout-color);
+      border-radius: var(--radius-md);
+      margin: 0 0 16px;
+      padding: 12px 14px;
+    }}
+    .vault-callout--warning {{ --callout-rgb: 212, 168, 67; }}
+    .vault-callout--danger,
+    .vault-callout--failure,
+    .vault-callout--bug {{ --callout-rgb: 255, 61, 61; }}
+    .vault-callout--success,
+    .vault-callout--tip {{ --callout-rgb: 98, 208, 123; }}
+    .vault-callout--question,
+    .vault-callout--example {{ --callout-rgb: 74, 158, 255; }}
+    .vault-callout--quote {{ --callout-rgb: 122, 154, 184; }}
+    .vault-callout-header {{
+      align-items: center;
+      color: var(--callout-color);
+      display: flex;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      font-weight: 600;
+      gap: 8px;
+      line-height: 1.35;
+    }}
+    .vault-callout > summary.vault-callout-header {{
+      cursor: pointer;
+      list-style: none;
+    }}
+    .vault-callout > summary.vault-callout-header::-webkit-details-marker {{
+      display: none;
+    }}
+    .vault-callout-icon {{
+      align-items: center;
+      border: 1px solid rgba(var(--callout-rgb), 0.4);
+      border-radius: 999px;
+      display: inline-flex;
+      flex: 0 0 auto;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      height: 20px;
+      justify-content: center;
+      line-height: 1;
+      width: 20px;
+    }}
+    .vault-callout-body {{
+      margin-top: 10px;
+    }}
+    .vault-callout-body > :last-child {{
+      margin-bottom: 0;
+    }}
     .vault-wikilink {{
       color: var(--cyan);
       text-decoration: none;
