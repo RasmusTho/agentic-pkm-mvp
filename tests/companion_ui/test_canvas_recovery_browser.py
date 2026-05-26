@@ -103,7 +103,9 @@ def test_edits_blocked_during_recovery() -> None:
     assert state.is_loaded is False
     assert "unavailable" in (state.error or "")
     assert client.post_calls == []
-    assert "disabled>Apply body edit</button>" in html
+    assert 'data-testid="workspace-canvas-edit-submit"' not in html
+    assert 'data-testid="workspace-canvas-action-unavailable"' in html
+    assert 'data-action="apply-body-edit"' in html
 
 
 def test_conflict_indicator_visible() -> None:

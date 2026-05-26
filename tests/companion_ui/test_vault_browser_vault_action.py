@@ -247,6 +247,55 @@ def test_governance_action_requires_receipt_or_confirmation() -> None:
         )
 
 
+# ---- AC for #1281: open_note + copy_path wired with affordance=available ----
+
+
+def _action_tag(html: str, testid: str) -> str:
+    """Return the opening <div> tag for the given vault-action testid."""
+    import re
+    m = re.search(rf'(<div\b[^>]*data-testid="{re.escape(testid)}"[^>]*>)', html)
+    assert m, f"vault-action testid={testid!r} not found in inspector HTML"
+    return m.group(1)
+
+
+def test_open_note_affordance_available() -> None:
+    """#1281 AC: open_note renders data-affordance-status=available when note_path is set."""
+    html = _inspector_html(_load_html(note_path="notes/current.md"))
+    tag = _action_tag(html, "vault-action-open-note")
+    assert 'data-affordance-status="available"' in tag, (
+        f"open_note must carry affordance=available; got: {tag!r}"
+    )
+
+
+def test_open_note_carries_workspace_href() -> None:
+    """#1281 AC: open_note carries a data-href pointing to the note in the workspace."""
+    html = _inspector_html(_load_html(note_path="notes/current.md"))
+    tag = _action_tag(html, "vault-action-open-note")
+    assert "data-href=" in tag, f"open_note must carry data-href; got: {tag!r}"
+    assert "note_path" in tag, f"data-href must include note_path parameter; got: {tag!r}"
+    assert "notes/current.md" in tag or "notes%2Fcurrent.md" in tag, (
+        f"data-href must contain the note path; got: {tag!r}"
+    )
+
+
+def test_copy_path_affordance_available() -> None:
+    """#1281 AC: copy_path renders data-affordance-status=available when note_path is set."""
+    html = _inspector_html(_load_html(note_path="notes/current.md"))
+    tag = _action_tag(html, "vault-action-copy-path")
+    assert 'data-affordance-status="available"' in tag, (
+        f"copy_path must carry affordance=available; got: {tag!r}"
+    )
+
+
+def test_copy_path_carries_note_path_in_data_path() -> None:
+    """#1281 AC: copy_path carries data-path with the vault-relative note path."""
+    html = _inspector_html(_load_html(note_path="notes/current.md"))
+    tag = _action_tag(html, "vault-action-copy-path")
+    assert 'data-path="notes/current.md"' in tag, (
+        f"copy_path must carry data-path with the note path; got: {tag!r}"
+    )
+
+
 # ---- AC6: body update flow remains separate ----
 
 

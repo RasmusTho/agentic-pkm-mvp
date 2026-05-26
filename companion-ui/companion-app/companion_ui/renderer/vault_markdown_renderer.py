@@ -15,11 +15,16 @@ from typing import Protocol
 from urllib.parse import quote
 
 from companion_ui.renderer.asset_resolver import VaultAssetResolver
+from companion_ui.renderer.callout_renderer import (
+    CALLOUT_HEADER_RE,
+    ObsidianCalloutRenderer,
+)
 from companion_ui.renderer.link_resolver import (
     VaultLinkResolver,
     link_display_label,
     parse_wikilink,
 )
+from companion_ui.renderer.mermaid_renderer import MermaidBlockRenderer
 from companion_ui.renderer.models import (
     MarkdownDiagnostic,
     VaultMarkdownDocument,
@@ -34,7 +39,7 @@ _EXPLICIT_ANCHOR_RE = re.compile(r"\s*\{#([A-Za-z0-9_-]+)\}\s*$")
 _TASK_RE = re.compile(r"^\s*[-*+]\s+\[([^\]])\]\s+(.*)$")
 _UNORDERED_RE = re.compile(r"^\s*[-*+]\s+(.*)$")
 _ORDERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
-_CALLOUT_RE = re.compile(r"^\s*>\s*\[!([A-Za-z0-9_-]+)\]([+-])?(?:\s+(.*))?\s*$")
+_CALLOUT_RE = CALLOUT_HEADER_RE
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 _COMMENT_RE = re.compile(r"%%.*?%%", re.DOTALL)
 _DIAGNOSTIC_ONLY_LANGUAGES = {"dataview", "dataviewjs", "query"}
@@ -49,6 +54,7 @@ _LOCAL_PATH_PREFIXES = (
     "/var/",
     "/Volumes/",
 )
+_CALLOUT_RENDERER = ObsidianCalloutRenderer()
 
 
 class LinkResolverProtocol(Protocol):
@@ -110,6 +116,7 @@ class _RenderContext:
     note_path: str
     link_resolver: LinkResolverProtocol
     asset_resolver: AssetResolverProtocol
+    mermaid_renderer: MermaidBlockRenderer
     diagnostics: list[MarkdownDiagnostic]
 
 
@@ -121,9 +128,11 @@ class VaultMarkdownRenderer:
         *,
         link_resolver: LinkResolverProtocol | None = None,
         asset_resolver: AssetResolverProtocol | None = None,
+        mermaid_renderer: MermaidBlockRenderer | None = None,
     ) -> None:
         self._link_resolver = link_resolver or VaultLinkResolver({})
         self._asset_resolver = asset_resolver or VaultAssetResolver({})
+        self._mermaid_renderer = mermaid_renderer or MermaidBlockRenderer()
 
     def render(
         self,
@@ -137,6 +146,7 @@ class VaultMarkdownRenderer:
             note_path=_safe_note_path(note_path),
             link_resolver=self._link_resolver,
             asset_resolver=self._asset_resolver,
+            mermaid_renderer=self._mermaid_renderer,
             diagnostics=diagnostics,
         )
         body_markdown = _strip_obsidian_comments(parsed.body_markdown)
@@ -160,12 +170,14 @@ def render_vault_markdown(
     note_path: str = "",
     link_resolver: LinkResolverProtocol | None = None,
     asset_resolver: AssetResolverProtocol | None = None,
+    mermaid_renderer: MermaidBlockRenderer | None = None,
 ) -> RenderedVaultMarkdown:
     """Convenience wrapper for one-shot rendering."""
 
     return VaultMarkdownRenderer(
         link_resolver=link_resolver,
         asset_resolver=asset_resolver,
+        mermaid_renderer=mermaid_renderer,
     ).render(raw_markdown, note_path=note_path)
 
 
@@ -186,7 +198,7 @@ def _render_blocks(markdown: str, context: _RenderContext) -> str:
             continue
 
         if _CALLOUT_RE.match(line):
-            html_block, index = _render_callout_stub(lines, index, context)
+            html_block, index = _render_callout(lines, index, context)
             parts.append(html_block)
             continue
 
@@ -251,6 +263,11 @@ def _render_fenced_code(
         index += 1
 
     code = "\n".join(code_lines)
+    if language == "mermaid":
+        rendered_mermaid = context.mermaid_renderer.render(code)
+        context.diagnostics.extend(rendered_mermaid.diagnostics)
+        return rendered_mermaid.html, index
+
     if language in _DIAGNOSTIC_ONLY_LANGUAGES:
         context.diagnostics.append(
             MarkdownDiagnostic(
@@ -280,30 +297,16 @@ def _render_code_block(code: str, language: str) -> str:
     )
 
 
-def _render_callout_stub(
+def _render_callout(
     lines: list[str],
     start: int,
     context: _RenderContext,
 ) -> tuple[str, int]:
-    first_line = lines[start]
-    match = _CALLOUT_RE.match(first_line)
-    callout_type = (match.group(1) if match else "callout").lower()
-    index = start + 1
-    while index < len(lines) and (not lines[index].strip() or lines[index].lstrip().startswith(">")):
-        index += 1
-    context.diagnostics.append(
-        MarkdownDiagnostic(
-            severity="info",
-            code="unsupported_callout",
-            message=f"Callout rendering for {callout_type!r} is pending a dedicated renderer.",
-        )
-    )
-    return (
-        _render_unsupported_diagnostic(
-            code="unsupported_callout",
-            message=f"Callout rendering pending: {callout_type}",
-        ),
-        index,
+    return _CALLOUT_RENDERER.render_from_lines(
+        lines,
+        start,
+        render_body=lambda body_markdown: _render_blocks(body_markdown, context),
+        render_title=lambda title: _render_inline(title, context),
     )
 
 

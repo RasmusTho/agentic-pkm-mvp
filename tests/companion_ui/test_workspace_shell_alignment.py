@@ -320,16 +320,39 @@ class TestHumanFacingCopy:
         """Composer enabled/locked exposes its internal state as a data-* attribute."""
         html = _html(suggestion_composer_enabled=True)
         assert 'data-composer-state="enabled"' in html
+        assert "composer enabled" not in html.lower()
 
     def test_composer_state_data_attr_when_locked(self) -> None:
         html = _html(suggestion_composer_enabled=False)
         assert 'data-composer-state="locked"' in html
+        assert "composer locked" not in html.lower()
 
     def test_workspace_update_label_has_human_text(self) -> None:
         """A human-friendly label is used somewhere in posture chrome."""
         html = _html()
         # "Online" is the human-facing posture phrase for ok.
         assert "Online" in html
+
+    def test_internal_state_labels_not_visible_by_default(self) -> None:
+        html = _html()
+        visible_leaks = [
+            "user not present",
+            "composer enabled",
+            "suggestion</span>",
+            "find unavailable",
+            ">idle</span>",
+        ]
+        lower_html = html.lower()
+        for leak in visible_leaks:
+            assert leak not in lower_html
+
+    def test_default_canvas_unavailable_actions_are_reason_states_not_buttons(self) -> None:
+        html = _html(guard_canvas_enabled=False, guard_workspace_update_available=False)
+        assert 'data-testid="workspace-canvas-start"' not in html
+        assert 'data-testid="workspace-canvas-close"' not in html
+        assert 'data-testid="workspace-canvas-edit-submit"' not in html
+        assert 'data-testid="workspace-canvas-undo"' not in html
+        assert 'data-testid="workspace-canvas-action-unavailable"' in html
 
 
 # ---------------------------------------------------------------------------
@@ -391,3 +414,146 @@ def test_rail_empty_state_uses_rendered_panel_proposals_not_stale_count() -> Non
     )
     rail = _rail_region(html)
     assert 'data-testid="workspace-rail-empty-state"' not in rail
+
+
+# ---------------------------------------------------------------------------
+# Regression — operator/agent prompt text must not leak into the rail (UAT blocker)
+# Note body content lives in workspace-note-body only; the rail must never echo
+# raw note body text verbatim.  Rail item labels are capped to _RAIL_ITEM_MAX chars.
+# ---------------------------------------------------------------------------
+
+_OPERATOR_PROMPT = (
+    "You are on the Mac mini. Prepare the dev runtime for human remote-client UAT "
+    "of PR #1285. Clone the worktree to /tmp/uat-1285, checkout branch uat/1285, "
+    "set RUNTIME_HOST=http://10.42.42.10:18001, then run: make dev-runtime && "
+    "python3 scripts/serve_workspace.py --port 8112. Do not merge until UAT passes."
+)
+
+
+class TestOperatorPromptDoesNotLeakIntoRail:
+    """Regression for UAT blocker: operator/agent instruction text in left rail."""
+
+    def test_operator_prompt_body_not_in_rail(self) -> None:
+        """Note body containing operator instructions must not appear in the rail."""
+        html = _html(body=_OPERATOR_PROMPT)
+        rail = _rail_region(html)
+        # The distinctive operator-prompt phrase must not appear verbatim in the rail
+        assert "Prepare the dev runtime for human remote-client UAT" not in rail
+        assert "Do not merge until UAT passes" not in rail
+
+    def test_operator_prompt_body_is_in_note_body_region(self) -> None:
+        """Operator prompt appears only in the note-body surface, not escaped into the rail."""
+        html = _html(body=_OPERATOR_PROMPT)
+        body_region = _body_region(html)
+        # The note body region should contain (HTML-escaped) note content
+        assert "Mac mini" in body_region
+
+    def test_reorient_label_capped_at_280_chars(self) -> None:
+        """A very long reorient item label is truncated — does not appear verbatim in the rail."""
+        long_label = "A" * 400
+        html = _html(
+            reorient_sections={
+                "facts": [{"label": long_label, "source_link": "Notes/note.md"}],
+            }
+        )
+        rail = _rail_region(html)
+        # Full 400-char label must not appear verbatim in the rail
+        assert long_label not in rail
+        # A 280-char prefix must appear (truncated form is rendered)
+        assert "A" * 280 in rail
+
+    def test_resurface_label_capped_at_280_chars(self) -> None:
+        """A very long resurface candidate label is truncated in the rail."""
+        long_label = "B" * 400
+        html = _html(
+            resurface_candidates=[
+                {
+                    "candidate_id": "c1",
+                    "label": long_label,
+                    "why_now": "relevant",
+                    "relation_to_active_artifact": "linked",
+                    "source_link": "Notes/ref.md",
+                    "signals": [],
+                }
+            ]
+        )
+        rail = _rail_region(html)
+        assert long_label not in rail
+        assert "B" * 280 in rail
+
+    def test_resurface_why_now_capped_at_280_chars(self) -> None:
+        """A very long why_now field is truncated in the rail."""
+        long_why = "C" * 400
+        html = _html(
+            resurface_candidates=[
+                {
+                    "candidate_id": "c2",
+                    "label": "Short label",
+                    "why_now": long_why,
+                    "relation_to_active_artifact": "linked",
+                    "source_link": "Notes/ref.md",
+                    "signals": [],
+                }
+            ]
+        )
+        rail = _rail_region(html)
+        assert long_why not in rail
+        assert "C" * 280 in rail
+
+
+# ---------------------------------------------------------------------------
+# R1 regression — frontmatter must not be user-visible outside identity chrome
+# Issue #1290: UAT confirmed raw YAML was visible adjacent to the note frame.
+# These tests lock in the fix: the workspace-note-frontmatter section is hidden
+# from user view via aria-hidden + display:none; raw YAML stays out of the body.
+# ---------------------------------------------------------------------------
+
+
+def _frontmatter_section_tag(html: str) -> str:
+    """Return the opening <section> tag for the workspace-note-frontmatter element."""
+    m = re.search(
+        r'(<section\b[^>]*data-testid="workspace-note-frontmatter"[^>]*>)',
+        html,
+    )
+    assert m, "workspace-note-frontmatter section not found"
+    return m.group(1)
+
+
+class TestFrontmatterR1NotVisibleOutsideChrome:
+    """R1 regression: raw frontmatter must not be user-visible outside identity chrome (#1290)."""
+
+    def test_frontmatter_section_is_aria_hidden_when_frontmatter_present(self) -> None:
+        """Opening tag must carry aria-hidden=true so assistive tech sees it hidden."""
+        html = _html(body=_FRONTMATTER_BODY)
+        tag = _frontmatter_section_tag(html)
+        assert 'data-frontmatter-present="true"' in tag, (
+            "Expected data-frontmatter-present=true for a body that has frontmatter"
+        )
+        assert 'aria-hidden="true"' in tag, (
+            f"R1 violation: workspace-note-frontmatter must carry aria-hidden=true; got: {tag!r}"
+        )
+
+    def test_frontmatter_section_is_display_none_when_frontmatter_present(self) -> None:
+        """Opening tag must carry display:none so the section is visually hidden."""
+        html = _html(body=_FRONTMATTER_BODY)
+        tag = _frontmatter_section_tag(html)
+        assert "display:none" in tag or "display: none" in tag, (
+            f"R1 violation: workspace-note-frontmatter must carry style=display:none; got: {tag!r}"
+        )
+
+    def test_raw_yaml_keys_absent_from_note_body_region(self) -> None:
+        """R1: raw YAML key:value syntax must not appear in the note-body rendering surface."""
+        html = _html(body=_FRONTMATTER_BODY)
+        body = _body_region(html)
+        for key in ("uuid:", "kind:", "zone:", "tags:"):
+            assert key not in body, (
+                f"R1 violation: raw YAML key '{key}' found in workspace-note-body region"
+            )
+
+    def test_frontmatter_section_absent_from_agent_rail(self) -> None:
+        """The frontmatter section must not be rendered inside the agent rail."""
+        html = _html(body=_FRONTMATTER_BODY)
+        rail = _rail_region(html)
+        assert 'data-testid="workspace-note-frontmatter"' not in rail, (
+            "R1 violation: workspace-note-frontmatter section must not appear in agent rail"
+        )

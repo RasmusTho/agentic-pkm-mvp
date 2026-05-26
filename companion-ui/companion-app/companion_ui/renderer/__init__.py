@@ -19,7 +19,17 @@ from companion_ui.renderer.properties_renderer import (
     RenderedProperties,
     parse_frontmatter_fields,
 )
+from companion_ui.renderer.mermaid_renderer import (
+    MermaidBlockRenderer,
+    MermaidRenderError,
+    MermaidRenderResult,
+)
 from companion_ui.renderer.vault_markdown_parser import parse_vault_markdown
+from companion_ui.renderer.note_outline import (
+    note_outline_css,
+    note_outline_script,
+    render_note_outline,
+)
 from companion_ui.renderer.vault_markdown_renderer import (
     RenderedVaultMarkdown,
     VaultMarkdownRenderer,
@@ -34,6 +44,9 @@ __all__ = [
     "HeadingRef",
     "LinkResolution",
     "MarkdownDiagnostic",
+    "MermaidBlockRenderer",
+    "MermaidRenderError",
+    "MermaidRenderResult",
     "ObsidianCommentRef",
     "PropertiesRenderer",
     "PropertyField",
@@ -43,6 +56,9 @@ __all__ = [
     "WikiLinkRef",
     "parse_frontmatter_fields",
     "parse_vault_markdown",
+    "note_outline_css",
+    "note_outline_script",
+    "render_note_outline",
     "RenderedVaultMarkdown",
     "VaultMarkdownRenderer",
     "render_vault_markdown",
