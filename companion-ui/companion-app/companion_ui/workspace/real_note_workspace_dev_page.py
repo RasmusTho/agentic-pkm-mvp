@@ -77,6 +77,8 @@ class NoteLoadIntent:
     """Represents the operator's intent to load a specific note by path.
 
     note_path is forwarded to the runtime API as a query parameter.
+    active_filters carries optional vault browser filter dimensions (kind,
+    zone, review_state, trust) forwarded as multi-value query params.
     The UI does not resolve vault paths or access vault files directly.
     The runtime API is bound to an environment; it determines which vault
     is read.
@@ -84,6 +86,7 @@ class NoteLoadIntent:
 
     note_path: str
     artifact_id: Optional[str] = None
+    active_filters: dict[str, list[str]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +230,11 @@ class RealNoteWorkspaceDevPage:
         vault_browser_error: str | None = None
         if isinstance(self._http, WorkspaceHttpClient):
             try:
+                browser_params: dict[str, Any] = {"q": "", "limit": 250}
+                browser_params.update(intent.active_filters)
                 vault_browser = self._http.get(
                     "/api/companion/vault-browser",
-                    params={"q": "", "limit": 250},
+                    params=browser_params,
                 )
             except WorkspaceClientError as exc:
                 vault_browser = {}

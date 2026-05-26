@@ -1133,15 +1133,25 @@ def _render_filter_chips(
         if not values:
             continue
         active_set = set(active_filters.get(field, []))
+        multi_active = len(active_set) > 1
         for val in sorted(values):
             is_active = val in active_set
+            deselect_span = (
+                '<span class="filter-chip-remove" aria-label="remove filter" data-testid="filter-chip-remove">×</span>'
+                if is_active and multi_active
+                else ""
+            )
             chips_html.append(
                 f'<span class="filter-chip" '
                 f'data-testid="vault-browser-filter-chip" '
                 f'data-key="{_e(field)}" '
                 f'data-value="{_e(val)}" '
-                f'data-active="{"true" if is_active else "false"}">'
-                f'{_e(label)}: {_e(val)}</span>'
+                f'data-active="{"true" if is_active else "false"}" '
+                f'onclick="vbToggleFilter(this)" '
+                f'style="cursor:pointer">'
+                f'{_e(label)}: {_e(val)}'
+                f'{deselect_span}'
+                f'</span>'
             )
     if not chips_html:
         return ""
@@ -3560,6 +3570,19 @@ def render_index_html(
     }};
   }})();
   </script>
+  <script>
+  function vbToggleFilter(el) {{
+    var key = el.dataset.key;
+    var val = el.dataset.value;
+    var url = new URL(window.location.href);
+    var params = url.searchParams;
+    var existing = params.getAll(key);
+    params.delete(key);
+    if (existing.indexOf(val) === -1) {{ params.append(key, val); }}
+    existing.filter(function(v) {{ return v !== val; }}).forEach(function(v) {{ params.append(key, v); }});
+    window.location.href = url.toString();
+  }}
+  </script>
 </body>
 </html>"""
 
@@ -3577,12 +3600,14 @@ def handle_get(
     """
     params = parse_qs(query_string)
     note_path = params.get("note_path", [""])[0].strip()
+    _filter_keys = ("kind", "zone", "review_state", "trust")
+    active_filters = {k: params[k] for k in _filter_keys if params.get(k)}
     fields: Optional[dict] = None
     error = ""
 
     if note_path:
         page = RealNoteWorkspaceDevPage(client)
-        state = page.load(NoteLoadIntent(note_path=note_path))
+        state = page.load(NoteLoadIntent(note_path=note_path, active_filters=active_filters))
         if state.is_loaded:
             fields = page.render_fields()
         else:
