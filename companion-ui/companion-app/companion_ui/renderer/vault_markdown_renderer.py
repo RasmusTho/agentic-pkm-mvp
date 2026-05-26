@@ -67,6 +67,11 @@ class AssetResolverProtocol(Protocol):
         ...
 
 
+class LinkPreviewProtocol(Protocol):
+    def render(self, resolution: object, *, note_path: str = "", depth: int = 0) -> object:
+        ...
+
+
 class _RawHtmlStripper(HTMLParser):
     """Strip raw HTML tags and suppress script/style contents."""
 
@@ -117,7 +122,10 @@ class _RenderContext:
     link_resolver: LinkResolverProtocol
     asset_resolver: AssetResolverProtocol
     mermaid_renderer: MermaidBlockRenderer
+    link_preview: LinkPreviewProtocol | None
+    preview_depth: int
     diagnostics: list[MarkdownDiagnostic]
+    preview_counter: int = 0
 
 
 class VaultMarkdownRenderer:
@@ -129,16 +137,19 @@ class VaultMarkdownRenderer:
         link_resolver: LinkResolverProtocol | None = None,
         asset_resolver: AssetResolverProtocol | None = None,
         mermaid_renderer: MermaidBlockRenderer | None = None,
+        link_preview: LinkPreviewProtocol | None = None,
     ) -> None:
         self._link_resolver = link_resolver or VaultLinkResolver({})
         self._asset_resolver = asset_resolver or VaultAssetResolver({})
         self._mermaid_renderer = mermaid_renderer or MermaidBlockRenderer()
+        self._link_preview = link_preview
 
     def render(
         self,
         document: VaultMarkdownDocument | str,
         *,
         note_path: str = "",
+        preview_depth: int = 0,
     ) -> RenderedVaultMarkdown:
         parsed = parse_vault_markdown(document) if isinstance(document, str) else document
         diagnostics = list(parsed.diagnostics)
@@ -147,6 +158,8 @@ class VaultMarkdownRenderer:
             link_resolver=self._link_resolver,
             asset_resolver=self._asset_resolver,
             mermaid_renderer=self._mermaid_renderer,
+            link_preview=self._link_preview,
+            preview_depth=max(0, int(preview_depth)),
             diagnostics=diagnostics,
         )
         body_markdown = _strip_obsidian_comments(parsed.body_markdown)
@@ -171,6 +184,7 @@ def render_vault_markdown(
     link_resolver: LinkResolverProtocol | None = None,
     asset_resolver: AssetResolverProtocol | None = None,
     mermaid_renderer: MermaidBlockRenderer | None = None,
+    link_preview: LinkPreviewProtocol | None = None,
 ) -> RenderedVaultMarkdown:
     """Convenience wrapper for one-shot rendering."""
 
@@ -178,6 +192,7 @@ def render_vault_markdown(
         link_resolver=link_resolver,
         asset_resolver=asset_resolver,
         mermaid_renderer=mermaid_renderer,
+        link_preview=link_preview,
     ).render(raw_markdown, note_path=note_path)
 
 
@@ -472,7 +487,8 @@ def _render_wikilink(raw: str, context: _RenderContext) -> str:
     kind = str(getattr(resolution, "kind", "missing"))
     label = link_display_label(resolution) if kind in {"resolved", "missing", "ambiguous"} else raw
     if kind != "resolved":
-        return _render_link_diagnostic(label, kind, getattr(resolution, "reason", None))
+        trigger_html = _render_link_diagnostic(label, kind, getattr(resolution, "reason", None))
+        return _wrap_link_preview(trigger_html, resolution, context)
 
     note_path = _safe_note_path(str(getattr(resolution, "note_path", "") or ""))
     if not note_path:
@@ -482,11 +498,57 @@ def _render_wikilink(raw: str, context: _RenderContext) -> str:
     fragment = _resolution_fragment(resolution)
     if fragment:
         href = f"{href}#{quote(fragment, safe='')}"
-    return (
+    trigger_html = (
         '<a class="vault-wikilink" '
         'data-link-state="resolved" '
         f'data-note-path="{_e(note_path)}" '
         f'href="{_e(href)}">{_e(str(getattr(resolution, "display_text", label)))}</a>'
+    )
+    return _wrap_link_preview(trigger_html, resolution, context)
+
+
+def _wrap_link_preview(trigger_html: str, resolution: object, context: _RenderContext) -> str:
+    if context.link_preview is None:
+        return trigger_html
+
+    context.preview_counter += 1
+    preview_id = (
+        f"link-preview-{context.preview_counter}"
+        if context.preview_depth == 0
+        else f"link-preview-{context.preview_depth + 1}-{context.preview_counter}"
+    )
+    try:
+        preview = context.link_preview.render(
+            resolution,
+            note_path=context.note_path,
+            depth=context.preview_depth,
+        )
+        preview_html = str(getattr(preview, "html", "") or "")
+    except Exception as exc:  # Preview must never crash the note surface.
+        preview_html = _render_link_preview_exception(str(exc))
+
+    if not preview_html:
+        return trigger_html
+    return (
+        '<span class="vault-link-preview-host" '
+        'data-testid="link-preview" '
+        f'data-preview-depth="{context.preview_depth}" '
+        'tabindex="0" '
+        f'aria-describedby="{_e(preview_id)}">'
+        f"{trigger_html}"
+        f'<span id="{_e(preview_id)}" class="link-preview-popover" role="tooltip">'
+        f"{preview_html}</span>"
+        "</span>"
+    )
+
+
+def _render_link_preview_exception(message: str) -> str:
+    return (
+        '<section class="link-preview-card link-preview-diagnostic" '
+        'data-preview-state="missing" data-readonly="true">'
+        '<div class="link-preview-title">Preview unavailable</div>'
+        f'<div class="link-preview-message">{_e(message)}</div>'
+        "</section>"
     )
 
 
