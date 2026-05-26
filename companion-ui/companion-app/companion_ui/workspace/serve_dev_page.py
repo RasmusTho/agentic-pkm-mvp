@@ -287,7 +287,7 @@ def _render_rail_empty_state(
     )
 
 
-def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
+def _render_body_edit_panel(update_flow_available: bool, note_path: str, raw_body: str = "") -> str:
     if not update_flow_available:
         return (
             '<section class="body-edit-panel body-edit-disabled workspace-action-absent" '
@@ -308,10 +308,10 @@ def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
     <span class="body-edit-label">Edit note body</span>
     <span class="body-edit-note">Frontmatter and UUID are preserved. WriteGuard is authoritative.</span>
   </div>
-  <textarea class="body-edit-textarea" id="body-edit-textarea"
-            data-testid="workspace-body-edit-textarea"
-            rows="10" placeholder="Enter new note body…"
-            data-note-path="{note_path}"></textarea>
+  <div class="body-edit-codemirror" id="body-edit-codemirror"
+       data-testid="workspace-body-edit-textarea"
+       data-note-path="{note_path}"
+       data-raw-body="{_e(raw_body)}"></div>
   <div class="body-edit-actions">
     <button class="body-edit-submit"
             data-testid="workspace-body-edit-submit"
@@ -668,7 +668,7 @@ def _render_note_section(fields: dict) -> str:
           {suggested_insertions_html}
         </div>
       </div>
-      {_render_body_edit_panel(update_flow_available, note_path_val)}
+      {_render_body_edit_panel(update_flow_available, note_path_val, raw_body)}
     </div>
     <aside
       class="agent-rail"
@@ -3267,17 +3267,19 @@ def render_index_html(
     .body-edit-header {{ display: flex; flex-direction: column; gap: 2px; }}
     .body-edit-label {{ color: var(--fg-1); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 600; }}
     .body-edit-note {{ color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-xs); }}
-    .body-edit-textarea {{
+    .body-edit-codemirror {{
       background: var(--bg-raised);
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-md);
-      color: var(--fg-1);
-      font-family: var(--font-mono);
-      font-size: var(--text-sm);
-      padding: 8px;
-      resize: vertical;
+      min-height: 200px;
       width: 100%;
     }}
+    .body-edit-codemirror .cm-editor {{
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }}
+    .body-edit-codemirror .cm-focused {{ outline: 1px solid var(--border-focus); }}
     .body-edit-actions {{ display: flex; gap: 8px; }}
     .body-edit-submit {{
       background: var(--bg-raised);
@@ -3550,11 +3552,11 @@ def render_index_html(
   (function() {{
     window.bodyEditor = {{
       submit: function() {{
-        var ta = document.getElementById('body-edit-textarea');
+        var container = document.getElementById('body-edit-codemirror');
         var statusEl = document.getElementById('body-edit-status');
-        if (!ta || !statusEl) return;
-        var notePath = ta.getAttribute('data-note-path');
-        var newBody = ta.value;
+        if (!container || !statusEl) return;
+        var notePath = container.getAttribute('data-note-path');
+        var newBody = window._cmView ? window._cmView.state.doc.toString() : '';
         statusEl.className = 'body-edit-status';
         statusEl.textContent = 'Submitting…';
         fetch('/api/companion/workspace/body', {{
@@ -3580,13 +3582,32 @@ def render_index_html(
         }});
       }},
       reset: function() {{
-        var ta = document.getElementById('body-edit-textarea');
+        var container = document.getElementById('body-edit-codemirror');
         var statusEl = document.getElementById('body-edit-status');
-        if (ta) ta.value = '';
+        if (window._cmView && container) {{
+          var orig = container.getAttribute('data-raw-body') || '';
+          window._cmView.dispatch({{
+            changes: {{from: 0, to: window._cmView.state.doc.length, insert: orig}}
+          }});
+        }}
         if (statusEl) {{ statusEl.className = 'body-edit-status'; statusEl.textContent = ''; }}
       }}
     }};
   }})();
+  </script>
+  <script type="module">
+  import {{EditorView, basicSetup}} from 'https://esm.sh/codemirror@6.0.1';
+  import {{markdown, markdownLanguage}} from 'https://esm.sh/@codemirror/lang-markdown@6.2.5';
+  import {{oneDark}} from 'https://esm.sh/@codemirror/theme-one-dark@6.1.2';
+  var container = document.getElementById('body-edit-codemirror');
+  if (container) {{
+    var rawBody = container.dataset.rawBody || '';
+    window._cmView = new EditorView({{
+      doc: rawBody,
+      extensions: [basicSetup, markdown({{base: markdownLanguage}}), oneDark],
+      parent: container,
+    }});
+  }}
   </script>
   <script>
   function vbToggleFilter(el) {{
