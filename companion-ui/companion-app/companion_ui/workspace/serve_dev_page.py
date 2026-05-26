@@ -983,7 +983,7 @@ def _render_inspector_receipts(note: dict) -> str:
     )
 
 
-def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved for future per-artifact overrides
+def _render_vault_actions(note: dict) -> str:
     """Render the VaultAction display model for the selected browser artifact.
 
     Each action carries:
@@ -998,6 +998,7 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
     Governance and write-class actions are disabled/blocked with explicit reasons in
     this slice. No new write path is opened without guard/receipt semantics.
     """
+    note_path = str(note.get("note_path") or "").strip()
 
     def _action(
         testid: str,
@@ -1011,6 +1012,9 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
         disabled_reason: str = "",
         requires_receipt: bool = False,
         requires_confirmation: bool = False,
+        data_href: str = "",
+        data_path: str = "",
+        onclick: str = "",
     ) -> str:
         blocked_attr = (
             f' data-blocked="true" data-blocked-reason="{_e(blocked_reason)}"'
@@ -1024,6 +1028,9 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
         )
         receipt_attr = ' data-requires-receipt="true"' if requires_receipt else ""
         confirm_attr = ' data-requires-confirmation="true"' if requires_confirmation else ""
+        href_attr = f' data-href="{_e(data_href)}"' if data_href else ""
+        path_attr = f' data-path="{_e(data_path)}"' if data_path else ""
+        onclick_attr = f' onclick="{_e(onclick)}"' if onclick else ""
         return (
             f'<div class="vault-action" '
             f'data-testid="{testid}" '
@@ -1032,14 +1039,32 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
             f"{blocked_attr}"
             f"{disabled_attr}"
             f"{receipt_attr}"
-            f'{confirm_attr}>'
+            f"{confirm_attr}"
+            f"{href_attr}"
+            f"{path_attr}"
+            f'{onclick_attr}>'
             f'<span class="vault-action-label">{_e(label)}</span>'
             f"</div>"
         )
 
+    workspace_href = f"?note_path={quote(note_path, safe='/')}" if note_path else ""
     actions = [
-        _action("vault-action-open-note", "Open note", "read_only"),
-        _action("vault-action-copy-path", "Copy path", "ui_only"),
+        _action(
+            "vault-action-open-note",
+            "Open note",
+            "read_only",
+            affordance="available" if note_path else "unavailable",
+            data_href=workspace_href,
+            onclick="window.location.href=this.dataset.href" if note_path else "",
+        ),
+        _action(
+            "vault-action-copy-path",
+            "Copy path",
+            "ui_only",
+            affordance="available" if note_path else "unavailable",
+            data_path=note_path,
+            onclick="navigator.clipboard.writeText(this.dataset.path)" if note_path else "",
+        ),
         _action(
             "vault-action-find-related",
             "Find related (read-only)",
