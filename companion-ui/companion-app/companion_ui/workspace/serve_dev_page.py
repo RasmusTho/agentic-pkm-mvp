@@ -625,7 +625,10 @@ def _render_note_section(fields: dict) -> str:
     )
 
     return f"""
-  <div class="workspace-layout">
+  <div class="workspace-layout workspace-layout--three-col">
+    <nav class="vault-browser-left-pane" data-testid="workspace-vault-browser-left-pane" data-region="vault-browser-pane">
+      {vault_browser_html}
+    </nav>
     <div class="workspace-main">
       {primary_posture_html}
       {safety_strip_html}
@@ -702,7 +705,6 @@ def _render_note_section(fields: dict) -> str:
         {reorient_mode_html}
         {resurface_mode_html}
         {act_mode_html}
-        {vault_browser_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
@@ -2517,6 +2519,21 @@ def render_index_html(
       min-height: 0;
       overflow: hidden;
     }}
+    /* Left-pane layout: vault browser left, note center, agent-rail right */
+    .workspace-layout--three-col {{
+      display: grid;
+      grid-template-columns: 280px 1fr 320px;
+      grid-template-rows: 1fr;
+    }}
+    .vault-browser-left-pane {{
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 8px;
+    }}
     .workspace-main {{
       flex: 1;
       min-width: 0;
@@ -3159,6 +3176,15 @@ def render_index_html(
         padding-bottom: 60px;
       }}
       .agent-rail {{
+        display: none;
+      }}
+      /* Collapse three-col grid to single-column on narrow viewports.
+         The 280px left pane and 320px agent-rail would otherwise crush the note
+         center column behind overflow:hidden (Codex P1 review finding). */
+      .workspace-layout--three-col {{
+        grid-template-columns: 1fr;
+      }}
+      .vault-browser-left-pane {{
         display: none;
       }}
       .portrait-sheet {{
