@@ -499,3 +499,61 @@ class TestOperatorPromptDoesNotLeakIntoRail:
         rail = _rail_region(html)
         assert long_why not in rail
         assert "C" * 280 in rail
+
+
+# ---------------------------------------------------------------------------
+# R1 regression — frontmatter must not be user-visible outside identity chrome
+# Issue #1290: UAT confirmed raw YAML was visible adjacent to the note frame.
+# These tests lock in the fix: the workspace-note-frontmatter section is hidden
+# from user view via aria-hidden + display:none; raw YAML stays out of the body.
+# ---------------------------------------------------------------------------
+
+
+def _frontmatter_section_tag(html: str) -> str:
+    """Return the opening <section> tag for the workspace-note-frontmatter element."""
+    m = re.search(
+        r'(<section\b[^>]*data-testid="workspace-note-frontmatter"[^>]*>)',
+        html,
+    )
+    assert m, "workspace-note-frontmatter section not found"
+    return m.group(1)
+
+
+class TestFrontmatterR1NotVisibleOutsideChrome:
+    """R1 regression: raw frontmatter must not be user-visible outside identity chrome (#1290)."""
+
+    def test_frontmatter_section_is_aria_hidden_when_frontmatter_present(self) -> None:
+        """Opening tag must carry aria-hidden=true so assistive tech sees it hidden."""
+        html = _html(body=_FRONTMATTER_BODY)
+        tag = _frontmatter_section_tag(html)
+        assert 'data-frontmatter-present="true"' in tag, (
+            "Expected data-frontmatter-present=true for a body that has frontmatter"
+        )
+        assert 'aria-hidden="true"' in tag, (
+            f"R1 violation: workspace-note-frontmatter must carry aria-hidden=true; got: {tag!r}"
+        )
+
+    def test_frontmatter_section_is_display_none_when_frontmatter_present(self) -> None:
+        """Opening tag must carry display:none so the section is visually hidden."""
+        html = _html(body=_FRONTMATTER_BODY)
+        tag = _frontmatter_section_tag(html)
+        assert "display:none" in tag or "display: none" in tag, (
+            f"R1 violation: workspace-note-frontmatter must carry style=display:none; got: {tag!r}"
+        )
+
+    def test_raw_yaml_keys_absent_from_note_body_region(self) -> None:
+        """R1: raw YAML key:value syntax must not appear in the note-body rendering surface."""
+        html = _html(body=_FRONTMATTER_BODY)
+        body = _body_region(html)
+        for key in ("uuid:", "kind:", "zone:", "tags:"):
+            assert key not in body, (
+                f"R1 violation: raw YAML key '{key}' found in workspace-note-body region"
+            )
+
+    def test_frontmatter_section_absent_from_agent_rail(self) -> None:
+        """The frontmatter section must not be rendered inside the agent rail."""
+        html = _html(body=_FRONTMATTER_BODY)
+        rail = _rail_region(html)
+        assert 'data-testid="workspace-note-frontmatter"' not in rail, (
+            "R1 violation: workspace-note-frontmatter section must not appear in agent rail"
+        )
