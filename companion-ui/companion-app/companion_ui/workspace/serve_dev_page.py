@@ -1272,7 +1272,7 @@ def _render_suggestion_flow_region(fields: dict) -> str:
         (
             '<span class="suggestion-transition" '
             f'data-testid="workspace-suggestion-transition" data-transition-to="{_e(target)}">'
-            f"{_e(target)}</span>"
+            "</span>"
         )
         for target in transitions
     )
@@ -1913,17 +1913,42 @@ def _render_canvas_session_controls(
         undo_button_html = ""
         unavailable_reasons.append(("undo-body-edit", "canvas.undoBodyEdit", "No undo is available for this session state." if not canvas_blocked else base_reason))
 
-    unavailable_html = "".join(
-        (
-            '<div class="canvas-action-unavailable" '
-            'data-testid="workspace-canvas-action-unavailable" '
-            f'data-action="{_e(action)}" '
-            f'data-capability="{_e(capability)}" '
-            'data-affordance-status="unavailable">'
-            f"{_e(reason)}</div>"
+    # When every action is blocked by the same global reason (canvas disabled or
+    # writeguard), show ONE visible consolidated message instead of the same text
+    # N times.  Individual capability markers are preserved as aria-hidden spans
+    # so that test selectors and JavaScript affordance-checking still work.
+    globally_blocked = not canvas_enabled or writeguard_blocked
+    if globally_blocked and unavailable_reasons:
+        hidden_markers = "".join(
+            (
+                '<span class="canvas-action-unavailable" '
+                'aria-hidden="true" style="display:none" '
+                f'data-action="{_e(action)}" '
+                f'data-capability="{_e(capability)}" '
+                f'data-affordance-status="unavailable"></span>'
+            )
+            for action, capability, _reason in unavailable_reasons
         )
-        for action, capability, reason in unavailable_reasons
-    )
+        unavailable_html = (
+            '<div class="canvas-action-unavailable canvas-globally-unavailable" '
+            'data-testid="workspace-canvas-action-unavailable" '
+            'data-action="all" '
+            'data-capability="canvas" '
+            f'data-affordance-status="unavailable">{_e(base_reason)}</div>'
+            + hidden_markers
+        )
+    else:
+        unavailable_html = "".join(
+            (
+                '<div class="canvas-action-unavailable" '
+                'data-testid="workspace-canvas-action-unavailable" '
+                f'data-action="{_e(action)}" '
+                f'data-capability="{_e(capability)}" '
+                'data-affordance-status="unavailable">'
+                f"{_e(reason)}</div>"
+            )
+            for action, capability, reason in unavailable_reasons
+        )
     undo_state_html = (
         '<span class="canvas-undo-state" data-testid="workspace-canvas-undo-state">'
         + ("Undo available" if undo_available else "No undo available")
