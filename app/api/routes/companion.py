@@ -640,27 +640,6 @@ def _is_hidden_browser_path(safe_path: str) -> bool:
     return any(part.startswith(".") for part in parts[:-1])
 
 
-def _list_markdown_notes(vault_root: Path) -> list[VaultBrowserNoteState]:
-    notes: list[VaultBrowserNoteState] = []
-    for candidate in vault_root.rglob("*.md"):
-        if not candidate.is_file():
-            continue
-        safe_path = _vault_relative(candidate, vault_root)
-        if safe_path is None:
-            continue
-        if _is_hidden_browser_path(safe_path):
-            continue
-        body = candidate.read_text(encoding="utf-8")
-        notes.append(
-            VaultBrowserNoteState(
-                note_path=safe_path,
-                title=_browser_title(body, fallback=candidate.stem),
-                zone=_zone_for_path(safe_path),
-            )
-        )
-    notes.sort(key=lambda note: note.note_path)
-    return notes
-
 
 def _safe_vault_browse_max_notes() -> int:
     raw = os.getenv("VAULT_BROWSE_MAX_NOTES")
