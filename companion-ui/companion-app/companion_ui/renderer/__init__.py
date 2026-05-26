@@ -13,6 +13,11 @@ from companion_ui.renderer.models import (
     VaultMarkdownDocument,
     WikiLinkRef,
 )
+from companion_ui.renderer.mermaid_renderer import (
+    MermaidBlockRenderer,
+    MermaidRenderError,
+    MermaidRenderResult,
+)
 from companion_ui.renderer.vault_markdown_parser import parse_vault_markdown
 from companion_ui.renderer.vault_markdown_renderer import (
     RenderedVaultMarkdown,
@@ -28,6 +33,9 @@ __all__ = [
     "HeadingRef",
     "LinkResolution",
     "MarkdownDiagnostic",
+    "MermaidBlockRenderer",
+    "MermaidRenderError",
+    "MermaidRenderResult",
     "ObsidianCommentRef",
     "SourceRange",
     "VaultMarkdownDocument",

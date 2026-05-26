@@ -24,6 +24,7 @@ from companion_ui.renderer.link_resolver import (
     link_display_label,
     parse_wikilink,
 )
+from companion_ui.renderer.mermaid_renderer import MermaidBlockRenderer
 from companion_ui.renderer.models import (
     MarkdownDiagnostic,
     VaultMarkdownDocument,
@@ -115,6 +116,7 @@ class _RenderContext:
     note_path: str
     link_resolver: LinkResolverProtocol
     asset_resolver: AssetResolverProtocol
+    mermaid_renderer: MermaidBlockRenderer
     diagnostics: list[MarkdownDiagnostic]
 
 
@@ -126,9 +128,11 @@ class VaultMarkdownRenderer:
         *,
         link_resolver: LinkResolverProtocol | None = None,
         asset_resolver: AssetResolverProtocol | None = None,
+        mermaid_renderer: MermaidBlockRenderer | None = None,
     ) -> None:
         self._link_resolver = link_resolver or VaultLinkResolver({})
         self._asset_resolver = asset_resolver or VaultAssetResolver({})
+        self._mermaid_renderer = mermaid_renderer or MermaidBlockRenderer()
 
     def render(
         self,
@@ -142,6 +146,7 @@ class VaultMarkdownRenderer:
             note_path=_safe_note_path(note_path),
             link_resolver=self._link_resolver,
             asset_resolver=self._asset_resolver,
+            mermaid_renderer=self._mermaid_renderer,
             diagnostics=diagnostics,
         )
         body_markdown = _strip_obsidian_comments(parsed.body_markdown)
@@ -165,12 +170,14 @@ def render_vault_markdown(
     note_path: str = "",
     link_resolver: LinkResolverProtocol | None = None,
     asset_resolver: AssetResolverProtocol | None = None,
+    mermaid_renderer: MermaidBlockRenderer | None = None,
 ) -> RenderedVaultMarkdown:
     """Convenience wrapper for one-shot rendering."""
 
     return VaultMarkdownRenderer(
         link_resolver=link_resolver,
         asset_resolver=asset_resolver,
+        mermaid_renderer=mermaid_renderer,
     ).render(raw_markdown, note_path=note_path)
 
 
@@ -256,6 +263,11 @@ def _render_fenced_code(
         index += 1
 
     code = "\n".join(code_lines)
+    if language == "mermaid":
+        rendered_mermaid = context.mermaid_renderer.render(code)
+        context.diagnostics.extend(rendered_mermaid.diagnostics)
+        return rendered_mermaid.html, index
+
     if language in _DIAGNOSTIC_ONLY_LANGUAGES:
         context.diagnostics.append(
             MarkdownDiagnostic(
