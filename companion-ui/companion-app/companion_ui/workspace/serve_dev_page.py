@@ -41,7 +41,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from companion_ui.renderer import parse_vault_markdown, render_vault_markdown
+from companion_ui.renderer import (
+    PropertiesRenderer,
+    VaultMarkdownDocument,
+    parse_vault_markdown,
+    render_vault_markdown,
+)
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
@@ -88,39 +93,16 @@ def _split_frontmatter(body: str) -> tuple[list[str], str]:
     return document.frontmatter.splitlines(), document.body_markdown
 
 
-def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
-    """Render frontmatter as bounded metadata chrome separate from the body.
+def _render_note_frontmatter_region(document: VaultMarkdownDocument) -> str:
+    """Render frontmatter as bounded read-only metadata chrome.
 
     AC1 / AC2 (#1260): the body region must not display YAML frontmatter as
     prose; frontmatter-derived metadata remains visible in dedicated chrome.
     """
-    if not frontmatter_lines:
-        return (
-            '<section class="note-frontmatter note-frontmatter-empty" '
-            'data-testid="workspace-note-frontmatter" '
-            'data-frontmatter-present="false">'
-            '<span class="frontmatter-label">No frontmatter</span>'
-            "</section>"
-        )
-    rows: list[str] = []
-    for line in frontmatter_lines:
-        stripped = line.rstrip()
-        if not stripped:
-            continue
-        rows.append(
-            '<div class="frontmatter-line">'
-            f'<code>{_e(stripped)}</code>'
-            "</div>"
-        )
-    body_html = "".join(rows) or '<span class="frontmatter-label">(empty frontmatter)</span>'
-    return (
-        '<section class="note-frontmatter" '
-        'data-testid="workspace-note-frontmatter" '
-        'data-frontmatter-present="true">'
-        '<span class="frontmatter-label">frontmatter</span>'
-        f"{body_html}"
-        "</section>"
-    )
+    return PropertiesRenderer(
+        test_id="workspace-note-frontmatter",
+        include_empty=True,
+    ).render(document).html
 
 
 def _compute_primary_posture(
@@ -288,13 +270,8 @@ def _render_note_section(fields: dict) -> str:
     vault_provenance = fields.get("runtime_vault_provenance") or "unresolved"
     raw_body = str(fields.get("body", "") or "")
     rendered_body = render_vault_markdown(raw_body, note_path=raw_note_path)
-    frontmatter_lines = (
-        rendered_body.document.frontmatter.splitlines()
-        if rendered_body.document.frontmatter is not None
-        else []
-    )
     body = rendered_body.html
-    note_frontmatter_html = _render_note_frontmatter_region(frontmatter_lines)
+    note_frontmatter_html = _render_note_frontmatter_region(rendered_body.document)
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
@@ -2364,6 +2341,70 @@ def render_index_html(
       color: var(--fg-2);
     }}
     .prov-sep {{ color: var(--border-strong); }}
+
+    /* ---- Read-only properties ---- */
+    .vault-properties {{
+      margin: 14px 24px 0;
+      padding: 10px 12px;
+      background: color-mix(in srgb, var(--bg-raised) 78%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-2);
+    }}
+    .vault-properties-header {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }}
+    .vault-properties-label {{
+      color: var(--fg-3);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .vault-properties-mode {{
+      color: var(--fg-3);
+    }}
+    .vault-properties-list {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin: 0;
+    }}
+    .vault-property {{
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      min-width: min(180px, 100%);
+    }}
+    .vault-property dt {{
+      color: var(--fg-3);
+      margin: 0;
+    }}
+    .vault-property dd {{
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 0;
+    }}
+    .vault-property-tag, .vault-property-value {{
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 7px;
+      background: var(--bg);
+      color: var(--fg-1);
+    }}
+    .vault-properties-invalid {{
+      border-color: rgba(212,168,67,0.35);
+    }}
+    .vault-properties-diagnostics {{
+      margin: 0;
+      padding-left: 18px;
+      color: var(--accent);
+    }}
 
     /* ---- Note body ---- */
     .note-body {{
