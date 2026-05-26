@@ -3556,7 +3556,12 @@ def render_index_html(
         var statusEl = document.getElementById('body-edit-status');
         if (!container || !statusEl) return;
         var notePath = container.getAttribute('data-note-path');
-        var newBody = window._cmView ? window._cmView.state.doc.toString() : '';
+        if (!window._cmView) {{
+          statusEl.className = 'body-edit-status error';
+          statusEl.textContent = 'Editor not ready. Wait for the page to finish loading.';
+          return;
+        }}
+        var newBody = window._cmView.state.doc.toString();
         statusEl.className = 'body-edit-status';
         statusEl.textContent = 'Submitting…';
         fetch('/api/companion/workspace/body', {{

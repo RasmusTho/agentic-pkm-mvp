@@ -930,6 +930,14 @@ class TestBodyEditPanelRendering:
         assert "window._cmView.state.doc.toString()" in html
         assert "ta.value" not in html
 
+    def test_submit_guards_against_uninitialized_editor(self) -> None:
+        html = self._html(update_flow_available=True)
+        # submit() must bail out early (not post) when _cmView is not ready
+        assert "if (!window._cmView)" in html
+        assert "Editor not ready" in html
+        # the fallback empty-string path must not exist
+        assert "_cmView ? window._cmView.state.doc.toString() : ''" not in html
+
     def test_codemirror_absent_when_flow_disabled(self) -> None:
         html = self._html(update_flow_available=False)
         assert 'id="body-edit-codemirror"' not in html
