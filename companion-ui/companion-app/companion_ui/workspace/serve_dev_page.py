@@ -590,7 +590,9 @@ def _render_note_section(fields: dict) -> str:
         reason=workspace_update_reason,
     )
     canvas_state_copy = _e(
-        _human_state_label(
+        "Disabled"
+        if not canvas_enabled or writeguard_blocked
+        else _human_state_label(
             canvas_session_state_raw,
             {
                 "idle": "No active Canvas session",
@@ -1949,16 +1951,16 @@ def _render_canvas_session_controls(
             f'data-affordance-status="unavailable">{_e(base_reason)}</div>'
             + hidden_markers
         )
-        # Early return: skip presence text, composer, undo_state — all covered by the
-        # single consolidated message above.  Log counts are kept for diagnostics.
+        # Early return: skip presence text, composer, undo_state, and log counts —
+        # none of those are meaningful when canvas is globally blocked.
         return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
           {unavailable_html}
-          <div class="canvas-provenance" data-testid="workspace-canvas-provenance">
-            <span class="canvas-provenance-label">log</span>
+          <div class="canvas-provenance" data-testid="workspace-canvas-provenance"
+               aria-hidden="true" style="display:none">
             <code data-testid="workspace-canvas-session-log-path">{log_text}</code>
-            <span data-testid="workspace-canvas-edit-count">{applied_edit_count} edit{'s' if applied_edit_count != 1 else ''}</span>
-            <span data-testid="workspace-canvas-undone-count">{undone_edit_count} undone</span>
+            <span data-testid="workspace-canvas-edit-count">{applied_edit_count}</span>
+            <span data-testid="workspace-canvas-undone-count">{undone_edit_count}</span>
           </div>
         </div>"""
     else:
