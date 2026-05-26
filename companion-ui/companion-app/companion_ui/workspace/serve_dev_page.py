@@ -41,7 +41,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from companion_ui.renderer import parse_vault_markdown, render_vault_markdown
+from companion_ui.renderer import (
+    note_outline_css,
+    note_outline_script,
+    parse_vault_markdown,
+    render_note_outline,
+    render_vault_markdown,
+)
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
@@ -294,6 +300,7 @@ def _render_note_section(fields: dict) -> str:
         else []
     )
     body = rendered_body.html
+    outline_html = render_note_outline(rendered_body.document)
     note_frontmatter_html = _render_note_frontmatter_region(frontmatter_lines)
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
@@ -572,9 +579,14 @@ def _render_note_section(fields: dict) -> str:
         {identity_caution_html}
       </header>
       {note_frontmatter_html}
-      <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
-        <div class="note-body-content">{body}</div>
-        {suggested_insertions_html}
+      <div
+        class="note-reading-layout"
+        data-testid="workspace-note-reading-layout">
+        {outline_html}
+        <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
+          <div class="note-body-content">{body}</div>
+          {suggested_insertions_html}
+        </div>
       </div>
       {_render_body_edit_panel(update_flow_available, note_path_val)}
     </div>
@@ -2428,6 +2440,7 @@ def render_index_html(
       overflow-x: auto;
       padding: 14px;
     }}
+    {note_outline_css()}
     .vault-wikilink {{
       color: var(--cyan);
       text-decoration: none;
@@ -3060,6 +3073,8 @@ def render_index_html(
            data-testid="vault-browser-status"></div>
     </div>
   </div>
+
+  {note_outline_script()}
 
   <script>
   (function() {{
