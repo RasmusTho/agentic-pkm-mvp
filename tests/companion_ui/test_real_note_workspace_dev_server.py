@@ -903,3 +903,41 @@ class TestBodyEditPanelRendering:
             fields=self._fields(update_flow_available=True, note_path="Inbox/Todo.md"),
         )
         assert 'data-note-path="Inbox/Todo.md"' in html
+
+    def test_codemirror_container_present_when_flow_available(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'id="body-edit-codemirror"' in html
+        assert 'class="body-edit-codemirror"' in html
+
+    def test_codemirror_raw_body_in_data_attribute(self) -> None:
+        from companion_ui.workspace.serve_dev_page import render_index_html
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields={**self._fields(update_flow_available=True), "body": "# Hello\n\nWorld"},
+        )
+        assert "data-raw-body=" in html
+        assert "# Hello" in html
+
+    def test_codemirror_esm_loader_present(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'type="module"' in html
+        assert "esm.sh/codemirror" in html
+        assert "_cmView" in html
+
+    def test_body_editor_reads_from_cmview_not_textarea_value(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert "window._cmView" in html
+        assert "window._cmView.state.doc.toString()" in html
+        assert "ta.value" not in html
+
+    def test_submit_guards_against_uninitialized_editor(self) -> None:
+        html = self._html(update_flow_available=True)
+        # submit() must bail out early (not post) when _cmView is not ready
+        assert "if (!window._cmView)" in html
+        assert "Editor not ready" in html
+        # the fallback empty-string path must not exist
+        assert "_cmView ? window._cmView.state.doc.toString() : ''" not in html
+
+    def test_codemirror_absent_when_flow_disabled(self) -> None:
+        html = self._html(update_flow_available=False)
+        assert 'id="body-edit-codemirror"' not in html
