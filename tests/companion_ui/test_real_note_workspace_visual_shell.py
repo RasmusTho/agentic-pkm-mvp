@@ -393,7 +393,8 @@ class TestErrorState:
 class TestApiIndicator:
     def test_api_base_url_in_topbar(self) -> None:
         html = render_index_html(api_base_url="http://192.168.1.5:18001")
-        assert "http://192.168.1.5:18001" in html
+        assert "Server-side runtime" in html
+        assert "http://192.168.1.5:18001" not in html
 
     def test_runtime_api_label_present(self) -> None:
         html = _html_empty()

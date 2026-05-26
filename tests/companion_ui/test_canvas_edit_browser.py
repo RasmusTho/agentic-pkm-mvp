@@ -156,14 +156,13 @@ def _render_canvas(client: _FakeClient) -> str:
 def test_canvas_body_edit_apply_disabled_outside_active_editable_session() -> None:
     html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=False)]))
 
-    assert 'data-testid="workspace-canvas-edit-submit"' in html
+    assert 'data-testid="workspace-canvas-edit-submit"' not in html
     assert 'data-testid="workspace-canvas-body-edit-composer"' not in html
     assert 'data-testid="workspace-canvas-body-edit-unavailable"' in html
     assert 'data-capability="canvas.applyBodyEdit"' in html
     assert 'data-affordance-status="unavailable"' in html
-    assert 'data-testid="workspace-canvas-edit-submit"' in html
-    assert "Apply body edit</button>" in html
-    assert 'disabled>Apply body edit</button>' in html
+    assert 'data-testid="workspace-canvas-action-unavailable"' in html
+    assert 'data-action="apply-body-edit"' in html
 
 
 def test_canvas_body_edit_composer_preview_and_discard_visible_when_editable() -> None:
@@ -195,8 +194,8 @@ def test_canvas_disabled_blocks_body_edit_affordances() -> None:
     assert 'data-testid="workspace-guard-indicator"' in html
     assert "Canvas disabled" in html
     assert 'data-capability="canvas.applyBodyEdit"' in html
-    assert 'data-affordance-status="blocked"' in html
-    assert 'disabled>Apply body edit</button>' in html
+    assert 'data-affordance-status="unavailable"' in html
+    assert 'data-action="apply-body-edit"' in html
     assert 'data-testid="workspace-canvas-body-edit-composer"' not in html
 
 
@@ -224,10 +223,7 @@ def test_workspace_refreshed_after_edit() -> None:
         content_hash="hash-1",
     )
 
-    workspace_get_calls = [
-        call for call in client.get_calls if call[0] == "/api/companion/workspace"
-    ]
-    assert workspace_get_calls == [
+    assert [call for call in client.get_calls if call[0] == "/api/companion/workspace"] == [
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
     ]

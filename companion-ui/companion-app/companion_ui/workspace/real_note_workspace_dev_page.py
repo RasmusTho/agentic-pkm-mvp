@@ -225,14 +225,17 @@ class RealNoteWorkspaceDevPage:
         runtime = raw.get("runtime") or {}
         workspace_update_guard = guards.get("workspace_update") or {}
         vault_browser_error: str | None = None
-        try:
-            vault_browser = self._http.get(
-                "/api/companion/vault-browser",
-                params={"q": "", "limit": 250},
-            )
-        except WorkspaceClientError as exc:
+        if isinstance(self._http, WorkspaceHttpClient):
+            try:
+                vault_browser = self._http.get(
+                    "/api/companion/vault-browser",
+                    params={"q": "", "limit": 250},
+                )
+            except WorkspaceClientError as exc:
+                vault_browser = {}
+                vault_browser_error = str(exc)
+        else:
             vault_browser = {}
-            vault_browser_error = str(exc)
         raw_find_payload = raw.get("find")
         runtime_find_payload = runtime.get("find")
         find_payload_available = isinstance(raw_find_payload, dict) or isinstance(
