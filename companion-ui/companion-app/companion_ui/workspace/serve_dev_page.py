@@ -40,8 +40,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
-import yaml
 
+from companion_ui.renderer import parse_vault_markdown, render_vault_markdown
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
@@ -77,37 +77,15 @@ def _status_label(value: object, *, fallback: str = "unknown") -> str:
 
 
 def _split_frontmatter(body: str) -> tuple[list[str], str]:
-    """Split a YAML frontmatter prefix off ``body``.
+    """Split a frontmatter prefix off ``body`` using the renderer parser.
 
     Returns ``(frontmatter_lines, remaining_body)``. If the body does not begin
-    with a ``---``/``---`` fenced YAML block, returns ``([], body)`` unchanged.
-
-    Frontmatter is treated as opaque text for rendering — keys are surfaced as
-    chrome but not parsed into a typed model here. The runtime owns parsing for
-    contract purposes (#1253); this helper only ensures the body region does
-    not display the frontmatter as prose.
+    with a ``---``/``---`` fenced block, returns ``([], body)`` unchanged.
     """
-    if not body.startswith("---"):
+    document = parse_vault_markdown(body)
+    if document.frontmatter is None:
         return [], body
-    lines = body.split("\n")
-    if not lines or lines[0].strip() != "---":
-        return [], body
-    end_idx: int | None = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end_idx = i
-            break
-    if end_idx is None:
-        return [], body
-    fm_lines = lines[1:end_idx]
-    try:
-        parsed = yaml.safe_load("\n".join(fm_lines))
-    except Exception:
-        return [], body
-    if parsed is not None and not isinstance(parsed, dict):
-        return [], body
-    remaining = "\n".join(lines[end_idx + 1:])
-    return fm_lines, remaining
+    return document.frontmatter.splitlines(), document.body_markdown
 
 
 def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
@@ -292,7 +270,8 @@ def _render_note_section(fields: dict) -> str:
     Canvas/Panel integration.
     """
     title = _e(fields.get("title", ""))
-    note_path_val = _e(fields.get("note_path", ""))
+    raw_note_path = str(fields.get("note_path", "") or "")
+    note_path_val = _e(raw_note_path)
     artifact_id = _e(fields.get("artifact_id", ""))
     content_hash = _e(fields.get("content_hash", ""))
     artifact_kind = _e(_status_label(fields.get("artifact_kind"), fallback="human_note"))
@@ -308,8 +287,13 @@ def _render_note_section(fields: dict) -> str:
     vault_channel = _e(fields.get("runtime_vault_channel") or "unknown")
     vault_provenance = fields.get("runtime_vault_provenance") or "unresolved"
     raw_body = str(fields.get("body", "") or "")
-    frontmatter_lines, stripped_body = _split_frontmatter(raw_body)
-    body = _e(stripped_body)
+    rendered_body = render_vault_markdown(raw_body, note_path=raw_note_path)
+    frontmatter_lines = (
+        rendered_body.document.frontmatter.splitlines()
+        if rendered_body.document.frontmatter is not None
+        else []
+    )
+    body = rendered_body.html
     note_frontmatter_html = _render_note_frontmatter_region(frontmatter_lines)
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
@@ -589,7 +573,7 @@ def _render_note_section(fields: dict) -> str:
       </header>
       {note_frontmatter_html}
       <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
-        <pre class="note-body-content">{body}</pre>
+        <div class="note-body-content">{body}</div>
         {suggested_insertions_html}
       </div>
       {_render_body_edit_panel(update_flow_available, note_path_val)}
@@ -2395,12 +2379,82 @@ def render_index_html(
       max-width: 920px;
       min-height: 100%;
       padding: 28px 32px;
-      font-family: var(--font-mono);
-      font-size: var(--text-sm);
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
       color: var(--fg-1);
       line-height: 1.75;
-      white-space: pre-wrap;
       word-break: break-word;
+    }}
+    .vault-markdown-rendered h1,
+    .vault-markdown-rendered h2,
+    .vault-markdown-rendered h3 {{
+      color: var(--fg-0);
+      line-height: 1.2;
+      margin: 0 0 14px;
+    }}
+    .vault-markdown-rendered h1 {{ font-size: clamp(2rem, 4vw, 3rem); }}
+    .vault-markdown-rendered h2 {{ font-size: 1.6rem; margin-top: 28px; }}
+    .vault-markdown-rendered h3 {{ font-size: 1.25rem; margin-top: 22px; }}
+    .vault-markdown-rendered p,
+    .vault-markdown-rendered ul,
+    .vault-markdown-rendered ol,
+    .vault-markdown-rendered blockquote,
+    .vault-markdown-rendered table,
+    .vault-markdown-rendered pre {{
+      margin: 0 0 16px;
+    }}
+    .vault-markdown-rendered table {{
+      border-collapse: collapse;
+      width: 100%;
+    }}
+    .vault-markdown-rendered th,
+    .vault-markdown-rendered td {{
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      text-align: left;
+    }}
+    .vault-markdown-rendered th {{
+      background: rgba(255,255,255,0.05);
+      color: var(--fg-0);
+    }}
+    .vault-markdown-rendered code,
+    .vault-markdown-rendered pre {{
+      font-family: var(--font-mono);
+    }}
+    .vault-markdown-rendered pre {{
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+      padding: 14px;
+    }}
+    .vault-wikilink {{
+      color: var(--cyan);
+      text-decoration: none;
+    }}
+    .vault-wikilink-diagnostic,
+    .vault-asset-diagnostic,
+    .unsupported-block-diagnostic,
+    .vault-diagnostics {{
+      background: rgba(212,168,67,0.12);
+      border: 1px solid rgba(212,168,67,0.35);
+      border-radius: var(--radius-sm);
+      color: var(--accent);
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      padding: 4px 7px;
+    }}
+    .unsupported-block-diagnostic,
+    .vault-diagnostics {{
+      display: block;
+      margin: 0 0 16px;
+    }}
+    .vault-image {{
+      border-radius: var(--radius-sm);
+      display: block;
+      height: auto;
+      max-width: 100%;
     }}
     .suggested-insertion {{
       background: rgba(212,168,67,0.08);

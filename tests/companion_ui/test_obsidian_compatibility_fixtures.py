@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from companion_ui.renderer import parse_vault_markdown
+from companion_ui.renderer import parse_vault_markdown, render_vault_markdown
 
 
 FIXTURE_DIR = (
@@ -40,6 +40,16 @@ def test_obsidian_fixture_raw_markdown_round_trips(fixture_name: str) -> None:
 
     assert document.raw_markdown == raw_markdown
     assert isinstance(document.body_markdown, str)
+
+
+@pytest.mark.parametrize("fixture_name", FIXTURE_NAMES)
+def test_obsidian_fixture_renders_without_crash(fixture_name: str) -> None:
+    raw_markdown = (FIXTURE_DIR / fixture_name).read_text(encoding="utf-8")
+
+    rendered = render_vault_markdown(raw_markdown, note_path="Notes/current.md")
+
+    assert rendered.html
+    assert 'class="vault-markdown-rendered"' in rendered.html
 
 
 def test_full_smoke_fixture_extracts_all_parser_reference_types() -> None:

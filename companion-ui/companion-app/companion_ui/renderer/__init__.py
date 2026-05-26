@@ -14,6 +14,11 @@ from companion_ui.renderer.models import (
     WikiLinkRef,
 )
 from companion_ui.renderer.vault_markdown_parser import parse_vault_markdown
+from companion_ui.renderer.vault_markdown_renderer import (
+    RenderedVaultMarkdown,
+    VaultMarkdownRenderer,
+    render_vault_markdown,
+)
 
 __all__ = [
     "AssetRef",
@@ -28,4 +33,7 @@ __all__ = [
     "VaultMarkdownDocument",
     "WikiLinkRef",
     "parse_vault_markdown",
+    "RenderedVaultMarkdown",
+    "VaultMarkdownRenderer",
+    "render_vault_markdown",
 ]

@@ -239,7 +239,8 @@ class TestNoteBody:
             re.DOTALL,
         )
         assert body_region, "workspace-note-body region missing"
-        assert "<pre" in body_region.group(), "body content must be in a pre inside the body region"
+        assert 'class="vault-markdown-rendered"' in body_region.group()
+        assert '<h1 id="test">Test</h1>' in body_region.group()
 
 
 # ---------------------------------------------------------------------------
