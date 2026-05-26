@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
-from app.observability.status_service import get_orientation_signals
+from app.observability.status_service import OrientationSignals, get_orientation_signals
 
 
 class ResurfacingSignal(BaseModel):
@@ -37,13 +37,13 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def evaluate_resurfacing_candidates() -> ResurfacingEvaluation:
+def evaluate_resurfacing_candidates(signals: OrientationSignals | None = None) -> ResurfacingEvaluation:
     """Produce resurfacing candidates from derived relevance-change runtime signals.
 
     This seam is intentionally query-independent and read-only.
     """
 
-    orientation = get_orientation_signals()
+    orientation = signals if signals is not None else get_orientation_signals()
     events = orientation.events
     ingestion = orientation.ingestion
     queue = orientation.worker_queue
