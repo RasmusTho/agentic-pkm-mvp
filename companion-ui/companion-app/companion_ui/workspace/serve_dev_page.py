@@ -3148,6 +3148,15 @@ def render_index_html(
       .agent-rail {{
         display: none;
       }}
+      /* Collapse three-col grid to single-column on narrow viewports.
+         The 280px left pane and 320px agent-rail would otherwise crush the note
+         center column behind overflow:hidden (Codex P1 review finding). */
+      .workspace-layout--three-col {{
+        grid-template-columns: 1fr;
+      }}
+      .vault-browser-left-pane {{
+        display: none;
+      }}
       .portrait-sheet {{
         background: var(--bg-surface);
         border-top: 1px solid var(--border);
