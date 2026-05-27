@@ -763,6 +763,8 @@ def _render_note_section(fields: dict) -> str:
         class="note-reading-layout"
         data-testid="workspace-note-reading-layout">
         {outline_html}
+        <button class="workspace-outline-ribbon" data-testid="workspace-outline-ribbon"
+          aria-label="open outline" data-layout-visible="800-1099">☰ outline</button>
         <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
           <div class="note-body-content">{body}</div>
           {suggested_insertions_html}
@@ -808,6 +810,15 @@ def _render_note_section(fields: dict) -> str:
         {rail_empty_state_html}
       </div>
     </aside>
+    <div class="workspace-panel-peek" data-testid="workspace-panel-peek"
+      data-layout-visible="1100-1299"
+      data-panel-proposal-count="{proposal_count}">{f'<span class="peek-badge" data-testid="workspace-panel-peek-badge">{proposal_count}</span>' if proposal_count else ""}</div>
+    <div class="workspace-sheet-triggers" data-layout-visible="max-799">
+      <button class="workspace-outline-sheet-trigger" data-testid="workspace-outline-sheet-trigger"
+        aria-label="open outline">&#9776; Outline</button>
+      <button class="workspace-panel-sheet-trigger" data-testid="workspace-panel-sheet-trigger"
+        aria-label="open panel">Panel</button>
+    </div>
     {portrait_sheet_html}
   </div>"""
 
@@ -3697,6 +3708,96 @@ def render_index_html(
       padding: 4px 7px;
       text-transform: uppercase;
     }}
+    /* §7.5 Responsive breakpoints */
+    /* Default (≥1300px): all three columns visible — no overrides needed */
+
+    /* Hide responsive-only elements at full width */
+    .workspace-panel-peek, .workspace-outline-ribbon, .workspace-sheet-triggers {{
+      display: none;
+    }}
+
+    /* 1100–1299px: Panel collapses to 32px peek tab on right edge */
+    @media (min-width: 1100px) and (max-width: 1299px) {{
+      .agent-rail[data-layout-desktop="side-rail"] {{
+        display: none;
+      }}
+      .workspace-panel-peek {{
+        align-items: center;
+        background: var(--bg-raised);
+        border-left: 1px solid var(--border);
+        bottom: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        position: fixed;
+        right: 0;
+        top: 0;
+        width: 32px;
+        z-index: 10;
+      }}
+      .peek-badge {{
+        background: var(--agent);
+        border-radius: 9px;
+        color: white;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        min-width: 16px;
+        padding: 1px 4px;
+        text-align: center;
+      }}
+    }}
+
+    /* 800–1099px: Outline collapses to 36px ribbon */
+    @media (min-width: 800px) and (max-width: 1099px) {{
+      .note-outline {{
+        display: none;
+      }}
+      .workspace-outline-ribbon {{
+        align-items: center;
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
+        display: flex;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        height: 36px;
+        padding: 0 12px;
+        width: 100%;
+      }}
+    }}
+
+    /* <800px: single column, sheet trigger buttons visible */
+    @media (max-width: 799px) {{
+      .workspace-sheet-triggers {{
+        display: flex;
+        gap: 8px;
+        padding: 6px 12px;
+      }}
+      .workspace-outline-sheet-trigger,
+      .workspace-panel-sheet-trigger {{
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        padding: 4px 10px;
+      }}
+      .workspace-layout--three-col {{
+        grid-template-columns: 1fr;
+      }}
+      .vault-browser-left-pane, .agent-rail {{
+        display: none;
+      }}
+      .note-outline {{
+        display: none;
+      }}
+      .workspace-header-strip {{
+        flex-wrap: wrap;
+        height: auto;
+      }}
+    }}
+
     @media (max-width: 899px) {{
       .workspace-shell {{
         padding-bottom: 60px;

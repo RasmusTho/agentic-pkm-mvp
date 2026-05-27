@@ -99,6 +99,11 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "vault-properties-mode",
         "vault-property-value",
         "vault-property-key",
+        # Responsive collapse elements (§7.5 / #1342)
+        "workspace-outline-ribbon",
+        "workspace-outline-sheet-trigger",
+        "workspace-panel-sheet-trigger",
+        "workspace-sheet-triggers",
     }
 )
 
