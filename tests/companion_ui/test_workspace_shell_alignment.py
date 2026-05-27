@@ -53,6 +53,7 @@ def _fields(
     governance_receipts: list | None = None,
     suggestion_state: str = "idle",
     suggestion_composer_enabled: bool = True,
+    workspace_loaded_at: str | None = None,
 ) -> dict:
     return {
         "title": title,
@@ -92,6 +93,7 @@ def _fields(
         "suggestion_composer_enabled": suggestion_composer_enabled,
         "is_production_ui": False,
         "dev_page_label": "dev/staging",
+        "workspace_loaded_at": workspace_loaded_at,
     }
 
 
@@ -112,6 +114,26 @@ def _body_region(html: str) -> str:
 def _rail_region(html: str) -> str:
     m = re.search(r'data-testid="workspace-agent-rail".*?</aside>', html, re.DOTALL)
     assert m, "workspace-agent-rail region not found"
+    return m.group()
+
+
+def _header_strip(html: str) -> str:
+    m = re.search(
+        r'<header\b[^>]*class="workspace-header-strip\b.*?</header>',
+        html,
+        re.DOTALL,
+    )
+    assert m, "workspace-header-strip not found"
+    return m.group()
+
+
+def _runtime_popover(html: str) -> str:
+    m = re.search(
+        r'data-testid="workspace-runtime-status-popover".*?</div>\s*</details>',
+        html,
+        re.DOTALL,
+    )
+    assert m, "workspace-runtime-status-popover not found"
     return m.group()
 
 
@@ -237,14 +259,98 @@ class TestPrimaryPostureSurface:
 
     def test_primary_posture_has_human_label(self) -> None:
         html = _html()
-        m = re.search(
-            r'data-testid="workspace-primary-posture".*?</section>',
-            html,
+        region = _header_strip(html)
+        assert "Online" in region or "Ok" in region or "Ready" in region
+
+
+# ---------------------------------------------------------------------------
+# #1336 — design review §7.2 workspace header strip
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceHeaderStrip:
+    def test_header_strip_replaces_runtime_band(self) -> None:
+        html = _html(guard_canvas_enabled=False, runtime_vault_name="Niflheim")
+        header = _header_strip(html)
+        assert 'class="runtime-safety-strip"' not in html
+        assert 'data-testid="workspace-runtime-safety-strip"' not in html
+        assert header.count('data-testid="workspace-header-row"') == 1
+
+        ordered_testids = [
+            'data-testid="workspace-wordmark"',
+            'data-testid="workspace-vault-chip"',
+            'data-testid="workspace-runtime-pill"',
+            'data-testid="workspace-freshness"',
+            'class="workspace-header-spacer"',
+            'data-testid="workspace-quick-open"',
+            'data-testid="workspace-browse-vault"',
+            'data-testid="workspace-dev-ribbon"',
+        ]
+        positions = [header.index(token) for token in ordered_testids]
+        assert positions == sorted(positions)
+
+    def test_runtime_status_popover_contains_runtime_fields(self) -> None:
+        html = _html(
+            guard_canvas_enabled=False,
+            guard_workspace_update_available=False,
+            runtime_vault_name="Niflheim",
+            runtime_vault_channel="dev",
+            runtime_vault_provenance="resolved",
+        )
+        popover = _runtime_popover(html)
+        expected_fields = [
+            "runtime_environment_label",
+            "runtime_api_base_url_label",
+            "runtime_vault_name",
+            "runtime_vault_channel",
+            "runtime_vault_provenance",
+            "runtime_writeguard_status",
+            "runtime_canvas_enabled",
+            "runtime_update_flow_available",
+            "runtime_guard_degraded",
+            "runtime_workspace_update_state",
+            "runtime_workspace_update_available",
+            "runtime_workspace_update_scope",
+            "runtime_workspace_update_reason",
+            "runtime_workspace_update_config_mode",
+            "runtime_governance_via_update_enabled",
+            "runtime_trace_id",
+        ]
+        for field in expected_fields:
+            assert f'data-runtime-field="{field}"' in popover
+
+    def test_dev_ribbon_is_absent_in_production_profile(self) -> None:
+        dev_html = _html()
+        assert 'data-testid="workspace-dev-ribbon"' in dev_html
+        assert re.search(
+            r"\.workspace-dev-ribbon\s*\{[^}]*height:\s*28px",
+            dev_html,
             re.DOTALL,
         )
-        assert m
-        region = m.group()
-        assert "Online" in region or "Ok" in region or "Ready" in region
+
+        prod_fields = _fields()
+        prod_fields["is_production_ui"] = True
+        prod_fields["runtime_environment_label"] = "prod"
+        prod_html = render_index_html(
+            api_base_url="http://127.0.0.1:18000",
+            note_path="Notes/note.md",
+            fields=prod_fields,
+            production_profile=True,
+        )
+        assert 'data-testid="workspace-dev-ribbon"' not in prod_html
+
+    def test_freshness_token_is_always_present(self) -> None:
+        html = _html(workspace_loaded_at="2026-05-27T14:22:00+02:00")
+        assert re.search(
+            r'data-testid="workspace-freshness"[^>]*>as of \d{2}:\d{2}<',
+            html,
+        )
+
+    def test_trace_id_only_renders_inside_runtime_popover(self) -> None:
+        html = _html(runtime_vault_provenance="unresolved")
+        popover = _runtime_popover(html)
+        assert "trace-1" in popover
+        assert "trace-1" not in html.replace(popover, "")
 
 
 # ---------------------------------------------------------------------------

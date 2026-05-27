@@ -303,7 +303,8 @@ class TestAgentRail:
 class TestRuntimeSafetyStrip:
     def test_runtime_safety_strip_present(self) -> None:
         html = _html_with_note()
-        assert 'data-testid="workspace-runtime-safety-strip"' in html
+        # old full-width safety strip replaced by 32px header strip (#1336)
+        assert 'data-testid="workspace-primary-posture"' in html
         assert 'data-testid="workspace-runtime-channel"' in html
         assert 'data-testid="workspace-writeguard-state"' in html
         assert 'data-testid="workspace-canvas-enabled-state"' in html

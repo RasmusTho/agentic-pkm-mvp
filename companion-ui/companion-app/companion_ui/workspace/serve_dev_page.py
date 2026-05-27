@@ -40,7 +40,9 @@ to the runtime localhost port.
 import html as _html
 import json
 import os
+import re
 import sys
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
@@ -212,37 +214,175 @@ def _compute_primary_posture(
     return "ok", "Online"
 
 
-def _render_primary_posture(
+
+def _workspace_header_freshness(fields: dict) -> tuple[str, str]:
+    raw = (
+        fields.get("workspace_loaded_at")
+        or fields.get("runtime_last_ingest_at")
+        or fields.get("updated")
+        or fields.get("last_modified")
+    )
+    if raw:
+        full = str(raw)
+        match = re.search(r"(\d{2}):(\d{2})", full)
+        if match:
+            return f"as of {match.group(1)}:{match.group(2)}", full
+    now = datetime.now().astimezone()
+    return f"as of {now:%H:%M}", now.isoformat(timespec="minutes")
+
+
+def _render_workspace_header_strip(
     *,
+    fields: dict,
     posture: str,
-    label: str,
+    posture_label: str,
+    runtime_environment: str,
+    runtime_channel: str,
+    runtime_trace_id: str,
     vault_name: str,
     vault_channel: str,
-    runtime_trace_id: str,
+    vault_provenance: str,
+    writeguard_status: str,
+    canvas_enabled: bool,
+    update_flow_available: bool,
+    guard_degraded: bool,
+    workspace_update_available: bool,
+    workspace_update_state: str,
+    workspace_update_reason: str,
+    workspace_update_scope: str,
+    workspace_update_governance_actions_enabled: bool,
+    workspace_update_config_mode: str,
 ) -> str:
-    """Render the single primary posture surface above the detailed safety strip.
-
-    AC3 (#1260): one primary posture region; AC4: distinct tone class per
-    posture state; AC6: human-readable label, internal token in ``data-*``.
-    """
-    trace = runtime_trace_id or "unavailable"
-    return (
-        f'<section class="primary-posture posture-tone-{posture}" '
-        f'data-testid="workspace-primary-posture" '
-        f'data-posture="{posture}">'
-        f'<span class="primary-posture-label">{_e(label)}</span>'
-        f'<span class="primary-posture-identity" '
-        'data-testid="workspace-primary-posture-identity">'
-        f'<span class="primary-posture-vault">{_e(vault_name)}</span>'
-        f'<span class="primary-posture-sep">/</span>'
-        f'<span class="primary-posture-channel">{_e(vault_channel)}</span>'
-        "</span>"
-        '<span class="primary-posture-trace" '
-        'data-testid="workspace-primary-posture-trace">'
-        f"<code>{_e(trace)}</code>"
-        "</span>"
-        "</section>"
+    freshness_label, freshness_title = _workspace_header_freshness(fields)
+    canvas_token = "canvas off" if not canvas_enabled else "canvas on"
+    runtime_token = "runtime degraded" if posture in {"blocked", "degraded", "unavailable"} else "ok"
+    pill_label = canvas_token if not canvas_enabled else runtime_token
+    is_prod = bool(fields.get("is_production_ui")) or str(
+        fields.get("runtime_environment_label") or ""
+    ).lower() == "prod"
+    dev_ribbon = (
+        ""
+        if is_prod
+        else '<span class="workspace-dev-ribbon" data-testid="workspace-dev-ribbon">DEV</span>'
     )
+    vault_state = "unresolved" if str(vault_provenance).lower() == "unresolved" else "ok"
+    browse_target = "#vault-browser-overlay"
+    telemetry_rows = [
+        ("workspace-runtime-channel", "runtime_environment_label", "runtime", runtime_environment),
+        ("workspace-runtime-channel-api", "runtime_api_base_url_label", "channel", runtime_channel),
+        ("workspace-vault-identity", "runtime_vault_name", "vault", vault_name),
+        ("workspace-vault-channel", "runtime_vault_channel", "vault channel", vault_channel),
+        (
+            "workspace-vault-provenance",
+            "runtime_vault_provenance",
+            "vault provenance",
+            _e(vault_provenance),
+        ),
+        ("workspace-writeguard-state", "runtime_writeguard_status", "WriteGuard", writeguard_status),
+        (
+            "workspace-canvas-enabled-state",
+            "runtime_canvas_enabled",
+            "Canvas",
+            "enabled" if canvas_enabled else "disabled",
+        ),
+        (
+            "workspace-update-flow-state",
+            "runtime_update_flow_available",
+            "Update flow",
+            "available" if update_flow_available else "disabled",
+        ),
+        (
+            "workspace-guard-degraded-state",
+            "runtime_guard_degraded",
+            "guard",
+            "degraded" if guard_degraded else "normal",
+        ),
+        (
+            "workspace-update-flow-state-detail",
+            "runtime_workspace_update_state",
+            "workspace update",
+            workspace_update_state,
+            f'data-update-state="{workspace_update_state}"',
+        ),
+        (
+            "workspace-update-flow-availability",
+            "runtime_workspace_update_available",
+            "workspace update available",
+            "available" if workspace_update_available else "disabled",
+        ),
+        (
+            "workspace-update-flow-scope",
+            "runtime_workspace_update_scope",
+            "workspace update scope",
+            workspace_update_scope,
+        ),
+        (
+            "workspace-update-flow-reason",
+            "runtime_workspace_update_reason",
+            "update reason",
+            workspace_update_reason,
+        ),
+        (
+            "workspace-update-flow-config-mode",
+            "runtime_workspace_update_config_mode",
+            "update config",
+            workspace_update_config_mode,
+        ),
+        (
+            "workspace-update-governance-state",
+            "runtime_governance_via_update_enabled",
+            "governance via update",
+            "enabled" if workspace_update_governance_actions_enabled else "disabled",
+        ),
+        (
+            "workspace-runtime-trace-id",
+            "runtime_trace_id",
+            "trace",
+            runtime_trace_id or "unavailable",
+        ),
+    ]
+    telemetry_html = "".join(
+        f"""
+          <div class="workspace-runtime-popover-row" data-testid="{testid}" data-runtime-field="{field}"{' ' + extra if (extra := row[4] if len(row) > 4 else '') else ''}>
+            <span class="workspace-runtime-popover-key">{label}</span>
+            <code>{value}</code>
+          </div>"""
+        for row in telemetry_rows
+        for testid, field, label, value in [row[:4]]
+    )
+    return f"""
+      <header
+        class="workspace-header-strip primary-posture posture-tone-{posture}"
+        data-testid="workspace-primary-posture"
+        data-posture="{posture}"
+        data-region="workspace-header">
+        <div class="workspace-header-row" data-testid="workspace-header-row">
+          <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
+          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}">
+            <span class="workspace-vault-dot" aria-hidden="true"></span>
+            <span>{vault_name} · vault {vault_state}</span>
+          </a>
+          <details class="workspace-runtime-status" data-testid="workspace-runtime-status">
+            <summary
+              class="workspace-runtime-pill"
+              data-testid="workspace-runtime-pill"
+              aria-label="Show runtime telemetry">
+              <span>{pill_label}</span>
+              <span class="workspace-runtime-human-label">{posture_label}</span>
+            </summary>
+            <div class="workspace-runtime-status-popover" data-testid="workspace-runtime-status-popover">
+              {telemetry_html}
+            </div>
+          </details>
+          <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
+          <span class="workspace-header-spacer" aria-hidden="true"></span>
+          <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
+            <kbd>/</kbd><span>⌘K</span>
+          </button>
+          <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" onclick="vaultBrowser.open()">Browse vault</button>
+          {dev_ribbon}
+        </div>
+      </header>"""
 
 
 def _render_rail_empty_state(
@@ -417,12 +557,26 @@ def _render_note_section(fields: dict) -> str:
         workspace_update_available=workspace_update_available,
         guard_degraded=guard_degraded,
     )
-    primary_posture_html = _render_primary_posture(
+    workspace_header_strip_html = _render_workspace_header_strip(
+        fields=fields,
         posture=posture_token,
-        label=posture_label,
-        vault_name=str(fields.get("runtime_vault_name") or "unresolved"),
-        vault_channel=str(fields.get("runtime_vault_channel") or "unknown"),
-        runtime_trace_id=str(fields.get("runtime_trace_id") or ""),
+        posture_label=posture_label,
+        runtime_environment=runtime_environment,
+        runtime_channel=runtime_channel,
+        runtime_trace_id=runtime_trace_id,
+        vault_name=vault_name,
+        vault_channel=vault_channel,
+        vault_provenance=str(vault_provenance),
+        writeguard_status=writeguard_status,
+        canvas_enabled=canvas_enabled,
+        update_flow_available=update_flow_available,
+        guard_degraded=guard_degraded,
+        workspace_update_available=workspace_update_available,
+        workspace_update_state=workspace_update_state,
+        workspace_update_reason=workspace_update_reason,
+        workspace_update_scope=workspace_update_scope,
+        workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
+        workspace_update_config_mode=workspace_update_config_mode,
     )
     rail_empty_state_html = _render_rail_empty_state(
         panel_proposal_count=proposal_count,
@@ -436,62 +590,6 @@ def _render_note_section(fields: dict) -> str:
         governance_receipts_count=len(fields.get("governance_receipts") or []),
         suggestion_state=str(fields.get("suggestion_state", "idle") or "idle"),
     )
-    safety_strip_html = f"""
-      <section
-        class="runtime-safety-strip"
-        data-testid="workspace-runtime-safety-strip"
-        data-affordance-status="read-only"
-        data-runtime-backed="true">
-        <div class="safety-item" data-testid="workspace-runtime-channel">
-          <span class="safety-label">runtime</span>
-          <span>{runtime_environment}</span>
-          <span class="safety-sep">/</span>
-          <span>{runtime_channel}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-vault-identity" data-vault-provenance="{_e(vault_provenance)}">
-          <span class="safety-label">vault/channel</span>
-          <span>{vault_name}</span>
-          <span class="safety-sep">/</span>
-          <span>{vault_channel}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-writeguard-state">
-          <span class="safety-label">WriteGuard</span>
-          <span>{writeguard_status}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-canvas-enabled-state">
-          <span class="safety-label">Canvas</span>
-          <span>{'enabled' if canvas_enabled else 'disabled'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-flow-state"
-             data-update-flow="{'available' if update_flow_available else 'disabled'}">
-          <span class="safety-label">Update flow</span>
-          <span>{'available' if update_flow_available else 'disabled'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-guard-degraded-state">
-          <span class="safety-label">guard</span>
-          <span>{'degraded' if guard_degraded else 'normal'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-flow-state" data-update-state="{workspace_update_state}">
-          <span class="safety-label">workspace update</span>
-          <span>{'available' if workspace_update_available else 'disabled'}</span>
-          <span class="safety-sep">/</span>
-          <span>{workspace_update_scope}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-flow-reason">
-          <span class="safety-label">update reason</span>
-          <span>{workspace_update_reason}</span>
-          <span class="safety-sep">/</span>
-          <span>{workspace_update_config_mode}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-governance-state">
-          <span class="safety-label">governance via update</span>
-          <span>{'enabled' if workspace_update_governance_actions_enabled else 'disabled'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-runtime-trace-id">
-          <span class="safety-label">trace</span>
-          <code>{runtime_trace_id or 'unavailable'}</code>
-        </div>
-      </section>"""
     guard_messages: list[str] = []
     if writeguard_status.lower() == "blocked":
         guard_messages.append("WriteGuard blocked")
@@ -630,8 +728,7 @@ def _render_note_section(fields: dict) -> str:
       {vault_browser_html}
     </nav>
     <div class="workspace-main">
-      {primary_posture_html}
-      {safety_strip_html}
+      {workspace_header_strip_html}
       <header
         class="note-header active-note-header"
         data-testid="workspace-note-header"
@@ -2540,6 +2637,170 @@ def render_index_html(
       display: flex;
       flex-direction: column;
       overflow: hidden;
+    }}
+    .workspace-header-strip {{
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      color: var(--fg-3);
+      flex-shrink: 0;
+      height: 32px;
+      min-height: 32px;
+      overflow: visible;
+      position: relative;
+      white-space: nowrap;
+      z-index: 20;
+    }}
+    .workspace-header-row {{
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      height: 32px;
+      padding: 0 14px;
+      width: 100%;
+    }}
+    .workspace-wordmark {{
+      color: color-mix(in srgb, var(--accent) 72%, var(--fg-3));
+      flex-shrink: 0;
+      font-family: var(--font-display);
+      font-size: 16px;
+      line-height: 1;
+      text-decoration: none;
+    }}
+    .workspace-vault-chip,
+    .workspace-runtime-pill,
+    .workspace-freshness,
+    .workspace-quick-open,
+    .workspace-browse-vault,
+    .workspace-dev-ribbon {{
+      align-items: center;
+      display: inline-flex;
+      flex-shrink: 0;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      line-height: 1;
+    }}
+    .workspace-vault-chip {{
+      color: var(--fg-2);
+      gap: 6px;
+      text-decoration: none;
+    }}
+    .workspace-vault-dot {{
+      background: var(--cyan);
+      border-radius: 999px;
+      display: inline-block;
+      height: 6px;
+      width: 6px;
+    }}
+    .workspace-vault-chip[data-state="unresolved"] .workspace-vault-dot {{
+      background: var(--accent);
+    }}
+    .workspace-runtime-status {{
+      flex-shrink: 0;
+      position: relative;
+    }}
+    .workspace-runtime-status summary {{
+      list-style: none;
+    }}
+    .workspace-runtime-status summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .workspace-runtime-pill {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: pointer;
+      gap: 6px;
+      height: 22px;
+      padding: 0 8px;
+    }}
+    .workspace-runtime-human-label {{
+      color: var(--fg-3);
+    }}
+    .workspace-runtime-status-popover {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      display: none;
+      min-width: 360px;
+      padding: 10px 12px;
+      position: absolute;
+      top: 28px;
+      z-index: 30;
+    }}
+    .workspace-runtime-status[open] .workspace-runtime-status-popover {{
+      display: grid;
+      gap: 6px;
+    }}
+    .workspace-runtime-popover-row {{
+      align-items: baseline;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(130px, 0.8fr) minmax(120px, 1fr);
+    }}
+    .workspace-runtime-popover-key {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .workspace-runtime-popover-row code {{
+      background: none;
+      border: none;
+      color: var(--fg-2);
+      font-size: var(--text-xs);
+      overflow: hidden;
+      padding: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .workspace-freshness {{
+      color: var(--fg-3);
+    }}
+    .workspace-header-spacer {{
+      flex: 1 1 auto;
+      min-width: 12px;
+    }}
+    .workspace-quick-open,
+    .workspace-browse-vault {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      height: 24px;
+      gap: 6px;
+      padding: 0 8px;
+    }}
+    .workspace-quick-open {{
+      cursor: default;
+    }}
+    .workspace-quick-open kbd {{
+      background: transparent;
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .workspace-browse-vault {{
+      cursor: pointer;
+      font-family: var(--font-ui);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .workspace-browse-vault:hover {{
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }}
+    .workspace-dev-ribbon {{
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
+      border-radius: var(--radius-sm);
+      color: #f09030;
+      height: 28px;
+      letter-spacing: 0.07em;
+      padding: 0 8px;
+      text-transform: uppercase;
     }}
     .runtime-safety-strip {{
       align-items: center;
