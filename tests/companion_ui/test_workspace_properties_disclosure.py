@@ -140,8 +140,8 @@ class TestArtifactAndHashInsideDisclosure:
         outside = html.replace(disc_m.group(), "")
         # Strip style/script blocks before checking
         import re as _re
-        outside = _re.sub(r"<style[^>]*>.*?</style>", "", outside, flags=_re.DOTALL)
-        outside = _re.sub(r"<script[^>]*>.*?</script>", "", outside, flags=_re.DOTALL)
+        outside = _re.sub(r"<style[^>]*>.*?</style>", "", outside, flags=_re.DOTALL | _re.IGNORECASE)
+        outside = _re.sub(r"<script[^>]*>.*?</script>", "", outside, flags=_re.DOTALL | _re.IGNORECASE)
         assert "art-unique-7777" not in outside, (
             "artifact_id appears outside the disclosure (restatement violation)"
         )
@@ -161,8 +161,8 @@ class TestNoFactRestatement:
             flags=_re.DOTALL,
         )
         # Strip style/script
-        stripped = _re.sub(r"<style[^>]*>.*?</style>", "", html_outside_details, flags=_re.DOTALL)
-        stripped = _re.sub(r"<script[^>]*>.*?</script>", "", stripped, flags=_re.DOTALL)
+        stripped = _re.sub(r"<style[^>]*>.*?</style>", "", html_outside_details, flags=_re.DOTALL | _re.IGNORECASE)
+        stripped = _re.sub(r"<script[^>]*>.*?</script>", "", stripped, flags=_re.DOTALL | _re.IGNORECASE)
         # These unique values should NOT appear outside the disclosure
         assert "art-unique-xzy" not in stripped, "artifact_id leaked outside disclosure"
         assert "sha256-unique-abc" not in stripped, "content_hash leaked outside disclosure"
