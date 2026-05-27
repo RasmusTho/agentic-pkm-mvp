@@ -52,8 +52,7 @@ def note_outline_css() -> str:
       overflow: hidden;
     }
     .note-outline {
-      background: rgba(7,11,18,0.72);
-      border-right: 1px solid var(--border);
+      background: var(--bg-surface);
       color: var(--fg-2);
       min-height: 0;
       overflow-y: auto;
@@ -74,26 +73,54 @@ def note_outline_css() -> str:
       list-style: none;
     }
     .note-outline-item {
-      padding-left: calc((var(--outline-level, 1) - 1) * 12px);
+      min-width: 0;
     }
     .note-outline-link {
+      border-left: 2px solid transparent;
       border-radius: var(--radius-sm);
+      box-sizing: border-box;
       color: var(--fg-2);
       display: block;
-      font-size: var(--text-sm);
-      line-height: 1.35;
+      font-family: var(--font-display);
+      font-size: 13px;
+      line-height: 18px;
       overflow: hidden;
-      padding: 5px 6px;
+      padding-bottom: 5px;
+      padding-right: 6px;
+      padding-top: 5px;
       text-decoration: none;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .note-outline-link[data-depth="1"] {
+      padding-left: 0;
+    }
+    .note-outline-link[data-depth="2"] {
+      padding-left: 12px;
+    }
+    .note-outline-link[data-depth="3"] {
+      padding-left: 24px;
+    }
+    .note-outline-link[data-depth="4"] {
+      padding-left: 36px;
+    }
+    .note-outline-link[data-depth="5"],
+    .note-outline-link[data-depth="6"] {
+      display: none;
+      padding-left: 36px;
+    }
     .note-outline-link:hover,
     .note-outline-link:focus {
-      background: var(--cyan-muted);
-      color: var(--cyan);
+      color: var(--fg-1);
       outline: 1px solid var(--border-focus);
       outline-offset: 1px;
+      overflow: visible;
+      text-overflow: clip;
+      white-space: normal;
+    }
+    .note-outline-link[data-current="true"] {
+      border-left: 2px solid var(--accent);
+      color: var(--accent);
     }
     .note-outline-empty-copy {
       color: var(--fg-3);
@@ -110,7 +137,6 @@ def note_outline_css() -> str:
       }
       .note-outline {
         border-bottom: 1px solid var(--border);
-        border-right: 0;
         flex-shrink: 0;
         max-height: none;
         overflow: visible;
@@ -125,7 +151,6 @@ def note_outline_css() -> str:
       }
       .note-outline-item {
         flex: 0 0 auto;
-        padding-left: 0;
       }
       .note-outline-link {
         max-width: 70vw;
@@ -161,6 +186,28 @@ def note_outline_script() -> str:
       target.focus({ preventScroll: true });
     }
 
+    function updateCurrentSection() {
+      var links = Array.prototype.slice.call(document.querySelectorAll('[data-note-outline-link="true"]'));
+      if (!links.length) return;
+      var current = links[0];
+      var offset = 96;
+      links.forEach(function (link) {
+        var targetId = link.getAttribute('data-scroll-target');
+        var target = targetId ? document.getElementById(targetId) : null;
+        if (!target) return;
+        if (target.getBoundingClientRect().top <= offset) {
+          current = link;
+        }
+      });
+      links.forEach(function (link) {
+        if (link === current) {
+          link.setAttribute('data-current', 'true');
+        } else {
+          link.removeAttribute('data-current');
+        }
+      });
+    }
+
     document.addEventListener('click', function (event) {
       var link = outlineLinkFrom(event);
       if (!link) return;
@@ -174,6 +221,10 @@ def note_outline_script() -> str:
       event.preventDefault();
       link.click();
     });
+
+    document.addEventListener('scroll', updateCurrentSection, { passive: true, capture: true });
+    window.addEventListener('resize', updateCurrentSection);
+    updateCurrentSection();
   }());
   </script>"""
 
@@ -185,11 +236,13 @@ def _render_heading_item(heading: HeadingRef) -> str:
     return (
         '<li class="note-outline-item" '
         f'data-heading-level="{level}" '
-        f'style="--outline-level: {level}">'
+        f'data-depth="{level}">'
         '<a class="note-outline-link" '
         'data-testid="note-outline-link" '
         'data-note-outline-link="true" '
         f'data-scroll-target="{anchor}" '
+        f'data-depth="{level}" '
+        f'title="{text}" '
         f'aria-label="Jump to heading: {text}" '
         f'href="#{anchor}">{text}</a>'
         "</li>"

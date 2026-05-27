@@ -108,6 +108,61 @@ def test_portrait_viewport() -> None:
     assert "overflow: visible;" in css
 
 
+def test_row_has_title_attr() -> None:
+    outline = render_note_outline(
+        parse_vault_markdown(
+            "# Companion UI Markdown Feature Review\n\n"
+            "## 2.2.1 Another third-level heading with a long label\n"
+        )
+    )
+    css = note_outline_css()
+
+    assert 'title="Companion UI Markdown Feature Review"' in outline
+    assert 'title="2.2.1 Another third-level heading with a long label"' in outline
+    assert 'text-overflow: ellipsis;' in css
+    assert ".note-outline-link:hover," in css
+    assert "overflow: visible;" in css
+    assert "text-overflow: clip;" in css
+    assert "white-space: normal;" in css
+
+
+def test_current_section_carries_accent_rule() -> None:
+    html = _workspace_html("# Alpha\n\nBody.").replace(
+        'data-scroll-target="alpha"',
+        'data-scroll-target="alpha" data-current="true"',
+        1,
+    )
+
+    assert 'data-current="true"' in html
+    assert '.note-outline-link[data-current="true"] {' in html
+    assert "border-left: 2px solid var(--accent);" in html
+
+
+def test_indentation_by_depth() -> None:
+    outline = render_note_outline(
+        parse_vault_markdown(
+            "# One\n\n"
+            "## Two\n\n"
+            "### Three\n\n"
+            "#### Four\n\n"
+        )
+    )
+    css = note_outline_css()
+
+    assert 'data-depth="1"' in outline
+    assert 'data-depth="2"' in outline
+    assert 'data-depth="3"' in outline
+    assert 'data-depth="4"' in outline
+    assert '.note-outline-link[data-depth="1"] {' in css
+    assert "padding-left: 0;" in css
+    assert '.note-outline-link[data-depth="2"] {' in css
+    assert "padding-left: 12px;" in css
+    assert '.note-outline-link[data-depth="3"] {' in css
+    assert "padding-left: 24px;" in css
+    assert '.note-outline-link[data-depth="4"] {' in css
+    assert "padding-left: 36px;" in css
+
+
 def test_no_write_calls() -> None:
     outline = render_note_outline(parse_vault_markdown("# Alpha\n\n## Beta"))
     script = note_outline_script()
