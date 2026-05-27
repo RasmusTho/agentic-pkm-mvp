@@ -155,13 +155,8 @@ class TestNoteHeader:
 
     def test_note_path_in_provenance(self) -> None:
         html = _html_with_note(note_path="Projects/Alpha.md")
-        header_match = re.search(
-            r'data-testid="workspace-note-header".*?</header>',
-            html,
-            re.DOTALL,
-        )
-        assert header_match
-        assert "Projects/Alpha.md" in header_match.group()
+        # Path is in the breadcrumb's data-note-path attribute (§7.3 / #1337)
+        assert 'data-note-path="Projects/Alpha.md"' in html
 
     def test_artifact_id_in_provenance(self) -> None:
         html = _html_with_note(artifact_id="art-xyz-999")
