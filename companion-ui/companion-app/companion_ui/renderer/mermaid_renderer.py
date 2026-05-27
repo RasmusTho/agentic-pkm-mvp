@@ -177,17 +177,8 @@ def _render_error_result(
         code=code,
         message=f"{message} {detail}".strip(),
     )
-    body_html = (
-        '<div class="vault-mermaid-error" '
-        'data-testid="vault-mermaid-error" '
-        f'data-diagnostic-code="{_e(code)}" '
-        'role="alert">'
-        f"{_e(message)}"
-        f'<span class="vault-mermaid-error-detail">{_e(detail)}</span>'
-        "</div>"
-    )
     return MermaidRenderResult(
-        html=_render_figure(source, state="error", body_html=body_html),
+        html=_render_failed_embed_partial(source, code=code),
         diagnostics=(diagnostic,),
     )
 
@@ -209,12 +200,31 @@ def _render_source_details(source: str) -> str:
     return (
         '<details class="vault-mermaid-source" '
         'data-testid="vault-mermaid-source" '
-        "open>"
-        "<summary>Mermaid source</summary>"
+        ">"
+        "<summary>view source</summary>"
         '<pre class="vault-code-block vault-mermaid-source-code" data-language="mermaid">'
         f'<code class="language-mermaid">{_e(source)}</code>'
         "</pre>"
         "</details>"
+    )
+
+
+def _render_failed_embed_partial(source: str, *, code: str) -> str:
+    return (
+        '<figure class="vault-mermaid-block failed-embed failed-embed--mermaid" '
+        'data-testid="failed-embed" '
+        f'data-diagnostic-code="{_e(code)}" '
+        'data-embed-state="failed" '
+        'data-source-preserved="true" '
+        'data-network-policy="blocked">'
+        '<div class="failed-embed-main">'
+        '<span class="failed-embed-tag">MERMAID</span>'
+        '<span class="failed-embed-message">'
+        "Diagram source available &mdash; interactive render unavailable in this view."
+        "</span>"
+        "</div>"
+        f"{_render_source_details(source)}"
+        "</figure>"
     )
 
 

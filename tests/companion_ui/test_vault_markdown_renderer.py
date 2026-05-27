@@ -111,6 +111,15 @@ def test_internal_links() -> None:
     assert "Notes/ExistingNote.md" in rendered.html
 
 
+def test_unresolved_link_partial_emits_title_attr() -> None:
+    rendered = render_vault_markdown("[[Missing Note]]", link_resolver=_link_resolver())
+
+    assert (
+        '<span class="vault-wikilink vault-wikilink-diagnostic" '
+        'data-link-state="missing" title="[[Missing Note]] — not found in vault">'
+    ) in rendered.html
+
+
 def test_image_rendering() -> None:
     rendered = render_vault_markdown(
         _fixture("embeds-images.md"),
