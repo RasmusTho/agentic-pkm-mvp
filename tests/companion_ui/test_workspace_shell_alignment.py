@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui._orphan_text import assert_no_orphan_text
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,7 @@ _FRONTMATTER_BODY = (
 class TestFrontmatterStrippedFromBody:
     def test_frontmatter_block_not_in_body_region(self) -> None:
         html = _html(body=_FRONTMATTER_BODY)
+        assert_no_orphan_text(html)  # AC5 opt-in: catch future orphan-text regressions
         body = _body_region(html)
         assert "uuid: 11111111" not in body
         assert "- companion-ui" not in body
