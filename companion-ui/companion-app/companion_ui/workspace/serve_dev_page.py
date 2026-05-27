@@ -775,8 +775,8 @@ def _render_note_section(fields: dict) -> str:
       data-testid="workspace-agent-rail"
       data-region="agent-rail"
       data-layout-desktop="side-rail">
-      <div class="rail-header">
-        <span class="rail-label">Companion&nbsp;/ Panel</span>
+      <div class="rail-header" data-testid="workspace-panel-column-header">
+        <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>
         <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
       </div>
       <div class="rail-placeholder-body">
@@ -1591,19 +1591,30 @@ def _render_find_mode(candidates: list[dict], *, payload_available: bool = False
 
 
 def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
-    if not any(sections.get(name) for name in sections):
-        return """
+    open_loops_count = len(sections.get("open_loops") or []) if sections else 0
+    has_content = bool(sections) and any(sections.get(name) for name in sections)
+    if not has_content:
+        # Idle: single line with collapsed recall disclosure (AC3 §8.3)
+        return f"""
         <section
-          class="reorient-mode"
+          class="reorient-mode panel-section"
           data-testid="reorient-mode"
+          data-section-state="idle"
           data-affordance-status="read-only"
           data-capability="reorient">
           <div class="rail-state-row">
             <span class="rail-state-label">Reorient</span>
-            <span class="rail-state-value">read-only</span>
-          </div>
-          <div class="reorient-empty" data-testid="reorient-empty-state">
-            Reorient is available, but no orientation payload is available for this note yet.
+            <details class="reorient-recall-disclosure" data-testid="reorient-recall-disclosure"
+              aria-expanded="false">
+              <summary class="reorient-recall-trigger"
+                aria-expanded="false"
+                data-testid="reorient-recall-trigger">recall&nbsp;&#9660;</summary>
+              <div class="reorient-recall-body" data-testid="reorient-recall-body" hidden>
+                <div class="reorient-empty" data-testid="reorient-empty-state">
+                  Reorient is available, but no orientation payload is available for this note yet.
+                </div>
+              </div>
+            </details>
           </div>
         </section>"""
 
@@ -1678,15 +1689,23 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
         )
     return f"""
         <section
-          class="reorient-mode"
+          class="reorient-mode panel-section"
           data-testid="reorient-mode"
+          data-section-state="active"
           data-affordance-status="read-only"
           data-capability="reorient">
           <div class="rail-state-row">
             <span class="rail-state-label">Reorient</span>
-            <span class="rail-state-value">read-only</span>
+            <details class="reorient-recall-disclosure" data-testid="reorient-recall-disclosure"
+              aria-expanded="false">
+              <summary class="reorient-recall-trigger"
+                aria-expanded="false"
+                data-testid="reorient-recall-trigger">{open_loops_count} open loop{"s" if open_loops_count != 1 else ""}&nbsp;&middot;&nbsp;recall&nbsp;&#9660;</summary>
+              <div class="reorient-recall-body" data-testid="reorient-recall-body">
+                {"".join(section_html)}
+              </div>
+            </details>
           </div>
-          {"".join(section_html)}
         </section>"""
 
 
@@ -2230,6 +2249,15 @@ def _render_panel_proposal_rows(
     if not proposals:
         return ""
 
+    # Action row order: Apply (confirm) → Discard (reject) → Defer (correct) per §8 design
+    _ACTION_LABELS = {"confirm": "Apply", "reject": "Discard", "correct": "Defer"}
+    _ACTION_ORDER = ("confirm", "reject", "correct")
+    _ACTION_CSS = {
+        "confirm": "panel-action-apply",
+        "reject": "panel-action-discard",
+        "correct": "panel-action-defer",
+    }
+
     rows: list[str] = []
     for proposal in proposals:
         evidence = proposal.get("evidence") or {}
@@ -2237,16 +2265,27 @@ def _render_panel_proposal_rows(
         proposal_status = str(proposal.get("status") or "staged")
         proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
         affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
+        section_state = "active" if proposal_available else "idle"
         enabled_affordances = [
             label
-            for label in ("confirm", "correct", "reject")
+            for label in _ACTION_ORDER
             if affordances.get(label) and proposal_available
         ]
         proposal_id = _e(proposal.get("proposal_id", ""))
         artifact_id = _e(proposal.get("artifact_id", ""))
+        # Provenance line: agent · ISO-timestamp · confidence N (AC4)
+        prov_agent = _e(str(proposal.get("agent") or proposal.get("author") or "hugin"))
+        prov_ts_raw = str(proposal.get("created_at") or proposal.get("timestamp") or "")
+        prov_ts = _e(prov_ts_raw[:16]) if prov_ts_raw else _e(datetime.now().strftime("%Y-%m-%dT%H:%M"))
+        prov_conf = _e(str(proposal.get("confidence") or "—"))
+        provenance_html = (
+            f'<div class="panel-section-provenance" data-testid="workspace-panel-provenance">'
+            f"{prov_agent}&nbsp;&middot;&nbsp;{prov_ts}&nbsp;&middot;&nbsp;confidence&nbsp;{prov_conf}"
+            f"</div>"
+        )
         buttons = "".join(
             (
-                '<button type="button" class="panel-proposal-action" '
+                f'<button type="button" class="panel-proposal-action {_ACTION_CSS[label]}" '
                 'data-testid="workspace-panel-action" '
                 f'data-panel-action="{_e(label)}" '
                 f'data-affordance-status="{affordance_status}" '
@@ -2255,7 +2294,7 @@ def _render_panel_proposal_rows(
                 'data-runtime-backed="true" '
                 'data-api-method="POST" '
                 'data-api-path="/api/panel/confirm">'
-                f"{_e(label)}</button>"
+                f"{_ACTION_LABELS[label]}</button>"
             )
             for label in enabled_affordances
         )
@@ -2269,12 +2308,14 @@ def _render_panel_proposal_rows(
         rows.append(
             f"""
         <div
-          class="panel-proposal-row"
+          class="panel-proposal-row panel-section"
           data-testid="workspace-panel-proposal-row"
+          data-section-state="{section_state}"
           data-affordance-status="{affordance_status}"
           data-proposal-id="{proposal_id}"
           data-artifact-id="{artifact_id}">
-          <div class="panel-proposal-title">{_e(proposal.get("description", ""))}</div>
+          <div class="panel-section-title">{_e(proposal.get("description", ""))}</div>
+          {provenance_html if proposal_available else ""}
           <div class="panel-proposal-meta">
             <span data-testid="workspace-panel-proposal-id">{proposal_id}</span>
             <span data-testid="workspace-panel-artifact-id">{artifact_id}</span>
@@ -2286,7 +2327,7 @@ def _render_panel_proposal_rows(
             <span data-testid="workspace-panel-action-class">{_e(evidence.get("action_class", ""))}</span>
             <span data-testid="workspace-panel-cognition-route">{_e(evidence.get("cognition_route", ""))}</span>
           </details>
-          <div class="panel-proposal-affordances">
+          <div class="panel-proposal-affordances panel-action-row">
             {buttons}
           </div>
         </div>"""
@@ -3742,6 +3783,91 @@ def render_index_html(
         display: flex;
       }}
     }}
+    /* §8 Panel section state model */
+    .panel-section[data-section-state="idle"] {{
+      padding: 4px 0;
+    }}
+    .panel-section[data-section-state="idle"] .panel-section-title {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }}
+    .panel-section[data-section-state="active"] {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--agent);
+      border-radius: 4px;
+      padding: 10px;
+    }}
+    .panel-section-title {{
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+      font-style: normal;
+      font-family: var(--font-mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 11px;
+      color: var(--fg-3);
+    }}
+    .panel-section[data-section-state="active"] .panel-section-title {{
+      color: var(--agent);
+    }}
+    .panel-section-provenance {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }}
+    .panel-action-row {{
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+      margin-top: 4px;
+    }}
+    .panel-action-apply {{
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius-md);
+      color: white;
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      height: 28px;
+      padding: 0 10px;
+    }}
+    .panel-action-discard {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      height: 28px;
+      padding: 0 10px;
+    }}
+    .panel-action-defer {{
+      background: transparent;
+      border: none;
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      height: 28px;
+      padding: 0 6px;
+    }}
+    /* Reorient recall disclosure */
+    .reorient-recall-disclosure {{ display: inline; }}
+    .reorient-recall-trigger {{
+      display: inline;
+      cursor: pointer;
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      list-style: none;
+    }}
+    .reorient-recall-trigger::-webkit-details-marker {{ display: none; }}
+    .reorient-recall-body {{ margin-top: 8px; }}
     .panel-proposal-row {{
       background: var(--bg-raised);
       border: 1px solid var(--border);
