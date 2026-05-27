@@ -355,7 +355,13 @@ def _render_workspace_header_strip(
         if is_prod
         else '<span class="workspace-dev-ribbon" data-testid="workspace-dev-ribbon">DEV</span>'
     )
-    vault_state = "unresolved" if str(vault_provenance).lower() == "unresolved" else "ok"
+    vp_lower = str(vault_provenance).lower()
+    if vp_lower == "unreachable":
+        vault_state = "unreachable"
+    elif vp_lower == "unresolved":
+        vault_state = "unresolved"
+    else:
+        vault_state = "ok"
     browse_target = "#vault-browser-overlay"
     telemetry_rows = [
         ("workspace-runtime-channel", "runtime_environment_label", "runtime", runtime_environment),
@@ -517,6 +523,40 @@ def _render_rail_empty_state(
     )
 
 
+def _render_read_only_pill() -> str:
+    return (
+        '<div class="workspace-read-only-pill" data-testid="workspace-read-only-pill"'
+        ' title="Canvas off · runtime configuration · view in Panel">'
+        "▍ read-only"
+        "</div>"
+    )
+
+
+def _render_vault_unreachable_banner(last_sync: str = "") -> str:
+    sync_label = f"last sync {last_sync}" if last_sync else "last sync unavailable"
+    return (
+        f'<div class="workspace-vault-unreachable-banner" data-testid="workspace-vault-unreachable-banner">'
+        f"<span>Vault unreachable — {sync_label}. Showing cached view.</span>"
+        f'<a href="#workspace-runtime-status" class="banner-retry-link" data-testid="workspace-vault-retry">retry</a>'
+        f"</div>"
+    )
+
+
+def _render_note_not_found(note_path: str) -> str:
+    safe_path = _e(note_path)
+    return (
+        f'<div class="workspace-note-not-found" data-testid="workspace-note-not-found">'
+        f"<h1>Note not found</h1>"
+        f"<code>{safe_path}</code>"
+        f"<p>No artifact at {safe_path}. The vault may have moved or this link may be stale.</p>"
+        f'<div class="not-found-actions">'
+        f'<button type="button" class="not-found-browse" onclick="vaultBrowser.open()">Browse vault</button>'
+        f'<button type="button" class="not-found-last-note" data-testid="workspace-open-last-note">Open last note</button>'
+        f"</div>"
+        f"</div>"
+    )
+
+
 def _render_body_edit_panel(update_flow_available: bool, note_path: str, raw_body: str = "") -> str:
     if not update_flow_available:
         return (
@@ -636,10 +676,12 @@ def _render_note_section(fields: dict) -> str:
         if companion_of
         else ""
     )
+    vault_unreachable = bool(fields.get("vault_unreachable", False)) or str(vault_provenance).lower() == "unreachable"
     vault_unresolved = (
         str(vault_provenance).lower() == "unresolved"
         or str(fields.get("runtime_vault_name") or "").lower() == "unresolved"
     )
+    note_not_found = bool(fields.get("note_not_found", False))
     posture_token, posture_label = _compute_primary_posture(
         writeguard_blocked=writeguard_blocked,
         vault_unresolved=vault_unresolved,
@@ -647,6 +689,7 @@ def _render_note_section(fields: dict) -> str:
         workspace_update_available=workspace_update_available,
         guard_degraded=guard_degraded,
     )
+    effective_vault_provenance = "unreachable" if vault_unreachable else str(vault_provenance)
     workspace_header_strip_html = _render_workspace_header_strip(
         fields=fields,
         posture=posture_token,
@@ -656,7 +699,7 @@ def _render_note_section(fields: dict) -> str:
         runtime_trace_id=runtime_trace_id,
         vault_name=vault_name,
         vault_channel=vault_channel,
-        vault_provenance=str(vault_provenance),
+        vault_provenance=effective_vault_provenance,
         writeguard_status=writeguard_status,
         canvas_enabled=canvas_enabled,
         update_flow_available=update_flow_available,
@@ -679,6 +722,15 @@ def _render_note_section(fields: dict) -> str:
         companion_html=companion_html,
         rendered_props=rendered_props,
     )
+    vault_unreachable_banner_html = (
+        _render_vault_unreachable_banner(
+            last_sync=fields.get("vault_last_sync_label") or fields.get("runtime_last_ingest_at") or ""
+        )
+        if vault_unreachable
+        else ""
+    )
+    read_only_pill_html = _render_read_only_pill() if not canvas_enabled else ""
+    note_not_found_html = _render_note_not_found(raw_note_path) if note_not_found else ""
     rail_empty_state_html = _render_rail_empty_state(
         panel_proposal_count=proposal_count,
         panel_proposals=panel_proposals,
@@ -830,6 +882,7 @@ def _render_note_section(fields: dict) -> str:
     </nav>
     <div class="workspace-main">
       {workspace_header_strip_html}
+      {vault_unreachable_banner_html}
       <header
         class="note-header active-note-header"
         data-testid="workspace-note-header"
@@ -839,6 +892,7 @@ def _render_note_section(fields: dict) -> str:
         {identity_caution_html}
       </header>
       {hidden_frontmatter_html}
+      {note_not_found_html}
       <div
         class="note-reading-layout"
         data-testid="workspace-note-reading-layout">
@@ -846,6 +900,7 @@ def _render_note_section(fields: dict) -> str:
         <button class="workspace-outline-ribbon" data-testid="workspace-outline-ribbon"
           aria-label="open outline" data-layout-visible="800-1099">☰ outline</button>
         <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
+          {read_only_pill_html}
           <div class="note-body-content">{body}</div>
           {suggested_insertions_html}
         </div>
@@ -2826,6 +2881,12 @@ def render_index_html(
     .workspace-vault-chip[data-state="unresolved"] .workspace-vault-dot {{
       background: var(--accent);
     }}
+    .workspace-vault-chip[data-state="unreachable"] .workspace-vault-dot {{
+      background: var(--destructive);
+    }}
+    .workspace-vault-chip[data-state="unreachable"] {{
+      color: var(--destructive);
+    }}
     .workspace-runtime-status {{
       flex-shrink: 0;
       position: relative;
@@ -2968,6 +3029,83 @@ def render_index_html(
       white-space: nowrap;
     }}
     .safety-sep {{ color: var(--border-strong); }}
+
+    /* ---- Shell error surfaces (#1341) ---- */
+    .workspace-vault-unreachable-banner {{
+      align-items: center;
+      background: color-mix(in srgb, var(--destructive) 8%, var(--bg-surface));
+      border-left: 2px solid var(--destructive);
+      color: var(--fg-2);
+      display: flex;
+      flex-shrink: 0;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      gap: 12px;
+      height: 32px;
+      min-height: 32px;
+      padding: 0 16px;
+    }}
+    .banner-retry-link {{
+      color: var(--fg-2);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }}
+    .workspace-read-only-pill {{
+      align-items: center;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: default;
+      display: inline-flex;
+      float: right;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      height: 24px;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+      padding: 0 8px;
+    }}
+    .workspace-note-not-found {{
+      align-items: flex-start;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 32px 24px;
+    }}
+    .workspace-note-not-found h1 {{
+      color: var(--fg-1);
+      font-family: var(--font-display);
+      font-size: var(--text-xl);
+      margin: 0;
+    }}
+    .workspace-note-not-found code {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }}
+    .workspace-note-not-found p {{
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+      margin: 0;
+    }}
+    .not-found-actions {{
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }}
+    .not-found-browse,
+    .not-found-last-note {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      height: 32px;
+      padding: 0 14px;
+    }}
 
     /* ---- Note header ---- */
     .note-header {{
