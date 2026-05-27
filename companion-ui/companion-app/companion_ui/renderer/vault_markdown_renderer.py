@@ -482,17 +482,27 @@ def _render_wikilink(raw: str, context: _RenderContext) -> str:
         link = parse_wikilink(raw)
         resolution = context.link_resolver.resolve(link, note_path=context.note_path)
     except Exception as exc:  # Resolver contract says never throw; guard third-party stubs.
-        return _render_link_diagnostic(raw, "missing", str(exc))
+        return _render_unresolved_link_partial(raw, "missing", title_raw=raw, reason=str(exc))
 
     kind = str(getattr(resolution, "kind", "missing"))
     label = link_display_label(resolution) if kind in {"resolved", "missing", "ambiguous"} else raw
     if kind != "resolved":
-        trigger_html = _render_link_diagnostic(label, kind, getattr(resolution, "reason", None))
+        trigger_html = _render_unresolved_link_partial(
+            label,
+            kind,
+            title_raw=raw,
+            reason=getattr(resolution, "reason", None),
+        )
         return _wrap_link_preview(trigger_html, resolution, context)
 
     note_path = _safe_note_path(str(getattr(resolution, "note_path", "") or ""))
     if not note_path:
-        return _render_link_diagnostic(label, "missing", "Resolved note path was not browser-safe.")
+        return _render_unresolved_link_partial(
+            label,
+            "missing",
+            title_raw=raw,
+            reason="Resolved note path was not browser-safe.",
+        )
 
     href = f"?note_path={quote(note_path, safe='')}"
     fragment = _resolution_fragment(resolution)
@@ -552,11 +562,19 @@ def _render_link_preview_exception(message: str) -> str:
     )
 
 
-def _render_link_diagnostic(label: str, kind: str, reason: str | None) -> str:
-    reason_attr = f' title="{_e(reason)}"' if reason else ""
+def _render_unresolved_link_partial(
+    label: str,
+    kind: str,
+    *,
+    title_raw: str,
+    reason: str | None,
+) -> str:
+    missing_title = f"{title_raw} \u2014 not found in vault"
+    title = missing_title if kind == "missing" else (reason or missing_title)
     return (
         '<span class="vault-wikilink vault-wikilink-diagnostic" '
-        f'data-link-state="{_e(kind)}"{reason_attr}>'
+        f'data-link-state="{_e(kind)}" '
+        f'title="{_e(title)}">'
         f"{_e(label)}</span>"
     )
 
@@ -596,16 +614,31 @@ def _render_asset(
             }
         )
     except Exception as exc:  # Resolver contract says never throw; guard third-party stubs.
-        return _render_asset_diagnostic(raw_target, "missing", str(exc))
+        return _render_missing_image_partial(
+            display_name=raw_target,
+            target=raw_target,
+            state="missing",
+            reason=str(exc),
+            alt=alt,
+        )
 
     state = str(getattr(resolution, "kind", "missing"))
-    display_name = str(getattr(resolution, "display_name", None) or getattr(resolution, "displayName", "") or raw_target)
+    display_name = str(
+        getattr(resolution, "display_name", None)
+        or getattr(resolution, "displayName", "")
+        or raw_target
+    )
     if state != "allowed":
-        return _render_asset_diagnostic(
-            display_name,
-            state,
-            str(getattr(resolution, "reason", "") or ""),
-        )
+        reason = str(getattr(resolution, "reason", "") or "")
+        if state == "missing":
+            return _render_missing_image_partial(
+                display_name=display_name,
+                target=raw_target,
+                state=state,
+                reason=reason,
+                alt=alt,
+            )
+        return _render_asset_diagnostic(display_name, state, reason)
 
     src = str(getattr(resolution, "src", "") or "")
     if not _is_browser_safe_src(src):
@@ -619,6 +652,35 @@ def _render_asset(
     return (
         '<img class="vault-image" data-asset-state="allowed" '
         f'src="{_e(src)}" alt="{_e(alt_text)}"{width_attr}{height_attr}>'
+    )
+
+
+def _render_missing_image_partial(
+    *,
+    display_name: str,
+    target: str,
+    state: str,
+    reason: str,
+    alt: str | None,
+) -> str:
+    title_attr = f' title="{_e(reason)}"' if reason else ""
+    alt_html = (
+        f'<figcaption class="missing-image-alt">{_e(alt)}</figcaption>'
+        if alt
+        else ""
+    )
+    return (
+        '<figure class="vault-asset-diagnostic missing-image" '
+        'data-testid="missing-image" '
+        f'data-asset-state="{_e(state)}"{title_attr}>'
+        '<div class="missing-image-box">'
+        '<span class="missing-image-icon" aria-hidden="true"></span>'
+        '<span class="missing-image-caption">'
+        f"<code>{_e(display_name)}</code> &mdash; not found at <code>{_e(target)}</code>"
+        "</span>"
+        "</div>"
+        f"{alt_html}"
+        "</figure>"
     )
 
 

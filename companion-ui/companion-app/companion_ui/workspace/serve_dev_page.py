@@ -2993,6 +2993,106 @@ def render_index_html(
       display: inline;
       cursor: help;
     }}
+    .failed-embed {{
+      align-items: flex-start;
+      background: var(--bg-surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: 2px;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      margin: 0 0 16px;
+      padding: 14px 16px;
+    }}
+    .failed-embed-main {{
+      align-items: baseline;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }}
+    .failed-embed-tag {{
+      color: var(--amber);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0;
+      line-height: 1;
+    }}
+    .failed-embed-message {{
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+    }}
+    .failed-embed .vault-mermaid-source {{
+      flex: 0 0 auto;
+      margin: 0;
+    }}
+    .failed-embed .vault-mermaid-source > summary {{
+      color: var(--accent);
+      cursor: pointer;
+      font-size: var(--text-sm);
+      list-style: none;
+    }}
+    .failed-embed .vault-mermaid-source > summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .failed-embed .vault-mermaid-source[open] {{
+      flex-basis: 100%;
+    }}
+    .failed-embed .vault-mermaid-source-code {{
+      margin: 12px 0 0;
+    }}
+    .vault-asset-diagnostic.missing-image {{
+      background: transparent;
+      border: 0;
+      color: var(--fg-2);
+      display: block;
+      font-family: inherit;
+      margin: 0 0 16px;
+      padding: 0;
+    }}
+    .missing-image-box {{
+      align-items: center;
+      background: var(--bg-surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: 4px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      height: 120px;
+      justify-content: center;
+      max-width: 100%;
+      width: 100%;
+    }}
+    .missing-image-icon {{
+      border: 1px solid var(--fg-3);
+      border-radius: 2px;
+      box-sizing: border-box;
+      height: 20px;
+      position: relative;
+      width: 20px;
+    }}
+    .missing-image-icon::after {{
+      border-bottom: 1px solid var(--fg-3);
+      border-left: 1px solid var(--fg-3);
+      bottom: 4px;
+      content: "";
+      height: 6px;
+      left: 4px;
+      position: absolute;
+      transform: rotate(-45deg);
+      width: 10px;
+    }}
+    .missing-image-caption {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .missing-image-alt {{
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+      margin-top: 6px;
+    }}
     .vault-asset-diagnostic,
     .unsupported-block-diagnostic,
     .vault-diagnostics {{
