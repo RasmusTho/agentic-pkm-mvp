@@ -174,18 +174,108 @@ def _render_hidden_frontmatter_marker(document: VaultMarkdownDocument) -> str:
     )
 
 
-def _render_note_frontmatter_region(document: VaultMarkdownDocument) -> str:
-    """Render frontmatter as bounded read-only metadata chrome.
+def _render_note_frontmatter_region(document: VaultMarkdownDocument):  # type: ignore[return]
+    """Return (hidden_marker_html, rendered_properties).
 
     AC1 / AC2 (#1260): the body region must not display YAML frontmatter as
     prose; frontmatter-derived metadata remains visible in dedicated chrome.
+    #1337: the visible properties are wrapped in a breadcrumb disclosure; the
+    hidden marker is kept in-place for downstream selectors.
     """
     hidden_marker = _render_hidden_frontmatter_marker(document)
-    properties_html = PropertiesRenderer(
+    rendered_props = PropertiesRenderer(
         test_id="workspace-note-properties",
         include_empty=False,
-    ).render(document).html
-    return hidden_marker + properties_html
+    ).render(document)
+    return hidden_marker, rendered_props
+
+
+def _render_workspace_breadcrumb(
+    *,
+    note_path: str,
+    artifact_id: str,
+    content_hash: str,
+    identity_state: str,
+    identity_source: str,
+    artifact_kind: str,
+    owns_identity: bool,
+    companion_html: str,
+    rendered_props,
+) -> str:
+    """Breadcrumb line under the note title with a properties ▾ disclosure.
+
+    §7.3 / #1337: replaces the chip strip (path · artifact · hash) with a
+    single breadcrumb line; artifact id and hash move inside the disclosure.
+    """
+    # Path segments — keep raw slashes as separators for readability
+    path_segments = note_path.replace("&amp;", "&").split("/")
+    path_html = " / ".join(_e(p) for p in path_segments if p)
+
+    # Pull up to 2 inline meta items from frontmatter (kind + review_state)
+    _META_KEYS = ("kind", "review", "review_state")
+    meta_items: list[str] = []
+    for field in (rendered_props.fields or ()):
+        if field.key in _META_KEYS and field.values:
+            label = _e(field.key)
+            val = _e(", ".join(field.values[:2]))
+            meta_items.append(
+                f'<span class="breadcrumb-meta-item">{label}&nbsp;{val}</span>'
+            )
+        if len(meta_items) >= 2:
+            break
+
+    meta_html = "".join(
+        f'<span class="breadcrumb-sep">&middot;</span>{item}' for item in meta_items
+    )
+
+    # Artifact/hash chips move inside the disclosure
+    artifact_chip = ""
+    if artifact_id:
+        artifact_chip = (
+            f'<span class="prov-item artifact-identity-pill"'
+            f' data-testid="workspace-artifact-identity-pill"'
+            f' data-identity-state="{identity_state}"'
+            f' data-identity-source="{identity_source}"'
+            f' data-artifact-kind="{artifact_kind}"'
+            f' data-owns-identity="{"true" if owns_identity else "false"}">'
+            f'<span class="prov-label">artifact</span>'
+            f"<code>{artifact_id}</code>"
+            f'<span class="identity-meta">{identity_state}</span>'
+            f'<span class="identity-meta">{identity_source}</span>'
+            f"{companion_html}"
+            f"</span>"
+        )
+    hash_chip = ""
+    if content_hash:
+        hash_chip = (
+            f'<span class="prov-item content-hash-pill"'
+            f' data-testid="workspace-content-hash-pill">'
+            f'<span class="prov-label">hash</span>'
+            f"<code>{content_hash}</code>"
+            f"</span>"
+        )
+    identity_chips_html = ""
+    if artifact_chip or hash_chip:
+        identity_chips_html = (
+            f'<div class="breadcrumb-identity-chips">{artifact_chip}{hash_chip}</div>'
+        )
+
+    raw_path = note_path.replace("&amp;", "&")
+    return (
+        f'<div class="workspace-breadcrumb" data-testid="workspace-breadcrumb" data-note-path="{_e(raw_path)}">'
+        f'<span class="breadcrumb-path">{path_html}</span>'
+        f"{meta_html}"
+        f'<details class="workspace-properties-disclosure"'
+        f' data-testid="workspace-properties-disclosure"'
+        f" aria-expanded=\"false\">"
+        f'<summary class="breadcrumb-disclosure-trigger">properties&nbsp;&#9660;</summary>'
+        f'<div class="properties-disclosure-body">'
+        f"{identity_chips_html}"
+        f"{rendered_props.html}"
+        f"</div>"
+        f"</details>"
+        f"</div>"
+    )
 
 
 def _compute_primary_posture(
@@ -493,7 +583,7 @@ def _render_note_section(fields: dict) -> str:
     rendered_body = render_vault_markdown(raw_body, note_path=raw_note_path)
     body = rendered_body.html
     outline_html = render_note_outline(rendered_body.document)
-    note_frontmatter_html = _render_note_frontmatter_region(rendered_body.document)
+    hidden_frontmatter_html, rendered_props = _render_note_frontmatter_region(rendered_body.document)
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
@@ -577,6 +667,17 @@ def _render_note_section(fields: dict) -> str:
         workspace_update_scope=workspace_update_scope,
         workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
         workspace_update_config_mode=workspace_update_config_mode,
+    )
+    breadcrumb_html = _render_workspace_breadcrumb(
+        note_path=note_path_val,
+        artifact_id=artifact_id,
+        content_hash=content_hash,
+        identity_state=identity_state,
+        identity_source=identity_source,
+        artifact_kind=artifact_kind,
+        owns_identity=owns_identity,
+        companion_html=companion_html,
+        rendered_props=rendered_props,
     )
     rail_empty_state_html = _render_rail_empty_state(
         panel_proposal_count=proposal_count,
@@ -734,31 +835,10 @@ def _render_note_section(fields: dict) -> str:
         data-testid="workspace-note-header"
         data-region="note-header">
         <h1 class="note-title">{title}</h1>
-        <div class="note-provenance">
-          <span class="prov-item"><span class="prov-label">path</span><code>{note_path_val}</code></span>
-          <span class="prov-sep">&middot;</span>
-          <span
-            class="prov-item artifact-identity-pill"
-            data-testid="workspace-artifact-identity-pill"
-            data-identity-state="{identity_state}"
-            data-identity-source="{identity_source}"
-            data-artifact-kind="{artifact_kind}"
-            data-owns-identity="{'true' if owns_identity else 'false'}">
-            <span class="prov-label">artifact</span><code>{artifact_id or 'unresolved'}</code>
-            <span class="identity-meta">{identity_state}</span>
-            <span class="identity-meta">{identity_source}</span>
-            {companion_html}
-          </span>
-          <span class="prov-sep">&middot;</span>
-          <span
-            class="prov-item content-hash-pill"
-            data-testid="workspace-content-hash-pill">
-            <span class="prov-label">hash</span><code>{content_hash or 'unavailable'}</code>
-          </span>
-        </div>
+        {breadcrumb_html}
         {identity_caution_html}
       </header>
-      {note_frontmatter_html}
+      {hidden_frontmatter_html}
       <div
         class="note-reading-layout"
         data-testid="workspace-note-reading-layout">
@@ -2902,6 +2982,50 @@ def render_index_html(
       line-height: 1.2;
       color: var(--fg-1);
       margin-bottom: 8px;
+    }}
+    .workspace-breadcrumb {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--fg-3);
+      margin-top: 4px;
+      margin-bottom: 6px;
+    }}
+    .breadcrumb-path {{ color: var(--fg-3); }}
+    .breadcrumb-sep {{ color: var(--border-strong); }}
+    .breadcrumb-meta-item {{ color: var(--fg-3); }}
+    .workspace-properties-disclosure {{ display: contents; }}
+    .workspace-properties-disclosure summary {{
+      display: inline;
+      cursor: pointer;
+      color: var(--fg-3);
+      list-style: none;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }}
+    .workspace-properties-disclosure summary::-webkit-details-marker {{ display: none; }}
+    .workspace-properties-disclosure[open] summary {{ color: var(--fg-2); }}
+    .properties-disclosure-body {{
+      position: absolute;
+      z-index: 20;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      min-width: 280px;
+      max-width: 480px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+    }}
+    .breadcrumb-identity-chips {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      margin-bottom: 8px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
     }}
     .note-provenance {{
       display: flex;
