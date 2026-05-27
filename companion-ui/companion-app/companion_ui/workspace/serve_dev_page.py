@@ -2707,32 +2707,89 @@ def render_index_html(
       overflow-y: auto;
       padding: 24px;
     }}
+    /* Design review §6.1 — body column is a reading surface, not a card.
+       Background matches the page; no inset border; line-length capped at 68ch. */
     .note-body-content {{
-      background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
+      background: var(--bg-base);
+      border: none;
+      border-radius: 0;
       margin: 0 auto;
-      max-width: 920px;
+      max-width: 68ch;
       max-height: 60vh;
       min-height: 0;
       overflow-y: auto;
-      padding: 28px 32px;
+      padding: 40px 32px 48px;
       font-family: var(--font-ui);
       font-size: var(--text-base);
       color: var(--fg-1);
-      line-height: 1.75;
+      /* §6.3 — paragraph rhythm */
+      line-height: 1.65;
       word-break: break-word;
     }}
-    .vault-markdown-rendered h1,
-    .vault-markdown-rendered h2,
-    .vault-markdown-rendered h3 {{
-      color: var(--fg-0);
-      line-height: 1.2;
-      margin: 0 0 14px;
+    /* Design review §6.2 — heading scale (sharp step-down between levels). */
+    .vault-markdown-rendered h1 {{
+      font-family: var(--font-display);
+      font-size: 40px;
+      line-height: 44px;
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      color: var(--fg-1);
+      margin: 0 0 32px;
     }}
-    .vault-markdown-rendered h1 {{ font-size: clamp(2rem, 4vw, 3rem); }}
-    .vault-markdown-rendered h2 {{ font-size: 1.6rem; margin-top: 28px; }}
-    .vault-markdown-rendered h3 {{ font-size: 1.25rem; margin-top: 22px; }}
+    .vault-markdown-rendered h2 {{
+      font-family: var(--font-ui);
+      font-size: 22px;
+      line-height: 28px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      color: var(--fg-1);
+      margin: 40px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      max-width: 80%;
+    }}
+    .vault-markdown-rendered h3 {{
+      font-family: var(--font-ui);
+      font-size: 16px;
+      line-height: 22px;
+      font-weight: 600;
+      color: var(--fg-1);
+      margin: 28px 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+    .vault-markdown-rendered h3::before {{
+      content: "";
+      display: inline-block;
+      flex: 0 0 auto;
+      width: 4px;
+      height: 14px;
+      background: var(--accent-dim);
+      border-radius: 1px;
+    }}
+    .vault-markdown-rendered h4 {{
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-2);
+      margin: 20px 0 4px;
+    }}
+    .vault-markdown-rendered h5,
+    .vault-markdown-rendered h6 {{
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 14px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-3);
+      margin: 16px 0 4px;
+    }}
+    /* §6.3 — block rhythm */
     .vault-markdown-rendered p,
     .vault-markdown-rendered ul,
     .vault-markdown-rendered ol,
@@ -2741,30 +2798,126 @@ def render_index_html(
     .vault-markdown-rendered pre {{
       margin: 0 0 16px;
     }}
+    .vault-markdown-rendered ul,
+    .vault-markdown-rendered ol {{
+      padding-left: 24px;
+    }}
+    .vault-markdown-rendered li + li {{
+      margin-top: 4px;
+    }}
+    /* §6.5 — blockquote: rule + muted text, no fill. A blockquote is not a callout. */
+    .vault-markdown-rendered blockquote {{
+      border-left: 2px solid var(--border-strong);
+      background: transparent;
+      color: var(--fg-2);
+      padding: 2px 0 2px 20px;
+      margin: 0 0 16px;
+    }}
+    /* §6.5 — tables: header is a label band; rows separated by a single dashed rule;
+       no row striping. */
     .vault-markdown-rendered table {{
       border-collapse: collapse;
       width: 100%;
     }}
     .vault-markdown-rendered th,
     .vault-markdown-rendered td {{
-      border: 1px solid var(--border);
-      padding: 8px 10px;
+      border: none;
+      padding: 12px 14px;
       text-align: left;
+      vertical-align: top;
     }}
     .vault-markdown-rendered th {{
-      background: rgba(255,255,255,0.05);
-      color: var(--fg-0);
-    }}
-    .vault-markdown-rendered code,
-    .vault-markdown-rendered pre {{
+      background: var(--bg-base);
+      color: var(--fg-3);
       font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
     }}
-    .vault-markdown-rendered pre {{
-      background: rgba(0,0,0,0.25);
+    .vault-markdown-rendered td {{
+      border-bottom: 1px dashed var(--border);
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+      line-height: 20px;
+    }}
+    .vault-markdown-rendered tr:last-child td {{
+      border-bottom: none;
+    }}
+    /* §6.4 — inline code: present but quiet. */
+    .vault-markdown-rendered code {{
+      font-family: var(--font-mono);
+      font-size: 0.875em;
+      background: var(--bg-raised);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
+      padding: 1px 5px;
+      color: var(--fg-1);
+    }}
+    /* §6.5 — code block: surface card, no inline-code chrome inside it. */
+    .vault-markdown-rendered pre {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
       overflow-x: auto;
-      padding: 14px;
+      padding: 16px 18px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 20px;
+      color: var(--fg-1);
+    }}
+    .vault-markdown-rendered pre code {{
+      background: transparent;
+      border: none;
+      padding: 0;
+      font-size: inherit;
+    }}
+    /* §6.5 — horizontal rule */
+    .vault-markdown-rendered hr {{
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 32px 0;
+    }}
+    /* §6.5 — task lists: custom checkboxes; read-only is the truth in v0. */
+    .vault-markdown-rendered ul.task-list {{
+      list-style: none;
+      padding-left: 4px;
+    }}
+    .vault-markdown-rendered li.task-list-item {{
+      position: relative;
+      padding-left: 24px;
+      list-style: none;
+    }}
+    .vault-markdown-rendered li.task-list-item > input[type="checkbox"] {{
+      appearance: none;
+      -webkit-appearance: none;
+      position: absolute;
+      left: 0;
+      top: 0.32em;
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      border: 1.5px solid var(--fg-3);
+      border-radius: 2px;
+      background: transparent;
+      cursor: default;
+      vertical-align: baseline;
+    }}
+    .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked {{
+      background: var(--accent-dim);
+      border-color: var(--accent);
+    }}
+    .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked::after {{
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 0px;
+      width: 4px;
+      height: 8px;
+      border: solid var(--bg-base);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg);
     }}
     {note_outline_css()}
     .vault-callout {{
@@ -2827,7 +2980,19 @@ def render_index_html(
       color: var(--cyan);
       text-decoration: none;
     }}
-    .vault-wikilink-diagnostic,
+    /* Design review §9 — unresolved wikilink: visible without being alarming. */
+    .vault-markdown-rendered .vault-wikilink.vault-wikilink-diagnostic {{
+      background: transparent;
+      border: none;
+      padding: 0;
+      color: var(--fg-2);
+      font-family: inherit;
+      font-size: inherit;
+      text-decoration: underline dashed rgba(255, 61, 61, 0.6);
+      text-underline-offset: 3px;
+      display: inline;
+      cursor: help;
+    }}
     .vault-asset-diagnostic,
     .unsupported-block-diagnostic,
     .vault-diagnostics {{
