@@ -155,13 +155,8 @@ class TestNoteHeader:
 
     def test_note_path_in_provenance(self) -> None:
         html = _html_with_note(note_path="Projects/Alpha.md")
-        header_match = re.search(
-            r'data-testid="workspace-note-header".*?</header>',
-            html,
-            re.DOTALL,
-        )
-        assert header_match
-        assert "Projects/Alpha.md" in header_match.group()
+        # Path is in the breadcrumb's data-note-path attribute (§7.3 / #1337)
+        assert 'data-note-path="Projects/Alpha.md"' in html
 
     def test_artifact_id_in_provenance(self) -> None:
         html = _html_with_note(artifact_id="art-xyz-999")
@@ -213,13 +208,12 @@ class TestNoteHeader:
 class TestNoteBody:
     def test_body_content_rendered_in_body_region(self) -> None:
         html = _html_with_note(body="# Alpha\n\nThis is the note body.")
-        # The note-body div contains nested divs before the pre, so match through to the pre.
         body_match = re.search(
-            r'data-testid="workspace-note-body".*?<pre class="note-body-content">(.*?)</pre>',
+            r'data-testid="workspace-note-body".*?<article class="vault-markdown-rendered"[^>]*>(.*?)</article>',
             html,
             re.DOTALL,
         )
-        assert body_match, "workspace-note-body pre element not found"
+        assert body_match, "workspace-note-body region not found"
         assert "This is the note body." in body_match.group()
 
     def test_body_precedes_rail_in_markup(self) -> None:
@@ -234,14 +228,14 @@ class TestNoteBody:
     def test_body_not_in_debug_pre_at_page_root(self) -> None:
         """Body must be inside the workspace-note-body region, not a bare root pre."""
         html = _html_with_note(body="# Test")
-        # Match through nested divs to find the pre element inside workspace-note-body.
         body_region = re.search(
-            r'data-testid="workspace-note-body".*?<pre class="note-body-content">',
+            r'data-testid="workspace-note-body".*?(<article class="vault-markdown-rendered"[^>]*>.*?</article>)',
             html,
             re.DOTALL,
         )
-        assert body_region, "workspace-note-body pre element missing"
-        assert "<pre" in body_region.group(), "body content must be in a pre inside the body region"
+        assert body_region, "workspace-note-body region missing"
+        assert 'class="vault-markdown-rendered"' in body_region.group()
+        assert '<h1 id="test">Test</h1>' in body_region.group()
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +298,8 @@ class TestAgentRail:
 class TestRuntimeSafetyStrip:
     def test_runtime_safety_strip_present(self) -> None:
         html = _html_with_note()
-        assert 'data-testid="workspace-runtime-safety-strip"' in html
+        # old full-width safety strip replaced by 32px header strip (#1336)
+        assert 'data-testid="workspace-primary-posture"' in html
         assert 'data-testid="workspace-runtime-channel"' in html
         assert 'data-testid="workspace-writeguard-state"' in html
         assert 'data-testid="workspace-canvas-enabled-state"' in html
@@ -394,7 +389,8 @@ class TestErrorState:
 class TestApiIndicator:
     def test_api_base_url_in_topbar(self) -> None:
         html = render_index_html(api_base_url="http://192.168.1.5:18001")
-        assert "http://192.168.1.5:18001" in html
+        assert "Server-side runtime" in html
+        assert "http://192.168.1.5:18001" not in html
 
     def test_runtime_api_label_present(self) -> None:
         html = _html_empty()

@@ -9,6 +9,10 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui.vault_browser_test_helpers import (
+    default_vault_browser_payload,
+    is_vault_browser_get,
+)
 
 
 class _FakeClient:
@@ -21,6 +25,8 @@ class _FakeClient:
         if url == "/api/companion/vault-browser":
             return {}  # infrastructure; not under test
         self.get_calls.append((url, params))
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         return self.payloads.pop(0)
 
     def delete(
@@ -94,8 +100,8 @@ def test_undo_enabled_only_when_available() -> None:
     disabled_html = _html_for_canvas(undo_available=False)
     enabled_html = _html_for_canvas(undo_available=True)
 
-    assert 'data-testid="workspace-canvas-undo"' in disabled_html
-    assert "disabled>Undo</button>" in disabled_html
+    assert 'data-testid="workspace-canvas-undo"' not in disabled_html
+    assert 'data-action="undo-body-edit"' in disabled_html
     assert 'data-testid="workspace-canvas-undo-state"' in disabled_html
     assert "No undo available" in disabled_html
     assert 'data-api-path="/api/canvas/sessions/session-1/edits/last">Undo</button>' in enabled_html

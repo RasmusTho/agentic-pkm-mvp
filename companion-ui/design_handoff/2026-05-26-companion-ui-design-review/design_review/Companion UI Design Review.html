@@ -1,0 +1,1000 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Companion UI · Design Review · 2026-05-26</title>
+<link rel="stylesheet" href="colors_and_type.css" />
+<link rel="stylesheet" href="review.css" />
+</head>
+<body>
+<div class="shell">
+
+<aside class="toc">
+  <div class="mark">Companion UI</div>
+  <div class="submark">Design Review · 2026-05-26</div>
+
+  <div class="label">Contents</div>
+  <ol>
+    <li><a href="#exec"><span class="n">01</span><span>Executive assessment</span></a></li>
+    <li><a href="#works"><span class="n">02</span><span>What currently works</span></a></li>
+    <li><a href="#load"><span class="n">03</span><span>What creates cognitive load</span></a></li>
+    <li><a href="#friction"><span class="n">04</span><span>What creates friction</span></a></li>
+    <li><a href="#hierarchy"><span class="n">05</span><span>Visual hierarchy</span></a></li>
+    <li><a href="#renderer"><span class="n">06</span><span>Markdown renderer spec</span></a></li>
+    <li><a href="#layout"><span class="n">07</span><span>Layout &amp; rail recommendations</span></a></li>
+    <li><a href="#panel"><span class="n">08</span><span>Panel / governance separation</span></a></li>
+    <li><a href="#errors"><span class="n">09</span><span>Error &amp; disabled states</span></a></li>
+    <li><a href="#priorities"><span class="n">10</span><span>Prioritized fixes</span></a></li>
+    <li><a href="#codex"><span class="n">11</span><span>Codex-ready guidance</span></a></li>
+    <li><a href="#uat"><span class="n">12</span><span>UAT acceptance checklist</span></a></li>
+  </ol>
+
+  <div class="label">Scope</div>
+  <p class="muted" style="font-size: 12px; line-height: 1.5; margin: 0;">
+    Design specification only. No implementation code. Governance, vault, and runtime
+    contracts are out of scope and must be preserved.
+  </p>
+</aside>
+
+<main class="doc">
+
+<!-- ============================================================ COVER -->
+<section class="cover" id="top">
+  <span class="kicker">Yggdrasil · Companion UI</span>
+  <h1 class="doc-title">A note-reading surface that is not yet calm enough to read in.</h1>
+  <p class="lede" style="margin-top: var(--space-5);">
+    The Companion UI has the right bones for a cognitive prosthesis — a three-column shell, a vault-native
+    note body, a governance rail, an outline. The bones are not the problem. Every surface above the bones is
+    currently tuned for an operator inspecting a runtime, not for an architect reading their own thinking.
+    The work ahead is mostly subtraction.
+  </p>
+  <div class="meta">
+    <span><b>Baseline</b>origin/main @ 29f81427</span>
+    <span><b>Environment</b>dev · Niflheim vault</span>
+    <span><b>Inputs</b>5 UAT screenshots · 6 handoff docs</span>
+    <span><b>Out of scope</b>Mermaid · wikilinks · body-edit wiring</span>
+  </div>
+</section>
+
+<!-- ============================================================ 01 EXEC -->
+<section id="exec">
+  <span class="eyebrow"><span class="num">01</span>Executive assessment</span>
+  <h2 class="section-title">The note body is structurally primary and visually subordinate.</h2>
+
+  <p>
+    The UAT screenshots show a workspace whose loudest, top-most, full-width surface is a band of runtime
+    telemetry — <code>SERVER-SIDE RUNTIME</code>, <code>WRITEGUARD</code>, <code>CANVAS disabled</code>,
+    <code>UPDATE FLOW disabled</code>, <code>GOVERNANCE VIA UPDATE</code>, <code>TRACE 8f3c…</code> — followed
+    by a second dense block restating artifact id, content hash, properties and tags. Only after roughly
+    one-third of the viewport has been spent on machine state does the user reach the note title. The Panel
+    rail on the right, meanwhile, shows five labeled idle states stacked vertically in agent-blue cards, the
+    last of which (<em>Reorient</em>) renders a wall of bulleted prose. Inside this dashboard, the note body
+    is a card with a visible inset border. The body is where the user has come to think; the UI presents it
+    as one panel among many.
+  </p>
+
+  <p>
+    Two things follow. First, the most consequential design move is not a new component — it is
+    <strong>reducing the visual weight of everything that is not the note</strong> until the note becomes the
+    obvious primary surface on first glance, without the user having to choose where to look. Second, the
+    Panel and the metadata band are conflating two different jobs: <em>orientation</em> ("where am I, when
+    was this, is this fresh?") and <em>governance state</em> ("can I edit, what is the runtime doing, what
+    are the proposals?"). They need to separate.
+  </p>
+
+  <p>
+    The Markdown renderer itself is in better shape than the surrounding shell. Basic constructs render.
+    Callouts are the strongest visual in the system and should be the typographic North Star. The headings
+    are too large, too uniform, and too closely scaled — but this is a CSS-token problem, not a renderer
+    problem.
+  </p>
+
+  <div class="note accent">
+    <div class="icon">▍ thesis</div>
+    <div class="body"><p>
+      The Companion UI is not failing as a Markdown viewer. It is failing as a <em>cognitive surface</em>
+      because the chrome around the note is heavier than the note. Fix the chrome first; the renderer second.
+      Do not redesign the architecture, do not rebuild the rails, do not collapse Panel into Canvas.
+    </p></div>
+  </div>
+</section>
+
+<!-- ============================================================ 02 WORKS -->
+<section id="works">
+  <span class="eyebrow"><span class="num">02</span>What currently works</span>
+  <h2 class="section-title">Preserve these. They are load-bearing.</h2>
+
+  <table class="findings">
+    <thead><tr><th>Element</th><th>Why it works</th><th>Disposition</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Three-column shell</td>
+        <td>Outline left, body center, Panel right is the correct topology for a read-and-review surface.
+            The two rails are categorically different jobs and should remain distinct columns.</td>
+        <td><span class="tag t-keep">Keep</span></td>
+      </tr>
+      <tr>
+        <td>EB Garamond H1 / note title</td>
+        <td>The display serif gives the note title a clear landmark character without shouting. It signals
+            that the artifact is durable, not transactional. It is the one heading that should remain large.</td>
+        <td><span class="tag t-keep">Keep</span></td>
+      </tr>
+      <tr>
+        <td>Callouts — Note / Tip / Warning / Danger</td>
+        <td>Color-coded edge, glyph, type label, calm fill. The strongest visual element in the system.
+            Their pattern (left-rule + type label + glyph + body) should become the template for all
+            block-level non-prose constructs.</td>
+        <td><span class="tag t-keep">Keep · extend</span></td>
+      </tr>
+      <tr>
+        <td>Outline / left rail navigates correctly</td>
+        <td>Headings extracted, indentation reflects hierarchy, clicking jumps to the section. The
+            functional contract is sound. Visual weight needs reduction, not redesign.</td>
+        <td><span class="tag t-keep">Keep</span></td>
+      </tr>
+      <tr>
+        <td>Panel rail is labeled, not silent</td>
+        <td>"No active Panel proposal", "Suggestions are idle", "Find unavailable…" — the principle of
+            speaking the null state rather than rendering blank is correct. Volume and density are wrong,
+            but the principle stays.</td>
+        <td><span class="tag t-keep">Keep · quieten</span></td>
+      </tr>
+      <tr>
+        <td>Tables render with clear header / row separation</td>
+        <td>Headers are visually distinct; rows are scannable. The table component does not need a
+            structural change, only token alignment.</td>
+        <td><span class="tag t-keep">Keep</span></td>
+      </tr>
+      <tr>
+        <td>Monospace vocabulary for paths, ids, hashes</td>
+        <td>The decision to render <code>note_path</code>, artifact ids, content hashes in JetBrains Mono is
+            correct — these are technical values for an expert reader. Do not soften them into UI text.</td>
+        <td><span class="tag t-keep">Keep · relocate</span></td>
+      </tr>
+      <tr>
+        <td>DEV / NOT PRODUCTION banner exists</td>
+        <td>This banner is necessary — for a system that writes to vault files, an unmissable environment
+            signal is a safety affordance. The treatment is too prominent, but the affordance is correct.</td>
+        <td><span class="tag t-keep">Keep · resize</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 03 COGNITIVE LOAD -->
+<section id="load">
+  <span class="eyebrow"><span class="num">03</span>What creates cognitive load</span>
+  <h2 class="section-title">The user is being asked to read the runtime, not the note.</h2>
+
+  <p>
+    Cognitive load in this UI is generated by three patterns: <em>machine state surfaced as primary content</em>,
+    <em>redundant restatement of the same information across surfaces</em>, and <em>identifiers presented with the same
+    visual weight as content</em>. None of these are bugs. Each is a deliberate design decision that needs to be
+    reversed for this audience.</p>
+
+  <h3 class="sub">3.1 The runtime telemetry band is the loudest thing on the page</h3>
+  <p>
+    The band reading <code>SERVER-SIDE RUNTIME · RUNTIME dev / local-dev · VAULT/CHANNEL vault / dev ·
+    WRITEGUARD ok · CANVAS disabled · UPDATE FLOW disabled · GUARD degraded · WORKSPACE UPDATE disabled /
+    active_note_body · UPDATE REASON canvas_disabled / inherited · GOVERNANCE VIA UPDATE disabled · TRACE
+    8f3c7b55…</code> is a dump of runtime state at the top of every note view. The user must parse this
+    every time they open a note, then mentally suppress it to get to the title. It is not an orientation
+    aid; it is the contents of a debug log promoted to a header.
+  </p>
+
+  <h3 class="sub">3.2 The metadata band is restated three times</h3>
+  <p>
+    The same artifact is described as: a path in the URL bar; a <code>NOTE_PATH</code> input below it; a
+    <code>PATH</code> chip below the title; an <code>ARTIFACT</code> chip; a <code>HASH</code> chip;
+    a <code>PROPERTIES</code> block with title, kind, review_state, trust, origin, tags and uuid; and again
+    as <code>TRACE 8f3c…</code> in the runtime band. The user does not need this said six times. They need
+    it said once, calmly, where they can find it when they want it.
+  </p>
+
+  <h3 class="sub">3.3 The Panel rail rewards attention it cannot return</h3>
+  <p>
+    Five Panel sections are visible (<em>Companion/Panel</em>, <em>Canvas</em>, <em>Panel</em>,
+    <em>Suggestions</em>, <em>Find</em>, <em>Reorient</em>), each in agent-blue, each saying some variant of
+    "idle / disabled / unavailable / read-only". The <em>Reorient</em> block then renders a long bulleted
+    paragraph in agent-blue body text that scrolls below the viewport. The eye is drawn there; nothing
+    actionable is there; trust erodes a little with each glance.
+  </p>
+
+  <h3 class="sub">3.4 Heading levels collapse onto one visual rank</h3>
+  <p>
+    H2 (<em>"2. Outline and right rail navigation"</em>) and H3 (<em>"2.1 First nested heading"</em>) appear
+    at nearly identical size. The user must read the numbering ("2." vs "2.1") to know the level, defeating
+    the purpose of having a visual hierarchy at all. Even H1 (the note title) is similar enough to the body
+    H2s that the title's status as landmark depends on its serif face, not on size.
+  </p>
+
+  <h3 class="sub">3.5 There is no signal that the visible state is fresh</h3>
+  <p>
+    If the user returns to the tab after lunch, nothing on the page communicates whether the note, the
+    Panel state, the runtime state, or the outline are current as of now or as of three hours ago. The
+    <em>Reorient</em> block mentions <code>last_ingest_at=unknown</code>, which is the opposite of
+    reassuring. There is no "as of HH:MM" anywhere.
+  </p>
+
+  <div class="note warn">
+    <div class="icon">! cost</div>
+    <div class="body"><p>
+      Each of these is small in isolation. Together they put the user into <em>maintenance mode</em> the
+      instant the page loads — the cognitive posture of inspecting a system rather than thinking with it.
+      A cognitive prosthesis cannot afford that posture as its default.
+    </p></div>
+  </div>
+</section>
+
+<!-- ============================================================ 04 FRICTION -->
+<section id="friction">
+  <span class="eyebrow"><span class="num">04</span>What creates friction</span>
+  <h2 class="section-title">Friction is structural, not cosmetic.</h2>
+
+  <h3 class="sub">4.1 The note body is a card inside a dashboard</h3>
+  <p>
+    The reading column is wrapped in an inset surface with a visible border, raised against the page
+    background. This makes the note feel like a tile in a control panel, not a writing surface. Compare to
+    Obsidian Reading View, where the body sits directly on the page and the rails are subordinate frames
+    around it. The current treatment subtly tells the user: "the dashboard is the surface; the note is a
+    widget inside it." That framing fights the entire premise.
+  </p>
+
+  <h3 class="sub">4.2 The address bar carries presentational weight</h3>
+  <p>
+    The URL <code>?note_path=📥+Inbox%2FCompanion_UI_Markdown_Feature_UAT.md</code> is the user's primary way
+    to switch notes. The emoji and percent-encoding leak from the vault into the browser chrome. This is a
+    deeper architectural issue, but inside the design review's scope: the in-app NOTE_PATH input with
+    LOAD / BROWSE VAULT buttons duplicates the address bar, while neither offers the equivalent of an
+    in-vault file picker, recent notes list, or quick-open. The user is given two ways to do the same job
+    and neither is the right one.
+  </p>
+
+  <h3 class="sub">4.3 The outline truncates mid-word with no tooltip</h3>
+  <p>
+    "Companion UI Markdown Fea…" and "2.2.1 Another third-level …" are visible in the rail. There is no
+    tooltip, no hover-expand, no marquee. If a heading is interesting enough to truncate, the user must
+    scroll the body to recover the rest. The outline is a navigation surface; truncating its labels without
+    a recovery affordance is friction by design.
+  </p>
+
+  <h3 class="sub">4.4 Read-only state is told, not shown</h3>
+  <p>
+    The phrase "read-only" appears in <code>PROPERTIES</code>, in <code>PANEL</code>, and in
+    <code>REORIENT</code>. The note body itself gives no visible indication that it is not editable —
+    no caret-blocked cursor, no muted toolbar, no "Canvas editing unavailable" line at the top of the
+    body. The user has to learn the rule from the rails. When body-edit lands, removing the affordance
+    will be a hidden change.
+  </p>
+
+  <h3 class="sub">4.5 The leaked debug string above the band</h3>
+  <p>
+    The screenshot shows <code>Degradedvault/dev8f3c7b55433e4126b1cb3a6ae30b430c</code> rendered as
+    unstyled text bleeding out from above the runtime band. Whether this is a server-rendering accident
+    or a state label that has lost its container, it reads as a broken page. A user encountering it for
+    the first time would reasonably assume the system is in an error state. <em>Implementation issue; flag
+    here because the design must specify that no raw state string is ever allowed outside a labeled
+    surface.</em>
+  </p>
+</section>
+
+<!-- ============================================================ 05 HIERARCHY -->
+<section id="hierarchy">
+  <span class="eyebrow"><span class="num">05</span>Visual hierarchy</span>
+  <h2 class="section-title">Hierarchy is currently inverted. It needs to be redrawn around the act of reading.</h2>
+
+  <p>
+    The right hierarchy for this surface is approximately this list, read top-to-bottom, in order of
+    visual prominence:
+  </p>
+
+  <ol class="numbers">
+    <li><strong>Note body</strong> — typography, whitespace, callouts. The unmistakable primary surface.</li>
+    <li><strong>Note title and one-line orientation</strong> — title, breadcrumb path, "as of HH:MM". A landmark and a freshness signal. Nothing else.</li>
+    <li><strong>Outline (left rail)</strong> — present, scannable, recessive. Becomes prominent only when used.</li>
+    <li><strong>Panel (right rail)</strong> — visible only when it has something to say. Otherwise a quiet column header and one collapsed strip.</li>
+    <li><strong>Properties / artifact identity</strong> — collapsed by default into a single line; expandable on demand.</li>
+    <li><strong>Runtime state</strong> — a single status pill near the title (e.g. "Canvas off · degraded") that expands to the full telemetry on click. <em>Never</em> a full-width band.</li>
+    <li><strong>DEV / NOT PRODUCTION</strong> — present but small. A 28-px corner ribbon, not a hero element.</li>
+  </ol>
+
+  <p>
+    The current page maps almost in reverse: runtime state, dev banner, properties and identity all sit
+    above the title at full visual weight. The note body, the actual subject, is third or fourth in line.
+  </p>
+
+  <div class="wires">
+    <div class="wire">
+      <div class="label"><span>Current — observed</span><span class="verdict bad">Inverted</span></div>
+      <svg viewBox="0 0 360 280" xmlns="http://www.w3.org/2000/svg">
+        <!-- env band -->
+        <rect x="8" y="8" width="344" height="22" fill="#1a0e02" stroke="#f09030" opacity="0.9"/>
+        <text x="14" y="22" font-family="JetBrains Mono" font-size="9" fill="#f09030" letter-spacing="0.5">RUNTIME · GUARD · CANVAS · WRITEGUARD · TRACE · DEV/NOT PRODUCTION</text>
+        <!-- note_path -->
+        <rect x="8" y="34" width="344" height="20" fill="#0c1220" stroke="#152030"/>
+        <text x="14" y="48" font-family="JetBrains Mono" font-size="9" fill="#7a9ab8">NOTE_PATH input · LOAD · BROWSE VAULT</text>
+        <!-- title -->
+        <text x="8" y="80" font-family="EB Garamond" font-size="20" fill="#dce8f0">Companion UI Markdown Feature UAT</text>
+        <!-- chips -->
+        <rect x="8" y="92" width="344" height="14" fill="#0c1220" stroke="#152030"/>
+        <text x="14" y="103" font-family="JetBrains Mono" font-size="8" fill="#7a9ab8">PATH · ARTIFACT · HASH chips</text>
+        <!-- props -->
+        <rect x="8" y="112" width="344" height="34" fill="#0c1220" stroke="#152030"/>
+        <text x="14" y="126" font-family="JetBrains Mono" font-size="8" fill="#7a9ab8">PROPERTIES — title kind review_state trust origin tags uuid</text>
+        <!-- three cols -->
+        <rect x="8" y="156" width="70" height="116" fill="#0c1220" stroke="#152030"/>
+        <text x="14" y="170" font-family="JetBrains Mono" font-size="8" fill="#7a9ab8">OUTLINE</text>
+        <rect x="84" y="156" width="180" height="116" fill="#111a2e" stroke="#1e3050"/>
+        <text x="92" y="172" font-family="EB Garamond" font-size="14" fill="#dce8f0">H1 / Body card</text>
+        <text x="92" y="190" font-family="Space Grotesk" font-size="9" fill="#7a9ab8">large H2 / large H3</text>
+        <text x="92" y="204" font-family="Space Grotesk" font-size="9" fill="#7a9ab8">body</text>
+        <rect x="270" y="156" width="82" height="116" fill="#051228" stroke="#1e5a9a"/>
+        <text x="276" y="170" font-family="JetBrains Mono" font-size="8" fill="#4a9eff">PANEL · 5 idle</text>
+        <text x="276" y="184" font-family="JetBrains Mono" font-size="8" fill="#4a9eff">CANVAS disabled</text>
+        <text x="276" y="198" font-family="JetBrains Mono" font-size="8" fill="#4a9eff">SUGGESTIONS idle</text>
+        <text x="276" y="212" font-family="JetBrains Mono" font-size="8" fill="#4a9eff">FIND unavailable</text>
+        <text x="276" y="226" font-family="JetBrains Mono" font-size="8" fill="#4a9eff">REORIENT wall</text>
+      </svg>
+    </div>
+
+    <div class="wire">
+      <div class="label"><span>Proposed — calmed</span><span class="verdict good">Body-first</span></div>
+      <svg viewBox="0 0 360 280" xmlns="http://www.w3.org/2000/svg">
+        <!-- thin status strip -->
+        <rect x="8" y="8" width="344" height="14" fill="#0c1220" stroke="#152030"/>
+        <text x="14" y="18" font-family="JetBrains Mono" font-size="8" fill="#7a9ab8">Yggdrasil  ·  Niflheim · vault ok · canvas off  ·  as of 14:22  ·  dev</text>
+        <rect x="320" y="8" width="32" height="14" fill="#1a0e02" stroke="#f09030"/>
+        <text x="324" y="18" font-family="JetBrains Mono" font-size="7" fill="#f09030">DEV</text>
+        <!-- three cols -->
+        <rect x="8" y="30" width="60" height="242" fill="#0c1220" stroke="#152030"/>
+        <text x="12" y="44" font-family="JetBrains Mono" font-size="7" fill="#3d5570" letter-spacing="0.4">OUTLINE</text>
+        <line x1="12" y1="56" x2="64" y2="56" stroke="#1e3050"/>
+        <text x="12" y="68" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">UAT result summary</text>
+        <text x="12" y="80" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">1. Typography</text>
+        <text x="12" y="92" font-family="Space Grotesk" font-size="8" fill="#d4a843">2. Outline ▍</text>
+        <text x="18" y="104" font-family="Space Grotesk" font-size="7" fill="#7a9ab8">2.1 First nested</text>
+        <text x="12" y="116" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">3. Lists</text>
+        <text x="12" y="128" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">4. Tables</text>
+
+        <!-- body -->
+        <rect x="74" y="30" width="200" height="242" fill="#070b12"/>
+        <text x="82" y="58" font-family="EB Garamond" font-size="18" fill="#dce8f0">Companion UI Markdown Feature UAT</text>
+        <text x="82" y="74" font-family="JetBrains Mono" font-size="8" fill="#3d5570">Inbox/Companion_UI_Markdown_Feature_UAT.md · as of 14:22 · properties ▾</text>
+        <line x1="82" y1="84" x2="266" y2="84" stroke="#152030"/>
+        <text x="82" y="106" font-family="Space Grotesk" font-size="11" fill="#dce8f0" font-weight="600">UAT result summary</text>
+        <rect x="82" y="116" width="184" height="2" fill="#80621a" opacity="0.5"/>
+        <text x="82" y="134" font-family="Space Grotesk" font-size="9" fill="#dce8f0">Use this table while testing.</text>
+        <rect x="82" y="142" width="184" height="40" fill="#0c1220" stroke="#152030"/>
+        <text x="86" y="155" font-family="JetBrains Mono" font-size="7" fill="#7a9ab8">Area · Expected · Result · Notes</text>
+        <text x="82" y="200" font-family="Space Grotesk" font-size="10" fill="#dce8f0" font-weight="600">2. Outline and right rail navigation</text>
+        <text x="82" y="218" font-family="Space Grotesk" font-size="9" fill="#dce8f0">The right rail should pick up...</text>
+
+        <!-- panel -->
+        <rect x="280" y="30" width="72" height="242" fill="#0c1220" stroke="#152030"/>
+        <text x="286" y="44" font-family="JetBrains Mono" font-size="7" fill="#3d5570" letter-spacing="0.4">PANEL · idle</text>
+        <line x1="286" y1="56" x2="348" y2="56" stroke="#1e3050"/>
+        <text x="286" y="72" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">No proposals</text>
+        <text x="286" y="86" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">for this note.</text>
+        <text x="286" y="110" font-family="JetBrains Mono" font-size="7" fill="#3d5570" letter-spacing="0.4">CANVAS</text>
+        <text x="286" y="124" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">Off · runtime</text>
+        <text x="286" y="148" font-family="JetBrains Mono" font-size="7" fill="#3d5570" letter-spacing="0.4">FIND</text>
+        <text x="286" y="162" font-family="Space Grotesk" font-size="8" fill="#7a9ab8">Unavailable</text>
+      </svg>
+    </div>
+  </div>
+
+  <p class="muted" style="font-size: 13px;">
+    The proposed sketch is illustrative, not pixel-binding. The key moves are: collapse the runtime band to
+    a single status line; demote PATH/ARTIFACT/HASH into a one-line metadata strip with a
+    <em>properties ▾</em> disclosure; remove the body card border; convert the Panel from five vertical
+    cards into a column of one-line section headers that expand only when state is non-idle.
+  </p>
+</section>
+
+<!-- ============================================================ 06 RENDERER -->
+<section id="renderer">
+  <span class="eyebrow"><span class="num">06</span>Markdown renderer · typography &amp; design spec</span>
+  <h2 class="section-title">A reading surface, not a tile in a dashboard.</h2>
+
+  <p>
+    All tokens reference the Yggdrasil design system at <code>colors_and_type.css</code>. The renderer
+    remains server-rendered HTML; this spec is achievable through CSS and Tailwind utilities alone. No
+    pipeline rewrite is required.
+  </p>
+
+  <h3 class="sub">6.1 Body column</h3>
+  <dl class="defs">
+    <dt>Width</dt>           <dd><code>max-width: 68ch</code> (≈ 720 px at 15 px base). Body column is centered in its grid cell; no card border, no inset background.</dd>
+    <dt>Background</dt>      <dd><code>var(--bg-base)</code> — same as page. The note body is not a panel.</dd>
+    <dt>Side padding</dt>    <dd>Minimum <code>var(--space-8)</code> (32 px) between body column and either rail. The whitespace itself is the visual divider.</dd>
+    <dt>Vertical padding</dt><dd><code>var(--space-10)</code> top, <code>var(--space-12)</code> bottom — generous baseline so the title lands.</dd>
+  </dl>
+
+  <h3 class="sub">6.2 Heading scale</h3>
+  <p>
+    H1 remains a display landmark. H2 through H4 step down sharply. Long notes must not feel like a sequence
+    of equally-loud headings interrupted by occasional prose.
+  </p>
+
+  <div class="scale-demo">
+    <div class="row">
+      <span class="tok">H1 · title</span>
+      <span class="spec">EB Garamond · 40 / 44 · 400 · -0.02em</span>
+      <span class="sample h1-d">Companion UI Markdown Feature UAT</span>
+    </div>
+    <div class="row">
+      <span class="tok">H2 · section</span>
+      <span class="spec">Space Grotesk · 22 / 28 · 600 · -0.005em</span>
+      <span class="sample h2-s">2. Outline and right rail navigation</span>
+    </div>
+    <div class="row">
+      <span class="tok">H3 · subsection</span>
+      <span class="spec">Space Grotesk · 16 / 22 · 600 · gold bar prefix</span>
+      <span class="sample h3-s"><span style="display:inline-block;width:4px;height:12px;background:var(--accent-dim);margin-right:10px;vertical-align:-1px;"></span>2.1 First nested heading</span>
+    </div>
+    <div class="row">
+      <span class="tok">H4 · label</span>
+      <span class="spec">JetBrains Mono · 12 / 16 · 500 · uppercase · 0.08em</span>
+      <span class="sample h4-s">2.1.1 Third-level heading</span>
+    </div>
+    <div class="row">
+      <span class="tok">Body</span>
+      <span class="spec">Space Grotesk · 15 / 25 · 400 · max-width 68ch</span>
+      <span class="sample body">The right rail should pick up the headings below.</span>
+    </div>
+    <div class="row">
+      <span class="tok">Small / caption</span>
+      <span class="spec">Space Grotesk · 13 / 20 · 400 · fg-2</span>
+      <span class="sample small">Properties hidden — expand for details.</span>
+    </div>
+  </div>
+
+  <h3 class="sub">6.3 Vertical rhythm</h3>
+  <dl class="defs">
+    <dt>H1 → next block</dt>          <dd>32 px below; preceded only by the orientation line.</dd>
+    <dt>H2 top / bottom margin</dt>   <dd>40 px top, 12 px bottom. Underline rule: 1 px solid <code>--border</code> sitting tight under the heading text, 60–80 % column width.</dd>
+    <dt>H3 top / bottom margin</dt>   <dd>28 px top, 8 px bottom. No underline. Gold bar prefix (4 × 14 px, <code>--accent-dim</code>) signals depth without competing with H2.</dd>
+    <dt>H4 top / bottom margin</dt>   <dd>20 px top, 4 px bottom. Uppercase mono label sits flush left; reads as a section tag, not a continuation of body.</dd>
+    <dt>Paragraph spacing</dt>        <dd><code>margin-bottom: 16 px</code>. Line height 1.65. Consecutive paragraphs visibly separate without needing rules.</dd>
+    <dt>List spacing</dt>             <dd>4 px between list items; 16 px before and after the list.</dd>
+  </dl>
+
+  <h3 class="sub">6.4 Inline elements</h3>
+  <dl class="defs">
+    <dt>Bold</dt>                <dd>Weight 600, color <code>--fg-1</code> (same as body). No color shift.</dd>
+    <dt>Italic</dt>              <dd>EB Garamond italic for emphasis inside body prose feels too literary. Use Space Grotesk italic, same color. Reserve display serif for headings only.</dd>
+    <dt>Inline code</dt>         <dd>JetBrains Mono · 0.875em · background <code>--bg-raised</code> · 1 px border <code>--border</code> · radius 2 px · padding 1 / 5 px. Visible but quiet.</dd>
+    <dt>External links</dt>      <dd>Color <code>--accent</code> (gold). Underline <code>--accent-dim</code>, offset 3 px. Hover: text <code>--fg-1</code>, underline <code>--accent</code>.</dd>
+    <dt>Resolved wikilinks</dt>  <dd>Same as external link, but with a leading "&#x2197;" or "<code>::</code>" glyph at <code>--fg-3</code> to distinguish vault-internal navigation. Underline gold.</dd>
+    <dt>Unresolved wikilinks</dt><dd>Color <code>--fg-2</code>. Underline <em>dashed</em>, color <code>--destructive</code>, offset 3 px. <code>title</code> attribute "[[Name]] — not found in vault". Never invisible.</dd>
+  </dl>
+
+  <h3 class="sub">6.5 Block elements</h3>
+  <dl class="defs">
+    <dt>Code block</dt>
+    <dd>Background <code>--bg-surface</code>, border <code>--border</code>, radius <code>--radius-md</code> (4 px),
+        padding 16 / 18 px. Top-right corner: a small uppercase mono language label
+        (e.g. <code>python</code>) in <code>--fg-3</code>, 11 px, 0.08em tracking. Body: JetBrains Mono 13 / 20.
+        No syntax highlighting in v0 — adopting a highlighter is a separate decision. Inline horizontal
+        scroll on overflow.</dd>
+    <dt>Blockquote</dt>
+    <dd>Left border 2 px <code>--border-strong</code>, padding-left 20 px. Body color <code>--fg-2</code> (slightly muted relative to body). No background fill — a blockquote is not a callout. Italic optional via author choice.</dd>
+    <dt>Callouts</dt>
+    <dd>Preserve the current pattern exactly. Formalize as: 1 px border <code>--border</code>; 2 px left border in the type color; 4 px radius; padding 16 / 20 px; header row with 16 px circular glyph + uppercase type label in the type color; body in <code>--fg-1</code>. Eight types: <em>note</em> (cyan), <em>tip</em> (vault green), <em>info</em> (agent blue), <em>question</em> (accent gold), <em>warning</em> (amber), <em>danger</em> (destructive), <em>success</em> (vault green), <em>quote</em> (fg-2). Foldable callouts: a chevron at the right side of the header; collapsed state hides body, keeps header.</dd>
+    <dt>Tables</dt>
+    <dd>Header row: <code>--bg-base</code> background, mono uppercase labels 11 px / 0.08em / <code>--fg-3</code>, bottom border 1 px <code>--border</code>. Data cells: 12 / 14 px padding, body color <code>--fg-1</code>, dashed bottom border between rows <code>--border</code>. No row striping. Overflow: horizontal scroll on narrow viewports; do not wrap cells. Tables are full body width, never width-constrained narrower than the body column.</dd>
+    <dt>Task lists</dt>
+    <dd>Custom checkboxes (not native). Box 14 × 14 px, 1.5 px border <code>--fg-3</code>, radius 2 px, vertical-align baseline +2 px. Checked: fill <code>--accent-dim</code>, border <code>--accent</code>, check glyph in <code>--bg-base</code>. Read-only state: cursor <code>default</code>, no hover affordance. When body-edit lands: cursor <code>pointer</code>, hover lightens border one step. <em>Read-only is the current truth; the design must show it.</em></dd>
+    <dt>Horizontal rule</dt>
+    <dd>1 px solid <code>--border</code>, 32 px top and bottom margin. No decorative variant.</dd>
+    <dt>Images</dt>
+    <dd>Native rendering: full body-column width, radius 4 px, no caption styling by default (a paragraph immediately following an image and beginning with italic is treated as a caption — body color <code>--fg-2</code>, 13 px, centered). Loading placeholder and missing-image state specified in §9.</dd>
+    <dt>Embeds (Mermaid, Dataview, etc.)</dt>
+    <dd>Failed embed treatment specified in §9. Successful embed: full body-column width, neutral border, top-right type label like a code block.</dd>
+  </dl>
+
+  <h3 class="sub">6.6 Heading anchors</h3>
+  <p>
+    Hidden by default. Visible on heading hover only — a small <code>#</code> glyph in <code>--fg-3</code>, 14 px,
+    appearing 8 px to the left of the heading, on a 150 ms fade. Clicking copies the URL with the anchor. The
+    glyph must not shift heading layout when it appears.
+  </p>
+
+  <h3 class="sub">6.7 Rendered preview — the spec applied to a fragment</h3>
+  <p>
+    The block below applies the full renderer specification to a representative slice of vault Markdown. It
+    is a design artifact, not a screenshot of the current build.
+  </p>
+
+  <div class="spec-preview">
+    <div class="sp-breadcrumb">Inbox / Companion_UI_Markdown_Feature_UAT.md  ·  as of 14:22  ·  read-only</div>
+    <h1 class="sp">Companion UI Markdown Feature UAT</h1>
+
+    <h2 class="sp">UAT result summary</h2>
+    <p class="sp">A short paragraph explains the table. Body sits at 15 / 25, max width 68 ch, on the page
+    background with no card around it. Inline values like <code>note_path</code> and the artifact id
+    <code>cdbe5545-b63a-4056-88ae-bbfd602fc11b</code> stay in JetBrains Mono with a quiet background.</p>
+
+    <div class="sp-callout">
+      <div class="h">▍ note</div>
+      <div>
+        <p>This note is a disposable UAT note for evaluating Companion UI Markdown rendering, outline
+          navigation, right-rail behavior, and body-edit behavior in the dev vault Niflheim.</p>
+      </div>
+    </div>
+
+    <h2 class="sp">2. Outline and right rail navigation</h2>
+    <p class="sp">The right rail should pick up the headings below. Clicking each heading should navigate
+      within the note. External references are rendered as
+      <a class="sp-link" href="#">orientation contract</a>; unresolved vault references look like
+      <a class="sp-link broken" href="#">[[Missing Note]]</a> so the gap is visible.</p>
+
+    <h3 class="sp">2.1 First nested heading</h3>
+    <p class="sp"><strong>Expected:</strong> Third-level headings are either shown with correct hierarchy
+      or intentionally omitted according to the UI contract. The H3 carries a gold accent bar at left so it
+      cannot be confused with an H2.</p>
+
+    <h4 class="sp">2.1.1 Third-level marker</h4>
+    <p class="sp">Mono uppercase label reads as a tag, not a continuation of body. Used for sub-sub-sections
+      that exist as anchors but should not compete with section H2s for vertical attention.</p>
+
+    <div class="sp-task"><span class="box"></span><span class="label">Unchecked task</span></div>
+    <div class="sp-task done"><span class="box"></span><span class="label">Checked task</span></div>
+    <div class="sp-task"><span class="box"></span><span class="label">Task with <strong>bold</strong></span></div>
+    <div class="sp-task"><span class="box"></span><span class="label">Task with <code>inline code</code></span></div>
+
+    <div class="sp-code"><span class="lang">python</span>def render_note(path: Path) -&gt; str:
+    artifact = vault.load(path)
+    return template.render(artifact=artifact)</div>
+
+    <div class="sp-failed">
+      <div class="l"><span class="tag-fail">Mermaid</span><span>Diagram source available — interactive render unavailable in this view.</span></div>
+      <span class="a">view source</span>
+    </div>
+
+    <p class="sp">After the failed block, body resumes without alarm.
+      <span class="sp-read-only">▍ read-only</span> is a small ambient pill, not a banner.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 07 LAYOUT -->
+<section id="layout">
+  <span class="eyebrow"><span class="num">07</span>Layout &amp; rail recommendations</span>
+  <h2 class="section-title">Three columns, sized to the job they do.</h2>
+
+  <h3 class="sub">7.1 Column widths</h3>
+  <dl class="defs">
+    <dt>Outline (left)</dt> <dd>Fixed 220 px on desktop. Collapsible to a 36 px ribbon with a hamburger affordance on narrow viewports (&lt; 1100 px).</dd>
+    <dt>Body (center)</dt>  <dd>Flexible, max-width 68 ch (~ 720 px). Centered in its grid cell. Side gutters absorb the rest of the column width up to the rails.</dd>
+    <dt>Panel (right)</dt>  <dd>Fixed 280 px on desktop. Hidden behind a peek tab on viewports &lt; 1300 px; drawer behavior on narrow / mobile.</dd>
+  </dl>
+
+  <h3 class="sub">7.2 The header strip replaces the band</h3>
+  <p>
+    A single 32 px tall horizontal strip across the top, ordered left to right:
+  </p>
+  <ul class="bullets">
+    <li><strong>Wordmark</strong> — "Yggdrasil" in EB Garamond 16 px, gold-dim. Click → return to vault root.</li>
+    <li><strong>Vault chip</strong> — mono "<code>Niflheim · vault ok</code>" with a 6 px <code>--vault</code> dot. Click → vault picker / browser.</li>
+    <li><strong>Runtime status pill</strong> — single token: "<code>canvas off</code>" or "<code>runtime degraded</code>" or "<code>ok</code>". Click expands a popover with the full telemetry currently shown in the band.</li>
+    <li><strong>Freshness</strong> — mono "<code>as of 14:22</code>". Tooltip: full timestamp + last ingest at.</li>
+    <li><em>(flex spacer)</em></li>
+    <li><strong>Quick-open</strong> — "<code>/</code>" or "<code>⌘K</code>" affordance for switching notes. Replaces the NOTE_PATH input.</li>
+    <li><strong>Browse vault</strong> — secondary button.</li>
+    <li><strong>DEV ribbon</strong> — 28 px corner pill, <code>--amber</code> on <code>--amber-muted</code>, only shown in non-prod environments.</li>
+  </ul>
+
+  <h3 class="sub">7.3 The metadata strip replaces the chips and properties block</h3>
+  <p>
+    Directly under the note title, a single line in JetBrains Mono 12 px / <code>--fg-3</code>:
+  </p>
+  <div class="spec-preview" style="padding: var(--space-4) var(--space-5);">
+    <div class="sp-breadcrumb">Inbox / Companion_UI_Markdown_Feature_UAT.md
+      <span style="color: var(--fg-2);">·</span> kind <span style="color: var(--fg-2);">test_note</span>
+      <span style="color: var(--fg-2);">·</span> review <span style="color: var(--fg-2);">needs_review</span>
+      <span style="color: var(--fg-2);">·</span> updated <span style="color: var(--fg-2);">2d ago</span>
+      <span style="color: var(--accent);"> · properties ▾</span></div>
+  </div>
+  <p>
+    The <em>properties ▾</em> disclosure expands into the current properties table. Artifact id and content
+    hash live inside that expanded view, not above it. Default state is collapsed.
+  </p>
+
+  <h3 class="sub">7.4 Outline rail behavior</h3>
+  <ul class="bullets">
+    <li>Font: Space Grotesk 13 / 18, color <code>--fg-2</code> at rest, <code>--fg-1</code> on hover, <code>--accent</code> when the current scroll position is inside that section.</li>
+    <li>Indentation by depth: 0 / 12 / 24 / 36 px. H4+ may be hidden by default behind an "expand outline" affordance; preserve markup so anchor links still work.</li>
+    <li>Truncation: single line with CSS ellipsis; title-attribute on hover; on hover the row expands to wrap, revealing the full heading.</li>
+    <li>Current-section indicator: a 2 px <code>--accent</code> bar inset on the left edge of the active row, not a background fill.</li>
+    <li>The outline column has its own subtle background (<code>--bg-surface</code>) but no border on the body side. The whitespace gutter does the separation.</li>
+  </ul>
+
+  <h3 class="sub">7.5 Responsive behavior</h3>
+  <dl class="defs">
+    <dt>≥ 1300 px</dt><dd>All three columns visible.</dd>
+    <dt>1100–1299 px</dt><dd>Panel rail collapses to a 32 px peek tab on the right edge with a count badge when proposals exist. Click expands as an overlay drawer.</dd>
+    <dt>800–1099 px</dt><dd>Outline collapses to a 36 px ribbon with hamburger.</dd>
+    <dt>&lt; 800 px (iPad portrait, iPhone)</dt><dd>Single column. Outline accessed via top-left button → modal sheet. Panel accessed via top-right button → modal sheet. Header strip becomes a 2-line stack: line 1 wordmark + status; line 2 breadcrumb + actions.</dd>
+  </dl>
+</section>
+
+<!-- ============================================================ 08 PANEL -->
+<section id="panel">
+  <span class="eyebrow"><span class="num">08</span>Panel / governance separation</span>
+  <h2 class="section-title">The Panel is a quiet column with an agent voice. Not five idle cards.</h2>
+
+  <p>
+    The Panel must remain visually and interactionally distinguishable from the note body. That distinction
+    is currently overspent: the Panel rail shouts in agent-blue even when it has nothing to say. The
+    distinction needs to come from <em>character</em>, not from <em>volume</em>.
+  </p>
+
+  <h3 class="sub">8.1 The Panel has one job per section, and most jobs are idle most of the time</h3>
+  <p>
+    Panel sections, in order: <em>Proposals</em>, <em>Canvas (body-edit) status</em>, <em>Suggestions</em>,
+    <em>Find</em>, <em>Reorient</em>. Each section has two display modes:
+  </p>
+  <ul class="bullets">
+    <li><strong>Idle / null state</strong> — one line, 13 px, <code>--fg-2</code>. Section title in mono uppercase <code>--fg-3</code>, single short sentence after it. No card, no border, no agent-blue background. The Panel rail's <em>structure</em> persists; its <em>volume</em> drops to near zero.</li>
+    <li><strong>Active state</strong> — a card with a 2 px <code>--agent</code> left border, agent-blue type label, provenance line, body, and explicit action affordances (Apply / Discard / Defer). Only active sections get a card.</li>
+  </ul>
+
+  <h3 class="sub">8.2 Agent voice tokens</h3>
+  <dl class="defs">
+    <dt>Container</dt>  <dd>Background <code>--bg-surface</code>, 1 px <code>--border</code>, 2 px left border <code>--agent</code>, radius 4 px.</dd>
+    <dt>Type label</dt> <dd>JetBrains Mono 11 px / 0.08em / uppercase / <code>--agent</code>. Example: "<code>PROPOSAL · classification</code>".</dd>
+    <dt>Provenance</dt> <dd>One line, 12 px mono, <code>--fg-3</code>. Example: "<code>hugin · 2026-05-26 14:18 · confidence 0.82</code>". Always present on agent-authored content. Never optional.</dd>
+    <dt>Body</dt>       <dd>Space Grotesk 13 / 20, <code>--fg-1</code>. May contain inline mono tokens.</dd>
+    <dt>Actions</dt>    <dd>Right-aligned row: <em>Apply</em> primary (gold), <em>Discard</em> secondary, <em>Defer</em> tertiary. Buttons sized 28 px tall, 12 px text. Apply is never the default focus — the user must intentionally claim authorship.</dd>
+  </dl>
+
+  <h3 class="sub">8.3 The Reorient block must collapse to a single line at rest</h3>
+  <p>
+    The current <em>Reorient</em> output is a long, scrolling, agent-blue bulleted summary. This is
+    information that <em>could</em> be useful when the user explicitly asks "where am I?", and it is
+    actively harmful when shown unsolicited. The Panel section should default to:
+  </p>
+  <div class="spec-preview" style="padding: var(--space-4) var(--space-5); max-width: 480px;">
+    <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3);">Reorient</div>
+    <div style="font-size: 13px; color: var(--fg-2); margin-top: 4px;">Last leave-point 2d ago · 0 open loops · <span style="color: var(--accent); cursor: pointer;">recall ▾</span></div>
+  </div>
+  <p>
+    Clicking <em>recall</em> expands the current verbose Reorient body inline. The default state is one
+    line. The expanded state inherits the agent-blue card treatment described above.</p>
+
+  <h3 class="sub">8.4 The note body must never look like the Panel and vice versa</h3>
+  <p>
+    Tokens reserved exclusively for the Panel: agent-blue (<code>--agent</code>), provenance lines, the
+    Apply / Discard / Defer action row, the 2 px left agent-blue rule. The note body must never use any of
+    these. Tokens reserved exclusively for the note body: EB Garamond display headings; callouts as the
+    only colored block element; full body-column width. The Panel must never use the display serif.
+  </p>
+
+  <h3 class="sub">8.5 Canvas (body-edit) state belongs in the Panel, with a body-side echo</h3>
+  <p>
+    "Canvas editing is currently disabled by runtime configuration" should live in the Panel
+    <em>Canvas</em> section as a one-liner at rest. When the user attempts an edit on the body
+    (clicks into the prose), the body shows a 1-line read-only pill at the top right of the body column —
+    <code>▍ read-only · Canvas off</code> — that links to the Panel section. The body never shows a modal,
+    never blocks scrolling, never displays an error toast. Disabled state should feel like a closed door,
+    not a slammed one.
+  </p>
+</section>
+
+<!-- ============================================================ 09 ERROR / DISABLED -->
+<section id="errors">
+  <span class="eyebrow"><span class="num">09</span>Error &amp; disabled states</span>
+  <h2 class="section-title">"I understand what happened and what to do next."</h2>
+
+  <p>
+    The current UI tells the user about disabled state in three places at once, in dense mono, with no
+    clear next step. The spec below replaces alarm with declarative calm. Every state has the same shape:
+    <em>what is true</em>, <em>why</em>, <em>what the user can do</em>.
+  </p>
+
+  <table class="findings">
+    <thead><tr><th>State</th><th>Current</th><th>Specified</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Body edit unavailable</strong> (Canvas disabled by runtime)</td>
+        <td>"Canvas editing is currently disabled by runtime configuration" in Panel agent-blue card; "read-only" in three rail locations; no body affordance.</td>
+        <td>Body column: small ambient pill at top-right, 24 px tall, <code>▍ read-only</code> in mono 11 px / <code>--fg-2</code>. Hover: tooltip "Canvas off · runtime configuration · view in Panel". Panel <em>Canvas</em> section: one line, <em>"Canvas off · runtime"</em>, with link to runtime status popover. No modal, no banner.</td>
+      </tr>
+      <tr>
+        <td><strong>Unresolved wikilink</strong> <code>[[Missing Note]]</code></td>
+        <td>Renders as raw text or as a non-functional link.</td>
+        <td>Inline span: color <code>--fg-2</code>, dashed underline <code>--destructive</code> at 0.6 opacity, offset 3 px. <code>title</code> attribute "[[Missing Note]] — not found in vault". Click does nothing on first click; on second click within 800 ms, offers "create note" affordance (future; out of scope for renderer pass). Never invisible; never red-text.</td>
+      </tr>
+      <tr>
+        <td><strong>Failed Mermaid block</strong></td>
+        <td>Raw text or unstyled error.</td>
+        <td>Dashed 1 px border <code>--border-strong</code>, radius 2 px, <code>--bg-surface</code> background, 14 / 16 px padding. Left side: small <code>--amber</code> tag "<code>MERMAID</code>" + body "Diagram source available — interactive render unavailable in this view." Right side: subtle "<em>view source</em>" link in <code>--accent</code> opening a folded code block with the original Mermaid source. Body of note continues without a gap.</td>
+      </tr>
+      <tr>
+        <td><strong>Missing image</strong> <code>![alt](missing.png)</code></td>
+        <td>Placeholder observed but not designed.</td>
+        <td>Body-column width rectangle, height 120 px, <code>--bg-surface</code>, 1 px dashed <code>--border-strong</code>, 4 px radius. Centered: a 20 px image-frame icon in <code>--fg-3</code>, then mono caption "<code>missing.png</code> — not found at <code>attachments/missing.png</code>". No broken-image emoji, no red colour. Alt text rendered as muted body caption below the rectangle in <code>--fg-2</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>Image loading</strong></td>
+        <td>Not specified.</td>
+        <td>Same shape as missing-image rectangle; centered caption "<code>loading…</code>" in <code>--fg-2</code>, mono. Fade to image on load over 150 ms.</td>
+      </tr>
+      <tr>
+        <td><strong>Vault unreachable</strong> (runtime API down)</td>
+        <td>Page may render stale or empty.</td>
+        <td>Header strip vault chip switches to <code>--destructive</code> dot + "<code>vault unreachable</code>". Single top-of-body banner: 32 px tall, <code>--destructive-muted</code> background, 2 px left rule <code>--destructive</code>, mono "Vault unreachable — last sync 14:22. Showing cached view." with "<em>retry</em>" action. Body remains visible (last good render) so the user does not lose context.</td>
+      </tr>
+      <tr>
+        <td><strong>Note not found</strong> (bad path)</td>
+        <td>Likely error page.</td>
+        <td>Body column displays a calm empty state: H1 placeholder "<em>Note not found</em>", mono path of the attempted load, single sentence "No artifact at <code>Inbox/Foo.md</code>. The vault may have moved or this link may be stale." Two actions: <em>Browse vault</em>, <em>Open last note</em>. No 404 styling.</td>
+      </tr>
+      <tr>
+        <td><strong>Code block — unsupported language</strong></td>
+        <td>Renders without label.</td>
+        <td>Same code block treatment as §6.5; if language is not recognized, label reads "<code>text</code>" rather than the unknown token. No error.</td>
+      </tr>
+      <tr>
+        <td><strong>Empty Panel state (idle, all sections)</strong></td>
+        <td>Five stacked cards each saying a variant of "idle / disabled / unavailable".</td>
+        <td>Panel column shows mono uppercase section titles only, each followed by one short line of idle copy. Column title at top: "<em>Panel · idle</em>". No agent-blue used until something becomes active.</td>
+      </tr>
+      <tr>
+        <td><strong>Leaked debug string</strong> (e.g. <code>Degradedvault/dev8f3c…</code>)</td>
+        <td>Renders as unstyled text above the band.</td>
+        <td>Never permitted. Any state string must live inside a labeled surface. Design contract: <em>no orphan text nodes outside a component</em>. Codex check: any text content rendered outside a known design-system container is a build-time warning.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note agent">
+    <div class="icon">▍ rule</div>
+    <div class="body"><p>
+      Every degraded state must obey three rules: (1) the note body remains readable, (2) the user can identify
+      the failure within one second of looking at the affected element, (3) there is at most one place in the UI
+      where the same condition is repeated.
+    </p></div>
+  </div>
+</section>
+
+<!-- ============================================================ 10 PRIORITIES -->
+<section id="priorities">
+  <span class="eyebrow"><span class="num">10</span>Prioritized fixes</span>
+  <h2 class="section-title">Five categories, twenty-eight items, in the order they should land.</h2>
+
+  <h3 class="sub">A. Quick visual fixes — CSS / token only, no structural change</h3>
+  <table class="findings">
+    <thead><tr><th>Change</th><th>Effect</th><th>Type</th></tr></thead>
+    <tbody>
+      <tr><td>Apply heading scale per §6.2</td>             <td>H1 / H2 / H3 / H4 visibly distinct without reading numbers.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Increase body line-height to 1.65</td>         <td>Sustained reading becomes possible.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Constrain body column to <code>max-width: 68ch</code></td><td>Lines stop running 1400 px wide.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Remove the visible border / background card around the body</td><td>Body becomes a reading surface, not a tile.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>H3 gold accent bar prefix</td>                 <td>Reinforces hierarchy through color, not size.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Reduce runtime band to 14 px height, single line, mono <code>--fg-3</code> on <code>--bg-surface</code></td><td>Telemetry becomes ambient; presence preserved, weight gone.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Shrink DEV / NOT PRODUCTION to a 28 px corner ribbon</td><td>Safety affordance preserved, no longer the loudest pixel.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Reduce Panel cards to one-line strips when idle</td><td>Quiet column with structure; volume drops by ~80%.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Recolor Panel idle strips from agent-blue to <code>--fg-3</code></td><td>Agent-blue is reserved for active agent content.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Custom task list checkboxes per §6.5</td>      <td>Native browser checkboxes stop looking like a form.</td><td><span class="tag t-css">CSS</span></td></tr>
+      <tr><td>Add unresolved-wikilink dashed underline style</td><td>Failure becomes visible without becoming alarming.</td><td><span class="tag t-css">CSS</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub">B. Structural layout changes</h3>
+  <table class="findings">
+    <thead><tr><th>Change</th><th>Effect</th><th>Type</th></tr></thead>
+    <tbody>
+      <tr><td>Replace runtime band with single 32 px header strip (§7.2)</td><td>Top of page becomes orientation, not telemetry.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Collapse PATH / ARTIFACT / HASH / PROPERTIES into one breadcrumb line with disclosure (§7.3)</td><td>Identity surfaced once, calmly, expandable on demand.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Move artifact id and content hash <em>inside</em> properties disclosure</td><td>Technical identity preserved, not promoted.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Build Panel section state model: <em>idle / active</em></td><td>Visual weight scales with agent activity, not just presence.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Reorient collapses to a single line by default (§8.3)</td><td>The biggest noise source becomes opt-in.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Outline rail: truncation with hover-wrap, current-section gold rule</td><td>Recovery affordance for long headings; "where am I" answered.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Read-only pill in body column (§8.5)</td><td>Body-side echo of disabled state, no modal.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Quick-open (⌘K) replaces NOTE_PATH input</td><td>One way to switch notes, not two.</td><td><span class="tag t-struct">Layout</span></td></tr>
+      <tr><td>Responsive collapse rules per §7.5</td><td>iPad portrait and iPhone become legible without redesign.</td><td><span class="tag t-struct">Layout</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub">C. Cognitive-load reductions</h3>
+  <table class="findings">
+    <thead><tr><th>Change</th><th>Effect</th><th>Type</th></tr></thead>
+    <tbody>
+      <tr><td>Single "as of HH:MM" freshness token in the header</td><td>Resumption after interruption gets a baseline.</td><td><span class="tag t-fix">Reduce</span></td></tr>
+      <tr><td>One location per fact: no metadata restated across surfaces</td><td>User stops reading the same thing three times.</td><td><span class="tag t-fix">Reduce</span></td></tr>
+      <tr><td>Runtime status reduced to one token; details behind popover</td><td>Operator details preserved for operator moments.</td><td><span class="tag t-fix">Reduce</span></td></tr>
+      <tr><td>Provenance lines on agent-authored content, nowhere else</td><td>The user sees agent activity exactly where it happens.</td><td><span class="tag t-fix">Reduce</span></td></tr>
+      <tr><td>Failed embeds collapse to one-line treatment</td><td>Failure neither hides nor dominates.</td><td><span class="tag t-fix">Reduce</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub">D. Future / strategic changes</h3>
+  <p class="muted">Not in scope for the typography / shell pass. Stage these only after the functional gaps close.</p>
+  <table class="findings">
+    <thead><tr><th>Change</th><th>Notes</th><th>Stage</th></tr></thead>
+    <tbody>
+      <tr><td>Body-edit affordances</td><td>When Canvas body-edit is wired, the body column gains an "Edit" action in the header strip, with diff preview and Apply / Discard. All routed through Canvas API.</td><td><span class="tag t-defer">Phase 2</span></td></tr>
+      <tr><td>Resolved-wikilink hover preview</td><td>Hover over a wikilink shows a 320 px floating card with target note title, last-modified, first sentence. Agent-blue chrome if surfaced via Hugin retrieval.</td><td><span class="tag t-defer">Phase 2</span></td></tr>
+      <tr><td>Outline as a structural diff surface</td><td>When Hugin proposes a restructure, the outline can render proposed headings in agent-blue alongside current ones. Apply / Discard from outline.</td><td><span class="tag t-defer">Phase 3</span></td></tr>
+      <tr><td>Resumption snapshot</td><td>On return after &gt; N hours, body opens with a quiet 2-line summary card at top: "you left in §3.2 · 3 new vault writes since." Dismissible.</td><td><span class="tag t-defer">Phase 3</span></td></tr>
+      <tr><td>Find / search surface</td><td>Currently labeled "unavailable". When wired, lives in Panel <em>Find</em> as a single-input search returning vault hits with provenance — distinct from quick-open which switches notes.</td><td><span class="tag t-defer">Phase 2</span></td></tr>
+      <tr><td>Receipt timeline (Munin / Tyr)</td><td>A separate surface, not an addition to this one. Out of scope for the Companion UI shell pass.</td><td><span class="tag t-defer">Future</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub">E. Things <em>not</em> to change</h3>
+  <table class="findings">
+    <thead><tr><th>Element</th><th>Why it stays</th></tr></thead>
+    <tbody>
+      <tr><td>Three-column shell topology</td><td>Correct division of labor. Do not collapse outline into Panel, do not collapse Panel into body.</td></tr>
+      <tr><td>EB Garamond / Space Grotesk / JetBrains Mono trio</td><td>The face system is doing the right job. Tighten its application; don't replace.</td></tr>
+      <tr><td>Callout component pattern</td><td>The strongest visual in the system. Extend it; do not redesign it.</td></tr>
+      <tr><td>Server-rendered HTML / Tailwind pipeline</td><td>Out of scope; no renderer rewrite required to land the visual spec.</td></tr>
+      <tr><td>Markdown as the source of truth</td><td>Vault primacy is non-negotiable. The design must never hide or interpret away Markdown semantics.</td></tr>
+      <tr><td>Panel as a distinct surface from Canvas</td><td>The two surfaces have categorically different semantics. The visual spec sharpens the line; does not erase it.</td></tr>
+      <tr><td>"Read-only" as the truthful default for task lists</td><td>Until Canvas body-edit is wired, task interaction would bypass governance. The design must show the truth.</td></tr>
+      <tr><td>Outline as the LEFT rail</td><td>The handoff confirms left is correct. Do not move.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 11 CODEX -->
+<section id="codex">
+  <span class="eyebrow"><span class="num">11</span>Codex-ready implementation guidance</span>
+  <h2 class="section-title">Stated as design specification. Codex implements; this section does not.</h2>
+
+  <h3 class="sub">11.1 What Codex should do</h3>
+  <ul class="bullets">
+    <li>Implement category <strong>A (Quick visual fixes)</strong> first, as a single bounded PR scoped to <code>colors_and_type.css</code>, the Tailwind config, and the Jinja templates' class attributes. No HTML structure changes beyond adding wrapper classes where required for the spec.</li>
+    <li>Implement category <strong>B (Structural layout)</strong> as separate, bounded issues — one per row in the §10-B table. Each issue must reference the row by ID (see §12 UAT checklist).</li>
+    <li>Move all artifact metadata into a single Jinja partial that renders the breadcrumb strip + collapsible properties disclosure. The current PROPERTIES / chips templates become its inputs.</li>
+    <li>Build a Panel section component with a two-mode API: <code>state="idle" | "active"</code>. Idle renders the one-line strip per §8.1; active renders the agent-card per §8.2. The Reorient block is just a Panel section with custom expanded content.</li>
+    <li>Extend the Tailwind config with the heading scale, line heights, and column widths in §6 and §7. Prefer custom-property bridges (<code>colors_and_type.css</code>) over inline arbitrary values.</li>
+    <li>Surface a small handful of error-state partials: <code>renderer/failed_embed.html</code>, <code>renderer/missing_image.html</code>, <code>renderer/unresolved_link.html</code>. Each partial is exercised by a UAT fixture note.</li>
+    <li>Add a build-time check: any text node rendered outside a known design-system container component is a warning. This catches future leaks like the observed <code>Degradedvault/dev8f3c…</code> string.</li>
+  </ul>
+
+  <h3 class="sub">11.2 What Codex must not do</h3>
+  <ul class="bullets">
+    <li><strong>Do not fix Mermaid, wikilinks, images, or body edit</strong> as part of this design pass. The renderer pass owns only the <em>degraded-state visual treatment</em>, not the underlying functional fix. Each functional fix is a separate, bounded issue.</li>
+    <li><strong>Do not merge note body and Panel.</strong> The 2-px <code>--agent</code> left rule lives only on Panel containers. The body never adopts agent chrome.</li>
+    <li><strong>Do not hide Markdown semantics.</strong> Headings remain <code>&lt;h1&gt;…&lt;h6&gt;</code>, lists remain semantic, blockquotes remain blockquotes, tables remain tables. No styling decision may replace semantic markup with <code>&lt;div&gt;</code> soup.</li>
+    <li><strong>Do not make task checkboxes interactive</strong> until the Canvas body-edit API is wired. The read-only treatment is the truth in v0.</li>
+    <li><strong>Do not add new colors.</strong> If a state needs a hue not in <code>colors_and_type.css</code>, the answer is to compose existing tokens, not extend the palette.</li>
+    <li><strong>Do not introduce visual regression screenshot tests as the primary verification path.</strong> Use DOM assertions and the UAT checklist below. Screenshots are evidence, not contracts.</li>
+    <li><strong>Do not infer scope from this document.</strong> Each bounded issue lifts one section and lists its specific scope. Anything not lifted is not in scope.</li>
+  </ul>
+
+  <h3 class="sub">11.3 Order of work — recommended issue sequence</h3>
+  <ol class="numbers">
+    <li><em>Token alignment</em> — apply §6 typography + spacing + radius tokens. PR scoped to CSS only.</li>
+    <li><em>Header strip</em> — replace runtime band with §7.2 strip; collapse properties per §7.3. One issue.</li>
+    <li><em>Body column</em> — remove card; enforce <code>max-width: 68ch</code>; apply heading scale and rhythm. One issue.</li>
+    <li><em>Panel state model</em> — implement idle / active per §8. One issue covering all five sections.</li>
+    <li><em>Outline rail polish</em> — typography, truncation, current-section indicator. One issue.</li>
+    <li><em>Error-state partials</em> — unresolved link, failed embed, missing image, body-edit pill. One issue per partial; each ships with a fixture in the UAT note.</li>
+    <li><em>Responsive collapse</em> — apply §7.5 breakpoints. One issue.</li>
+    <li><em>Build-time orphan-text-node warning</em> — one issue. Catches the <code>Degradedvault/dev8f3c…</code> class of regressions.</li>
+  </ol>
+
+  <div class="note agent">
+    <div class="icon">▍ boundary</div>
+    <div class="body"><p>
+      Codex implements from this specification and from each governing bounded issue. Where this
+      specification is silent, Codex stops and raises a question. Codex does not infer; it does not bypass
+      governance; it does not expand scope. Per <code>CODEX_IMPLEMENTATION_BOUNDARY.md</code>.
+    </p></div>
+  </div>
+</section>
+
+<!-- ============================================================ 12 UAT -->
+<section id="uat">
+  <span class="eyebrow"><span class="num">12</span>UAT acceptance checklist</span>
+  <h2 class="section-title">Each item produces a clear PASS or FAIL.</h2>
+
+  <p>
+    The checklist below is the acceptance surface for the design pass. Each item names the surface, the
+    expected condition, and the verification — either a DOM/class assertion or a human-UAT step. Items are
+    grouped by the priority category from §10 so the implementation order is preserved.
+  </p>
+
+  <h3 class="sub">A. Quick visual fixes</h3>
+  <div class="checklist">
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-01</span> · H1 (note title) renders in EB Garamond 400, 40 px, line-height 1.1. <em>Verify:</em> computed style on <code>article h1</code>.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-02</span> · H2 renders in Space Grotesk 600, 22 px, with a 1 px bottom border at <code>--border</code>. <em>Verify:</em> computed style on <code>article h2</code>.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-03</span> · H3 carries a 4 × 14 px gold accent bar prefix. <em>Verify:</em> <code>article h3::before</code> renders with non-zero width.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-04</span> · H4 renders in JetBrains Mono 12 px, uppercase, 0.08em tracking, <code>--fg-2</code>. <em>Verify:</em> computed style.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-05</span> · Body paragraphs render at 15 / 25 with <code>max-width: 68ch</code>. <em>Verify:</em> computed style on <code>article p</code>.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-06</span> · Note body column has no card border or raised background. <em>Verify:</em> human — the note title and first paragraph sit on the page background, not in a tile.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-A-07</span> · Runtime band is at most 32 px tall; uses mono <code>--fg-3</code> text only; no full-line wrap. <em>Verify:</em> bounding box height ≤ 32 px.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-A-08</span> · DEV / NOT PRODUCTION ribbon is ≤ 32 px tall and lives in the top-right corner only. <em>Verify:</em> human.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Panel</span><div><span class="id">UAT-A-09</span> · All idle Panel sections render as one-line strips. No agent-blue card chrome on idle. <em>Verify:</em> <code>.panel-section[data-state="idle"]</code> has height ≤ 32 px and no left-border in agent-blue.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-10</span> · Task list checkboxes render as custom 14 × 14 px boxes, not native browser checkboxes. <em>Verify:</em> DOM — no <code>&lt;input type="checkbox"&gt;</code> in rendered output, or <code>appearance: none</code> applied.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-A-11</span> · Unresolved wikilinks render with dashed destructive underline + title attribute. <em>Verify:</em> fixture <code>[[Missing Note]]</code> in UAT note carries <code>.wikilink--unresolved</code> class.</div></div>
+  </div>
+
+  <h3 class="sub">B. Structural layout</h3>
+  <div class="checklist">
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-B-01</span> · Single 32 px header strip with wordmark, vault chip, runtime pill, freshness, quick-open, browse vault, dev ribbon — in that order. <em>Verify:</em> human + DOM order.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-B-02</span> · Properties surfaced as a single breadcrumb line under the title, with a <em>properties ▾</em> disclosure. Default collapsed. <em>Verify:</em> human + initial state <code>aria-expanded="false"</code>.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-B-03</span> · Artifact id and content hash live inside the expanded properties block, not above it. <em>Verify:</em> DOM containment.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Panel</span><div><span class="id">UAT-B-04</span> · Each Panel section has two display modes (<code>idle | active</code>) driven by a data attribute. <em>Verify:</em> component contract test.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Panel</span><div><span class="id">UAT-B-05</span> · Reorient defaults to a single line; full body is opt-in behind a <em>recall ▾</em> disclosure. <em>Verify:</em> human + initial height ≤ 28 px.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Outline</span><div><span class="id">UAT-B-06</span> · Outline rows truncate to one line; hover reveals the full heading (wrap or tooltip). <em>Verify:</em> human + presence of <code>title</code> attr.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Outline</span><div><span class="id">UAT-B-07</span> · Current section in the outline shows a 2 px gold left rule. <em>Verify:</em> scroll into a section, confirm DOM class.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-B-08</span> · Body column shows a <em>▍ read-only · Canvas off</em> pill when Canvas is disabled. <em>Verify:</em> human, dev environment.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-B-09</span> · Quick-open (<code>⌘K</code> / <code>/</code>) opens a note-switcher overlay; NOTE_PATH input is removed. <em>Verify:</em> human.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Layout</span><div><span class="id">UAT-B-10</span> · At 1100–1299 px viewport, Panel collapses to a peek tab. <em>Verify:</em> resize the browser to 1200 px.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Layout</span><div><span class="id">UAT-B-11</span> · At ≤ 800 px viewport, both rails become modal sheets. <em>Verify:</em> resize to 768 px.</div></div>
+  </div>
+
+  <h3 class="sub">C. Cognitive load</h3>
+  <div class="checklist">
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-C-01</span> · An "as of HH:MM" token is visible in the header strip on every page load. <em>Verify:</em> human.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">All</span><div><span class="id">UAT-C-02</span> · No single fact (artifact id, hash, kind, review_state) appears in more than one visible surface at a time. <em>Verify:</em> human read-through.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-C-03</span> · Runtime state is a single token in the header strip; full telemetry is behind a popover. <em>Verify:</em> click runtime pill, confirm popover.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Panel</span><div><span class="id">UAT-C-04</span> · Provenance line is present on every agent-authored card and nowhere else. <em>Verify:</em> human read-through of a fixture proposal.</div></div>
+  </div>
+
+  <h3 class="sub">D. Error / disabled states</h3>
+  <div class="checklist">
+    <div class="item"><span class="box"></span><span class="surface">Renderer</span><div><span class="id">UAT-D-01</span> · A fixture <code>[[Missing Note]]</code> wikilink renders with dashed destructive underline + title attr "not found in vault". <em>Verify:</em> UAT note contains the fixture; inspect element.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Renderer</span><div><span class="id">UAT-D-02</span> · A fixture failed Mermaid block renders as the dashed container per §9, with a "view source" affordance that reveals the original source. <em>Verify:</em> UAT note + click.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Renderer</span><div><span class="id">UAT-D-03</span> · A fixture missing-image <code>![alt](missing.png)</code> renders as the dashed rectangle with mono caption and alt text below. <em>Verify:</em> UAT note + inspect.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-D-04</span> · Read-only pill is present in the body column at top right whenever Canvas is disabled. Hover tooltip names the cause. <em>Verify:</em> human.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Header</span><div><span class="id">UAT-D-05</span> · When the runtime API is unreachable, the vault chip turns destructive and a single banner appears above the body. Body still renders from cache. <em>Verify:</em> kill runtime, reload.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Body</span><div><span class="id">UAT-D-06</span> · Loading a non-existent note shows the calm "note not found" empty state per §9. <em>Verify:</em> load <code>?note_path=Does/Not/Exist.md</code>.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">All</span><div><span class="id">UAT-D-07</span> · No raw state string appears outside a labeled component. The <code>Degradedvault/dev8f3c…</code> leak is gone. <em>Verify:</em> human read-through + build warning is silent.</div></div>
+  </div>
+
+  <h3 class="sub">E. Preservation checks (things not to break)</h3>
+  <div class="checklist">
+    <div class="item"><span class="box"></span><span class="surface">All</span><div><span class="id">UAT-E-01</span> · Markdown rendered by the Companion UI continues to be readable in Obsidian unmodified. <em>Verify:</em> open the UAT note in Obsidian.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">All</span><div><span class="id">UAT-E-02</span> · No write to the vault is initiated from the body, task checkboxes, or properties strip. <em>Verify:</em> watch <code>writeguard</code> logs across a full UAT pass; expect zero writes.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Renderer</span><div><span class="id">UAT-E-03</span> · Callouts continue to render with the existing type system (Note / Tip / Warning / Danger), now formalized per §6.5. <em>Verify:</em> existing fixture callouts unchanged in semantics.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Outline</span><div><span class="id">UAT-E-04</span> · Outline navigation continues to work — every heading remains an anchor target. <em>Verify:</em> click every outline row; confirm scroll.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">Panel</span><div><span class="id">UAT-E-05</span> · Panel and Canvas remain categorically distinct surfaces; no design element merges them. <em>Verify:</em> human read-through against <code>PANEL_COMPANION_UI_CONTRACT.md</code>.</div></div>
+    <div class="item"><span class="box"></span><span class="surface">All</span><div><span class="id">UAT-E-06</span> · The three-column shell remains. Outline is the LEFT rail. Panel is the RIGHT rail. <em>Verify:</em> human.</div></div>
+  </div>
+
+  <hr class="soft" />
+
+  <div class="note preserve">
+    <div class="icon">▍ closing</div>
+    <div class="body"><p>
+      A pass that lands categories A through C, plus the §9 error-state partials, will produce a surface a
+      senior architect could open at the start of a day and read in without first having to clear the
+      page. That is the bar this review aims at — not novelty, not visual ambition, not a redesign.
+      A note-reading surface calm enough that the cognitive prosthesis can begin to be one.
+    </p></div>
+  </div>
+
+  <p class="muted" style="margin-top: var(--space-8); font-size: 13px;">
+    Document end. Companion UI Design Review · 2026-05-26 · Yggdrasil
+  </p>
+</section>
+
+</main>
+</div>
+
+<script>
+  // Lightweight TOC active-state tracking
+  const links = document.querySelectorAll('aside.toc a[href^="#"]');
+  const sections = [...links].map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const map = new Map(sections.map((s, i) => [s, links[i]]));
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const link = map.get(e.target);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px', threshold: 0 });
+  sections.forEach(s => io.observe(s));
+</script>
+
+</body>
+</html>

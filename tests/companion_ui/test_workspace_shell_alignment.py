@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui._orphan_text import assert_no_orphan_text
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ def _fields(
     governance_receipts: list | None = None,
     suggestion_state: str = "idle",
     suggestion_composer_enabled: bool = True,
+    workspace_loaded_at: str | None = None,
 ) -> dict:
     return {
         "title": title,
@@ -92,6 +94,7 @@ def _fields(
         "suggestion_composer_enabled": suggestion_composer_enabled,
         "is_production_ui": False,
         "dev_page_label": "dev/staging",
+        "workspace_loaded_at": workspace_loaded_at,
     }
 
 
@@ -104,21 +107,41 @@ def _html(**kw) -> str:
 
 
 def _body_region(html: str) -> str:
-    # Match the full note-body section including the pre element that holds body content.
-    # The note-body div contains nested divs (readonly-indicator, readonly-reason) before the
-    # pre element, so we cannot stop at the first </div>.
+    # Match the full note-body section through the vault-markdown-rendered article.
+    # The note-body div contains nested divs (readonly-indicator, readonly-reason) before
+    # the rendered content, so we match the article tag specifically.
     m = re.search(
-        r'data-testid="workspace-note-body".*?<pre class="note-body-content">(.*?)</pre>',
+        r'(data-testid="workspace-note-body".*?<article class="vault-markdown-rendered"[^>]*>.*?</article>)',
         html,
         re.DOTALL,
     )
-    assert m, "workspace-note-body pre element not found"
-    return m.group()
+    assert m, "workspace-note-body vault-markdown-rendered article not found"
+    return m.group(1)
 
 
 def _rail_region(html: str) -> str:
     m = re.search(r'data-testid="workspace-agent-rail".*?</aside>', html, re.DOTALL)
     assert m, "workspace-agent-rail region not found"
+    return m.group()
+
+
+def _header_strip(html: str) -> str:
+    m = re.search(
+        r'<header\b[^>]*class="workspace-header-strip\b.*?</header>',
+        html,
+        re.DOTALL,
+    )
+    assert m, "workspace-header-strip not found"
+    return m.group()
+
+
+def _runtime_popover(html: str) -> str:
+    m = re.search(
+        r'data-testid="workspace-runtime-status-popover".*?</div>\s*</details>',
+        html,
+        re.DOTALL,
+    )
+    assert m, "workspace-runtime-status-popover not found"
     return m.group()
 
 
@@ -144,6 +167,7 @@ _FRONTMATTER_BODY = (
 class TestFrontmatterStrippedFromBody:
     def test_frontmatter_block_not_in_body_region(self) -> None:
         html = _html(body=_FRONTMATTER_BODY)
+        assert_no_orphan_text(html)  # AC5 opt-in: catch future orphan-text regressions
         body = _body_region(html)
         assert "uuid: 11111111" not in body
         assert "- companion-ui" not in body
@@ -152,13 +176,13 @@ class TestFrontmatterStrippedFromBody:
         html = _html(body=_FRONTMATTER_BODY)
         body = _body_region(html)
         assert "Body paragraph here." in body
-        assert "# Heading" in body
+        assert '<h1 id="heading">Heading</h1>' in body
 
     def test_body_without_frontmatter_unchanged(self) -> None:
         body_only = "# Plain note\n\nNo frontmatter."
         html = _html(body=body_only)
         body = _body_region(html)
-        assert "# Plain note" in body
+        assert '<h1 id="plain-note">Plain note</h1>' in body
         assert "No frontmatter." in body
 
     def test_frontmatter_region_present_when_frontmatter_exists(self) -> None:
@@ -244,14 +268,98 @@ class TestPrimaryPostureSurface:
 
     def test_primary_posture_has_human_label(self) -> None:
         html = _html()
-        m = re.search(
-            r'data-testid="workspace-primary-posture".*?</section>',
-            html,
+        region = _header_strip(html)
+        assert "Online" in region or "Ok" in region or "Ready" in region
+
+
+# ---------------------------------------------------------------------------
+# #1336 — design review §7.2 workspace header strip
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceHeaderStrip:
+    def test_header_strip_replaces_runtime_band(self) -> None:
+        html = _html(guard_canvas_enabled=False, runtime_vault_name="Niflheim")
+        header = _header_strip(html)
+        assert 'class="runtime-safety-strip"' not in html
+        assert 'data-testid="workspace-runtime-safety-strip"' not in html
+        assert header.count('data-testid="workspace-header-row"') == 1
+
+        ordered_testids = [
+            'data-testid="workspace-wordmark"',
+            'data-testid="workspace-vault-chip"',
+            'data-testid="workspace-runtime-pill"',
+            'data-testid="workspace-freshness"',
+            'class="workspace-header-spacer"',
+            'data-testid="workspace-quick-open"',
+            'data-testid="workspace-browse-vault"',
+            'data-testid="workspace-dev-ribbon"',
+        ]
+        positions = [header.index(token) for token in ordered_testids]
+        assert positions == sorted(positions)
+
+    def test_runtime_status_popover_contains_runtime_fields(self) -> None:
+        html = _html(
+            guard_canvas_enabled=False,
+            guard_workspace_update_available=False,
+            runtime_vault_name="Niflheim",
+            runtime_vault_channel="dev",
+            runtime_vault_provenance="resolved",
+        )
+        popover = _runtime_popover(html)
+        expected_fields = [
+            "runtime_environment_label",
+            "runtime_api_base_url_label",
+            "runtime_vault_name",
+            "runtime_vault_channel",
+            "runtime_vault_provenance",
+            "runtime_writeguard_status",
+            "runtime_canvas_enabled",
+            "runtime_update_flow_available",
+            "runtime_guard_degraded",
+            "runtime_workspace_update_state",
+            "runtime_workspace_update_available",
+            "runtime_workspace_update_scope",
+            "runtime_workspace_update_reason",
+            "runtime_workspace_update_config_mode",
+            "runtime_governance_via_update_enabled",
+            "runtime_trace_id",
+        ]
+        for field in expected_fields:
+            assert f'data-runtime-field="{field}"' in popover
+
+    def test_dev_ribbon_is_absent_in_production_profile(self) -> None:
+        dev_html = _html()
+        assert 'data-testid="workspace-dev-ribbon"' in dev_html
+        assert re.search(
+            r"\.workspace-dev-ribbon\s*\{[^}]*height:\s*28px",
+            dev_html,
             re.DOTALL,
         )
-        assert m
-        region = m.group()
-        assert "Online" in region or "Ok" in region or "Ready" in region
+
+        prod_fields = _fields()
+        prod_fields["is_production_ui"] = True
+        prod_fields["runtime_environment_label"] = "prod"
+        prod_html = render_index_html(
+            api_base_url="http://127.0.0.1:18000",
+            note_path="Notes/note.md",
+            fields=prod_fields,
+            production_profile=True,
+        )
+        assert 'data-testid="workspace-dev-ribbon"' not in prod_html
+
+    def test_freshness_token_is_always_present(self) -> None:
+        html = _html(workspace_loaded_at="2026-05-27T14:22:00+02:00")
+        assert re.search(
+            r'data-testid="workspace-freshness"[^>]*>as of \d{2}:\d{2}<',
+            html,
+        )
+
+    def test_trace_id_only_renders_inside_runtime_popover(self) -> None:
+        html = _html(runtime_vault_provenance="unresolved")
+        popover = _runtime_popover(html)
+        assert "trace-1" in popover
+        assert "trace-1" not in html.replace(popover, "")
 
 
 # ---------------------------------------------------------------------------
@@ -327,16 +435,39 @@ class TestHumanFacingCopy:
         """Composer enabled/locked exposes its internal state as a data-* attribute."""
         html = _html(suggestion_composer_enabled=True)
         assert 'data-composer-state="enabled"' in html
+        assert "composer enabled" not in html.lower()
 
     def test_composer_state_data_attr_when_locked(self) -> None:
         html = _html(suggestion_composer_enabled=False)
         assert 'data-composer-state="locked"' in html
+        assert "composer locked" not in html.lower()
 
     def test_workspace_update_label_has_human_text(self) -> None:
         """A human-friendly label is used somewhere in posture chrome."""
         html = _html()
         # "Online" is the human-facing posture phrase for ok.
         assert "Online" in html
+
+    def test_internal_state_labels_not_visible_by_default(self) -> None:
+        html = _html()
+        visible_leaks = [
+            "user not present",
+            "composer enabled",
+            "suggestion</span>",
+            "find unavailable",
+            ">idle</span>",
+        ]
+        lower_html = html.lower()
+        for leak in visible_leaks:
+            assert leak not in lower_html
+
+    def test_default_canvas_unavailable_actions_are_reason_states_not_buttons(self) -> None:
+        html = _html(guard_canvas_enabled=False, guard_workspace_update_available=False)
+        assert 'data-testid="workspace-canvas-start"' not in html
+        assert 'data-testid="workspace-canvas-close"' not in html
+        assert 'data-testid="workspace-canvas-edit-submit"' not in html
+        assert 'data-testid="workspace-canvas-undo"' not in html
+        assert 'data-testid="workspace-canvas-action-unavailable"' in html
 
 
 # ---------------------------------------------------------------------------
@@ -381,11 +512,12 @@ class TestRailEmptyState:
         rail = _rail_region(html)
         assert 'data-testid="workspace-rail-empty-state"' not in rail
 
-def test_delimiter_shaped_body_without_frontmatter_is_not_stripped() -> None:
+def test_malformed_frontmatter_is_omitted_from_body_with_diagnostic() -> None:
     body = "---\nThis is prose, not yaml: [\n---\n\nParagraph stays.\n"
     html = _html(body=body)
     note_body = _body_region(html)
-    assert "This is prose, not yaml" in note_body
+    assert "This is prose, not yaml" not in note_body
+    assert "frontmatter_parse_error" in note_body
     assert "Paragraph stays." in note_body
 
 
@@ -482,3 +614,67 @@ class TestOperatorPromptDoesNotLeakIntoRail:
         rail = _rail_region(html)
         assert long_why not in rail
         assert "C" * 280 in rail
+
+
+# ---------------------------------------------------------------------------
+# R1 regression — frontmatter must not be user-visible as raw YAML outside
+# identity chrome. Issue #1290: UAT confirmed raw YAML was visible adjacent
+# to the note frame. Updated for daily-use visibility contract (#1361): the
+# section uses a <details> disclosure (humanized summary, collapsed by default)
+# rather than display:none — raw YAML is de-emphasized, not deleted from DOM.
+# ---------------------------------------------------------------------------
+
+
+def _frontmatter_section_tag(html: str) -> str:
+    """Return the opening <section> tag for the workspace-note-frontmatter element."""
+    m = re.search(
+        r'(<section\b[^>]*data-testid="workspace-note-frontmatter"[^>]*>)',
+        html,
+    )
+    assert m, "workspace-note-frontmatter section not found"
+    return m.group(1)
+
+
+class TestFrontmatterR1NotVisibleOutsideChrome:
+    """R1 regression: raw frontmatter must not be user-visible outside identity chrome (#1290)."""
+
+    def test_frontmatter_section_present_when_frontmatter_present(self) -> None:
+        """Section must be present and carry data-frontmatter-present=true."""
+        html = _html(body=_FRONTMATTER_BODY)
+        tag = _frontmatter_section_tag(html)
+        assert 'data-frontmatter-present="true"' in tag, (
+            "Expected data-frontmatter-present=true for a body that has frontmatter"
+        )
+
+    def test_frontmatter_section_uses_disclosure_not_raw_display(self) -> None:
+        """Frontmatter must be behind a <details> disclosure (daily-use visibility contract #1361).
+
+        The section must not render raw YAML as visible body text. The disclosure
+        pattern (humanized summary, raw YAML in body) replaces the earlier
+        display:none approach while preserving the R1 guarantee that raw YAML
+        is not visible in normal reading flow.
+        """
+        html = _html(body=_FRONTMATTER_BODY)
+        assert 'data-testid="workspace-frontmatter-disclosure"' in html, (
+            "R1/#1361: frontmatter must be wrapped in a disclosure element"
+        )
+        assert 'data-testid="workspace-frontmatter-summary"' in html, (
+            "R1/#1361: frontmatter disclosure must have a humanized summary"
+        )
+
+    def test_raw_yaml_keys_absent_from_note_body_region(self) -> None:
+        """R1: raw YAML key:value syntax must not appear in the note-body rendering surface."""
+        html = _html(body=_FRONTMATTER_BODY)
+        body = _body_region(html)
+        for key in ("uuid:", "kind:", "zone:", "tags:"):
+            assert key not in body, (
+                f"R1 violation: raw YAML key '{key}' found in workspace-note-body region"
+            )
+
+    def test_frontmatter_section_absent_from_agent_rail(self) -> None:
+        """The frontmatter section must not be rendered inside the agent rail."""
+        html = _html(body=_FRONTMATTER_BODY)
+        rail = _rail_region(html)
+        assert 'data-testid="workspace-note-frontmatter"' not in rail, (
+            "R1 violation: workspace-note-frontmatter section must not appear in agent rail"
+        )

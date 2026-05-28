@@ -9,6 +9,10 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui.vault_browser_test_helpers import (
+    default_vault_browser_payload,
+    is_vault_browser_get,
+)
 from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
 
@@ -22,6 +26,8 @@ class _FakeClient:
         if url == "/api/companion/vault-browser":
             return {}  # infrastructure; not under test
         self.get_calls.append((url, params))
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         payload = self.payloads.pop(0)
         if isinstance(payload, Exception):
             raise payload
@@ -99,7 +105,9 @@ def test_edits_blocked_during_recovery() -> None:
     assert state.is_loaded is False
     assert "unavailable" in (state.error or "")
     assert client.post_calls == []
-    assert "disabled>Apply body edit</button>" in html
+    assert 'data-testid="workspace-canvas-edit-submit"' not in html
+    assert 'data-testid="workspace-canvas-action-unavailable"' in html
+    assert 'data-action="apply-body-edit"' in html
 
 
 def test_conflict_indicator_visible() -> None:

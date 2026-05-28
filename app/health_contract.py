@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import timezone, datetime, timedelta
@@ -9,10 +10,88 @@ from typing import Any
 
 from app.config.environment import active_environment
 from app.config.paths import resolve_vault_root
-from app.events.outbox import event_name, latest_trace_story, normalize_timestamp, read_outbox
+from app.events.outbox import default_outbox_path, event_name, latest_trace_story, normalize_timestamp
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
 from app.stores import get_object_store
+
+# Health checks must never load the full outbox into memory; it can grow to hundreds of MB.
+# Bound tail reads to this many bytes — enough to capture recent activity for all checks.
+_HEALTH_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB
+
+
+def _count_outbox_lines_db() -> int | None:
+    """Count total outbox rows via DB when STORE_BACKEND=pg. Returns None on any error."""
+    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+    if backend != "pg":
+        return None
+    try:
+        from app.services.outbox import count_outbox_events
+
+        return count_outbox_events()
+    except Exception:
+        return None
+
+
+def _count_outbox_lines(path: Path) -> int:
+    """Count outbox records: DB when available, else streaming file line count."""
+    db_count = _count_outbox_lines_db()
+    if db_count is not None:
+        return db_count
+    if not path.exists():
+        return 0
+    try:
+        count = 0
+        saw_bytes = False
+        last_byte = b""
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                saw_bytes = True
+                count += chunk.count(b"\n")
+                last_byte = chunk[-1:]
+        if saw_bytes and last_byte != b"\n":
+            count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
+    """Read at most _HEALTH_TAIL_BYTES from the end of the outbox; return parsed records."""
+    target = (path or default_outbox_path()).expanduser()
+    if not target.exists():
+        return []
+    try:
+        with target.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            if size > _HEALTH_TAIL_BYTES:
+                fh.seek(size - _HEALTH_TAIL_BYTES)
+                partial = True
+            else:
+                fh.seek(0)
+                partial = False
+            data = fh.read()
+    except Exception:
+        return []
+    try:
+        lines = data.decode("utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    if partial and lines:
+        lines = lines[1:]  # drop potentially truncated first line
+    records: list[dict[str, Any]] = []
+    for ln in lines:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            obj = json.loads(ln)
+            if isinstance(obj, dict):
+                records.append(obj)
+        except Exception:
+            continue
+    return records
 
 WRITE_BLOCKED_STATES = {"safe_mode", "unhealthy"}
 INCIDENT_STATES = {"degraded", "unhealthy", "safe_mode"}
@@ -117,8 +196,9 @@ class HealthContract:
         now = self.now_fn()
         vault_root = self.vault_root_fn()
         settings_result = load_health_settings(vault_root=vault_root)
-        records = read_outbox()
-        outbox_count = len(records)
+        outbox_path = default_outbox_path()
+        outbox_count = _count_outbox_lines(outbox_path)
+        records = _read_tail_records(outbox_path)
         object_count = self._count_objects()
         latest_ts = self._latest_timestamp(records)
         age = self._compute_age(latest_ts, now)

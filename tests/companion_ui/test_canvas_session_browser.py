@@ -9,6 +9,10 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     RealNoteWorkspaceDevPage,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui.vault_browser_test_helpers import (
+    default_vault_browser_payload,
+    is_vault_browser_get,
+)
 
 
 class _FakeClient:
@@ -22,6 +26,8 @@ class _FakeClient:
         if url == "/api/companion/vault-browser":
             return {}  # infrastructure; not under test
         self.get_calls.append((url, params))
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         return self.payloads.pop(0)
 
     def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
@@ -88,8 +94,8 @@ def test_session_controls_rendered() -> None:
     html = _html_for_canvas(session_id="session-1", session_state="active")
 
     assert 'data-testid="workspace-canvas-session-controls"' in html
-    assert 'data-testid="workspace-canvas-start"' in html
-    assert 'data-api-path="/api/canvas/sessions"' in html
+    assert 'data-testid="workspace-canvas-start"' not in html
+    assert 'data-action="start-session"' in html
     assert 'data-testid="workspace-canvas-close"' in html
     assert 'data-api-path="/api/canvas/sessions/session-1"' in html
 
@@ -113,7 +119,7 @@ def test_session_open_and_close_call_canvas_api() -> None:
             {"total_summary": "session closed from Companion UI"},
         ),
     ]
-    assert client.get_calls == [
+    assert [call for call in client.get_calls if call[0] == "/api/companion/workspace"] == [
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
     ]
@@ -126,9 +132,9 @@ def test_edit_controls_disabled_outside_active() -> None:
         can_edit_body=False,
     )
 
-    assert 'data-testid="workspace-canvas-edit-submit"' in html
-    assert 'data-api-path=""' in html
-    assert "disabled>Apply body edit</button>" in html
+    assert 'data-testid="workspace-canvas-edit-submit"' not in html
+    assert 'data-testid="workspace-canvas-action-unavailable"' in html
+    assert 'data-action="apply-body-edit"' in html
 
 
 def test_session_state_indicator() -> None:

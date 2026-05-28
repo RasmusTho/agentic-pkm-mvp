@@ -29,27 +29,42 @@ Local dev:
 
 LAN/Tailscale (explicit operator action required — not the default):
     cd companion-ui/companion-app
-    COMPANION_API_BASE_URL=http://<host-ip>:18001 HOST=0.0.0.0 PORT=8111 \\
+    COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=0.0.0.0 PORT=8111 \\
         python -m companion_ui.workspace.serve_dev_page
+
+Browser requests use same-origin Companion UI routes; the dev server calls
+COMPANION_API_BASE_URL server-side so remote clients never need direct access
+to the runtime localhost port.
 """
 
 import html as _html
 import json
 import os
+import re
 import sys
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
-import yaml
 
+from companion_ui.renderer import (
+    PropertiesRenderer,
+    VaultMarkdownDocument,
+    link_preview_css,
+    note_outline_css,
+    note_outline_script,
+    parse_vault_markdown,
+    render_note_outline,
+    render_vault_markdown,
+)
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
 )
+from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
     WorkspaceClientHTTPError,
-    WorkspaceHttpClient,
 )
 
 _DEFAULT_HOST = "127.0.0.1"
@@ -75,6 +90,13 @@ def _e(value: str) -> str:
     return _html.escape(str(value))
 
 
+# Canonical companion kind values from COMPANION_NOTE_CONTRACT.md.
+# Exact match only — substring checks risk false-positives on arbitrary kind strings
+# (e.g. "non_companion_attachment"). Extend this set as new companion kinds are
+# introduced via the contract, not via loose substring heuristics.
+_COMPANION_KINDS: frozenset[str] = frozenset({"companion_note"})
+
+
 # Maximum characters for any single rail item label / reason / relation field.
 # Prevents operator/agent note body content from leaking into the rail verbatim.
 _RAIL_ITEM_MAX: int = 280
@@ -89,7 +111,7 @@ def _cap(text: str, max_len: int = _RAIL_ITEM_MAX) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Daily-use visibility helpers
+# Daily-use visibility helpers (#1361)
 # ---------------------------------------------------------------------------
 
 _REVIEW_STATE_LABELS: dict[str, str] = {
@@ -135,13 +157,12 @@ def _humanize_fm_pair(key: str, value: str) -> str | None:
 
 
 def _should_hide_note_by_default(note: dict) -> bool:
-    """Return True for system/companion/UUID notes hidden from navigation by default."""
+    """Return True for companion/UUID notes hidden from navigation by default."""
     import re as _re
     kind = str(note.get("kind") or "").strip()
-    if kind == "companion_note":
+    if kind in _COMPANION_KINDS:
         return True
     path = str(note.get("note_path") or "").strip()
-    # Hide notes whose filename is a bare UUID (common for system/ephemeral records).
     filename = path.split("/")[-1]
     filename_stem = filename
     for ext in (".md", ".MD"):
@@ -152,9 +173,7 @@ def _should_hide_note_by_default(note: dict) -> bool:
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
         _re.IGNORECASE,
     )
-    if uuid_pat.match(filename_stem):
-        return True
-    return False
+    return bool(uuid_pat.match(filename_stem))
 
 
 def _status_label(value: object, *, fallback: str = "unknown") -> str:
@@ -162,93 +181,176 @@ def _status_label(value: object, *, fallback: str = "unknown") -> str:
     return text if text else fallback
 
 
+def _human_state_label(state: str, mapping: dict[str, str], *, fallback: str = "Unavailable") -> str:
+    token = str(state or "").strip().lower()
+    return mapping.get(token, fallback)
+
+
+def _human_reason(reason: str) -> str:
+    token = str(reason or "").strip()
+    return {
+        "not_declared": "runtime has not enabled this capability",
+        "disabled": "runtime configuration marks this capability unavailable",
+        "canvas_disabled": "Canvas editing is disabled by runtime configuration",
+    }.get(token, token.replace("_", " ") if token else "reason unavailable")
+
+
 def _split_frontmatter(body: str) -> tuple[list[str], str]:
-    """Split a YAML frontmatter prefix off ``body``.
+    """Split a frontmatter prefix off ``body`` using the renderer parser.
 
     Returns ``(frontmatter_lines, remaining_body)``. If the body does not begin
-    with a ``---``/``---`` fenced YAML block, returns ``([], body)`` unchanged.
-
-    Frontmatter is treated as opaque text for rendering — keys are surfaced as
-    chrome but not parsed into a typed model here. The runtime owns parsing for
-    contract purposes (#1253); this helper only ensures the body region does
-    not display the frontmatter as prose.
+    with a ``---``/``---`` fenced block, returns ``([], body)`` unchanged.
     """
-    if not body.startswith("---"):
+    document = parse_vault_markdown(body)
+    if document.frontmatter is None:
         return [], body
-    lines = body.split("\n")
-    if not lines or lines[0].strip() != "---":
-        return [], body
-    end_idx: int | None = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end_idx = i
-            break
-    if end_idx is None:
-        return [], body
-    fm_lines = lines[1:end_idx]
-    try:
-        parsed = yaml.safe_load("\n".join(fm_lines))
-    except Exception:
-        return [], body
-    if parsed is not None and not isinstance(parsed, dict):
-        return [], body
-    remaining = "\n".join(lines[end_idx + 1:])
-    return fm_lines, remaining
+    return document.frontmatter.splitlines(), document.body_markdown
 
 
-def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
-    """Render frontmatter as bounded metadata chrome separate from the body.
-
-    AC1 / AC2 (#1260): the body region must not display YAML frontmatter as
-    prose; frontmatter-derived metadata remains visible in dedicated chrome.
-
-    Daily-use visibility: closed summary shows humanized labels for well-known
-    fields (review_state, lifecycle_state, note_type/kind, zone). Raw YAML
-    remains fully available in the open/expanded section.
-    """
-    if not frontmatter_lines:
+def _render_hidden_frontmatter_marker(document: VaultMarkdownDocument) -> str:
+    """Render frontmatter as a humanized disclosure section (daily-use #1361)."""
+    if document.frontmatter is None:
         return (
             '<section class="note-frontmatter note-frontmatter-empty" '
             'data-testid="workspace-note-frontmatter" '
-            'data-frontmatter-present="false">'
+            'data-frontmatter-present="false" '
+            'aria-hidden="true" style="display:none">'
             '<span class="frontmatter-label">No frontmatter</span>'
             "</section>"
         )
-    # Build humanized summary labels for well-known fields.
-    human_labels: list[str] = []
-    try:
-        parsed_fm: dict = yaml.safe_load("\n".join(frontmatter_lines)) or {}
-    except Exception:
-        parsed_fm = {}
-    for key in ("review_state", "lifecycle_state", "note_type", "kind", "zone"):
-        val = parsed_fm.get(key)
-        if val and isinstance(val, str):
-            label = _humanize_fm_pair(key, val)
-            if label:
-                human_labels.append(label)
-    summary_text = " · ".join(human_labels) if human_labels else "properties"
+    summary_items: list[str] = []
     rows: list[str] = []
-    for line in frontmatter_lines:
+    for line in document.frontmatter.splitlines():
         stripped = line.rstrip()
         if not stripped:
             continue
+        if ":" in stripped:
+            key, _, val = stripped.partition(":")
+            human = _humanize_fm_pair(key.strip(), val.strip())
+            if human:
+                summary_items.append(_e(human))
         rows.append(
             '<div class="frontmatter-line">'
             f'<code>{_e(stripped)}</code>'
             "</div>"
         )
+    summary_text = " · ".join(summary_items) if summary_items else "properties"
     body_html = "".join(rows) or '<span class="frontmatter-label">(empty frontmatter)</span>'
     return (
         '<section class="note-frontmatter" '
         'data-testid="workspace-note-frontmatter" '
         'data-frontmatter-present="true">'
         '<details class="frontmatter-disclosure" data-testid="workspace-frontmatter-disclosure">'
-        f'<summary class="frontmatter-summary" data-testid="workspace-frontmatter-summary">'
-        f'{_e(summary_text)}'
+        '<summary class="frontmatter-summary" data-testid="workspace-frontmatter-summary">'
+        f"{summary_text}"
         "</summary>"
         f"{body_html}"
         "</details>"
         "</section>"
+    )
+
+
+def _render_note_frontmatter_region(document: VaultMarkdownDocument):  # type: ignore[return]
+    """Return (hidden_marker_html, rendered_properties).
+
+    AC1 / AC2 (#1260): the body region must not display YAML frontmatter as
+    prose; frontmatter-derived metadata remains visible in dedicated chrome.
+    #1337: the visible properties are wrapped in a breadcrumb disclosure; the
+    hidden marker is kept in-place for downstream selectors.
+    """
+    hidden_marker = _render_hidden_frontmatter_marker(document)
+    rendered_props = PropertiesRenderer(
+        test_id="workspace-note-properties",
+        include_empty=False,
+    ).render(document)
+    return hidden_marker, rendered_props
+
+
+def _render_workspace_breadcrumb(
+    *,
+    note_path: str,
+    artifact_id: str,
+    content_hash: str,
+    identity_state: str,
+    identity_source: str,
+    artifact_kind: str,
+    owns_identity: bool,
+    companion_html: str,
+    rendered_props,
+) -> str:
+    """Breadcrumb line under the note title with a properties ▾ disclosure.
+
+    §7.3 / #1337: replaces the chip strip (path · artifact · hash) with a
+    single breadcrumb line; artifact id and hash move inside the disclosure.
+    """
+    # Path segments — keep raw slashes as separators for readability
+    path_segments = note_path.replace("&amp;", "&").split("/")
+    path_html = " / ".join(_e(p) for p in path_segments if p)
+
+    # Pull up to 2 inline meta items from frontmatter (kind + review_state)
+    _META_KEYS = ("kind", "review", "review_state")
+    meta_items: list[str] = []
+    for field in (rendered_props.fields or ()):
+        if field.key in _META_KEYS and field.values:
+            label = _e(field.key)
+            val = _e(", ".join(field.values[:2]))
+            meta_items.append(
+                f'<span class="breadcrumb-meta-item">{label}&nbsp;{val}</span>'
+            )
+        if len(meta_items) >= 2:
+            break
+
+    meta_html = "".join(
+        f'<span class="breadcrumb-sep">&middot;</span>{item}' for item in meta_items
+    )
+
+    # Artifact/hash chips move inside the disclosure
+    artifact_chip = ""
+    if artifact_id:
+        artifact_chip = (
+            f'<span class="prov-item artifact-identity-pill"'
+            f' data-testid="workspace-artifact-identity-pill"'
+            f' data-identity-state="{identity_state}"'
+            f' data-identity-source="{identity_source}"'
+            f' data-artifact-kind="{artifact_kind}"'
+            f' data-owns-identity="{"true" if owns_identity else "false"}">'
+            f'<span class="prov-label">artifact</span>'
+            f"<code>{artifact_id}</code>"
+            f'<span class="identity-meta">{identity_state}</span>'
+            f'<span class="identity-meta">{identity_source}</span>'
+            f"{companion_html}"
+            f"</span>"
+        )
+    hash_chip = ""
+    if content_hash:
+        hash_chip = (
+            f'<span class="prov-item content-hash-pill"'
+            f' data-testid="workspace-content-hash-pill">'
+            f'<span class="prov-label">hash</span>'
+            f"<code>{content_hash}</code>"
+            f"</span>"
+        )
+    identity_chips_html = ""
+    if artifact_chip or hash_chip:
+        identity_chips_html = (
+            f'<div class="breadcrumb-identity-chips">{artifact_chip}{hash_chip}</div>'
+        )
+
+    raw_path = note_path.replace("&amp;", "&")
+    return (
+        f'<div class="workspace-breadcrumb" data-testid="workspace-breadcrumb" data-note-path="{_e(raw_path)}">'
+        f'<span class="breadcrumb-path">{path_html}</span>'
+        f"{meta_html}"
+        f'<details class="workspace-properties-disclosure"'
+        f' data-testid="workspace-properties-disclosure"'
+        f" aria-expanded=\"false\">"
+        f'<summary class="breadcrumb-disclosure-trigger">properties&nbsp;&#9660;</summary>'
+        f'<div class="properties-disclosure-body">'
+        f"{identity_chips_html}"
+        f"{rendered_props.html}"
+        f"</div>"
+        f"</details>"
+        f"</div>"
     )
 
 
@@ -278,37 +380,184 @@ def _compute_primary_posture(
     return "ok", "Online"
 
 
-def _render_primary_posture(
+
+def _workspace_header_freshness(fields: dict) -> tuple[str, str]:
+    raw = (
+        fields.get("workspace_loaded_at")
+        or fields.get("runtime_last_ingest_at")
+        or fields.get("updated")
+        or fields.get("last_modified")
+    )
+    if raw:
+        full = str(raw)
+        match = re.search(r"(\d{2}):(\d{2})", full)
+        if match:
+            return f"as of {match.group(1)}:{match.group(2)}", full
+    now = datetime.now().astimezone()
+    return f"as of {now:%H:%M}", now.isoformat(timespec="minutes")
+
+
+def _render_workspace_header_strip(
     *,
+    fields: dict,
     posture: str,
-    label: str,
+    posture_label: str,
+    runtime_environment: str,
+    runtime_channel: str,
+    runtime_trace_id: str,
     vault_name: str,
     vault_channel: str,
-    runtime_trace_id: str,
+    vault_provenance: str,
+    writeguard_status: str,
+    canvas_enabled: bool,
+    update_flow_available: bool,
+    guard_degraded: bool,
+    workspace_update_available: bool,
+    workspace_update_state: str,
+    workspace_update_reason: str,
+    workspace_update_scope: str,
+    workspace_update_governance_actions_enabled: bool,
+    workspace_update_config_mode: str,
 ) -> str:
-    """Render the single primary posture surface above the detailed safety strip.
-
-    AC3 (#1260): one primary posture region; AC4: distinct tone class per
-    posture state; AC6: human-readable label, internal token in ``data-*``.
-    """
-    trace = runtime_trace_id or "unavailable"
-    return (
-        f'<section class="primary-posture posture-tone-{posture}" '
-        f'data-testid="workspace-primary-posture" '
-        f'data-posture="{posture}">'
-        f'<span class="primary-posture-label">{_e(label)}</span>'
-        f'<span class="primary-posture-identity" '
-        'data-testid="workspace-primary-posture-identity">'
-        f'<span class="primary-posture-vault">{_e(vault_name)}</span>'
-        f'<span class="primary-posture-sep">/</span>'
-        f'<span class="primary-posture-channel">{_e(vault_channel)}</span>'
-        "</span>"
-        '<span class="primary-posture-trace" '
-        'data-testid="workspace-primary-posture-trace">'
-        f"<code>{_e(trace)}</code>"
-        "</span>"
-        "</section>"
+    freshness_label, freshness_title = _workspace_header_freshness(fields)
+    canvas_token = "canvas off" if not canvas_enabled else "canvas on"
+    runtime_token = "runtime degraded" if posture in {"blocked", "degraded", "unavailable"} else "ok"
+    pill_label = canvas_token if not canvas_enabled else runtime_token
+    is_prod = bool(fields.get("is_production_ui")) or str(
+        fields.get("runtime_environment_label") or ""
+    ).lower() == "prod"
+    dev_ribbon = (
+        ""
+        if is_prod
+        else '<span class="workspace-dev-ribbon" data-testid="workspace-dev-ribbon">DEV</span>'
     )
+    vp_lower = str(vault_provenance).lower()
+    if vp_lower == "unreachable":
+        vault_state = "unreachable"
+    elif vp_lower == "unresolved":
+        vault_state = "unresolved"
+    else:
+        vault_state = "ok"
+    browse_target = "#vault-browser-overlay"
+    telemetry_rows = [
+        ("workspace-runtime-channel", "runtime_environment_label", "runtime", runtime_environment),
+        ("workspace-runtime-channel-api", "runtime_api_base_url_label", "channel", runtime_channel),
+        ("workspace-vault-identity", "runtime_vault_name", "vault", vault_name),
+        ("workspace-vault-channel", "runtime_vault_channel", "vault channel", vault_channel),
+        (
+            "workspace-vault-provenance",
+            "runtime_vault_provenance",
+            "vault provenance",
+            _e(vault_provenance),
+        ),
+        ("workspace-writeguard-state", "runtime_writeguard_status", "WriteGuard", writeguard_status),
+        (
+            "workspace-canvas-enabled-state",
+            "runtime_canvas_enabled",
+            "Canvas",
+            "enabled" if canvas_enabled else "disabled",
+        ),
+        (
+            "workspace-update-flow-state",
+            "runtime_update_flow_available",
+            "Update flow",
+            "available" if update_flow_available else "disabled",
+        ),
+        (
+            "workspace-guard-degraded-state",
+            "runtime_guard_degraded",
+            "guard",
+            "degraded" if guard_degraded else "normal",
+        ),
+        (
+            "workspace-update-flow-state-detail",
+            "runtime_workspace_update_state",
+            "workspace update",
+            workspace_update_state,
+            f'data-update-state="{workspace_update_state}"',
+        ),
+        (
+            "workspace-update-flow-availability",
+            "runtime_workspace_update_available",
+            "workspace update available",
+            "available" if workspace_update_available else "disabled",
+        ),
+        (
+            "workspace-update-flow-scope",
+            "runtime_workspace_update_scope",
+            "workspace update scope",
+            workspace_update_scope,
+        ),
+        (
+            "workspace-update-flow-reason",
+            "runtime_workspace_update_reason",
+            "update reason",
+            workspace_update_reason,
+        ),
+        (
+            "workspace-update-flow-config-mode",
+            "runtime_workspace_update_config_mode",
+            "update config",
+            workspace_update_config_mode,
+        ),
+        (
+            "workspace-update-governance-state",
+            "runtime_governance_via_update_enabled",
+            "governance via update",
+            "enabled" if workspace_update_governance_actions_enabled else "disabled",
+        ),
+        (
+            "workspace-runtime-trace-id",
+            "runtime_trace_id",
+            "trace",
+            runtime_trace_id or "unavailable",
+        ),
+    ]
+    telemetry_html = "".join(
+        f"""
+          <div class="workspace-runtime-popover-row" data-testid="{testid}" data-runtime-field="{field}"{' ' + extra if (extra := row[4] if len(row) > 4 else '') else ''}>
+            <span class="workspace-runtime-popover-key">{label}</span>
+            <code>{value}</code>
+          </div>"""
+        for row in telemetry_rows
+        for testid, field, label, value in [row[:4]]
+    )
+    return f"""
+      <header
+        class="workspace-header-strip primary-posture posture-tone-{posture}"
+        data-testid="workspace-primary-posture"
+        data-posture="{posture}"
+        data-region="workspace-header">
+        <div class="workspace-header-row" data-testid="workspace-header-row">
+          <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
+          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}">
+            <span class="workspace-vault-dot" aria-hidden="true"></span>
+            <span>{vault_name} · vault {vault_state}</span>
+          </a>
+          <details class="workspace-runtime-status" data-testid="workspace-runtime-status">
+            <summary
+              class="workspace-runtime-pill"
+              data-testid="workspace-runtime-pill"
+              aria-label="Show runtime telemetry">
+              <span>{pill_label}</span>
+              <span class="workspace-runtime-human-label">{posture_label}</span>
+            </summary>
+            <span id="workspace-runtime-telemetry"
+              data-testid="workspace-runtime-telemetry"
+              aria-hidden="true"></span>
+            <div class="workspace-runtime-status-popover" data-testid="workspace-runtime-status-popover">
+              {telemetry_html}
+            </div>
+          </details>
+          <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
+          <span class="workspace-header-spacer" aria-hidden="true"></span>
+          <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
+            <kbd>/</kbd><span>⌘K</span>
+          </button>
+          <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" onclick="vaultBrowser.open()">Browse vault</button>
+          {dev_ribbon}
+        </div>
+      </header>"""
 
 
 def _render_rail_empty_state(
@@ -353,7 +602,41 @@ def _render_rail_empty_state(
     )
 
 
-def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
+def _render_read_only_pill() -> str:
+    return (
+        '<div class="workspace-read-only-pill" data-testid="workspace-read-only-pill"'
+        ' title="Canvas off · runtime configuration · view in Panel">'
+        "▍ read-only"
+        "</div>"
+    )
+
+
+def _render_vault_unreachable_banner(last_sync: str = "") -> str:
+    sync_label = f"last sync {last_sync}" if last_sync else "last sync unavailable"
+    return (
+        f'<div class="workspace-vault-unreachable-banner" data-testid="workspace-vault-unreachable-banner">'
+        f"<span>Vault unreachable — {sync_label}. Showing cached view.</span>"
+        f'<a href="#workspace-runtime-status" class="banner-retry-link" data-testid="workspace-vault-retry">retry</a>'
+        f"</div>"
+    )
+
+
+def _render_note_not_found(note_path: str) -> str:
+    safe_path = _e(note_path)
+    return (
+        f'<div class="workspace-note-not-found" data-testid="workspace-note-not-found">'
+        f"<h1>Note not found</h1>"
+        f"<code>{safe_path}</code>"
+        f"<p>No artifact at {safe_path}. The vault may have moved or this link may be stale.</p>"
+        f'<div class="not-found-actions">'
+        f'<button type="button" class="not-found-browse" onclick="vaultBrowser.open()">Browse vault</button>'
+        f'<button type="button" class="not-found-last-note" data-testid="workspace-open-last-note">Open last note</button>'
+        f"</div>"
+        f"</div>"
+    )
+
+
+def _render_body_edit_panel(update_flow_available: bool, note_path: str, raw_body: str = "") -> str:
     if not update_flow_available:
         return (
             '<section class="body-edit-panel body-edit-disabled workspace-action-absent" '
@@ -362,9 +645,9 @@ def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
             'data-reason="update_flow_disabled" '
             'data-update-flow="disabled">'
             '<span class="absent-label" data-testid="workspace-body-edit-panel">'
-            "Body editing unavailable</span>"
+            "&#9998; Read only</span>"
             '<span class="absent-reason">'
-            "Update flow is currently disabled (set WORKSPACE_UPDATE_FLOW_ENABLED=1 to enable)."
+            "This note is open for reading. Editing is not enabled in this workspace."
             "</span>"
             "</section>"
         )
@@ -374,10 +657,10 @@ def _render_body_edit_panel(update_flow_available: bool, note_path: str) -> str:
     <span class="body-edit-label">Edit note body</span>
     <span class="body-edit-note">Frontmatter and UUID are preserved. WriteGuard is authoritative.</span>
   </div>
-  <textarea class="body-edit-textarea" id="body-edit-textarea"
-            data-testid="workspace-body-edit-textarea"
-            rows="10" placeholder="Enter new note body…"
-            data-note-path="{note_path}"></textarea>
+  <div class="body-edit-codemirror" id="body-edit-codemirror"
+       data-testid="workspace-body-edit-textarea"
+       data-note-path="{note_path}"
+       data-raw-body="{_e(raw_body)}"></div>
   <div class="body-edit-actions">
     <button class="body-edit-submit"
             data-testid="workspace-body-edit-submit"
@@ -399,7 +682,8 @@ def _render_note_section(fields: dict) -> str:
     Canvas/Panel integration.
     """
     title = _e(fields.get("title", ""))
-    note_path_val = _e(fields.get("note_path", ""))
+    raw_note_path = str(fields.get("note_path", "") or "")
+    note_path_val = _e(raw_note_path)
     artifact_id = _e(fields.get("artifact_id", ""))
     content_hash = _e(fields.get("content_hash", ""))
     artifact_kind = _e(_status_label(fields.get("artifact_kind"), fallback="human_note"))
@@ -415,9 +699,10 @@ def _render_note_section(fields: dict) -> str:
     vault_channel = _e(fields.get("runtime_vault_channel") or "unknown")
     vault_provenance = fields.get("runtime_vault_provenance") or "unresolved"
     raw_body = str(fields.get("body", "") or "")
-    frontmatter_lines, stripped_body = _split_frontmatter(raw_body)
-    body = _e(stripped_body)
-    note_frontmatter_html = _render_note_frontmatter_region(frontmatter_lines)
+    rendered_body = render_vault_markdown(raw_body, note_path=raw_note_path)
+    body = rendered_body.html
+    outline_html = render_note_outline(rendered_body.document)
+    hidden_frontmatter_html, rendered_props = _render_note_frontmatter_region(rendered_body.document)
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
     canvas_state = _e(fields.get("canvas_session_state", "idle"))
@@ -470,10 +755,12 @@ def _render_note_section(fields: dict) -> str:
         if companion_of
         else ""
     )
+    vault_unreachable = bool(fields.get("vault_unreachable", False)) or str(vault_provenance).lower() == "unreachable"
     vault_unresolved = (
         str(vault_provenance).lower() == "unresolved"
         or str(fields.get("runtime_vault_name") or "").lower() == "unresolved"
     )
+    note_not_found = bool(fields.get("note_not_found", False))
     posture_token, posture_label = _compute_primary_posture(
         writeguard_blocked=writeguard_blocked,
         vault_unresolved=vault_unresolved,
@@ -481,13 +768,48 @@ def _render_note_section(fields: dict) -> str:
         workspace_update_available=workspace_update_available,
         guard_degraded=guard_degraded,
     )
-    primary_posture_html = _render_primary_posture(
+    effective_vault_provenance = "unreachable" if vault_unreachable else str(vault_provenance)
+    workspace_header_strip_html = _render_workspace_header_strip(
+        fields=fields,
         posture=posture_token,
-        label=posture_label,
-        vault_name=str(fields.get("runtime_vault_name") or "unresolved"),
-        vault_channel=str(fields.get("runtime_vault_channel") or "unknown"),
-        runtime_trace_id=str(fields.get("runtime_trace_id") or ""),
+        posture_label=posture_label,
+        runtime_environment=runtime_environment,
+        runtime_channel=runtime_channel,
+        runtime_trace_id=runtime_trace_id,
+        vault_name=vault_name,
+        vault_channel=vault_channel,
+        vault_provenance=effective_vault_provenance,
+        writeguard_status=writeguard_status,
+        canvas_enabled=canvas_enabled,
+        update_flow_available=update_flow_available,
+        guard_degraded=guard_degraded,
+        workspace_update_available=workspace_update_available,
+        workspace_update_state=workspace_update_state,
+        workspace_update_reason=workspace_update_reason,
+        workspace_update_scope=workspace_update_scope,
+        workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
+        workspace_update_config_mode=workspace_update_config_mode,
     )
+    breadcrumb_html = _render_workspace_breadcrumb(
+        note_path=note_path_val,
+        artifact_id=artifact_id,
+        content_hash=content_hash,
+        identity_state=identity_state,
+        identity_source=identity_source,
+        artifact_kind=artifact_kind,
+        owns_identity=owns_identity,
+        companion_html=companion_html,
+        rendered_props=rendered_props,
+    )
+    vault_unreachable_banner_html = (
+        _render_vault_unreachable_banner(
+            last_sync=fields.get("vault_last_sync_label") or fields.get("runtime_last_ingest_at") or ""
+        )
+        if vault_unreachable
+        else ""
+    )
+    read_only_pill_html = _render_read_only_pill() if not canvas_enabled else ""
+    note_not_found_html = _render_note_not_found(raw_note_path) if note_not_found else ""
     rail_empty_state_html = _render_rail_empty_state(
         panel_proposal_count=proposal_count,
         panel_proposals=panel_proposals,
@@ -500,62 +822,6 @@ def _render_note_section(fields: dict) -> str:
         governance_receipts_count=len(fields.get("governance_receipts") or []),
         suggestion_state=str(fields.get("suggestion_state", "idle") or "idle"),
     )
-    safety_strip_html = f"""
-      <section
-        class="runtime-safety-strip"
-        data-testid="workspace-runtime-safety-strip"
-        data-affordance-status="read-only"
-        data-runtime-backed="true">
-        <div class="safety-item" data-testid="workspace-runtime-channel">
-          <span class="safety-label">runtime</span>
-          <span>{runtime_environment}</span>
-          <span class="safety-sep">/</span>
-          <span>{runtime_channel}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-vault-identity" data-vault-provenance="{_e(vault_provenance)}">
-          <span class="safety-label">vault/channel</span>
-          <span>{vault_name}</span>
-          <span class="safety-sep">/</span>
-          <span>{vault_channel}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-writeguard-state">
-          <span class="safety-label">WriteGuard</span>
-          <span>{writeguard_status}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-canvas-enabled-state">
-          <span class="safety-label">Canvas</span>
-          <span>{'enabled' if canvas_enabled else 'disabled'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-flow-state"
-             data-update-flow="{'available' if update_flow_available else 'disabled'}">
-          <span class="safety-label">Update flow</span>
-          <span>{'available' if update_flow_available else 'disabled'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-guard-degraded-state">
-          <span class="safety-label">guard</span>
-          <span>{'degraded' if guard_degraded else 'normal'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-flow-state" data-update-state="{workspace_update_state}">
-          <span class="safety-label">workspace update</span>
-          <span>{'available' if workspace_update_available else 'disabled'}</span>
-          <span class="safety-sep">/</span>
-          <span>{workspace_update_scope}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-flow-reason">
-          <span class="safety-label">update reason</span>
-          <span>{workspace_update_reason}</span>
-          <span class="safety-sep">/</span>
-          <span>{workspace_update_config_mode}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-update-governance-state">
-          <span class="safety-label">governance via update</span>
-          <span>{'enabled' if workspace_update_governance_actions_enabled else 'disabled'}</span>
-        </div>
-        <div class="safety-item" data-testid="workspace-runtime-trace-id">
-          <span class="safety-label">trace</span>
-          <code>{runtime_trace_id or 'unavailable'}</code>
-        </div>
-      </section>"""
     guard_messages: list[str] = []
     if writeguard_status.lower() == "blocked":
         guard_messages.append("WriteGuard blocked")
@@ -659,83 +925,92 @@ def _render_note_section(fields: dict) -> str:
         message=active_note_body_update_message,
         reason=workspace_update_reason,
     )
-
-    # Safety strip is operator-level telemetry: wrap in a disclosure so it does
-    # not dominate the daily-use reading surface. Open by default in dev so
-    # existing tests that assert on testids inside the strip still pass.
-    safety_strip_disclosure = f"""
-      <details class="runtime-telemetry-disclosure" data-testid="workspace-runtime-telemetry" open>
-        <summary class="runtime-telemetry-summary"
-                 data-testid="workspace-runtime-telemetry-toggle">Runtime telemetry</summary>
-        {safety_strip_html}
-      </details>"""
+    canvas_state_copy = _e(
+        "Disabled"
+        if not canvas_enabled or writeguard_blocked
+        else _human_state_label(
+            canvas_session_state_raw,
+            {
+                "idle": "No active Canvas session",
+                "active": "Canvas session active",
+                "composing": "Canvas session active",
+                "paused": "Canvas session paused",
+                "closed": "Canvas session closed",
+            },
+            fallback="Canvas session unavailable",
+        )
+    )
+    panel_state_copy = _e(
+        _human_state_label(
+            panel_state_raw,
+            {
+                "idle": "No active Panel proposal",
+                "running": "Panel is preparing proposals",
+                "proposals-staged": "Panel proposal ready",
+                "proposal_staged": "Panel proposal ready",
+                "blocked": "Panel blocked",
+            },
+            fallback="Panel state unavailable",
+        )
+    )
 
     return f"""
-  <div class="workspace-layout">
+  <div class="workspace-layout workspace-layout--three-col">
+    <nav class="vault-browser-left-pane" data-testid="workspace-vault-browser-left-pane" data-region="vault-browser-pane">
+      {vault_browser_html}
+    </nav>
     <div class="workspace-main">
-      {primary_posture_html}
-      {safety_strip_disclosure}
+      {workspace_header_strip_html}
+      {vault_unreachable_banner_html}
       <header
         class="note-header active-note-header"
         data-testid="workspace-note-header"
         data-region="note-header">
         <h1 class="note-title">{title}</h1>
-        <div class="note-provenance">
-          <span class="prov-item"><span class="prov-label">path</span><code>{note_path_val}</code></span>
-          <span class="prov-sep">&middot;</span>
-          <span
-            class="prov-item artifact-identity-pill"
-            data-testid="workspace-artifact-identity-pill"
-            data-identity-state="{identity_state}"
-            data-identity-source="{identity_source}"
-            data-artifact-kind="{artifact_kind}"
-            data-owns-identity="{'true' if owns_identity else 'false'}">
-            <span class="prov-label">artifact</span><code>{artifact_id or 'unresolved'}</code>
-            <span class="identity-meta">{identity_state}</span>
-            <span class="identity-meta">{identity_source}</span>
-            {companion_html}
-          </span>
-          <span class="prov-sep">&middot;</span>
-          <span
-            class="prov-item content-hash-pill"
-            data-testid="workspace-content-hash-pill">
-            <span class="prov-label">hash</span><code>{content_hash or 'unavailable'}</code>
-          </span>
-        </div>
+        {breadcrumb_html}
         {identity_caution_html}
       </header>
-      {note_frontmatter_html}
-      <div class="note-body" data-testid="workspace-note-body" data-region="note-body"
-           data-read-only="true">
-        <div class="note-body-readonly-indicator"
-             data-testid="workspace-note-body-readonly-indicator"
-             data-read-only="true">read-only</div>
-        <div class="note-body-readonly-reason"
-             data-testid="workspace-note-body-readonly-reason"
-             aria-live="polite"
-             hidden>
-          Editing is currently disabled by runtime configuration.&#160;<a
-            href="#workspace-runtime-telemetry"
-            data-testid="workspace-note-body-readonly-why">Why?</a>
+      {hidden_frontmatter_html}
+      {note_not_found_html}
+      <div
+        class="note-reading-layout"
+        data-testid="workspace-note-reading-layout">
+        {outline_html}
+        <button class="workspace-outline-ribbon" data-testid="workspace-outline-ribbon"
+          aria-label="open outline" data-layout-visible="800-1099">☰ outline</button>
+        <div class="note-body" data-testid="workspace-note-body" data-region="note-body"
+          data-read-only="true">
+          <div class="note-body-readonly-indicator"
+            data-testid="workspace-note-body-readonly-indicator"
+            data-read-only="true">read-only</div>
+          <div class="note-body-readonly-reason"
+            data-testid="workspace-note-body-readonly-reason"
+            aria-live="polite"
+            hidden>
+            Editing is currently disabled by runtime configuration.&#160;<a
+              href="#workspace-runtime-telemetry"
+              data-testid="workspace-note-body-readonly-why">Why?</a>
+          </div>
+          {read_only_pill_html}
+          <div class="note-body-content">{body}</div>
+          {suggested_insertions_html}
         </div>
-        <pre class="note-body-content">{body}</pre>
-        {suggested_insertions_html}
       </div>
-      {_render_body_edit_panel(update_flow_available, note_path_val)}
+      {_render_body_edit_panel(update_flow_available, note_path_val, raw_body)}
     </div>
     <aside
       class="agent-rail"
       data-testid="workspace-agent-rail"
       data-region="agent-rail"
       data-layout-desktop="side-rail">
-      <div class="rail-header">
-        <span class="rail-label">Companion&nbsp;/ Panel</span>
-        <span class="rail-badge" data-testid="workspace-panel-state">{panel_state}</span>
+      <div class="rail-header" data-testid="workspace-panel-column-header">
+        <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>
+        <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
       </div>
       <div class="rail-placeholder-body">
         <div class="rail-state-row" data-testid="workspace-canvas-state">
           <span class="rail-state-label">Canvas</span>
-          <span class="rail-state-value">{canvas_state}</span>
+          <span class="rail-state-value" data-canvas-state="{canvas_state}">{canvas_state_copy}</span>
         </div>
         {canvas_controls_html}
         {active_note_body_update_html}
@@ -755,13 +1030,21 @@ def _render_note_section(fields: dict) -> str:
         {reorient_mode_html}
         {resurface_mode_html}
         {act_mode_html}
-        {vault_browser_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
         {rail_empty_state_html}
       </div>
     </aside>
+    <div class="workspace-panel-peek" data-testid="workspace-panel-peek"
+      data-layout-visible="1100-1299"
+      data-panel-proposal-count="{proposal_count}">{f'<span class="peek-badge" data-testid="workspace-panel-peek-badge">{proposal_count}</span>' if proposal_count else ""}</div>
+    <div class="workspace-sheet-triggers" data-layout-visible="max-799">
+      <button class="workspace-outline-sheet-trigger" data-testid="workspace-outline-sheet-trigger"
+        aria-label="open outline">&#9776; Outline</button>
+      <button class="workspace-panel-sheet-trigger" data-testid="workspace-panel-sheet-trigger"
+        aria-label="open panel">Panel</button>
+    </div>
     {portrait_sheet_html}
   </div>"""
 
@@ -778,15 +1061,14 @@ def _render_active_note_body_update_flow(
     safe_state = _e(state or "idle")
     safe_message = _e(message)
     if not enabled:
-        # Disabled state: render a minimal placeholder that retains the
-        # data-testid for test/automation compatibility but does not add a
-        # duplicate visible "unavailable" message — the guard alert and
-        # body-edit panel absence already surface this. (Daily-use dedup.)
+        # Render a hidden absence marker — keeps testid selectors functional while
+        # not adding a duplicate "unavailable" banner (daily-use dedup, #1361).
         return (
             '<section'
             ' class="active-note-body-update-flow active-note-body-update-flow--disabled"'
             ' data-testid="workspace-active-note-body-update-flow"'
-            ' data-flow-state="disabled">'
+            ' data-flow-state="disabled"'
+            f' data-reason="{_e(reason)}">'
             '<div'
             ' class="active-note-body-update-blocked active-note-body-update-blocked--quiet"'
             ' data-testid="workspace-active-note-body-update-state-blocked"'
@@ -938,10 +1220,15 @@ def _render_artifact_inspector(
     receipts_html = _render_inspector_receipts(note)
     posture_html = _render_inspector_review_posture(note)
 
+    is_companion_note = kind_val in _COMPANION_KINDS
+    inspector_kind_attr = f' data-kind="{_e(str(kind_val))}"' if kind_val else ""
+    inspector_companion_attr = ' data-companion="true"' if is_companion_note else ""
+
     return (
         f'<section class="vault-browser-inspector" '
         f'data-testid="workspace-vault-browser-inspector" '
-        f'data-affordance-status="read-only">'
+        f'data-affordance-status="read-only"'
+        f'{inspector_kind_attr}{inspector_companion_attr}>'
         f'<header class="inspector-header">'
         f'<span data-testid="workspace-vault-browser-inspector-title" '
         f'class="inspector-title">{title}</span>'
@@ -1067,7 +1354,7 @@ def _render_inspector_receipts(note: dict) -> str:
     )
 
 
-def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved for future per-artifact overrides
+def _render_vault_actions(note: dict) -> str:
     """Render the VaultAction display model for the selected browser artifact.
 
     Each action carries:
@@ -1082,6 +1369,7 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
     Governance and write-class actions are disabled/blocked with explicit reasons in
     this slice. No new write path is opened without guard/receipt semantics.
     """
+    note_path = str(note.get("note_path") or "").strip()
 
     def _action(
         testid: str,
@@ -1095,6 +1383,9 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
         disabled_reason: str = "",
         requires_receipt: bool = False,
         requires_confirmation: bool = False,
+        data_href: str = "",
+        data_path: str = "",
+        onclick: str = "",
     ) -> str:
         blocked_attr = (
             f' data-blocked="true" data-blocked-reason="{_e(blocked_reason)}"'
@@ -1108,6 +1399,9 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
         )
         receipt_attr = ' data-requires-receipt="true"' if requires_receipt else ""
         confirm_attr = ' data-requires-confirmation="true"' if requires_confirmation else ""
+        href_attr = f' data-href="{_e(data_href)}"' if data_href else ""
+        path_attr = f' data-path="{_e(data_path)}"' if data_path else ""
+        onclick_attr = f' onclick="{_e(onclick)}"' if onclick else ""
         return (
             f'<div class="vault-action" '
             f'data-testid="{testid}" '
@@ -1116,14 +1410,32 @@ def _render_vault_actions(note: dict) -> str:  # noqa: ARG001 — note reserved 
             f"{blocked_attr}"
             f"{disabled_attr}"
             f"{receipt_attr}"
-            f'{confirm_attr}>'
+            f"{confirm_attr}"
+            f"{href_attr}"
+            f"{path_attr}"
+            f'{onclick_attr}>'
             f'<span class="vault-action-label">{_e(label)}</span>'
             f"</div>"
         )
 
+    workspace_href = f"?note_path={quote(note_path, safe='/')}" if note_path else ""
     actions = [
-        _action("vault-action-open-note", "Open note", "read_only"),
-        _action("vault-action-copy-path", "Copy path", "ui_only"),
+        _action(
+            "vault-action-open-note",
+            "Open note",
+            "read_only",
+            affordance="available" if note_path else "unavailable",
+            data_href=workspace_href,
+            onclick="window.location.href=this.dataset.href" if note_path else "",
+        ),
+        _action(
+            "vault-action-copy-path",
+            "Copy path",
+            "ui_only",
+            affordance="available" if note_path else "unavailable",
+            data_path=note_path,
+            onclick="navigator.clipboard.writeText(this.dataset.path)" if note_path else "",
+        ),
         _action(
             "vault-action-find-related",
             "Find related (read-only)",
@@ -1172,15 +1484,25 @@ def _render_filter_chips(
         if not values:
             continue
         active_set = set(active_filters.get(field, []))
+        multi_active = len(active_set) > 1
         for val in sorted(values):
             is_active = val in active_set
+            deselect_span = (
+                '<span class="filter-chip-remove" aria-label="remove filter" data-testid="filter-chip-remove">×</span>'
+                if is_active and multi_active
+                else ""
+            )
             chips_html.append(
                 f'<span class="filter-chip" '
                 f'data-testid="vault-browser-filter-chip" '
                 f'data-key="{_e(field)}" '
                 f'data-value="{_e(val)}" '
-                f'data-active="{"true" if is_active else "false"}">'
-                f'{_e(label)}: {_e(val)}</span>'
+                f'data-active="{"true" if is_active else "false"}" '
+                f'onclick="vbToggleFilter(this)" '
+                f'style="cursor:pointer">'
+                f'{_e(label)}: {_e(val)}'
+                f'{deselect_span}'
+                f'</span>'
             )
     if not chips_html:
         return ""
@@ -1237,12 +1559,13 @@ def _render_vault_browser(
             "</div>"
         )
 
-    # Filter system/companion/UUID notes from the navigation list by default.
-    visible_notes = [n for n in notes if not _should_hide_note_by_default(n)]
-    hidden_count = len(notes) - len(visible_notes)
+    # Daily-use visibility: companion/UUID notes are rendered hidden in the DOM
+    # (preserving data-kind/data-companion attributes for test compatibility)
+    # but excluded from the visible nav list (#1361).
+    hidden_count = sum(1 for n in notes if _should_hide_note_by_default(n))
 
     rows: list[str] = []
-    for note in visible_notes:
+    for note in notes:
         path = str(note.get("note_path") or "").strip()
         if not path:
             continue
@@ -1284,14 +1607,24 @@ def _render_vault_browser(
                 f'data-testid="workspace-vault-browser-note-health" '
                 f'data-missing-fields="{_e(missing_label)}">missing: {_e(missing_label)}</span>'
             )
+        badges_html = kind_badge + review_badge + trust_badge + health_badge
+
+        kind_safe = _e(str(kind_val)) if kind_val else ""
+        is_companion = kind_val in _COMPANION_KINDS
+        row_extra_class = " vault-browser-row--companion" if is_companion else ""
+        row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
+        row_companion_attr = ' data-companion="true"' if is_companion else ""
+        nav_hidden = _should_hide_note_by_default(note)
+        row_hidden_attr = " hidden" if nav_hidden else ""
+        row_nav_attr = ' data-nav-visible="false"' if nav_hidden else ""
 
         rows.append(
             f"""
-          <li class="vault-browser-row" data-testid="workspace-vault-browser-note-row" data-active="{active}">
+          <li class="vault-browser-row{row_extra_class}" data-testid="workspace-vault-browser-note-row" data-active="{active}"{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>
             <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
             <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
             <span data-testid="workspace-vault-browser-note-zone" class="vault-browser-zone-label">{zone}</span>
-            {kind_badge}{review_badge}{trust_badge}{health_badge}
+            {badges_html}
           </li>"""
         )
 
@@ -1303,6 +1636,8 @@ def _render_vault_browser(
         else ""
     )
     read_only_text = "read-only" if read_only else "mutating"
+    # Calm provenance label for daily-use visibility; raw value in data attribute.
+    calm_provenance = "read-only fallback · filesystem index" if read_only else "filesystem index"
     filters_html = _render_filter_chips(notes, active_filters or {})
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
     inspector_html = (
@@ -1310,9 +1645,6 @@ def _render_vault_browser(
         if selected_note is not None
         else ""
     )
-    # Calm provenance label for daily-use visibility — raw vault_provenance
-    # retained as data-attribute for tests/debugging; calm copy shown in UI.
-    calm_provenance = "read-only fallback · filesystem index" if read_only else "filesystem index"
     hidden_html = (
         f'<span class="vault-browser-hidden-count" '
         f'data-testid="workspace-vault-browser-hidden-count" '
@@ -1345,13 +1677,34 @@ def _render_suggestion_flow_region(fields: dict) -> str:
     suggestion_state = _e(fields.get("suggestion_state", "idle"))
     dom_alias = _e(fields.get("suggestion_dom_alias", suggestion_state))
     composer_enabled = bool(fields.get("suggestion_composer_enabled", True))
-    composer_text = "composer enabled" if composer_enabled else "composer locked"
+    _suggestion_state_raw = str(fields.get("suggestion_state", "idle"))
+    _is_suggestion_idle = _suggestion_state_raw in ("idle", "thinking", "blocked")
+    composer_text = (
+        ""  # suppress composer status copy when no suggestion is staged
+        if _is_suggestion_idle
+        else (
+            "Suggestion composer can be used when a suggestion is staged."
+            if composer_enabled
+            else "Suggestion composer is locked by the current suggestion state."
+        )
+    )
+    suggestion_copy = _human_state_label(
+        str(fields.get("suggestion_state", "idle")),
+        {
+            "idle": "Suggestions are idle.",
+            "thinking": "Suggestions are being prepared.",
+            "staged_body": "Body suggestion staged.",
+            "staged_governance": "Governance suggestion staged.",
+            "blocked": "Suggestions are blocked.",
+        },
+        fallback="Suggestion state is unavailable.",
+    )
     transitions = fields.get("suggestion_allowed_transitions") or []
     transition_html = "".join(
         (
             '<span class="suggestion-transition" '
             f'data-testid="workspace-suggestion-transition" data-transition-to="{_e(target)}">'
-            f"{_e(target)}</span>"
+            "</span>"
         )
         for target in transitions
     )
@@ -1364,8 +1717,8 @@ def _render_suggestion_flow_region(fields: dict) -> str:
           data-suggestion-dom-alias="{dom_alias}"
           data-composer-state="{composer_state_token}">
           <div class="rail-state-row">
-            <span class="rail-state-label">Suggestion</span>
-            <span class="rail-state-value">{suggestion_state}</span>
+            <span class="rail-state-label">Suggestions</span>
+            <span class="rail-state-value">{_e(suggestion_copy)}</span>
           </div>
           <div class="suggestion-composer-state" data-composer-state="{composer_state_token}">{composer_text}</div>
           <div class="suggestion-transitions">{transition_html}</div>
@@ -1396,6 +1749,11 @@ def _render_portrait_sheet(sheet: dict) -> str:
 def _render_keyboard_shortcuts(shortcuts: dict) -> str:
     bindings = shortcuts.get("key_bindings") or {}
     if not bindings:
+        return ""
+    # Only show shortcut map when a suggestion is actively staged — not during idle,
+    # thinking, blocked, or terminal states.
+    rail_state = shortcuts.get("rail_state", "")
+    if rail_state not in ("staged_body", "staged_governance", "staged"):
         return ""
     rows = "".join(
         (
@@ -1500,19 +1858,30 @@ def _render_find_mode(candidates: list[dict], *, payload_available: bool = False
 
 
 def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
-    if not any(sections.get(name) for name in sections):
-        return """
+    open_loops_count = len(sections.get("open_loops") or []) if sections else 0
+    has_content = bool(sections) and any(sections.get(name) for name in sections)
+    if not has_content:
+        # Idle: single line with collapsed recall disclosure (AC3 §8.3)
+        return f"""
         <section
-          class="reorient-mode"
+          class="reorient-mode panel-section"
           data-testid="reorient-mode"
+          data-section-state="idle"
           data-affordance-status="read-only"
           data-capability="reorient">
           <div class="rail-state-row">
             <span class="rail-state-label">Reorient</span>
-            <span class="rail-state-value">read-only</span>
-          </div>
-          <div class="reorient-empty" data-testid="reorient-empty-state">
-            Reorient is available, but no orientation payload is available for this note yet.
+            <details class="reorient-recall-disclosure" data-testid="reorient-recall-disclosure"
+              aria-expanded="false">
+              <summary class="reorient-recall-trigger"
+                aria-expanded="false"
+                data-testid="reorient-recall-trigger">recall&nbsp;&#9660;</summary>
+              <div class="reorient-recall-body" data-testid="reorient-recall-body" hidden>
+                <div class="reorient-empty" data-testid="reorient-empty-state">
+                  Reorient is available, but no orientation payload is available for this note yet.
+                </div>
+              </div>
+            </details>
           </div>
         </section>"""
 
@@ -1587,15 +1956,23 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
         )
     return f"""
         <section
-          class="reorient-mode"
+          class="reorient-mode panel-section"
           data-testid="reorient-mode"
+          data-section-state="active"
           data-affordance-status="read-only"
           data-capability="reorient">
           <div class="rail-state-row">
             <span class="rail-state-label">Reorient</span>
-            <span class="rail-state-value">read-only</span>
+            <details class="reorient-recall-disclosure" data-testid="reorient-recall-disclosure"
+              aria-expanded="false">
+              <summary class="reorient-recall-trigger"
+                aria-expanded="false"
+                data-testid="reorient-recall-trigger">{open_loops_count} open loop{"s" if open_loops_count != 1 else ""}&nbsp;&middot;&nbsp;recall&nbsp;&#9660;</summary>
+              <div class="reorient-recall-body" data-testid="reorient-recall-body">
+                {"".join(section_html)}
+              </div>
+            </details>
           </div>
-          {"".join(section_html)}
         </section>"""
 
 
@@ -1911,20 +2288,146 @@ def _render_canvas_session_controls(
     undone_edit_count: int,
 ) -> str:
     canvas_blocked = not canvas_enabled or writeguard_blocked or (not workspace_update_available)
-    start_status = "blocked" if not canvas_enabled else "experimental" if not session_id else "unavailable"
-    close_status = "blocked" if not canvas_enabled else "experimental" if session_id else "unavailable"
-    edit_status = "blocked" if canvas_blocked else "active" if can_edit_body else "unavailable"
-    undo_status = "blocked" if canvas_blocked else "active" if undo_available else "unavailable"
-    start_disabled = " disabled" if session_id or not canvas_enabled else ""
-    close_disabled = "" if session_id else " disabled"
-    if not canvas_enabled:
-        close_disabled = " disabled"
-    edit_disabled = "" if can_edit_body and not canvas_blocked else " disabled"
-    undo_disabled = "" if undo_available and not canvas_blocked else " disabled"
     edit_api_path = f"/api/canvas/sessions/{session_id}/edits" if session_id else ""
     undo_api_path = f"/api/canvas/sessions/{session_id}/edits/last" if session_id else ""
-    present_text = "user present" if user_present else "user not present"
+    present_text = (
+        "User is present for Canvas editing."
+        if user_present
+        else "No active Canvas session."
+    )
     log_text = session_log_path or "no session log"
+    unavailable_reasons: list[tuple[str, str, str]] = []
+    if not canvas_enabled:
+        base_reason = "Canvas editing is currently disabled by runtime configuration."
+    elif writeguard_blocked:
+        base_reason = "Canvas editing is blocked by WriteGuard."
+    elif not workspace_update_available:
+        base_reason = (
+            "Body editing is unavailable because workspace update is disabled: "
+            f"{_human_reason(workspace_update_reason)}."
+        )
+    else:
+        base_reason = "Canvas action is unavailable in the current session state."
+
+    if session_id and canvas_enabled:
+        close_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-close"
+            data-affordance-status="active"
+            data-capability="canvas.closeSession"
+            data-api-method="DELETE"
+            data-api-path="/api/canvas/sessions/{session_id}">Close</button>"""
+    else:
+        close_html = ""
+        unavailable_reasons.append(
+            (
+                "close-session",
+                "canvas.closeSession",
+                base_reason if not canvas_enabled else "No active Canvas session to close.",
+            )
+        )
+
+    if canvas_enabled and not session_id:
+        start_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-start"
+            data-affordance-status="active"
+            data-capability="canvas.openSession"
+            data-api-method="POST"
+            data-api-path="/api/canvas/sessions"
+            data-note-path="{note_path}">Start</button>"""
+    else:
+        start_html = ""
+        unavailable_reasons.append(("start-session", "canvas.openSession", base_reason if not canvas_enabled else "A Canvas session is already active."))
+
+    if can_edit_body and not canvas_blocked:
+        edit_button_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-edit-submit"
+            data-affordance-status="active"
+            data-capability="canvas.applyBodyEdit"
+            data-api-method="POST"
+            data-api-path="{edit_api_path}"
+            data-content-hash="{content_hash}">Apply body edit</button>"""
+    else:
+        edit_button_html = ""
+        unavailable_reasons.append(("apply-body-edit", "canvas.applyBodyEdit", base_reason))
+
+    if undo_available and not canvas_blocked:
+        undo_button_html = f"""
+          <button
+            type="button"
+            data-testid="workspace-canvas-undo"
+            data-affordance-status="active"
+            data-capability="canvas.undoBodyEdit"
+            data-api-method="DELETE"
+            data-api-path="{undo_api_path}">Undo</button>"""
+    else:
+        undo_button_html = ""
+        unavailable_reasons.append(("undo-body-edit", "canvas.undoBodyEdit", "No undo is available for this session state." if not canvas_blocked else base_reason))
+
+    # When every action is blocked by the same global reason (canvas disabled or
+    # writeguard), show ONE visible consolidated message instead of the same text
+    # N times.  Individual capability markers are preserved as aria-hidden spans
+    # so that test selectors and JavaScript affordance-checking still work.
+    globally_blocked = not canvas_enabled or writeguard_blocked
+    if globally_blocked and unavailable_reasons:
+        hidden_markers = "".join(
+            (
+                '<span class="canvas-action-unavailable" '
+                'aria-hidden="true" style="display:none" '
+                f'data-action="{_e(action)}" '
+                f'data-capability="{_e(capability)}" '
+                f'data-affordance-status="unavailable"></span>'
+            )
+            for action, capability, _reason in unavailable_reasons
+        )
+        unavailable_html = (
+            '<div class="canvas-action-unavailable canvas-globally-unavailable" '
+            'data-testid="workspace-canvas-action-unavailable" '
+            'data-action="all" '
+            'data-capability="canvas" '
+            f'data-affordance-status="unavailable">{_e(base_reason)}</div>'
+            + hidden_markers
+        )
+        # Early return: skip presence text, composer, undo_state, and log counts —
+        # none of those are meaningful when canvas is globally blocked.
+        # Retain workspace-canvas-body-edit-unavailable in DOM (suppressed) so test
+        # selectors and affordance-checking still work (#1361).
+        suppressed_composer = (
+            '<div'
+            ' class="canvas-body-edit-unavailable canvas-body-edit-unavailable--suppressed"'
+            ' data-testid="workspace-canvas-body-edit-unavailable"'
+            ' data-affordance-status="blocked"'
+            ' hidden>'
+            "</div>"
+        ) if not canvas_enabled else ""
+        return f"""
+        <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
+          {unavailable_html}
+          {suppressed_composer}
+          <div class="canvas-provenance" data-testid="workspace-canvas-provenance"
+               aria-hidden="true" style="display:none">
+            <code data-testid="workspace-canvas-session-log-path">{log_text}</code>
+            <span data-testid="workspace-canvas-edit-count">{applied_edit_count}</span>
+            <span data-testid="workspace-canvas-undone-count">{undone_edit_count}</span>
+          </div>
+        </div>"""
+    else:
+        unavailable_html = "".join(
+            (
+                '<div class="canvas-action-unavailable" '
+                'data-testid="workspace-canvas-action-unavailable" '
+                f'data-action="{_e(action)}" '
+                f'data-capability="{_e(capability)}" '
+                'data-affordance-status="unavailable">'
+                f"{_e(reason)}</div>"
+            )
+            for action, capability, reason in unavailable_reasons
+        )
     undo_state_html = (
         '<span class="canvas-undo-state" data-testid="workspace-canvas-undo-state">'
         + ("Undo available" if undo_available else "No undo available")
@@ -1964,18 +2467,31 @@ def _render_canvas_session_controls(
             </div>
           </form>"""
     else:
-        # When canvas is blocked/disabled, the guard alert already surfaces the
-        # blocked state. Suppress the duplicate visible "unavailable" message here;
-        # keep the data-testid element for test/automation compatibility but make
-        # it non-visible (daily-use visibility deduplication).
-        composer_html = (
-            '<div'
-            ' class="canvas-body-edit-unavailable canvas-body-edit-unavailable--suppressed"'
-            ' data-testid="workspace-canvas-body-edit-unavailable"'
-            ' data-affordance-status="blocked"'
-            ' hidden>'
-            "</div>"
-        )
+        unavailable_copy = "Body edit composer unavailable until Canvas has an active editable session."
+        if not workspace_update_available:
+            unavailable_copy = (
+                "Body edit composer disabled by workspace update capability: "
+                f"{_human_reason(workspace_update_reason)}."
+            )
+        if canvas_blocked and not canvas_enabled:
+            # Suppressed: canvas is disabled — guard alert already communicates this.
+            # Retain testid in DOM for test compatibility but keep visually hidden.
+            composer_html = (
+                '<div'
+                ' class="canvas-body-edit-unavailable canvas-body-edit-unavailable--suppressed"'
+                ' data-testid="workspace-canvas-body-edit-unavailable"'
+                ' data-affordance-status="blocked"'
+                ' hidden>'
+                "</div>"
+            )
+        else:
+            composer_html = """
+          <div
+            class="canvas-body-edit-unavailable"
+            data-testid="workspace-canvas-body-edit-unavailable"
+            data-affordance-status="blocked">
+            """ + unavailable_copy + """
+          </div>"""
     recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
     recovery_html = ""
     if conflict_detected:
@@ -1997,37 +2513,12 @@ def _render_canvas_session_controls(
           </div>"""
     return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
-          <button
-            type="button"
-            data-testid="workspace-canvas-start"
-            data-affordance-status="{start_status}"
-            data-capability="canvas.openSession"
-            data-api-method="POST"
-            data-api-path="/api/canvas/sessions"
-            data-note-path="{note_path}"{start_disabled}>Start</button>
-          <button
-            type="button"
-            data-testid="workspace-canvas-close"
-            data-affordance-status="{close_status}"
-            data-capability="canvas.closeSession"
-            data-api-method="DELETE"
-            data-api-path="/api/canvas/sessions/{session_id}"{close_disabled}>Close</button>
-          <button
-            type="button"
-            data-testid="workspace-canvas-edit-submit"
-            data-affordance-status="{edit_status}"
-            data-capability="canvas.applyBodyEdit"
-            data-api-method="POST"
-            data-api-path="{edit_api_path}"
-            data-content-hash="{content_hash}"{edit_disabled}>Apply body edit</button>
-          <button
-            type="button"
-            data-testid="workspace-canvas-undo"
-            data-affordance-status="{undo_status}"
-            data-capability="canvas.undoBodyEdit"
-            data-api-method="DELETE"
-            data-api-path="{undo_api_path}"{undo_disabled}>Undo</button>
-          <span class="canvas-presence" data-testid="workspace-canvas-user-present">{present_text}</span>
+          {start_html}
+          {close_html}
+          {edit_button_html}
+          {undo_button_html}
+          {unavailable_html}
+          <span class="canvas-presence" data-testid="workspace-canvas-user-present" data-user-present="{'true' if user_present else 'false'}">{present_text}</span>
           {composer_html}
           {recovery_html}
           {undo_state_html}
@@ -2048,6 +2539,15 @@ def _render_panel_proposal_rows(
     if not proposals:
         return ""
 
+    # Action row order: Apply (confirm) → Discard (reject) → Defer (correct) per §8 design
+    _ACTION_LABELS = {"confirm": "Apply", "reject": "Discard", "correct": "Defer"}
+    _ACTION_ORDER = ("confirm", "reject", "correct")
+    _ACTION_CSS = {
+        "confirm": "panel-action-apply",
+        "reject": "panel-action-discard",
+        "correct": "panel-action-defer",
+    }
+
     rows: list[str] = []
     for proposal in proposals:
         evidence = proposal.get("evidence") or {}
@@ -2055,16 +2555,27 @@ def _render_panel_proposal_rows(
         proposal_status = str(proposal.get("status") or "staged")
         proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
         affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
+        section_state = "active" if proposal_available else "idle"
         enabled_affordances = [
             label
-            for label in ("confirm", "correct", "reject")
+            for label in _ACTION_ORDER
             if affordances.get(label) and proposal_available
         ]
         proposal_id = _e(proposal.get("proposal_id", ""))
         artifact_id = _e(proposal.get("artifact_id", ""))
+        # Provenance line: agent · ISO-timestamp · confidence N (AC4)
+        prov_agent = _e(str(proposal.get("agent") or proposal.get("author") or "hugin"))
+        prov_ts_raw = str(proposal.get("created_at") or proposal.get("timestamp") or "")
+        prov_ts = _e(prov_ts_raw[:16]) if prov_ts_raw else _e(datetime.now().strftime("%Y-%m-%dT%H:%M"))
+        prov_conf = _e(str(proposal.get("confidence") or "—"))
+        provenance_html = (
+            f'<div class="panel-section-provenance" data-testid="workspace-panel-provenance">'
+            f"{prov_agent}&nbsp;&middot;&nbsp;{prov_ts}&nbsp;&middot;&nbsp;confidence&nbsp;{prov_conf}"
+            f"</div>"
+        )
         buttons = "".join(
             (
-                '<button type="button" class="panel-proposal-action" '
+                f'<button type="button" class="panel-proposal-action {_ACTION_CSS[label]}" '
                 'data-testid="workspace-panel-action" '
                 f'data-panel-action="{_e(label)}" '
                 f'data-affordance-status="{affordance_status}" '
@@ -2073,7 +2584,7 @@ def _render_panel_proposal_rows(
                 'data-runtime-backed="true" '
                 'data-api-method="POST" '
                 'data-api-path="/api/panel/confirm">'
-                f"{_e(label)}</button>"
+                f"{_ACTION_LABELS[label]}</button>"
             )
             for label in enabled_affordances
         )
@@ -2087,12 +2598,14 @@ def _render_panel_proposal_rows(
         rows.append(
             f"""
         <div
-          class="panel-proposal-row"
+          class="panel-proposal-row panel-section"
           data-testid="workspace-panel-proposal-row"
+          data-section-state="{section_state}"
           data-affordance-status="{affordance_status}"
           data-proposal-id="{proposal_id}"
           data-artifact-id="{artifact_id}">
-          <div class="panel-proposal-title">{_e(proposal.get("description", ""))}</div>
+          <div class="panel-section-title">{_e(proposal.get("description", ""))}</div>
+          {provenance_html if proposal_available else ""}
           <div class="panel-proposal-meta">
             <span data-testid="workspace-panel-proposal-id">{proposal_id}</span>
             <span data-testid="workspace-panel-artifact-id">{artifact_id}</span>
@@ -2104,7 +2617,7 @@ def _render_panel_proposal_rows(
             <span data-testid="workspace-panel-action-class">{_e(evidence.get("action_class", ""))}</span>
             <span data-testid="workspace-panel-cognition-route">{_e(evidence.get("cognition_route", ""))}</span>
           </details>
-          <div class="panel-proposal-affordances">
+          <div class="panel-proposal-affordances panel-action-row">
             {buttons}
           </div>
         </div>"""
@@ -2307,7 +2820,7 @@ def render_index_html(
     /* ---- Top bar ---- */
     .topbar {{
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       gap: 12px;
       padding: 8px 20px;
       background: var(--bg-surface);
@@ -2349,41 +2862,16 @@ def render_index_html(
       color: #f09030;
       flex-shrink: 0;
     }}
-    /* ---- DEV operator disclosure ---- */
-    .dev-controls-disclosure {{
-      flex: 1;
-      min-width: 0;
-    }}
-    .dev-controls-summary {{
-      cursor: pointer;
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
-      color: var(--fg-3);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      list-style: none;
-      user-select: none;
-    }}
-    .dev-controls-summary::-webkit-details-marker {{ display: none; }}
-    .dev-controls-summary::before {{
-      content: "▸ ";
-      font-size: 0.65em;
-    }}
-    .dev-controls-disclosure[open] .dev-controls-summary::before {{
-      content: "▾ ";
-    }}
-    .dev-controls-body {{
-      display: flex;
-      flex-direction: column;
-      gap: 0;
-    }}
 
     /* ---- Load form ---- */
     .load-bar {{
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 0 2px 0;
+      padding: 10px 20px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
     }}
     .load-bar label {{
       font-family: var(--font-mono);
@@ -2423,26 +2911,70 @@ def render_index_html(
       flex-shrink: 0;
     }}
     .load-bar button:hover {{ border-color: var(--cyan); color: var(--cyan); }}
-    /* ---- Runtime telemetry disclosure ---- */
-    .runtime-telemetry-disclosure {{
-      border-bottom: 1px solid var(--border);
-    }}
-    .runtime-telemetry-summary {{
+
+    /* ---- Dev controls disclosure (#1361) ---- */
+    .dev-controls-disclosure {{ margin: 0; padding: 0; }}
+    .dev-controls-disclosure > summary.dev-controls-summary {{
+      display: inline-block;
       cursor: pointer;
-      padding: 6px 24px;
+      color: var(--fg-3);
+      font-size: var(--text-xs);
       font-family: var(--font-mono);
+      padding: 2px 8px;
+      user-select: none;
+    }}
+
+    /* ---- Note body read-only affordance (#1361) ---- */
+    .note-body-readonly-indicator {{
+      display: inline-block;
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      color: var(--fg-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1px 6px;
+      margin-bottom: 8px;
+      cursor: default;
+    }}
+    .note-body-readonly-reason {{
+      font-size: var(--text-xs);
+      color: var(--fg-2);
+      margin-bottom: 8px;
+    }}
+    .note-body-readonly-reason[hidden] {{ display: none; }}
+
+    /* ---- Frontmatter disclosure (#1361) ---- */
+    .frontmatter-disclosure > summary.frontmatter-summary {{
+      cursor: pointer;
       font-size: var(--text-xs);
       color: var(--fg-3);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      list-style: none;
+      font-family: var(--font-mono);
       user-select: none;
-      background: rgba(17,26,46,0.45);
+      list-style: none;
     }}
-    .runtime-telemetry-summary::-webkit-details-marker {{ display: none; }}
-    .runtime-telemetry-disclosure[open] .runtime-safety-strip {{
-      border-bottom: none;
+    .frontmatter-disclosure > summary.frontmatter-summary::before {{
+      content: "▸ ";
+      font-size: 0.7em;
     }}
+    .frontmatter-disclosure[open] > summary.frontmatter-summary::before {{
+      content: "▾ ";
+    }}
+
+    /* ---- Vault browser calm provenance (#1361) ---- */
+    .vault-browser-provenance-calm {{
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      display: block;
+      padding: 4px 10px 6px;
+    }}
+    .vault-browser-hidden-count {{
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      padding: 2px 10px 4px;
+      display: block;
+    }}
+    .note-badge--nav-hidden {{ opacity: 0.45; }}
 
     /* ---- Error state ---- */
     .error-state {{
@@ -2479,12 +3011,197 @@ def render_index_html(
       min-height: 0;
       overflow: hidden;
     }}
+    /* Left-pane layout: vault browser left, note center, agent-rail right */
+    .workspace-layout--three-col {{
+      display: grid;
+      grid-template-columns: 280px 1fr 320px;
+      grid-template-rows: 1fr;
+    }}
+    .vault-browser-left-pane {{
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 8px;
+    }}
     .workspace-main {{
       flex: 1;
       min-width: 0;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+    }}
+    .workspace-header-strip {{
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      color: var(--fg-3);
+      flex-shrink: 0;
+      height: 32px;
+      min-height: 32px;
+      overflow: visible;
+      position: relative;
+      white-space: nowrap;
+      z-index: 20;
+    }}
+    .workspace-header-row {{
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      height: 32px;
+      padding: 0 14px;
+      width: 100%;
+    }}
+    .workspace-wordmark {{
+      color: color-mix(in srgb, var(--accent) 72%, var(--fg-3));
+      flex-shrink: 0;
+      font-family: var(--font-display);
+      font-size: 16px;
+      line-height: 1;
+      text-decoration: none;
+    }}
+    .workspace-vault-chip,
+    .workspace-runtime-pill,
+    .workspace-freshness,
+    .workspace-quick-open,
+    .workspace-browse-vault,
+    .workspace-dev-ribbon {{
+      align-items: center;
+      display: inline-flex;
+      flex-shrink: 0;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      line-height: 1;
+    }}
+    .workspace-vault-chip {{
+      color: var(--fg-2);
+      gap: 6px;
+      text-decoration: none;
+    }}
+    .workspace-vault-dot {{
+      background: var(--cyan);
+      border-radius: 999px;
+      display: inline-block;
+      height: 6px;
+      width: 6px;
+    }}
+    .workspace-vault-chip[data-state="unresolved"] .workspace-vault-dot {{
+      background: var(--accent);
+    }}
+    .workspace-vault-chip[data-state="unreachable"] .workspace-vault-dot {{
+      background: var(--destructive);
+    }}
+    .workspace-vault-chip[data-state="unreachable"] {{
+      color: var(--destructive);
+    }}
+    .workspace-runtime-status {{
+      flex-shrink: 0;
+      position: relative;
+    }}
+    .workspace-runtime-status summary {{
+      list-style: none;
+    }}
+    .workspace-runtime-status summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .workspace-runtime-pill {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: pointer;
+      gap: 6px;
+      height: 22px;
+      padding: 0 8px;
+    }}
+    .workspace-runtime-human-label {{
+      color: var(--fg-3);
+    }}
+    .workspace-runtime-status-popover {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      display: none;
+      min-width: 360px;
+      padding: 10px 12px;
+      position: absolute;
+      top: 28px;
+      z-index: 30;
+    }}
+    .workspace-runtime-status[open] .workspace-runtime-status-popover {{
+      display: grid;
+      gap: 6px;
+    }}
+    .workspace-runtime-popover-row {{
+      align-items: baseline;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(130px, 0.8fr) minmax(120px, 1fr);
+    }}
+    .workspace-runtime-popover-key {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .workspace-runtime-popover-row code {{
+      background: none;
+      border: none;
+      color: var(--fg-2);
+      font-size: var(--text-xs);
+      overflow: hidden;
+      padding: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .workspace-freshness {{
+      color: var(--fg-3);
+    }}
+    .workspace-header-spacer {{
+      flex: 1 1 auto;
+      min-width: 12px;
+    }}
+    .workspace-quick-open,
+    .workspace-browse-vault {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      height: 24px;
+      gap: 6px;
+      padding: 0 8px;
+    }}
+    .workspace-quick-open {{
+      cursor: default;
+    }}
+    .workspace-quick-open kbd {{
+      background: transparent;
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .workspace-browse-vault {{
+      cursor: pointer;
+      font-family: var(--font-ui);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .workspace-browse-vault:hover {{
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }}
+    .workspace-dev-ribbon {{
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
+      border-radius: var(--radius-sm);
+      color: #f09030;
+      height: 28px;
+      letter-spacing: 0.07em;
+      padding: 0 8px;
+      text-transform: uppercase;
     }}
     .runtime-safety-strip {{
       align-items: center;
@@ -2521,6 +3238,83 @@ def render_index_html(
     }}
     .safety-sep {{ color: var(--border-strong); }}
 
+    /* ---- Shell error surfaces (#1341) ---- */
+    .workspace-vault-unreachable-banner {{
+      align-items: center;
+      background: color-mix(in srgb, var(--destructive) 8%, var(--bg-surface));
+      border-left: 2px solid var(--destructive);
+      color: var(--fg-2);
+      display: flex;
+      flex-shrink: 0;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      gap: 12px;
+      height: 32px;
+      min-height: 32px;
+      padding: 0 16px;
+    }}
+    .banner-retry-link {{
+      color: var(--fg-2);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }}
+    .workspace-read-only-pill {{
+      align-items: center;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: default;
+      display: inline-flex;
+      float: right;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      height: 24px;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+      padding: 0 8px;
+    }}
+    .workspace-note-not-found {{
+      align-items: flex-start;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 32px 24px;
+    }}
+    .workspace-note-not-found h1 {{
+      color: var(--fg-1);
+      font-family: var(--font-display);
+      font-size: var(--text-xl);
+      margin: 0;
+    }}
+    .workspace-note-not-found code {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }}
+    .workspace-note-not-found p {{
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+      margin: 0;
+    }}
+    .not-found-actions {{
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }}
+    .not-found-browse,
+    .not-found-last-note {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      height: 32px;
+      padding: 0 14px;
+    }}
+
     /* ---- Note header ---- */
     .note-header {{
       padding: 20px 24px 12px;
@@ -2534,6 +3328,50 @@ def render_index_html(
       line-height: 1.2;
       color: var(--fg-1);
       margin-bottom: 8px;
+    }}
+    .workspace-breadcrumb {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--fg-3);
+      margin-top: 4px;
+      margin-bottom: 6px;
+    }}
+    .breadcrumb-path {{ color: var(--fg-3); }}
+    .breadcrumb-sep {{ color: var(--border-strong); }}
+    .breadcrumb-meta-item {{ color: var(--fg-3); }}
+    .workspace-properties-disclosure {{ display: contents; }}
+    .workspace-properties-disclosure summary {{
+      display: inline;
+      cursor: pointer;
+      color: var(--fg-3);
+      list-style: none;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }}
+    .workspace-properties-disclosure summary::-webkit-details-marker {{ display: none; }}
+    .workspace-properties-disclosure[open] summary {{ color: var(--fg-2); }}
+    .properties-disclosure-body {{
+      position: absolute;
+      z-index: 20;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      min-width: 280px;
+      max-width: 480px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+    }}
+    .breadcrumb-identity-chips {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      margin-bottom: 8px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
     }}
     .note-provenance {{
       display: flex;
@@ -2582,31 +3420,69 @@ def render_index_html(
     }}
     .prov-sep {{ color: var(--border-strong); }}
 
-    /* ---- Frontmatter disclosure ---- */
-    .note-frontmatter {{
-      padding: 0 24px 4px;
-      flex-shrink: 0;
-    }}
-    .frontmatter-disclosure {{
+    /* ---- Read-only properties ---- */
+    .vault-properties {{
+      margin: 14px 24px 0;
+      padding: 10px 12px;
+      background: color-mix(in srgb, var(--bg-raised) 78%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
+      color: var(--fg-2);
     }}
-    .frontmatter-summary {{
-      color: var(--fg-3);
-      cursor: pointer;
-      letter-spacing: 0.05em;
-      list-style: none;
-      padding: 4px 0;
-      user-select: none;
+    .vault-properties-header {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
     }}
-    .frontmatter-summary::-webkit-details-marker {{ display: none; }}
-    .frontmatter-label {{
+    .vault-properties-label {{
       color: var(--fg-3);
-      font-size: var(--text-xs);
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
-    .frontmatter-line {{ color: var(--fg-2); padding: 1px 0; }}
+    .vault-properties-mode {{
+      color: var(--fg-3);
+    }}
+    .vault-properties-list {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin: 0;
+    }}
+    .vault-property {{
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      min-width: min(180px, 100%);
+    }}
+    .vault-property dt {{
+      color: var(--fg-3);
+      margin: 0;
+    }}
+    .vault-property dd {{
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 0;
+    }}
+    .vault-property-tag, .vault-property-value {{
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 7px;
+      background: var(--bg);
+      color: var(--fg-1);
+    }}
+    .vault-properties-invalid {{
+      border-color: rgba(212,168,67,0.35);
+    }}
+    .vault-properties-diagnostics {{
+      margin: 0;
+      padding-left: 18px;
+      color: var(--accent);
+    }}
 
     /* ---- Note body ---- */
     .note-body {{
@@ -2614,48 +3490,414 @@ def render_index_html(
       overflow-y: auto;
       padding: 24px;
     }}
-    /* Read-only affordance: calm, low-noise indicator in the note body area */
-    .note-body-readonly-indicator {{
-      color: var(--fg-3);
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
-      letter-spacing: 0.06em;
-      margin: 0 auto 8px;
-      max-width: 920px;
-      text-transform: uppercase;
-    }}
-    .note-body-readonly-reason {{
-      background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      color: var(--fg-2);
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
-      margin: 0 auto 8px;
-      max-width: 920px;
-      padding: 8px 12px;
-    }}
-    .note-body-readonly-reason a {{
-      color: var(--cyan);
-      text-decoration: none;
-    }}
-    .note-body-readonly-reason a:hover {{ text-decoration: underline; }}
+    /* Design review §6.1 — body column is a reading surface, not a card.
+       Background matches the page; no inset border; line-length capped at 68ch. */
     .note-body-content {{
-      background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
+      background: var(--bg-base);
+      border: none;
+      border-radius: 0;
       margin: 0 auto;
-      max-width: 920px;
+      max-width: 68ch;
       max-height: 60vh;
       min-height: 0;
       overflow-y: auto;
-      padding: 28px 32px;
-      font-family: var(--font-mono);
-      font-size: var(--text-sm);
+      padding: 40px 32px 48px;
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
       color: var(--fg-1);
-      line-height: 1.75;
-      white-space: pre-wrap;
+      /* §6.3 — paragraph rhythm */
+      line-height: 1.65;
       word-break: break-word;
+    }}
+    /* Design review §6.2 — heading scale (sharp step-down between levels). */
+    .vault-markdown-rendered h1 {{
+      font-family: var(--font-display);
+      font-size: 40px;
+      line-height: 44px;
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      color: var(--fg-1);
+      margin: 0 0 32px;
+    }}
+    .vault-markdown-rendered h2 {{
+      font-family: var(--font-ui);
+      font-size: 22px;
+      line-height: 28px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      color: var(--fg-1);
+      margin: 40px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      max-width: 80%;
+    }}
+    .vault-markdown-rendered h3 {{
+      font-family: var(--font-ui);
+      font-size: 16px;
+      line-height: 22px;
+      font-weight: 600;
+      color: var(--fg-1);
+      margin: 28px 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+    .vault-markdown-rendered h3::before {{
+      content: "";
+      display: inline-block;
+      flex: 0 0 auto;
+      width: 4px;
+      height: 14px;
+      background: var(--accent-dim);
+      border-radius: 1px;
+    }}
+    .vault-markdown-rendered h4 {{
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-2);
+      margin: 20px 0 4px;
+    }}
+    .vault-markdown-rendered h5,
+    .vault-markdown-rendered h6 {{
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 14px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-3);
+      margin: 16px 0 4px;
+    }}
+    /* §6.3 — block rhythm */
+    .vault-markdown-rendered p,
+    .vault-markdown-rendered ul,
+    .vault-markdown-rendered ol,
+    .vault-markdown-rendered blockquote,
+    .vault-markdown-rendered table,
+    .vault-markdown-rendered pre {{
+      margin: 0 0 16px;
+    }}
+    .vault-markdown-rendered ul,
+    .vault-markdown-rendered ol {{
+      padding-left: 24px;
+    }}
+    .vault-markdown-rendered li + li {{
+      margin-top: 4px;
+    }}
+    /* §6.5 — blockquote: rule + muted text, no fill. A blockquote is not a callout. */
+    .vault-markdown-rendered blockquote {{
+      border-left: 2px solid var(--border-strong);
+      background: transparent;
+      color: var(--fg-2);
+      padding: 2px 0 2px 20px;
+      margin: 0 0 16px;
+    }}
+    /* §6.5 — tables: header is a label band; rows separated by a single dashed rule;
+       no row striping. */
+    .vault-markdown-rendered table {{
+      border-collapse: collapse;
+      width: 100%;
+    }}
+    .vault-markdown-rendered th,
+    .vault-markdown-rendered td {{
+      border: none;
+      padding: 12px 14px;
+      text-align: left;
+      vertical-align: top;
+    }}
+    .vault-markdown-rendered th {{
+      background: var(--bg-base);
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }}
+    .vault-markdown-rendered td {{
+      border-bottom: 1px dashed var(--border);
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+      line-height: 20px;
+    }}
+    .vault-markdown-rendered tr:last-child td {{
+      border-bottom: none;
+    }}
+    /* §6.4 — inline code: present but quiet. */
+    .vault-markdown-rendered code {{
+      font-family: var(--font-mono);
+      font-size: 0.875em;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1px 5px;
+      color: var(--fg-1);
+    }}
+    /* §6.5 — code block: surface card, no inline-code chrome inside it. */
+    .vault-markdown-rendered pre {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+      padding: 16px 18px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 20px;
+      color: var(--fg-1);
+    }}
+    .vault-markdown-rendered pre code {{
+      background: transparent;
+      border: none;
+      padding: 0;
+      font-size: inherit;
+    }}
+    /* §6.5 — horizontal rule */
+    .vault-markdown-rendered hr {{
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 32px 0;
+    }}
+    /* §6.5 — task lists: custom checkboxes; read-only is the truth in v0. */
+    .vault-markdown-rendered ul.task-list {{
+      list-style: none;
+      padding-left: 4px;
+    }}
+    .vault-markdown-rendered li.task-list-item {{
+      position: relative;
+      padding-left: 24px;
+      list-style: none;
+    }}
+    .vault-markdown-rendered li.task-list-item > input[type="checkbox"] {{
+      appearance: none;
+      -webkit-appearance: none;
+      position: absolute;
+      left: 0;
+      top: 0.32em;
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      border: 1.5px solid var(--fg-3);
+      border-radius: 2px;
+      background: transparent;
+      cursor: default;
+      vertical-align: baseline;
+    }}
+    .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked {{
+      background: var(--accent-dim);
+      border-color: var(--accent);
+    }}
+    .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked::after {{
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 0px;
+      width: 4px;
+      height: 8px;
+      border: solid var(--bg-base);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg);
+    }}
+    {note_outline_css()}
+    .vault-callout {{
+      --callout-rgb: 0, 212, 232;
+      --callout-color: rgb(var(--callout-rgb));
+      background: rgba(var(--callout-rgb), 0.08);
+      border: 1px solid rgba(var(--callout-rgb), 0.25);
+      border-left: 4px solid var(--callout-color);
+      border-radius: var(--radius-md);
+      margin: 0 0 16px;
+      padding: 12px 14px;
+    }}
+    .vault-callout--warning {{ --callout-rgb: 212, 168, 67; }}
+    .vault-callout--danger,
+    .vault-callout--failure,
+    .vault-callout--bug {{ --callout-rgb: 255, 61, 61; }}
+    .vault-callout--success,
+    .vault-callout--tip {{ --callout-rgb: 98, 208, 123; }}
+    .vault-callout--question,
+    .vault-callout--example {{ --callout-rgb: 74, 158, 255; }}
+    .vault-callout--quote {{ --callout-rgb: 122, 154, 184; }}
+    .vault-callout-header {{
+      align-items: center;
+      color: var(--callout-color);
+      display: flex;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      font-weight: 600;
+      gap: 8px;
+      line-height: 1.35;
+    }}
+    .vault-callout > summary.vault-callout-header {{
+      cursor: pointer;
+      list-style: none;
+    }}
+    .vault-callout > summary.vault-callout-header::-webkit-details-marker {{
+      display: none;
+    }}
+    .vault-callout-icon {{
+      align-items: center;
+      border: 1px solid rgba(var(--callout-rgb), 0.4);
+      border-radius: 999px;
+      display: inline-flex;
+      flex: 0 0 auto;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      height: 20px;
+      justify-content: center;
+      line-height: 1;
+      width: 20px;
+    }}
+    .vault-callout-body {{
+      margin-top: 10px;
+    }}
+    .vault-callout-body > :last-child {{
+      margin-bottom: 0;
+    }}
+    {link_preview_css()}
+    .vault-wikilink {{
+      color: var(--cyan);
+      text-decoration: none;
+    }}
+    /* Design review §9 — unresolved wikilink: visible without being alarming. */
+    .vault-markdown-rendered .vault-wikilink.vault-wikilink-diagnostic {{
+      background: transparent;
+      border: none;
+      padding: 0;
+      color: var(--fg-2);
+      font-family: inherit;
+      font-size: inherit;
+      text-decoration: underline dashed rgba(255, 61, 61, 0.6);
+      text-underline-offset: 3px;
+      display: inline;
+      cursor: help;
+    }}
+    .failed-embed {{
+      align-items: flex-start;
+      background: var(--bg-surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: 2px;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      margin: 0 0 16px;
+      padding: 14px 16px;
+    }}
+    .failed-embed-main {{
+      align-items: baseline;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }}
+    .failed-embed-tag {{
+      color: var(--amber);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0;
+      line-height: 1;
+    }}
+    .failed-embed-message {{
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+    }}
+    .failed-embed .vault-mermaid-source {{
+      flex: 0 0 auto;
+      margin: 0;
+    }}
+    .failed-embed .vault-mermaid-source > summary {{
+      color: var(--accent);
+      cursor: pointer;
+      font-size: var(--text-sm);
+      list-style: none;
+    }}
+    .failed-embed .vault-mermaid-source > summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .failed-embed .vault-mermaid-source[open] {{
+      flex-basis: 100%;
+    }}
+    .failed-embed .vault-mermaid-source-code {{
+      margin: 12px 0 0;
+    }}
+    .vault-asset-diagnostic.missing-image {{
+      background: transparent;
+      border: 0;
+      color: var(--fg-2);
+      display: block;
+      font-family: inherit;
+      margin: 0 0 16px;
+      padding: 0;
+    }}
+    .missing-image-box {{
+      align-items: center;
+      background: var(--bg-surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: 4px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      height: 120px;
+      justify-content: center;
+      max-width: 100%;
+      width: 100%;
+    }}
+    .missing-image-icon {{
+      border: 1px solid var(--fg-3);
+      border-radius: 2px;
+      box-sizing: border-box;
+      height: 20px;
+      position: relative;
+      width: 20px;
+    }}
+    .missing-image-icon::after {{
+      border-bottom: 1px solid var(--fg-3);
+      border-left: 1px solid var(--fg-3);
+      bottom: 4px;
+      content: "";
+      height: 6px;
+      left: 4px;
+      position: absolute;
+      transform: rotate(-45deg);
+      width: 10px;
+    }}
+    .missing-image-caption {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .missing-image-alt {{
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+      margin-top: 6px;
+    }}
+    .vault-asset-diagnostic,
+    .unsupported-block-diagnostic,
+    .vault-diagnostics {{
+      background: rgba(212,168,67,0.12);
+      border: 1px solid rgba(212,168,67,0.35);
+      border-radius: var(--radius-sm);
+      color: var(--accent);
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      padding: 4px 7px;
+    }}
+    .unsupported-block-diagnostic,
+    .vault-diagnostics {{
+      display: block;
+      margin: 0 0 16px;
+    }}
+    .vault-image {{
+      border-radius: var(--radius-sm);
+      display: block;
+      height: auto;
+      max-width: 100%;
     }}
     .suggested-insertion {{
       background: rgba(212,168,67,0.08);
@@ -2977,11 +4219,110 @@ def render_index_html(
       padding: 4px 7px;
       text-transform: uppercase;
     }}
+    /* §7.5 Responsive breakpoints */
+    /* Default (≥1300px): all three columns visible — no overrides needed */
+
+    /* Hide responsive-only elements at full width */
+    .workspace-panel-peek, .workspace-outline-ribbon, .workspace-sheet-triggers {{
+      display: none;
+    }}
+
+    /* 1100–1299px: Panel collapses to 32px peek tab on right edge */
+    @media (min-width: 1100px) and (max-width: 1299px) {{
+      .agent-rail[data-layout-desktop="side-rail"] {{
+        display: none;
+      }}
+      .workspace-panel-peek {{
+        align-items: center;
+        background: var(--bg-raised);
+        border-left: 1px solid var(--border);
+        bottom: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        position: fixed;
+        right: 0;
+        top: 0;
+        width: 32px;
+        z-index: 10;
+      }}
+      .peek-badge {{
+        background: var(--agent);
+        border-radius: 9px;
+        color: white;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        min-width: 16px;
+        padding: 1px 4px;
+        text-align: center;
+      }}
+    }}
+
+    /* 800–1099px: Outline collapses to 36px ribbon */
+    @media (min-width: 800px) and (max-width: 1099px) {{
+      .note-outline {{
+        display: none;
+      }}
+      .workspace-outline-ribbon {{
+        align-items: center;
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
+        display: flex;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        height: 36px;
+        padding: 0 12px;
+        width: 100%;
+      }}
+    }}
+
+    /* <800px: single column, sheet trigger buttons visible */
+    @media (max-width: 799px) {{
+      .workspace-sheet-triggers {{
+        display: flex;
+        gap: 8px;
+        padding: 6px 12px;
+      }}
+      .workspace-outline-sheet-trigger,
+      .workspace-panel-sheet-trigger {{
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        padding: 4px 10px;
+      }}
+      .workspace-layout--three-col {{
+        grid-template-columns: 1fr;
+      }}
+      .vault-browser-left-pane, .agent-rail {{
+        display: none;
+      }}
+      .note-outline {{
+        display: none;
+      }}
+      .workspace-header-strip {{
+        flex-wrap: wrap;
+        height: auto;
+      }}
+    }}
+
     @media (max-width: 899px) {{
       .workspace-shell {{
         padding-bottom: 60px;
       }}
       .agent-rail {{
+        display: none;
+      }}
+      /* Collapse three-col grid to single-column on narrow viewports.
+         The 280px left pane and 320px agent-rail would otherwise crush the note
+         center column behind overflow:hidden (Codex P1 review finding). */
+      .workspace-layout--three-col {{
+        grid-template-columns: 1fr;
+      }}
+      .vault-browser-left-pane {{
         display: none;
       }}
       .portrait-sheet {{
@@ -3013,6 +4354,91 @@ def render_index_html(
         display: flex;
       }}
     }}
+    /* §8 Panel section state model */
+    .panel-section[data-section-state="idle"] {{
+      padding: 4px 0;
+    }}
+    .panel-section[data-section-state="idle"] .panel-section-title {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }}
+    .panel-section[data-section-state="active"] {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--agent);
+      border-radius: 4px;
+      padding: 10px;
+    }}
+    .panel-section-title {{
+      color: var(--fg-1);
+      font-size: var(--text-sm);
+      font-style: normal;
+      font-family: var(--font-mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 11px;
+      color: var(--fg-3);
+    }}
+    .panel-section[data-section-state="active"] .panel-section-title {{
+      color: var(--agent);
+    }}
+    .panel-section-provenance {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }}
+    .panel-action-row {{
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+      margin-top: 4px;
+    }}
+    .panel-action-apply {{
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius-md);
+      color: white;
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      height: 28px;
+      padding: 0 10px;
+    }}
+    .panel-action-discard {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      height: 28px;
+      padding: 0 10px;
+    }}
+    .panel-action-defer {{
+      background: transparent;
+      border: none;
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: 12px;
+      height: 28px;
+      padding: 0 6px;
+    }}
+    /* Reorient recall disclosure */
+    .reorient-recall-disclosure {{ display: inline; }}
+    .reorient-recall-trigger {{
+      display: inline;
+      cursor: pointer;
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      list-style: none;
+    }}
+    .reorient-recall-trigger::-webkit-details-marker {{ display: none; }}
+    .reorient-recall-body {{ margin-top: 8px; }}
     .panel-proposal-row {{
       background: var(--bg-raised);
       border: 1px solid var(--border);
@@ -3071,25 +4497,38 @@ def render_index_html(
       padding: 12px;
     }}
     .body-edit-disabled {{
-      border-color: var(--border);
+      border-color: var(--border-strong);
+      color: var(--fg-2);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+    }}
+    .body-edit-disabled .absent-label {{
+      font-weight: 600;
+      white-space: nowrap;
+    }}
+    .body-edit-disabled .absent-reason {{
       color: var(--fg-3);
-      font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
     .body-edit-header {{ display: flex; flex-direction: column; gap: 2px; }}
     .body-edit-label {{ color: var(--fg-1); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 600; }}
     .body-edit-note {{ color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-xs); }}
-    .body-edit-textarea {{
+    .body-edit-codemirror {{
       background: var(--bg-raised);
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-md);
-      color: var(--fg-1);
-      font-family: var(--font-mono);
-      font-size: var(--text-sm);
-      padding: 8px;
-      resize: vertical;
+      min-height: 200px;
       width: 100%;
     }}
+    .body-edit-codemirror .cm-editor {{
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }}
+    .body-edit-codemirror .cm-focused {{ outline: 1px solid var(--border-focus); }}
     .body-edit-actions {{ display: flex; gap: 8px; }}
     .body-edit-submit {{
       background: var(--bg-raised);
@@ -3118,28 +4557,6 @@ def render_index_html(
     }}
     .body-edit-status.ok {{ color: var(--cyan); }}
     .body-edit-status.error {{ color: var(--destructive); }}
-    /* Per-note badges hidden from nav list by default (daily-use visibility pass).
-       These elements retain their data-testid for test compatibility. */
-    .note-badge--nav-hidden {{ display: none; }}
-    /* Vault browser calm provenance label */
-    .vault-browser-provenance-calm {{
-      color: var(--fg-3);
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
-      font-style: italic;
-    }}
-    .vault-browser-zone-label {{
-      color: var(--fg-3);
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
-    }}
-    .vault-browser-hidden-count {{
-      color: var(--fg-3);
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
-      font-style: italic;
-      padding: 2px 0 4px;
-    }}
     /* Vault note browser overlay */
     .vault-browser-overlay {{
       display: none;
@@ -3236,36 +4653,33 @@ def render_index_html(
   </style>
 </head>
 <body>
-  <div class="topbar" data-testid="workspace-topbar">
+  <div class="topbar">
+    <div class="topbar-api">
+      <span class="api-label">Server-side runtime</span>
+      <span class="api-url" title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
+    </div>
     {dev_chip}
-    <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
-      <summary class="dev-controls-summary"
-               data-testid="workspace-dev-controls-toggle">DEV · operator</summary>
-      <div class="dev-controls-body">
-        <div class="topbar-api">
-          <span class="api-label">Runtime API</span>
-          <span class="api-url" title="{_e(api_base_url)}">{_e(api_base_url)}</span>
-        </div>
-        <div class="load-bar" data-testid="workspace-load-bar">
-          <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
-            <label for="note_path">note_path</label>
-            <input
-              type="text"
-              id="note_path"
-              name="note_path"
-              value="{_e(note_path)}"
-              placeholder="Some/Note.md"
-              autocomplete="off">
-            <button type="submit">Load</button>
-            <button type="button"
-              id="vault-browse-btn"
-              data-testid="vault-browse-button"
-              onclick="vaultBrowser.open()">Browse vault</button>
-          </form>
-        </div>
-      </div>
-    </details>
   </div>
+  <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
+    <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
+    <div class="load-bar">
+      <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
+        <label for="note_path">note_path</label>
+        <input
+          type="text"
+          id="note_path"
+          name="note_path"
+          value="{_e(note_path)}"
+          placeholder="Some/Note.md"
+          autocomplete="off">
+        <button type="submit">Load</button>
+        <button type="button"
+          id="vault-browse-btn"
+          data-testid="vault-browse-button"
+          onclick="vaultBrowser.open()">Browse vault</button>
+      </form>
+    </div>
+  </details>
   {content_section}
 
   <!-- Vault note browser overlay -->
@@ -3290,9 +4704,10 @@ def render_index_html(
     </div>
   </div>
 
+  {note_outline_script()}
+
   <script>
   (function() {{
-    var API_BASE = '';  /* same-origin proxy — runtime host is server-side only */
     var overlay = document.getElementById('vault-browser-overlay');
     var list    = document.getElementById('vault-browser-list');
     var status  = document.getElementById('vault-browser-status');
@@ -3337,7 +4752,7 @@ def render_index_html(
     function fetchNotes(q) {{
       setStatus('Loading…');
       list.innerHTML = '';
-      var url = API_BASE + '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
+      var url = '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
       fetch(url)
         .then(function(r) {{
           if (!r.ok) throw new Error('API error ' + r.status);
@@ -3387,18 +4802,21 @@ def render_index_html(
 
   <script>
   (function() {{
-    var API_BASE = '';  /* same-origin proxy — runtime host is server-side only */
-
     window.bodyEditor = {{
       submit: function() {{
-        var ta = document.getElementById('body-edit-textarea');
+        var container = document.getElementById('body-edit-codemirror');
         var statusEl = document.getElementById('body-edit-status');
-        if (!ta || !statusEl) return;
-        var notePath = ta.getAttribute('data-note-path');
-        var newBody = ta.value;
+        if (!container || !statusEl) return;
+        var notePath = container.getAttribute('data-note-path');
+        if (!window._cmView) {{
+          statusEl.className = 'body-edit-status error';
+          statusEl.textContent = 'Editor not ready. Wait for the page to finish loading.';
+          return;
+        }}
+        var newBody = window._cmView.state.doc.toString();
         statusEl.className = 'body-edit-status';
         statusEl.textContent = 'Submitting…';
-        fetch(API_BASE + '/api/companion/workspace/body', {{
+        fetch('/api/companion/workspace/body', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{note_path: notePath, new_body: newBody}})
@@ -3421,13 +4839,45 @@ def render_index_html(
         }});
       }},
       reset: function() {{
-        var ta = document.getElementById('body-edit-textarea');
+        var container = document.getElementById('body-edit-codemirror');
         var statusEl = document.getElementById('body-edit-status');
-        if (ta) ta.value = '';
+        if (window._cmView && container) {{
+          var orig = container.getAttribute('data-raw-body') || '';
+          window._cmView.dispatch({{
+            changes: {{from: 0, to: window._cmView.state.doc.length, insert: orig}}
+          }});
+        }}
         if (statusEl) {{ statusEl.className = 'body-edit-status'; statusEl.textContent = ''; }}
       }}
     }};
   }})();
+  </script>
+  <script type="module">
+  import {{EditorView, basicSetup}} from 'https://esm.sh/codemirror@6.0.1';
+  import {{markdown, markdownLanguage}} from 'https://esm.sh/@codemirror/lang-markdown@6.2.5';
+  import {{oneDark}} from 'https://esm.sh/@codemirror/theme-one-dark@6.1.2';
+  var container = document.getElementById('body-edit-codemirror');
+  if (container) {{
+    var rawBody = container.dataset.rawBody || '';
+    window._cmView = new EditorView({{
+      doc: rawBody,
+      extensions: [basicSetup, markdown({{base: markdownLanguage}}), oneDark],
+      parent: container,
+    }});
+  }}
+  </script>
+  <script>
+  function vbToggleFilter(el) {{
+    var key = el.dataset.key;
+    var val = el.dataset.value;
+    var url = new URL(window.location.href);
+    var params = url.searchParams;
+    var existing = params.getAll(key);
+    params.delete(key);
+    if (existing.indexOf(val) === -1) {{ params.append(key, val); }}
+    existing.filter(function(v) {{ return v !== val; }}).forEach(function(v) {{ params.append(key, v); }});
+    window.location.href = url.toString();
+  }}
   </script>
 </body>
 </html>"""
@@ -3446,12 +4896,14 @@ def handle_get(
     """
     params = parse_qs(query_string)
     note_path = params.get("note_path", [""])[0].strip()
+    _filter_keys = ("kind", "zone", "review_state", "trust")
+    active_filters = {k: params[k] for k in _filter_keys if params.get(k)}
     fields: Optional[dict] = None
     error = ""
 
     if note_path:
         page = RealNoteWorkspaceDevPage(client)
-        state = page.load(NoteLoadIntent(note_path=note_path))
+        state = page.load(NoteLoadIntent(note_path=note_path, active_filters=active_filters))
         if state.is_loaded:
             fields = page.render_fields()
         else:
@@ -3485,6 +4937,34 @@ def make_handler(
         _production_profile = production_profile
         _static_assets = static_assets or {}
 
+        def _send_json(self, status_code: int, payload: dict) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _proxy_error(self, exc: WorkspaceClientError) -> None:
+            if isinstance(exc, WorkspaceClientHTTPError):
+                self._send_json(
+                    exc.status_code,
+                    {
+                        "error": "runtime_api_error",
+                        "message": exc.detail,
+                        "status_code": exc.status_code,
+                    },
+                )
+                return
+            self._send_json(
+                502,
+                {
+                    "error": "runtime_unavailable",
+                    "message": str(exc),
+                    "next_step": "Verify the Companion runtime API is running on the server host.",
+                },
+            )
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path in self._static_assets:
@@ -3495,13 +4975,18 @@ def make_handler(
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            # Same-origin proxy: GET /api/companion/vault/notes → runtime API.
-            # Client JS uses a path-only URL so the request goes to the Companion
-            # UI server (reachable from any client), which then calls the runtime
-            # API server-side. This avoids the 127.0.0.1 leakage that broke
-            # remote clients (#1277 AC1, AC2).
             if parsed.path == "/api/companion/vault/notes":
-                self._proxy_get_vault_notes(parsed.query)
+                params = parse_qs(parsed.query)
+                q = params.get("q", [""])[0]
+                try:
+                    data = self._client.get(
+                        "/api/companion/vault/notes",
+                        params={"q": q} if q else {},
+                    )
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
                 return
             body = handle_get(
                 query_string=parsed.query,
@@ -3517,84 +5002,25 @@ def make_handler(
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            # Same-origin proxy: POST /api/companion/workspace/body → runtime API.
-            if parsed.path == "/api/companion/workspace/body":
-                self._proxy_post_workspace_body()
-                return
-            body = b"Not Found"
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def _proxy_get_vault_notes(self, query_string: str) -> None:
-            """Proxy GET /api/companion/vault/notes to the runtime API server-side."""
-            q_val = parse_qs(query_string).get("q", [""])[0]
-            params: dict = {"q": q_val} if q_val else {}
-            try:
-                data = self._client.get("/api/companion/vault/notes", params=params)
-                resp_body = json.dumps(data).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.end_headers()
-                self.wfile.write(resp_body)
-            except WorkspaceClientHTTPError as exc:
-                resp_body = json.dumps({"error": exc.detail}).encode("utf-8")
-                self.send_response(exc.status_code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.end_headers()
-                self.wfile.write(resp_body)
-            except WorkspaceClientError as exc:
-                resp_body = json.dumps({"error": str(exc)}).encode("utf-8")
-                self.send_response(502)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.end_headers()
-                self.wfile.write(resp_body)
-
-        def _proxy_post_workspace_body(self) -> None:
-            """Proxy POST /api/companion/workspace/body to the runtime API server-side."""
-            content_length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(content_length)
-            try:
-                request_data = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
-                resp_body = json.dumps({"error": "invalid JSON"}).encode("utf-8")
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.end_headers()
-                self.wfile.write(resp_body)
+            if parsed.path != "/api/companion/workspace/body":
+                self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
             try:
-                data = self._client.post("/api/companion/workspace/body", json=request_data)
-                resp_body = json.dumps(data).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.end_headers()
-                self.wfile.write(resp_body)
-            except WorkspaceClientHTTPError as exc:
-                try:
-                    error_data = json.loads(exc.detail)
-                except (json.JSONDecodeError, ValueError):
-                    error_data = {"detail": exc.detail}
-                resp_body = json.dumps(error_data).encode("utf-8")
-                self.send_response(exc.status_code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.end_headers()
-                self.wfile.write(resp_body)
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                length = 0
+            raw_body = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw_body.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
+                return
+            try:
+                data = self._client.post("/api/companion/workspace/body", json=payload)
             except WorkspaceClientError as exc:
-                resp_body = json.dumps({"error": str(exc)}).encode("utf-8")
-                self.send_response(502)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.end_headers()
-                self.wfile.write(resp_body)
+                self._proxy_error(exc)
+                return
+            self._send_json(200, data)
 
         def log_message(self, fmt: str, *args: object) -> None:
             pass  # suppress per-request log noise; startup banner handles visibility

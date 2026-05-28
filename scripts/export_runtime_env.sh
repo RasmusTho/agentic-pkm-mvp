@@ -4,6 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+operator_openai_base="${OPENAI_BASE:-}"
+operator_openai_base_url="${OPENAI_BASE_URL:-}"
+export PKM_EXPORT_OPERATOR_OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-}"
+export PKM_EXPORT_OPERATOR_OLLAMA_URL="${OLLAMA_URL:-}"
+export PKM_EXPORT_OPERATOR_OLLAMA_HOST="${OLLAMA_HOST:-}"
+export PKM_EXPORT_OPERATOR_OPENAI_BASE_URL="${OPENAI_BASE_URL:-}"
+
 source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
@@ -193,14 +200,19 @@ fi
 # If the operator set it explicitly, write it as-is.
 # Otherwise, if OPENAI_BASE_URL is set (OpenAI-compatible base), derive the chat-completions
 # URL by stripping a trailing slash and appending /chat/completions.
-if [ -n "${OPENAI_BASE:-}" ]; then
+if [ -n "$operator_openai_base" ]; then
   printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
 else
   _resolved_openai_base_url="${OPENAI_BASE_URL:-}"
   if [ -z "$_resolved_openai_base_url" ]; then
     _resolved_openai_base_url="$(awk -F= '/^OPENAI_BASE_URL=/{print substr($0, index($0,$2)); exit}' "$runtime_env_path")"
   fi
-  if [ -n "$_resolved_openai_base_url" ]; then
+  if [ -n "$_resolved_openai_base_url" ] && { [ -n "$operator_openai_base_url" ] || [ -z "${OPENAI_BASE:-}" ]; }; then
+    _derived_openai_base="${_resolved_openai_base_url%/}/chat/completions"
+    printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+  elif [ -n "${OPENAI_BASE:-}" ]; then
+    printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
+  elif [ -n "$_resolved_openai_base_url" ]; then
     _derived_openai_base="${_resolved_openai_base_url%/}/chat/completions"
     printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
   fi
@@ -256,8 +268,17 @@ providers = _load_providers(vault_root)
 llm_ref = providers.llm.get("default_chat") if providers else None
 embed_ref = providers.embedding.get("default") if providers else None
 
+def _operator_env(name: str) -> str | None:
+    value = (os.getenv(f"PKM_EXPORT_OPERATOR_{name}") or "").strip()
+    return value or None
+
+
 base_url = (
-    os.getenv("OLLAMA_BASE_URL")
+    _operator_env("OLLAMA_BASE_URL")
+    or _operator_env("OLLAMA_URL")
+    or _operator_env("OLLAMA_HOST")
+    or _operator_env("OPENAI_BASE_URL")
+    or os.getenv("OLLAMA_BASE_URL")
     or os.getenv("OLLAMA_URL")
     or os.getenv("OLLAMA_HOST")
     or os.getenv("OPENAI_BASE_URL")

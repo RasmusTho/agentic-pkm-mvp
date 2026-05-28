@@ -43,15 +43,6 @@ patterns=(
   "tmp-test/latest_watcher_tick_log"
 )
 
-deleted=()
-for pattern in "${patterns[@]}"; do
-  for target in $pattern; do
-    if [ -e "$target" ] || [ -L "$target" ]; then
-      deleted+=("$target")
-    fi
-  done
-done
-
 echo "Stopping docker compose (down -v --remove-orphans)"
 if command -v docker &> /dev/null; then
   if docker compose down -v --remove-orphans 2>&1; then
@@ -65,6 +56,15 @@ if command -v docker &> /dev/null; then
 else
   echo "  (docker not available, skipping)"
 fi
+
+deleted=()
+for pattern in "${patterns[@]}"; do
+  for target in $pattern; do
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      deleted+=("$target")
+    fi
+  done
+done
 
 echo "Identified runtime artifacts to delete:"
 if [ "${#deleted[@]}" -eq 0 ]; then

@@ -245,7 +245,8 @@ class TestRenderIndexHtml:
         from companion_ui.workspace.serve_dev_page import render_index_html
 
         html = render_index_html(api_base_url="http://127.0.0.1:18001")
-        assert "http://127.0.0.1:18001" in html
+        assert "Server-side runtime" in html
+        assert "http://127.0.0.1:18001" not in html
 
     def test_contains_note_path_input(self) -> None:
         from companion_ui.workspace.serve_dev_page import render_index_html
@@ -349,7 +350,7 @@ class TestRenderIndexHtml:
         )
 
         assert 'data-affordance-status="active"' in html
-        assert 'data-affordance-status="experimental"' in html
+        assert 'data-affordance-status="unavailable"' in html
         assert 'data-capability="canvas.applyBodyEdit"' in html
         assert 'data-runtime-backed="true"' in html
 
@@ -489,13 +490,10 @@ class TestHandleGet:
             client=client,
             api_base_url="http://127.0.0.1:18001",
         )
-        assert len(client.get_calls) == 2
+        assert len(client.get_calls) == 1
         workspace_url, workspace_params = client.get_calls[0]
         assert workspace_url == "/api/companion/workspace"
         assert workspace_params.get("note_path") == "Some/Note.md"
-        browser_url, browser_params = client.get_calls[1]
-        assert browser_url == "/api/companion/vault-browser"
-        assert browser_params.get("q") == ""
 
     def test_successful_load_renders_note_fields(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
@@ -535,7 +533,8 @@ class TestHandleGet:
             client=client,
             api_base_url="http://192.168.1.42:18001",
         )
-        assert "http://192.168.1.42:18001" in html
+        assert "Server-side runtime" in html
+        assert "http://192.168.1.42:18001" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +553,8 @@ class TestLiveServer:
 
     def test_get_root_has_api_base_url(self, live_server_ok) -> None:
         resp = httpx.get(f"http://127.0.0.1:{live_server_ok['port']}/")
-        assert live_server_ok["api_base_url"] in resp.text
+        assert "Server-side runtime" in resp.text
+        assert live_server_ok["api_base_url"] not in resp.text
 
     def test_get_root_has_note_path_input(self, live_server_ok) -> None:
         resp = httpx.get(f"http://127.0.0.1:{live_server_ok['port']}/")
@@ -796,14 +796,51 @@ class TestVaultBrowserOverlay:
         html = self._html()
         assert 'data-testid="vault-browser-identity"' in html
 
-    def test_api_base_url_referenced_in_js(self) -> None:
+    def test_browse_vault_uses_same_origin_route_not_runtime_localhost(self) -> None:
         html = self._html()
-        assert "127.0.0.1:18001" in html
+        assert "127.0.0.1:18001" not in html
+        assert "var url = '/api/companion/vault/notes'" in html
         assert "/api/companion/vault/notes" in html
 
     def test_vault_browser_status_element_present(self) -> None:
         html = self._html()
         assert 'data-testid="vault-browser-status"' in html
+
+
+class TestSameOriginProxyRoutes:
+    """Browser-facing routes proxy to the runtime server-side."""
+
+    def test_vault_notes_proxy_uses_server_side_client(self) -> None:
+        payload = {
+            "notes": [{"path": "Inbox/A.md", "title": "A"}],
+            "vault_identity": {"vault_name": "dev", "channel": "local-dev"},
+        }
+        client = _FakeClient(get_result=payload)
+        server, port = _start_server(client, "http://127.0.0.1:18001")
+        try:
+            resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/companion/vault/notes",
+                params={"q": "Inbox"},
+            )
+        finally:
+            server.shutdown()
+
+        assert resp.status_code == 200
+        assert resp.json() == payload
+        assert client.get_calls == [("/api/companion/vault/notes", {"q": "Inbox"})]
+
+    def test_vault_notes_proxy_returns_structured_runtime_error(self) -> None:
+        client = _FakeClient(get_error=WorkspaceClientNetworkError("Connection refused"))
+        server, port = _start_server(client, "http://127.0.0.1:19999")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/companion/vault/notes")
+        finally:
+            server.shutdown()
+
+        assert resp.status_code == 502
+        data = resp.json()
+        assert data["error"] == "runtime_unavailable"
+        assert "Verify the Companion runtime API" in data["next_step"]
 
 
 # ---------------------------------------------------------------------------
@@ -853,9 +890,10 @@ class TestBodyEditPanelRendering:
         html = self._html(update_flow_available=True)
         assert 'data-testid="workspace-body-edit-status"' in html
 
-    def test_api_base_url_in_body_editor_script(self) -> None:
+    def test_body_editor_uses_same_origin_route_not_runtime_localhost(self) -> None:
         html = self._html(update_flow_available=True)
-        assert "127.0.0.1:18001" in html
+        assert "127.0.0.1:18001" not in html
+        assert "fetch('/api/companion/workspace/body'" in html
         assert "/api/companion/workspace/body" in html
 
     def test_note_path_in_textarea_data_attribute(self) -> None:
@@ -866,137 +904,40 @@ class TestBodyEditPanelRendering:
         )
         assert 'data-note-path="Inbox/Todo.md"' in html
 
+    def test_codemirror_container_present_when_flow_available(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'id="body-edit-codemirror"' in html
+        assert 'class="body-edit-codemirror"' in html
 
-# ---------------------------------------------------------------------------
-# Same-origin proxy (#1277 AC1, AC2)
-# ---------------------------------------------------------------------------
-
-
-class TestSameOriginProxy:
-    """Verify that the handler proxies /api/companion/vault/notes and
-    /api/companion/workspace/body through the server-side client so that
-    remote browsers (opening the page from a non-localhost IP) are not
-    left calling 127.0.0.1 directly.
-    """
-
-    class _ProxyFakeClient:
-        """Fake client that records calls and returns configurable responses."""
-
-        def __init__(
-            self,
-            get_result: dict | None = None,
-            get_error: Exception | None = None,
-            post_result: dict | None = None,
-            post_error: Exception | None = None,
-        ) -> None:
-            self.get_calls: list[tuple[str, dict]] = []
-            self.post_calls: list[tuple[str, dict]] = []
-            self._get_result = get_result
-            self._get_error = get_error
-            self._post_result = post_result
-            self._post_error = post_error
-
-        def get(self, url: str, *, params: dict) -> dict:
-            self.get_calls.append((url, params))
-            if self._get_error is not None:
-                raise self._get_error
-            return self._get_result or {}
-
-        def post(self, url: str, *, json: dict) -> dict:
-            self.post_calls.append((url, json))
-            if self._post_error is not None:
-                raise self._post_error
-            return self._post_result or {}
-
-        def delete(self, url: str, *, params: dict | None = None) -> dict:
-            return {}
-
-    def _start(self, client: "_ProxyFakeClient") -> tuple[HTTPServer, int]:
-        from companion_ui.workspace.serve_dev_page import make_handler
-
-        handler = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
-        server = HTTPServer(("127.0.0.1", 0), handler)
-        port = server.server_address[1]
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
-        return server, port
-
-    def test_get_vault_notes_proxy_calls_client(self) -> None:
-        """GET /api/companion/vault/notes calls WorkspaceHttpClient.get server-side."""
-        client = self._ProxyFakeClient(
-            get_result={"notes": [{"title": "A", "path": "A.md"}], "vault_identity": {}}
-        )
-        server, port = self._start(client)
-        try:
-            resp = httpx.get(f"http://127.0.0.1:{port}/api/companion/vault/notes")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data.get("notes") == [{"title": "A", "path": "A.md"}]
-            vault_notes_calls = [c for c in client.get_calls if "/api/companion/vault/notes" in c[0]]
-            assert vault_notes_calls, "Expected a proxy call to /api/companion/vault/notes"
-        finally:
-            server.shutdown()
-
-    def test_get_vault_notes_forwards_q_param(self) -> None:
-        """GET /api/companion/vault/notes?q=foo forwards q to the runtime client."""
-        client = self._ProxyFakeClient(get_result={"notes": [], "vault_identity": {}})
-        server, port = self._start(client)
-        try:
-            httpx.get(f"http://127.0.0.1:{port}/api/companion/vault/notes?q=foo")
-            vault_notes_calls = [c for c in client.get_calls if "/api/companion/vault/notes" in c[0]]
-            assert vault_notes_calls
-            _url, params = vault_notes_calls[0]
-            assert params.get("q") == "foo"
-        finally:
-            server.shutdown()
-
-    def test_get_vault_notes_client_error_returns_502(self) -> None:
-        """A network error from the runtime client returns 502 to the browser."""
-        from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
-
-        client = self._ProxyFakeClient(
-            get_error=WorkspaceClientNetworkError("connection refused")
-        )
-        server, port = self._start(client)
-        try:
-            resp = httpx.get(f"http://127.0.0.1:{port}/api/companion/vault/notes")
-            assert resp.status_code == 502
-            assert "error" in resp.json()
-        finally:
-            server.shutdown()
-
-    def test_post_workspace_body_proxy_calls_client(self) -> None:
-        """POST /api/companion/workspace/body calls WorkspaceHttpClient.post server-side."""
-        client = self._ProxyFakeClient(post_result={"content_hash": "sha256-new"})
-        server, port = self._start(client)
-        try:
-            resp = httpx.post(
-                f"http://127.0.0.1:{port}/api/companion/workspace/body",
-                json={"note_path": "Notes/a.md", "new_body": "new body"},
-            )
-            assert resp.status_code == 200
-            assert resp.json().get("content_hash") == "sha256-new"
-            body_calls = [c for c in client.post_calls if "/api/companion/workspace/body" in c[0]]
-            assert body_calls, "Expected proxy call to /api/companion/workspace/body"
-        finally:
-            server.shutdown()
-
-    def test_js_api_base_is_same_origin(self) -> None:
-        """JavaScript API_BASE must be empty-string (same-origin) so remote
-        browsers do not call the server's 127.0.0.1 runtime directly (#1277 AC2).
-        """
+    def test_codemirror_raw_body_in_data_attribute(self) -> None:
         from companion_ui.workspace.serve_dev_page import render_index_html
-
-        html = render_index_html(api_base_url="http://10.42.42.10:18001")
-        # The JS should use same-origin paths, never the literal runtime host.
-        assert "var API_BASE = '';" in html or "var API_BASE = ''" in html
-        # The runtime host must not appear inside the JavaScript fetch() calls.
-        # It may still appear in human-visible chrome (e.g. the api-url span).
-        import re
-
-        js_api_base_match = re.search(r"var API_BASE\s*=\s*['\"]([^'\"]*)['\"]", html)
-        assert js_api_base_match is not None
-        assert js_api_base_match.group(1) == "", (
-            "API_BASE must be empty string for same-origin calls; "
-            f"got: {js_api_base_match.group(1)!r}"
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            fields={**self._fields(update_flow_available=True), "body": "# Hello\n\nWorld"},
         )
+        assert "data-raw-body=" in html
+        assert "# Hello" in html
+
+    def test_codemirror_esm_loader_present(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert 'type="module"' in html
+        assert "esm.sh/codemirror" in html
+        assert "_cmView" in html
+
+    def test_body_editor_reads_from_cmview_not_textarea_value(self) -> None:
+        html = self._html(update_flow_available=True)
+        assert "window._cmView" in html
+        assert "window._cmView.state.doc.toString()" in html
+        assert "ta.value" not in html
+
+    def test_submit_guards_against_uninitialized_editor(self) -> None:
+        html = self._html(update_flow_available=True)
+        # submit() must bail out early (not post) when _cmView is not ready
+        assert "if (!window._cmView)" in html
+        assert "Editor not ready" in html
+        # the fallback empty-string path must not exist
+        assert "_cmView ? window._cmView.state.doc.toString() : ''" not in html
+
+    def test_codemirror_absent_when_flow_disabled(self) -> None:
+        html = self._html(update_flow_available=False)
+        assert 'id="body-edit-codemirror"' not in html

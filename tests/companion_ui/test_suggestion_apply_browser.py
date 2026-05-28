@@ -8,6 +8,10 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
 )
+from tests.companion_ui.vault_browser_test_helpers import (
+    default_vault_browser_payload,
+    is_vault_browser_get,
+)
 
 
 class _FakeClient:
@@ -20,6 +24,8 @@ class _FakeClient:
         if url == "/api/companion/vault-browser":
             return {}  # infrastructure; not under test
         self.get_calls.append((url, params))
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
         return self.payloads.pop(0)
 
     def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
@@ -106,7 +112,10 @@ def test_body_apply_calls_canvas_api() -> None:
             },
         ),
     ]
-    assert client.get_calls == [
+    workspace_get_calls = [
+        call for call in client.get_calls if call[0] == "/api/companion/workspace"
+    ]
+    assert workspace_get_calls == [
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
         ("/api/companion/workspace", {"note_path": "Notes/canvas.md"}),
     ]

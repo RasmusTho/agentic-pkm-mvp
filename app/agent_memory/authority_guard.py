@@ -60,6 +60,8 @@ def evaluate_memory_authority(
         posture_markers.append("contradicted")
     if candidate.contradiction_state is ContradictionState.REVISED:
         posture_markers.append("revised")
+    if candidate.contradiction_state is ContradictionState.REJECTED:
+        posture_markers.append("rejected")
     if candidate.review_state is ReviewState.REJECTED or promoted.outcome is ReviewState.REJECTED:
         posture_markers.append("rejected")
 
@@ -71,6 +73,8 @@ def evaluate_memory_authority(
         blocked.append("inferred_memory_not_mutation_authoritative")
     if promoted.outcome in {ReviewState.REVISED, ReviewState.REJECTED}:
         blocked.append("non_current_memory_lifecycle_state")
+    if candidate.contradiction_state in {ContradictionState.CONTRADICTED, ContradictionState.REJECTED}:
+        blocked.append("contradiction_state_blocks_mutation_authority")
     if conflicts_with_human_truth:
         blocked.append("human_authored_truth_precedence")
 

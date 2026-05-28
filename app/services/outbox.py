@@ -222,6 +222,28 @@ def write_outbox_event(
             conn.close()
 
 
+def count_outbox_events(conn: Any = None) -> int | None:
+    """Return the total DB outbox row count, or None when the DB is unavailable."""
+    try:
+        conn, close = _use_conn(conn)
+    except Exception:
+        return None
+    try:
+        cur = _exec(conn, "select count(*) from outbox")
+        if hasattr(cur, "fetchone"):
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+        return None
+    except Exception:
+        return None
+    finally:
+        if close:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def insert_object_and_outbox(
     payload: Dict[str, Any],
     topic: str,

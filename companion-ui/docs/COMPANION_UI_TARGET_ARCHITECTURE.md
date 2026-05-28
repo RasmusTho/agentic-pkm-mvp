@@ -125,7 +125,7 @@ The detailed localhost/LAN/Tailscale/token/CSRF posture is defined in
 
 ## 5. Current Shipped State
 
-As of 2026-05-19 (after PR #1101, PR #1108, PR #1119 merged):
+As of 2026-05-26 (after PR #1101, PR #1108, PR #1119, the Obsidian renderer/editor epic #1293–#1306, and the CodeMirror source editor #1329):
 
 | Component | State |
 |---|---|
@@ -133,6 +133,16 @@ As of 2026-05-19 (after PR #1101, PR #1108, PR #1119 merged):
 | Real-note workspace dev page model | Shipped — `companion_ui/workspace/real_note_workspace_dev_page.py` (#1072 / PR #1101) |
 | Browser dev server | Shipped — `companion_ui/workspace/serve_dev_page.py` (#1103 / PR #1108) |
 | Real-note workspace visual shell (first alignment pass) | Shipped — Yggdrasil tokens, note body primary, companion rail placeholder (#1119). Dev/staging only. |
+| Obsidian-compatible Markdown parser and resolvers | Shipped — `companion_ui/renderer/` parser, link resolver, and asset resolver provide read-only parsing/resolution boundaries (#1296, #1297, #1298). |
+| Vault Markdown renderer core | Shipped — Python server-side read-only renderer wired into the Python-served note body (#1299). Unsafe HTML stripped/escaped; wikilinks/assets route through resolver boundaries. |
+| Obsidian callout renderer | Shipped — `companion_ui/renderer/callout_renderer.py`; type styling, fold state, nested Markdown (#1300 / PR #1313). |
+| Mermaid safe renderer | Shipped — `companion_ui/renderer/mermaid_renderer.py`; source preserved, no JS execution, no external network (#1301 / PR #1315). |
+| Properties/frontmatter renderer | Shipped — `companion_ui/renderer/properties_renderer.py`; read-only YAML display, tag chips, aliases, malformed diagnostics (#1302 / PR #1314). |
+| Note outline navigation | Shipped — `companion_ui/renderer/note_outline.py`; heading navigation, desktop side panel, no rename (#1303 / PR #1316). |
+| Link preview | Shipped — `companion_ui/renderer/link_preview.py`; bounded hover preview, read-only, no write path (#1304 / PR #1325). |
+| CodeMirror 6 source editor (body-edit panel) | Shipped for dev surface — `serve_dev_page.py` body-edit panel replaces the plain textarea with a CodeMirror 6 editor loaded via ESM CDN (`esm.sh`), pre-populated with raw Markdown. Write path unchanged (`POST /api/companion/workspace/body`). No autosave. No production bundling yet (#1329). |
+| CodeMirror 6 adapter spike | Spike only — `companion_ui/spikes/codemirror_adapter.py`; adapter contract proven, raw-text round-trip across all Obsidian fixtures (#1305 / PR #1326). Decision: defer full production adoption until npm/browser frontend module exists. |
+| Milkdown / MDXEditor rich-editor spikes | Spike only — test-only adapters in `tests/companion_ui/rich_editor_spike_adapters.py` (#1306 / PR #1327). Decision: defer both until real browser runtime round-trip is proven. |
 | Canvas Core models and session API | Shipped — `companion_ui/canvas_core/`, `app/api/routes/canvas.py` behind `CANVAS_ENABLED` |
 | Canvas Suggestion Flow models | Shipped — `companion_ui/canvas_suggestion_flow/` (browser integration pending) |
 | Panel models and confirmation service | Shipped — `companion_ui/panel/`, `app/panel/confirmation.py`, `POST /api/panel/confirm` |

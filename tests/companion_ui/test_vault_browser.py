@@ -396,6 +396,211 @@ def test_vault_browser_inactive_filter_chip_has_data_active_false() -> None:
     assert 'data-active="false"' in html
 
 
+# ---- #1280: wire filter chip clicks to server-side reload ----
+
+
+def test_filter_chips_carry_onclick_wiring() -> None:
+    """#1280 AC1+AC2: Every filter chip carries onclick=vbToggleFilter(this) for toggle interaction."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'onclick="vbToggleFilter(this)"' in html
+
+
+def test_filter_chips_carry_cursor_pointer_style() -> None:
+    """#1280 AC1: Filter chips are visually afforded as clickable."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'style="cursor:pointer"' in html
+
+
+def test_multi_value_active_chips_show_deselect_affordance() -> None:
+    """#1280 AC3: When 2+ values active for a dimension, active chips show a deselect affordance."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(
+            active_filters={"kind": ["human_note", "companion_note"]},
+        ),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'data-testid="filter-chip-remove"' in html
+
+
+def test_single_active_chip_no_deselect_affordance() -> None:
+    """#1280 AC3 boundary: single active value → no deselect affordance (no ambiguity)."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(
+            active_filters={"kind": ["human_note"]},
+        ),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'data-testid="filter-chip-remove"' not in html
+
+
+def test_handle_get_passes_filter_params_to_vault_browser_api() -> None:
+    """#1280 AC4: URL filter params are forwarded to the vault browser API call."""
+    from unittest.mock import MagicMock, patch
+
+    from companion_ui.workspace.serve_dev_page import handle_get
+    from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
+
+    captured: dict = {}
+
+    workspace_mock = MagicMock()
+    workspace_mock.status_code = 200
+    workspace_mock.json.return_value = _workspace_payload()
+
+    browser_mock = MagicMock()
+    browser_mock.status_code = 200
+    browser_mock.json.return_value = _vault_browser_payload_with_filters(
+        active_filters={"kind": ["human_note"]},
+    )
+
+    def _side_effect(url: str, *, params: dict, timeout: float):
+        if url.endswith("/api/companion/workspace"):
+            return workspace_mock
+        if url.endswith("/api/companion/vault-browser"):
+            captured["params"] = dict(params)
+            return browser_mock
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    with patch("httpx.get", side_effect=_side_effect):
+        client = WorkspaceHttpClient(base_url="http://localhost:18001")
+        handle_get(
+            query_string="note_path=notes/current.md&kind=human_note",
+            client=client,
+            api_base_url="http://127.0.0.1:18001",
+        )
+
+    assert "kind" in captured.get("params", {}), (
+        "Filter param 'kind' must be forwarded to vault-browser API"
+    )
+    assert captured["params"]["kind"] == ["human_note"], (
+        f"Filter value must be ['human_note']; got: {captured['params']['kind']!r}"
+    )
+
+
+def test_vbtoggle_script_block_present_in_page() -> None:
+    """#1280: vbToggleFilter JS function is embedded in page output."""
+    page = _load_page(
+        browser_payload=_vault_browser_payload_with_filters(),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert "vbToggleFilter" in html
+    assert "url.searchParams" in html
+
+
+# ---- #1283: visually distinguish companion vs human notes ----
+
+
+def test_companion_note_row_has_data_companion_true() -> None:
+    """#1283 AC1: Companion note row carries data-companion="true"."""
+    companion = _note_with_metadata(
+        note_path="notes/companion.md",
+        title="Companion",
+        kind="companion_note",
+        zone="semi_active",
+    )
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[companion], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'data-companion="true"' in html, (
+        "companion_note row must carry data-companion=\"true\""
+    )
+
+
+def test_companion_note_row_has_data_kind_companion_note() -> None:
+    """#1283 AC1: Companion note row carries data-kind="companion_note"."""
+    companion = _note_with_metadata(
+        note_path="notes/companion.md",
+        kind="companion_note",
+    )
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[companion], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'data-kind="companion_note"' in html, (
+        "companion_note row must carry data-kind=\"companion_note\""
+    )
+
+
+def test_companion_note_row_carries_companion_css_class() -> None:
+    """#1283 AC1: Companion note row carries vault-browser-row--companion CSS class."""
+    companion = _note_with_metadata(
+        note_path="notes/companion.md",
+        kind="companion_note",
+    )
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[companion], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert "vault-browser-row--companion" in html, (
+        "companion_note row must carry vault-browser-row--companion CSS class"
+    )
+
+
+def test_human_note_row_has_no_companion_treatment() -> None:
+    """#1283 AC1 boundary: human_note row does NOT carry companion treatment."""
+    human = _note_with_metadata(
+        note_path="notes/human.md",
+        kind="human_note",
+    )
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[human], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'data-companion="true"' not in html
+    assert "vault-browser-row--companion" not in html
+
+
 def test_vault_provenance_attribute_is_escaped() -> None:
     payload = _workspace_payload()
     payload["runtime"]["vault_identity"]["provenance"] = 'env" onmouseover="alert(1)'

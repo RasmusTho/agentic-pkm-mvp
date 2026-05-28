@@ -234,32 +234,28 @@ _HUMAN_NOTE = {
 class TestVaultBrowserFiltering:
     def test_companion_note_not_in_nav_list(self) -> None:
         html = _html(vault_browser_notes=[_COMPANION_NOTE, _HUMAN_NOTE])
-        # The companion note's path must not appear as a nav link.
-        list_region = re.search(
-            r'data-testid="workspace-vault-browser-list"(.*?)</ul>',
+        # Companion note must be rendered hidden in the DOM (data-nav-visible="false")
+        # not as an active nav link. It carries data-companion="true" on the <li>.
+        companion_row_m = re.search(
+            r'<li[^>]*data-companion="true"[^>]*data-nav-visible="false"[^>]*>',
             html,
-            re.DOTALL,
         )
-        assert list_region, "vault-browser-list must be present"
-        list_html = list_region.group(1)
-        assert "Notes/.meta/Companion.md" not in list_html, (
-            "companion note path must not appear as a nav link in the vault browser list"
+        assert companion_row_m, (
+            "companion note row must be in DOM with data-companion=true and data-nav-visible=false"
         )
-        assert "My Note" in list_html, "human note must still appear"
+        # Human note must still appear as a visible nav link.
+        assert "My Note" in html, "human note must still appear"
 
     def test_uuid_filename_note_not_in_nav_list(self) -> None:
         html = _html(vault_browser_notes=[_UUID_NOTE, _HUMAN_NOTE])
-        list_region = re.search(
-            r'data-testid="workspace-vault-browser-list"(.*?)</ul>',
+        # UUID-filename notes must be rendered hidden in the DOM (data-nav-visible="false").
+        uuid_row_m = re.search(
+            r'<li[^>]*data-nav-visible="false"[^>]*hidden[^>]*>.*?11111111-2222-3333-4444-555555555555',
             html,
             re.DOTALL,
         )
-        assert list_region, "vault-browser-list must be present"
-        list_html = list_region.group(1)
-        assert "11111111-2222-3333-4444-555555555555" not in list_html, (
-            "UUID-filename note must not appear as a nav link"
-        )
-        assert "My Note" in list_html, "human note must still appear"
+        assert uuid_row_m, "UUID-filename note row must be in DOM with data-nav-visible=false"
+        assert "My Note" in html, "human note must still appear"
 
     def test_hidden_count_shown_when_notes_filtered(self) -> None:
         html = _html(vault_browser_notes=[_COMPANION_NOTE, _UUID_NOTE, _HUMAN_NOTE])
