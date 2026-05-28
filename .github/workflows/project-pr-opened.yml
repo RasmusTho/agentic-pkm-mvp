@@ -17,7 +17,10 @@ jobs:
       - name: Project PR state projection
         # Draft PRs stay In Progress; non-draft PRs move to Review.
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
+          # token with Projects read/write is required. Falls back to the default
+          # token (graceful no-op) when PROJECT_TOKEN is unset.
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/project_status.py \
             --repo "${{ github.repository }}" \

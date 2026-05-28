@@ -21,7 +21,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Reconcile issue project status
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
+          # token with Projects read/write is required. Falls back to the default
+          # token (graceful no-op) when PROJECT_TOKEN is unset.
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/reconcile_project_status.py \
             --repo "${{ github.repository }}" \
@@ -34,7 +37,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Reconcile existing project items
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
+          # token with Projects read/write is required. Falls back to the default
+          # token (graceful no-op) when PROJECT_TOKEN is unset.
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/reconcile_project_status.py \
             --repo "${{ github.repository }}" \
