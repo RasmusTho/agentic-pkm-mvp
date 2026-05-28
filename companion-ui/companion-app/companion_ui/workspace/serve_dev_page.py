@@ -46,7 +46,11 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
 )
-from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
+from companion_ui.workspace.workspace_http_client import (
+    WorkspaceClientError,
+    WorkspaceClientHTTPError,
+    WorkspaceHttpClient,
+)
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8111
@@ -69,6 +73,88 @@ def load_config() -> dict:
 def _e(value: str) -> str:
     """HTML-escape a string for safe inline output."""
     return _html.escape(str(value))
+
+
+# Maximum characters for any single rail item label / reason / relation field.
+# Prevents operator/agent note body content from leaking into the rail verbatim.
+_RAIL_ITEM_MAX: int = 280
+
+
+def _cap(text: str, max_len: int = _RAIL_ITEM_MAX) -> str:
+    """Truncate *text* to *max_len* characters, appending '…' if clipped."""
+    s = str(text)
+    if len(s) <= max_len:
+        return s
+    return s[:max_len] + "…"
+
+
+# ---------------------------------------------------------------------------
+# Daily-use visibility helpers
+# ---------------------------------------------------------------------------
+
+_REVIEW_STATE_LABELS: dict[str, str] = {
+    "needs_review": "needs review",
+    "reviewed": "reviewed",
+    "in_progress": "in progress",
+    "deferred": "deferred",
+    "approved": "approved",
+    "rejected": "rejected",
+}
+
+_LIFECYCLE_STATE_LABELS: dict[str, str] = {
+    "active": "active",
+    "inbox": "inbox",
+    "workbench": "workbench",
+    "archive": "archive",
+    "seedling": "seedling",
+    "evergreen": "evergreen",
+}
+
+_NOTE_TYPE_LABELS: dict[str, str] = {
+    "human_note": "note",
+    "companion_note": "companion",
+    "log_entry": "log",
+    "reference": "reference",
+}
+
+
+def _humanize_fm_pair(key: str, value: str) -> str | None:
+    """Return a human label for a frontmatter key/value pair, or None to skip."""
+    if key == "review_state":
+        label = _REVIEW_STATE_LABELS.get(value, value.replace("_", " "))
+        return f"review · {label}"
+    if key == "lifecycle_state":
+        label = _LIFECYCLE_STATE_LABELS.get(value, value.replace("_", " "))
+        return f"lifecycle · {label}"
+    if key in ("note_type", "kind"):
+        label = _NOTE_TYPE_LABELS.get(value, value.replace("_", " "))
+        return f"type · {label}"
+    if key == "zone":
+        return f"zone · {value.replace('_', ' ')}"
+    return None
+
+
+def _should_hide_note_by_default(note: dict) -> bool:
+    """Return True for system/companion/UUID notes hidden from navigation by default."""
+    import re as _re
+    kind = str(note.get("kind") or "").strip()
+    if kind == "companion_note":
+        return True
+    path = str(note.get("note_path") or "").strip()
+    # Hide notes whose filename is a bare UUID (common for system/ephemeral records).
+    filename = path.split("/")[-1]
+    filename_stem = filename
+    for ext in (".md", ".MD"):
+        if filename_stem.endswith(ext):
+            filename_stem = filename_stem[: -len(ext)]
+            break
+    uuid_pat = _re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        _re.IGNORECASE,
+    )
+    if uuid_pat.match(filename_stem):
+        return True
+    return False
 
 
 def _status_label(value: object, *, fallback: str = "unknown") -> str:
@@ -115,6 +201,10 @@ def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
 
     AC1 / AC2 (#1260): the body region must not display YAML frontmatter as
     prose; frontmatter-derived metadata remains visible in dedicated chrome.
+
+    Daily-use visibility: closed summary shows humanized labels for well-known
+    fields (review_state, lifecycle_state, note_type/kind, zone). Raw YAML
+    remains fully available in the open/expanded section.
     """
     if not frontmatter_lines:
         return (
@@ -124,6 +214,19 @@ def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
             '<span class="frontmatter-label">No frontmatter</span>'
             "</section>"
         )
+    # Build humanized summary labels for well-known fields.
+    human_labels: list[str] = []
+    try:
+        parsed_fm: dict = yaml.safe_load("\n".join(frontmatter_lines)) or {}
+    except Exception:
+        parsed_fm = {}
+    for key in ("review_state", "lifecycle_state", "note_type", "kind", "zone"):
+        val = parsed_fm.get(key)
+        if val and isinstance(val, str):
+            label = _humanize_fm_pair(key, val)
+            if label:
+                human_labels.append(label)
+    summary_text = " · ".join(human_labels) if human_labels else "properties"
     rows: list[str] = []
     for line in frontmatter_lines:
         stripped = line.rstrip()
@@ -139,8 +242,12 @@ def _render_note_frontmatter_region(frontmatter_lines: list[str]) -> str:
         '<section class="note-frontmatter" '
         'data-testid="workspace-note-frontmatter" '
         'data-frontmatter-present="true">'
-        '<span class="frontmatter-label">frontmatter</span>'
+        '<details class="frontmatter-disclosure" data-testid="workspace-frontmatter-disclosure">'
+        f'<summary class="frontmatter-summary" data-testid="workspace-frontmatter-summary">'
+        f'{_e(summary_text)}'
+        "</summary>"
         f"{body_html}"
+        "</details>"
         "</section>"
     )
 
@@ -553,11 +660,21 @@ def _render_note_section(fields: dict) -> str:
         reason=workspace_update_reason,
     )
 
+    # Safety strip is operator-level telemetry: wrap in a disclosure so it does
+    # not dominate the daily-use reading surface. Open by default in dev so
+    # existing tests that assert on testids inside the strip still pass.
+    safety_strip_disclosure = f"""
+      <details class="runtime-telemetry-disclosure" data-testid="workspace-runtime-telemetry" open>
+        <summary class="runtime-telemetry-summary"
+                 data-testid="workspace-runtime-telemetry-toggle">Runtime telemetry</summary>
+        {safety_strip_html}
+      </details>"""
+
     return f"""
   <div class="workspace-layout">
     <div class="workspace-main">
       {primary_posture_html}
-      {safety_strip_html}
+      {safety_strip_disclosure}
       <header
         class="note-header active-note-header"
         data-testid="workspace-note-header"
@@ -588,7 +705,19 @@ def _render_note_section(fields: dict) -> str:
         {identity_caution_html}
       </header>
       {note_frontmatter_html}
-      <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
+      <div class="note-body" data-testid="workspace-note-body" data-region="note-body"
+           data-read-only="true">
+        <div class="note-body-readonly-indicator"
+             data-testid="workspace-note-body-readonly-indicator"
+             data-read-only="true">read-only</div>
+        <div class="note-body-readonly-reason"
+             data-testid="workspace-note-body-readonly-reason"
+             aria-live="polite"
+             hidden>
+          Editing is currently disabled by runtime configuration.&#160;<a
+            href="#workspace-runtime-telemetry"
+            data-testid="workspace-note-body-readonly-why">Why?</a>
+        </div>
         <pre class="note-body-content">{body}</pre>
         {suggested_insertions_html}
       </div>
@@ -649,17 +778,22 @@ def _render_active_note_body_update_flow(
     safe_state = _e(state or "idle")
     safe_message = _e(message)
     if not enabled:
-        return f"""
-        <section
-          class="active-note-body-update-flow"
-          data-testid="workspace-active-note-body-update-flow"
-          data-flow-state="disabled">
-          <div
-            class="active-note-body-update-blocked"
-            data-testid="workspace-active-note-body-update-state-blocked">
-            Active-note body update unavailable: {_e(reason)}.
-          </div>
-        </section>"""
+        # Disabled state: render a minimal placeholder that retains the
+        # data-testid for test/automation compatibility but does not add a
+        # duplicate visible "unavailable" message — the guard alert and
+        # body-edit panel absence already surface this. (Daily-use dedup.)
+        return (
+            '<section'
+            ' class="active-note-body-update-flow active-note-body-update-flow--disabled"'
+            ' data-testid="workspace-active-note-body-update-flow"'
+            ' data-flow-state="disabled">'
+            '<div'
+            ' class="active-note-body-update-blocked active-note-body-update-blocked--quiet"'
+            ' data-testid="workspace-active-note-body-update-state-blocked"'
+            ' hidden>'
+            "</div>"
+            "</section>"
+        )
 
     status_html = ""
     if safe_state == "success":
@@ -920,7 +1054,7 @@ def _render_inspector_receipts(note: dict) -> str:
                 f'<span data-testid="vault-browser-receipt-trace-id" class="receipt-trace">{_e(trace_id)}</span>'
                 if trace_id else ""
             )
-            + f'</div>'
+            + '</div>'
         )
     return (
         '<div class="inspector-receipts" '
@@ -1103,8 +1237,12 @@ def _render_vault_browser(
             "</div>"
         )
 
+    # Filter system/companion/UUID notes from the navigation list by default.
+    visible_notes = [n for n in notes if not _should_hide_note_by_default(n)]
+    hidden_count = len(notes) - len(visible_notes)
+
     rows: list[str] = []
-    for note in notes:
+    for note in visible_notes:
         path = str(note.get("note_path") or "").strip()
         if not path:
             continue
@@ -1113,43 +1251,47 @@ def _render_vault_browser(
         href = "/?note_path=" + quote(path, safe="/")
         active = "true" if path == note_path else "false"
 
-        badges: list[str] = []
+        # Per-note metadata badges: hidden from the nav list by default (daily-use
+        # visibility pass). The inspector panel shows the full metadata. These
+        # elements retain their data-testid for test compatibility but are visually
+        # hidden so the nav list stays calm and navigation-focused.
+        hidden_badge_attrs = ' class="note-badge note-badge--nav-hidden" data-nav-visible="false"'
         kind_val = note.get("kind")
-        if kind_val:
-            badges.append(
-                f'<span class="note-badge note-badge--kind" '
-                f'data-testid="workspace-vault-browser-note-kind">{_e(str(kind_val))}</span>'
-            )
+        kind_badge = (
+            f'<span{hidden_badge_attrs} '
+            f'data-testid="workspace-vault-browser-note-kind">{_e(str(kind_val))}</span>'
+            if kind_val else ""
+        )
         review_state_val = note.get("review_state")
-        if review_state_val:
-            badges.append(
-                f'<span class="note-badge note-badge--review-state" '
-                f'data-testid="workspace-vault-browser-note-review-state">{_e(str(review_state_val))}</span>'
-            )
+        review_badge = (
+            f'<span{hidden_badge_attrs} '
+            f'data-testid="workspace-vault-browser-note-review-state">{_e(str(review_state_val))}</span>'
+            if review_state_val else ""
+        )
         trust_val = note.get("trust")
-        if trust_val:
-            badges.append(
-                f'<span class="note-badge note-badge--trust" '
-                f'data-testid="workspace-vault-browser-note-trust">{_e(str(trust_val))}</span>'
-            )
+        trust_badge = (
+            f'<span{hidden_badge_attrs} '
+            f'data-testid="workspace-vault-browser-note-trust">{_e(str(trust_val))}</span>'
+            if trust_val else ""
+        )
         frontmatter_valid = note.get("frontmatter_valid", True)
         missing_fields = note.get("missing_required_fields") or []
+        health_badge = ""
         if not frontmatter_valid or missing_fields:
             missing_label = ", ".join(missing_fields) if missing_fields else "invalid"
-            badges.append(
+            health_badge = (
                 f'<span class="note-badge note-badge--health note-badge--health-invalid" '
                 f'data-testid="workspace-vault-browser-note-health" '
                 f'data-missing-fields="{_e(missing_label)}">missing: {_e(missing_label)}</span>'
             )
-        badges_html = "".join(badges)
 
         rows.append(
             f"""
           <li class="vault-browser-row" data-testid="workspace-vault-browser-note-row" data-active="{active}">
             <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
             <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
-            <span data-testid="workspace-vault-browser-note-zone">{zone}</span>
-            {badges_html}
+            <span data-testid="workspace-vault-browser-note-zone" class="vault-browser-zone-label">{zone}</span>
+            {kind_badge}{review_badge}{trust_badge}{health_badge}
           </li>"""
         )
 
@@ -1168,6 +1310,18 @@ def _render_vault_browser(
         if selected_note is not None
         else ""
     )
+    # Calm provenance label for daily-use visibility — raw vault_provenance
+    # retained as data-attribute for tests/debugging; calm copy shown in UI.
+    calm_provenance = "read-only fallback · filesystem index" if read_only else "filesystem index"
+    hidden_html = (
+        f'<span class="vault-browser-hidden-count" '
+        f'data-testid="workspace-vault-browser-hidden-count" '
+        f'data-hidden="{hidden_count}">'
+        f'{hidden_count} system/companion note{"s" if hidden_count != 1 else ""} hidden'
+        "</span>"
+        if hidden_count > 0
+        else ""
+    )
     return f"""
         <details class="vault-browser" data-testid="workspace-vault-browser" open>
           <summary data-testid="workspace-vault-browser-toggle">Browse vault notes</summary>
@@ -1175,8 +1329,11 @@ def _render_vault_browser(
             {identity_html}
             <span data-testid="workspace-vault-browser-read-only">{read_only_text}</span>
             <span data-testid="workspace-vault-browser-query">{query_text}</span>
-            <span data-testid="workspace-vault-browser-provenance">{_e(vault_provenance)}</span>
+            <span class="vault-browser-provenance-calm"
+                  data-testid="workspace-vault-browser-provenance"
+                  data-raw-provenance="{_e(vault_provenance)}">{_e(calm_provenance)}</span>
           </div>
+          {hidden_html}
           {filters_html}
           {state_html}
           {list_html}
@@ -1407,7 +1564,7 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
                 data-reorient-section="{_e(name)}"
                 data-reorient-kind="{_e(item_kind)}">
                 <span class="reorient-kind" data-testid="reorient-kind">{_e(labels[name])}</span>
-                <span class="reorient-item-label">{_e(item.get("label", ""))}</span>
+                <span class="reorient-item-label">{_e(_cap(item.get("label", "")))}</span>
                 <a
                   class="reorient-source"
                   data-testid="reorient-source-link"
@@ -1502,13 +1659,13 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
             data-runtime-backed="true"
             data-candidate-id="{_e(candidate.get("candidate_id", ""))}">
             <div class="resurface-title" data-testid="resurface-candidate-label">
-              {_e(candidate.get("label", ""))}
+              {_e(_cap(candidate.get("label", "")))}
             </div>
             <div class="resurface-why" data-testid="resurface-why-now">
-              {_e(candidate.get("why_now", ""))}
+              {_e(_cap(candidate.get("why_now", "")))}
             </div>
             <div class="resurface-relation" data-testid="resurface-relation">
-              {_e(candidate.get("relation_to_active_artifact", ""))}
+              {_e(_cap(candidate.get("relation_to_active_artifact", "")))}
             </div>
             <a
               class="resurface-source"
@@ -1807,19 +1964,18 @@ def _render_canvas_session_controls(
             </div>
           </form>"""
     else:
-        unavailable_copy = "Body edit composer unavailable until Canvas has an active editable session."
-        if not workspace_update_available:
-            unavailable_copy = (
-                "Body edit composer disabled by workspace update capability: "
-                f"{workspace_update_reason}."
-            )
-        composer_html = """
-          <div
-            class="canvas-body-edit-unavailable"
-            data-testid="workspace-canvas-body-edit-unavailable"
-            data-affordance-status="blocked">
-            """ + unavailable_copy + """
-          </div>"""
+        # When canvas is blocked/disabled, the guard alert already surfaces the
+        # blocked state. Suppress the duplicate visible "unavailable" message here;
+        # keep the data-testid element for test/automation compatibility but make
+        # it non-visible (daily-use visibility deduplication).
+        composer_html = (
+            '<div'
+            ' class="canvas-body-edit-unavailable canvas-body-edit-unavailable--suppressed"'
+            ' data-testid="workspace-canvas-body-edit-unavailable"'
+            ' data-affordance-status="blocked"'
+            ' hidden>'
+            "</div>"
+        )
     recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
     recovery_html = ""
     if conflict_detected:
@@ -2151,7 +2307,7 @@ def render_index_html(
     /* ---- Top bar ---- */
     .topbar {{
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 12px;
       padding: 8px 20px;
       background: var(--bg-surface);
@@ -2193,16 +2349,41 @@ def render_index_html(
       color: #f09030;
       flex-shrink: 0;
     }}
+    /* ---- DEV operator disclosure ---- */
+    .dev-controls-disclosure {{
+      flex: 1;
+      min-width: 0;
+    }}
+    .dev-controls-summary {{
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      list-style: none;
+      user-select: none;
+    }}
+    .dev-controls-summary::-webkit-details-marker {{ display: none; }}
+    .dev-controls-summary::before {{
+      content: "▸ ";
+      font-size: 0.65em;
+    }}
+    .dev-controls-disclosure[open] .dev-controls-summary::before {{
+      content: "▾ ";
+    }}
+    .dev-controls-body {{
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }}
 
     /* ---- Load form ---- */
     .load-bar {{
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 10px 20px;
-      background: var(--bg-surface);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
+      padding: 6px 0 2px 0;
     }}
     .load-bar label {{
       font-family: var(--font-mono);
@@ -2242,6 +2423,26 @@ def render_index_html(
       flex-shrink: 0;
     }}
     .load-bar button:hover {{ border-color: var(--cyan); color: var(--cyan); }}
+    /* ---- Runtime telemetry disclosure ---- */
+    .runtime-telemetry-disclosure {{
+      border-bottom: 1px solid var(--border);
+    }}
+    .runtime-telemetry-summary {{
+      cursor: pointer;
+      padding: 6px 24px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      list-style: none;
+      user-select: none;
+      background: rgba(17,26,46,0.45);
+    }}
+    .runtime-telemetry-summary::-webkit-details-marker {{ display: none; }}
+    .runtime-telemetry-disclosure[open] .runtime-safety-strip {{
+      border-bottom: none;
+    }}
 
     /* ---- Error state ---- */
     .error-state {{
@@ -2381,19 +2582,73 @@ def render_index_html(
     }}
     .prov-sep {{ color: var(--border-strong); }}
 
+    /* ---- Frontmatter disclosure ---- */
+    .note-frontmatter {{
+      padding: 0 24px 4px;
+      flex-shrink: 0;
+    }}
+    .frontmatter-disclosure {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .frontmatter-summary {{
+      color: var(--fg-3);
+      cursor: pointer;
+      letter-spacing: 0.05em;
+      list-style: none;
+      padding: 4px 0;
+      user-select: none;
+    }}
+    .frontmatter-summary::-webkit-details-marker {{ display: none; }}
+    .frontmatter-label {{
+      color: var(--fg-3);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .frontmatter-line {{ color: var(--fg-2); padding: 1px 0; }}
+
     /* ---- Note body ---- */
     .note-body {{
       flex: 1;
       overflow-y: auto;
       padding: 24px;
     }}
+    /* Read-only affordance: calm, low-noise indicator in the note body area */
+    .note-body-readonly-indicator {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      margin: 0 auto 8px;
+      max-width: 920px;
+      text-transform: uppercase;
+    }}
+    .note-body-readonly-reason {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      margin: 0 auto 8px;
+      max-width: 920px;
+      padding: 8px 12px;
+    }}
+    .note-body-readonly-reason a {{
+      color: var(--cyan);
+      text-decoration: none;
+    }}
+    .note-body-readonly-reason a:hover {{ text-decoration: underline; }}
     .note-body-content {{
       background: var(--bg-raised);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       margin: 0 auto;
       max-width: 920px;
-      min-height: 100%;
+      max-height: 60vh;
+      min-height: 0;
+      overflow-y: auto;
       padding: 28px 32px;
       font-family: var(--font-mono);
       font-size: var(--text-sm);
@@ -2863,6 +3118,28 @@ def render_index_html(
     }}
     .body-edit-status.ok {{ color: var(--cyan); }}
     .body-edit-status.error {{ color: var(--destructive); }}
+    /* Per-note badges hidden from nav list by default (daily-use visibility pass).
+       These elements retain their data-testid for test compatibility. */
+    .note-badge--nav-hidden {{ display: none; }}
+    /* Vault browser calm provenance label */
+    .vault-browser-provenance-calm {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-style: italic;
+    }}
+    .vault-browser-zone-label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .vault-browser-hidden-count {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-style: italic;
+      padding: 2px 0 4px;
+    }}
     /* Vault note browser overlay */
     .vault-browser-overlay {{
       display: none;
@@ -2959,29 +3236,35 @@ def render_index_html(
   </style>
 </head>
 <body>
-  <div class="topbar">
-    <div class="topbar-api">
-      <span class="api-label">Runtime API</span>
-      <span class="api-url" title="{_e(api_base_url)}">{_e(api_base_url)}</span>
-    </div>
+  <div class="topbar" data-testid="workspace-topbar">
     {dev_chip}
-  </div>
-  <div class="load-bar">
-    <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
-      <label for="note_path">note_path</label>
-      <input
-        type="text"
-        id="note_path"
-        name="note_path"
-        value="{_e(note_path)}"
-        placeholder="Some/Note.md"
-        autocomplete="off">
-      <button type="submit">Load</button>
-      <button type="button"
-        id="vault-browse-btn"
-        data-testid="vault-browse-button"
-        onclick="vaultBrowser.open()">Browse vault</button>
-    </form>
+    <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
+      <summary class="dev-controls-summary"
+               data-testid="workspace-dev-controls-toggle">DEV · operator</summary>
+      <div class="dev-controls-body">
+        <div class="topbar-api">
+          <span class="api-label">Runtime API</span>
+          <span class="api-url" title="{_e(api_base_url)}">{_e(api_base_url)}</span>
+        </div>
+        <div class="load-bar" data-testid="workspace-load-bar">
+          <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
+            <label for="note_path">note_path</label>
+            <input
+              type="text"
+              id="note_path"
+              name="note_path"
+              value="{_e(note_path)}"
+              placeholder="Some/Note.md"
+              autocomplete="off">
+            <button type="submit">Load</button>
+            <button type="button"
+              id="vault-browse-btn"
+              data-testid="vault-browse-button"
+              onclick="vaultBrowser.open()">Browse vault</button>
+          </form>
+        </div>
+      </div>
+    </details>
   </div>
   {content_section}
 
@@ -3009,7 +3292,7 @@ def render_index_html(
 
   <script>
   (function() {{
-    var API_BASE = {repr(_e(api_base_url))};
+    var API_BASE = '';  /* same-origin proxy — runtime host is server-side only */
     var overlay = document.getElementById('vault-browser-overlay');
     var list    = document.getElementById('vault-browser-list');
     var status  = document.getElementById('vault-browser-status');
@@ -3104,7 +3387,7 @@ def render_index_html(
 
   <script>
   (function() {{
-    var API_BASE = {repr(_e(api_base_url))};
+    var API_BASE = '';  /* same-origin proxy — runtime host is server-side only */
 
     window.bodyEditor = {{
       submit: function() {{
@@ -3212,6 +3495,14 @@ def make_handler(
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            # Same-origin proxy: GET /api/companion/vault/notes → runtime API.
+            # Client JS uses a path-only URL so the request goes to the Companion
+            # UI server (reachable from any client), which then calls the runtime
+            # API server-side. This avoids the 127.0.0.1 leakage that broke
+            # remote clients (#1277 AC1, AC2).
+            if parsed.path == "/api/companion/vault/notes":
+                self._proxy_get_vault_notes(parsed.query)
+                return
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
@@ -3223,6 +3514,87 @@ def make_handler(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            # Same-origin proxy: POST /api/companion/workspace/body → runtime API.
+            if parsed.path == "/api/companion/workspace/body":
+                self._proxy_post_workspace_body()
+                return
+            body = b"Not Found"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _proxy_get_vault_notes(self, query_string: str) -> None:
+            """Proxy GET /api/companion/vault/notes to the runtime API server-side."""
+            q_val = parse_qs(query_string).get("q", [""])[0]
+            params: dict = {"q": q_val} if q_val else {}
+            try:
+                data = self._client.get("/api/companion/vault/notes", params=params)
+                resp_body = json.dumps(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+            except WorkspaceClientHTTPError as exc:
+                resp_body = json.dumps({"error": exc.detail}).encode("utf-8")
+                self.send_response(exc.status_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+            except WorkspaceClientError as exc:
+                resp_body = json.dumps({"error": str(exc)}).encode("utf-8")
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+
+        def _proxy_post_workspace_body(self) -> None:
+            """Proxy POST /api/companion/workspace/body to the runtime API server-side."""
+            content_length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(content_length)
+            try:
+                request_data = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                resp_body = json.dumps({"error": "invalid JSON"}).encode("utf-8")
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+                return
+            try:
+                data = self._client.post("/api/companion/workspace/body", json=request_data)
+                resp_body = json.dumps(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+            except WorkspaceClientHTTPError as exc:
+                try:
+                    error_data = json.loads(exc.detail)
+                except (json.JSONDecodeError, ValueError):
+                    error_data = {"detail": exc.detail}
+                resp_body = json.dumps(error_data).encode("utf-8")
+                self.send_response(exc.status_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+            except WorkspaceClientError as exc:
+                resp_body = json.dumps({"error": str(exc)}).encode("utf-8")
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
 
         def log_message(self, fmt: str, *args: object) -> None:
             pass  # suppress per-request log noise; startup banner handles visibility

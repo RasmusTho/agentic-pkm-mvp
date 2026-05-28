@@ -213,12 +213,13 @@ class TestNoteHeader:
 class TestNoteBody:
     def test_body_content_rendered_in_body_region(self) -> None:
         html = _html_with_note(body="# Alpha\n\nThis is the note body.")
+        # The note-body div contains nested divs before the pre, so match through to the pre.
         body_match = re.search(
-            r'data-testid="workspace-note-body".*?</div>',
+            r'data-testid="workspace-note-body".*?<pre class="note-body-content">(.*?)</pre>',
             html,
             re.DOTALL,
         )
-        assert body_match, "workspace-note-body region not found"
+        assert body_match, "workspace-note-body pre element not found"
         assert "This is the note body." in body_match.group()
 
     def test_body_precedes_rail_in_markup(self) -> None:
@@ -233,12 +234,13 @@ class TestNoteBody:
     def test_body_not_in_debug_pre_at_page_root(self) -> None:
         """Body must be inside the workspace-note-body region, not a bare root pre."""
         html = _html_with_note(body="# Test")
+        # Match through nested divs to find the pre element inside workspace-note-body.
         body_region = re.search(
-            r'data-testid="workspace-note-body"(.*?)</div>',
+            r'data-testid="workspace-note-body".*?<pre class="note-body-content">',
             html,
             re.DOTALL,
         )
-        assert body_region, "workspace-note-body region missing"
+        assert body_region, "workspace-note-body pre element missing"
         assert "<pre" in body_region.group(), "body content must be in a pre inside the body region"
 
 

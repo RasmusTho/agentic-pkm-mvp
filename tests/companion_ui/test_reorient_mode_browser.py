@@ -13,6 +13,8 @@ from companion_ui.workspace.serve_dev_page import render_index_html
 
 class _FakeClient:
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if url == "/api/companion/vault-browser":
+            return {}
         assert url == "/api/companion/workspace"
         assert params == {"note_path": "Notes/reorient.md"}
         return {

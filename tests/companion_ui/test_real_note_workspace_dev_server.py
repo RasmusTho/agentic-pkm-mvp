@@ -865,3 +865,138 @@ class TestBodyEditPanelRendering:
             fields=self._fields(update_flow_available=True, note_path="Inbox/Todo.md"),
         )
         assert 'data-note-path="Inbox/Todo.md"' in html
+
+
+# ---------------------------------------------------------------------------
+# Same-origin proxy (#1277 AC1, AC2)
+# ---------------------------------------------------------------------------
+
+
+class TestSameOriginProxy:
+    """Verify that the handler proxies /api/companion/vault/notes and
+    /api/companion/workspace/body through the server-side client so that
+    remote browsers (opening the page from a non-localhost IP) are not
+    left calling 127.0.0.1 directly.
+    """
+
+    class _ProxyFakeClient:
+        """Fake client that records calls and returns configurable responses."""
+
+        def __init__(
+            self,
+            get_result: dict | None = None,
+            get_error: Exception | None = None,
+            post_result: dict | None = None,
+            post_error: Exception | None = None,
+        ) -> None:
+            self.get_calls: list[tuple[str, dict]] = []
+            self.post_calls: list[tuple[str, dict]] = []
+            self._get_result = get_result
+            self._get_error = get_error
+            self._post_result = post_result
+            self._post_error = post_error
+
+        def get(self, url: str, *, params: dict) -> dict:
+            self.get_calls.append((url, params))
+            if self._get_error is not None:
+                raise self._get_error
+            return self._get_result or {}
+
+        def post(self, url: str, *, json: dict) -> dict:
+            self.post_calls.append((url, json))
+            if self._post_error is not None:
+                raise self._post_error
+            return self._post_result or {}
+
+        def delete(self, url: str, *, params: dict | None = None) -> dict:
+            return {}
+
+    def _start(self, client: "_ProxyFakeClient") -> tuple[HTTPServer, int]:
+        from companion_ui.workspace.serve_dev_page import make_handler
+
+        handler = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        port = server.server_address[1]
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        return server, port
+
+    def test_get_vault_notes_proxy_calls_client(self) -> None:
+        """GET /api/companion/vault/notes calls WorkspaceHttpClient.get server-side."""
+        client = self._ProxyFakeClient(
+            get_result={"notes": [{"title": "A", "path": "A.md"}], "vault_identity": {}}
+        )
+        server, port = self._start(client)
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/companion/vault/notes")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data.get("notes") == [{"title": "A", "path": "A.md"}]
+            vault_notes_calls = [c for c in client.get_calls if "/api/companion/vault/notes" in c[0]]
+            assert vault_notes_calls, "Expected a proxy call to /api/companion/vault/notes"
+        finally:
+            server.shutdown()
+
+    def test_get_vault_notes_forwards_q_param(self) -> None:
+        """GET /api/companion/vault/notes?q=foo forwards q to the runtime client."""
+        client = self._ProxyFakeClient(get_result={"notes": [], "vault_identity": {}})
+        server, port = self._start(client)
+        try:
+            httpx.get(f"http://127.0.0.1:{port}/api/companion/vault/notes?q=foo")
+            vault_notes_calls = [c for c in client.get_calls if "/api/companion/vault/notes" in c[0]]
+            assert vault_notes_calls
+            _url, params = vault_notes_calls[0]
+            assert params.get("q") == "foo"
+        finally:
+            server.shutdown()
+
+    def test_get_vault_notes_client_error_returns_502(self) -> None:
+        """A network error from the runtime client returns 502 to the browser."""
+        from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
+
+        client = self._ProxyFakeClient(
+            get_error=WorkspaceClientNetworkError("connection refused")
+        )
+        server, port = self._start(client)
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/companion/vault/notes")
+            assert resp.status_code == 502
+            assert "error" in resp.json()
+        finally:
+            server.shutdown()
+
+    def test_post_workspace_body_proxy_calls_client(self) -> None:
+        """POST /api/companion/workspace/body calls WorkspaceHttpClient.post server-side."""
+        client = self._ProxyFakeClient(post_result={"content_hash": "sha256-new"})
+        server, port = self._start(client)
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/companion/workspace/body",
+                json={"note_path": "Notes/a.md", "new_body": "new body"},
+            )
+            assert resp.status_code == 200
+            assert resp.json().get("content_hash") == "sha256-new"
+            body_calls = [c for c in client.post_calls if "/api/companion/workspace/body" in c[0]]
+            assert body_calls, "Expected proxy call to /api/companion/workspace/body"
+        finally:
+            server.shutdown()
+
+    def test_js_api_base_is_same_origin(self) -> None:
+        """JavaScript API_BASE must be empty-string (same-origin) so remote
+        browsers do not call the server's 127.0.0.1 runtime directly (#1277 AC2).
+        """
+        from companion_ui.workspace.serve_dev_page import render_index_html
+
+        html = render_index_html(api_base_url="http://10.42.42.10:18001")
+        # The JS should use same-origin paths, never the literal runtime host.
+        assert "var API_BASE = '';" in html or "var API_BASE = ''" in html
+        # The runtime host must not appear inside the JavaScript fetch() calls.
+        # It may still appear in human-visible chrome (e.g. the api-url span).
+        import re
+
+        js_api_base_match = re.search(r"var API_BASE\s*=\s*['\"]([^'\"]*)['\"]", html)
+        assert js_api_base_match is not None
+        assert js_api_base_match.group(1) == "", (
+            "API_BASE must be empty string for same-origin calls; "
+            f"got: {js_api_base_match.group(1)!r}"
+        )

@@ -18,6 +18,8 @@ class _FakeClient:
         self.delete_calls: list[tuple[str, dict[str, Any] | None]] = []
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if url == "/api/companion/vault-browser":
+            return {}  # infrastructure; not under test
         self.get_calls.append((url, params))
         return self.payloads.pop(0)
 

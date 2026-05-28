@@ -16,6 +16,8 @@ class _FakeClient:
         self.suggestions = suggestions
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if url == "/api/companion/vault-browser":
+            return {}  # infrastructure; not under test
         return {
             "artifact": {
                 "artifact_id": "art-1133",

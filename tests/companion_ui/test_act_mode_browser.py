@@ -16,6 +16,8 @@ class _FakeClient:
         self._receipt = receipt
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if url == "/api/companion/vault-browser":
+            return {}
         assert url == "/api/companion/workspace"
         assert params == {"note_path": "Notes/act.md"}
         panel: dict[str, Any] = {

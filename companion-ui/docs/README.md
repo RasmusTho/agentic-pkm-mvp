@@ -18,6 +18,13 @@ Foundational documents for cognitive interaction architecture.
 - `FUTURE_RESEARCH.md`
 - `DESIGN_BRIEF.md` (preserved source brief)
 
+## Obsidian-compatible note surface
+- `OBSIDIAN_COMPATIBILITY_MATRIX.md` — source-of-truth matrix for Obsidian syntax compatibility in Companion UI: compatibility target (Reading View-like), feature-by-feature phase assignments (adopt now / adopt soon / spike / diagnostic only / reject/defer), mutation/governance boundary, stop conditions. Workstream: Companion UI Obsidian-Compatible Note Surface.
+- `VAULT_MARKDOWN_RENDERER_CONTRACT.md` — contract for read-only Companion UI rendering of vault Markdown: document model (VaultMarkdownDocument, WikiLinkRef, EmbedRef, etc.), parser/renderer/resolver responsibilities, component boundaries (VaultMarkdownRenderer, ObsidianCalloutRenderer, MermaidBlockRenderer, etc.), security model, governance boundary, test contract, editor-adapter boundary. Workstream: Companion UI Obsidian-Compatible Note Surface.
+
+## Daily-use visibility
+- `COMPANION_UI_DAILY_USE_VISIBILITY_CONTRACT.md` — what is always visible vs. behind disclosure vs. suppressed when disabled: dev controls, runtime identity, Panel deduplication, vault browser filtering, read-only body affordance, frontmatter humanization. Governing issue: #1361.
+
 ## Surface contracts and feature implementation specs
 - `WORKSPACE_STATE_CONTRACT.md` — read-side aggregate contract for `GET /api/companion/workspace`, combining artifact, runtime, Canvas, Panel, suggestion, and guard state without creating a new authority surface. Governing issue: #1122.
 - `CANVAS_BROWSER_EDITOR_DECISION.md` — decision record choosing `textarea` as the interim Canvas browser editor primitive and preserving full-body replacement semantics. Governing issue: #1126.
