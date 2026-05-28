@@ -107,9 +107,16 @@ def _html(**kw) -> str:
 
 
 def _body_region(html: str) -> str:
-    m = re.search(r'data-testid="workspace-note-body".*?</div>', html, re.DOTALL)
-    assert m, "workspace-note-body region not found"
-    return m.group()
+    # Match the full note-body section through the vault-markdown-rendered article.
+    # The note-body div contains nested divs (readonly-indicator, readonly-reason) before
+    # the rendered content, so we match the article tag specifically.
+    m = re.search(
+        r'(data-testid="workspace-note-body".*?<article class="vault-markdown-rendered"[^>]*>.*?</article>)',
+        html,
+        re.DOTALL,
+    )
+    assert m, "workspace-note-body vault-markdown-rendered article not found"
+    return m.group(1)
 
 
 def _rail_region(html: str) -> str:
@@ -610,10 +617,11 @@ class TestOperatorPromptDoesNotLeakIntoRail:
 
 
 # ---------------------------------------------------------------------------
-# R1 regression — frontmatter must not be user-visible outside identity chrome
-# Issue #1290: UAT confirmed raw YAML was visible adjacent to the note frame.
-# These tests lock in the fix: the workspace-note-frontmatter section is hidden
-# from user view via aria-hidden + display:none; raw YAML stays out of the body.
+# R1 regression — frontmatter must not be user-visible as raw YAML outside
+# identity chrome. Issue #1290: UAT confirmed raw YAML was visible adjacent
+# to the note frame. Updated for daily-use visibility contract (#1361): the
+# section uses a <details> disclosure (humanized summary, collapsed by default)
+# rather than display:none — raw YAML is de-emphasized, not deleted from DOM.
 # ---------------------------------------------------------------------------
 
 
@@ -630,23 +638,28 @@ def _frontmatter_section_tag(html: str) -> str:
 class TestFrontmatterR1NotVisibleOutsideChrome:
     """R1 regression: raw frontmatter must not be user-visible outside identity chrome (#1290)."""
 
-    def test_frontmatter_section_is_aria_hidden_when_frontmatter_present(self) -> None:
-        """Opening tag must carry aria-hidden=true so assistive tech sees it hidden."""
+    def test_frontmatter_section_present_when_frontmatter_present(self) -> None:
+        """Section must be present and carry data-frontmatter-present=true."""
         html = _html(body=_FRONTMATTER_BODY)
         tag = _frontmatter_section_tag(html)
         assert 'data-frontmatter-present="true"' in tag, (
             "Expected data-frontmatter-present=true for a body that has frontmatter"
         )
-        assert 'aria-hidden="true"' in tag, (
-            f"R1 violation: workspace-note-frontmatter must carry aria-hidden=true; got: {tag!r}"
-        )
 
-    def test_frontmatter_section_is_display_none_when_frontmatter_present(self) -> None:
-        """Opening tag must carry display:none so the section is visually hidden."""
+    def test_frontmatter_section_uses_disclosure_not_raw_display(self) -> None:
+        """Frontmatter must be behind a <details> disclosure (daily-use visibility contract #1361).
+
+        The section must not render raw YAML as visible body text. The disclosure
+        pattern (humanized summary, raw YAML in body) replaces the earlier
+        display:none approach while preserving the R1 guarantee that raw YAML
+        is not visible in normal reading flow.
+        """
         html = _html(body=_FRONTMATTER_BODY)
-        tag = _frontmatter_section_tag(html)
-        assert "display:none" in tag or "display: none" in tag, (
-            f"R1 violation: workspace-note-frontmatter must carry style=display:none; got: {tag!r}"
+        assert 'data-testid="workspace-frontmatter-disclosure"' in html, (
+            "R1/#1361: frontmatter must be wrapped in a disclosure element"
+        )
+        assert 'data-testid="workspace-frontmatter-summary"' in html, (
+            "R1/#1361: frontmatter disclosure must have a humanized summary"
         )
 
     def test_raw_yaml_keys_absent_from_note_body_region(self) -> None:

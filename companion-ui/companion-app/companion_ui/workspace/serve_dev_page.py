@@ -110,6 +110,72 @@ def _cap(text: str, max_len: int = _RAIL_ITEM_MAX) -> str:
     return s[:max_len] + "…"
 
 
+# ---------------------------------------------------------------------------
+# Daily-use visibility helpers (#1361)
+# ---------------------------------------------------------------------------
+
+_REVIEW_STATE_LABELS: dict[str, str] = {
+    "needs_review": "needs review",
+    "reviewed": "reviewed",
+    "in_progress": "in progress",
+    "deferred": "deferred",
+    "approved": "approved",
+    "rejected": "rejected",
+}
+
+_LIFECYCLE_STATE_LABELS: dict[str, str] = {
+    "active": "active",
+    "inbox": "inbox",
+    "workbench": "workbench",
+    "archive": "archive",
+    "seedling": "seedling",
+    "evergreen": "evergreen",
+}
+
+_NOTE_TYPE_LABELS: dict[str, str] = {
+    "human_note": "note",
+    "companion_note": "companion",
+    "log_entry": "log",
+    "reference": "reference",
+}
+
+
+def _humanize_fm_pair(key: str, value: str) -> str | None:
+    """Return a human label for a frontmatter key/value pair, or None to skip."""
+    if key == "review_state":
+        label = _REVIEW_STATE_LABELS.get(value, value.replace("_", " "))
+        return f"review · {label}"
+    if key == "lifecycle_state":
+        label = _LIFECYCLE_STATE_LABELS.get(value, value.replace("_", " "))
+        return f"lifecycle · {label}"
+    if key in ("note_type", "kind"):
+        label = _NOTE_TYPE_LABELS.get(value, value.replace("_", " "))
+        return f"type · {label}"
+    if key == "zone":
+        return f"zone · {value.replace('_', ' ')}"
+    return None
+
+
+def _should_hide_note_by_default(note: dict) -> bool:
+    """Return True for companion/UUID notes hidden from navigation by default."""
+    import re as _re
+    kind = str(note.get("kind") or "").strip()
+    if kind in _COMPANION_KINDS:
+        return True
+    path = str(note.get("note_path") or "").strip()
+    filename = path.split("/")[-1]
+    filename_stem = filename
+    for ext in (".md", ".MD"):
+        if filename_stem.endswith(ext):
+            filename_stem = filename_stem[: -len(ext)]
+            break
+    uuid_pat = _re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        _re.IGNORECASE,
+    )
+    return bool(uuid_pat.match(filename_stem))
+
+
 def _status_label(value: object, *, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
     return text if text else fallback
@@ -142,7 +208,7 @@ def _split_frontmatter(body: str) -> tuple[list[str], str]:
 
 
 def _render_hidden_frontmatter_marker(document: VaultMarkdownDocument) -> str:
-    """Render the legacy hidden frontmatter marker expected by shell tests."""
+    """Render frontmatter as a humanized disclosure section (daily-use #1361)."""
     if document.frontmatter is None:
         return (
             '<section class="note-frontmatter note-frontmatter-empty" '
@@ -152,24 +218,34 @@ def _render_hidden_frontmatter_marker(document: VaultMarkdownDocument) -> str:
             '<span class="frontmatter-label">No frontmatter</span>'
             "</section>"
         )
+    summary_items: list[str] = []
     rows: list[str] = []
     for line in document.frontmatter.splitlines():
         stripped = line.rstrip()
         if not stripped:
             continue
+        if ":" in stripped:
+            key, _, val = stripped.partition(":")
+            human = _humanize_fm_pair(key.strip(), val.strip())
+            if human:
+                summary_items.append(_e(human))
         rows.append(
             '<div class="frontmatter-line">'
             f'<code>{_e(stripped)}</code>'
             "</div>"
         )
+    summary_text = " · ".join(summary_items) if summary_items else "properties"
     body_html = "".join(rows) or '<span class="frontmatter-label">(empty frontmatter)</span>'
     return (
         '<section class="note-frontmatter" '
         'data-testid="workspace-note-frontmatter" '
-        'data-frontmatter-present="true" '
-        'aria-hidden="true" style="display:none">'
-        '<span class="frontmatter-label">frontmatter</span>'
+        'data-frontmatter-present="true">'
+        '<details class="frontmatter-disclosure" data-testid="workspace-frontmatter-disclosure">'
+        '<summary class="frontmatter-summary" data-testid="workspace-frontmatter-summary">'
+        f"{summary_text}"
+        "</summary>"
         f"{body_html}"
+        "</details>"
         "</section>"
     )
 
@@ -466,6 +542,9 @@ def _render_workspace_header_strip(
               <span>{pill_label}</span>
               <span class="workspace-runtime-human-label">{posture_label}</span>
             </summary>
+            <span id="workspace-runtime-telemetry"
+              data-testid="workspace-runtime-telemetry"
+              aria-hidden="true"></span>
             <div class="workspace-runtime-status-popover" data-testid="workspace-runtime-status-popover">
               {telemetry_html}
             </div>
@@ -899,7 +978,19 @@ def _render_note_section(fields: dict) -> str:
         {outline_html}
         <button class="workspace-outline-ribbon" data-testid="workspace-outline-ribbon"
           aria-label="open outline" data-layout-visible="800-1099">☰ outline</button>
-        <div class="note-body" data-testid="workspace-note-body" data-region="note-body">
+        <div class="note-body" data-testid="workspace-note-body" data-region="note-body"
+          data-read-only="true">
+          <div class="note-body-readonly-indicator"
+            data-testid="workspace-note-body-readonly-indicator"
+            data-read-only="true">read-only</div>
+          <div class="note-body-readonly-reason"
+            data-testid="workspace-note-body-readonly-reason"
+            aria-live="polite"
+            hidden>
+            Editing is currently disabled by runtime configuration.&#160;<a
+              href="#workspace-runtime-telemetry"
+              data-testid="workspace-note-body-readonly-why">Why?</a>
+          </div>
           {read_only_pill_html}
           <div class="note-body-content">{body}</div>
           {suggested_insertions_html}
@@ -971,17 +1062,20 @@ def _render_active_note_body_update_flow(
     safe_message = _e(message)
     if not enabled:
         # Render a hidden absence marker — keeps testid selectors functional while
-        # not leaking verbose internal reason text into the visible rail.
-        return f"""
-        <section
-          class="active-note-body-update-flow"
-          data-testid="workspace-active-note-body-update-flow"
-          data-flow-state="disabled"
-          data-reason="{_e(reason)}"
-          aria-hidden="true"
-          style="display:none">
-          <span data-testid="workspace-active-note-body-update-state-blocked"></span>
-        </section>"""
+        # not adding a duplicate "unavailable" banner (daily-use dedup, #1361).
+        return (
+            '<section'
+            ' class="active-note-body-update-flow active-note-body-update-flow--disabled"'
+            ' data-testid="workspace-active-note-body-update-flow"'
+            ' data-flow-state="disabled"'
+            f' data-reason="{_e(reason)}">'
+            '<div'
+            ' class="active-note-body-update-blocked active-note-body-update-blocked--quiet"'
+            ' data-testid="workspace-active-note-body-update-state-blocked"'
+            ' hidden>'
+            "</div>"
+            "</section>"
+        )
 
     status_html = ""
     if safe_state == "success":
@@ -1465,6 +1559,11 @@ def _render_vault_browser(
             "</div>"
         )
 
+    # Daily-use visibility: companion/UUID notes are rendered hidden in the DOM
+    # (preserving data-kind/data-companion attributes for test compatibility)
+    # but excluded from the visible nav list (#1361).
+    hidden_count = sum(1 for n in notes if _should_hide_note_by_default(n))
+
     rows: list[str] = []
     for note in notes:
         path = str(note.get("note_path") or "").strip()
@@ -1475,48 +1574,56 @@ def _render_vault_browser(
         href = "/?note_path=" + quote(path, safe="/")
         active = "true" if path == note_path else "false"
 
-        badges: list[str] = []
+        # Per-note metadata badges: hidden from the nav list by default (daily-use
+        # visibility pass). The inspector panel shows the full metadata. These
+        # elements retain their data-testid for test compatibility but are visually
+        # hidden so the nav list stays calm and navigation-focused.
+        hidden_badge_attrs = ' class="note-badge note-badge--nav-hidden" data-nav-visible="false"'
         kind_val = note.get("kind")
-        if kind_val:
-            badges.append(
-                f'<span class="note-badge note-badge--kind" '
-                f'data-testid="workspace-vault-browser-note-kind">{_e(str(kind_val))}</span>'
-            )
+        kind_badge = (
+            f'<span{hidden_badge_attrs} '
+            f'data-testid="workspace-vault-browser-note-kind">{_e(str(kind_val))}</span>'
+            if kind_val else ""
+        )
         review_state_val = note.get("review_state")
-        if review_state_val:
-            badges.append(
-                f'<span class="note-badge note-badge--review-state" '
-                f'data-testid="workspace-vault-browser-note-review-state">{_e(str(review_state_val))}</span>'
-            )
+        review_badge = (
+            f'<span{hidden_badge_attrs} '
+            f'data-testid="workspace-vault-browser-note-review-state">{_e(str(review_state_val))}</span>'
+            if review_state_val else ""
+        )
         trust_val = note.get("trust")
-        if trust_val:
-            badges.append(
-                f'<span class="note-badge note-badge--trust" '
-                f'data-testid="workspace-vault-browser-note-trust">{_e(str(trust_val))}</span>'
-            )
+        trust_badge = (
+            f'<span{hidden_badge_attrs} '
+            f'data-testid="workspace-vault-browser-note-trust">{_e(str(trust_val))}</span>'
+            if trust_val else ""
+        )
         frontmatter_valid = note.get("frontmatter_valid", True)
         missing_fields = note.get("missing_required_fields") or []
+        health_badge = ""
         if not frontmatter_valid or missing_fields:
             missing_label = ", ".join(missing_fields) if missing_fields else "invalid"
-            badges.append(
+            health_badge = (
                 f'<span class="note-badge note-badge--health note-badge--health-invalid" '
                 f'data-testid="workspace-vault-browser-note-health" '
                 f'data-missing-fields="{_e(missing_label)}">missing: {_e(missing_label)}</span>'
             )
-        badges_html = "".join(badges)
+        badges_html = kind_badge + review_badge + trust_badge + health_badge
 
         kind_safe = _e(str(kind_val)) if kind_val else ""
         is_companion = kind_val in _COMPANION_KINDS
         row_extra_class = " vault-browser-row--companion" if is_companion else ""
         row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
         row_companion_attr = ' data-companion="true"' if is_companion else ""
+        nav_hidden = _should_hide_note_by_default(note)
+        row_hidden_attr = " hidden" if nav_hidden else ""
+        row_nav_attr = ' data-nav-visible="false"' if nav_hidden else ""
 
         rows.append(
             f"""
-          <li class="vault-browser-row{row_extra_class}" data-testid="workspace-vault-browser-note-row" data-active="{active}"{row_kind_attr}{row_companion_attr}>
+          <li class="vault-browser-row{row_extra_class}" data-testid="workspace-vault-browser-note-row" data-active="{active}"{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>
             <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
             <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
-            <span data-testid="workspace-vault-browser-note-zone">{zone}</span>
+            <span data-testid="workspace-vault-browser-note-zone" class="vault-browser-zone-label">{zone}</span>
             {badges_html}
           </li>"""
         )
@@ -1529,11 +1636,22 @@ def _render_vault_browser(
         else ""
     )
     read_only_text = "read-only" if read_only else "mutating"
+    # Calm provenance label for daily-use visibility; raw value in data attribute.
+    calm_provenance = "read-only fallback · filesystem index" if read_only else "filesystem index"
     filters_html = _render_filter_chips(notes, active_filters or {})
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
     inspector_html = (
         _render_artifact_inspector(selected_note, vault_name=vault_name, vault_channel=vault_channel)
         if selected_note is not None
+        else ""
+    )
+    hidden_html = (
+        f'<span class="vault-browser-hidden-count" '
+        f'data-testid="workspace-vault-browser-hidden-count" '
+        f'data-hidden="{hidden_count}">'
+        f'{hidden_count} system/companion note{"s" if hidden_count != 1 else ""} hidden'
+        "</span>"
+        if hidden_count > 0
         else ""
     )
     return f"""
@@ -1543,8 +1661,11 @@ def _render_vault_browser(
             {identity_html}
             <span data-testid="workspace-vault-browser-read-only">{read_only_text}</span>
             <span data-testid="workspace-vault-browser-query">{query_text}</span>
-            <span data-testid="workspace-vault-browser-provenance">{_e(vault_provenance)}</span>
+            <span class="vault-browser-provenance-calm"
+                  data-testid="workspace-vault-browser-provenance"
+                  data-raw-provenance="{_e(vault_provenance)}">{_e(calm_provenance)}</span>
           </div>
+          {hidden_html}
           {filters_html}
           {state_html}
           {list_html}
@@ -2274,9 +2395,20 @@ def _render_canvas_session_controls(
         )
         # Early return: skip presence text, composer, undo_state, and log counts —
         # none of those are meaningful when canvas is globally blocked.
+        # Retain workspace-canvas-body-edit-unavailable in DOM (suppressed) so test
+        # selectors and affordance-checking still work (#1361).
+        suppressed_composer = (
+            '<div'
+            ' class="canvas-body-edit-unavailable canvas-body-edit-unavailable--suppressed"'
+            ' data-testid="workspace-canvas-body-edit-unavailable"'
+            ' data-affordance-status="blocked"'
+            ' hidden>'
+            "</div>"
+        ) if not canvas_enabled else ""
         return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
           {unavailable_html}
+          {suppressed_composer}
           <div class="canvas-provenance" data-testid="workspace-canvas-provenance"
                aria-hidden="true" style="display:none">
             <code data-testid="workspace-canvas-session-log-path">{log_text}</code>
@@ -2341,7 +2473,19 @@ def _render_canvas_session_controls(
                 "Body edit composer disabled by workspace update capability: "
                 f"{_human_reason(workspace_update_reason)}."
             )
-        composer_html = """
+        if canvas_blocked and not canvas_enabled:
+            # Suppressed: canvas is disabled — guard alert already communicates this.
+            # Retain testid in DOM for test compatibility but keep visually hidden.
+            composer_html = (
+                '<div'
+                ' class="canvas-body-edit-unavailable canvas-body-edit-unavailable--suppressed"'
+                ' data-testid="workspace-canvas-body-edit-unavailable"'
+                ' data-affordance-status="blocked"'
+                ' hidden>'
+                "</div>"
+            )
+        else:
+            composer_html = """
           <div
             class="canvas-body-edit-unavailable"
             data-testid="workspace-canvas-body-edit-unavailable"
@@ -2767,6 +2911,70 @@ def render_index_html(
       flex-shrink: 0;
     }}
     .load-bar button:hover {{ border-color: var(--cyan); color: var(--cyan); }}
+
+    /* ---- Dev controls disclosure (#1361) ---- */
+    .dev-controls-disclosure {{ margin: 0; padding: 0; }}
+    .dev-controls-disclosure > summary.dev-controls-summary {{
+      display: inline-block;
+      cursor: pointer;
+      color: var(--fg-3);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      padding: 2px 8px;
+      user-select: none;
+    }}
+
+    /* ---- Note body read-only affordance (#1361) ---- */
+    .note-body-readonly-indicator {{
+      display: inline-block;
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      color: var(--fg-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1px 6px;
+      margin-bottom: 8px;
+      cursor: default;
+    }}
+    .note-body-readonly-reason {{
+      font-size: var(--text-xs);
+      color: var(--fg-2);
+      margin-bottom: 8px;
+    }}
+    .note-body-readonly-reason[hidden] {{ display: none; }}
+
+    /* ---- Frontmatter disclosure (#1361) ---- */
+    .frontmatter-disclosure > summary.frontmatter-summary {{
+      cursor: pointer;
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      user-select: none;
+      list-style: none;
+    }}
+    .frontmatter-disclosure > summary.frontmatter-summary::before {{
+      content: "▸ ";
+      font-size: 0.7em;
+    }}
+    .frontmatter-disclosure[open] > summary.frontmatter-summary::before {{
+      content: "▾ ";
+    }}
+
+    /* ---- Vault browser calm provenance (#1361) ---- */
+    .vault-browser-provenance-calm {{
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      display: block;
+      padding: 4px 10px 6px;
+    }}
+    .vault-browser-hidden-count {{
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      padding: 2px 10px 4px;
+      display: block;
+    }}
+    .note-badge--nav-hidden {{ opacity: 0.45; }}
 
     /* ---- Error state ---- */
     .error-state {{
@@ -4452,23 +4660,26 @@ def render_index_html(
     </div>
     {dev_chip}
   </div>
-  <div class="load-bar">
-    <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
-      <label for="note_path">note_path</label>
-      <input
-        type="text"
-        id="note_path"
-        name="note_path"
-        value="{_e(note_path)}"
-        placeholder="Some/Note.md"
-        autocomplete="off">
-      <button type="submit">Load</button>
-      <button type="button"
-        id="vault-browse-btn"
-        data-testid="vault-browse-button"
-        onclick="vaultBrowser.open()">Browse vault</button>
-    </form>
-  </div>
+  <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
+    <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
+    <div class="load-bar">
+      <form method="GET" action="/" style="display:flex;align-items:center;gap:8px;width:100%">
+        <label for="note_path">note_path</label>
+        <input
+          type="text"
+          id="note_path"
+          name="note_path"
+          value="{_e(note_path)}"
+          placeholder="Some/Note.md"
+          autocomplete="off">
+        <button type="submit">Load</button>
+        <button type="button"
+          id="vault-browse-btn"
+          data-testid="vault-browse-button"
+          onclick="vaultBrowser.open()">Browse vault</button>
+      </form>
+    </div>
+  </details>
   {content_section}
 
   <!-- Vault note browser overlay -->

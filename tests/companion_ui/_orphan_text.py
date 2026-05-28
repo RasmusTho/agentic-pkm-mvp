@@ -104,6 +104,8 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-outline-sheet-trigger",
         "workspace-panel-sheet-trigger",
         "workspace-sheet-triggers",
+        # Dev controls disclosure (#1361)
+        "workspace-dev-controls-toggle",
     }
 )
 

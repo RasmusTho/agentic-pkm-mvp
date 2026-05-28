@@ -68,8 +68,9 @@ class TestReadOnlyPill:
         # Remove HTML tags, leaving only text and attribute values
         text_only = _re.sub(r"<[^>]+>", " ", stripped)
         count = text_only.lower().count("read-only")
-        # Three pre-existing + new surfaces are acceptable:
+        # Four surfaces are acceptable (#1361 adds note-body affordance):
         #   1) vault-browser-read-only span (vault browser status, always shown)
         #   2) reorient-mode rail-state-value "read-only" (panel affordance, empty state)
-        #   3) workspace-read-only-pill text "▍ read-only" (the new note-level indicator)
-        assert count <= 3, f"'read-only' visible text appears {count} times (expected ≤ 3)"
+        #   3) workspace-read-only-pill text "▍ read-only" (the note-level indicator)
+        #   4) note-body-readonly-indicator "read-only" (daily-use body affordance, #1361)
+        assert count <= 4, f"'read-only' visible text appears {count} times (expected ≤ 4)"

@@ -209,7 +209,7 @@ class TestNoteBody:
     def test_body_content_rendered_in_body_region(self) -> None:
         html = _html_with_note(body="# Alpha\n\nThis is the note body.")
         body_match = re.search(
-            r'data-testid="workspace-note-body".*?</div>',
+            r'data-testid="workspace-note-body".*?<article class="vault-markdown-rendered"[^>]*>(.*?)</article>',
             html,
             re.DOTALL,
         )
@@ -229,7 +229,7 @@ class TestNoteBody:
         """Body must be inside the workspace-note-body region, not a bare root pre."""
         html = _html_with_note(body="# Test")
         body_region = re.search(
-            r'data-testid="workspace-note-body"(.*?)</div>',
+            r'data-testid="workspace-note-body".*?(<article class="vault-markdown-rendered"[^>]*>.*?</article>)',
             html,
             re.DOTALL,
         )
