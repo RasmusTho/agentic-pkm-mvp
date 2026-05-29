@@ -432,6 +432,11 @@ cui_run_doctor() {
     echo "  [info] no tailscale IP detected (LAN-only or tailscale down)"
   fi
 
+  # 9. Channel-specific extra checks (e.g. prod automation-flag safety).
+  if declare -f cui_extra_doctor >/dev/null 2>&1; then
+    cui_extra_doctor || rc=1
+  fi
+
   echo "============================================================="
   return "${rc}"
 }

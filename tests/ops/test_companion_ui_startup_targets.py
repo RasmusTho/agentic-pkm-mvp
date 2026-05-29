@@ -28,6 +28,8 @@ DEV_START = REPO_ROOT / "scripts" / "dev" / "start_niflheim_ui.sh"
 DEV_DOCTOR = REPO_ROOT / "scripts" / "dev" / "dev_ui_doctor.sh"
 TEST_START = REPO_ROOT / "scripts" / "test" / "start_bifrost_ui.sh"
 TEST_DOCTOR = REPO_ROOT / "scripts" / "test" / "test_ui_doctor.sh"
+PROD_START = REPO_ROOT / "scripts" / "prod" / "start_midgard_ui.sh"
+PROD_DOCTOR = REPO_ROOT / "scripts" / "prod" / "prod_ui_doctor.sh"
 
 
 def _makefile_target_body(makefile_text: str, target_name: str) -> str | None:
@@ -265,3 +267,123 @@ def test_channel_scripts_use_distinct_ports_and_projects() -> None:
     assert "8111" in dev and "8112" in test, "dev/test UI ports must differ (8111 vs 8112)."
     assert "18001" in dev and "18002" in test, "dev/test API ports must differ (18001 vs 18002)."
     assert "pkm-dev" in dev and "pkm-test" in test, "dev/test compose projects must differ."
+
+
+# ── prod / Midgård (#1360) ────────────────────────────────────────────────────
+
+
+def test_prod_ui_make_targets_exist_and_delegate() -> None:
+    """make prod-ui and make prod-ui-doctor must exist and call the scripts.
+
+    Verify: Issue #1360 AC1 / AC6 —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_ui_make_targets_exist_and_delegate
+    """
+    text = MAKEFILE.read_text(encoding="utf-8")
+    start = _makefile_target_body(text, "prod-ui")
+    doctor = _makefile_target_body(text, "prod-ui-doctor")
+    assert start is not None, "Makefile is missing the canonical 'prod-ui' target (Issue #1360)."
+    assert doctor is not None, "Makefile is missing the 'prod-ui-doctor' target (Issue #1360)."
+    assert "scripts/prod/start_midgard_ui.sh" in start, (
+        "'prod-ui' must delegate to scripts/prod/start_midgard_ui.sh (Issue #1360)."
+    )
+    assert "scripts/prod/prod_ui_doctor.sh" in doctor, (
+        "'prod-ui-doctor' must delegate to scripts/prod/prod_ui_doctor.sh (Issue #1360)."
+    )
+
+
+def test_prod_scripts_exist_and_are_valid_bash() -> None:
+    """The prod startup and doctor scripts must exist and parse.
+
+    Verify: Issue #1360 AC1 / AC6 —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_scripts_exist_and_are_valid_bash
+    """
+    for path in (PROD_START, PROD_DOCTOR):
+        assert path.is_file(), f"{path.relative_to(REPO_ROOT)} is required (Issue #1360)."
+        ok, err = _bash_syntax_ok(path)
+        assert ok, f"{path.name} failed `bash -n`:\n{err}"
+
+
+def test_prod_start_binds_midgard_channel_and_ports() -> None:
+    """The prod start script must bind the prod channel, Midgård guard, and ports.
+
+    Verify: Issue #1360 AC2 / AC4 / AC5 —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_start_binds_midgard_channel_and_ports
+    """
+    text = PROD_START.read_text(encoding="utf-8")
+    assert re.search(r'CUI_CHANNEL=["\']?prod["\']?', text), "prod start must set CUI_CHANNEL=prod."
+    assert "midg" in text, (
+        "prod start must guard the resolved vault against Midgård/Midgard (Issue #1360 AC2)."
+    )
+    assert re.search(r'CUI_API_PORT=["\']?18000["\']?', text), "prod API port must be 18000."
+    assert re.search(r'CUI_UI_PORT=["\']?8113["\']?', text), "prod UI port must be 8113."
+    assert "pkm-prod" in text, "prod start must target the pkm-prod compose project (AC4)."
+    assert "serve_production_page" in text, (
+        "prod start must launch the Companion UI production page module (Issue #1360)."
+    )
+
+
+def test_prod_defaults_to_safe_posture_and_gates_automation() -> None:
+    """Prod must default to a safe posture and gate write/automation on an
+    explicit operator acknowledgement.
+
+    Verify: Issue #1360 AC3 —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_defaults_to_safe_posture_and_gates_automation
+    """
+    text = PROD_START.read_text(encoding="utf-8")
+    assert "PROD_UI_ENABLE_AUTOMATION" in text, (
+        "prod start must require an explicit acknowledgement flag for write/automation "
+        "modes (Issue #1360 AC3)."
+    )
+    # Default branch must turn watcher auto-exec OFF.
+    assert re.search(r'CUI_WATCHER_AUTO_EXEC=["\']?0["\']?', text), (
+        "prod start must default WATCHER_AUTO_EXEC to 0 (safe posture, Issue #1360 AC3)."
+    )
+
+
+def test_prod_doctor_checks_automation_flags() -> None:
+    """The prod doctor must surface unexpectedly-enabled automation/write flags.
+
+    Verify: Issue #1360 AC6 —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_doctor_checks_automation_flags
+    """
+    text = PROD_DOCTOR.read_text(encoding="utf-8")
+    assert "cui_extra_doctor" in text, "prod doctor must define the extra automation-flag check (AC6)."
+    assert "PROD_UI_ENABLE_AUTOMATION" in text and "WATCHER_AUTO_EXEC" in text, (
+        "prod doctor must inspect automation/write flags (Issue #1360 AC6)."
+    )
+
+
+@pytest.mark.parametrize(
+    "vault_basename,should_match",
+    [
+        ("Midgård", True),
+        ("Midgard", True),
+        ("midgård", True),
+        ("Niflheim", False),
+        ("Bifröst", False),
+        ("vault", False),
+    ],
+)
+def test_prod_vault_guard_pattern(vault_basename: str, should_match: bool) -> None:
+    """The prod vault guard regex must accept Midgård spellings and reject others.
+
+    Verify: Issue #1360 AC2 —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_vault_guard_pattern
+    """
+    pattern = re.compile("midg(å|a)rd")
+    matched = bool(pattern.search(vault_basename.lower()))
+    assert matched is should_match, (
+        f"vault guard pattern match for '{vault_basename}' was {matched}, expected {should_match}."
+    )
+
+
+def test_prod_uses_distinct_ports_from_dev_and_test() -> None:
+    """Prod must not share UI/API ports or compose project with dev/test.
+
+    Verify: Issue #1360 AC4 (channel separation) —
+      tests/ops/test_companion_ui_startup_targets.py::test_prod_uses_distinct_ports_from_dev_and_test
+    """
+    prod = PROD_START.read_text(encoding="utf-8")
+    assert "8113" in prod and "18000" in prod and "pkm-prod" in prod
+    for token in ("8111", "8112", "18001", "18002", "pkm-dev", "pkm-test"):
+        assert token not in prod, f"prod start must not reference dev/test token '{token}'."
