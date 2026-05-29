@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor dispatcher-init dispatcher-sync
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
@@ -117,6 +117,15 @@ dev-ui:
 
 dev-ui-doctor:
 	@bash scripts/dev/dev_ui_doctor.sh
+
+# Canonical test/Bifröst Companion UI startup + doctor (Issue #1359).
+# Same pattern as dev-ui, bound to the test channel (PKM_ENVIRONMENT=test,
+# pkm-test, app_test, API 18002, UI 8112) with channel separation preserved.
+test-ui:
+	@bash scripts/test/start_bifrost_ui.sh
+
+test-ui-doctor:
+	@bash scripts/test/test_ui_doctor.sh
 
 prod-up:
 	@$(COMPOSE_PROD) up -d --build

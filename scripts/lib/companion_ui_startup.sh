@@ -24,6 +24,7 @@
 #   CUI_BIND_LAN=1              bind the UI to 0.0.0.0 for LAN/Tailscale UAT (default: 127.0.0.1)
 #   CUI_TARGET_NOTE=<rel-path>  optional note path to verify via /api/companion/workspace
 #   CUI_WATCHER_AUTO_EXEC       passthrough to start_full_system.sh (prod wrapper sets 0 by default)
+#   CUI_DB_LABEL                expected channel DB name to report (e.g. app_dev/app_test/app)
 
 # ── repo + python resolution ────────────────────────────────────────────────
 
@@ -296,6 +297,7 @@ cui_print_summary() {
   fi
   echo ""
   echo "================ Companion UI (${CUI_CHANNEL}) ready ================"
+  echo "  channel     : PKM_ENVIRONMENT=${CUI_CHANNEL}  project=${CUI_COMPOSE_PROJECT}  db=${CUI_DB_LABEL:-derived}"
   echo "  runtime API : http://127.0.0.1:${CUI_API_PORT}/healthz"
   echo "  UI (local)  : http://127.0.0.1:${CUI_UI_PORT}/${query}"
   if [ "${CUI_BIND_LAN:-0}" = "1" ]; then
@@ -335,6 +337,7 @@ cui_run_doctor() {
   cui_require_config
   local rc=0
   echo "============ Companion UI doctor (${CUI_CHANNEL}) ============"
+  echo "  channel: PKM_ENVIRONMENT=${CUI_CHANNEL}  project=${CUI_COMPOSE_PROJECT}  db=${CUI_DB_LABEL:-derived}"
 
   # 1. Docker / Colima
   if cui_docker_ok; then
