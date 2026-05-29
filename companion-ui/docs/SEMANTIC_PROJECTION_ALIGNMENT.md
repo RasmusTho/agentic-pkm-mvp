@@ -78,7 +78,7 @@ No contract was found to assert UI-owned semantic truth or self-authorized durab
 - Runtime vs durable boundary: `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md`.
 - Relation edits: `docs/CONCEPTS/RELATION_TAXONOMY.md`.
 - Interaction-surface authority (Panel/Chat/Automation): `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`.
-- Workflow mutation/governance detail: #1371 follow-up.
+- Workflow mutation/governance detail: `docs/CONCEPTS/WORKFLOW_MUTATION_AND_GOVERNANCE_SEMANTICS.md` (#1371).
 
 ## Verification path
 
