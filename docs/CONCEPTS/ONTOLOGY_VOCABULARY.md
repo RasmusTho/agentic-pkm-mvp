@@ -18,6 +18,12 @@ This document is subordinate to:
 - `docs/CONCEPTS/CONTEXT_REPRESENTATION_POSTURE.md`
 - `docs/PROJECT_KERNEL.md`
 
+For the **field-level and semantic-layer-ownership** view of artifact/runtime/governance
+terminology (`artifact_class`, `artifact_type`, `memory_type`, `kind`, `mirror`, runtime/workspace
+state, etc.), see the companion `docs/CONCEPTS/ARTIFACT_TERMINOLOGY_NORMALIZATION.md`, which is
+subordinate to this document for domain terms and aligns terminology to the seven semantic layers in
+`docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`.
+
 ## Usage rule
 
 When a term appears in multiple ontology layers, the canonical human-first meaning wins.
