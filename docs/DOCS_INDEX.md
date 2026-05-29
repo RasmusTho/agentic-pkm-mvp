@@ -32,6 +32,36 @@ First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to lo
 | Governance-bearing mutation | `AGENTS.md` (GitHub delivery governance), `.codex/skills/issue-to-code/SKILL.md` |
 | Operations / runtime health | `docs/OPERATIONS.md`, `docs/HEALTH.md`, `docs/OBSERVABILITY.md` |
 
+## Critical Authority Boundaries
+
+High-signal map of which doc owns which authority. This index remains the canonical documentation
+role map; the rows below are a quick pointer, not a replacement for the full tables.
+
+- Documentation role map: `docs/DOCS_INDEX.md`
+- Current runtime truth: `docs/ARCHITECTURE.md` + `docs/STATUS.md`
+- Runtime events and outbox contract: `docs/EVENTS.md`
+- Frontmatter write contract: `docs/FRONTMATTER.md`
+- Component maturity and wiring catalog: `docs/COMPONENTS.md`
+- Interaction authority: `docs/INTERACTION_SURFACES_AND_AUTHORITY/**` + `docs/PANEL_AGENT.md`
+- Companion UI product target-state: `docs/COMPANION_UI_PRODUCT_SPEC.md`
+- Contextualization / artifact semantics: `docs/CONTEXTUALIZATION_LAYER/**` + `docs/CONCEPTS/**`
+- Builder-agent workflow: `AGENTS.md` + `docs/development/**`
+- Operations and release-channel truth: `docs/OPERATIONS.md`, `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/**`
+
+Conflict-resolution rules:
+
+- If `ARCHITECTURE.md` / `STATUS.md` conflict with roadmap or design docs on current runtime,
+  current-state SoT wins.
+- If a design handoff conflicts with an owner-doc writeback, the owner doc plus implementation
+  evidence wins for shipped reality.
+- If a product/design doc uses action vocabulary, that does not create an emitted event contract
+  unless `EVENTS.md` is updated.
+- If a concept or target-state doc describes behavior, do not treat it as shipped without code/test
+  evidence and owner-doc status.
+
+For a point-in-time review of where documentation roles are at risk of drift, see the non-canonical
+`docs/DOC_DIVERGENCE_AUDIT.md` (advisory only; subordinate to this index).
+
 ## Temporal governance
 
 Some docs are structurally correct but still drift because time, delivery state, runtime posture,

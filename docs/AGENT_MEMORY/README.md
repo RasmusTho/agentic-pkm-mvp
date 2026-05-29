@@ -1,12 +1,17 @@
-State: Implemented. All five AGENT-MEMORY slices delivered. Final slice (AGENT-MEMORY-05)
-delivered by PR #1242 (issue #1083, 2026-05-23). Parent feature issue #900 closed.
+State: Implemented. All five AGENT-MEMORY slices delivered. Companion-aware handling remains tracked separately if still open.
+Doc role: Capability implementation index and delivery record
+Authority: Navigates the delivered Agent Memory slices and their verification evidence. Semantic authority remains in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; current runtime posture remains in `docs/STATUS.md`.
+
+Final slice (AGENT-MEMORY-05) delivered by PR #1242 (issue #1083, 2026-05-23). Parent feature issue
+#900 closed.
 
 # Agent Memory
 
 ## Capability Boundary
 
-This specification directory defines the implementation-ready breakdown for the `agent memory`
-capability introduced in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`.
+This directory governs the `agent memory` capability introduced in
+`docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`. It began as the implementation-ready
+breakdown and is now both a delivery record and a navigation index for the implemented slices.
 
 The capability boundary is:
 
@@ -16,26 +21,39 @@ The capability boundary is:
 - recall explanation surfaces,
 - and authority guards that prevent unreviewed memory from becoming write authority.
 
-This directory is downstream of the concept contract and upstream of any runtime implementation. It
-prepares bounded implementation work; it does not claim that the runtime already has these memory
-surfaces.
+## Shipped Status
+
+All five Agent Memory implementation slices have been delivered:
+
+1. MemoryCandidate model
+2. Review queue
+3. Promote / reject / revise flow
+4. Explainable recall
+5. Unreviewed-memory authority guard
+
+These slices implement the bounded capability described by this directory. They do not make agent
+memory a hidden source of truth and do not allow unreviewed memory to authorize writes. Delivery
+evidence for each slice is recorded under [Relationship to GitHub Issues](#relationship-to-github-issues).
 
 ## Relationship to the Contract
 
 `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` defines what agent memory is, what it is not,
-its lifecycle, and its authority limits. This directory turns that contract into bounded
-implementation tasks suitable for later issue filing.
+its lifecycle, and its authority limits. It remains the semantic source of truth. This directory
+records how that contract was turned into the delivered slices and where their verification evidence
+lives.
 
-The concept contract remains the semantic source of truth. These task specs are the implementation
-planning surface for it.
+## Remaining Follow-ups
+
+- Companion-aware handling remains separate if still tracked by #1085 / PR #1216 or successor docs.
+- Any broader runtime/product promotion must still be reflected in `docs/STATUS.md` and relevant
+  owner docs.
 
 ## Non-Goals
 
-- shipping durable agent memory in this PR,
 - introducing a hidden memory source of truth,
 - bypassing human-authored knowledge or write guards,
 - defining a specific vector store or storage backend,
-- or claiming that recall, promotion, or review flows are already shipped.
+- or claiming runtime/product behavior beyond the delivered slices and their recorded evidence.
 
 ## Task List
 
@@ -74,25 +92,25 @@ planning surface for it.
 - Task-level verification follows each task file's `How to Verify (Pre-Merge)` section.
 - Contract-shape verification for this directory checks frontmatter, required sections, and inline
   `Verify:` targets.
-- PR-level verification for future implementation work must resolve the named test targets on the
-  head SHA of each task PR.
+- Each delivered slice resolved its named test targets on the head SHA of its task PR; see the
+  delivery records in [Relationship to GitHub Issues](#relationship-to-github-issues).
 
 ## Validation / Acceptance Path
 
-- This directory is accepted at the docs/spec layer when the README, parent feature draft, and all
-  five task specs are merged and internally consistent.
-- Runtime acceptance remains future work and should be tracked on a future parent feature issue plus
-  child implementation issues.
-- Owner-doc promotion is gated on implementation evidence that the runtime treats memory as
-  inspectable, reviewable, and non-authoritative by default.
+- This directory was accepted at the docs/spec layer once the README, parent feature issue, and all
+  five task specs were merged and internally consistent.
+- All five implementation slices have since been delivered against that contract.
+- Broader runtime/product promotion — surfacing memory in current-state owner docs as live product
+  behavior — is gated on the conditions in [Owner-Doc Promotion Trigger](#owner-doc-promotion-trigger)
+  and on `docs/STATUS.md` reflecting that posture; it is not implied by slice delivery alone.
 
 ## Evidence Surface
 
 - Local task specs in this directory define the implementation contract.
-- Future child PRs provide slice verification receipts.
-- The parent feature issue, once filed, should hold validation evidence and acceptance tracking.
-- Owner docs such as `docs/STATUS.md` and `docs/ARCHITECTURE.md` should change only when runtime
-  support is actually delivered.
+- Each delivered slice's PR provides its verification receipt (see Relationship to GitHub Issues).
+- The parent feature issue #900 held validation evidence and acceptance tracking before closure.
+- Owner docs such as `docs/STATUS.md` and `docs/ARCHITECTURE.md` should change to claim live product
+  behavior only when the owner-doc promotion conditions are met.
 
 ## Relationship to GitHub Issues
 
