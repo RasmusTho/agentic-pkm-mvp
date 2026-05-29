@@ -97,7 +97,7 @@ The following are the failure modes this contract exists to prevent. Each is pro
 - Mirror vs receipt decision: `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
 - Artifact vs projection: `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`.
 - Embeddings identity/rebuild: `docs/EMBEDDINGS.md`. Component catalog: `docs/COMPONENTS.md`. Schema: `docs/DB_SCHEMA.md`.
-- Runtime vs durable boundary (distinct from mirror): #1369 follow-up.
+- Runtime vs durable boundary (distinct from mirror): `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md` (#1369).
 
 ## Verification path
 
