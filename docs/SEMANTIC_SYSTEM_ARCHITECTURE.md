@@ -108,7 +108,7 @@ Reading rules for the topology:
 3. **Rebuildability is a tell.** If losing an object loses information, it is not derived/runtime — it is an artifact and must be governed as one.
 4. **Provenance is mandatory across roles.** Every system-originated change to an authoritative object carries provenance and produces a human-legible receipt (kernel constraint).
 
-The consolidated, per-entity authority matrix (with all flags: authoritative / rebuildable / temporary / machine-derived / governance-owned / human-editable / runtime-only / proposal-bearing / receipt-bearing / retrieval-visible / activatable / instructional / action-authorizing) is owned by the **Semantic Authority Matrix** (#1365). This section is the topology; that matrix is the per-entity detail.
+The consolidated, per-entity authority matrix (with all flags: authoritative / rebuildable / temporary / machine-derived / governance-owned / human-editable / runtime-only / proposal-bearing / receipt-bearing / retrieval-visible / activatable / instructional / action-authorizing) is owned by `docs/SEMANTIC_AUTHORITY_MATRIX.md` (#1365). This section is the topology; that matrix is the per-entity detail.
 
 ## Artifact-flow topology
 
@@ -176,7 +176,7 @@ The Companion UI is a **semantic projection layer** (Layer 7). It is rendered ov
 This map is the parent for the rest of epic #1363. Each sibling contract owns its layer's detail:
 
 - Terminology normalization — #1366 (`docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` + glossary alignment)
-- Semantic authority matrix — #1365 (per-entity authority detail under Layer 4)
+- Semantic authority matrix — #1365 → `docs/SEMANTIC_AUTHORITY_MATRIX.md` (per-entity authority detail under Layer 4)
 - Relation taxonomy — #1367 (relation detail under Layer 1)
 - Machine mirror / DB authority contract — #1370 (Layer 6 detail)
 - Runtime vs durable state boundary — #1369 (Layer 5 detail)
