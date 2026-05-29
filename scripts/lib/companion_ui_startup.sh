@@ -177,7 +177,9 @@ cui_verify_vault_mount() {
 # Prints PIDs (one per line) listening on the given TCP port.
 cui_port_listener_pids() {
   local port="$1"
-  lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null | sort -u
+  # `|| true` so an empty result (lsof exit 1) does not abort callers under
+  # `set -o pipefail`.
+  { lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true; } | sort -u
 }
 
 # Returns 0 if the given PID is a Companion UI dev/production server.
@@ -219,7 +221,7 @@ cui_lan_ip() {
 
 cui_tailscale_ip() {
   command -v tailscale >/dev/null 2>&1 || return 0
-  tailscale ip -4 2>/dev/null | head -n1
+  { tailscale ip -4 2>/dev/null || true; } | head -n1
 }
 
 # ── Companion UI server ────────────────────────────────────────────────────────
