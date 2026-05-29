@@ -89,6 +89,42 @@ python -m app.cli status
 
 The browser dev server ships as `companion_ui.workspace.serve_dev_page` (#1103).
 
+### Canonical operator command (recommended)
+
+For dev/Niflheim UAT, one repo-owned command starts the runtime API **and** the
+Companion UI dev page, with guards (Issue #1358):
+
+```bash
+make dev-ui            # start dev runtime + Companion UI against Niflheim
+make dev-ui-doctor     # read-only diagnostic (no services started, no vault writes)
+```
+
+`make dev-ui` (→ `scripts/dev/start_niflheim_ui.sh`):
+
+- requires `.env.dev.local` (gitignored) and fails fast if it is missing;
+- refuses to start if the resolved `VAULT_ROOT` is not Niflheim/Nifelheim;
+- brings up the dev runtime via `scripts/start_full_system.sh`
+  (`PKM_ENVIRONMENT=dev`, project `pkm-dev`) and waits for `/healthz` on `18001`;
+- verifies the API container sees its `/app/vault` mount;
+- replaces only a stale **Companion UI** listener on `8111` — never an unrelated
+  SSH/Colima/Docker process — and starts the dev page;
+- prints the final UAT URL(s) and the API/UI log paths.
+
+LAN/Tailscale UAT is opt-in and explicit:
+
+```bash
+CUI_BIND_LAN=1 make dev-ui                     # bind UI to 0.0.0.0
+CUI_TARGET_NOTE="Some Note.md" make dev-ui     # also verify a note via the API
+```
+
+`make dev-ui-doctor` (→ `scripts/dev/dev_ui_doctor.sh`) is read-only and reports:
+Docker/Colima availability, dev vault resolution (Niflheim), API health, the
+container vault mount, UI-port occupancy (distinguishing a Companion UI listener
+from an unrelated process), UI reachability, an optional target note, and the
+Tailscale IP. Expected output is a labelled `[ok]/[warn]/[FAIL]` checklist.
+
+The manual environment-variable invocations below remain valid for ad hoc use.
+
 ### Environment variables
 
 | Variable               | Default                     | Purpose                                       |

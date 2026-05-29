@@ -1,0 +1,177 @@
+"""
+Static inspection tests for the canonical Companion UI operator startup/doctor
+commands (Issues #1358 / #1359 / #1360).
+
+These mirror tests/ops/test_release_channel_startup_targets.py: they read the
+Makefile and the channel startup scripts directly and assert the canonical
+operator surface, channel binding, vault guard, ports, and safe UI-port
+handling. No Docker, runtime, or real vault required.
+
+Per-channel coverage is added as each sibling issue ships:
+  - dev/Niflheim  : #1358 (this file's dev cases + shared library cases)
+  - test/Bifröst  : #1359
+  - prod/Midgård  : #1360
+"""
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MAKEFILE = REPO_ROOT / "Makefile"
+SHARED_LIB = REPO_ROOT / "scripts" / "lib" / "companion_ui_startup.sh"
+DEV_START = REPO_ROOT / "scripts" / "dev" / "start_niflheim_ui.sh"
+DEV_DOCTOR = REPO_ROOT / "scripts" / "dev" / "dev_ui_doctor.sh"
+
+
+def _makefile_target_body(makefile_text: str, target_name: str) -> str | None:
+    pattern = re.compile(
+        rf"^{re.escape(target_name)}\s*:.*?(?=\n\S|\Z)",
+        re.DOTALL | re.MULTILINE,
+    )
+    match = pattern.search(makefile_text)
+    return match.group(0) if match else None
+
+
+def _bash_syntax_ok(path: Path) -> tuple[bool, str]:
+    proc = subprocess.run(
+        ["bash", "-n", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode == 0, proc.stderr
+
+
+# ── shared library (delivered by #1358, reused by #1359 / #1360) ──────────────
+
+
+def test_shared_library_exists_and_is_valid_bash() -> None:
+    """The channel-agnostic Companion UI startup library must exist and parse.
+
+    Verify: Issue #1358 AC1 —
+      tests/ops/test_companion_ui_startup_targets.py::test_shared_library_exists_and_is_valid_bash
+    """
+    assert SHARED_LIB.is_file(), (
+        "scripts/lib/companion_ui_startup.sh is required as the shared helper "
+        "for the canonical Companion UI startup/doctor commands (Issue #1358)."
+    )
+    ok, err = _bash_syntax_ok(SHARED_LIB)
+    assert ok, f"companion_ui_startup.sh failed `bash -n`:\n{err}"
+
+
+def test_shared_library_refuses_to_kill_unrelated_processes() -> None:
+    """Stale UI-port handling must target only Companion UI listeners.
+
+    Verify: Issue #1358 AC6 —
+      tests/ops/test_companion_ui_startup_targets.py::test_shared_library_refuses_to_kill_unrelated_processes
+    """
+    text = SHARED_LIB.read_text(encoding="utf-8")
+    # The guard identifies Companion UI listeners specifically...
+    assert "serve_(dev|production)_page" in text or "serve_dev_page" in text, (
+        "Shared library must identify Companion UI listeners specifically "
+        "before killing a UI-port holder (Issue #1358 AC6)."
+    )
+    # ...and explicitly refuses to kill a non-Companion holder.
+    assert re.search(r"non-Companion", text), (
+        "Shared library must refuse to kill a non-Companion process holding "
+        "the UI port and fail with instructions instead (Issue #1358 AC6)."
+    )
+
+
+def test_shared_library_doctor_is_read_only() -> None:
+    """The doctor entry point must not start services or mutate state.
+
+    Verify: Issue #1358 AC7 —
+      tests/ops/test_companion_ui_startup_targets.py::test_shared_library_doctor_is_read_only
+    """
+    text = SHARED_LIB.read_text(encoding="utf-8")
+    doctor = re.search(r"cui_run_doctor\(\)\s*\{.*?\n\}", text, re.DOTALL)
+    assert doctor is not None, "cui_run_doctor function not found in shared library."
+    body = doctor.group(0)
+    assert "cui_start_runtime" not in body, (
+        "Doctor must not start the runtime (read-only requirement, Issue #1358 AC7)."
+    )
+    assert "cui_start_ui" not in body, (
+        "Doctor must not start the Companion UI (read-only requirement, Issue #1358 AC7)."
+    )
+
+
+# ── dev / Niflheim (#1358) ────────────────────────────────────────────────────
+
+
+def test_dev_ui_make_targets_exist_and_delegate() -> None:
+    """make dev-ui and make dev-ui-doctor must exist and call the scripts.
+
+    Verify: Issue #1358 AC1 / AC7 —
+      tests/ops/test_companion_ui_startup_targets.py::test_dev_ui_make_targets_exist_and_delegate
+    """
+    text = MAKEFILE.read_text(encoding="utf-8")
+    start = _makefile_target_body(text, "dev-ui")
+    doctor = _makefile_target_body(text, "dev-ui-doctor")
+    assert start is not None, "Makefile is missing the canonical 'dev-ui' target (Issue #1358)."
+    assert doctor is not None, "Makefile is missing the 'dev-ui-doctor' target (Issue #1358)."
+    assert "scripts/dev/start_niflheim_ui.sh" in start, (
+        "'dev-ui' must delegate to scripts/dev/start_niflheim_ui.sh (Issue #1358)."
+    )
+    assert "scripts/dev/dev_ui_doctor.sh" in doctor, (
+        "'dev-ui-doctor' must delegate to scripts/dev/dev_ui_doctor.sh (Issue #1358)."
+    )
+
+
+def test_dev_scripts_exist_and_are_valid_bash() -> None:
+    """The dev startup and doctor scripts must exist and parse.
+
+    Verify: Issue #1358 AC1 / AC7 —
+      tests/ops/test_companion_ui_startup_targets.py::test_dev_scripts_exist_and_are_valid_bash
+    """
+    for path in (DEV_START, DEV_DOCTOR):
+        assert path.is_file(), f"{path.relative_to(REPO_ROOT)} is required (Issue #1358)."
+        ok, err = _bash_syntax_ok(path)
+        assert ok, f"{path.name} failed `bash -n`:\n{err}"
+
+
+def test_dev_start_binds_niflheim_channel_and_ports() -> None:
+    """The dev start script must bind PKM dev channel, Niflheim guard, and ports.
+
+    Verify: Issue #1358 AC2 / AC3 / AC5 —
+      tests/ops/test_companion_ui_startup_targets.py::test_dev_start_binds_niflheim_channel_and_ports
+    """
+    text = DEV_START.read_text(encoding="utf-8")
+    assert re.search(r'CUI_CHANNEL=["\']?dev["\']?', text), "dev start must set CUI_CHANNEL=dev."
+    assert "nife?lheim" in text, (
+        "dev start must guard the resolved vault against Niflheim/Nifelheim (Issue #1358 AC2)."
+    )
+    assert re.search(r'CUI_API_PORT=["\']?18001["\']?', text), "dev API port must be 18001 (AC3)."
+    assert re.search(r'CUI_UI_PORT=["\']?8111["\']?', text), "dev UI port must be 8111 (AC5)."
+    assert "companion_ui.workspace.serve_dev_page" in text, (
+        "dev start must launch the Companion UI dev page module (Issue #1358)."
+    )
+    assert "pkm-dev" in text, "dev start must target the pkm-dev compose project."
+
+
+@pytest.mark.parametrize(
+    "vault_basename,should_match",
+    [
+        ("Niflheim", True),
+        ("Nifelheim", True),
+        ("niflheim", True),
+        ("Midgård", False),
+        ("Bifröst", False),
+        ("PKM - Alpha", False),
+    ],
+)
+def test_dev_vault_guard_pattern(vault_basename: str, should_match: bool) -> None:
+    """The dev vault guard regex must accept Niflheim spellings and reject others.
+
+    Verify: Issue #1358 AC2 —
+      tests/ops/test_companion_ui_startup_targets.py::test_dev_vault_guard_pattern
+    """
+    pattern = re.compile("nife?lheim")
+    matched = bool(pattern.search(vault_basename.lower()))
+    assert matched is should_match, (
+        f"vault guard pattern match for '{vault_basename}' was {matched}, expected {should_match}."
+    )
