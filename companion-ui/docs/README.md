@@ -2,6 +2,8 @@
 
 Foundational documents for cognitive interaction architecture.
 
+> Semantic alignment: `SEMANTIC_PROJECTION_ALIGNMENT.md` maps every Companion UI contract onto Layer 7 (UI projection) of `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md` — the shared projection/mutation/authority/runtime-overlay rules these contracts must satisfy. Read it before changing any Companion UI contract.
+
 ## Product architecture and hosting
 - `COMPANION_UI_TARGET_ARCHITECTURE.md` — owner doc for Companion UI target architecture: local-first web app served by Yggdrasil, localhost/LAN/Tailscale access model, runtime API as the only vault access path, vault-boundary rules, current shipped state, browser dev server as the next slice, long-term options (PWA, desktop wrapper), non-goals. Governing issue: #1102.
 - `LOCAL_ACCESS_MODEL.md` — local access posture for Companion UI: localhost default, LAN/Tailscale opt-in, token/session auth option, CSRF posture, dev/production separation, public internet non-goal.
