@@ -80,6 +80,20 @@ These are the failure modes this contract exists to prevent:
 3. **Hidden durable writes.** No durable change to the human surface occurs without a receipt. There is no silent write path.
 4. **UI/runtime bypasses around governance.** The Companion UI and runtime layers route mutations to governance; they do not classify or authorize their own durable writes (owner: `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md`). Runtime state never becomes durable except through a governed mutation.
 
+## Runtime seam notes
+
+These notes document known gaps between the contracts above and the current runtime, so future implementors know what is target-state vs delivered. They are enabling-change annotations, not contract revisions.
+
+### Promotion path — receipt gap (tracking issue #1403)
+
+The `app/promotion/consumer.py` + `app/services/note_update.py` path satisfies the "no silent durable write" rule via a `PROMOTE_DONE` DB outbox event on success, and embeds `payload["promotion"]` provenance in the ObjectStore row. However, it does not yet produce a **formal durable promotion receipt** as a distinct, queryable accountability artifact (as specified by §Receipt linkage above and `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`).
+
+Current state: `PROMOTE_DONE` event in DB outbox = the transition record. `payload["promotion"]` = inline provenance.
+Target state: promotion consumer also writes a formal receipt record to a receipt store.
+Pre-requisite: receipt store model (not yet built).
+
+Until the receipt store is built, treat `PROMOTE_DONE` + `payload["promotion"]` as the correct interim implementation. Do not add ad hoc receipt workarounds.
+
 ## Cross-references
 
 - Parent semantic map (Layer 4) and artifact-flow topology: `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`.
