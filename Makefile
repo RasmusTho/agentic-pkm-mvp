@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor dispatcher-init dispatcher-sync
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 TEST_VAULT_ROOT ?= $(PWD)/vault-test
@@ -126,6 +126,16 @@ test-ui:
 
 test-ui-doctor:
 	@bash scripts/test/test_ui_doctor.sh
+
+# Canonical prod/Midgård Companion UI startup + doctor with guardrails (Issue #1360).
+# prod-ui defaults to a safe verification posture (watchers/workers NOT auto-started);
+# write/automation-capable startup requires PROD_UI_ENABLE_AUTOMATION=1.
+# prod-ui-doctor is the read-only diagnostic (incl. automation-flag safety check).
+prod-ui:
+	@bash scripts/prod/start_midgard_ui.sh
+
+prod-ui-doctor:
+	@bash scripts/prod/prod_ui_doctor.sh
 
 prod-up:
 	@$(COMPOSE_PROD) up -d --build

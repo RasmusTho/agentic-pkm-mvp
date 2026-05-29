@@ -190,6 +190,36 @@ http://<host-lan-or-tailnet-ip>:8111/?note_path=<valid-dev-note-path>
 
 ## 4. Production Launch Profile
 
+### Canonical operator command (recommended) — prod/Midgård
+
+For prod/Midgård, one guarded operator command starts/verifies the prod runtime
+API + Companion UI production page (Issue #1360):
+
+```bash
+make prod-ui                               # SAFE verification posture (default)
+PROD_UI_ENABLE_AUTOMATION=1 make prod-ui    # write/automation-capable (explicit)
+make prod-ui-doctor                         # read-only prod diagnostic
+```
+
+> **Production safety.** `make prod-ui` (→ `scripts/prod/start_midgard_ui.sh`)
+> defaults to a **safe verification posture**: watchers/workers are **not**
+> auto-started (`WATCHER_AUTO_EXEC=0`). Write-capable / automation-capable
+> startup runs **only** when the operator explicitly acknowledges it via
+> `PROD_UI_ENABLE_AUTOMATION=1`. The command refuses to start unless the
+> resolved vault is Midgård/Midgard, reports prod channel identity
+> (`PKM_ENVIRONMENT=prod`, project `pkm-prod`, DB `app`, API `18000`, UI
+> `8113`), uses the production page module, and never kills unrelated
+> SSH/Colima/Docker processes when freeing the UI port.
+
+`make prod-ui-doctor` (→ `scripts/prod/prod_ui_doctor.sh`) is read-only and adds
+a prod-specific check that surfaces unexpectedly-enabled automation/write flags
+(`PROD_UI_ENABLE_AUTOMATION`, `WATCHER_AUTO_EXEC`).
+
+This command does **not** change promotion/rollback semantics or the `stable`
+release pointer — see `docs/RELEASE_CHANNELS/README.md` for promotion/rollback.
+
+The manual production-profile invocation below remains valid for ad hoc use.
+
 The production launch profile is separate from the dev/staging server. It keeps
 the same runtime-mediated workspace boundary, defaults to the production runtime
 API port, links production-profile static assets under `/static/`, and omits
