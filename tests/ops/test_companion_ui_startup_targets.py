@@ -26,6 +26,8 @@ MAKEFILE = REPO_ROOT / "Makefile"
 SHARED_LIB = REPO_ROOT / "scripts" / "lib" / "companion_ui_startup.sh"
 DEV_START = REPO_ROOT / "scripts" / "dev" / "start_niflheim_ui.sh"
 DEV_DOCTOR = REPO_ROOT / "scripts" / "dev" / "dev_ui_doctor.sh"
+TEST_START = REPO_ROOT / "scripts" / "test" / "start_bifrost_ui.sh"
+TEST_DOCTOR = REPO_ROOT / "scripts" / "test" / "test_ui_doctor.sh"
 
 
 def _makefile_target_body(makefile_text: str, target_name: str) -> str | None:
@@ -175,3 +177,91 @@ def test_dev_vault_guard_pattern(vault_basename: str, should_match: bool) -> Non
     assert matched is should_match, (
         f"vault guard pattern match for '{vault_basename}' was {matched}, expected {should_match}."
     )
+
+
+# ── test / Bifröst (#1359) ────────────────────────────────────────────────────
+
+
+def test_test_ui_make_targets_exist_and_delegate() -> None:
+    """make test-ui and make test-ui-doctor must exist and call the scripts.
+
+    Verify: Issue #1359 AC1 / AC5 —
+      tests/ops/test_companion_ui_startup_targets.py::test_test_ui_make_targets_exist_and_delegate
+    """
+    text = MAKEFILE.read_text(encoding="utf-8")
+    start = _makefile_target_body(text, "test-ui")
+    doctor = _makefile_target_body(text, "test-ui-doctor")
+    assert start is not None, "Makefile is missing the canonical 'test-ui' target (Issue #1359)."
+    assert doctor is not None, "Makefile is missing the 'test-ui-doctor' target (Issue #1359)."
+    assert "scripts/test/start_bifrost_ui.sh" in start, (
+        "'test-ui' must delegate to scripts/test/start_bifrost_ui.sh (Issue #1359)."
+    )
+    assert "scripts/test/test_ui_doctor.sh" in doctor, (
+        "'test-ui-doctor' must delegate to scripts/test/test_ui_doctor.sh (Issue #1359)."
+    )
+
+
+def test_test_scripts_exist_and_are_valid_bash() -> None:
+    """The test startup and doctor scripts must exist and parse.
+
+    Verify: Issue #1359 AC1 / AC5 —
+      tests/ops/test_companion_ui_startup_targets.py::test_test_scripts_exist_and_are_valid_bash
+    """
+    for path in (TEST_START, TEST_DOCTOR):
+        assert path.is_file(), f"{path.relative_to(REPO_ROOT)} is required (Issue #1359)."
+        ok, err = _bash_syntax_ok(path)
+        assert ok, f"{path.name} failed `bash -n`:\n{err}"
+
+
+def test_test_start_binds_bifrost_channel_and_ports() -> None:
+    """The test start script must bind the test channel, Bifröst guard, and ports.
+
+    Verify: Issue #1359 AC2 / AC3 / AC4 —
+      tests/ops/test_companion_ui_startup_targets.py::test_test_start_binds_bifrost_channel_and_ports
+    """
+    text = TEST_START.read_text(encoding="utf-8")
+    assert re.search(r'CUI_CHANNEL=["\']?test["\']?', text), "test start must set CUI_CHANNEL=test."
+    assert "bifr" in text, (
+        "test start must guard the resolved vault against Bifröst/Bifrost (Issue #1359 AC2)."
+    )
+    assert re.search(r'CUI_API_PORT=["\']?18002["\']?', text), "test API port must be 18002."
+    assert re.search(r'CUI_UI_PORT=["\']?8112["\']?', text), "test UI port must be 8112."
+    assert "pkm-test" in text, "test start must target the pkm-test compose project (AC3)."
+    assert "app_test" in text, "test start must report the app_test channel DB (AC3)."
+
+
+@pytest.mark.parametrize(
+    "vault_basename,should_match",
+    [
+        ("Bifröst", True),
+        ("Bifrost", True),
+        ("bifröst", True),
+        ("Niflheim", False),
+        ("Midgård", False),
+        ("vault-test", False),
+    ],
+)
+def test_test_vault_guard_pattern(vault_basename: str, should_match: bool) -> None:
+    """The test vault guard regex must accept Bifröst spellings and reject others.
+
+    Verify: Issue #1359 AC2 —
+      tests/ops/test_companion_ui_startup_targets.py::test_test_vault_guard_pattern
+    """
+    pattern = re.compile("bifr(ö|o)st")
+    matched = bool(pattern.search(vault_basename.lower()))
+    assert matched is should_match, (
+        f"vault guard pattern match for '{vault_basename}' was {matched}, expected {should_match}."
+    )
+
+
+def test_channel_scripts_use_distinct_ports_and_projects() -> None:
+    """Dev and test channels must not share UI/API ports or compose projects.
+
+    Verify: Issue #1359 AC3 (channel separation) —
+      tests/ops/test_companion_ui_startup_targets.py::test_channel_scripts_use_distinct_ports_and_projects
+    """
+    dev = DEV_START.read_text(encoding="utf-8")
+    test = TEST_START.read_text(encoding="utf-8")
+    assert "8111" in dev and "8112" in test, "dev/test UI ports must differ (8111 vs 8112)."
+    assert "18001" in dev and "18002" in test, "dev/test API ports must differ (18001 vs 18002)."
+    assert "pkm-dev" in dev and "pkm-test" in test, "dev/test compose projects must differ."

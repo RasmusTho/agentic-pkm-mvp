@@ -123,6 +123,20 @@ container vault mount, UI-port occupancy (distinguishing a Companion UI listener
 from an unrelated process), UI reachability, an optional target note, and the
 Tailscale IP. Expected output is a labelled `[ok]/[warn]/[FAIL]` checklist.
 
+For test/Bifröst UAT/smoke verification, the same pattern is bound to the test
+channel (Issue #1359):
+
+```bash
+make test-ui           # start test runtime + Companion UI against Bifröst
+make test-ui-doctor     # read-only test-channel diagnostic
+```
+
+`make test-ui` (→ `scripts/test/start_bifrost_ui.sh`) uses
+`PKM_ENVIRONMENT=test`, requires `.env.test.local`, refuses to start unless the
+resolved vault is Bifröst/Bifrost, and reports its channel identity
+(`PKM_ENVIRONMENT=test`, project `pkm-test`, DB `app_test`, API `18002`, UI
+`8112`) so the test channel is never confused with dev or prod.
+
 The manual environment-variable invocations below remain valid for ad hoc use.
 
 ### Environment variables
