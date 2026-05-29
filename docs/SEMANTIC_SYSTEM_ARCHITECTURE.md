@@ -42,7 +42,7 @@ The layers below are **orthogonal concerns**, not a storage stack. A single Mark
 - **Question it answers:** What kinds of things exist, and how are they related?
 - **What it is:** The entity and relation vocabulary — actors, context structures, artifacts, commitments, operations, and the relations among them. It says what a "note", "source", "commitment", "agent", or "relation" *is*.
 - **What it is not:** It does **not** decide authority, admissibility, or write permission. Ontology says a thing can exist and can relate to another thing; it does not say which instance is authoritative or who may change it.
-- **Owner docs:** `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` (canonical ontology), `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` (normalized term set + drift map), `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` (agent/role/delegation ontology), `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` (commitment structures). Relation semantics are owned by the relation taxonomy (see #1367 follow-up: `docs/CONCEPTS/RELATION_TAXONOMY.md` once published).
+- **Owner docs:** `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` (canonical ontology), `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` (normalized term set + drift map), `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` (agent/role/delegation ontology), `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` (commitment structures). Relation semantics are owned by the relation taxonomy: `docs/CONCEPTS/RELATION_TAXONOMY.md` (#1367).
 
 ### Layer 2 — Artifact model
 
@@ -177,7 +177,7 @@ This map is the parent for the rest of epic #1363. Each sibling contract owns it
 
 - Terminology normalization — #1366 (`docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` + glossary alignment)
 - Semantic authority matrix — #1365 → `docs/SEMANTIC_AUTHORITY_MATRIX.md` (per-entity authority detail under Layer 4)
-- Relation taxonomy — #1367 (relation detail under Layer 1)
+- Relation taxonomy — #1367 → `docs/CONCEPTS/RELATION_TAXONOMY.md` (relation detail under Layer 1)
 - Machine mirror / DB authority contract — #1370 (Layer 6 detail)
 - Runtime vs durable state boundary — #1369 (Layer 5 detail)
 - Companion UI projection alignment — #1368 (Layer 7 detail)
