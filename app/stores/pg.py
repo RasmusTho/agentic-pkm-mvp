@@ -181,6 +181,7 @@ def reset_vector_index(cur) -> None:
 
 
 class PgObjectStore(ObjectStore):
+    rebuild_source = "vault ingest (vault notes → app/ingest/vault_alpha.py → store_objects)"
     _OBJECTS_TABLE = "store_objects"
 
     def __init__(self) -> None:
@@ -292,6 +293,8 @@ class _VectorHit:
 
 
 class PgVectorIndex(VectorIndex):
+    rebuild_source = "PgObjectStore payloads + embedding model (see docs/EMBEDDINGS.md)"
+
     def __init__(self) -> None:
         _ensure_tables()
 
@@ -448,6 +451,8 @@ class PgVectorIndex(VectorIndex):
 
 
 class PgRelationIndex(RelationIndex):
+    rebuild_source = "vault frontmatter links + PgObjectStore (see docs/CONCEPTS/RELATION_TAXONOMY.md)"
+
     def __init__(self) -> None:
         _ensure_tables()
 
