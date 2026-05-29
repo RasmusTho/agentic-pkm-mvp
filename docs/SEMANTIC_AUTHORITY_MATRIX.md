@@ -146,7 +146,7 @@ Cell values: **Y** = yes by default · **N** = no · **cond** = conditional (see
 - Receipts vs traces: `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
 - Mirror/DB authority detail: `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (#1370).
 - Runtime/durable boundary detail: `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md` (#1369).
-- Workflow mutation/escalation detail: #1371 follow-up.
+- Workflow mutation/escalation detail: `docs/CONCEPTS/WORKFLOW_MUTATION_AND_GOVERNANCE_SEMANTICS.md` (#1371).
 
 ## Verification path
 

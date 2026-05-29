@@ -64,7 +64,7 @@ The layers below are **orthogonal concerns**, not a storage stack. A single Mark
 - **Question it answers:** What is authoritative, what is admissible, what evidence is required, who may mutate, and how is escalation handled?
 - **What it is:** The admissibility, approval, audit, and write-safety layer. It owns trust tiers (`assert` / `suggest` / `apply`), write guards, APPLY gates, proposal/receipt semantics, policy profiles, and the rule that **authority lives with the human and with explicit governance — not with whichever runtime component happened to write a value.**
 - **Kernel binding (owner: system-of-systems spine):** human-first authority; provenance, receipts, and write guards; authority separation between subsystems.
-- **Owner docs:** `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` (trust tiers, gating, write constraints), `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`, `docs/PANEL_AGENT.md` (panel action catalog/provenance), `docs/NOTE_KIND_POLICIES.md`, `docs/ARCHITECTURE.md` (`Concurrency & Idempotency`, `Boundary Enforcement`), `docs/INTERACTION_SURFACES_AND_AUTHORITY/**`. The consolidated authority matrix is owned by the semantic authority matrix (#1365 follow-up). Workflow mutation semantics are owned by #1371 follow-up.
+- **Owner docs:** `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md` (trust tiers, gating, write constraints), `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`, `docs/PANEL_AGENT.md` (panel action catalog/provenance), `docs/NOTE_KIND_POLICIES.md`, `docs/ARCHITECTURE.md` (`Concurrency & Idempotency`, `Boundary Enforcement`), `docs/INTERACTION_SURFACES_AND_AUTHORITY/**`. The consolidated authority matrix is owned by `docs/SEMANTIC_AUTHORITY_MATRIX.md` (#1365). Workflow mutation semantics are owned by `docs/CONCEPTS/WORKFLOW_MUTATION_AND_GOVERNANCE_SEMANTICS.md` (#1371).
 
 ### Layer 5 — Runtime
 
@@ -181,7 +181,7 @@ This map is the parent for the rest of epic #1363. Each sibling contract owns it
 - Machine mirror / DB authority contract — #1370 → `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (Layer 6 detail)
 - Runtime vs durable state boundary — #1369 → `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md` (Layer 5 detail)
 - Companion UI projection alignment — #1368 → `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md` (Layer 7 detail)
-- Workflow mutation & governance semantics — #1371 (Layer 4 mutation detail)
+- Workflow mutation & governance semantics — #1371 → `docs/CONCEPTS/WORKFLOW_MUTATION_AND_GOVERNANCE_SEMANTICS.md` (Layer 4 mutation detail)
 - Semantic drift & boundary audit — #1372 (validates this map against the repo)
 
 ## Out of scope for this document

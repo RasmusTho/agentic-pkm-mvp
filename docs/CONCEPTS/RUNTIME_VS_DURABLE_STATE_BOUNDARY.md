@@ -86,7 +86,7 @@ The prohibited contaminations this contract exists to prevent:
 - Machine mirror boundary (rebuildable vs discardable): `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md`.
 - Receipts vs traces (for session logs): `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
 - UI runtime boundaries and workspace state: `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`, `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` (alignment detailed in #1368).
-- Workflow/proposal staging detail: #1371 follow-up.
+- Workflow/proposal staging detail: `docs/CONCEPTS/WORKFLOW_MUTATION_AND_GOVERNANCE_SEMANTICS.md` (#1371).
 
 ## Verification path
 
