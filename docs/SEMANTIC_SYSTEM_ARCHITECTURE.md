@@ -85,7 +85,7 @@ The layers below are **orthogonal concerns**, not a storage stack. A single Mark
 - **Question it answers:** What does the Companion UI (and other interaction surfaces) render, overlay, summarize, stage, and route — without becoming authoritative?
 - **What it is:** Companion UI panels, workspace projections, runtime overlays, proposal staging surfaces, provenance visibility. The UI **projects and mediates**; it does not own semantic truth. Server-side governance classifies mutation authority, not the UI.
 - **Hard rule:** No UI-owned semantic truth; no implicit authority escalation through a UI flow. A canvas/body edit and a governance-bearing mutation are distinct lanes even when they share a surface.
-- **Owner docs:** `companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md`, `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md`, `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`, `companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/COMPANION_UI_PRODUCT_SPEC.md`. Consolidated projection alignment is owned by #1368 follow-up.
+- **Owner docs:** `companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md`, `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md`, `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`, `companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/COMPANION_UI_PRODUCT_SPEC.md`. Consolidated projection alignment is owned by `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md` (#1368).
 
 ## Authority topology
 
@@ -158,7 +158,7 @@ Leakage-prevention rules (integrating summary; owner: #1369, #1370):
 
 ## Companion UI projection semantics (integrating summary)
 
-The Companion UI is a **semantic projection layer** (Layer 7). It is rendered over the authoritative surfaces; it is not one of them. Detailed alignment is owned by #1368 and the `companion-ui/docs/**` contracts.
+The Companion UI is a **semantic projection layer** (Layer 7). It is rendered over the authoritative surfaces; it is not one of them. Detailed alignment is owned by `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md` (#1368) and the individual `companion-ui/docs/**` contracts.
 
 - **Project / summarize / overlay:** allowed freely — these are read-side projections of authoritative or derived state.
 - **Stage / queue / propose:** allowed — but produces a proposal-bearing object that is non-durable until governance applies it.
@@ -180,7 +180,7 @@ This map is the parent for the rest of epic #1363. Each sibling contract owns it
 - Relation taxonomy — #1367 → `docs/CONCEPTS/RELATION_TAXONOMY.md` (relation detail under Layer 1)
 - Machine mirror / DB authority contract — #1370 → `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (Layer 6 detail)
 - Runtime vs durable state boundary — #1369 → `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md` (Layer 5 detail)
-- Companion UI projection alignment — #1368 (Layer 7 detail)
+- Companion UI projection alignment — #1368 → `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md` (Layer 7 detail)
 - Workflow mutation & governance semantics — #1371 (Layer 4 mutation detail)
 - Semantic drift & boundary audit — #1372 (validates this map against the repo)
 
