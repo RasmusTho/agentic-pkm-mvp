@@ -123,7 +123,7 @@ cui_docker_ok() {
 # ── runtime orchestration ─────────────────────────────────────────────────────
 
 cui_start_runtime() {
-  local root
+  local root _rc
   root="$(cui_repo_root)"
   cui_log "starting runtime API via scripts/start_full_system.sh (project=${CUI_COMPOSE_PROJECT})"
   (
@@ -134,7 +134,14 @@ cui_start_runtime() {
     START_MODE=runtime \
     ${CUI_WATCHER_AUTO_EXEC:+WATCHER_AUTO_EXEC="${CUI_WATCHER_AUTO_EXEC}"} \
     scripts/start_full_system.sh
-  ) || cui_die "runtime startup (start_full_system.sh) failed for ${CUI_CHANNEL}"
+  ) || {
+    _rc=$?
+    # start_full_system.sh can exit non-zero even when the stack came up
+    # (e.g. its final Python health-check step exits 1 while all containers
+    # are actually healthy). Treat this as a warning and let cui_wait_healthz
+    # be the authoritative health gate instead of aborting here.
+    cui_warn "start_full_system.sh exited non-zero (rc=${_rc}) — checking API health to confirm stack state"
+  }
 }
 
 # Polls the runtime API /healthz. Read-only. Returns 0 on healthy.
