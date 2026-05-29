@@ -206,7 +206,48 @@ def _safe_api_label() -> str:
     return (os.getenv("COMPANION_API_BASE_URL_LABEL") or "local-dev").strip() or "local-dev"
 
 
+def _configured_vault_name() -> str | None:
+    """Return the operator-configured vault name from settings, if any.
+
+    Vault identity is a first-class, hot-reloadable setting
+    (``instance.vault.name``). Reading it here means a renamed or switched vault
+    takes effect on the next request with no restart, and it is the seam where
+    future multi-vault selection will resolve the active vault.
+    """
+    try:
+        from app.settings.runtime import get_settings_bundle
+
+        bundle = get_settings_bundle()
+    except Exception:
+        return None
+    vault = getattr(getattr(bundle, "instance", None), "vault", None)
+    name = getattr(vault, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
+
+
 def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
+    raw_channel = (
+        os.getenv("PKM_ENVIRONMENT")
+        or os.getenv("CHANNEL")
+        or os.getenv("PKM_CHANNEL")
+        or ""
+    ).strip().lower()
+    channel = raw_channel if raw_channel in {"dev", "test", "prod"} else "unknown"
+
+    # A configured vault name is authoritative. It survives the container's
+    # host-VAULT_ROOT-vs-/app/vault path divergence that previously mislabeled a
+    # correctly-mounted vault as `fallback`/`vault`.
+    configured_name = _configured_vault_name()
+    if configured_name:
+        return VaultIdentityState(
+            vault_name=configured_name,
+            channel=channel,
+            provenance="settings",
+        )
+
+    # No configured name: infer identity from the VAULT_ROOT path as before.
     vault_root_raw = os.getenv("VAULT_ROOT", "").strip()
     vault_name = vault_root.name or str(vault_root)
     if not vault_root_raw:
@@ -217,13 +258,6 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
             provenance = "env" if env_path == vault_root.resolve() else "fallback"
         except Exception:
             provenance = "fallback"
-    raw_channel = (
-        os.getenv("PKM_ENVIRONMENT")
-        or os.getenv("CHANNEL")
-        or os.getenv("PKM_CHANNEL")
-        or ""
-    ).strip().lower()
-    channel = raw_channel if raw_channel in {"dev", "test", "prod"} else "unknown"
     return VaultIdentityState(
         vault_name=vault_name,
         channel=channel,

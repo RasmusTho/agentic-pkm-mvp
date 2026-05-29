@@ -155,6 +155,70 @@ def test_vault_provenance_fallback_when_vault_root_invalid(
     assert identity["provenance"] == "fallback"
 
 
+def _configure_runtime_vault(monkeypatch, tmp_path, name):
+    """Point the settings runtime at a temp instance.yaml carrying vault.name."""
+    from app.settings import runtime as settings_runtime
+
+    runtime_dir = tmp_path / "runtime_settings"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "global.yaml").write_text("{}\n", encoding="utf-8")
+    (runtime_dir / "providers.yaml").write_text("{}\n", encoding="utf-8")
+    (runtime_dir / "instance.yaml").write_text(
+        f"vault:\n  name: {name}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(settings_runtime, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(settings_runtime, "_SUBSCRIBERS", [])
+    monkeypatch.setattr(settings_runtime, "_CURRENT", None)
+    return runtime_dir
+
+
+def test_mounted_vault_reports_truthful_identity(
+    client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A configured vault name is authoritative: provenance="settings", real name.
+    _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
+    resp = _workspace(client)
+    assert resp.status_code == 200
+    identity = resp.json()["runtime"]["vault_identity"]
+    assert identity["vault_name"] == "Niflheim"
+    assert identity["provenance"] == "settings"
+
+
+def test_configured_vault_name_survives_container_path_divergence(
+    client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The container bug: host VAULT_ROOT does not exist in-container (would infer
+    # `fallback`/`vault`). A configured name overrides that and stays truthful.
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "host-only" / "Niflheim"))
+    _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
+    resp = _workspace(client, note_path="notes/note.md")
+    assert resp.status_code == 200
+    identity = resp.json()["runtime"]["vault_identity"]
+    assert identity["vault_name"] == "Niflheim"
+    assert identity["provenance"] == "settings"
+
+
+def test_configured_vault_name_hot_reloads_without_restart(
+    client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.settings import runtime as settings_runtime
+
+    runtime_dir = _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
+    assert (
+        _workspace(client).json()["runtime"]["vault_identity"]["vault_name"]
+        == "Niflheim"
+    )
+    # Rename on disk + reload (no process restart) → next request reflects it.
+    (runtime_dir / "instance.yaml").write_text(
+        "vault:\n  name: Midgard\n", encoding="utf-8"
+    )
+    settings_runtime.reload_settings_bundle(notify=False)
+    assert (
+        _workspace(client).json()["runtime"]["vault_identity"]["vault_name"]
+        == "Midgard"
+    )
+
+
 def test_vault_name_safe_for_path_with_spaces(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

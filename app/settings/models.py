@@ -255,6 +255,26 @@ class YggdrasilPaths(BaseModel):
     heimdall_root: Optional[Path] = None
 
 
+class VaultSettings(BaseModel):
+    name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-facing vault name shown in the Companion UI and used as the "
+            "vault's runtime identity. When unset, the runtime infers it from the "
+            "VAULT_ROOT path basename. Authoritative and hot-reloadable: changing "
+            "it does not require a restart."
+        ),
+    )
+    purpose: Optional[str] = Field(
+        default=None,
+        description=(
+            "Reserved for multi-vault routing (e.g. 'personal', 'work', 'research'). "
+            "Not yet wired to vault selection; present so a single-vault config can "
+            "evolve into plural vaults without a schema break."
+        ),
+    )
+
+
 class InstanceSettings(BaseModel):
     id: str = Field(
         default="home",
@@ -267,6 +287,10 @@ class InstanceSettings(BaseModel):
     environment: Literal["dev", "prod", "test"] = Field(
         default="prod",
         description="Runtime environment; 'prod' is production-safe default, 'dev' enables development features.",
+    )
+    vault: VaultSettings = Field(
+        default_factory=VaultSettings,
+        description="Active vault identity. Hot-reloadable; the seam for future multi-vault support.",
     )
 
 
