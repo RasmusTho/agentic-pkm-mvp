@@ -144,7 +144,7 @@ Cell values: **Y** = yes by default · **N** = no · **cond** = conditional (see
 - Use-right definitions and the unreviewed-memory guard: `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md`.
 - Trust tiers and write gating: `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`.
 - Receipts vs traces: `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
-- Mirror/DB authority detail: #1370 follow-up.
+- Mirror/DB authority detail: `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (#1370).
 - Runtime/durable boundary detail: #1369 follow-up.
 - Workflow mutation/escalation detail: #1371 follow-up.
 

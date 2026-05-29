@@ -78,7 +78,7 @@ The layers below are **orthogonal concerns**, not a storage stack. A single Mark
 - **Question it answers:** Which structures are rebuildable, optimized projections of authoritative artifacts, carrying no authority of their own?
 - **What it is:** DB object/store projections, vector indexes, retrieval caches, render caches, full-text/graph indexes, workspace aggregates, search projections. Every mirror must be **fully reconstructable** from the human-knowledge + agentic-memory set; if reconstruction would lose information, the object is misclassified and is really an artifact.
 - **Hard rule:** A machine mirror cannot say something the source does not say. Its authority is the authority of the source it projects (owner: `HUMAN_AND_AGENTIC_ARTIFACTS.md` §6).
-- **Owner docs:** `docs/COMPONENTS.md`, `docs/EMBEDDINGS.md`, `docs/RETRIEVAL.md`, `docs/DB_SCHEMA.md`, `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`, `docs/SEPARATING_PERSISTENCE_SURFACES/README.md`. The consolidated machine-mirror/DB authority contract is owned by #1370 follow-up.
+- **Owner docs:** `docs/COMPONENTS.md`, `docs/EMBEDDINGS.md`, `docs/RETRIEVAL.md`, `docs/DB_SCHEMA.md`, `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`, `docs/SEPARATING_PERSISTENCE_SURFACES/README.md`. The consolidated machine-mirror/DB authority contract is owned by `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (#1370).
 
 ### Layer 7 — UI projection
 
@@ -178,7 +178,7 @@ This map is the parent for the rest of epic #1363. Each sibling contract owns it
 - Terminology normalization — #1366 (`docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` + glossary alignment)
 - Semantic authority matrix — #1365 → `docs/SEMANTIC_AUTHORITY_MATRIX.md` (per-entity authority detail under Layer 4)
 - Relation taxonomy — #1367 → `docs/CONCEPTS/RELATION_TAXONOMY.md` (relation detail under Layer 1)
-- Machine mirror / DB authority contract — #1370 (Layer 6 detail)
+- Machine mirror / DB authority contract — #1370 → `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (Layer 6 detail)
 - Runtime vs durable state boundary — #1369 (Layer 5 detail)
 - Companion UI projection alignment — #1368 (Layer 7 detail)
 - Workflow mutation & governance semantics — #1371 (Layer 4 mutation detail)
