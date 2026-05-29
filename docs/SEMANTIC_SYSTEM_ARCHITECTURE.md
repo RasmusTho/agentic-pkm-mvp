@@ -71,7 +71,7 @@ The layers below are **orthogonal concerns**, not a storage stack. A single Mark
 - **Question it answers:** What state exists only while the system is running, and is therefore non-durable unless explicitly persisted under a contract?
 - **What it is:** AgentState, session/workspace state, panel/overlay state, retrieval state, active proposals before application, traces, decisions, and policy evaluations. Runtime state is **ephemeral by default**.
 - **Hard rule:** Runtime state must not contaminate durable semantics. A runtime-derived value becomes durable only by passing through governance (Layer 4) into an artifact (Layer 2) — never by silent persistence.
-- **Owner docs:** `docs/ARCHITECTURE.md` (current runtime surfaces, AgentState), `docs/LANGGRAPH_AGENT_ARCHITECTURE.md`, `docs/AGENTS.md`, `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` (runtime vs memory boundary). The consolidated runtime-vs-durable boundary contract is owned by #1369 follow-up.
+- **Owner docs:** `docs/ARCHITECTURE.md` (current runtime surfaces, AgentState), `docs/LANGGRAPH_AGENT_ARCHITECTURE.md`, `docs/AGENTS.md`, `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` (runtime vs memory boundary). The consolidated runtime-vs-durable boundary contract is owned by `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md` (#1369).
 
 ### Layer 6 — Machine mirror
 
@@ -179,7 +179,7 @@ This map is the parent for the rest of epic #1363. Each sibling contract owns it
 - Semantic authority matrix — #1365 → `docs/SEMANTIC_AUTHORITY_MATRIX.md` (per-entity authority detail under Layer 4)
 - Relation taxonomy — #1367 → `docs/CONCEPTS/RELATION_TAXONOMY.md` (relation detail under Layer 1)
 - Machine mirror / DB authority contract — #1370 → `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (Layer 6 detail)
-- Runtime vs durable state boundary — #1369 (Layer 5 detail)
+- Runtime vs durable state boundary — #1369 → `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md` (Layer 5 detail)
 - Companion UI projection alignment — #1368 (Layer 7 detail)
 - Workflow mutation & governance semantics — #1371 (Layer 4 mutation detail)
 - Semantic drift & boundary audit — #1372 (validates this map against the repo)
