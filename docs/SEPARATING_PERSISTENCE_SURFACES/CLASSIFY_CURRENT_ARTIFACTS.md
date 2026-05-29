@@ -29,8 +29,8 @@ Produces a single document whose body contains:
 4. **Pending-state rule (companion notes).** Companion-note entries are marked "**pending companion-note migration**" in the classification. The label means: the artifact class belongs on the system surface as a per-note sub-lane implementation (per `DEFINE_SYSTEM_SURFACE_CONTRACT.md`), but the concrete shape, path, field set, and write path are owned by the companion-note migration on the `claude/inspiring-jackson` worktree and are not finalized inside this capability. This document must not prescribe the companion-note implementation; it must only record that the assignment is conditional on the migration converging.
 5. **The artifact classes that must be classified.** The document enumerates, at minimum, the following current runtime artifact classes. Each class is a *category*, not a file path; the goal is category-level unambiguous placement, not a byte-level inventory.
    - **Vault notes** (human-authored Obsidian notes in the vault).
-   - **Companion notes** (per-note machine-side continuity artifact being introduced on `claude/inspiring-jackson`) — marked *pending companion-note migration*.
-   - **VaultMirror entries** (legacy per-note projection currently being replaced by companion notes).
+   - **Companion notes** (per-note machine-side continuity artifact; companion-note migration is now settled — see `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`).
+   - **VaultMirror entries** (legacy per-note projection; **deprecated** — replaced by companion notes; see `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`).
    - **ObjectStore payloads** (`store_objects` table rows and their payload blobs).
    - **Outbox events** (DB outbox rows in the canonical runtime queue; JSONL outbox is audit/diagnostic only).
    - **Index records** (vector index entries, hybrid store entries, retrieval/scoring projections).
@@ -68,7 +68,7 @@ Expected structure of the eventual classification document:
 |----------------------------|------------|----------------|----------------------------------------------|-------------------|
 | Vault notes                | writing    | —              |                                              | task 2            |
 | Companion notes            | system     | mirror         | pending companion-note migration             | task 4, task 5    |
-| VaultMirror entries        | system     | mirror         | legacy; being replaced by companion notes    | task 4, task 5    |
+| VaultMirror entries        | system     | mirror         | **deprecated**; replaced by companion notes  | task 4, task 5    |
 | ObjectStore payloads       | …          | …              |                                              | …                 |
 | Outbox events              | system     | operational trace |                                           | task 5            |
 | Index records              | system     | index/projection |                                            | task 4            |

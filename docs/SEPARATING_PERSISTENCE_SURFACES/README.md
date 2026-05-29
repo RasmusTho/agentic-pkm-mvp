@@ -52,7 +52,7 @@ Every deliverable in this directory is satisfied by editing documents under `doc
 
 ## Companion-note-migration dependency (MUST READ)
 
-There is active implementation work on a parallel worktree (`claude/inspiring-jackson`) that is replacing `VaultMirror` with a companion-note surface. That surface is literally the per-note materialization of what this spec calls the *system surface sub-lane*.
+The companion-note migration is now complete. `VaultMirror` (**deprecated**; replaced by companion notes — see `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`) served as the per-note projection of what this spec calls the *system surface sub-lane*; companion notes are its settled replacement.
 
 This specification treats the companion-note migration as the **reference implementation for the per-note system-surface sub-lane**. It does **not** prescribe the companion-note implementation shape, field set, location, write path, or migration strategy. Where the companion-note contract and this spec touch, this spec stays at the naming / invariants / surface-identity level and cites `COMPANION_NOTE_CONTRACT.md` and `MIRROR_RECEIPT_DECISION.md` rather than duplicating or constraining them.
 
@@ -100,7 +100,7 @@ The parent capability `Separating Persistence Surfaces` is accepted when **all**
 - [ ] The writing surface contract explicitly tolerates fragments, alternatives, and selective stabilization, routing `CREATIVE_PROCESS_CONTRACT` requirements through persistence naming.
 - [ ] The system surface contract cites but does not prescribe the companion-note migration, and marks it as the reference per-note sub-lane implementation.
 - [ ] Mirror, receipt, operational trace, and index/projection are named as distinct sub-kinds with stable invariants.
-- [ ] `CLASSIFY_CURRENT_ARTIFACTS.md` assigns every current runtime artifact class (vault note, VaultMirror, companion note, store payload, outbox event, audit row, index record, AI status callout, etc.) to exactly one surface, with explicit pending flags where the companion-note migration has not yet converged.
+- [ ] `CLASSIFY_CURRENT_ARTIFACTS.md` assigns every current runtime artifact class (vault note, VaultMirror (deprecated; replaced by companion notes), companion note, store payload, outbox event, audit row, index record, AI status callout, etc.) to exactly one surface.
 - [ ] A reviewer can point at any current runtime artifact class and say unambiguously which of the three surfaces it belongs to.
 - [ ] The capability does not change any code, schema, or on-disk layout; all acceptance evidence is satisfied by documents in this directory.
 

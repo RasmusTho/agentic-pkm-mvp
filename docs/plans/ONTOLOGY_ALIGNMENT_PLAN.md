@@ -210,7 +210,7 @@ Review questions:
 
 Additional finding:
 - the same vault note is projected into several runtime forms in one ingest pass:
-  - mirror markdown under `System/Metadata/VaultMirror`,
+  - mirror markdown under `System/Metadata/VaultMirror` (deprecated; replaced by companion notes — see `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`),
   - `DomainObject(kind="note")`,
   - object-store row with `kind="note"`,
   - retrieval/index document with `kind="note"`,

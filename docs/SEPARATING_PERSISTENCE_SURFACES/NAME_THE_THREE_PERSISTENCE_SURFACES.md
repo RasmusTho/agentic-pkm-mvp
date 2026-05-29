@@ -99,7 +99,7 @@ These three surfaces exist to make surface authority explicit and to prevent sil
 
 2. **The system surface must never silently become the only real source of meaning.** (Source: `docs/plans/V60_ARCHITECTURE_TARGET.md` §Pillar 3, §Pillar 4, §Delta 3.) This invariant defends the cognitive-prosthetic guarantee. Every time a mirror becomes the master, a receipt becomes just another log line, an index entry becomes the de-facto artifact, the user loses a piece of the "I can still read my own work without the runtime" promise. Naming this rule and placing it at the center of the contract is what stops that drift before it is rationalized into a convenience.
 
-3. **Classification of any concrete artifact must be unambiguous.** When the runtime encounters a vault note, a companion note, a VaultMirror, a store payload, an outbox event, an audit row, an index record, or a status callout, there must be no ambiguity about which surface it belongs to. The three-surface model exists to make this classification clear and defensible.
+3. **Classification of any concrete artifact must be unambiguous.** When the runtime encounters a vault note, a companion note, a VaultMirror (deprecated; replaced by companion notes), a store payload, an outbox event, an audit row, an index record, or a status callout, there must be no ambiguity about which surface it belongs to. The three-surface model exists to make this classification clear and defensible.
 
 ---
 
