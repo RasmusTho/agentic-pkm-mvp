@@ -182,7 +182,7 @@ This map is the parent for the rest of epic #1363. Each sibling contract owns it
 - Runtime vs durable state boundary — #1369 → `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md` (Layer 5 detail)
 - Companion UI projection alignment — #1368 → `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md` (Layer 7 detail)
 - Workflow mutation & governance semantics — #1371 → `docs/CONCEPTS/WORKFLOW_MUTATION_AND_GOVERNANCE_SEMANTICS.md` (Layer 4 mutation detail)
-- Semantic drift & boundary audit — #1372 (validates this map against the repo)
+- Semantic drift & boundary audit — #1372 → `docs/SEMANTIC_DRIFT_AUDIT.md` (validates this map against the repo)
 
 ## Out of scope for this document
 
