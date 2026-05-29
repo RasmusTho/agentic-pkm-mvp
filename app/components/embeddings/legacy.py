@@ -41,6 +41,14 @@ class EmbeddingIdentity:
     dim: int
     normalize: bool = True
 
+    def __post_init__(self) -> None:
+        # Ollama treats an untagged model name as its `:latest` tag. Persisting the
+        # canonical form keeps index identity stable regardless of which side wrote
+        # it, so a `nomic-embed-text` index does not spuriously mismatch the
+        # `nomic-embed-text:latest` health expectation (and vice-versa).
+        if self.provider == "ollama" and self.model and ":" not in self.model:
+            object.__setattr__(self, "model", f"{self.model}:latest")
+
 
 @lru_cache(maxsize=1)
 def _deterministic_embeddings_module():
