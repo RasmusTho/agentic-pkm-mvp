@@ -122,9 +122,22 @@ cui_docker_ok() {
 
 # ── runtime orchestration ─────────────────────────────────────────────────────
 
+# Single-shot probe of the runtime API /healthz. Read-only. Returns 0 if healthy.
+cui_api_healthy_now() {
+  curl -fsS --max-time 3 "http://127.0.0.1:${CUI_API_PORT}/healthz" >/dev/null 2>&1
+}
+
 cui_start_runtime() {
   local root _rc
   root="$(cui_repo_root)"
+  # Restarting the UI should not recreate an already-healthy stack. When the
+  # runtime API is up, skip the full start_full_system.sh recreate (and its
+  # watcher/worker health race). Set CUI_FORCE_RECREATE=1 to force a rebuild,
+  # e.g. after changing runtime code or compose config.
+  if [ "${CUI_FORCE_RECREATE:-0}" != "1" ] && cui_api_healthy_now; then
+    cui_log "runtime API already healthy on port ${CUI_API_PORT} — skipping full stack recreate (set CUI_FORCE_RECREATE=1 to force)"
+    return 0
+  fi
   cui_log "starting runtime API via scripts/start_full_system.sh (project=${CUI_COMPOSE_PROJECT})"
   (
     cd "${root}" || exit 1
