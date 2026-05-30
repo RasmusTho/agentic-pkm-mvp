@@ -30,7 +30,7 @@ features under test. It was loaded through the runtime API and observed in the b
 | GFM Task lists | **PASS (functional) / FAIL (design)** | Checkboxes render with visually distinct checked and unchecked states. Inline code within task items is visible. Read-only behavior is correct. Visual alignment and sizing need design review. |
 | Fenced code blocks | **AMBIGUOUS** | Code blocks were not captured in the available screenshots. Functional rendering is assumed from earlier observations but visual alignment (font, spacing, contrast, language label) is unconfirmed. A dedicated screenshot is still needed. |
 | Mermaid diagrams | **FAIL** | Mermaid fenced blocks do not render. The block appears as raw text or produces an error. |
-| Images | **AMBIGUOUS** | A missing-image placeholder state was observed. A real vault image asset was not available during UAT, so real image rendering remains unconfirmed. |
+| Images | **PASS (automated) / live UAT pending** | Real-image rendering now proven via a committed license-clean fixture (`Attachments/uat_real_image.png`) and renderer tests; missing-image placeholder (#1340) unchanged. See the "2026-05-30 — image rendering fixture (#1347)" section below. Live Niflheim re-observation handed to the owner. |
 | Internal / wiki links | **FAIL** | Wikilinks (`[[Note Name]]`) do not resolve and do not navigate. Rendered as raw text or as a non-functional link. |
 | Body edit (note mutation) | **FAIL** | No body edit functionality is wired to the browser UI. Attempting to edit the note body produces no visible effect. The Canvas body-edit API exists in the backend but is not connected. |
 
@@ -148,3 +148,49 @@ Fenced code blocks render as `<pre class="vault-code-block" data-language="…">
 ### Syntax highlighting decision
 
 **Not required for current acceptance.** Code blocks are a faithful, readable monospace surface with a language label; token-level syntax highlighting is a reading-comfort enhancement, not a correctness requirement for the cognitive-workspace MLP. No follow-up issue filed; revisit only if a future spec mandates highlighted code.
+
+---
+
+## 2026-05-30 — image rendering fixture (#1347, supersedes the "Images AMBIGUOUS" row)
+
+The earlier "Images" row was AMBIGUOUS because no real vault image asset was
+available during UAT — only the missing-image placeholder (#1340) could be
+observed. This issue adds a real, license-clean asset so both states are now
+provable.
+
+### Committed fixture
+
+| Field | Value |
+|---|---|
+| Asset path (repo) | `vault/9_Extras/Attachments/uat_real_image.png` |
+| Vault-relative path | `Attachments/uat_real_image.png` |
+| Dimensions / size | 200×112 px, 589 bytes (well under the 50 KB cap) |
+| Format | 8-bit RGB PNG |
+| License | **Repo-original / CC0.** Generated programmatically (deterministic quantized gradient, no third-party content) by the #1347 build step; free to redistribute. |
+
+### Expected outcomes (now covered by automated tests)
+
+| Scenario | Markdown in the UAT note | Expected render |
+|---|---|---|
+| Existing asset (Markdown image) | `![Pattern fixture](Attachments/uat_real_image.png)` | `<img class="vault-image" data-asset-state="allowed" src="…">` with non-empty `src` + `alt` |
+| Existing asset (Obsidian embed) | `![[Attachments/uat_real_image.png]]` | same `<img class="vault-image">` shape (alt = resolver display name) |
+| Missing asset (unchanged #1340 path) | `![alt](Attachments/nonexistent-image.png)` | `<figure class="vault-asset-diagnostic missing-image" data-testid="missing-image" data-asset-state="missing">` dashed-rectangle partial |
+
+Automated coverage: `tests/companion_ui/test_vault_markdown_renderer.py::test_existing_image_renders_img`,
+`::test_existing_image_embed_renders_img`,
+`::test_missing_image_still_uses_partial_alongside_existing_asset`, plus the
+unchanged `tests/companion_ui/test_missing_image_partial.py` baseline. The
+renderer never reads the filesystem; the asset is exposed through the
+`VaultAssetResolver` boundary as a browser-safe `src`.
+
+### Live-runtime follow-up (owner)
+
+To complete the human-facing UAT on the live Niflheim runtime
+(`http://10.42.42.10:8111`), the owner should copy
+`vault/9_Extras/Attachments/uat_real_image.png` into the Niflheim vault at
+`Attachments/uat_real_image.png` and add both fixture lines (Markdown image +
+Obsidian embed, exactly as in the table above) alongside the existing
+`Attachments/nonexistent-image.png` missing-asset line in
+`Companion_UI_Markdown_Feature_UAT.md`. Expected: the existing-asset blocks show
+the actual gradient image; the missing-asset block shows the #1340 dashed
+rectangle.
