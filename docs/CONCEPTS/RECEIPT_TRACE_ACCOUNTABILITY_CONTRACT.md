@@ -164,6 +164,16 @@ It does not automatically satisfy the human-legible receipt requirement.
 4. Automated action requires receipt semantics that make delegation/policy basis visible.
 5. Diagnostic logging alone is insufficient where human trust depends on accountability.
 
+Current bounded projection note (#1279):
+- the Vault Browser's per-artifact `receipts` field is an explicit read-only accountability
+  projection over existing governed outbox/event records;
+- the projection may use only event records that already carry receipt/accountability semantics
+  (`promotion.transition.applied`, `panel.action.logged`, `panel.action.blocked` in the current
+  implementation);
+- it is not a final durable receipt store, not a new receipt authority, and not a browser write path;
+- when the source is unavailable, the browser must preserve the `unavailable` state rather than
+  fabricating receipt rows.
+
 ## 6. Minimal accountability rule
 
 For every meaningful system action, the overall system should make it possible to recover:
