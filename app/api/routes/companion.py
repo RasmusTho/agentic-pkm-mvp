@@ -413,6 +413,28 @@ def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _vault_contained_abs_path(vault_root: Path, safe_note_path: str) -> Path:
+    """Resolve a validated relative note path to an absolute path, asserting it
+    stays inside the vault root.
+
+    Defense-in-depth against path traversal and symlink escape on top of
+    ``_validate_workspace_note_path`` (and a sanitizer CodeQL recognizes for the
+    py/path-injection rule): the realpath of the target must be the vault root
+    itself or a descendant of it.
+    """
+    root_real = os.path.realpath(vault_root)
+    target_real = os.path.realpath(os.path.join(root_real, safe_note_path))
+    if target_real != root_real and not target_real.startswith(root_real + os.sep):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "path_escape",
+                "message": "Resolved note path is outside the vault.",
+            },
+        )
+    return Path(target_real)
+
+
 def _vault_relative(path: Path, vault_root: Path) -> str | None:
     try:
         return path.relative_to(vault_root).as_posix()
@@ -1653,12 +1675,14 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
     vault_root = resolve_vault_root()
-    note_path = _find_workspace_note(vault_root, safe_note_path)
-    if note_path is None:
+    if _find_workspace_note(vault_root, safe_note_path) is None:
         raise HTTPException(
             status_code=404,
             detail={"error": "note_not_found", "message": "No note exists for the requested note_path"},
         )
+    # Defense-in-depth: resolve to an absolute path proven to be inside the vault
+    # before any filesystem read/write.
+    note_path = _vault_contained_abs_path(vault_root, safe_note_path)
 
     if _body_contains_frontmatter(req.new_body):
         raise HTTPException(
