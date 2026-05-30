@@ -2914,6 +2914,7 @@ def render_index_html(
     fields: Optional[dict] = None,
     error: str = "",
     production_profile: bool = False,
+    diagnostics: bool = False,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -3030,6 +3031,15 @@ def render_index_html(
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }}
+    /* #1418 — dev/operator harness chrome is hidden in the default human
+       workspace and only revealed in diagnostics mode (?diagnostics=1). The
+       elements stay in the DOM for operator access + data-* compatibility. */
+    body[data-diagnostics="false"] .topbar,
+    body[data-diagnostics="false"] .dev-controls-disclosure,
+    body[data-diagnostics="false"] .workspace-dev-ribbon,
+    body[data-diagnostics="false"] .dev-chip {{
+      display: none;
     }}
     .dev-chip {{
       display: inline-block;
@@ -5029,7 +5039,7 @@ def render_index_html(
     }}
   </style>
 </head>
-<body>
+<body data-diagnostics="{'true' if diagnostics else 'false'}">
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -5343,6 +5353,8 @@ def handle_get(
     note_path = params.get("note_path", [""])[0].strip()
     _filter_keys = ("kind", "zone", "review_state", "trust")
     active_filters = {k: params[k] for k in _filter_keys if params.get(k)}
+    # #1418 — diagnostics/operator chrome is opt-in via an explicit route.
+    diagnostics = params.get("diagnostics", ["0"])[0].strip().lower() in {"1", "true", "yes", "on"}
     fields: Optional[dict] = None
     error = ""
 
@@ -5360,6 +5372,7 @@ def handle_get(
         fields=fields,
         error=error,
         production_profile=production_profile,
+        diagnostics=diagnostics,
     )
 
 
