@@ -32,7 +32,7 @@ features under test. It was loaded through the runtime API and observed in the b
 | Mermaid diagrams | **PASS (automated + Preview UAT) / live UAT pending** | Valid fences render to inline SVG via a sandboxed client runtime; invalid fences degrade to the #1340 failed-embed partial (no Mermaid "bomb" error graphic). See the "2026-05-30 — Mermaid functional rendering (#1344)" section. Live Niflheim re-observation handed to the owner. |
 | Images | **PASS (automated) / live UAT pending** | Real-image rendering now proven via a committed license-clean fixture (`Attachments/uat_real_image.png`) and renderer tests; missing-image placeholder (#1340) unchanged. See the "2026-05-30 — image rendering fixture (#1347)" section below. Live Niflheim re-observation handed to the owner. |
 | Internal / wiki links | **FAIL** | Wikilinks (`[[Note Name]]`) do not resolve and do not navigate. Rendered as raw text or as a non-functional link. |
-| Body edit (note mutation) | **FAIL** | No body edit functionality is wired to the browser UI. Attempting to edit the note body produces no visible effect. The Canvas body-edit API exists in the backend but is not connected. |
+| Body edit (note mutation) | **PASS (automated) / live enabled-Canvas UAT pending** | The `active_note_body_update` flow is wired through `POST /api/companion/workspace/update` with writeguard: disabled→no write, commit→success+re-render, writeguard reject→blocked state, unsaved→staged signal, Panel proposals stay staged. See the "2026-05-30 — body-edit wiring (#1346)" section. Live enabled-Canvas walk handed to the owner (Niflheim keeps Canvas disabled). |
 
 ---
 
@@ -228,3 +228,37 @@ For the live Niflheim UAT (`http://10.42.42.10:8111`), add to
 malformed edges) and record the two fixture line numbers. Expected: the valid
 fence renders as a diagram; the broken fence shows the failed-embed dashed
 container with `view source`, and no error graphic leaks into the page.
+
+---
+
+## 2026-05-30 — body-edit wiring (#1346, supersedes the "Body edit FAIL" row; #1332 AC4)
+
+Note body editing is wired through the runtime `active_note_body_update` flow
+(`POST /api/companion/workspace/update`) with writeguard, Panel/Canvas
+separation, and staged-proposal preservation. The audit found the commit /
+writeguard / re-render machinery already implemented in
+`RealNoteWorkspaceDevPage.update_active_note_body`; this issue added the unsaved
+("staged") signal and the named acceptance coverage.
+
+### Automated acceptance (`tests/companion_ui/test_active_note_body_update.py`)
+
+| AC | Behaviour | Test |
+|---|---|---|
+| AC1 | Update capability disabled → no write, `blocked` state | `test_no_writes_when_canvas_disabled` |
+| AC2 | Explicit commit → `POST /workspace/update`, reload, `success` | `test_commit_round_trip` |
+| AC3 | Writeguard reject (403/blocked) → `blocked` state DOM, no silent loss | `test_writeguard_rejection_surfaces_failure_state` |
+| AC4 | Panel proposal stays staged; no auto-apply without explicit Apply | `test_proposal_does_not_auto_apply` |
+| AC5 | Uncommitted edit → visible `…-state-staged` signal + `oninput` reveal | `test_unsaved_edit_signal_visible` |
+| AC6 | After commit the body re-renders via `render_vault_markdown` (heading → `<h2>`) | `test_body_rerenders_with_renderer_after_commit` |
+
+### Live-runtime follow-up (owner)
+
+The live Niflheim runtime keeps Canvas disabled, so the **enabled-Canvas** human
+walk runs against a dev runtime with `CANVAS_ENABLED=1` /
+`guard_workspace_update_available=true`:
+1. With Canvas disabled: the body is read-only (#1341 pill); editing writes nothing.
+2. With Canvas enabled: type in the body → the unsaved/staged signal appears; the
+   explicit `Update body` commit succeeds and the body re-renders (headings,
+   callouts, links apply).
+3. Inject a Panel proposal: it stays staged (Apply / Discard / Defer) and never
+   becomes body text without explicit Apply.

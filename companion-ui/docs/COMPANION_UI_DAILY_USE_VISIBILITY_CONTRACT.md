@@ -63,6 +63,16 @@ When `active_note_body_update_enabled=false` (defaults to `guard_workspace_updat
 the blocked state element (`data-testid="workspace-active-note-body-update-state-blocked"`) is
 rendered with `hidden`. The outer section carries `data-flow-state="disabled"` for automation.
 
+### Rule: Active-note-body-update unsaved-edit signal (#1346)
+
+When the update flow is enabled, the unsaved-edit signal
+(`data-testid="workspace-active-note-body-update-state-staged"`) is always present in DOM and
+rendered `hidden` by default. It is revealed when the editor has uncommitted content — on
+client `oninput` while typing, or immediately when the page model reports
+`active_note_body_update_state="staged"`. It is an unsaved indicator only: it submits no write
+and does not bypass writeguard. The actual commit remains the explicit `Update body` action
+through `POST /api/companion/workspace/update`.
+
 ---
 
 ## Section C — Vault browser: filtering and calm provenance
