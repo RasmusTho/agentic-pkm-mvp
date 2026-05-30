@@ -174,6 +174,15 @@ Current bounded projection note (#1279):
 - when the source is unavailable, the browser must preserve the `unavailable` state rather than
   fabricating receipt rows.
 
+Promotion transition note (#1438):
+- `promote.done` / `PROMOTE_DONE` is an execution-result trace event, not the final durable receipt
+  store;
+- `promotion.transition.applied` / `PROMOTION_TRANSITION_APPLIED` is the current
+  transition-accountability event and interim receipt-supporting record for successful promotion
+  transitions;
+- ObjectStore `payload["promotion"]` inline provenance is mirror provenance, not receipt authority;
+- a formal durable promotion receipt remains blocked on the receipt-store/query model.
+
 ## 6. Minimal accountability rule
 
 For every meaningful system action, the overall system should make it possible to recover:

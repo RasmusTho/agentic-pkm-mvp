@@ -163,16 +163,23 @@ They record where the active runtime most clearly compresses multiple ontology l
     term for a human artifact.
 
 - `app/promotion/consumer.py` and `app/services/note_update.py`
-  - `promotion` currently resolves into `review_state` mutation in both vault frontmatter and store
-    payload. A `PROMOTE_DONE` DB outbox event is emitted on success and serves as the current
-    transition record; `payload["promotion"]` in the ObjectStore row provides inline provenance.
+  - `promotion` currently resolves into durable `maturity` / `review_state` mutation in vault
+    frontmatter and into mirror payload updates in the ObjectStore.
+  - A `PROMOTE_DONE` DB outbox event is emitted on success as the execution/result event. It is not
+    the final receipt store.
+  - A separate `PROMOTION_TRANSITION_APPLIED` / `promotion.transition.applied` event is emitted as
+    the current transition-accountability event / interim receipt-supporting record. It carries
+    authority, basis, outcome, and artifact linkage for the applied transition.
+  - `payload["promotion"]` in the ObjectStore row provides inline machine-mirror provenance only.
   - What is missing is a **distinct durable promotion receipt artifact** — separate from the store
-    payload and queryable as an accountability record. Until that is added, the transition record
-    lives only as an outbox event and an embedded payload field.
+    payload and queryable as an accountability record. Until that is added, accountability is
+    recoverable from the transition-accountability event plus supporting operational traces, not
+    from a final durable receipt store.
   - Tracked follow-on: issue #1403. Target state: promotion consumer writes a formal receipt record
     in addition to the store payload mutation. Pre-requisite: receipt store model.
   - This note is an enabling-change annotation, not a current-state claim. Current behavior
-    (PROMOTE_DONE event + payload["promotion"]) is the correct interim implementation.
+    (`PROMOTE_DONE` + `promotion.transition.applied` + `payload["promotion"]`) is the correct
+    interim implementation.
 
 - `app/domain/plan.py` and `app/agents/planner/graph.py`
   - `plan` currently means execution plan much more than human project or commitment structure.

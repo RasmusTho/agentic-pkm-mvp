@@ -84,15 +84,29 @@ These are the failure modes this contract exists to prevent:
 
 These notes document known gaps between the contracts above and the current runtime, so future implementors know what is target-state vs delivered. They are enabling-change annotations, not contract revisions.
 
-### Promotion path — receipt gap (tracking issue #1403)
+### Promotion path — receipt/accountability gap (tracking issue #1403)
 
-The `app/promotion/consumer.py` + `app/services/note_update.py` path satisfies the "no silent durable write" rule via a `PROMOTE_DONE` DB outbox event on success, and embeds `payload["promotion"]` provenance in the ObjectStore row. However, it does not yet produce a **formal durable promotion receipt** as a distinct, queryable accountability artifact (as specified by §Receipt linkage above and `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`).
+The `app/promotion/consumer.py` + `app/services/note_update.py` path satisfies the current
+"no silent durable write" rule through separate observable records after a successful governed
+mutation:
 
-Current state: `PROMOTE_DONE` event in DB outbox = the transition record. `payload["promotion"]` = inline provenance.
-Target state: promotion consumer also writes a formal receipt record to a receipt store.
+- `PROMOTE_DONE` is the execution/result event. It records that promotion execution applied and
+  carries the resulting `state`, `maturity`, `review_state`, note identity, and source event.
+- `PROMOTION_TRANSITION_APPLIED` / `promotion.transition.applied` is the current transition
+  accountability event and interim receipt-supporting record. It carries the transition family,
+  target maturity, authority, basis, outcome, and artifact linkage.
+- `payload["promotion"]` in the ObjectStore row is inline operational provenance for the machine
+  mirror, not the durable receipt store.
+
+Current state: `PROMOTE_DONE` + `promotion.transition.applied` + ObjectStore inline provenance are
+the correct interim implementation. They provide execution/result trace, transition-accountability
+audit material, and mirror provenance respectively.
+Target state: promotion consumer also writes a formal, durable, queryable promotion receipt record
+to a receipt store.
 Pre-requisite: receipt store model (not yet built).
 
-Until the receipt store is built, treat `PROMOTE_DONE` + `payload["promotion"]` as the correct interim implementation. Do not add ad hoc receipt workarounds.
+Until the receipt store is built, do not add ad hoc receipt workarounds or treat DB outbox rows or
+ObjectStore inline provenance as the final durable receipt authority.
 
 ## Cross-references
 
