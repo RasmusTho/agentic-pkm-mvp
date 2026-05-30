@@ -2812,7 +2812,10 @@ def render_index_html(
       font-family: var(--font-ui);
       font-size: var(--text-base);
       line-height: 1.55;
-      min-height: 100vh;
+      /* §3.3 scroll ownership — the app shell is exactly one viewport tall and
+         owns no page scroll; the central note surface owns the reading scroll. */
+      height: 100dvh;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
     }}
@@ -3029,6 +3032,7 @@ def render_index_html(
     .workspace-main {{
       flex: 1;
       min-width: 0;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -3485,22 +3489,26 @@ def render_index_html(
     }}
 
     /* ---- Note body ---- */
+    /* §3.3 — the note body is the single primary scroll container. It owns the
+       reading scroll (min-height:0 + overflow-y:auto) and reserves >=96px of
+       bottom breathing room so the last heading/paragraph is never clipped. */
     .note-body {{
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
-      padding: 24px;
+      padding: 24px 24px 96px;
     }}
     /* Design review §6.1 — body column is a reading surface, not a card.
-       Background matches the page; no inset border; line-length capped at 68ch. */
+       Background matches the page; no inset border; line-length capped at 68ch.
+       §3.3/§7 — the reading column does not own a second nested scroll and is
+       not height-clamped; it grows naturally inside the .note-body scroll. */
     .note-body-content {{
       background: var(--bg-base);
       border: none;
       border-radius: 0;
       margin: 0 auto;
       max-width: 68ch;
-      max-height: 60vh;
       min-height: 0;
-      overflow-y: auto;
       padding: 40px 32px 48px;
       font-family: var(--font-ui);
       font-size: var(--text-base);
