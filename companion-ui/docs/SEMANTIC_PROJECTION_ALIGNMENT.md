@@ -88,3 +88,12 @@ This document is verified by the existence of:
 - **mutation semantics** distinguishing direct body edits, governance-bearing mutations, metadata edits, relation edits, proposal applications, and receipt generation;
 - **authority boundaries** stating no UI-owned truth, no implicit escalation, server-side classification, and governance routing ownership; and
 - a **contract alignment findings** table mapping each Companion UI contract to these rules and confirming consistency.
+
+## Contract authoring checklist
+
+Use this checklist when authoring a new Companion UI contract or extending an existing one. A contract must satisfy all four rules before it is considered aligned with Layer 7.
+
+- [ ] **Layer mapped.** The contract is mapped to a specific layer in `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`. State the layer explicitly (e.g., "Layer 7 — UI projection") in the contract's Authority/Role section.
+- [ ] **Durability posture stated.** The contract declares whether its state is runtime-only, durable, or a projection. Runtime-only state must not become a durable artifact without an explicit governed path. Acceptable values: `runtime` (discardable), `projection` (rebuildable/read-only), `durable` (must route through write-guard and receipts).
+- [ ] **Write authority stated.** The contract states that the UI does not own vault I/O, does not reclassify actions locally, and that any durable write routes through the server-side governance path (WriteGuard, receipts, outbox). UI-only stores must not hold meaning-bearing artifacts.
+- [ ] **Runtime boundary flagged.** Any new hidden or implicit state is checked against `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md`. State that should be discardable must not persist. State that must survive restart must use the governed write path.

@@ -118,3 +118,12 @@ This document is verified by the existence of:
 - a **canonical relation table** covering at least `links_to`, `companion_for`, `has_companion`, `derived_from`, `source_ref`, `supports`, `conflicts_with`, `supersedes`, `part_of`, `task_for`, `proposal_for`, `decision_about`, `contextualizes` (plus `sphere_membership`), each with authorship, authority, governance, rebuildability, persistence, retrieval, and projection semantics;
 - explicit **inferred-vs-authoritative** and **provenance-relation** rules ensuring no hidden semantics inside generic links; and
 - alignment of provenance-sensitive relations with the provenance/source contract and the authority matrix.
+
+## Relation authoring checklist
+
+Use this checklist when defining a new relation type or adding a new relation to the store or frontmatter. A new relation definition must state all four items.
+
+- [ ] **Type declared.** The relation type is one of: `explicit` (human-authored and authority-bearing), `inferred` (machine-derived, non-authoritative until confirmed), or `provenance` (tracks origin, dependency, or transformation — must remain visible as provenance, never collapsed into a plain navigational link). State the type explicitly in the relation definition.
+- [ ] **Inferred/confirmed flag.** If the relation is `inferred`, declare whether it carries an `inferred` flag in the store and how confirmation promotes it to `explicit`. An inferred relation must never be rendered as a confirmed edge without a confirm/dismiss affordance.
+- [ ] **Provenance visibility.** If the relation is a provenance relation (`derived_from`, `source_ref`, `supports`, `conflicts_with`, or any relation tracking origin/dependency/transformation), the definition states that it must be rendered as visible provenance — never as a plain "see also" link. The fact/inference/stale distinction must be preserved at the UI layer (owner: `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md`).
+- [ ] **Generic link semantics.** If the relation is generic (i.e., carries no specific semantic beyond "these two things are related"), state this explicitly. Generic links carry no hidden semantics; do not rely on a generic link to carry a typed semantic that should be a distinct relation.
