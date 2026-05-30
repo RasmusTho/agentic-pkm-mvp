@@ -164,8 +164,15 @@ They record where the active runtime most clearly compresses multiple ontology l
 
 - `app/promotion/consumer.py` and `app/services/note_update.py`
   - `promotion` currently resolves into `review_state` mutation in both vault frontmatter and store
-    payload.
-  - This is a strong sign that runtime naming and ontology naming are still misaligned here.
+    payload. A `PROMOTE_DONE` DB outbox event is emitted on success and serves as the current
+    transition record; `payload["promotion"]` in the ObjectStore row provides inline provenance.
+  - What is missing is a **distinct durable promotion receipt artifact** — separate from the store
+    payload and queryable as an accountability record. Until that is added, the transition record
+    lives only as an outbox event and an embedded payload field.
+  - Tracked follow-on: issue #1403. Target state: promotion consumer writes a formal receipt record
+    in addition to the store payload mutation. Pre-requisite: receipt store model.
+  - This note is an enabling-change annotation, not a current-state claim. Current behavior
+    (PROMOTE_DONE event + payload["promotion"]) is the correct interim implementation.
 
 - `app/domain/plan.py` and `app/agents/planner/graph.py`
   - `plan` currently means execution plan much more than human project or commitment structure.
