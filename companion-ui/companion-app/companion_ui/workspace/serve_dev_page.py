@@ -438,7 +438,9 @@ def _render_workspace_header_strip(
         vault_state = "unresolved"
     else:
         vault_state = "ok"
-    browse_target = "#vault-browser-overlay"
+    # §5.2 — Browse Vault routes to the canonical left-pane browse surface, not
+    # the modal overlay (which is a narrow responsive fallback only).
+    browse_target = "#vault-browser-left-pane"
     telemetry_rows = [
         ("workspace-runtime-channel", "runtime_environment_label", "runtime", runtime_environment),
         ("workspace-runtime-channel-api", "runtime_api_base_url_label", "channel", runtime_channel),
@@ -554,7 +556,7 @@ def _render_workspace_header_strip(
           <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
             <kbd>/</kbd><span>⌘K</span>
           </button>
-          <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" onclick="vaultBrowser.open()">Browse vault</button>
+          <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>
           {dev_ribbon}
         </div>
       </header>"""
@@ -629,7 +631,7 @@ def _render_note_not_found(note_path: str) -> str:
         f"<code>{safe_path}</code>"
         f"<p>No artifact at {safe_path}. The vault may have moved or this link may be stale.</p>"
         f'<div class="not-found-actions">'
-        f'<button type="button" class="not-found-browse" onclick="vaultBrowser.open()">Browse vault</button>'
+        f'<button type="button" class="not-found-browse" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>'
         f'<button type="button" class="not-found-last-note" data-testid="workspace-open-last-note">Open last note</button>'
         f"</div>"
         f"</div>"
@@ -956,7 +958,7 @@ def _render_note_section(fields: dict) -> str:
 
     return f"""
   <div class="workspace-layout workspace-layout--three-col">
-    <nav class="vault-browser-left-pane" data-testid="workspace-vault-browser-left-pane" data-region="vault-browser-pane">
+    <nav class="vault-browser-left-pane" id="vault-browser-left-pane" data-testid="workspace-vault-browser-left-pane" data-region="vault-browser-pane" data-browser-role="canonical">
       {vault_browser_html}
     </nav>
     <div class="workspace-main">
@@ -4684,15 +4686,19 @@ def render_index_html(
         <button type="button"
           id="vault-browse-btn"
           data-testid="vault-browse-button"
-          onclick="vaultBrowser.open()">Browse vault</button>
+          data-browse-target="vault-browser-pane"
+          onclick="vaultBrowser.focus()">Browse vault</button>
       </form>
     </div>
   </details>
   {content_section}
 
-  <!-- Vault note browser overlay -->
+  <!-- Vault note browser overlay — narrow responsive fallback only (§5.3).
+       On desktop, Browse Vault focuses the canonical left-pane browse surface
+       instead of opening this modal. -->
   <div class="vault-browser-overlay" id="vault-browser-overlay"
-       data-testid="vault-browser-overlay" role="dialog" aria-modal="true">
+       data-testid="vault-browser-overlay" data-browser-role="responsive-fallback"
+       role="dialog" aria-modal="true">
     <div class="vault-browser-panel">
       <div class="vault-browser-header">
         <span class="vault-browser-title">Browse vault</span>
@@ -4775,6 +4781,23 @@ def render_index_html(
     }}
 
     window.vaultBrowser = {{
+      focus: function() {{
+        // §5.2/§5.3 — on desktop the canonical browser is the left context
+        // pane; focus it in place. Only fall back to the modal overlay on
+        // narrow viewports where the persistent left pane is not available.
+        var leftPane = document.getElementById('vault-browser-left-pane');
+        var hasInlinePane = leftPane &&
+          window.matchMedia('(min-width: 860px)').matches &&
+          window.getComputedStyle(leftPane).display !== 'none';
+        if (hasInlinePane) {{
+          leftPane.setAttribute('data-browse-focused', 'true');
+          leftPane.scrollIntoView({{ block: 'nearest', inline: 'nearest' }});
+          var paneSearch = leftPane.querySelector('input, a, button');
+          if (paneSearch) paneSearch.focus();
+          return;
+        }}
+        vaultBrowser.open();
+      }},
       open: function() {{
         overlay.classList.add('open');
         search.value = '';
