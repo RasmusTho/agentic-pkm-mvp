@@ -653,27 +653,38 @@ def _render_body_edit_panel(update_flow_available: bool, note_path: str, raw_bod
             "</span>"
             "</section>"
         )
-    return f"""<div class="body-edit-panel" data-testid="workspace-body-edit-panel"
+    # #1416 — render the dev composer as an opt-in disclosure that is collapsed
+    # by default. In the fixed-height shell (#1397) a sibling that grows with its
+    # content squeezes the note reading surface; a collapsed <details> contributes
+    # only its summary row so the note body keeps its reading height, and the
+    # expanded body is height-bounded with internal scroll (CSS) so it still
+    # cannot consume the reading layout's space. testid markers are preserved.
+    return f"""<details class="body-edit-panel" data-testid="workspace-body-edit-panel"
          data-update-flow="available">
-  <div class="body-edit-header">
+  <summary class="body-edit-summary" data-testid="workspace-body-edit-summary">
     <span class="body-edit-label">Edit note body</span>
-    <span class="body-edit-note">Frontmatter and UUID are preserved. WriteGuard is authoritative.</span>
+    <span class="body-edit-note">Opt-in &middot; keeps the reading surface primary</span>
+  </summary>
+  <div class="body-edit-body">
+    <div class="body-edit-header">
+      <span class="body-edit-note">Frontmatter and UUID are preserved. WriteGuard is authoritative.</span>
+    </div>
+    <div class="body-edit-codemirror" id="body-edit-codemirror"
+         data-testid="workspace-body-edit-textarea"
+         data-note-path="{note_path}"
+         data-raw-body="{_e(raw_body)}"></div>
+    <div class="body-edit-actions">
+      <button class="body-edit-submit"
+              data-testid="workspace-body-edit-submit"
+              onclick="bodyEditor.submit()">Apply update</button>
+      <button class="body-edit-reset"
+              data-testid="workspace-body-edit-reset"
+              onclick="bodyEditor.reset()">Reset</button>
+    </div>
+    <div class="body-edit-status" id="body-edit-status"
+         data-testid="workspace-body-edit-status"></div>
   </div>
-  <div class="body-edit-codemirror" id="body-edit-codemirror"
-       data-testid="workspace-body-edit-textarea"
-       data-note-path="{note_path}"
-       data-raw-body="{_e(raw_body)}"></div>
-  <div class="body-edit-actions">
-    <button class="body-edit-submit"
-            data-testid="workspace-body-edit-submit"
-            onclick="bodyEditor.submit()">Apply update</button>
-    <button class="body-edit-reset"
-            data-testid="workspace-body-edit-reset"
-            onclick="bodyEditor.reset()">Reset</button>
-  </div>
-  <div class="body-edit-status" id="body-edit-status"
-       data-testid="workspace-body-edit-status"></div>
-</div>"""
+</details>"""
 
 
 _LEFT_PANEL_MODES = ("browse", "outline", "context", "collapsed")
@@ -4875,14 +4886,40 @@ def render_index_html(
     .panel-confirm-receipt {{ color: var(--fg-1); }}
     .panel-confirm-blocked {{ color: var(--destructive); }}
     /* Body edit panel */
+    /* #1416 — the composer is shrink-locked and height-bounded so it cannot
+       squeeze the central note reading surface in the fixed-height shell
+       (#1397). Collapsed by default it is just the summary row; expanded it is
+       capped at 42vh and scrolls internally instead of growing the column. */
     .body-edit-panel {{
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-md);
       display: flex;
       flex-direction: column;
+      flex-shrink: 0;
       gap: 8px;
       margin-top: 12px;
+      max-height: 42vh;
+      overflow-y: auto;
       padding: 12px;
+    }}
+    .body-edit-summary {{
+      align-items: baseline;
+      cursor: pointer;
+      display: flex;
+      gap: 10px;
+      list-style-position: inside;
+    }}
+    /* Deterministic collapse — some rendering engines do not apply the UA
+       details:not([open]) rule, so hide the body explicitly when collapsed so
+       the composer contributes only its summary row (#1416). */
+    .body-edit-panel:not([open]) > :not(summary) {{
+      display: none;
+    }}
+    .body-edit-body {{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 10px;
     }}
     .body-edit-disabled {{
       border-color: var(--border-strong);
@@ -4908,7 +4945,9 @@ def render_index_html(
       background: var(--bg-raised);
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-md);
-      min-height: 200px;
+      max-height: 28vh;
+      min-height: 160px;
+      overflow: auto;
       width: 100%;
     }}
     .body-edit-codemirror .cm-editor {{
@@ -5541,6 +5580,14 @@ def render_index_html(
       extensions: [basicSetup, markdown({{base: markdownLanguage}}), oneDark],
       parent: container,
     }});
+    // #1416 — the composer is a collapsed <details> by default, so CodeMirror
+    // mounts with zero measured size. Re-measure when the user opens it.
+    var panel = container.closest('details.body-edit-panel');
+    if (panel) {{
+      panel.addEventListener('toggle', function() {{
+        if (panel.open && window._cmView) {{ window._cmView.requestMeasure(); }}
+      }});
+    }}
   }}
   </script>
   <script>
