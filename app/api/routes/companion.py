@@ -413,6 +413,28 @@ def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _vault_contained_abs_path(vault_root: Path, safe_note_path: str) -> Path:
+    """Resolve a validated relative note path to an absolute path, asserting it
+    stays inside the vault root.
+
+    Defense-in-depth against path traversal and symlink escape on top of
+    ``_validate_workspace_note_path`` (and a sanitizer CodeQL recognizes for the
+    py/path-injection rule): the realpath of the target must be the vault root
+    itself or a descendant of it.
+    """
+    root_real = os.path.realpath(vault_root)
+    target_real = os.path.realpath(os.path.join(root_real, safe_note_path))
+    if target_real != root_real and not target_real.startswith(root_real + os.sep):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "path_escape",
+                "message": "Resolved note path is outside the vault.",
+            },
+        )
+    return Path(target_real)
+
+
 def _vault_relative(path: Path, vault_root: Path) -> str | None:
     try:
         return path.relative_to(vault_root).as_posix()
@@ -1597,6 +1619,101 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse:
 
     written = note_path.read_text(encoding="utf-8")
     return BodyUpdateResponse(
+        status="ok",
+        note_path=safe_note_path,
+        content_hash=_content_hash(written),
+    )
+
+
+class NoteSaveRequest(BaseModel):
+    note_path: str
+    new_body: str
+    # Optional optimistic-concurrency token: the content_hash the editor loaded
+    # with. When provided and stale, the save is refused so a concurrent change
+    # is not clobbered. Omit to force-save.
+    expected_content_hash: str | None = None
+
+
+class NoteSaveResponse(BaseModel):
+    status: str
+    note_path: str
+    content_hash: str
+
+
+@router.post("/note/save", response_model=NoteSaveResponse)
+def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
+    """Human-initiated direct edit of the active note body.
+
+    This is a first-class human operation over the user's own vault. It is
+    intentionally **not** gated by ``CANVAS_ENABLED`` or
+    ``WORKSPACE_UPDATE_FLOW_ENABLED`` (those govern AI/Canvas-mediated writes,
+    not the human typing in their own note) and does not route through the
+    Canvas-session/active-note-body-update state machine.
+
+    The only retained guard is the runtime-health write block — pure data-safety
+    that refuses writes while the runtime is in a broken/degraded state — which
+    never trips in normal operation. Frontmatter is preserved verbatim; the body
+    must not carry its own frontmatter block.
+    """
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed("companion.note.human_edit")
+    except WritesBlockedError as exc:
+        # 409: transient runtime-health state, not a permission denial.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "runtime_write_blocked",
+                "message": str(exc),
+                "state": exc.state,
+            },
+        ) from exc
+    except Exception:
+        # The health snapshot could not even be evaluated (e.g. a minimally
+        # configured vault). The human-edit path fails open — this courtesy
+        # data-safety net must never block the user from editing their own note.
+        pass
+
+    safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
+    vault_root = resolve_vault_root()
+    if _find_workspace_note(vault_root, safe_note_path) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "note_not_found", "message": "No note exists for the requested note_path"},
+        )
+    # Defense-in-depth: resolve to an absolute path proven to be inside the vault
+    # before any filesystem read/write.
+    note_path = _vault_contained_abs_path(vault_root, safe_note_path)
+
+    if _body_contains_frontmatter(req.new_body):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "frontmatter_in_body",
+                "message": "new_body must not contain a frontmatter block; frontmatter is preserved automatically",
+            },
+        )
+
+    current = note_path.read_text(encoding="utf-8")
+    if req.expected_content_hash and _content_hash(current) != req.expected_content_hash:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "content_hash_mismatch",
+                "message": "The note changed since you opened it. Reload to pick up the latest, then re-apply your edit.",
+                "content_hash": _content_hash(current),
+            },
+        )
+
+    frontmatter_inner, _ = _split_frontmatter(current)
+    if frontmatter_inner is not None:
+        new_content = f"---{frontmatter_inner}\n---\n{req.new_body}"
+    else:
+        new_content = req.new_body if req.new_body.endswith("\n") else req.new_body + "\n"
+
+    write_note_from_absolute(note_path, new_content, vault_root=vault_root)
+
+    written = note_path.read_text(encoding="utf-8")
+    return NoteSaveResponse(
         status="ok",
         note_path=safe_note_path,
         content_hash=_content_hash(written),

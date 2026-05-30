@@ -392,21 +392,23 @@ class TestDistinctPostureTones:
 
 
 class TestAbsenceForUnavailableActions:
-    def test_body_edit_absence_card_when_update_flow_disabled(self) -> None:
+    def test_direct_editor_available_when_canvas_update_flow_disabled(self) -> None:
+        # The Canvas-mediated body-edit composer is gated by the update flow, but
+        # direct human editing is always available — so there is no "Editing is
+        # not enabled in this workspace" absence card / nag anymore.
         html = _html(guard_update_flow_available=False)
-        assert 'data-testid="workspace-action-absent"' in html
-        assert 'data-action="body-edit"' in html
+        assert "Editing is not enabled in this workspace" not in html
+        assert 'data-testid="workspace-note-source-editor"' in html
+        assert 'data-testid="workspace-note-edit-toggle"' in html
 
-    def test_body_edit_absence_carries_reason(self) -> None:
+    def test_no_canvas_body_edit_absence_nag(self) -> None:
         html = _html(guard_update_flow_available=False)
-        m = re.search(
-            r'data-testid="workspace-action-absent"[^>]*data-action="body-edit".*?</section>',
+        # The old body-edit absence card (workspace-action-absent / body-edit) is
+        # removed; it contradicted the always-available direct editor.
+        assert not re.search(
+            r'data-testid="workspace-action-absent"[^>]*data-action="body-edit"',
             html,
-            re.DOTALL,
         )
-        assert m
-        # absence card must say why
-        assert "unavailable" in m.group().lower() or "disabled" in m.group().lower()
 
     def test_no_actionable_submit_button_when_update_flow_disabled(self) -> None:
         html = _html(guard_update_flow_available=False)

@@ -163,6 +163,14 @@ class TestNoFactRestatement:
         # Strip style/script
         stripped = _re.sub(r"<style[^>]*>.*?</style[^>]*>", "", html_outside_details, flags=_re.DOTALL | _re.IGNORECASE)
         stripped = _re.sub(r"<script[^>]*>.*?</script[^>]*>", "", stripped, flags=_re.DOTALL | _re.IGNORECASE)
+        # Strip the direct editor's textarea: its data-content-hash is a machine
+        # optimistic-concurrency token, not human-visible fact restatement.
+        stripped = _re.sub(
+            r'<textarea[^>]*data-testid="workspace-note-source-editor".*?</textarea>',
+            "",
+            stripped,
+            flags=_re.DOTALL,
+        )
         # These unique values should NOT appear outside the disclosure
         assert "art-unique-xzy" not in stripped, "artifact_id leaked outside disclosure"
         assert "sha256-unique-abc" not in stripped, "content_hash leaked outside disclosure"
