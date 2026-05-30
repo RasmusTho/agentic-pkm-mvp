@@ -135,6 +135,64 @@ def test_image_rendering() -> None:
     assert "file://" not in rendered.html
 
 
+UAT_IMAGE_PATH = "Attachments/uat_real_image.png"
+UAT_IMAGE_SRC = "/api/companion/vault-assets/Attachments%2Fuat_real_image.png"
+
+
+def _uat_asset_resolver() -> VaultAssetResolver:
+    # Mirrors the live resolver boundary: the committed vault asset
+    # (vault/9_Extras/Attachments/uat_real_image.png) is exposed as an allowed,
+    # browser-safe src. The renderer never touches the filesystem (#1347).
+    return VaultAssetResolver({UAT_IMAGE_PATH: UAT_IMAGE_SRC})
+
+
+def test_existing_image_renders_img() -> None:
+    # #1347 AC2 — Markdown image syntax for an existing asset renders to <img>.
+    rendered = render_vault_markdown(
+        f"![Pattern fixture]({UAT_IMAGE_PATH})",
+        note_path="Companion_UI_Markdown_Feature_UAT.md",
+        asset_resolver=_uat_asset_resolver(),
+    )
+
+    assert '<img class="vault-image"' in rendered.html
+    assert 'data-asset-state="allowed"' in rendered.html
+    assert f'src="{UAT_IMAGE_SRC}"' in rendered.html
+    assert 'alt="Pattern fixture"' in rendered.html
+    assert "missing-image" not in rendered.html
+    assert "file://" not in rendered.html
+
+
+def test_existing_image_embed_renders_img() -> None:
+    # #1347 AC3 — Obsidian embed syntax for the same asset renders to <img>.
+    rendered = render_vault_markdown(
+        f"![[{UAT_IMAGE_PATH}]]",
+        note_path="Companion_UI_Markdown_Feature_UAT.md",
+        asset_resolver=_uat_asset_resolver(),
+    )
+
+    assert '<img class="vault-image"' in rendered.html
+    assert 'data-asset-state="allowed"' in rendered.html
+    assert f'src="{UAT_IMAGE_SRC}"' in rendered.html
+    # Embed has no explicit alt; the resolver display name is used instead.
+    assert 'alt="uat_real_image.png"' in rendered.html
+    assert "missing-image" not in rendered.html
+
+
+def test_missing_image_still_uses_partial_alongside_existing_asset() -> None:
+    # #1347 AC4 — the missing-asset path is unchanged: an unknown target still
+    # degrades to the #1340 missing-image partial even when other assets resolve.
+    rendered = render_vault_markdown(
+        f"![real]({UAT_IMAGE_PATH})\n\n![gone](Attachments/nonexistent-image.png)",
+        note_path="Companion_UI_Markdown_Feature_UAT.md",
+        asset_resolver=_uat_asset_resolver(),
+    )
+
+    assert '<img class="vault-image"' in rendered.html
+    assert 'data-testid="missing-image"' in rendered.html
+    assert 'data-asset-state="missing"' in rendered.html
+    assert "nonexistent-image.png" in rendered.html
+
+
 def test_unsafe_html_stripped() -> None:
     rendered = render_vault_markdown(_fixture("comments-and-html.md"))
     lowered = rendered.html.lower()
