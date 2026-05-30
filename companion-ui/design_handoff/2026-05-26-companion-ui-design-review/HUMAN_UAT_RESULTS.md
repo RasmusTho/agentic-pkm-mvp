@@ -123,3 +123,28 @@ Design should specify what both the successful and missing states should look li
 | Task list retest needed | Test coverage gap — design should specify correct rendering |
 | Code block retest needed | Test coverage gap — design should specify correct rendering |
 | Image asset missing | Test fixture gap — design should specify both states |
+
+---
+
+## 2026-05-30 retest — task lists & code blocks (#1348)
+
+Retested against `origin/main` after #1410 (Markdown list rendering) merged. Observed via local static render of the UAT note sections driven in a real browser at 1280×900 (the live runtime had not yet been redeployed with #1410).
+
+### Task list retest — **PASS**
+
+The renderer now produces correctly nested lists and unambiguous task states:
+
+- Unchecked tasks render an empty checkbox with `data-task-state=" "`.
+- Checked tasks render a filled accent checkbox with a check tick **and** an Obsidian-style completed treatment (`text-decoration: line-through`, muted color) keyed on `data-task-state="x"`.
+- Bold and inline code inside task items render (`<strong>`, `<code>`).
+- Nested ordered/unordered list items now indent under their parent (nested `<ol>` restarts numbering at 1 instead of continuing 4/5).
+
+Evidence: `getComputedStyle` on the checked item reported `text-decoration-line: line-through` with `checkbox.checked === true`; the nested ordered list rendered as a nested `<ol>` inside the parent `<li>`. Covered by `tests/companion_ui/test_markdown_renderer_lists.py`. Supersedes the earlier "Task list retest needed" gap.
+
+### Code block retest — **PASS (functional)**
+
+Fenced code blocks render as `<pre class="vault-code-block" data-language="…"><code class="language-…">`, both with a language hint (python/json/ts observed in the live note) and without one (plain block). Monospace, contained horizontal scroll, visible language attribute. Supersedes the earlier "Fenced code blocks AMBIGUOUS" row.
+
+### Syntax highlighting decision
+
+**Not required for current acceptance.** Code blocks are a faithful, readable monospace surface with a language label; token-level syntax highlighting is a reading-comfort enhancement, not a correctness requirement for the cognitive-workspace MLP. No follow-up issue filed; revisit only if a future spec mandates highlighted code.
