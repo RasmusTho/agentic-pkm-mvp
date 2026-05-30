@@ -1660,7 +1660,10 @@ def _render_vault_browser(
     # but excluded from the visible nav list (#1361).
     hidden_count = sum(1 for n in notes if _should_hide_note_by_default(n))
 
-    rows: list[str] = []
+    # §6 — group rows by folder so the list stays scannable at 40+ artifacts.
+    # Insertion order is preserved (dicts are ordered) so any server ordering
+    # intent survives; each folder header is emitted once.
+    grouped: dict[str, list[str]] = {}
     for note in notes:
         path = str(note.get("note_path") or "").strip()
         if not path:
@@ -1669,6 +1672,8 @@ def _render_vault_browser(
         zone = _e(note.get("zone") or "root")
         href = "/?note_path=" + quote(path, safe="/")
         active = "true" if path == note_path else "false"
+        folder = path.rsplit("/", 1)[0] if "/" in path else "(root)"
+        filename = path.rsplit("/", 1)[-1]
 
         # Per-note metadata badges: hidden from the nav list by default (daily-use
         # visibility pass). The inspector panel shows the full metadata. These
@@ -1714,21 +1719,36 @@ def _render_vault_browser(
         row_hidden_attr = " hidden" if nav_hidden else ""
         row_nav_attr = ' data-nav-visible="false"' if nav_hidden else ""
 
-        rows.append(
+        # §6.1/§6.3 — title leads; the path is compact (filename only, with the
+        # full absolute path preserved in the title attribute as a details
+        # affordance). Raw metadata stays in the nav-hidden badges above.
+        grouped.setdefault(folder, []).append(
             f"""
           <li class="vault-browser-row{row_extra_class}" data-testid="workspace-vault-browser-note-row" data-active="{active}"{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>
-            <a href="{href}" data-testid="workspace-vault-browser-note-link">{title}</a>
-            <code data-testid="workspace-vault-browser-note-path">{_e(path)}</code>
+            <a href="{href}" class="vault-browser-row-title" data-testid="workspace-vault-browser-note-link">{title}</a>
+            <code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" title="{_e(path)}">{_e(filename)}</code>
             <span data-testid="workspace-vault-browser-note-zone" class="vault-browser-zone-label">{zone}</span>
             {badges_html}
           </li>"""
         )
 
+    list_items: list[str] = []
+    for folder, folder_rows in grouped.items():
+        folder_label = _e(folder)
+        list_items.append(
+            '<li class="vault-browser-group" '
+            'data-testid="workspace-vault-browser-group" '
+            f'data-folder="{folder_label}">'
+            f'<span class="vault-browser-group-label" title="{folder_label}">'
+            f"{folder_label}</span></li>"
+        )
+        list_items.extend(folder_rows)
+
     list_html = (
         '<ul class="vault-browser-list" data-testid="workspace-vault-browser-list">'
-        + "".join(rows)
+        + "".join(list_items)
         + "</ul>"
-        if rows
+        if list_items
         else ""
     )
     read_only_text = "read-only" if read_only else "mutating"
@@ -4817,6 +4837,41 @@ def render_index_html(
       margin: 0;
       overflow-y: auto;
       padding: 0;
+    }}
+    /* §6 — density: folder group headers + compact, truncating rows. */
+    .vault-browser-group {{
+      list-style: none;
+      padding: 8px 4px 2px;
+      position: sticky;
+      top: 0;
+      background: var(--bg-surface);
+      z-index: 1;
+    }}
+    .vault-browser-group-label {{
+      color: var(--fg-3);
+      display: block;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.04em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .vault-browser-row-title {{
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .vault-browser-row-path {{
+      color: var(--fg-3);
+      direction: rtl;
+      display: block;
+      font-size: var(--text-xs);
+      overflow: hidden;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }}
     .vault-browser-item {{
       border-bottom: 1px solid var(--border);
