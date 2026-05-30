@@ -912,6 +912,41 @@ def _render_note_section(fields: dict) -> str:
         governance_receipts_count=len(fields.get("governance_receipts") or []),
         suggestion_state=str(fields.get("suggestion_state", "idle") or "idle"),
     )
+
+    # §§8–9 — right rail compaction. The rail stays expanded only when it has
+    # actionable or safety-critical content. Otherwise the idle/unavailable
+    # cards collapse behind one compact posture treatment.
+    _panel_last_response = fields.get("panel_last_response") or {}
+    rail_safety_critical = (
+        writeguard_blocked
+        or recovery_needed
+        or conflict_detected
+        or guard_degraded
+        or vault_unreachable
+    )
+    rail_actionable = bool(
+        rail_safety_critical
+        or proposal_count > 0
+        or bool(panel_proposals)
+        or bool(_panel_last_response)
+        or canvas_session_state_raw not in {"idle", "", "unknown"}
+        or panel_state_raw not in {"idle", "", "unknown"}
+        or bool(panel_message_raw)
+        or len(fields.get("find_candidates") or []) > 0
+        or bool(fields.get("reorient_sections"))
+        or len(fields.get("resurface_candidates") or []) > 0
+        or len(fields.get("governance_receipts") or []) > 0
+        or len(fields.get("suggestion_cards") or []) > 0
+        or str(fields.get("suggestion_state", "idle") or "idle") not in {"idle", "", "unknown"}
+    )
+    rail_posture_token = "active" if rail_actionable else "idle"
+    if rail_safety_critical:
+        rail_posture_copy = "Companion &middot; needs attention"
+    elif rail_actionable:
+        rail_posture_copy = "Companion &middot; active"
+    else:
+        rail_posture_copy = "Companion &middot; idle — no active proposals."
+
     guard_messages: list[str] = []
     if writeguard_status.lower() == "blocked":
         guard_messages.append("WriteGuard blocked")
@@ -1052,6 +1087,52 @@ def _render_note_section(fields: dict) -> str:
         identity_state_label=identity_state,
     )
 
+    # §§8–9 — compact posture chip + the detailed rail cards. When the rail is
+    # not actionable, the idle cards collapse behind one details affordance so
+    # the rail stops acting as a permanent status dump.
+    rail_posture_html = (
+        '<div class="rail-posture" data-testid="workspace-rail-posture" '
+        f'data-rail-posture="{rail_posture_token}">{rail_posture_copy}</div>'
+    )
+    rail_cards_inner = f"""
+        <div class="rail-state-row" data-testid="workspace-canvas-state">
+          <span class="rail-state-label">Canvas</span>
+          <span class="rail-state-value" data-canvas-state="{canvas_state}">{canvas_state_copy}</span>
+        </div>
+        {canvas_controls_html}
+        {active_note_body_update_html}
+        <div class="rail-state-row">
+          <span class="rail-state-label">Panel</span>
+          <span class="rail-state-value" data-testid="workspace-panel-label">{panel_label}</span>
+          <span class="rail-state-count" data-testid="workspace-panel-proposal-count">{proposal_text}</span>
+        </div>
+        {panel_message_html}
+        {proposal_rows_html}
+        {panel_response_html}
+        {suggestion_flow_html}
+        {suggestion_cards_html}
+        {shortcut_html}
+        {governance_receipts_html}
+        {find_mode_html}
+        {reorient_mode_html}
+        {resurface_mode_html}
+        {act_mode_html}
+        {guard_html}
+        {persistence_html}
+        {panel_rail}
+        {rail_empty_state_html}"""
+    if rail_actionable:
+        rail_body_html = (
+            f'<div class="rail-placeholder-body">{rail_cards_inner}\n      </div>'
+        )
+    else:
+        rail_body_html = (
+            '<div class="rail-placeholder-body">'
+            '<details class="rail-idle-details" data-testid="workspace-rail-idle-details">'
+            '<summary class="rail-idle-summary">Companion details</summary>'
+            f"{rail_cards_inner}\n      </details></div>"
+        )
+
     return f"""
   <div class="workspace-layout workspace-layout--three-col">
     {left_context_panel_html}
@@ -1103,34 +1184,8 @@ def _render_note_section(fields: dict) -> str:
         <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>
         <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
       </div>
-      <div class="rail-placeholder-body">
-        <div class="rail-state-row" data-testid="workspace-canvas-state">
-          <span class="rail-state-label">Canvas</span>
-          <span class="rail-state-value" data-canvas-state="{canvas_state}">{canvas_state_copy}</span>
-        </div>
-        {canvas_controls_html}
-        {active_note_body_update_html}
-        <div class="rail-state-row">
-          <span class="rail-state-label">Panel</span>
-          <span class="rail-state-value" data-testid="workspace-panel-label">{panel_label}</span>
-          <span class="rail-state-count" data-testid="workspace-panel-proposal-count">{proposal_text}</span>
-        </div>
-        {panel_message_html}
-        {proposal_rows_html}
-        {panel_response_html}
-        {suggestion_flow_html}
-        {suggestion_cards_html}
-        {shortcut_html}
-        {governance_receipts_html}
-        {find_mode_html}
-        {reorient_mode_html}
-        {resurface_mode_html}
-        {act_mode_html}
-        {guard_html}
-        {persistence_html}
-        {panel_rail}
-        {rail_empty_state_html}
-      </div>
+      {rail_posture_html}
+      {rail_body_html}
     </aside>
     <div class="workspace-panel-peek" data-testid="workspace-panel-peek"
       data-layout-visible="1100-1299"
@@ -1978,7 +2033,7 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
     has_content = bool(sections) and any(sections.get(name) for name in sections)
     if not has_content:
         # Idle: single line with collapsed recall disclosure (AC3 §8.3)
-        return f"""
+        return """
         <section
           class="reorient-mode panel-section"
           data-testid="reorient-mode"
@@ -4135,6 +4190,26 @@ def render_index_html(
     }}
 
     /* ---- Agent rail ---- */
+    /* §§8–9 — compact posture chip + collapsed idle details. */
+    .rail-posture {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      padding: 6px 10px;
+    }}
+    .rail-posture[data-rail-posture="active"] {{ color: var(--fg-1); }}
+    .rail-idle-details {{
+      border-top: 1px solid var(--border);
+      margin-top: 4px;
+    }}
+    .rail-idle-summary {{
+      color: var(--fg-3);
+      cursor: pointer;
+      font-size: var(--text-xs);
+      list-style: none;
+      padding: 6px 10px;
+    }}
+    .rail-idle-summary::-webkit-details-marker {{ display: none; }}
     .agent-rail {{
       width: 280px;
       flex-shrink: 0;
