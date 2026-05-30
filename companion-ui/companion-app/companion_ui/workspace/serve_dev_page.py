@@ -1657,10 +1657,18 @@ def _render_filter_chips(
             )
     if not chips_html:
         return ""
+    # #1417 — the Kind:/Zone:/Review:/Trust: facets are filtering controls, not a
+    # default reading surface. Keep them (and their wiring) but tuck them behind a
+    # collapsed "Filters" disclosure so they do not dump raw metadata into the
+    # default Browse view.
     return (
+        '<details class="vault-browser-filters-disclosure">'
+        '<summary class="vault-browser-filters-summary" '
+        'data-testid="workspace-vault-browser-filters-toggle">Filters</summary>'
         '<div class="vault-browser-filters" data-testid="workspace-vault-browser-filters">'
         + "".join(chips_html)
         + "</div>"
+        "</details>"
     )
 
 
@@ -3148,7 +3156,13 @@ def render_index_html(
       padding: 2px 10px 4px;
       display: block;
     }}
-    .note-badge--nav-hidden {{ opacity: 0.45; }}
+    /* #1417 — raw kind/review/trust metadata must not show as visible row text.
+       Keep the elements in the DOM (data-* compatibility) but hide them; the
+       inspector/disclosure carries the detail. */
+    .note-badge--nav-hidden {{ display: none; }}
+    /* #1417 — the raw zone value (e.g. 'inbox', '⚙ System') is navigation noise;
+       folder grouping already supplies path context. Hide it from row text. */
+    .vault-browser-zone-label {{ display: none; }}
 
     /* ---- Error state ---- */
     .error-state {{
@@ -4912,6 +4926,46 @@ def render_index_html(
       margin: 0;
       overflow-y: auto;
       padding: 0;
+    }}
+    /* #1417 — Filters tucked behind a collapsed disclosure; chips get light
+       chip chrome so the expanded view reads as controls, not a metadata dump. */
+    .vault-browser-filters-disclosure {{
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+    }}
+    .vault-browser-filters-summary {{
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.04em;
+      list-style: none;
+      padding: 2px 2px;
+    }}
+    .vault-browser-filters-summary::-webkit-details-marker {{ display: none; }}
+    .vault-browser-filters {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding-top: 6px;
+    }}
+    /* Deterministic collapse: do not rely on UA details behavior so the facets
+       are hidden from the default Browse view in every engine. */
+    .vault-browser-filters-disclosure:not([open]) > .vault-browser-filters {{
+      display: none;
+    }}
+    .filter-chip {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--fg-2);
+      font-size: var(--text-xs);
+      padding: 2px 8px;
+    }}
+    .filter-chip[data-active="true"] {{
+      border-color: var(--border-focus);
+      color: var(--fg-1);
     }}
     /* §6 — density: folder group headers + compact, truncating rows. */
     .vault-browser-group {{
