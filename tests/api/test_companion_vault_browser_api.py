@@ -14,6 +14,7 @@ are out of scope for this surface; see §7 of the contract.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -122,3 +123,86 @@ def test_vault_browser_cap_preserves_lexicographic_subset(tmp_path: Path, monkey
     _write_note(tmp_path / "m" / "middle.md", title="Middle")
     data = TestClient(app).get("/api/companion/vault-browser").json()
     assert [n["note_path"] for n in data["notes"]] == ["a/first.md", "m/middle.md"]
+
+
+def test_vault_browser_includes_receipts_from_outbox_projection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    outbox = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+
+    note_uuid = "00000000-0000-0000-0000-000000001279"
+    note_path = tmp_path / "vault" / "notes" / "receipt.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        f"---\ntitle: Receipt Note\nuuid: {note_uuid}\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    outbox.write_text(
+        json.dumps(
+            {
+                "event": "promotion.transition.applied",
+                "event_id": "evt-receipt-1279",
+                "trace_id": "trace-receipt-1279",
+                "source": "promotion.consumer",
+                "timestamp": "2026-05-30T12:00:00Z",
+                "payload": {
+                    "intent_event_id": "intent-1279",
+                    "note_uuid": note_uuid,
+                    "note_path": "notes/receipt.md",
+                    "outcome": {"status": "applied"},
+                    "authority": {"component": "panel_agent.runtime"},
+                    "artifact_linkage": {
+                        "note_uuid": note_uuid,
+                        "note_path": "notes/receipt.md",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    resp = TestClient(app).get("/api/companion/vault-browser")
+
+    assert resp.status_code == 200
+    receipt_note = next(
+        note for note in resp.json()["notes"] if note["note_path"] == "notes/receipt.md"
+    )
+    assert receipt_note["receipts"] == [
+        {
+            "receipt_id": "evt-receipt-1279",
+            "trace_id": "trace-receipt-1279",
+            "action_id": "intent-1279",
+            "action_type": "promotion.transition.applied",
+            "artifact_uuid": note_uuid,
+            "artifact_path": "notes/receipt.md",
+            "path": "notes/receipt.md",
+            "requested_by": "panel_agent.runtime",
+            "approved_by": None,
+            "status": "applied",
+            "timestamp": "2026-05-30T12:00:00Z",
+            "state": "applied",
+        }
+    ]
+
+
+def test_vault_browser_omits_receipts_when_receipt_source_unavailable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "missing-outbox.jsonl"))
+    _write_note(tmp_path / "vault" / "notes" / "no-source.md", title="No Source")
+
+    resp = TestClient(app).get("/api/companion/vault-browser")
+
+    assert resp.status_code == 200
+    note = resp.json()["notes"][0]
+    assert note["note_path"] == "notes/no-source.md"
+    assert "receipts" not in note

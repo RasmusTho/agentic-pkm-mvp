@@ -21,6 +21,7 @@ from app.config.paths import resolve_vault_root
 from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.runtime import build_orientation_frame
+from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
@@ -153,6 +154,21 @@ class WorkspaceBodyUpdateResponse(BaseModel):
     content_hash_after: str
 
 
+class VaultReceiptState(BaseModel):
+    receipt_id: str
+    trace_id: str | None = None
+    action_id: str | None = None
+    action_type: str | None = None
+    artifact_uuid: str | None = None
+    artifact_path: str | None = None
+    path: str | None = None
+    requested_by: str | None = None
+    approved_by: str | None = None
+    status: str
+    timestamp: str
+    state: str
+
+
 class VaultBrowserNoteState(BaseModel):
     note_path: str
     title: str
@@ -168,6 +184,10 @@ class VaultBrowserNoteState(BaseModel):
     updated: str | None = None
     frontmatter_valid: bool = False
     missing_required_fields: list[str] = Field(default_factory=list)
+    receipts: list[VaultReceiptState] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class VaultBrowserStateResponse(BaseModel):
@@ -775,6 +795,36 @@ def _select_vault_notes(
     return selected, total_notes, filtered_notes
 
 
+def _attach_receipts_to_notes(
+    notes: list[VaultBrowserNoteState],
+    *,
+    vault_root: Path,
+) -> list[VaultBrowserNoteState]:
+    projection = receipts_for_artifacts(
+        [
+            ArtifactReceiptTarget(
+                artifact_uuid=note.uuid,
+                note_path=note.note_path,
+            )
+            for note in notes
+        ],
+        vault_root=vault_root,
+    )
+    if projection is None:
+        return notes
+    return [
+        note.model_copy(
+            update={
+                "receipts": [
+                    VaultReceiptState.model_validate(receipt)
+                    for receipt in projection.get(note.note_path, [])
+                ]
+            }
+        )
+        for note in notes
+    ]
+
+
 def _invert_lex(value: str) -> str:
     return "".join(chr(0x10FFFF - ord(ch)) for ch in value)
 
@@ -861,6 +911,7 @@ def read_companion_vault_browser(
         limit=effective_limit,
         filters=active_filters,
     )
+    selected = _attach_receipts_to_notes(selected, vault_root=vault_root)
     identity = _vault_identity_state(vault_root)
     identity_available = (
         bool(identity.vault_name.strip()) and identity.channel in {"dev", "test", "prod"}

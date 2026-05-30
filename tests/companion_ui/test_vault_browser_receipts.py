@@ -217,7 +217,9 @@ def test_queued_receipt_rendered() -> None:
     """AC3: queued receipt is rendered with its state."""
     note = _browser_note(receipts=[_receipt(state="queued")])
     html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
+    assert 'data-testid="vault-browser-receipt-row"' in html
     assert 'data-receipt-state="queued"' in html
+    assert 'data-receipt-state="unavailable"' not in html
 
 
 def test_applied_receipt_rendered() -> None:
