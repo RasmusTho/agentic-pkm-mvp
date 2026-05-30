@@ -90,6 +90,8 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-vault-browser-provenance",
         "workspace-vault-browser-state-identity-unavailable",
         "vault-browse-button",
+        # Vault browser density: folder group headers (§6 / #1400)
+        "workspace-vault-browser-group",
         # Body edit panel
         "workspace-body-edit-submit",
         "workspace-body-edit-reset",
