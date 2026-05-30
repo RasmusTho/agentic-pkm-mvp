@@ -893,11 +893,20 @@ def _render_note_section(fields: dict) -> str:
     vault_channel = _e(fields.get("runtime_vault_channel") or "unknown")
     vault_provenance = fields.get("runtime_vault_provenance") or "unresolved"
     raw_body = str(fields.get("body", "") or "")
-    # #1345 — seed the link resolver with the active-vault link index so
-    # vault-internal wikilinks resolve and navigate. When the index is absent
-    # (current runtime, pending the read-only link-index API) this is an empty
-    # resolver, identical to the prior default — every link stays diagnostic.
-    link_resolver = VaultLinkResolver(_coerce_vault_link_index(fields.get("vault_link_index")))
+    # #1345/#1431 — seed the link resolver with the active-vault link index so
+    # vault-internal wikilinks resolve and navigate. The index arrives either as
+    # the read-only link-index API's note-path list (#1431) — the resolver
+    # expands each path into its lookup keys — or as a pre-built {target: paths}
+    # mapping. Absent index → empty resolver, identical to the prior default
+    # (every link stays diagnostic).
+    raw_link_index = fields.get("vault_link_index")
+    if isinstance(raw_link_index, (list, tuple)):
+        link_index: list[str] | dict[str, list[str]] = [
+            str(path) for path in raw_link_index if path
+        ]
+    else:
+        link_index = _coerce_vault_link_index(raw_link_index)
+    link_resolver = VaultLinkResolver(link_index)
     rendered_body = render_vault_markdown(
         raw_body, note_path=raw_note_path, link_resolver=link_resolver
     )

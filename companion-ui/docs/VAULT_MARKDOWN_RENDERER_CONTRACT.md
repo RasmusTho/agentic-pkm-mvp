@@ -262,7 +262,11 @@ output (HTML via React or equivalent).
   matching the rendered `<h_ id>`) so the link scrolls to the heading; a block-id
   fragment keeps the literal `#^block-id` form. Resolution requires the
   `VaultLinkResolver` to be seeded with the active-vault link index; with an empty
-  index every link stays diagnostic.
+  index every link stays diagnostic. The workspace seeds that index from the
+  read-only `GET /api/companion/vault-link-index` endpoint (#1431) — a complete
+  note-path listing the resolver expands into lookup keys; the UI never reads the
+  vault filesystem, and a failed/absent fetch degrades to the empty (diagnostic)
+  index.
 - The renderer does not emit navigation events as mutations.
 - The renderer does not store resolved content in durable state.
 - Clicking an internal link is a navigation event, not a mutation.
