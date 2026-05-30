@@ -192,3 +192,56 @@ def test_internal_labels_do_not_leak_to_default_copy():
     # ...and carries no internal/test labels (those live behind the details).
     for token in _IDLE_TOKENS:
         assert token not in head, f"internal label {token!r} leaked into default rail copy"
+
+
+# ---------------------------------------------------------------------------
+# #1419 — degraded/disabled-only state must NOT expand the rail
+# ---------------------------------------------------------------------------
+
+
+def test_rail_compacts_for_degraded_disabled_only_state():
+    # Matches the user UAT screenshot: runtime degraded + Canvas disabled +
+    # workspace update disabled + Find unavailable + Resurface degraded +
+    # Suggestions idle + idle Reorient + no proposals/recovery/block.
+    rail = _rail(_html(
+        guard_degraded=True,
+        guard_canvas_enabled=False,
+        guard_workspace_update_available=False,
+        find_payload_available=False,
+        reorient_sections={"open_loops": []},  # idle reorient (no items)
+        resurface_candidates=[],
+        suggestion_state="idle",
+        panel_state="idle",
+        panel_proposal_count=0,
+    ))
+    # None of those are actionable → compact posture, not "needs attention".
+    assert 'data-rail-posture="idle"' in rail
+    assert "needs attention" not in rail
+    # The disabled/degraded cards collapse behind the single details treatment.
+    assert 'data-testid="workspace-rail-idle-details"' in rail
+
+
+def test_generic_guard_degraded_alone_is_not_actionable():
+    rail = _rail(_html(guard_degraded=True))
+    assert 'data-rail-posture="idle"' in rail
+    assert 'data-testid="workspace-rail-idle-details"' in rail
+
+
+def test_idle_reorient_payload_does_not_expand_rail():
+    # An empty-section reorient dict must not force the rail open.
+    rail = _rail(_html(reorient_sections={"open_loops": [], "facts": []}))
+    assert 'data-rail-posture="idle"' in rail
+    assert 'data-testid="workspace-rail-idle-details"' in rail
+
+
+def test_actionable_reorient_with_items_still_expands_rail():
+    # A reorient payload with real items is an actionable orientation step.
+    rail = _rail(_html(reorient_sections={"open_loops": [{"text": "Close loop X", "source_path": "n.md"}]}))
+    assert 'data-testid="workspace-rail-idle-details"' not in rail
+
+
+def test_writeguard_block_still_expands_despite_compaction_fix():
+    # Safety-critical write block must remain visible (regression guard).
+    rail = _rail(_html(guard_writeguard_status="blocked", guard_degraded=True))
+    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    assert 'data-testid="workspace-guard-indicator"' in rail

@@ -917,13 +917,20 @@ def _render_note_section(fields: dict) -> str:
     # actionable or safety-critical content. Otherwise the idle/unavailable
     # cards collapse behind one compact posture treatment.
     _panel_last_response = fields.get("panel_last_response") or {}
+    # #1419 — only genuinely safety-affecting state is "critical". Generic
+    # guard_degraded (e.g. Canvas disabled) and vault_unreachable are passive
+    # capability/availability states: the former is non-actionable, the latter
+    # already has its own prominent unreachable banner. They must not force the
+    # rail open or read as "needs attention".
     rail_safety_critical = (
         writeguard_blocked
         or recovery_needed
         or conflict_detected
-        or guard_degraded
-        or vault_unreachable
     )
+    # Reorient counts as actionable only when it carries real items (an
+    # orientation step), not when it is the idle/empty recall payload (#1419).
+    _reorient = fields.get("reorient_sections") or {}
+    reorient_actionable = any(_reorient.get(name) for name in _reorient)
     rail_actionable = bool(
         rail_safety_critical
         or proposal_count > 0
@@ -933,7 +940,7 @@ def _render_note_section(fields: dict) -> str:
         or panel_state_raw not in {"idle", "", "unknown"}
         or bool(panel_message_raw)
         or len(fields.get("find_candidates") or []) > 0
-        or bool(fields.get("reorient_sections"))
+        or reorient_actionable
         or len(fields.get("resurface_candidates") or []) > 0
         or len(fields.get("governance_receipts") or []) > 0
         or len(fields.get("suggestion_cards") or []) > 0
@@ -4225,6 +4232,11 @@ def render_index_html(
     .rail-idle-details {{
       border-top: 1px solid var(--border);
       margin-top: 4px;
+    }}
+    /* #1419 — deterministic collapse: hide the non-actionable cards when the
+       details is closed, independent of UA details behavior. */
+    .rail-idle-details:not([open]) > :not(summary) {{
+      display: none;
     }}
     .rail-idle-summary {{
       color: var(--fg-3);
