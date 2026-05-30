@@ -1370,6 +1370,22 @@ def _render_active_note_body_update_flow(
             + "</div>"
         )
 
+    # #1346 AC5 — visible unsaved-edit signal. Rendered hidden by default and
+    # revealed when the editor has uncommitted content (client `oninput`), or
+    # shown immediately when the page model reports the `staged` state. It is an
+    # unsaved indicator only — it submits no write and does not alter writeguard.
+    staged_hidden = "" if safe_state == "staged" else " hidden"
+    staged_message = safe_message if (safe_state == "staged" and safe_message) else "Unsaved edit — commit to save."
+    staged_html = (
+        '<div class="active-note-body-update-staged" '
+        'data-testid="workspace-active-note-body-update-state-staged"'
+        f"{staged_hidden}>{staged_message}</div>"
+    )
+    reveal_staged = (
+        "var s=this.closest('.active-note-body-update-flow')"
+        ".querySelector('[data-testid=\\'workspace-active-note-body-update-state-staged\\']');"
+        "if(s){s.hidden=this.value.length===0;}"
+    )
     return f"""
         <section
           class="active-note-body-update-flow"
@@ -1379,6 +1395,7 @@ def _render_active_note_body_update_flow(
           <textarea
             id="active_note_body_update_input"
             data-testid="workspace-active-note-body-update-input"
+            oninput="{reveal_staged}"
             aria-label="Active note body update input"></textarea>
           <button
             type="button"
@@ -1387,6 +1404,7 @@ def _render_active_note_body_update_flow(
             data-api-path="/api/companion/workspace/update"
             data-note-path="{_e(note_path)}"
             data-content-hash="{_e(content_hash)}">Update body</button>
+          {staged_html}
           {status_html}
         </section>"""
 
