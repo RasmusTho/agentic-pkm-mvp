@@ -30,20 +30,37 @@ def test_valid_diagram() -> None:
     rendered = _render_mermaid(MERMAID_SOURCE)
 
     assert 'data-testid="vault-mermaid-block"' in rendered.html
-    assert 'data-testid="vault-mermaid-diagram"' in rendered.html
-    assert 'data-mermaid-state="source-fallback"' in rendered.html
-    assert 'data-mermaid-render-mode="source-fallback"' in rendered.html
+    assert 'data-mermaid-state="pending"' in rendered.html
+    assert '<pre class="vault-mermaid"' in rendered.html
+    assert '<code class="language-mermaid">' in rendered.html
     assert "graph TD" in rendered.html
+    assert "failed-embed" not in rendered.html
     assert not [diagnostic for diagnostic in rendered.diagnostics if diagnostic.severity == "error"]
 
 
-def test_invalid_diagram_error_ui() -> None:
+def test_emits_stable_selector() -> None:
+    # #1344 AC1 — a Mermaid fence produces pre.vault-mermaid > code.language-mermaid
+    # whose textContent is exactly the (escaped) source.
+    source = "sequenceDiagram\n    Alice->>Bob: Hi"
+    rendered = _render_mermaid(source)
+
+    assert (
+        '<pre class="vault-mermaid" data-testid="vault-mermaid">'
+        '<code class="language-mermaid">sequenceDiagram\n    Alice-&gt;&gt;Bob: Hi</code>'
+        "</pre>"
+    ) in rendered.html
+
+
+def test_invalid_diagram_uses_failed_embed() -> None:
+    # #1344 AC3 (server-side pre-validation branch) — clearly invalid source
+    # degrades to the #1340 failed-embed partial, not a parallel error shape.
     rendered = _render_mermaid("this is not valid mermaid syntax @@@")
 
-    assert 'data-testid="vault-mermaid-error"' in rendered.html
-    assert 'data-mermaid-state="error"' in rendered.html
+    assert 'data-testid="failed-embed"' in rendered.html
+    assert 'data-kind="mermaid"' in rendered.html
     assert 'data-diagnostic-code="invalid_mermaid"' in rendered.html
     assert "this is not valid mermaid syntax @@@" in rendered.html
+    assert "vault-mermaid-error" not in rendered.html
     assert any(diagnostic.code == "invalid_mermaid" for diagnostic in rendered.diagnostics)
 
 
@@ -56,8 +73,8 @@ def test_error_boundary() -> None:
     renderer = FailingMermaidRenderer()
     rendered = renderer.render(MERMAID_SOURCE)
 
-    assert 'data-testid="vault-mermaid-error"' in rendered.html
-    assert 'data-mermaid-state="error"' in rendered.html
+    assert 'data-testid="failed-embed"' in rendered.html
+    assert 'data-kind="mermaid"' in rendered.html
     assert 'data-diagnostic-code="mermaid_render_error"' in rendered.html
     assert any(diagnostic.code == "mermaid_render_error" for diagnostic in rendered.diagnostics)
 
@@ -66,8 +83,8 @@ def test_source_preserved() -> None:
     source = 'flowchart LR\n    A["<unsafe>"] --> B["done"]'
     rendered = _render_mermaid(source)
 
-    assert 'data-testid="vault-mermaid-source"' in rendered.html
     assert 'data-source-preserved="true"' in rendered.html
+    assert '<pre class="vault-mermaid"' in rendered.html
     assert "flowchart LR" in rendered.html
     assert "A[&quot;&lt;unsafe&gt;&quot;] --&gt; B" in rendered.html
     assert "<unsafe>" not in rendered.html
@@ -98,6 +115,11 @@ def test_mermaid_fixture() -> None:
     rendered = render_vault_markdown((FIXTURE_DIR / "mermaid.md").read_text(encoding="utf-8"))
 
     assert rendered.html
-    assert 'data-testid="vault-mermaid-diagram"' in rendered.html
+    # The valid fences emit the client-render placeholder...
+    assert 'data-testid="vault-mermaid"' in rendered.html
+    assert '<pre class="vault-mermaid"' in rendered.html
+    # ...and the intentionally-broken fence degrades to the failed-embed partial.
+    assert 'data-testid="failed-embed"' in rendered.html
+    assert 'data-kind="mermaid"' in rendered.html
     assert 'data-diagnostic-code="invalid_mermaid"' in rendered.html
     assert not any(diagnostic.code == "mermaid_render_error" for diagnostic in rendered.diagnostics)
