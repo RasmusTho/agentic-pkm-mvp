@@ -245,6 +245,10 @@ not a parallel receipt authority and must remain batch-oriented over the notes r
 load. If no outbox/event receipt source is available, the per-note `receipts` key is omitted so the
 inspector renders `data-receipt-state="unavailable"` honestly.
 
+Current UI detail implementation note (#1284): receipt rows may expand/collapse locally in the
+inspector to reveal read-only receipt details. The expanded detail displays available VaultReceipt
+fields and must not contain action buttons, forms, authoring controls, or server mutation hooks.
+
 ## 5. Capability boundaries
 
 The Vault Browser must keep the following capabilities **separate**:
@@ -370,6 +374,8 @@ The currently shipped Companion UI vault browser (from #1225 / PR #1239 and foll
 **#1257 (agent receipts and review posture):** The artifact inspector renders a receipt/posture section (`data-testid="workspace-vault-browser-inspector-receipts"`). Receipt state is determined from the note payload's `receipts` field: absent key → `data-receipt-state="unavailable"` (source not connected, honest placeholder); empty list → `data-receipt-state="no_receipts"` (source connected, none found); non-empty → renders each receipt row with `data-testid="vault-browser-receipt-row"`, `data-receipt-state`, `data-testid="vault-browser-receipt-id"`, and `data-testid="vault-browser-receipt-trace-id"` kept separate from artifact identity. Review posture (`data-testid="workspace-vault-browser-inspector-review-posture"`) surfaces `review_state` and `trust` from the normalized metadata with `data-review-authority="non_authoritative"` — unreviewed/inferred memory is explicitly labeled and does not become action-authorizing. No mutation controls rendered. Supported receipt states: `queued`, `applied`, `blocked`, `rejected`, `failed`. Before #1279, the API did not populate receipts and therefore rendered `unavailable` honestly.
 
 **#1279 (per-artifact receipt source):** The vault browser API now includes a per-note `receipts` field when a receipt-supporting outbox/event source is available. The field is populated by a read-only batch projection over existing governed records keyed by artifact UUID and/or vault-relative path; it does not create a receipt table, author receipts, or introduce a browser write path. Current projected rows carry `receipt_id`, `trace_id`, `action_id`, `action_type`, `artifact_uuid`, `artifact_path`/`path`, `requested_by`, `approved_by`, `status`, `timestamp`, and UI-compatible `state`. Missing source remains the absent-key `unavailable` state; a connected source with no matches returns an empty list (`no_receipts`).
+
+**#1284 (receipt row expand detail):** The artifact inspector receipt rows are now UI-only expandable rows. Clicking a row toggles a collapsed detail region (`data-testid="vault-browser-receipt-detail"`) that displays the available VaultReceipt fields: `receipt_id`, `trace_id`, `action_id`, `artifact_uuid`, `requested_by`, `approved_by`, `status`, and `timestamp`. The detail region is read-only and contains no `<button>`, `<form>`, server mutation hook, or receipt-authoring affordance.
 
 **#1280 (wire interactive filter chip clicks):** Delivered by PR #1322 (2026-05-26). Filter chips now carry `onclick="vbToggleFilter(this)"` and `style="cursor:pointer"` — clicking an inactive chip appends its `data-key`/`data-value` to the URL query string and reloads; clicking an active chip removes it. When multiple values are active for the same dimension, each chip renders a deselect affordance (`data-testid="filter-chip-remove"` `×` span); a single active chip shows no affordance. The `handle_get` handler parses `kind`, `zone`, `review_state`, `trust` from the query string and forwards them to the vault-browser API, making active filter state bookmarkable. Server remains the authoritative filter processor; no client-side filtering is introduced. Extends §4.3 (`VaultQuery`) interactive capability without altering filter semantics.
 
