@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.events.types import PROMOTE_ERROR, PROMOTE_INTENT_CREATED
+from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED
 from app.promotion.consumer import consume_promotion_intents, reset_promotion_dedup_store
 
 
@@ -51,10 +51,64 @@ def test_applied_promotion_writes_transition_receipt(tmp_path: Path) -> None:
     assert payload["intent_event_id"] == "evt-applied"
     assert payload["trace_id"] == "trace-applied"
     assert payload["note_uuid"] == note_uuid
+    assert payload["note_path"] == str(note_path)
     assert payload["transition_family"] == "promotion"
     assert payload["target_maturity"] == "evergreen"
     assert payload["executor"] == "promotion.consumer"
     assert payload["effect"] == "applied"
+    assert payload["authority"] == {
+        "mode": "governed_execution",
+        "component": "panel_agent.runtime",
+        "executor": "promotion.consumer",
+    }
+    assert payload["basis"] == {
+        "source_event": "evt-applied",
+        "intent_type": "promotion",
+    }
+    assert payload["outcome"] == {
+        "status": "applied",
+        "review_state": "reviewed",
+        "maturity": "evergreen",
+    }
+    assert payload["artifact_linkage"] == {
+        "note_uuid": note_uuid,
+        "note_path": str(note_path),
+    }
+
+
+def test_promote_done_remains_execution_result_separate_from_transition_accountability(
+    tmp_path: Path,
+) -> None:
+    reset_promotion_dedup_store()
+    note_path = tmp_path / "vault" / "N.md"
+    note_uuid = "00000000-0000-0000-0000-000000000104"
+    _write_note(note_path, note_uuid)
+
+    outbox = tmp_path / "outbox.jsonl"
+    event = _intent_event(note_path, note_uuid, event_id="evt-result", trace_id="trace-result")
+    outbox.write_text(json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    summary = consume_promotion_intents(outbox_path=outbox)
+    assert summary["applied"] == 1
+
+    records = _read_jsonl(outbox)
+    done_events = [r for r in records if r.get("event") == PROMOTE_DONE]
+    transition_events = [r for r in records if r.get("event") == "promotion.transition.applied"]
+    assert len(done_events) == 1
+    assert len(transition_events) == 1
+
+    done_payload = done_events[0]["payload"]
+    assert done_payload == {
+        "note_uuid": note_uuid,
+        "note_path": str(note_path),
+        "state": "evergreen",
+        "maturity": "evergreen",
+        "review_state": "reviewed",
+        "source_event": "evt-result",
+    }
+    assert "authority" not in done_payload
+    assert "basis" not in done_payload
+    assert "artifact_linkage" not in done_payload
 
 
 def test_replayed_promotion_intent_does_not_duplicate_receipt(tmp_path: Path) -> None:

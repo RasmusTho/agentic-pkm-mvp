@@ -242,11 +242,22 @@ Examples in the current runtime:
 - `panel.intent.created` = intent-creation layer
 - `promote.intent.created` = transition intent layer
 - `promote.done` / `promote.error` = execution-result layer
-- `promotion.transition.applied` = human-legible transition receipt layer for admitted promotion applies
+- `promotion.transition.applied` = transition-accountability event / interim receipt-supporting
+  record for admitted promotion applies
 
 The event stream is not, by itself, the complete receipt model.
 It is primarily an operational trace surface that may support later receipt or audit construction.
 It is also not identical to the metadata mirror.
+
+Promotion clarification (#1438):
+- `PROMOTE_DONE` records execution/result semantics: which note was updated, which resulting
+  `maturity` / `review_state` applied, and which source event drove execution.
+- `PROMOTION_TRANSITION_APPLIED` records the current transition-accountability semantics:
+  `note_uuid`, `note_path`, `transition_family`, `target_maturity`, `authority`, `basis`,
+  `outcome`, and `artifact_linkage`.
+- DB outbox events and ObjectStore inline provenance support accountability and audit, but they are
+  not the final durable promotion receipt store. Formal durable promotion receipts remain blocked on
+  a receipt-store/query model.
 
 ## References
 
