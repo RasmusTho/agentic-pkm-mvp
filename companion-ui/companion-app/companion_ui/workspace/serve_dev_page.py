@@ -676,6 +676,93 @@ def _render_body_edit_panel(update_flow_available: bool, note_path: str, raw_bod
 </div>"""
 
 
+_LEFT_PANEL_MODES = ("browse", "outline", "context", "collapsed")
+
+
+def _render_left_context_panel(
+    *,
+    vault_browser_html: str,
+    outline_html: str,
+    has_headings: bool,
+    note_path_val: str,
+    identity_state_label: str,
+) -> str:
+    """Render the single adaptive left context panel (#1399, handoff §4).
+
+    One panel, four modes (browse / outline / context / collapsed); only one
+    mode region is visible at a time. Opening a note prefers ``outline`` when
+    the note has headings, otherwise ``collapsed`` so the panel does not cold
+    open into a noisy browser dump. Mode labels are human-facing; internal mode
+    keys stay in ``data-*`` attributes.
+    """
+
+    default_mode = "outline" if has_headings else "collapsed"
+
+    def _region(mode: str, label_testid: str, inner: str) -> str:
+        hidden = "" if mode == default_mode else " hidden"
+        return (
+            f'<div class="left-panel-mode left-panel-mode--{mode}" '
+            f'data-left-panel-mode-region="{mode}" data-mode="{mode}" '
+            f'data-testid="workspace-left-panel-mode-{mode}" role="tabpanel"'
+            f"{hidden}>{inner}</div>"
+        )
+
+    # §4.3 — context mode is compact, not a metadata dump.
+    context_inner = (
+        '<div class="left-panel-context" data-testid="workspace-left-panel-context">'
+        '<div class="left-panel-context-row">'
+        '<span class="lpc-label">Path</span>'
+        f'<span class="lpc-value">{note_path_val or "—"}</span></div>'
+        '<div class="left-panel-context-row">'
+        '<span class="lpc-label">Identity</span>'
+        f'<span class="lpc-value">{identity_state_label}</span></div>'
+        '<p class="left-panel-context-empty">Nothing needs attention for this note.</p>'
+        "</div>"
+    )
+
+    def _tab(mode: str, label: str) -> str:
+        selected = "true" if mode == default_mode else "false"
+        return (
+            f'<button type="button" class="left-panel-mode-tab" role="tab" '
+            f'data-mode="{mode}" data-testid="workspace-left-panel-tab-{mode}" '
+            f'aria-selected="{selected}" '
+            f"onclick=\"leftPanel.setMode('{mode}')\">{label}</button>"
+        )
+
+    switcher = (
+        '<div class="left-panel-mode-switcher" role="tablist" '
+        'data-testid="workspace-left-panel-mode-switcher">'
+        f"{_tab('browse', 'Browse')}"
+        f"{_tab('outline', 'Outline')}"
+        f"{_tab('context', 'Context')}"
+        '<button type="button" class="left-panel-collapse" '
+        'data-testid="workspace-left-panel-collapse" aria-label="Collapse panel" '
+        "onclick=\"leftPanel.collapse()\">&#10216;</button>"
+        "</div>"
+    )
+
+    reopen_hidden = "" if default_mode == "collapsed" else " hidden"
+    reopen = (
+        '<button type="button" class="left-panel-reopen" '
+        'data-testid="workspace-left-panel-reopen" '
+        f"onclick=\"leftPanel.reopen()\"{reopen_hidden}>Open panel</button>"
+    )
+
+    return (
+        '<nav class="vault-browser-left-pane" id="vault-browser-left-pane" '
+        'data-testid="workspace-vault-browser-left-pane" '
+        'data-region="vault-browser-pane" data-browser-role="canonical" '
+        f'data-left-panel-modes="{" ".join(_LEFT_PANEL_MODES)}" '
+        f'data-left-panel-mode="{default_mode}">'
+        f"{switcher}"
+        f"{_region('browse', 'browse', vault_browser_html)}"
+        f"{_region('outline', 'outline', outline_html)}"
+        f"{_region('context', 'context', context_inner)}"
+        f"{reopen}"
+        "</nav>"
+    )
+
+
 def _render_note_section(fields: dict) -> str:
     """Render the workspace shell from render_fields() output.
 
@@ -704,6 +791,7 @@ def _render_note_section(fields: dict) -> str:
     rendered_body = render_vault_markdown(raw_body, note_path=raw_note_path)
     body = rendered_body.html
     outline_html = render_note_outline(rendered_body.document)
+    has_headings = bool(tuple(rendered_body.document.headings))
     hidden_frontmatter_html, rendered_props = _render_note_frontmatter_region(rendered_body.document)
     panel_rail = _e(fields.get("panel_rail", "Panel / agent rail placeholder"))
     canvas_session_id = _e(fields.get("canvas_session_id") or "")
@@ -956,11 +1044,17 @@ def _render_note_section(fields: dict) -> str:
         )
     )
 
+    left_context_panel_html = _render_left_context_panel(
+        vault_browser_html=vault_browser_html,
+        outline_html=outline_html,
+        has_headings=has_headings,
+        note_path_val=note_path_val,
+        identity_state_label=identity_state,
+    )
+
     return f"""
   <div class="workspace-layout workspace-layout--three-col">
-    <nav class="vault-browser-left-pane" id="vault-browser-left-pane" data-testid="workspace-vault-browser-left-pane" data-region="vault-browser-pane" data-browser-role="canonical">
-      {vault_browser_html}
-    </nav>
+    {left_context_panel_html}
     <div class="workspace-main">
       {workspace_header_strip_html}
       {vault_unreachable_banner_html}
@@ -975,11 +1069,11 @@ def _render_note_section(fields: dict) -> str:
       {hidden_frontmatter_html}
       {note_not_found_html}
       <div
-        class="note-reading-layout"
+        class="note-reading-layout note-reading-layout--single"
         data-testid="workspace-note-reading-layout">
-        {outline_html}
         <button class="workspace-outline-ribbon" data-testid="workspace-outline-ribbon"
-          aria-label="open outline" data-layout-visible="800-1099">☰ outline</button>
+          aria-label="open outline" data-layout-visible="800-1099"
+          onclick="leftPanel.setMode('outline')">☰ outline</button>
         <div class="note-body" data-testid="workspace-note-body" data-region="note-body"
           data-read-only="true">
           <div class="note-body-readonly-indicator"
@@ -3031,6 +3125,95 @@ def render_index_html(
       overflow-y: auto;
       padding: 12px 8px;
     }}
+    /* §4 — single adaptive left context panel: mode switcher + mode regions. */
+    .left-panel-mode-switcher {{
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-shrink: 0;
+      gap: 2px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+    }}
+    .left-panel-mode-tab {{
+      background: none;
+      border: none;
+      border-radius: var(--radius-sm);
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      padding: 3px 8px;
+    }}
+    .left-panel-mode-tab[aria-selected="true"] {{
+      background: var(--bg-raised);
+      color: var(--fg-1);
+    }}
+    .left-panel-collapse {{
+      background: none;
+      border: none;
+      color: var(--fg-3);
+      cursor: pointer;
+      margin-left: auto;
+      padding: 3px 6px;
+    }}
+    .left-panel-mode {{
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+    }}
+    .left-panel-mode[hidden] {{ display: none; }}
+    .left-panel-context-row {{
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      padding: 4px 2px;
+    }}
+    .left-panel-context .lpc-label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .left-panel-context .lpc-value {{
+      color: var(--fg-2);
+      font-size: var(--text-xs);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .left-panel-context-empty {{
+      color: var(--fg-3);
+      font-size: var(--text-sm);
+      margin-top: 8px;
+    }}
+    .left-panel-reopen {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: pointer;
+      font-size: var(--text-xs);
+      padding: 6px 10px;
+    }}
+    .left-panel-reopen[hidden] {{ display: none; }}
+    /* §4 — the outline now lives in the left panel (outline mode), so the
+       central reading layout is a single column. Double-class selector beats
+       the 2-column .note-reading-layout rule from note_outline_css(). */
+    .note-reading-layout.note-reading-layout--single {{
+      grid-template-columns: minmax(0, 1fr);
+    }}
+    /* Collapsed mode maximizes reading: hide switcher + mode regions, keep the
+       reopen affordance, and shrink the panel to a narrow rail. */
+    .vault-browser-left-pane[data-left-panel-mode="collapsed"] {{
+      align-items: center;
+      overflow: visible;
+      padding: 12px 6px;
+    }}
+    .vault-browser-left-pane[data-left-panel-mode="collapsed"] .left-panel-mode-switcher,
+    .vault-browser-left-pane[data-left-panel-mode="collapsed"] .left-panel-mode {{
+      display: none;
+    }}
     .workspace-main {{
       flex: 1;
       min-width: 0;
@@ -4790,6 +4973,8 @@ def render_index_html(
           window.matchMedia('(min-width: 860px)').matches &&
           window.getComputedStyle(leftPane).display !== 'none';
         if (hasInlinePane) {{
+          // §4.1/§5.2 — activate browse mode in the single left context panel.
+          if (window.leftPanel) window.leftPanel.setMode('browse');
           leftPane.setAttribute('data-browse-focused', 'true');
           leftPane.scrollIntoView({{ block: 'nearest', inline: 'nearest' }});
           var paneSearch = leftPane.querySelector('input, a, button');
@@ -4828,6 +5013,51 @@ def render_index_html(
     document.addEventListener('keydown', function(e) {{
       if (e.key === 'Escape') vaultBrowser.close();
     }});
+  }})();
+  </script>
+
+  <script>
+  (function() {{
+    // §4 — single adaptive left context panel controller. Exactly one mode is
+    // visible at a time; collapsed maximizes the reading surface and keeps a
+    // visible reopen affordance that restores the last non-collapsed mode.
+    function nav() {{ return document.getElementById('vault-browser-left-pane'); }}
+
+    window.leftPanel = {{
+      setMode: function(mode) {{
+        var n = nav();
+        if (!n) return;
+        var current = n.getAttribute('data-left-panel-mode');
+        if (current && current !== 'collapsed') {{
+          n.setAttribute('data-left-panel-last-mode', current);
+        }}
+        n.setAttribute('data-left-panel-mode', mode);
+        var regions = n.querySelectorAll('[data-left-panel-mode-region]');
+        Array.prototype.forEach.call(regions, function(r) {{
+          if (mode !== 'collapsed' && r.getAttribute('data-mode') === mode) {{
+            r.removeAttribute('hidden');
+          }} else {{
+            r.setAttribute('hidden', '');
+          }}
+        }});
+        var tabs = n.querySelectorAll('[role="tab"]');
+        Array.prototype.forEach.call(tabs, function(t) {{
+          t.setAttribute('aria-selected',
+            t.getAttribute('data-mode') === mode ? 'true' : 'false');
+        }});
+        var reopen = n.querySelector('[data-testid="workspace-left-panel-reopen"]');
+        if (reopen) {{
+          if (mode === 'collapsed') reopen.removeAttribute('hidden');
+          else reopen.setAttribute('hidden', '');
+        }}
+      }},
+      collapse: function() {{ window.leftPanel.setMode('collapsed'); }},
+      reopen: function() {{
+        var n = nav();
+        var last = (n && n.getAttribute('data-left-panel-last-mode')) || 'browse';
+        window.leftPanel.setMode(last);
+      }}
+    }};
   }})();
   </script>
 

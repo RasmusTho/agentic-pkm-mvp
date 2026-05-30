@@ -104,6 +104,17 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-outline-sheet-trigger",
         "workspace-panel-sheet-trigger",
         "workspace-sheet-triggers",
+        # Adaptive left context panel modes (§4 / #1399)
+        "workspace-left-panel-mode-switcher",
+        "workspace-left-panel-tab-browse",
+        "workspace-left-panel-tab-outline",
+        "workspace-left-panel-tab-context",
+        "workspace-left-panel-collapse",
+        "workspace-left-panel-reopen",
+        "workspace-left-panel-context",
+        "workspace-left-panel-mode-browse",
+        "workspace-left-panel-mode-outline",
+        "workspace-left-panel-mode-context",
         # Dev controls disclosure (#1361)
         "workspace-dev-controls-toggle",
     }
