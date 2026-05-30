@@ -5042,27 +5042,43 @@ def render_index_html(
       color: var(--fg-1);
     }}
     /* §6 — density: folder group headers + compact, truncating rows. */
-    /* #1425 — Obsidian-style collapsible folder tree. */
+    /* #1425/#1427 — Obsidian-style collapsible folder tree. The folder summaries
+       and note rows share the exact graphical profile of the Outline list
+       (font-display 13px/18px, 2px left rail, accent for the active item) so the
+       single left panel reads as one consistent family across its modes. */
     .vault-tree, .vault-tree ul {{
       list-style: none;
       margin: 0;
       padding: 0;
     }}
-    .vault-tree-children {{
-      padding-left: 14px;
+    .vault-tree {{
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
     }}
-    .vault-tree-folder {{ list-style: none; }}
+    .vault-tree-children {{
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding-left: 12px;
+    }}
+    .vault-tree-folder {{ list-style: none; min-width: 0; }}
     .vault-tree-folder-details > summary {{ list-style: none; }}
     .vault-tree-folder-details > summary::-webkit-details-marker {{ display: none; }}
     .vault-tree-folder-summary {{
       align-items: center;
+      border-left: 2px solid transparent;
+      border-radius: var(--radius-sm);
+      box-sizing: border-box;
       color: var(--fg-2);
       cursor: pointer;
       display: flex;
-      font-size: var(--text-sm);
+      font-family: var(--font-display);
+      font-size: 13px;
       gap: 4px;
+      line-height: 18px;
       overflow: hidden;
-      padding: 3px 4px;
+      padding: 5px 6px;
       text-overflow: ellipsis;
       white-space: nowrap;
     }}
@@ -5077,32 +5093,59 @@ def render_index_html(
     .vault-tree-folder-details[open] > .vault-tree-folder-summary::before {{
       transform: rotate(90deg);
     }}
-    .vault-tree-folder-summary:hover {{ color: var(--fg-1); }}
-    /* Tree note rows: name only, indented, with a clear active highlight. */
-    .vault-tree .vault-browser-row {{
-      border-radius: var(--radius-sm);
-      list-style: none;
-      padding: 3px 6px;
-    }}
-    .vault-tree .vault-browser-row:hover {{ background: var(--bg-raised); }}
-    .vault-tree .vault-browser-row[data-active="true"] {{
-      background: var(--bg-raised);
-    }}
-    .vault-tree .vault-browser-row[data-active="true"] > .vault-browser-row-title {{
+    .vault-tree-folder-summary:hover {{
       color: var(--fg-1);
+      outline: 1px solid var(--border-focus);
+      outline-offset: 1px;
+    }}
+    /* Tree note rows mirror .note-outline-link exactly. */
+    .vault-tree .vault-browser-row {{
+      box-sizing: border-box;
+      list-style: none;
+      min-width: 0;
     }}
     .vault-tree .vault-browser-row-title {{
+      border-left: 2px solid transparent;
+      border-radius: var(--radius-sm);
+      box-sizing: border-box;
       color: var(--fg-2);
       display: block;
+      font-family: var(--font-display);
+      font-size: 13px;
+      line-height: 18px;
       overflow: hidden;
+      padding: 5px 6px;
       text-decoration: none;
       text-overflow: ellipsis;
       white-space: nowrap;
     }}
+    .vault-tree .vault-browser-row-title:hover {{
+      color: var(--fg-1);
+      outline: 1px solid var(--border-focus);
+      outline-offset: 1px;
+    }}
+    .vault-tree .vault-browser-row[data-active="true"] > .vault-browser-row-title {{
+      border-left-color: var(--accent);
+      color: var(--accent);
+    }}
     .vault-tree .vault-browser-row-path {{ display: none; }}
-    /* #1425 — de-emphasize browse header chrome; the tree is the surface. */
+    /* #1425 — de-emphasize browse header chrome; the tree is the surface. The
+       "Browse vault notes" toggle matches the Outline heading label. */
     .vault-browser-meta,
     .vault-browser-state {{ display: none; }}
+    .vault-browser > summary[data-testid="workspace-vault-browser-toggle"] {{
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.08em;
+      list-style: none;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }}
+    .vault-browser > summary[data-testid="workspace-vault-browser-toggle"]::-webkit-details-marker {{
+      display: none;
+    }}
     .vault-browser-group {{
       list-style: none;
       padding: 8px 4px 2px;
