@@ -362,6 +362,16 @@ def _render_heading(match: re.Match[str], context: _RenderContext) -> str:
     return f'<h{level} id="{_e(anchor)}">{_render_inline(text, context)}</h{level}>'
 
 
+def _slugify_anchor(text: str) -> str:
+    """Slug used for heading element ids and heading-fragment link hrefs.
+
+    Both sides must agree so that ``[[Note#Heading]]`` navigates to the rendered
+    ``<h_ id="...">`` (#1345).
+    """
+    slug = re.sub(r"-+", "-", "".join(char if char.isalnum() else "-" for char in text.lower()))
+    return slug.strip("-")
+
+
 def _heading_text_and_anchor(raw_text: str) -> tuple[str, str]:
     text = raw_text.strip()
     explicit_anchor = _EXPLICIT_ANCHOR_RE.search(text)
@@ -369,8 +379,7 @@ def _heading_text_and_anchor(raw_text: str) -> tuple[str, str]:
         text = text[: explicit_anchor.start()].strip()
         return text, explicit_anchor.group(1)
     text = text.strip(" #\t")
-    slug = re.sub(r"-+", "-", "".join(char if char.isalnum() else "-" for char in text.lower()))
-    return text, slug.strip("-")
+    return text, _slugify_anchor(text)
 
 
 def _list_kind(line: str) -> str | None:
@@ -548,7 +557,8 @@ def _render_wikilink(raw: str, context: _RenderContext) -> str:
     href = f"?note_path={quote(note_path, safe='')}"
     fragment = _resolution_fragment(resolution)
     if fragment:
-        href = f"{href}#{quote(fragment, safe='')}"
+        # Keep ``^`` literal so block-id links read as ``#^block-id`` (#1345 AC4).
+        href = f"{href}#{quote(fragment, safe='^')}"
     trigger_html = (
         '<a class="vault-wikilink" '
         'data-link-state="resolved" '
@@ -621,11 +631,14 @@ def _render_unresolved_link_partial(
 
 
 def _resolution_fragment(resolution: object) -> str:
-    heading = getattr(resolution, "heading", None)
     block_id = getattr(resolution, "block_id", None)
     if block_id:
         return f"^{block_id}"
-    return str(heading or "")
+    heading = getattr(resolution, "heading", None)
+    if heading:
+        # Match the slugified heading element id so the link scrolls to it.
+        return _slugify_anchor(str(heading))
+    return ""
 
 
 def _render_obsidian_embed(raw: str, context: _RenderContext) -> str:
