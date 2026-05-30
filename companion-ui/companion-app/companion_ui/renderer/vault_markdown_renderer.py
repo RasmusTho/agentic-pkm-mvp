@@ -238,18 +238,8 @@ def _render_blocks(markdown: str, context: _RenderContext) -> str:
             index += 1
             continue
 
-        if _TASK_RE.match(line):
-            html_block, index = _render_task_list(lines, index, context)
-            parts.append(html_block)
-            continue
-
-        if _UNORDERED_RE.match(line):
-            html_block, index = _render_list(lines, index, context, ordered=False)
-            parts.append(html_block)
-            continue
-
-        if _ORDERED_RE.match(line):
-            html_block, index = _render_list(lines, index, context, ordered=True)
+        if _list_kind(line) is not None:
+            html_block, index = _render_list_block(lines, index, context)
             parts.append(html_block)
             continue
 
@@ -383,48 +373,99 @@ def _heading_text_and_anchor(raw_text: str) -> tuple[str, str]:
     return text, slug.strip("-")
 
 
-def _render_task_list(
+def _list_kind(line: str) -> str | None:
+    """Classify a line as a list item: 'task', 'ol', 'ul', or None.
+
+    Task items (``- [ ]``) are a special case of unordered items and must be
+    checked first.
+    """
+    if _TASK_RE.match(line):
+        return "task"
+    if _ORDERED_RE.match(line):
+        return "ol"
+    if _UNORDERED_RE.match(line):
+        return "ul"
+    return None
+
+
+def _list_indent(line: str) -> int:
+    expanded = line.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip(" "))
+
+
+def _render_list_block(
     lines: list[str],
     start: int,
     context: _RenderContext,
 ) -> tuple[str, int]:
-    items: list[str] = []
+    """Render a (possibly nested) list block, indentation-aware (#1410).
+
+    Collects consecutive list lines and rebuilds the nesting from their indent
+    so nested ordered lists render inside a nested ``<ol>`` (restarting at 1)
+    rather than as flattened continuation items.
+    """
+    entries: list[tuple[int, str, str | None, str]] = []
     index = start
     while index < len(lines):
-        match = _TASK_RE.match(lines[index])
-        if not match:
+        kind = _list_kind(lines[index])
+        if kind is None:
             break
-        state = match.group(1).strip() or " "
-        checked = state.lower() == "x"
-        checked_attr = " checked" if checked else ""
-        items.append(
-            '<li class="task-list-item" '
-            f'data-task-state="{_e(state)}">'
-            f'<input type="checkbox" disabled{checked_attr}> '
-            f"{_render_inline(match.group(2), context)}</li>"
-        )
+        indent = _list_indent(lines[index])
+        if kind == "task":
+            match = _TASK_RE.match(lines[index])
+            assert match is not None
+            entries.append((indent, "task", match.group(1).strip() or " ", match.group(2)))
+        elif kind == "ol":
+            match = _ORDERED_RE.match(lines[index])
+            assert match is not None
+            entries.append((indent, "ol", None, match.group(1)))
+        else:
+            match = _UNORDERED_RE.match(lines[index])
+            assert match is not None
+            entries.append((indent, "ul", None, match.group(1)))
         index += 1
-    return f'<ul class="task-list">{"".join(items)}</ul>', index
+
+    html, _ = _build_list_html(entries, 0, entries[0][0], context)
+    return html, index
 
 
-def _render_list(
-    lines: list[str],
-    start: int,
+def _build_list_html(
+    entries: list[tuple[int, str, str | None, str]],
+    pos: int,
+    indent: int,
     context: _RenderContext,
-    *,
-    ordered: bool,
 ) -> tuple[str, int]:
-    pattern = _ORDERED_RE if ordered else _UNORDERED_RE
+    list_kind = entries[pos][1]
     items: list[str] = []
-    index = start
-    while index < len(lines):
-        match = pattern.match(lines[index])
-        if not match or _TASK_RE.match(lines[index]):
-            break
-        items.append(f"<li>{_render_inline(match.group(1), context)}</li>")
-        index += 1
-    tag = "ol" if ordered else "ul"
-    return f"<{tag}>{''.join(items)}</{tag}>", index
+    while pos < len(entries) and entries[pos][0] >= indent:
+        e_indent, e_kind, e_state, e_content = entries[pos]
+        if e_indent > indent:
+            # Deeper than expected without a parent item at this level — attach
+            # the nested list to the previous item (or open a bare item).
+            nested_html, pos = _build_list_html(entries, pos, e_indent, context)
+            if items:
+                items[-1] = items[-1][: -len("</li>")] + nested_html + "</li>"
+            else:
+                items.append(f"<li>{nested_html}</li>")
+            continue
+        pos += 1
+        nested_html = ""
+        if pos < len(entries) and entries[pos][0] > indent:
+            nested_html, pos = _build_list_html(entries, pos, entries[pos][0], context)
+        if e_kind == "task":
+            checked_attr = " checked" if (e_state or "").lower() == "x" else ""
+            items.append(
+                '<li class="task-list-item" '
+                f'data-task-state="{_e(e_state or " ")}">'
+                f'<input type="checkbox" disabled{checked_attr}> '
+                f"{_render_inline(e_content, context)}{nested_html}</li>"
+            )
+        else:
+            items.append(f"<li>{_render_inline(e_content, context)}{nested_html}</li>")
+
+    tag = "ol" if list_kind == "ol" else "ul"
+    cls = ' class="task-list"' if list_kind == "task" else ""
+    return f"<{tag}{cls}>{''.join(items)}</{tag}>", pos
 
 
 def _render_paragraph(
