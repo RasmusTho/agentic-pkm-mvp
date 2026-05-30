@@ -1,10 +1,10 @@
 """Mermaid client-runtime injection on the workspace dev page (#1344).
 
 Static/structural coverage for the placeholder + lazy runtime contract. The
-real-browser behaviour (valid source -> SVG; broken source -> failed-embed; the
-bundle network request only when a fence exists) is verified via the Claude
-Preview MCP UAT recorded on the issue; here we pin the server-emitted shape and
-the lazy-load guard so they cannot silently regress.
+real-browser behaviour (valid source -> SVG; broken source -> failed-embed) is
+covered by the opt-in Playwright suite in test_mermaid_browser.py; here we pin
+the server-emitted shape and the lazy-load guard so they cannot silently
+regress.
 """
 
 from __future__ import annotations

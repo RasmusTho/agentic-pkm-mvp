@@ -13,6 +13,34 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`).
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
 
+## Companion UI Browser Runtime Tests
+
+Decision (#1435): Companion UI client-JS runtime behaviour uses Playwright, not Selenium or
+Preview-MCP-only UAT. Browser runtime tests are additive to the existing static
+`tests/companion_ui/*_browser.py` assertions.
+
+Use static Companion UI browser assertions when the contract is server-emitted HTML from
+`render_index_html`: stable selectors, text, data attributes, fallback DOM, and API wiring visible
+in the rendered string. These tests stay fast, run in normal pytest lanes, and do not require
+browser binaries.
+
+Use real browser runtime tests when the contract depends on actual client execution: dynamic
+`import()` loading, DOM mutation after module scripts run, event/click behaviour, async fetch
+handling, browser storage, or layout/runtime APIs. The current harness serves `render_index_html`
+output on `127.0.0.1` and drives Chromium headlessly through Playwright.
+
+Determinism rule: browser tests must not depend on live `esm.sh` or other network resources. The
+browser harness fulfills the pinned Mermaid and CodeMirror module URLs from repo-local ESM stubs and
+blocks unexpected external requests. These stubs prove Companion UI runtime wiring and graceful
+degradation; they are not a new product bundle authority.
+
+Execution:
+- Normal companion UI test runs skip browser-runtime tests unless explicitly enabled.
+- Local opt-in command:
+  `COMPANION_UI_BROWSER_TESTS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_mermaid_browser.py`
+- CI runs the browser suite in `.github/workflows/browser-runtime.yml` as a separate non-blocking
+  job. The existing smoke gates must not install browser binaries or depend on this job.
+
 ## Layer mapping
 | Layer | Focus | Representative suites | Command |
 | --- | --- | --- | --- |
