@@ -120,6 +120,11 @@ Supported filter dimensions (capability map; subset shipped per MLP):
 
 Ranking, when used, must be **explicit and observable**: the browser must be able to show which signals contributed to a result's position. Implicit semantic ranking without surfaced signals is out of scope. Deterministic filters (text, path, title) are preferred and required as the default.
 
+Artifact-scoped Find may rank related artifacts only when the response surfaces the contributing
+signals and their weights/provenance. Current deterministic signals include vault wikilinks,
+frontmatter tags, frontmatter/source references, and shared zone; these are not semantic/vector
+neighborhoods.
+
 ### 4.4 VaultRelation
 
 A relation between two artifacts.
@@ -188,7 +193,7 @@ Required fields per action:
 
 Required action modes (boundary contract):
 
-- `read_only` — no state change anywhere (open, peek, copy path)
+- `read_only` — no state change anywhere (open, peek, copy path, find related)
 - `ui_only` — local Companion UI state only (toggle panel, expand row, change view)
 - `bounded_system_write` — governed system-side state change with a receipt (mark indexed, queue for review)
 - `governance_write` — change that crosses an authority boundary (alter review posture, alter trust, promote a relation, change lifecycle state) and must be routed through governed execution
@@ -254,6 +259,7 @@ fields and must not contain action buttons, forms, authoring controls, or server
 The Vault Browser must keep the following capabilities **separate**:
 
 - **Browsing** — enumerating, filtering, ranking, and visually presenting artifacts.
+- **Find** — artifact-scoped related-artifact lookup with visible ranking/provenance signals.
 - **Retrieval** — answering a content/context question with ranked evidence (`docs/RETRIEVAL.md`).
 - **Orientation** — surfacing "what is this, why does it matter, where did it come from, what state is it in" for a specific artifact.
 - **Resurfacing** — bringing forgotten or dormant material back into attention under policy (`docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`, `companion-ui/docs/RESURFACING_HEURISTICS.md`).
@@ -262,6 +268,12 @@ The Vault Browser must keep the following capabilities **separate**:
 - **Agent proposals** — surfaced via `VaultProposal`, never auto-applied.
 
 A Vault Browser implementation may compose with these capabilities, but must not collapse them into a single action.
+
+Current Find implementation note (#1282): `find_related` calls the read-only
+`GET /api/companion/vault-related` endpoint with `note_path` and/or `artifact_uuid` scope.
+The endpoint is separate from `/search`, which remains text/vector search. Results carry
+`data_mode="read_only"`, `ranking_score`, and `ranking_signals` with signal, value, weight, and
+provenance so ordering is inspectable.
 
 ## 6. MLP v0 boundary
 
@@ -376,6 +388,8 @@ The currently shipped Companion UI vault browser (from #1225 / PR #1239 and foll
 **#1279 (per-artifact receipt source):** The vault browser API now includes a per-note `receipts` field when a receipt-supporting outbox/event source is available. The field is populated by a read-only batch projection over existing governed records keyed by artifact UUID and/or vault-relative path; it does not create a receipt table, author receipts, or introduce a browser write path. Current projected rows carry `receipt_id`, `trace_id`, `action_id`, `action_type`, `artifact_uuid`, `artifact_path`/`path`, `requested_by`, `approved_by`, `status`, `timestamp`, and UI-compatible `state`. Missing source remains the absent-key `unavailable` state; a connected source with no matches returns an empty list (`no_receipts`).
 
 **#1284 (receipt row expand detail):** The artifact inspector receipt rows are now UI-only expandable rows. Clicking a row toggles a collapsed detail region (`data-testid="vault-browser-receipt-detail"`) that displays the available VaultReceipt fields: `receipt_id`, `trace_id`, `action_id`, `artifact_uuid`, `requested_by`, `approved_by`, `status`, and `timestamp`. The detail region is read-only and contains no `<button>`, `<form>`, server mutation hook, or receipt-authoring affordance.
+
+**#1282 (artifact-scoped find_related):** The `find_related` VaultAction is now wired as a read-only artifact-scoped Find action, separate from Browse and from `/search` text/vector search. The UI action carries `data-mode="read_only"`, `data-api-method="GET"`, `data-api-path="/api/companion/vault-related"`, and the selected artifact scope (`data-note-path`, `data-artifact-uuid`). The endpoint accepts `note_path` and/or `artifact_uuid`, returns `read_only: true` / `data_mode: "read_only"`, and ranks related artifacts using surfaced deterministic signals such as wikilink outlinks/backlinks, shared frontmatter tags, source references, and shared zone. No write path, receipt authoring path, or hidden semantic ranking is introduced.
 
 **#1280 (wire interactive filter chip clicks):** Delivered by PR #1322 (2026-05-26). Filter chips now carry `onclick="vbToggleFilter(this)"` and `style="cursor:pointer"` — clicking an inactive chip appends its `data-key`/`data-value` to the URL query string and reloads; clicking an active chip removes it. When multiple values are active for the same dimension, each chip renders a deselect affordance (`data-testid="filter-chip-remove"` `×` span); a single active chip shows no affordance. The `handle_get` handler parses `kind`, `zone`, `review_state`, `trust` from the query string and forwards them to the vault-browser API, making active filter state bookmarkable. Server remains the authoritative filter processor; no client-side filtering is introduced. Extends §4.3 (`VaultQuery`) interactive capability without altering filter semantics.
 

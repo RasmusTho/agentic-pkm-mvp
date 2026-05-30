@@ -76,8 +76,9 @@ def _browser_note(
     kind: str | None = "human_note",
     zone: str = "notes",
     frontmatter_valid: bool = True,
+    related_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    note = {
         "note_path": note_path,
         "title": title,
         "uuid": uuid,
@@ -92,6 +93,9 @@ def _browser_note(
         "frontmatter_valid": frontmatter_valid,
         "missing_required_fields": [],
     }
+    if related_results is not None:
+        note["related_results"] = related_results
+    return note
 
 
 def _vault_browser_payload(notes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -294,6 +298,83 @@ def test_copy_path_carries_note_path_in_data_path() -> None:
     assert 'data-path="notes/current.md"' in tag, (
         f"copy_path must carry data-path with the note path; got: {tag!r}"
     )
+
+
+# ---- AC for #1282: find_related wired to read-only artifact-scoped Find ----
+
+
+def test_find_related_affordance_available_with_artifact_scope() -> None:
+    """#1282 AC: find_related is available when the selected artifact has scope."""
+    note = _browser_note(note_path="notes/current.md", uuid="uuid-1282")
+    html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
+    tag = _action_tag(html, "vault-action-find-related")
+
+    assert 'data-mode="read_only"' in tag
+    assert 'data-affordance-status="available"' in tag
+    assert 'data-api-method="GET"' in tag
+    assert 'data-api-path="/api/companion/vault-related"' in tag
+    assert 'data-note-path="notes/current.md"' in tag
+    assert 'data-artifact-uuid="uuid-1282"' in tag
+    assert 'onclick="vaultBrowserFindRelated(this)"' in tag
+    assert "Find not connected" not in tag
+    assert "data-disabled" not in tag
+
+
+def test_find_related_results_region_is_read_only() -> None:
+    """#1282 AC: inspector exposes a read-only result region for related artifacts."""
+    html = _inspector_html(_load_html())
+
+    assert 'data-testid="vault-browser-find-related-results"' in html
+    assert 'data-mode="read_only"' in html
+    assert 'data-state="idle"' in html
+
+
+def test_find_related_result_rows_expose_ranking_signals() -> None:
+    """#1282 AC: rendered related rows surface ranking/provenance signals."""
+    note = _browser_note(
+        related_results=[
+            {
+                "note_path": "notes/related.md",
+                "title": "Related",
+                "data_mode": "read_only",
+                "ranking_score": 130,
+                "ranking_signals": [
+                    {
+                        "signal": "shared_tag",
+                        "value": "alpha",
+                        "weight": 30,
+                        "provenance": "frontmatter.tags",
+                    },
+                    {
+                        "signal": "wikilink_backlink",
+                        "value": "notes/current.md",
+                        "weight": 100,
+                        "provenance": "notes/related.md wikilinks to scope artifact",
+                    },
+                ],
+            }
+        ]
+    )
+    html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
+
+    assert 'data-testid="vault-browser-find-related-result"' in html
+    assert 'data-mode="read_only"' in html
+    assert 'data-ranking-score="130"' in html
+    assert 'data-testid="vault-browser-find-related-signal"' in html
+    assert 'data-signal="shared_tag"' in html
+    assert 'data-weight="30"' in html
+    assert 'data-provenance="frontmatter.tags"' in html
+
+
+def test_find_related_js_calls_read_only_endpoint() -> None:
+    """#1282 AC: click handler calls the scoped endpoint with GET, not mutation."""
+    html = _load_html()
+
+    assert "function vaultBrowserFindRelated(action)" in html
+    assert "params.set('note_path', action.dataset.notePath);" in html
+    assert "params.set('artifact_uuid', action.dataset.artifactUuid);" in html
+    assert "fetch(url, {method: 'GET'})" in html
+    assert "renderVaultBrowserFindRelatedResults(data);" in html
 
 
 # ---- AC6: body update flow remains separate ----

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import os
 import heapq
+import re
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -215,6 +216,38 @@ class VaultLinkIndexResponse(BaseModel):
     total_notes: int
     truncated: bool = False
     read_only: bool = True
+    vault_identity: VaultIdentityState
+    identity_available: bool
+
+
+class VaultRelatedScopeState(BaseModel):
+    note_path: str
+    artifact_uuid: str | None = None
+
+
+class VaultRelatedSignalState(BaseModel):
+    signal: str
+    value: str
+    weight: int
+    provenance: str
+
+
+class VaultRelatedResultState(BaseModel):
+    note_path: str
+    title: str
+    artifact_uuid: str | None = None
+    kind: str | None = None
+    zone: str | None = None
+    data_mode: str = "read_only"
+    ranking_score: int
+    ranking_signals: list[VaultRelatedSignalState]
+
+
+class VaultRelatedResponse(BaseModel):
+    scope: VaultRelatedScopeState
+    results: list[VaultRelatedResultState]
+    read_only: bool = True
+    data_mode: str = "read_only"
     vault_identity: VaultIdentityState
     identity_available: bool
 
@@ -860,6 +893,303 @@ def _browser_title(body: str, *, fallback: str) -> str:
     return _extract_title(body, fallback=fallback)
 
 
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def _normalize_relation_token(value: str) -> str:
+    token = str(value or "").strip()
+    if "|" in token:
+        token = token.split("|", 1)[0]
+    if "#" in token:
+        token = token.split("#", 1)[0]
+    token = token.strip()
+    if token.endswith(".md"):
+        token = token[:-3]
+    return token.lower()
+
+
+def _wikilink_targets(body: str) -> set[str]:
+    targets: set[str] = set()
+    for match in _WIKILINK_RE.finditer(body):
+        token = _normalize_relation_token(match.group(1))
+        if token:
+            targets.add(token)
+    return targets
+
+
+def _coerce_relation_tags(raw: object) -> set[str]:
+    if raw is None:
+        return set()
+    values: list[object]
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, tuple | set):
+        values = list(raw)
+    elif isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            values = [part.strip().strip('"').strip("'") for part in stripped[1:-1].split(",")]
+        elif "," in stripped:
+            values = [part.strip() for part in stripped.split(",")]
+        else:
+            values = [stripped]
+    else:
+        values = [raw]
+    return {
+        str(value).strip().lstrip("#").lower()
+        for value in values
+        if str(value).strip()
+    }
+
+
+def _frontmatter_dict(body: str) -> dict:
+    fm_inner, _ = _split_frontmatter(body)
+    if fm_inner is None:
+        return {}
+    try:
+        raw = yaml.safe_load(fm_inner) or {}
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _collect_relation_notes(vault_root: Path) -> list[dict[str, object]]:
+    notes: list[dict[str, object]] = []
+    if not vault_root.exists():
+        return notes
+    for candidate in vault_root.rglob("*.md"):
+        if not candidate.is_file():
+            continue
+        safe_path = _vault_relative(candidate, vault_root)
+        if safe_path is None or _is_hidden_browser_path(safe_path):
+            continue
+        try:
+            body = candidate.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        path_zone = _zone_for_path(safe_path)
+        metadata = _parse_note_artifact_metadata(body, path_derived_zone=path_zone)
+        frontmatter = _frontmatter_dict(body)
+        tags = _coerce_relation_tags(frontmatter.get("tags") or frontmatter.get("tag"))
+        title = _browser_title(body, fallback=candidate.stem)
+        notes.append(
+            {
+                "note_path": safe_path,
+                "title": title,
+                "artifact_uuid": metadata["uuid"],
+                "kind": metadata["kind"],
+                "zone": metadata["zone"],
+                "source_ref": metadata["source_ref"],
+                "tags": tags,
+                "wikilink_targets": _wikilink_targets(body),
+            }
+        )
+    return notes
+
+
+def _relation_link_keys(note: dict[str, object]) -> set[str]:
+    note_path = str(note.get("note_path") or "")
+    title = str(note.get("title") or "")
+    uuid = str(note.get("artifact_uuid") or "")
+    path = PurePosixPath(note_path)
+    candidates = {
+        note_path,
+        note_path.removesuffix(".md"),
+        path.name,
+        path.name.removesuffix(".md"),
+        title,
+        uuid,
+    }
+    return {
+        _normalize_relation_token(value)
+        for value in candidates
+        if str(value).strip()
+    }
+
+
+def _resolve_related_scope(
+    notes: list[dict[str, object]],
+    *,
+    note_path: str | None,
+    artifact_uuid: str | None,
+) -> dict[str, object]:
+    target: dict[str, object] | None = None
+    if note_path:
+        target = next((note for note in notes if note.get("note_path") == note_path), None)
+        if target is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "artifact_not_found",
+                    "message": "No vault note exists for the requested note_path.",
+                    "note_path": note_path,
+                },
+            )
+    if artifact_uuid:
+        uuid_match = next(
+            (note for note in notes if note.get("artifact_uuid") == artifact_uuid),
+            None,
+        )
+        if uuid_match is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "artifact_not_found",
+                    "message": "No vault note exists for the requested artifact_uuid.",
+                    "artifact_uuid": artifact_uuid,
+                },
+            )
+        if target is not None and target.get("note_path") != uuid_match.get("note_path"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "artifact_scope_mismatch",
+                    "message": "note_path and artifact_uuid identify different artifacts.",
+                    "note_path": note_path,
+                    "artifact_uuid": artifact_uuid,
+                },
+            )
+        target = uuid_match
+    if target is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "artifact_scope_required",
+                "message": "Provide note_path and/or artifact_uuid for artifact-scoped Find.",
+            },
+        )
+    return target
+
+
+def _signal(signal: str, value: str, *, weight: int, provenance: str) -> dict[str, object]:
+    return {
+        "signal": signal,
+        "value": value,
+        "weight": weight,
+        "provenance": provenance,
+    }
+
+
+def _related_signals(
+    target: dict[str, object],
+    candidate: dict[str, object],
+) -> list[dict[str, object]]:
+    target_path = str(target.get("note_path") or "")
+    candidate_path = str(candidate.get("note_path") or "")
+    target_keys = _relation_link_keys(target)
+    candidate_keys = _relation_link_keys(candidate)
+    target_links = target.get("wikilink_targets") or set()
+    candidate_links = candidate.get("wikilink_targets") or set()
+    target_tags = target.get("tags") or set()
+    candidate_tags = candidate.get("tags") or set()
+    signals: list[dict[str, object]] = []
+
+    if isinstance(target_links, set) and target_links.intersection(candidate_keys):
+        signals.append(
+            _signal(
+                "wikilink_outlink",
+                candidate_path,
+                weight=100,
+                provenance=f"{target_path} wikilinks to candidate",
+            )
+        )
+    if isinstance(candidate_links, set) and candidate_links.intersection(target_keys):
+        signals.append(
+            _signal(
+                "wikilink_backlink",
+                target_path,
+                weight=100,
+                provenance=f"{candidate_path} wikilinks to scope artifact",
+            )
+        )
+    if isinstance(target_tags, set) and isinstance(candidate_tags, set):
+        for tag in sorted(target_tags.intersection(candidate_tags)):
+            signals.append(
+                _signal(
+                    "shared_tag",
+                    tag,
+                    weight=30,
+                    provenance="frontmatter.tags",
+                )
+            )
+    target_source = str(target.get("source_ref") or "")
+    candidate_source = str(candidate.get("source_ref") or "")
+    target_uuid = str(target.get("artifact_uuid") or "")
+    candidate_uuid = str(candidate.get("artifact_uuid") or "")
+    if candidate_source and candidate_source in {target_path, target_uuid}:
+        signals.append(
+            _signal(
+                "source_ref_points_to_scope",
+                candidate_source,
+                weight=80,
+                provenance=f"{candidate_path} frontmatter.source_ref",
+            )
+        )
+    if target_source and target_source in {candidate_path, candidate_uuid}:
+        signals.append(
+            _signal(
+                "scope_source_ref_points_to_candidate",
+                target_source,
+                weight=80,
+                provenance=f"{target_path} frontmatter.source_ref",
+            )
+        )
+    if target_source and candidate_source and target_source == candidate_source:
+        signals.append(
+            _signal(
+                "shared_source_ref",
+                target_source,
+                weight=60,
+                provenance="frontmatter.source_ref",
+            )
+        )
+    target_zone = str(target.get("zone") or "")
+    candidate_zone = str(candidate.get("zone") or "")
+    if target_zone and candidate_zone and target_zone == candidate_zone:
+        signals.append(
+            _signal(
+                "shared_zone",
+                target_zone,
+                weight=10,
+                provenance="frontmatter.zone/path zone",
+            )
+        )
+    return signals
+
+
+def _rank_related_notes(
+    target: dict[str, object],
+    notes: list[dict[str, object]],
+    *,
+    limit: int,
+) -> list[VaultRelatedResultState]:
+    results: list[VaultRelatedResultState] = []
+    target_path = target.get("note_path")
+    for candidate in notes:
+        if candidate.get("note_path") == target_path:
+            continue
+        signals = _related_signals(target, candidate)
+        if not signals:
+            continue
+        ranking_score = sum(int(signal["weight"]) for signal in signals)
+        results.append(
+            VaultRelatedResultState(
+                note_path=str(candidate.get("note_path") or ""),
+                title=str(candidate.get("title") or ""),
+                artifact_uuid=_str_or_none(candidate.get("artifact_uuid")),
+                kind=_str_or_none(candidate.get("kind")),
+                zone=_str_or_none(candidate.get("zone")),
+                ranking_score=ranking_score,
+                ranking_signals=[
+                    VaultRelatedSignalState.model_validate(signal)
+                    for signal in signals
+                ],
+            )
+        )
+    results.sort(key=lambda result: (-result.ranking_score, result.note_path))
+    return results[:limit]
+
+
 def _compose_note_with_preserved_frontmatter(*, original_content: str, new_body: str) -> str:
     if _body_contains_frontmatter(new_body):
         raise HTTPException(
@@ -979,6 +1309,64 @@ def read_companion_vault_link_index() -> VaultLinkIndexResponse:
         total_notes=len(note_paths),
         truncated=truncated,
         read_only=True,
+        vault_identity=identity,
+        identity_available=identity_available,
+    )
+
+
+@router.get("/vault-related", response_model=VaultRelatedResponse)
+def read_companion_vault_related(
+    note_path: str | None = Query(
+        default=None,
+        description="Vault-relative markdown note path to use as the Find scope.",
+    ),
+    artifact_uuid: str | None = Query(
+        default=None,
+        description="Artifact UUID to use as the Find scope.",
+    ),
+    limit: int = Query(10, ge=1, le=50),
+) -> VaultRelatedResponse:
+    """Return deterministic, read-only related artifacts for one vault artifact.
+
+    This intentionally does not reuse ``/search`` because that route is text /
+    embedding search. Vault Browser ``find_related`` requires artifact scope and
+    surfaced ranking/provenance signals so Browse and Find remain separate.
+    """
+    if note_path is None and artifact_uuid is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "artifact_scope_required",
+                "message": "Provide note_path and/or artifact_uuid for artifact-scoped Find.",
+            },
+        )
+    safe_note_path = (
+        _validate_workspace_markdown_note_path(note_path)
+        if note_path is not None
+        else None
+    )
+    safe_artifact_uuid = artifact_uuid.strip() if artifact_uuid else None
+    vault_root = resolve_vault_root()
+    notes = _collect_relation_notes(vault_root)
+    target = _resolve_related_scope(
+        notes,
+        note_path=safe_note_path,
+        artifact_uuid=safe_artifact_uuid,
+    )
+    identity = _vault_identity_state(vault_root)
+    identity_available = (
+        bool(identity.vault_name.strip()) and identity.channel in {"dev", "test", "prod"}
+    )
+    target_note_path = str(target.get("note_path") or "")
+    target_uuid = _str_or_none(target.get("artifact_uuid"))
+    return VaultRelatedResponse(
+        scope=VaultRelatedScopeState(
+            note_path=target_note_path,
+            artifact_uuid=target_uuid,
+        ),
+        results=_rank_related_notes(target, notes, limit=limit),
+        read_only=True,
+        data_mode="read_only",
         vault_identity=identity,
         identity_available=identity_available,
     )

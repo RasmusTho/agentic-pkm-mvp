@@ -1690,6 +1690,54 @@ def _render_inspector_receipts(note: dict) -> str:
     )
 
 
+def _render_vault_related_results(results: list[dict]) -> str:
+    if not results:
+        return (
+            '<div class="vault-related-results" '
+            'data-testid="vault-browser-find-related-results" '
+            'data-mode="read_only" '
+            'data-state="idle"></div>'
+        )
+    rows: list[str] = []
+    for result in results:
+        signals = result.get("ranking_signals") or result.get("signals") or []
+        signal_html = "".join(
+            (
+                '<span class="vault-related-signal" '
+                'data-testid="vault-browser-find-related-signal" '
+                f'data-signal="{_e(str(signal.get("signal") or ""))}" '
+                f'data-weight="{_e(str(signal.get("weight") or ""))}" '
+                f'data-provenance="{_e(str(signal.get("provenance") or ""))}">'
+                f'{_e(str(signal.get("signal") or ""))}: {_e(str(signal.get("value") or ""))}'
+                '</span>'
+            )
+            for signal in signals
+            if isinstance(signal, dict)
+        )
+        rows.append(
+            f'<article class="vault-related-result" '
+            f'data-testid="vault-browser-find-related-result" '
+            f'data-mode="{_e(str(result.get("data_mode") or "read_only"))}" '
+            f'data-note-path="{_e(str(result.get("note_path") or ""))}" '
+            f'data-ranking-score="{_e(str(result.get("ranking_score") or 0))}">'
+            f'<span class="vault-related-title">{_e(str(result.get("title") or "Related artifact"))}</span>'
+            f'<code class="vault-related-path">{_e(str(result.get("note_path") or ""))}</code>'
+            f'<span class="vault-related-score" '
+            f'data-testid="vault-browser-find-related-score">'
+            f'{_e(str(result.get("ranking_score") or 0))}</span>'
+            f'<span class="vault-related-signals">{signal_html}</span>'
+            f'</article>'
+        )
+    return (
+        '<div class="vault-related-results" '
+        'data-testid="vault-browser-find-related-results" '
+        'data-mode="read_only" '
+        'data-state="ready">'
+        + "".join(rows)
+        + '</div>'
+    )
+
+
 def _render_vault_actions(note: dict) -> str:
     """Render the VaultAction display model for the selected browser artifact.
 
@@ -1706,6 +1754,7 @@ def _render_vault_actions(note: dict) -> str:
     this slice. No new write path is opened without guard/receipt semantics.
     """
     note_path = str(note.get("note_path") or "").strip()
+    artifact_uuid = str(note.get("uuid") or "").strip()
 
     def _action(
         testid: str,
@@ -1721,6 +1770,10 @@ def _render_vault_actions(note: dict) -> str:
         requires_confirmation: bool = False,
         data_href: str = "",
         data_path: str = "",
+        data_api_method: str = "",
+        data_api_path: str = "",
+        data_note_path: str = "",
+        data_artifact_uuid: str = "",
         onclick: str = "",
     ) -> str:
         blocked_attr = (
@@ -1737,6 +1790,14 @@ def _render_vault_actions(note: dict) -> str:
         confirm_attr = ' data-requires-confirmation="true"' if requires_confirmation else ""
         href_attr = f' data-href="{_e(data_href)}"' if data_href else ""
         path_attr = f' data-path="{_e(data_path)}"' if data_path else ""
+        api_method_attr = f' data-api-method="{_e(data_api_method)}"' if data_api_method else ""
+        api_path_attr = f' data-api-path="{_e(data_api_path)}"' if data_api_path else ""
+        note_path_attr = f' data-note-path="{_e(data_note_path)}"' if data_note_path else ""
+        artifact_uuid_attr = (
+            f' data-artifact-uuid="{_e(data_artifact_uuid)}"'
+            if data_artifact_uuid
+            else ""
+        )
         onclick_attr = f' onclick="{_e(onclick)}"' if onclick else ""
         return (
             f'<div class="vault-action" '
@@ -1749,6 +1810,10 @@ def _render_vault_actions(note: dict) -> str:
             f"{confirm_attr}"
             f"{href_attr}"
             f"{path_attr}"
+            f"{api_method_attr}"
+            f"{api_path_attr}"
+            f"{note_path_attr}"
+            f"{artifact_uuid_attr}"
             f'{onclick_attr}>'
             f'<span class="vault-action-label">{_e(label)}</span>'
             f"</div>"
@@ -1776,8 +1841,16 @@ def _render_vault_actions(note: dict) -> str:
             "vault-action-find-related",
             "Find related (read-only)",
             "read_only",
-            disabled=True,
-            disabled_reason="Find not connected for this artifact.",
+            affordance="available" if note_path or artifact_uuid else "unavailable",
+            disabled=not (note_path or artifact_uuid),
+            disabled_reason=(
+                "" if note_path or artifact_uuid else "Artifact scope unavailable for Find."
+            ),
+            data_api_method="GET" if note_path or artifact_uuid else "",
+            data_api_path="/api/companion/vault-related" if note_path or artifact_uuid else "",
+            data_note_path=note_path,
+            data_artifact_uuid=artifact_uuid,
+            onclick="vaultBrowserFindRelated(this)" if note_path or artifact_uuid else "",
         ),
         _action(
             "vault-action-queue-review",
@@ -1794,6 +1867,7 @@ def _render_vault_actions(note: dict) -> str:
         'data-testid="workspace-vault-browser-inspector-actions">'
         + "".join(actions)
         + "</div>"
+        + _render_vault_related_results(list(note.get("related_results") or []))
     )
 
 
@@ -5442,6 +5516,34 @@ def render_index_html(
       min-width: 0;
       overflow-wrap: anywhere;
     }}
+    .vault-related-results {{
+      display: grid;
+      gap: 6px;
+      margin-top: 6px;
+    }}
+    .vault-related-result {{
+      border-left: 1px solid var(--border);
+      display: grid;
+      gap: 2px;
+      padding-left: 8px;
+    }}
+    .vault-related-title {{
+      color: var(--fg-1);
+      font-weight: 600;
+    }}
+    .vault-related-path,
+    .vault-related-score,
+    .vault-related-signal {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      overflow-wrap: anywhere;
+    }}
+    .vault-related-signals {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }}
     /* #1425 — de-emphasize browse header chrome; the tree is the surface. The
        "Browse vault notes" toggle matches the Outline heading label. */
     .vault-browser-meta,
@@ -5822,6 +5924,75 @@ def render_index_html(
     detail.hidden = expanded;
     detail.setAttribute('aria-hidden', expanded ? 'true' : 'false');
     detail.setAttribute('data-expanded', expanded ? 'false' : 'true');
+  }}
+
+  function vaultBrowserEscape(value) {{
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }}
+
+  function renderVaultBrowserFindRelatedResults(data) {{
+    var container = document.querySelector('[data-testid="vault-browser-find-related-results"]');
+    if (!container) return;
+    var results = data && Array.isArray(data.results) ? data.results : [];
+    container.setAttribute('data-mode', 'read_only');
+    container.setAttribute('data-state', results.length ? 'ready' : 'empty');
+    if (!results.length) {{
+      container.innerHTML = '<span class="vault-related-empty">No related artifacts found.</span>';
+      return;
+    }}
+    container.innerHTML = results.map(function(result) {{
+      var signals = Array.isArray(result.ranking_signals) ? result.ranking_signals : [];
+      var signalHtml = signals.map(function(signal) {{
+        return '<span class="vault-related-signal" ' +
+          'data-testid="vault-browser-find-related-signal" ' +
+          'data-signal="' + vaultBrowserEscape(signal.signal) + '" ' +
+          'data-weight="' + vaultBrowserEscape(signal.weight) + '" ' +
+          'data-provenance="' + vaultBrowserEscape(signal.provenance) + '">' +
+          vaultBrowserEscape(signal.signal) + ': ' + vaultBrowserEscape(signal.value) +
+          '</span>';
+      }}).join('');
+      return '<article class="vault-related-result" ' +
+        'data-testid="vault-browser-find-related-result" ' +
+        'data-mode="read_only" ' +
+        'data-note-path="' + vaultBrowserEscape(result.note_path) + '" ' +
+        'data-ranking-score="' + vaultBrowserEscape(result.ranking_score || 0) + '">' +
+        '<span class="vault-related-title">' + vaultBrowserEscape(result.title || 'Related artifact') + '</span>' +
+        '<code class="vault-related-path">' + vaultBrowserEscape(result.note_path || '') + '</code>' +
+        '<span class="vault-related-score" data-testid="vault-browser-find-related-score">' +
+        vaultBrowserEscape(result.ranking_score || 0) + '</span>' +
+        '<span class="vault-related-signals">' + signalHtml + '</span>' +
+        '</article>';
+    }}).join('');
+  }}
+
+  function vaultBrowserFindRelated(action) {{
+    if (!action || !action.dataset) return;
+    var params = new URLSearchParams();
+    if (action.dataset.notePath) params.set('note_path', action.dataset.notePath);
+    if (action.dataset.artifactUuid) params.set('artifact_uuid', action.dataset.artifactUuid);
+    if (!params.toString()) return;
+    var endpoint = action.dataset.apiPath || '/api/companion/vault-related';
+    var url = endpoint + '?' + params.toString();
+    fetch(url, {{method: 'GET'}})
+      .then(function(response) {{
+        if (!response.ok) throw new Error('Find request failed: ' + response.status);
+        return response.json();
+      }})
+      .then(function(data) {{
+        renderVaultBrowserFindRelatedResults(data);
+      }})
+      .catch(function(error) {{
+        var container = document.querySelector('[data-testid="vault-browser-find-related-results"]');
+        if (!container) return;
+        container.setAttribute('data-mode', 'read_only');
+        container.setAttribute('data-state', 'error');
+        container.textContent = error.message;
+      }});
   }}
 
   function vbToggleFilter(el) {{
