@@ -29,7 +29,7 @@ features under test. It was loaded through the runtime API and observed in the b
 | Panel / governance separation | **PASS** | The Panel rail is visually distinct from the note body. Panel and Canvas surfaces remain separate. |
 | GFM Task lists | **PASS (functional) / FAIL (design)** | Checkboxes render with visually distinct checked and unchecked states. Inline code within task items is visible. Read-only behavior is correct. Visual alignment and sizing need design review. |
 | Fenced code blocks | **AMBIGUOUS** | Code blocks were not captured in the available screenshots. Functional rendering is assumed from earlier observations but visual alignment (font, spacing, contrast, language label) is unconfirmed. A dedicated screenshot is still needed. |
-| Mermaid diagrams | **FAIL** | Mermaid fenced blocks do not render. The block appears as raw text or produces an error. |
+| Mermaid diagrams | **PASS (automated + Preview UAT) / live UAT pending** | Valid fences render to inline SVG via a sandboxed client runtime; invalid fences degrade to the #1340 failed-embed partial (no Mermaid "bomb" error graphic). See the "2026-05-30 — Mermaid functional rendering (#1344)" section. Live Niflheim re-observation handed to the owner. |
 | Images | **PASS (automated) / live UAT pending** | Real-image rendering now proven via a committed license-clean fixture (`Attachments/uat_real_image.png`) and renderer tests; missing-image placeholder (#1340) unchanged. See the "2026-05-30 — image rendering fixture (#1347)" section below. Live Niflheim re-observation handed to the owner. |
 | Internal / wiki links | **FAIL** | Wikilinks (`[[Note Name]]`) do not resolve and do not navigate. Rendered as raw text or as a non-functional link. |
 | Body edit (note mutation) | **FAIL** | No body edit functionality is wired to the browser UI. Attempting to edit the note body produces no visible effect. The Canvas body-edit API exists in the backend but is not connected. |
@@ -194,3 +194,37 @@ Obsidian embed, exactly as in the table above) alongside the existing
 `Companion_UI_Markdown_Feature_UAT.md`. Expected: the existing-asset blocks show
 the actual gradient image; the missing-asset block shows the #1340 dashed
 rectangle.
+
+---
+
+## 2026-05-30 — Mermaid functional rendering (#1344, supersedes the "Mermaid FAIL" row)
+
+Mermaid now renders functionally with graceful failure. The renderer emits a
+stable client-render placeholder; a sandboxed runtime on the workspace dev page
+converts valid source to inline SVG and degrades broken source to the #1340
+failed-embed partial.
+
+### Behaviour (all proven via Claude Preview MCP, mermaid@10.9.1 from esm.sh)
+
+| Scenario | Source | Result |
+|---|---|---|
+| Valid (AC2) | ```` ```mermaid\ngraph TD\n A-->B ... ``` ```` | `figure.vault-mermaid-block[data-mermaid-state="rendered"]` containing `.vault-mermaid-rendered svg` |
+| Broken — server pre-validation | ```` ```mermaid\nthis is not valid ... ``` ```` | server-emitted `[data-testid="failed-embed"][data-kind="mermaid"]` with `view source` |
+| Broken — client throw (AC3) | a diagram-type-prefixed but malformed fence | client rewrites the figure to the same `[data-testid="failed-embed"][data-kind="mermaid"]` shape; **no Mermaid "Syntax error" bomb graphic** (`suppressErrorRendering` + orphan cleanup) |
+| Lazy load (AC4) | — | the Mermaid bundle is requested **only** when a `pre.vault-mermaid` placeholder exists; a no-fence note issues no Mermaid network request |
+
+DOM evidence (1280×800): `rendered_svgs=1`, `pending_placeholders=0`,
+`failed_embeds[data-kind=mermaid]=2`, `bomb_text_present=false`,
+`leaked_error_nodes=0`, **no console errors**. Automated coverage:
+`tests/companion_ui/test_mermaid_block_renderer.py` (placeholder/partial/source)
+and `tests/companion_ui/test_mermaid_runtime_injection.py` (page placeholder +
+lazy-load guard + degrade shape).
+
+### Live-runtime follow-up (owner)
+
+For the live Niflheim UAT (`http://10.42.42.10:8111`), add to
+`Companion_UI_Markdown_Feature_UAT.md` one **valid** Mermaid fence (e.g.
+`graph TD; A-->B`) and one **broken** Mermaid fence (e.g. a `graph TD` block with
+malformed edges) and record the two fixture line numbers. Expected: the valid
+fence renders as a diagram; the broken fence shows the failed-embed dashed
+container with `view source`, and no error graphic leaks into the page.

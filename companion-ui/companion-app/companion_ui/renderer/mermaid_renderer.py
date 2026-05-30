@@ -1,8 +1,12 @@
 """Safe Mermaid fenced-block rendering for the Companion UI note surface.
 
-The current Python server-side UI has no sandboxed Mermaid runtime. Until a
-safe client component can be configured and tested, Mermaid blocks render as an
-inert diagram shell with preserved source instead of executing Mermaid code.
+The server emits a stable, source-preserving placeholder
+(``pre.vault-mermaid > code.language-mermaid``) for well-formed Mermaid source
+and hands SVG rendering to a sandboxed client runtime on the workspace dev page
+(#1344). Source that fails the server-side safety/shape pre-validation degrades
+immediately to the #1340 failed-embed partial; the client runtime degrades to
+the same partial when Mermaid throws at render time. The server never executes
+Mermaid and never fetches network resources.
 """
 
 from __future__ import annotations
@@ -87,11 +91,7 @@ class MermaidBlockRenderer:
 
             diagnostics = _link_policy_diagnostics(normalized_source)
             return MermaidRenderResult(
-                html=_render_figure(
-                    normalized_source,
-                    state="source-fallback",
-                    body_html=component_html,
-                ),
+                html=_render_pending_figure(component_html),
                 diagnostics=diagnostics,
             )
         except Exception as exc:
@@ -103,7 +103,7 @@ class MermaidBlockRenderer:
             )
 
     def _render_component(self, source: str) -> str:
-        return _render_source_fallback_component(source)
+        return _render_mermaid_placeholder(source)
 
 
 def _normalize_source(source: str) -> str:
@@ -148,20 +148,16 @@ def _link_policy_diagnostics(source: str) -> tuple[MarkdownDiagnostic, ...]:
     )
 
 
-def _render_source_fallback_component(source: str) -> str:
-    _ = source
+def _render_mermaid_placeholder(source: str) -> str:
+    """Stable client-render placeholder carrying the verbatim (escaped) source.
+
+    The client runtime (#1344) selects ``pre.vault-mermaid > code.language-mermaid``,
+    reads ``textContent`` as the Mermaid source, and replaces the node with SVG.
+    """
     return (
-        '<div class="vault-mermaid-diagram" '
-        'data-testid="vault-mermaid-diagram" '
-        'data-mermaid-render-mode="source-fallback" '
-        'role="img" '
-        'aria-label="Mermaid diagram source preview">'
-        '<div class="vault-mermaid-diagnostic" '
-        'data-diagnostic-code="mermaid_source_fallback">'
-        "Mermaid source is displayed because safe client-side Mermaid rendering "
-        "is not configured in this server-rendered UI."
-        "</div>"
-        "</div>"
+        '<pre class="vault-mermaid" data-testid="vault-mermaid">'
+        f'<code class="language-mermaid">{_e(source)}</code>'
+        "</pre>"
     )
 
 
@@ -183,15 +179,14 @@ def _render_error_result(
     )
 
 
-def _render_figure(source: str, *, state: str, body_html: str) -> str:
+def _render_pending_figure(body_html: str) -> str:
     return (
         '<figure class="vault-mermaid-block" '
         'data-testid="vault-mermaid-block" '
-        f'data-mermaid-state="{_e(state)}" '
+        'data-mermaid-state="pending" '
         'data-source-preserved="true" '
         'data-network-policy="blocked">'
         f"{body_html}"
-        f"{_render_source_details(source)}"
         "</figure>"
     )
 
@@ -213,6 +208,7 @@ def _render_failed_embed_partial(source: str, *, code: str) -> str:
     return (
         '<figure class="vault-mermaid-block failed-embed failed-embed--mermaid" '
         'data-testid="failed-embed" '
+        'data-kind="mermaid" '
         f'data-diagnostic-code="{_e(code)}" '
         'data-embed-state="failed" '
         'data-source-preserved="true" '

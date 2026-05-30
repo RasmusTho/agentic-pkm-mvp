@@ -338,9 +338,15 @@ The resolver:
    after all plugin transformations. Sanitization schema must be explicit and tested.
 6. **Script execution forbidden.** `<script>` tags, `javascript:` URLs, and inline
    event handlers must be stripped by sanitization.
-7. **Mermaid render-only with error boundary.** Mermaid must be rendered in a controlled
-   component with a safe configuration (no external network calls, no file access). Mermaid
-   rendering failures must be caught and displayed as diagnostics, not propagate as crashes.
+7. **Mermaid render-only with error boundary.** The **server** renderer never executes
+   Mermaid and makes no network/file calls: it emits a stable, source-preserving placeholder
+   (`pre.vault-mermaid > code.language-mermaid`) for well-formed source and degrades clearly
+   invalid source to the #1340 failed-embed partial. SVG rendering is delegated to a
+   **sandboxed client runtime on the workspace dev page** (`securityLevel: 'strict'`,
+   `suppressErrorRendering: true`); the Mermaid bundle is imported only when at least one
+   placeholder is present. A Mermaid render failure must be caught and rewritten to the same
+   `[data-testid="failed-embed"][data-kind="mermaid"]` partial — no parallel error visual,
+   no leaked Mermaid error graphic — never propagating as a crash (#1344).
 8. **Dataview and plugin code must not execute.** Fenced blocks with plugin names render as
    `UnsupportedBlockDiagnostic` or `CodeBlockRenderer` without execution.
 9. **Remote image policy must be explicit and test-covered.** The default policy must block
@@ -466,8 +472,11 @@ The `full-smoke.md` fixture must include all of:
 - If renderer implementation would call a write endpoint: **stop**.
 - If resolver implementation would read vault files directly: **stop**.
 - If sanitization schema would allow `<script>` or `javascript:` : **stop**.
-- If Mermaid renderer cannot be configured without external network calls: **use
-  placeholder/diagnostic instead**.
+- The server Mermaid path emits a source placeholder + diagnostics only; client-side SVG
+  rendering runs in a sandboxed runtime (`securityLevel: 'strict'`) on the workspace dev page,
+  loaded only when a placeholder is present (#1344). If a future surface cannot load that
+  sandboxed runtime, it **falls back to the placeholder/diagnostic** rather than executing
+  Mermaid unsafely.
 - If any editor adapter (CodeMirror, Milkdown, MDXEditor) cannot guarantee no autosave or
   direct vault write: **reject the adapter**.
 - If a rich editor cannot prove Obsidian-flavored Markdown round-trip in fixture tests:

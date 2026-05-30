@@ -775,6 +775,77 @@ def _render_left_context_panel(
     )
 
 
+def _mermaid_runtime_script() -> str:
+    """Sandboxed client runtime that renders ``pre.vault-mermaid`` placeholders.
+
+    #1344: the Mermaid bundle is imported only when at least one placeholder is
+    present (AC4). Valid source renders to inline SVG (AC2); a Mermaid throw
+    rewrites the figure to the #1340 failed-embed partial shape (AC3) — the same
+    ``data-testid="failed-embed" data-kind="mermaid"`` DOM the server emits — so
+    there is no second error visual. ``securityLevel: 'strict'`` disables click
+    directives and HTML injection. Returned as a plain string (not an f-string)
+    so the JS braces are not double-escaped by the page template.
+    """
+    return """
+  <script type="module">
+  (async function () {
+    var blocks = document.querySelectorAll('.note-body pre.vault-mermaid');
+    if (!blocks.length) { return; }            // AC4: no bundle unless needed
+    var mermaid;
+    try {
+      mermaid = (await import('https://esm.sh/mermaid@10.9.1')).default;
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'dark',
+        suppressErrorRendering: true   // do not inject Mermaid's global error graphic
+      });
+    } catch (e) { return; }                    // load failure: keep source placeholder
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function degrade(figure, source) {
+      figure.className = 'vault-mermaid-block failed-embed failed-embed--mermaid';
+      figure.setAttribute('data-testid', 'failed-embed');
+      figure.setAttribute('data-kind', 'mermaid');
+      figure.setAttribute('data-embed-state', 'failed');
+      figure.setAttribute('data-mermaid-state', 'failed');
+      figure.setAttribute('data-diagnostic-code', 'mermaid_render_error');
+      figure.innerHTML =
+        '<div class="failed-embed-main">' +
+        '<span class="failed-embed-tag">MERMAID</span>' +
+        '<span class="failed-embed-message">Diagram source available &mdash; ' +
+        'interactive render unavailable in this view.</span></div>' +
+        '<details class="vault-mermaid-source" data-testid="vault-mermaid-source">' +
+        '<summary>view source</summary>' +
+        '<pre class="vault-code-block vault-mermaid-source-code" data-language="mermaid">' +
+        '<code class="language-mermaid">' + esc(source) + '</code></pre></details>';
+    }
+    for (var i = 0; i < blocks.length; i++) {
+      var pre = blocks[i];
+      var figure = pre.closest('.vault-mermaid-block') || pre.parentNode;
+      var code = pre.querySelector('code');
+      var source = (code ? code.textContent : pre.textContent) || '';
+      var renderId = 'vault-mermaid-svg-' + i;
+      try {
+        var out = await mermaid.render(renderId, source);
+        var holder = document.createElement('div');
+        holder.className = 'vault-mermaid-rendered';
+        holder.setAttribute('data-testid', 'vault-mermaid-rendered');
+        holder.innerHTML = out.svg;
+        pre.replaceWith(holder);
+        if (figure && figure.setAttribute) { figure.setAttribute('data-mermaid-state', 'rendered'); }
+      } catch (err) {
+        // Belt-and-suspenders: drop any orphan error node Mermaid may have left.
+        var orphan = document.getElementById(renderId) || document.getElementById('d' + renderId);
+        if (orphan && orphan.parentNode) { orphan.parentNode.removeChild(orphan); }
+        if (figure && figure.setAttribute) { degrade(figure, source); }
+      }
+    }
+  })();
+  </script>"""
+
+
 def _coerce_vault_link_index(value: object) -> dict[str, list[str]]:
     """Normalize an optional active-vault link index for the link resolver.
 
@@ -4228,6 +4299,28 @@ def render_index_html(
     .failed-embed .vault-mermaid-source-code {{
       margin: 12px 0 0;
     }}
+    /* #1344 — Mermaid client-render placeholder + rendered SVG holder. The
+       placeholder is a quiet source preview until the runtime swaps in SVG;
+       theme colors come from Mermaid's built-in dark theme (no new tokens). */
+    .vault-mermaid {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      margin: 0 0 16px;
+      overflow-x: auto;
+      padding: 14px 16px;
+    }}
+    .vault-mermaid-rendered {{
+      margin: 0 0 16px;
+      text-align: center;
+    }}
+    .vault-mermaid-rendered svg {{
+      height: auto;
+      max-width: 100%;
+    }}
     .vault-asset-diagnostic.missing-image {{
       background: transparent;
       border: 0;
@@ -5633,6 +5726,7 @@ def render_index_html(
     window.location.href = url.toString();
   }}
   </script>
+  {_mermaid_runtime_script()}
 </body>
 </html>"""
 
