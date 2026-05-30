@@ -1679,6 +1679,119 @@ def _render_filter_chips(
     )
 
 
+def _build_vault_tree(notes: list[dict]) -> dict:
+    """Build a nested folder tree from server-provided note paths (#1425).
+
+    Returns ``{"folders": {name: subtree}, "files": [(note, filename, path)]}``.
+    Insertion order is preserved (folders first-seen, files in order).
+    """
+    root: dict = {"folders": {}, "files": []}
+    for note in notes:
+        path = str(note.get("note_path") or "").strip()
+        if not path:
+            continue
+        parts = path.split("/")
+        folders, filename = parts[:-1], parts[-1]
+        node = root
+        for folder in folders:
+            node = node["folders"].setdefault(folder, {"folders": {}, "files": []})
+        node["files"].append((note, filename, path))
+    return root
+
+
+def _render_vault_tree(
+    node: dict,
+    *,
+    note_path: str,
+    active_folder_paths: set[str],
+    base: str,
+) -> str:
+    parts: list[str] = []
+    # Folders first (Obsidian-like), then files at this level.
+    for name, child in node["folders"].items():
+        full = f"{base}/{name}" if base else name
+        is_open = full in active_folder_paths
+        children = _render_vault_tree(
+            child, note_path=note_path, active_folder_paths=active_folder_paths, base=full
+        )
+        parts.append(
+            f'<li class="vault-tree-folder" data-testid="workspace-vault-browser-group" '
+            f'data-folder="{_e(full)}">'
+            f'<details class="vault-tree-folder-details"{" open" if is_open else ""}>'
+            f'<summary class="vault-tree-folder-summary">{_e(name)}</summary>'
+            f'<ul class="vault-tree-children">{children}</ul>'
+            "</details></li>"
+        )
+    for note, filename, path in node["files"]:
+        parts.append(_render_vault_note_row(note, filename, path, note_path))
+    return "".join(parts)
+
+
+def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str) -> str:
+    """Render one clean note row: name only (filename stem); metadata hidden (#1417/#1425)."""
+    title = _e(note.get("title") or filename)
+    stem = filename[:-3] if filename.lower().endswith(".md") else filename
+    zone = _e(note.get("zone") or "root")
+    href = "/?note_path=" + quote(path, safe="/")
+    active = "true" if path == note_path else "false"
+
+    hidden_badge_attrs = ' class="note-badge note-badge--nav-hidden" data-nav-visible="false"'
+    kind_val = note.get("kind")
+    kind_badge = (
+        f'<span{hidden_badge_attrs} '
+        f'data-testid="workspace-vault-browser-note-kind">{_e(str(kind_val))}</span>'
+        if kind_val else ""
+    )
+    review_state_val = note.get("review_state")
+    review_badge = (
+        f'<span{hidden_badge_attrs} '
+        f'data-testid="workspace-vault-browser-note-review-state">{_e(str(review_state_val))}</span>'
+        if review_state_val else ""
+    )
+    trust_val = note.get("trust")
+    trust_badge = (
+        f'<span{hidden_badge_attrs} '
+        f'data-testid="workspace-vault-browser-note-trust">{_e(str(trust_val))}</span>'
+        if trust_val else ""
+    )
+    frontmatter_valid = note.get("frontmatter_valid", True)
+    missing_fields = note.get("missing_required_fields") or []
+    health_badge = ""
+    if not frontmatter_valid or missing_fields:
+        missing_label = ", ".join(missing_fields) if missing_fields else "invalid"
+        health_badge = (
+            f'<span class="note-badge note-badge--health note-badge--health-invalid" '
+            f'data-testid="workspace-vault-browser-note-health" '
+            f'data-missing-fields="{_e(missing_label)}">missing: {_e(missing_label)}</span>'
+        )
+    badges_html = kind_badge + review_badge + trust_badge + health_badge
+
+    kind_safe = _e(str(kind_val)) if kind_val else ""
+    is_companion = kind_val in _COMPANION_KINDS
+    row_extra_class = " vault-browser-row--companion" if is_companion else ""
+    row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
+    row_companion_attr = ' data-companion="true"' if is_companion else ""
+    nav_hidden = _should_hide_note_by_default(note)
+    row_hidden_attr = " hidden" if nav_hidden else ""
+    row_nav_attr = ' data-nav-visible="false"' if nav_hidden else ""
+
+    # Obsidian-clean row: the visible label is the filename stem (disambiguates
+    # same-titled notes); the frontmatter title is the tooltip. The full path and
+    # raw metadata stay in hidden elements (data-* preserved for tests).
+    return (
+        f'<li class="vault-browser-row{row_extra_class}" '
+        f'data-testid="workspace-vault-browser-note-row" data-active="{active}"'
+        f'{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>'
+        f'<a href="{href}" class="vault-browser-row-title" '
+        f'data-testid="workspace-vault-browser-note-link" title="{title}">{_e(stem)}</a>'
+        f'<code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" '
+        f'title="{_e(path)}" hidden>{_e(filename)}</code>'
+        f'<span data-testid="workspace-vault-browser-note-zone" '
+        f'class="vault-browser-zone-label">{zone}</span>'
+        f"{badges_html}</li>"
+    )
+
+
 def _render_vault_browser(
     *,
     note_path: str,
@@ -1733,92 +1846,24 @@ def _render_vault_browser(
     # §6 — group rows by folder so the list stays scannable at 40+ artifacts.
     # Insertion order is preserved (dicts are ordered) so any server ordering
     # intent survives; each folder header is emitted once.
-    grouped: dict[str, list[str]] = {}
-    for note in notes:
-        path = str(note.get("note_path") or "").strip()
-        if not path:
-            continue
-        title = _e(note.get("title") or path)
-        zone = _e(note.get("zone") or "root")
-        href = "/?note_path=" + quote(path, safe="/")
-        active = "true" if path == note_path else "false"
-        folder = path.rsplit("/", 1)[0] if "/" in path else "(root)"
-        filename = path.rsplit("/", 1)[-1]
-
-        # Per-note metadata badges: hidden from the nav list by default (daily-use
-        # visibility pass). The inspector panel shows the full metadata. These
-        # elements retain their data-testid for test compatibility but are visually
-        # hidden so the nav list stays calm and navigation-focused.
-        hidden_badge_attrs = ' class="note-badge note-badge--nav-hidden" data-nav-visible="false"'
-        kind_val = note.get("kind")
-        kind_badge = (
-            f'<span{hidden_badge_attrs} '
-            f'data-testid="workspace-vault-browser-note-kind">{_e(str(kind_val))}</span>'
-            if kind_val else ""
-        )
-        review_state_val = note.get("review_state")
-        review_badge = (
-            f'<span{hidden_badge_attrs} '
-            f'data-testid="workspace-vault-browser-note-review-state">{_e(str(review_state_val))}</span>'
-            if review_state_val else ""
-        )
-        trust_val = note.get("trust")
-        trust_badge = (
-            f'<span{hidden_badge_attrs} '
-            f'data-testid="workspace-vault-browser-note-trust">{_e(str(trust_val))}</span>'
-            if trust_val else ""
-        )
-        frontmatter_valid = note.get("frontmatter_valid", True)
-        missing_fields = note.get("missing_required_fields") or []
-        health_badge = ""
-        if not frontmatter_valid or missing_fields:
-            missing_label = ", ".join(missing_fields) if missing_fields else "invalid"
-            health_badge = (
-                f'<span class="note-badge note-badge--health note-badge--health-invalid" '
-                f'data-testid="workspace-vault-browser-note-health" '
-                f'data-missing-fields="{_e(missing_label)}">missing: {_e(missing_label)}</span>'
-            )
-        badges_html = kind_badge + review_badge + trust_badge + health_badge
-
-        kind_safe = _e(str(kind_val)) if kind_val else ""
-        is_companion = kind_val in _COMPANION_KINDS
-        row_extra_class = " vault-browser-row--companion" if is_companion else ""
-        row_kind_attr = f' data-kind="{kind_safe}"' if kind_safe else ""
-        row_companion_attr = ' data-companion="true"' if is_companion else ""
-        nav_hidden = _should_hide_note_by_default(note)
-        row_hidden_attr = " hidden" if nav_hidden else ""
-        row_nav_attr = ' data-nav-visible="false"' if nav_hidden else ""
-
-        # §6.1/§6.3 — title leads; the path is compact (filename only, with the
-        # full absolute path preserved in the title attribute as a details
-        # affordance). Raw metadata stays in the nav-hidden badges above.
-        grouped.setdefault(folder, []).append(
-            f"""
-          <li class="vault-browser-row{row_extra_class}" data-testid="workspace-vault-browser-note-row" data-active="{active}"{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>
-            <a href="{href}" class="vault-browser-row-title" data-testid="workspace-vault-browser-note-link">{title}</a>
-            <code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" title="{_e(path)}">{_e(filename)}</code>
-            <span data-testid="workspace-vault-browser-note-zone" class="vault-browser-zone-label">{zone}</span>
-            {badges_html}
-          </li>"""
-        )
-
-    list_items: list[str] = []
-    for folder, folder_rows in grouped.items():
-        folder_label = _e(folder)
-        list_items.append(
-            '<li class="vault-browser-group" '
-            'data-testid="workspace-vault-browser-group" '
-            f'data-folder="{folder_label}">'
-            f'<span class="vault-browser-group-label" title="{folder_label}">'
-            f"{folder_label}</span></li>"
-        )
-        list_items.extend(folder_rows)
-
+    # #1425 — render an Obsidian-style nested, collapsible folder tree built from
+    # the server-provided note paths. Folders on the path to the active note are
+    # expanded by default; the rest are collapsed.
+    tree = _build_vault_tree(notes)
+    active_folder_paths: set[str] = set()
+    if note_path and "/" in note_path:
+        acc = ""
+        for seg in note_path.split("/")[:-1]:
+            acc = f"{acc}/{seg}" if acc else seg
+            active_folder_paths.add(acc)
+    tree_html = _render_vault_tree(
+        tree, note_path=note_path, active_folder_paths=active_folder_paths, base=""
+    )
     list_html = (
-        '<ul class="vault-browser-list" data-testid="workspace-vault-browser-list">'
-        + "".join(list_items)
+        '<ul class="vault-browser-list vault-tree" data-testid="workspace-vault-browser-list">'
+        + tree_html
         + "</ul>"
-        if list_items
+        if (tree["folders"] or tree["files"])
         else ""
     )
     read_only_text = "read-only" if read_only else "mutating"
@@ -4997,6 +5042,110 @@ def render_index_html(
       color: var(--fg-1);
     }}
     /* §6 — density: folder group headers + compact, truncating rows. */
+    /* #1425/#1427 — Obsidian-style collapsible folder tree. The folder summaries
+       and note rows share the exact graphical profile of the Outline list
+       (font-display 13px/18px, 2px left rail, accent for the active item) so the
+       single left panel reads as one consistent family across its modes. */
+    .vault-tree, .vault-tree ul {{
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }}
+    .vault-tree {{
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }}
+    .vault-tree-children {{
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding-left: 12px;
+    }}
+    .vault-tree-folder {{ list-style: none; min-width: 0; }}
+    .vault-tree-folder-details > summary {{ list-style: none; }}
+    .vault-tree-folder-details > summary::-webkit-details-marker {{ display: none; }}
+    .vault-tree-folder-summary {{
+      align-items: center;
+      border-left: 2px solid transparent;
+      border-radius: var(--radius-sm);
+      box-sizing: border-box;
+      color: var(--fg-2);
+      cursor: pointer;
+      display: flex;
+      font-family: var(--font-display);
+      font-size: 13px;
+      gap: 4px;
+      line-height: 18px;
+      overflow: hidden;
+      padding: 5px 6px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .vault-tree-folder-summary::before {{
+      color: var(--fg-3);
+      content: "\\203A";
+      display: inline-block;
+      flex-shrink: 0;
+      transition: transform 0.12s ease;
+      width: 10px;
+    }}
+    .vault-tree-folder-details[open] > .vault-tree-folder-summary::before {{
+      transform: rotate(90deg);
+    }}
+    .vault-tree-folder-summary:hover {{
+      color: var(--fg-1);
+      outline: 1px solid var(--border-focus);
+      outline-offset: 1px;
+    }}
+    /* Tree note rows mirror .note-outline-link exactly. */
+    .vault-tree .vault-browser-row {{
+      box-sizing: border-box;
+      list-style: none;
+      min-width: 0;
+    }}
+    .vault-tree .vault-browser-row-title {{
+      border-left: 2px solid transparent;
+      border-radius: var(--radius-sm);
+      box-sizing: border-box;
+      color: var(--fg-2);
+      display: block;
+      font-family: var(--font-display);
+      font-size: 13px;
+      line-height: 18px;
+      overflow: hidden;
+      padding: 5px 6px;
+      text-decoration: none;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .vault-tree .vault-browser-row-title:hover {{
+      color: var(--fg-1);
+      outline: 1px solid var(--border-focus);
+      outline-offset: 1px;
+    }}
+    .vault-tree .vault-browser-row[data-active="true"] > .vault-browser-row-title {{
+      border-left-color: var(--accent);
+      color: var(--accent);
+    }}
+    .vault-tree .vault-browser-row-path {{ display: none; }}
+    /* #1425 — de-emphasize browse header chrome; the tree is the surface. The
+       "Browse vault notes" toggle matches the Outline heading label. */
+    .vault-browser-meta,
+    .vault-browser-state {{ display: none; }}
+    .vault-browser > summary[data-testid="workspace-vault-browser-toggle"] {{
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.08em;
+      list-style: none;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }}
+    .vault-browser > summary[data-testid="workspace-vault-browser-toggle"]::-webkit-details-marker {{
+      display: none;
+    }}
     .vault-browser-group {{
       list-style: none;
       padding: 8px 4px 2px;
