@@ -196,3 +196,57 @@ def test_layout_preserves_single_scroll_ownership_markers():
     assert "overflow-y: auto;" not in content, (
         "note-body-content must not own a second nested scroll"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC (#1416): the dev "Edit note body" composer must not squeeze the reading
+# surface in the fixed-height shell. With guard_update_flow_available the
+# composer renders as an opt-in disclosure (collapsed by default) and is
+# shrink-locked + height-bounded, so the note reading layout stays primary.
+# ---------------------------------------------------------------------------
+
+
+def test_edit_composer_is_collapsed_by_default_so_reading_stays_primary():
+    # _fields() sets guard_update_flow_available=True, so the enabled composer
+    # renders. It must be present but collapsed, contributing only its summary
+    # row, so the note body keeps its reading height (#1416, corrective #4).
+    html = _html()
+    assert 'data-testid="workspace-body-edit-panel"' in html
+    assert 'data-update-flow="available"' in html
+    panel = re.search(
+        r'<details class="body-edit-panel"[^>]*'
+        r'data-testid="workspace-body-edit-panel"[^>]*>',
+        html,
+    )
+    assert panel, "enabled body-edit composer must render as a <details> disclosure"
+    # Collapsed by default: no `open` attribute on the <details> tag.
+    assert not re.search(r"\bopen\b", panel.group(0)), (
+        "edit composer must be collapsed by default (opt-in), not expanded"
+    )
+
+
+def test_edit_composer_does_not_compete_with_reading_layout_for_shell_height():
+    html = _html()
+    # The reading layout remains the single growing primary region.
+    reading = _css_block(html, r"\.note-reading-layout")
+    assert "flex: 1;" in reading
+    assert "min-height: 0;" in reading
+    # The composer is shrink-locked and height-bounded with internal scroll, so
+    # it cannot consume the reading layout's space even when expanded.
+    panel = _css_block(html, r"\.body-edit-panel")
+    assert "flex-shrink: 0;" in panel, "composer must not be squeezed by the shell"
+    assert "max-height" in panel, "composer must be height-bounded"
+    assert "overflow-y: auto;" in panel, "composer must scroll internally when tall"
+
+
+def test_edit_composer_preserves_single_scroll_ownership():
+    # With the composer enabled, the #1397 scroll-ownership contract still holds.
+    html = _html()
+    body = _css_block(html, r"body")
+    assert "height: 100dvh;" in body
+    assert "overflow: hidden;" in body
+    note_body = _css_block(html, r"\.note-body")
+    assert "overflow-y: auto;" in note_body
+    # The composer's internal scroll is a bounded editor surface, not a second
+    # ownership of the page/reading scroll.
+    assert html.count("height: 100dvh;") == 1
