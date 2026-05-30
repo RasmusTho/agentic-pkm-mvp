@@ -155,7 +155,7 @@ Automation can surface a suggestion that becomes a Panel action or a canvas item
 
 The Automation surface is not hypothetical. The following runtime components are current Automation surface members as of the v5.5 baseline:
 
-- **Vault watcher** (`VaultMirror` and its successors): reacts to file-system events and triggers the intent classification and routing pipeline.
+- **Vault watcher** (previously `VaultMirror`, **deprecated** — replaced by companion notes; see `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`): reacts to file-system events and triggers the intent classification and routing pipeline.
 - **Scheduler / periodic jobs**: runs temporal governance checks (commitment expiry detection, stale-note detection) and maintenance sweeps on schedule.
 - **Policy auto-exec plumbing**: the infrastructure that allows a previously-approved policy to trigger vault mutations without interactive confirmation per action.
 
