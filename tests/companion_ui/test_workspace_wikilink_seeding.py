@@ -85,3 +85,18 @@ def test_link_index_accepts_list_candidates() -> None:
     )
 
     assert 'data-link-state="resolved"' in html
+
+
+def test_link_index_note_path_list_resolves_end_to_end() -> None:
+    # #1431 AC3 — the read-only link-index API returns a note-path list; the
+    # resolver expands each path into its lookup keys so a bare wikilink to an
+    # existing note resolves and navigates end-to-end.
+    html = _render(
+        body="See [[Existing Note]] and [[Missing One]].",
+        vault_link_index=["Notes/Existing Note.md", "Archive/Other.md"],
+    )
+
+    assert 'data-link-state="resolved"' in html
+    assert "href=\"?note_path=Notes%2FExisting%20Note.md\"" in html
+    # The unknown target still degrades to the diagnostic.
+    assert 'data-link-state="missing"' in html

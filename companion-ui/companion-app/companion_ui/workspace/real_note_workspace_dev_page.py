@@ -160,6 +160,7 @@ class DevPageState:
     active_note_body_update_state: str = "idle"
     active_note_body_update_message: str = ""
     vault_browser_notes: list[dict[str, Any]] | None = None
+    vault_link_index: list[str] | None = None
     vault_browser_query: str = ""
     vault_browser_total_notes: int = 0
     vault_browser_filtered_notes: int = 0
@@ -241,6 +242,23 @@ class RealNoteWorkspaceDevPage:
                 vault_browser_error = str(exc)
         else:
             vault_browser = {}
+        # #1431 — fetch the complete vault link index so wikilinks resolve
+        # end-to-end. This is a best-effort, non-critical enrichment: any failure
+        # (client error, missing endpoint on an older runtime, malformed payload)
+        # must degrade to an empty index — links stay diagnostic (prior
+        # behaviour) and the note still renders. The UI never reads the vault
+        # filesystem; it only consumes the runtime API payload.
+        vault_link_index: list[str] = []
+        if isinstance(self._http, WorkspaceHttpClient):
+            try:
+                link_index_payload = self._http.get(
+                    "/api/companion/vault-link-index", params={}
+                )
+                vault_link_index = [
+                    str(path) for path in (link_index_payload.get("note_paths") or []) if path
+                ]
+            except Exception:
+                vault_link_index = []
         raw_find_payload = raw.get("find")
         runtime_find_payload = runtime.get("find")
         find_payload_available = isinstance(raw_find_payload, dict) or isinstance(
@@ -398,6 +416,7 @@ class RealNoteWorkspaceDevPage:
             guard_workspace_update_config_mode=workspace_update_config_mode,
             active_note_body_update_enabled=workspace_update_available,
             vault_browser_notes=list(vault_browser.get("notes") or []),
+            vault_link_index=vault_link_index,
             vault_browser_query=str(vault_browser.get("query") or ""),
             vault_browser_total_notes=int(vault_browser.get("total_notes") or 0),
             vault_browser_filtered_notes=int(vault_browser.get("filtered_notes") or 0),
@@ -900,6 +919,7 @@ class RealNoteWorkspaceDevPage:
             "active_note_body_update_state": self.state.active_note_body_update_state,
             "active_note_body_update_message": self.state.active_note_body_update_message,
             "vault_browser_notes": self.state.vault_browser_notes or [],
+            "vault_link_index": self.state.vault_link_index or [],
             "vault_browser_query": self.state.vault_browser_query,
             "vault_browser_total_notes": self.state.vault_browser_total_notes,
             "vault_browser_filtered_notes": self.state.vault_browser_filtered_notes,

@@ -181,6 +181,24 @@ class VaultBrowserStateResponse(BaseModel):
     active_filters: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class VaultLinkIndexResponse(BaseModel):
+    """Complete, read-only listing of active-vault note paths for link resolution.
+
+    The Companion UI seeds its ``VaultLinkResolver`` from ``note_paths`` so that
+    vault-internal wikilinks resolve and navigate (#1431). Unlike the vault
+    browser, this is **not** paginated/filtered — it is the full link index. The
+    resolver expands each path into its lookup keys (full path, stem path, name,
+    stem); the server returns the raw paths so the UI never reads the filesystem.
+    """
+
+    note_paths: list[str]
+    total_notes: int
+    truncated: bool = False
+    read_only: bool = True
+    vault_identity: VaultIdentityState
+    identity_available: bool
+
+
 def _truthy_env(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -856,6 +874,62 @@ def read_companion_vault_browser(
         vault_identity=identity,
         identity_available=identity_available,
         active_filters=active_filters,
+    )
+
+
+def _safe_vault_link_index_max() -> int:
+    raw = os.getenv("VAULT_LINK_INDEX_MAX")
+    if raw is None:
+        return 5000
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 5000
+
+
+def _collect_vault_note_paths(vault_root: Path, *, limit: int) -> tuple[list[str], bool]:
+    """Enumerate every non-hidden Markdown note path under the vault (read-only).
+
+    Returns (sorted_paths, truncated). No file content is read and nothing is
+    written; only paths are collected for link resolution (#1431).
+    """
+    paths: list[str] = []
+    truncated = False
+    for candidate in vault_root.rglob("*.md"):
+        if not candidate.is_file():
+            continue
+        safe_path = _vault_relative(candidate, vault_root)
+        if safe_path is None or _is_hidden_browser_path(safe_path):
+            continue
+        paths.append(safe_path)
+        if len(paths) >= limit:
+            truncated = True
+            break
+    paths.sort()
+    return paths, truncated
+
+
+@router.get("/vault-link-index", response_model=VaultLinkIndexResponse)
+def read_companion_vault_link_index() -> VaultLinkIndexResponse:
+    # #1431 — complete read-only note-path listing so the Companion UI can seed
+    # VaultLinkResolver and resolve vault-internal wikilinks end-to-end. Mirrors
+    # the vault browser's read-only posture (no mutation, no write path); the UI
+    # must not read the filesystem directly (UI_RUNTIME_BOUNDARIES).
+    vault_root = resolve_vault_root()
+    note_paths, truncated = _collect_vault_note_paths(
+        vault_root, limit=_safe_vault_link_index_max()
+    )
+    identity = _vault_identity_state(vault_root)
+    identity_available = (
+        bool(identity.vault_name.strip()) and identity.channel in {"dev", "test", "prod"}
+    )
+    return VaultLinkIndexResponse(
+        note_paths=note_paths,
+        total_notes=len(note_paths),
+        truncated=truncated,
+        read_only=True,
+        vault_identity=identity,
+        identity_available=identity_available,
     )
 
 
