@@ -1621,16 +1621,47 @@ def _render_inspector_receipts(note: dict) -> str:
         )
 
     rows: list[str] = []
-    for receipt in receipts:
+    for idx, receipt in enumerate(receipts):
         receipt_id = str(receipt.get("receipt_id") or "")
         state = str(receipt.get("state") or "unknown")
         action_type = str(receipt.get("action_type") or "")
         trace_id = str(receipt.get("trace_id") or "")
+        action_id = str(receipt.get("action_id") or "")
+        artifact_uuid = str(receipt.get("artifact_uuid") or "")
+        requested_by = str(receipt.get("requested_by") or "")
+        approved_by = str(receipt.get("approved_by") or "")
+        status = str(receipt.get("status") or state or "")
+        timestamp = str(receipt.get("timestamp") or "")
         receipt_state = state if state in _RECEIPT_STATES else "unknown"
+        detail_id = f"vault-browser-receipt-detail-{idx}"
+        detail_fields = (
+            ("receipt-id", "receipt_id", receipt_id),
+            ("trace-id", "trace_id", trace_id),
+            ("action-id", "action_id", action_id),
+            ("artifact-uuid", "artifact_uuid", artifact_uuid),
+            ("requested-by", "requested_by", requested_by),
+            ("approved-by", "approved_by", approved_by),
+            ("status", "status", status),
+            ("timestamp", "timestamp", timestamp),
+        )
+        detail_rows = "".join(
+            f'<dt class="receipt-detail-label">{_e(label)}</dt>'
+            f'<dd data-testid="vault-browser-receipt-detail-{_e(testid_suffix)}" '
+            f'class="receipt-detail-value">{_e(value)}</dd>'
+            for testid_suffix, label, value in detail_fields
+        )
         rows.append(
             f'<div class="receipt-row" '
             f'data-testid="vault-browser-receipt-row" '
-            f'data-receipt-state="{_e(receipt_state)}">'
+            f'data-receipt-state="{_e(receipt_state)}" '
+            f'data-detail-id="{_e(detail_id)}" '
+            f'data-expanded="false" '
+            f'aria-expanded="false" '
+            f'role="button" '
+            f'tabindex="0" '
+            f'onclick="vaultBrowserToggleReceiptDetail(this)" '
+            f'onkeydown="if(event.key===\'Enter\'||event.key===\' \')'
+            f'{{event.preventDefault();vaultBrowserToggleReceiptDetail(this);}}">'
             f'<span data-testid="vault-browser-receipt-id" class="receipt-id">{_e(receipt_id)}</span>'
             f'<span data-testid="vault-browser-receipt-state" class="receipt-state">{_e(state)}</span>'
             f'<span data-testid="vault-browser-receipt-action-type" class="receipt-action">{_e(action_type)}</span>'
@@ -1639,6 +1670,14 @@ def _render_inspector_receipts(note: dict) -> str:
                 if trace_id else ""
             )
             + '</div>'
+            f'<dl class="receipt-detail" '
+            f'data-testid="vault-browser-receipt-detail" '
+            f'id="{_e(detail_id)}" '
+            f'hidden '
+            f'aria-hidden="true" '
+            f'data-expanded="false">'
+            f'{detail_rows}'
+            f'</dl>'
         )
     return (
         '<div class="inspector-receipts" '
@@ -5372,6 +5411,37 @@ def render_index_html(
       color: var(--fg-3);
       flex-shrink: 0;
     }}
+    .receipt-row {{
+      cursor: pointer;
+      display: grid;
+      gap: 4px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 3px 0;
+    }}
+    .receipt-row:focus-visible {{
+      border-radius: var(--radius-sm);
+      outline: 1px solid var(--accent);
+      outline-offset: 2px;
+    }}
+    .receipt-detail {{
+      border-left: 1px solid var(--border);
+      display: grid;
+      gap: 2px 8px;
+      grid-template-columns: max-content minmax(0, 1fr);
+      margin: 2px 0 6px;
+      padding-left: 8px;
+    }}
+    .receipt-detail[hidden] {{ display: none; }}
+    .receipt-detail-label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
+    .receipt-detail-value {{
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }}
     /* #1425 — de-emphasize browse header chrome; the tree is the surface. The
        "Browse vault notes" toggle matches the Outline heading label. */
     .vault-browser-meta,
@@ -5741,6 +5811,19 @@ def render_index_html(
   }}
   </script>
   <script>
+  function vaultBrowserToggleReceiptDetail(row) {{
+    if (!row || !row.getAttribute) return;
+    var detailId = row.getAttribute('data-detail-id');
+    var detail = detailId ? document.getElementById(detailId) : null;
+    if (!detail) return;
+    var expanded = row.getAttribute('aria-expanded') === 'true';
+    row.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    row.setAttribute('data-expanded', expanded ? 'false' : 'true');
+    detail.hidden = expanded;
+    detail.setAttribute('aria-hidden', expanded ? 'true' : 'false');
+    detail.setAttribute('data-expanded', expanded ? 'false' : 'true');
+  }}
+
   function vbToggleFilter(el) {{
     var key = el.dataset.key;
     var val = el.dataset.value;

@@ -101,16 +101,26 @@ def _receipt(
     receipt_id: str = "rcpt-001",
     state: str = "queued",
     action_type: str = "frontmatter_update",
+    action_id: str = "action-001",
     artifact_path: str = "notes/current.md",
     artifact_uuid: str | None = "note-uuid-abc",
+    requested_by: str = "agent:codex",
+    approved_by: str = "human:rasmus",
+    status: str = "ok",
+    timestamp: str = "2026-05-30T21:00:00Z",
     trace_id: str | None = "trace-001",
 ) -> dict[str, Any]:
     return {
         "receipt_id": receipt_id,
         "state": state,
         "action_type": action_type,
+        "action_id": action_id,
         "artifact_path": artifact_path,
         "artifact_uuid": artifact_uuid,
+        "requested_by": requested_by,
+        "approved_by": approved_by,
+        "status": status,
+        "timestamp": timestamp,
         "trace_id": trace_id,
     }
 
@@ -171,6 +181,16 @@ def _inspector_html(html: str) -> str:
         return ""
     end = html.find("</section>", start)
     return html[start:end + len("</section>")] if end != -1 else html[start:]
+
+
+def _receipt_detail_html(html: str) -> str:
+    marker = 'data-testid="vault-browser-receipt-detail"'
+    marker_start = html.find(marker)
+    if marker_start == -1:
+        return ""
+    start = html.rfind("<dl", 0, marker_start)
+    end = html.find("</dl>", marker_start)
+    return html[start : end + len("</dl>")] if start != -1 and end != -1 else ""
 
 
 # ---- AC1: receipt/posture section renders ----
@@ -270,6 +290,80 @@ def test_receipt_trace_id_rendered_separately() -> None:
     html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
     assert 'data-testid="vault-browser-receipt-trace-id"' in html
     assert "trace-xyz" in html
+
+
+def test_receipt_row_exposes_collapsed_detail_toggle() -> None:
+    """#1284: receipt row expands a deterministic read-only detail region."""
+    note = _browser_note(receipts=[_receipt(receipt_id="rcpt-detail-001")])
+    html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
+    detail = _receipt_detail_html(html)
+
+    assert 'onclick="vaultBrowserToggleReceiptDetail(this)"' in html
+    assert 'data-detail-id="vault-browser-receipt-detail-0"' in html
+    assert 'aria-expanded="false"' in html
+    assert 'data-testid="vault-browser-receipt-detail"' in detail
+    assert 'id="vault-browser-receipt-detail-0"' in detail
+    assert "hidden" in detail
+    assert 'aria-hidden="true"' in detail
+    assert 'data-expanded="false"' in detail
+
+
+def test_receipt_detail_displays_available_receipt_fields() -> None:
+    """#1284: expanded receipt detail exposes VaultReceipt fields."""
+    note = _browser_note(
+        receipts=[
+            _receipt(
+                receipt_id="rcpt-detail-002",
+                trace_id="trace-detail-002",
+                action_id="action-detail-002",
+                artifact_uuid="note-uuid-detail",
+                requested_by="agent:test",
+                approved_by="human:test",
+                status="ok",
+                timestamp="2026-05-30T22:00:00Z",
+            )
+        ]
+    )
+    html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
+    detail = _receipt_detail_html(html)
+
+    assert 'data-testid="vault-browser-receipt-detail-receipt-id"' in detail
+    assert "rcpt-detail-002" in detail
+    assert 'data-testid="vault-browser-receipt-detail-trace-id"' in detail
+    assert "trace-detail-002" in detail
+    assert 'data-testid="vault-browser-receipt-detail-action-id"' in detail
+    assert "action-detail-002" in detail
+    assert 'data-testid="vault-browser-receipt-detail-artifact-uuid"' in detail
+    assert "note-uuid-detail" in detail
+    assert 'data-testid="vault-browser-receipt-detail-requested-by"' in detail
+    assert "agent:test" in detail
+    assert 'data-testid="vault-browser-receipt-detail-approved-by"' in detail
+    assert "human:test" in detail
+    assert 'data-testid="vault-browser-receipt-detail-status"' in detail
+    assert "ok" in detail
+    assert 'data-testid="vault-browser-receipt-detail-timestamp"' in detail
+    assert "2026-05-30T22:00:00Z" in detail
+
+
+def test_receipt_detail_contains_no_buttons_or_forms() -> None:
+    """#1284: detail section is read-only and contains no action controls."""
+    note = _browser_note(receipts=[_receipt()])
+    html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
+    detail = _receipt_detail_html(html)
+
+    assert "<button" not in detail
+    assert "<form" not in detail
+
+
+def test_receipt_detail_toggle_function_collapses_deterministically() -> None:
+    """#1284: second click collapses via the same deterministic toggler."""
+    note = _browser_note(receipts=[_receipt()])
+    html = _load_html(browser_payload=_vault_browser_payload(notes=[note]))
+
+    assert "function vaultBrowserToggleReceiptDetail(row)" in html
+    assert "var expanded = row.getAttribute('aria-expanded') === 'true';" in html
+    assert "detail.hidden = expanded;" in html
+    assert "row.setAttribute('aria-expanded', expanded ? 'false' : 'true');" in html
 
 
 # ---- AC5: unreviewed memory visible but not action-authorizing ----
