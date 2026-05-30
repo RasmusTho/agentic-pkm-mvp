@@ -641,19 +641,12 @@ def _render_note_not_found(note_path: str) -> str:
 
 def _render_body_edit_panel(update_flow_available: bool, note_path: str, raw_body: str = "") -> str:
     if not update_flow_available:
-        return (
-            '<section class="body-edit-panel body-edit-disabled workspace-action-absent" '
-            'data-testid="workspace-action-absent" '
-            'data-action="body-edit" '
-            'data-reason="update_flow_disabled" '
-            'data-update-flow="disabled">'
-            '<span class="absent-label" data-testid="workspace-body-edit-panel">'
-            "&#9998; Read only</span>"
-            '<span class="absent-reason">'
-            "This note is open for reading. Editing is not enabled in this workspace."
-            "</span>"
-            "</section>"
-        )
+        # Direct human editing is always available via the note's own Read/Edit
+        # editor (independent of the Canvas/update flow), so the old "Editing is
+        # not enabled in this workspace" absence card is no longer shown — it
+        # contradicted the always-available editor and read as unsolicited
+        # read-only nagging. The Canvas-mediated composer below is dev-only.
+        return ""
     # #1416 — render the dev composer as an opt-in disclosure that is collapsed
     # by default. In the fixed-height shell (#1397) a sibling that grows with its
     # content squeezes the note reading surface; a collapsed <details> contributes
@@ -846,6 +839,86 @@ def _mermaid_runtime_script() -> str:
   </script>"""
 
 
+def _note_editor_script() -> str:
+    """Direct human note editor: Read <-> Edit toggle over a plain textarea.
+
+    Edit mode swaps the rendered body for the raw source in a native
+    ``<textarea spellcheck>`` (OS-grade spellcheck — far better than any JS
+    editor and impossible inside CodeMirror). Save POSTs to the same-origin
+    ``/api/companion/note/save`` proxy (frontmatter preserved server-side, no
+    Canvas/writeguard ceremony) and reloads to pick up the re-rendered note.
+    Returned as a plain string so JS braces are not double-escaped by the page
+    template.
+    """
+    return """
+  <script>
+  (function () {
+    function el(sel) { return document.querySelector(sel); }
+    function setStatus(cls, text) {
+      var s = el('.note-edit-status');
+      if (s) { s.className = 'note-edit-status' + (cls ? ' ' + cls : ''); s.textContent = text || ''; }
+    }
+    window.noteEditor = {
+      start: function () {
+        var ta = document.getElementById('note-source-editor');
+        if (!ta) { return; }
+        var content = el('.note-body-content');
+        var actions = el('[data-testid="workspace-note-edit-actions"]');
+        var toggle = el('.note-edit-toggle');
+        if (content) { content.hidden = true; }
+        ta.hidden = false;
+        if (actions) { actions.hidden = false; }
+        if (toggle) { toggle.hidden = true; }
+        setStatus('', '');
+        ta.focus();
+      },
+      cancel: function () {
+        var ta = document.getElementById('note-source-editor');
+        var content = el('.note-body-content');
+        var actions = el('[data-testid="workspace-note-edit-actions"]');
+        var toggle = el('.note-edit-toggle');
+        if (ta) { ta.hidden = true; ta.value = ta.defaultValue; }
+        if (content) { content.hidden = false; }
+        if (actions) { actions.hidden = true; }
+        if (toggle) { toggle.hidden = false; }
+        setStatus('', '');
+      },
+      save: function () {
+        var ta = document.getElementById('note-source-editor');
+        if (!ta) { return; }
+        setStatus('', 'Saving\\u2026');
+        fetch('/api/companion/note/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            note_path: ta.getAttribute('data-note-path'),
+            new_body: ta.value,
+            expected_content_hash: ta.getAttribute('data-content-hash') || null
+          })
+        }).then(function (r) {
+          return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; });
+        }).then(function (res) {
+          if (res.ok) {
+            setStatus('ok', 'Saved. Reloading\\u2026');
+            window.location.reload();
+            return;
+          }
+          var d = res.data || {};
+          var msg = (d.message || (d.detail && d.detail.message) || ('HTTP ' + res.status));
+          if (res.status === 409) {
+            setStatus('error', 'Could not save \\u2014 the note changed elsewhere or the runtime is busy. Reload and re-apply.');
+          } else {
+            setStatus('error', 'Save failed: ' + msg);
+          }
+        }).catch(function (e) {
+          setStatus('error', 'Network error: ' + (e && e.message ? e.message : e));
+        });
+      }
+    };
+  })();
+  </script>"""
+
+
 def _coerce_vault_link_index(value: object) -> dict[str, list[str]]:
     """Normalize an optional active-vault link index for the link resolver.
 
@@ -911,6 +984,9 @@ def _render_note_section(fields: dict) -> str:
         raw_body, note_path=raw_note_path, link_resolver=link_resolver
     )
     body = rendered_body.html
+    # Frontmatter-stripped source for the direct human editor (the save endpoint
+    # preserves frontmatter and rejects a frontmatter block in the body).
+    editor_body = str(getattr(rendered_body.document, "body_markdown", "") or "")
     outline_html = render_note_outline(rendered_body.document)
     has_headings = bool(tuple(rendered_body.document.headings))
     hidden_frontmatter_html, rendered_props = _render_note_frontmatter_region(rendered_body.document)
@@ -1297,7 +1373,29 @@ def _render_note_section(fields: dict) -> str:
               data-testid="workspace-note-body-readonly-why">Why?</a>
           </div>
           {read_only_pill_html}
-          <div class="note-body-content">{body}</div>
+          <div class="note-edit-bar" data-testid="workspace-note-edit-bar">
+            <button type="button" class="note-edit-toggle"
+              data-testid="workspace-note-edit-toggle"
+              onclick="noteEditor.start()">&#9998;&#160;Edit</button>
+            <div class="note-edit-actions" data-testid="workspace-note-edit-actions" hidden>
+              <button type="button" class="note-edit-save"
+                data-testid="workspace-note-edit-save"
+                onclick="noteEditor.save()">Save</button>
+              <button type="button" class="note-edit-cancel"
+                data-testid="workspace-note-edit-cancel"
+                onclick="noteEditor.cancel()">Cancel</button>
+              <span class="note-edit-status" data-testid="workspace-note-edit-status"
+                aria-live="polite"></span>
+            </div>
+          </div>
+          <div class="note-body-content" data-testid="workspace-note-rendered">{body}</div>
+          <textarea class="note-source-editor" id="note-source-editor"
+            data-testid="workspace-note-source-editor"
+            spellcheck="true" autocapitalize="sentences" autocorrect="on"
+            autocomplete="off" wrap="soft"
+            aria-label="Edit note source"
+            data-note-path="{note_path_val}" data-content-hash="{content_hash}"
+            hidden>{_e(editor_body)}</textarea>
           {suggested_insertions_html}
         </div>
       </div>
@@ -4098,6 +4196,55 @@ def render_index_html(
       overflow-y: auto;
       padding: 24px 24px 96px;
     }}
+    /* ---- Direct human note editor (Read <-> Edit) ---- */
+    .note-edit-bar {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: 68ch;
+      margin: 0 auto 8px;
+      padding: 0 32px;
+    }}
+    .note-edit-toggle, .note-edit-save, .note-edit-cancel {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--fg-1);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 4px 12px;
+    }}
+    .note-edit-toggle:hover, .note-edit-save:hover, .note-edit-cancel:hover {{
+      border-color: var(--accent);
+    }}
+    .note-edit-save {{
+      background: color-mix(in srgb, var(--accent) 18%, var(--bg-raised));
+      font-weight: 600;
+    }}
+    .note-edit-actions {{ display: flex; align-items: center; gap: 8px; }}
+    .note-edit-status {{ color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-xs); }}
+    .note-edit-status.ok {{ color: var(--cyan); }}
+    .note-edit-status.error {{ color: var(--destructive); }}
+    .note-source-editor {{
+      background: var(--bg-base);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      box-sizing: border-box;
+      color: var(--fg-1);
+      display: block;
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      line-height: 1.6;
+      margin: 0 auto;
+      max-width: 68ch;
+      min-height: 60vh;
+      padding: 24px 32px;
+      resize: vertical;
+      width: 100%;
+    }}
+    .note-source-editor[hidden] {{ display: none; }}
+    .note-source-editor:focus {{ outline: 1px solid var(--border-focus); }}
     /* Design review §6.1 — body column is a reading surface, not a card.
        Background matches the page; no inset border; line-length capped at 68ch.
        §3.3/§7 — the reading column does not own a second nested scroll and is
@@ -6008,6 +6155,7 @@ def render_index_html(
   }}
   </script>
   {_mermaid_runtime_script()}
+  {_note_editor_script()}
 </body>
 </html>"""
 
@@ -6132,9 +6280,18 @@ def make_handler(
             self.end_headers()
             self.wfile.write(body)
 
+        # POST paths the page server proxies through to the runtime API
+        # (same-origin model; the browser never talks to the runtime directly).
+        _POST_PROXY_PATHS = frozenset(
+            {
+                "/api/companion/workspace/body",
+                "/api/companion/note/save",  # direct human note edit
+            }
+        )
+
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path != "/api/companion/workspace/body":
+            if parsed.path not in self._POST_PROXY_PATHS:
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
             try:
@@ -6148,7 +6305,7 @@ def make_handler(
                 self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
                 return
             try:
-                data = self._client.post("/api/companion/workspace/body", json=payload)
+                data = self._client.post(parsed.path, json=payload)
             except WorkspaceClientError as exc:
                 self._proxy_error(exc)
                 return

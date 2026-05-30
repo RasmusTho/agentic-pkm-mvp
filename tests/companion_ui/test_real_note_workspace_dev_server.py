@@ -749,10 +749,15 @@ class TestUpdateFlowStateRendering:
     def test_update_flow_item_present(self) -> None:
         assert 'data-testid="workspace-update-flow-state"' in self._html()
 
-    def test_update_flow_shows_disabled_by_default(self) -> None:
+    def test_update_flow_disabled_still_allows_direct_editing(self) -> None:
+        # When the Canvas-mediated update flow is off, the old "Editing is not
+        # enabled in this workspace" absence card is no longer shown — direct
+        # human editing is always available via the note's own Read/Edit editor.
         html = self._html(update_flow_available=False)
-        assert 'data-update-flow="disabled"' in html
-        assert ">disabled<" in html
+        assert 'data-update-flow="disabled"' not in html
+        assert "Editing is not enabled in this workspace" not in html
+        assert 'data-testid="workspace-note-source-editor"' in html
+        assert 'data-testid="workspace-note-edit-toggle"' in html
 
     def test_update_flow_shows_available_when_true(self) -> None:
         html = self._html(update_flow_available=True)
@@ -873,10 +878,12 @@ class TestBodyEditPanelRendering:
         assert 'data-testid="workspace-body-edit-panel"' in html
         assert 'data-update-flow="available"' in html
 
-    def test_edit_panel_disabled_state_when_flow_off(self) -> None:
+    def test_no_canvas_composer_nag_when_flow_off(self) -> None:
+        # The Canvas-mediated composer's "edit disabled" absence card is gone;
+        # direct editing is available instead (see TestUpdateFlowStateRendering).
         html = self._html(update_flow_available=False)
-        assert 'data-testid="workspace-body-edit-panel"' in html
-        assert 'data-update-flow="disabled"' in html
+        assert 'data-update-flow="disabled"' not in html
+        assert 'data-testid="workspace-note-source-editor"' in html
 
     def test_textarea_present_when_flow_available(self) -> None:
         html = self._html(update_flow_available=True)
@@ -926,9 +933,12 @@ class TestBodyEditPanelRendering:
 
     def test_body_editor_reads_from_cmview_not_textarea_value(self) -> None:
         html = self._html(update_flow_available=True)
+        # The Canvas CodeMirror composer reads from the live _cmView, not a
+        # textarea. (The separate direct human editor legitimately reads its own
+        # plain <textarea>.value — that is the noteEditor, not bodyEditor.)
         assert "window._cmView" in html
         assert "window._cmView.state.doc.toString()" in html
-        assert "ta.value" not in html
+        assert "var newBody = window._cmView.state.doc.toString();" in html
 
     def test_submit_guards_against_uninitialized_editor(self) -> None:
         html = self._html(update_flow_available=True)
