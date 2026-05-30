@@ -57,6 +57,7 @@ from companion_ui.renderer import (
     render_note_outline,
     render_vault_markdown,
 )
+from companion_ui.renderer.link_resolver import VaultLinkResolver
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
@@ -774,6 +775,28 @@ def _render_left_context_panel(
     )
 
 
+def _coerce_vault_link_index(value: object) -> dict[str, list[str]]:
+    """Normalize an optional active-vault link index for the link resolver.
+
+    Accepts ``{target: note_path}`` or ``{target: [note_path, ...]}`` and returns
+    a mapping the ``VaultLinkResolver`` accepts. Unknown/None shapes yield an
+    empty index (links stay diagnostic), preserving prior behavior (#1345).
+    """
+    if not isinstance(value, dict):
+        return {}
+    index: dict[str, list[str]] = {}
+    for key, candidates in value.items():
+        if isinstance(candidates, str):
+            paths = [candidates]
+        elif isinstance(candidates, (list, tuple)):
+            paths = [str(path) for path in candidates if path]
+        else:
+            continue
+        if paths:
+            index[str(key)] = paths
+    return index
+
+
 def _render_note_section(fields: dict) -> str:
     """Render the workspace shell from render_fields() output.
 
@@ -799,7 +822,14 @@ def _render_note_section(fields: dict) -> str:
     vault_channel = _e(fields.get("runtime_vault_channel") or "unknown")
     vault_provenance = fields.get("runtime_vault_provenance") or "unresolved"
     raw_body = str(fields.get("body", "") or "")
-    rendered_body = render_vault_markdown(raw_body, note_path=raw_note_path)
+    # #1345 — seed the link resolver with the active-vault link index so
+    # vault-internal wikilinks resolve and navigate. When the index is absent
+    # (current runtime, pending the read-only link-index API) this is an empty
+    # resolver, identical to the prior default — every link stays diagnostic.
+    link_resolver = VaultLinkResolver(_coerce_vault_link_index(fields.get("vault_link_index")))
+    rendered_body = render_vault_markdown(
+        raw_body, note_path=raw_note_path, link_resolver=link_resolver
+    )
     body = rendered_body.html
     outline_html = render_note_outline(rendered_body.document)
     has_headings = bool(tuple(rendered_body.document.headings))

@@ -193,6 +193,69 @@ def test_missing_image_still_uses_partial_alongside_existing_asset() -> None:
     assert "nonexistent-image.png" in rendered.html
 
 
+def _wikilink_resolver() -> VaultLinkResolver:
+    # Stub resolver seeded with a single existing note (#1345). A real workspace
+    # request seeds the same shape from the active-vault link index.
+    return VaultLinkResolver({"Existing Note": "Notes/Existing Note.md"})
+
+
+def test_bare_wikilink_resolves() -> None:
+    # #1345 AC1 — a bare wikilink to an existing note navigates.
+    rendered = render_vault_markdown("[[Existing Note]]", link_resolver=_wikilink_resolver())
+
+    assert 'class="vault-wikilink"' in rendered.html
+    assert 'data-link-state="resolved"' in rendered.html
+    assert 'href="?note_path=Notes%2FExisting%20Note.md"' in rendered.html
+    assert ">Existing Note</a>" in rendered.html
+    assert "vault-wikilink-diagnostic" not in rendered.html
+
+
+def test_aliased_wikilink_resolves() -> None:
+    # #1345 AC2 — aliased link resolves; the alias is the visible text.
+    rendered = render_vault_markdown(
+        "[[Existing Note|display alias]]", link_resolver=_wikilink_resolver()
+    )
+
+    assert 'data-link-state="resolved"' in rendered.html
+    assert 'href="?note_path=Notes%2FExisting%20Note.md"' in rendered.html
+    assert ">display alias</a>" in rendered.html
+
+
+def test_heading_fragment_wikilink_resolves() -> None:
+    # #1345 AC3 — heading-fragment link resolves; href carries the slug anchor
+    # that matches the rendered heading element id so it scrolls into view.
+    rendered = render_vault_markdown(
+        "[[Existing Note#Some Heading]]", link_resolver=_wikilink_resolver()
+    )
+
+    assert 'data-link-state="resolved"' in rendered.html
+    assert "?note_path=Notes%2FExisting%20Note.md#some-heading" in rendered.html
+
+
+def test_block_id_wikilink_resolves() -> None:
+    # #1345 AC4 — block-id link resolves; href keeps the literal ^block-id form.
+    rendered = render_vault_markdown(
+        "[[Existing Note#^block-id]]", link_resolver=_wikilink_resolver()
+    )
+
+    assert 'data-link-state="resolved"' in rendered.html
+    assert "?note_path=Notes%2FExisting%20Note.md#^block-id" in rendered.html
+
+
+def test_unresolved_wikilink_unchanged() -> None:
+    # #1345 AC5 — an unresolved target keeps the post-#1334 diagnostic shape.
+    rendered = render_vault_markdown(
+        "[[Definitely Missing]]", link_resolver=_wikilink_resolver()
+    )
+
+    assert (
+        '<span class="vault-wikilink vault-wikilink-diagnostic" '
+        'data-link-state="missing"'
+    ) in rendered.html
+    assert "Definitely Missing" in rendered.html
+    assert 'data-link-state="resolved"' not in rendered.html
+
+
 def test_unsafe_html_stripped() -> None:
     rendered = render_vault_markdown(_fixture("comments-and-html.md"))
     lowered = rendered.html.lower()

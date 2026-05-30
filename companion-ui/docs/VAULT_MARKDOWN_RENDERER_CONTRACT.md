@@ -257,6 +257,12 @@ output (HTML via React or equivalent).
 
 - The renderer does not call write endpoints.
 - The renderer does not read vault files directly.
+- A resolved internal link emits `<a class="vault-wikilink" data-link-state="resolved" href="?note_path=…">`.
+  A heading fragment is emitted as the slugified heading anchor (`#some-heading`,
+  matching the rendered `<h_ id>`) so the link scrolls to the heading; a block-id
+  fragment keeps the literal `#^block-id` form. Resolution requires the
+  `VaultLinkResolver` to be seeded with the active-vault link index; with an empty
+  index every link stays diagnostic.
 - The renderer does not emit navigation events as mutations.
 - The renderer does not store resolved content in durable state.
 - Clicking an internal link is a navigation event, not a mutation.
