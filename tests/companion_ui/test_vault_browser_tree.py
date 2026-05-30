@@ -132,3 +132,50 @@ def test_tree_preserves_note_testids_and_density():
     assert 'data-testid="workspace-vault-browser-note-row"' in html
     # Root-level notes (no folder) still render as rows.
     assert "Companion UI UAT.md" in html or "Companion UI UAT" in html
+
+
+# ---------------------------------------------------------------------------
+# #1427 — clean default browse view (no inspector dump, subtle hover/selection)
+# ---------------------------------------------------------------------------
+
+
+def test_inspector_is_collapsed_behind_a_disclosure_by_default():
+    html = _html()
+    m = re.search(
+        r'<details class="vault-browser-inspector-disclosure"([^>]*)>(.*?)</details>',
+        html, re.S,
+    )
+    assert m, "inspector must sit behind a vault-browser-inspector-disclosure <details>"
+    assert "open" not in m.group(1), "inspector disclosure must be collapsed by default"
+    # The inspector fields are still in the DOM (preserve #1255).
+    assert 'data-testid="workspace-vault-browser-inspector"' in m.group(2)
+    # Deterministic collapse CSS so the dump is hidden in every engine.
+    assert re.search(
+        r'\.vault-browser-inspector-disclosure:not\(\[open\]\)[^{]*\{[^}]*display:\s*none',
+        html,
+    )
+
+
+def test_tree_hover_uses_background_not_outline_box():
+    html = _html()
+    # The tree row hover rule highlights with a background, not an outline box.
+    hover = re.search(
+        r'\.vault-tree \.vault-browser-row-title:hover[^{]*\{([^}]*)\}', html
+    )
+    assert hover, "tree row hover rule missing"
+    assert "background" in hover.group(1)
+    # No heavy outline box (outline:none to drop the focus ring is fine).
+    assert "border-focus" not in hover.group(1)
+    assert "outline: 1px" not in hover.group(1)
+    # The folder summary focus ring is suppressed (no heavy blue box).
+    assert re.search(
+        r'\.vault-tree-folder-details > summary:focus[^{]*\{[^}]*outline:\s*none', html
+    )
+
+
+def test_active_note_has_subtle_background_highlight():
+    html = _html()
+    rule = re.search(
+        r'\.vault-tree \.vault-browser-row\[data-active="true"\]\s*\{([^}]*)\}', html
+    )
+    assert rule and "background" in rule.group(1), "active row needs a background highlight"

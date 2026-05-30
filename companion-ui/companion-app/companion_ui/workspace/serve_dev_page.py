@@ -1871,9 +1871,21 @@ def _render_vault_browser(
     calm_provenance = "read-only fallback · filesystem index" if read_only else "filesystem index"
     filters_html = _render_filter_chips(notes, active_filters or {})
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
-    inspector_html = (
+    # #1427 — keep the inspector out of the default browse view. The tree is the
+    # surface; the inspector metadata/actions sit behind a collapsed disclosure
+    # so the pane reads like a file tree, not a debug dump (fields stay in DOM).
+    _inspector_panel = (
         _render_artifact_inspector(selected_note, vault_name=vault_name, vault_channel=vault_channel)
         if selected_note is not None
+        else ""
+    )
+    inspector_html = (
+        '<details class="vault-browser-inspector-disclosure">'
+        '<summary class="vault-browser-inspector-summary" '
+        'data-testid="workspace-vault-browser-inspector-toggle">Note details</summary>'
+        f"{_inspector_panel}"
+        "</details>"
+        if _inspector_panel
         else ""
     )
     hidden_html = (
@@ -5093,10 +5105,14 @@ def render_index_html(
     .vault-tree-folder-details[open] > .vault-tree-folder-summary::before {{
       transform: rotate(90deg);
     }}
-    .vault-tree-folder-summary:hover {{
+    /* #1427 — subtle full-width background highlight on hover/focus (Obsidian /
+       Claude Code style), not a heavy outline box or browser focus ring. */
+    .vault-tree-folder-details > summary:focus {{ outline: none; }}
+    .vault-tree-folder-summary:hover,
+    .vault-tree-folder-details > summary:focus-visible > .vault-tree-folder-summary,
+    .vault-tree-folder-details > summary:focus-visible {{
+      background: var(--bg-raised);
       color: var(--fg-1);
-      outline: 1px solid var(--border-focus);
-      outline-offset: 1px;
     }}
     /* Tree note rows mirror .note-outline-link exactly. */
     .vault-tree .vault-browser-row {{
@@ -5119,16 +5135,54 @@ def render_index_html(
       text-overflow: ellipsis;
       white-space: nowrap;
     }}
-    .vault-tree .vault-browser-row-title:hover {{
+    .vault-tree .vault-browser-row-title:hover,
+    .vault-tree .vault-browser-row-title:focus-visible {{
+      background: var(--bg-raised);
       color: var(--fg-1);
-      outline: 1px solid var(--border-focus);
-      outline-offset: 1px;
+      outline: none;
+    }}
+    /* Active note: a subtle full-width background block + the Outline accent
+       rail/text, so it reads as the current selection (Obsidian/Claude Code). */
+    .vault-tree .vault-browser-row[data-active="true"] {{
+      background: var(--bg-raised);
+      border-radius: var(--radius-sm);
     }}
     .vault-tree .vault-browser-row[data-active="true"] > .vault-browser-row-title {{
       border-left-color: var(--accent);
       color: var(--accent);
     }}
     .vault-tree .vault-browser-row-path {{ display: none; }}
+    /* #1427 — inspector behind a collapsed disclosure; deterministic collapse. */
+    .vault-browser-inspector-disclosure {{
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+      padding-top: 6px;
+    }}
+    .vault-browser-inspector-summary {{
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      list-style: none;
+      padding: 2px 2px;
+      text-transform: uppercase;
+    }}
+    .vault-browser-inspector-summary::-webkit-details-marker {{ display: none; }}
+    .vault-browser-inspector-disclosure:not([open]) > :not(summary) {{
+      display: none;
+    }}
+    /* #1427 — readable label/value spacing in the inspector (was "kindnote"). */
+    .inspector-field {{
+      display: flex;
+      gap: 6px;
+      justify-content: space-between;
+      padding: 2px 0;
+    }}
+    .inspector-field > .inspector-label {{
+      color: var(--fg-3);
+      flex-shrink: 0;
+    }}
     /* #1425 — de-emphasize browse header chrome; the tree is the surface. The
        "Browse vault notes" toggle matches the Outline heading label. */
     .vault-browser-meta,
