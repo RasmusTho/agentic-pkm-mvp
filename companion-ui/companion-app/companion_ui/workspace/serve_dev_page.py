@@ -3987,19 +3987,26 @@ def render_index_html(
       vertical-align: baseline;
     }}
     .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked {{
-      background: var(--accent-dim);
+      background: var(--accent);
       border-color: var(--accent);
     }}
     .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked::after {{
       content: "";
       position: absolute;
-      left: 3px;
-      top: 0px;
+      left: 4px;
+      top: 1px;
       width: 4px;
       height: 8px;
       border: solid var(--bg-base);
-      border-width: 0 1.5px 1.5px 0;
+      border-width: 0 2px 2px 0;
       transform: rotate(45deg);
+    }}
+    /* #1410 — completed tasks get Obsidian-style completed treatment so the
+       checked state is unambiguous beyond the checkbox alone. */
+    .vault-markdown-rendered li.task-list-item[data-task-state="x"],
+    .vault-markdown-rendered li.task-list-item[data-task-state="X"] {{
+      color: var(--fg-3);
+      text-decoration: line-through;
     }}
     {note_outline_css()}
     .vault-callout {{
