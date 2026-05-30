@@ -244,3 +244,73 @@ def test_long_paths_are_truncated_or_moved_to_details():
     assert path_el.group(1).strip() != f"{long_folder}/a-rather-long-note-filename.md"
     # A truncation style exists for the path.
     assert ".vault-browser-row-path" in html
+
+
+# ---------------------------------------------------------------------------
+# #1417 — raw metadata must not leak into visible Browse row text
+# ---------------------------------------------------------------------------
+
+
+def _css_block(html: str, selector_re: str) -> str:
+    m = re.search(r"\n {4}" + selector_re + r"\s*\{(.*?)\}", html, re.S)
+    assert m, f"CSS rule {selector_re!r} not found"
+    return m.group(1)
+
+
+def test_row_metadata_badges_are_hidden_not_dimmed():
+    # The kind/review/trust badges carry note-badge--nav-hidden; that class must
+    # hide them (display:none), not merely dim them (opacity), so raw metadata
+    # like "note"/"needs_review"/"asserted" never shows as visible row text.
+    html = _html()
+    block = _css_block(html, r"\.note-badge--nav-hidden")
+    assert "display: none" in block, "nav-hidden badges must be display:none"
+    assert "opacity:" not in block, "nav-hidden must not merely dim metadata"
+
+
+def test_row_zone_label_not_rendered_as_visible_text():
+    # The raw zone label (e.g. 'inbox', '⚙ System') must not show as primary row
+    # text; folder grouping already supplies path context. Element may remain in
+    # the DOM (for data-* compatibility) but must be hidden.
+    html = _html()
+    assert 'data-testid="workspace-vault-browser-note-zone"' in html  # preserved
+    block = _css_block(html, r"\.vault-browser-zone-label")
+    assert "display: none" in block, "zone label must be hidden from row text"
+
+
+def test_filter_chips_are_collapsed_behind_a_filters_disclosure():
+    # The Kind:/Zone:/Review:/Trust: filter facets must not dump into the default
+    # Browse view; they live behind a collapsed Filters disclosure.
+    html = _html()
+    # The filters region is wrapped in a <details> that is not open by default.
+    m = re.search(
+        r'<details([^>]*)class="[^"]*vault-browser-filters-disclosure[^"]*"[^>]*>(.*?)</details>',
+        html,
+        re.S,
+    )
+    assert m, "filter chips must be inside a vault-browser-filters-disclosure <details>"
+    assert "open" not in m.group(1), "Filters disclosure must be collapsed by default"
+    # The chips (with their wiring) are preserved inside the disclosure.
+    assert 'data-testid="vault-browser-filter-chip"' in m.group(2)
+    assert 'onclick="vbToggleFilter(this)"' in m.group(2)
+    # Human-facing summary label.
+    assert re.search(r"<summary[^>]*>\s*Filters", m.group(2) + m.group(0))
+
+
+def test_no_raw_kind_or_trust_label_in_default_visible_row_area():
+    # Belt-and-braces: the literal "Kind:" / "Trust:" / "Review:" label text only
+    # appears inside the collapsed Filters disclosure, never in a row.
+    note = {
+        "note_path": "📥 Inbox/Companion UI UAT.md",
+        "title": "Companion UI UAT",
+        "zone": "inbox",
+        "kind": "note",
+        "review_state": "needs_review",
+        "trust": "internal",
+    }
+    html = _html(notes=[note], note_path="📥 Inbox/Companion UI UAT.md")
+    row = _rows(html)[0]
+    for leak in ("Kind:", "Zone:", "Review:", "Trust:"):
+        assert leak not in row, f"row leaks raw metadata label {leak!r}"
+    # The concatenated metadata fragment seen in UAT (e.g. 'noteinboxinternal')
+    # must not appear as visible row text — those values live in hidden badges.
+    assert ">note<" not in row or "note-badge--nav-hidden" in row
