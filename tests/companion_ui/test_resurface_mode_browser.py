@@ -139,7 +139,7 @@ def test_workspace_resurface_source_link_uses_logical_identifier(
     monkeypatch.setattr(
         companion,
         "evaluate_resurfacing_candidates",
-        lambda: ResurfacingEvaluation(
+        lambda *, signals=None: ResurfacingEvaluation(
             generated_at="2026-05-21T00:00:00Z",
             status_summary="resurfacing_candidates=1",
             candidates=[

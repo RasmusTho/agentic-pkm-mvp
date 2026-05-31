@@ -381,7 +381,7 @@ class TestRenderIndexHtml:
             fields=fields,
         )
 
-        assert 'data-testid="workspace-runtime-safety-strip"' in html
+        assert 'data-testid="workspace-primary-posture"' in html
         assert 'data-testid="workspace-runtime-channel"' in html
         assert "dev" in html
         assert "local-dev" in html
