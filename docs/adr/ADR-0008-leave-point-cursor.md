@@ -1,9 +1,9 @@
-State: Proposed - decision recorded; no runtime behavior is claimed. This ADR gates downstream implementation issue #1455.
+State: Implemented — runtime behavior shipped in PR #1464 (merge commit 3fe0cc29). Scope-filter hardening applied in PR #1465.
 
 # ADR-0008: Leave-Point Cursor as Bounded Operational Trace
 
 **Date:** 2026-05-31
-**Status:** Proposed - decision recorded; docs-only
+**Status:** Implemented — shipped in PR #1464 (merge commit `3fe0cc29`)
 
 ---
 
