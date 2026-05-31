@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-19
-Last verified against: docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/PANEL_AGENT.md, docs/STATUS.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/RELEASE_CHANNELS/README.md, docs/RELEASE_CHANNELS/TERMINOLOGY.md, docs/runbooks/UAT_PANEL_WATCHER.md, app/api/routes/artifacts.py, app/api/routes/canvas.py, app/api/routes/panel.py, app/chat/canvas_writer.py, app/chat/governance_router.py, app/chat/session_log.py, app/cli/__init__.py, app/cli/latency_harness.py, app/observability/status_service.py, app/panel/confirmation.py, app/settings/validate.py, app/watcher/registry.py, app/workers/outbox_worker.py, tests/api/test_artifact_note_read_api.py, tests/api/test_canvas_api.py, tests/api/test_panel_confirm_api.py, tests/cli/test_canvas_cli.py, tests/cli/test_sync_latency_harness.py, tests/events/test_outbox_consumer_contract.py, tests/integration/test_panel_confirm_integration.py, tests/settings/test_panel_watcher_config_validation.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1054/#1056/#1068/#1069/#1070/#1076/#1118/#1119, and current repo state at 725f5b4 on 2026-05-19
+Last reviewed: 2026-05-31
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1460/#1461/#1463/#1464/#1466/#1475, and current repo state at 332d724e on 2026-05-31
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
