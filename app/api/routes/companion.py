@@ -1027,8 +1027,8 @@ def _parse_note_artifact_metadata(body: str, *, path_derived_zone: str) -> dict:
         "trust": _str_or_none(fm.get("trust")),
         "origin": _str_or_none(fm.get("origin")),
         "source_ref": _str_or_none(fm.get("source_ref")),
-        "created": _str_or_none(fm.get("created")),
-        "updated": _str_or_none(fm.get("updated")),
+        "created": _timestamp_str_or_none(fm.get("created")),
+        "updated": _timestamp_str_or_none(fm.get("updated")),
         "frontmatter_valid": frontmatter_valid,
         "missing_required_fields": missing if not parse_error else list(_ARTIFACT_REQUIRED_FIELDS),
     }
@@ -1041,6 +1041,38 @@ def _str_or_none(val: object) -> str | None:
         return val.isoformat()
     s = str(val).strip()
     return s if s else None
+
+
+def _timestamp_str_or_none(val: object) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, datetime.datetime):
+        return _format_timestamp_datetime(val)
+    if isinstance(val, datetime.date):
+        return val.isoformat()
+    s = str(val).strip()
+    if not s:
+        return None
+    return _normalize_timestamp_string(s)
+
+
+def _normalize_timestamp_string(value: str) -> str:
+    if not any(separator in value for separator in ("T", "t", " ")):
+        return value
+    parse_value = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.datetime.fromisoformat(parse_value)
+    except ValueError:
+        return value
+    return _format_timestamp_datetime(parsed)
+
+
+def _format_timestamp_datetime(value: datetime.datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.isoformat()
+    utc_value = value.astimezone(datetime.timezone.utc)
+    iso_value = utc_value.isoformat()
+    return f"{iso_value[:-6]}Z" if iso_value.endswith("+00:00") else iso_value
 
 
 def _zone_for_path(note_path: str) -> str:

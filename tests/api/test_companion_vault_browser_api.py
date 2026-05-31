@@ -215,6 +215,62 @@ def test_vault_browser_pagination_is_read_only(tmp_path: Path, monkeypatch) -> N
     assert second.read_text(encoding="utf-8") == before[second]
 
 
+def test_vault_browser_datetime_frontmatter_serializes_stably(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    note_path = tmp_path / "notes" / "timestamped.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        "---\n"
+        "title: Timestamped\n"
+        "uuid: timestamped-uuid\n"
+        "created: 2026-01-01T00:00:00Z\n"
+        "updated: 2026-01-02T03:04:05+00:00\n"
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+
+    resp = TestClient(app).get("/api/companion/vault-browser")
+
+    assert resp.status_code == 200
+    note = next(note for note in resp.json()["notes"] if note["note_path"] == "notes/timestamped.md")
+    assert note["created"] == "2026-01-01T00:00:00Z"
+    assert note["updated"] == "2026-01-02T03:04:05Z"
+
+
+def test_vault_browser_accepts_iso_timestamp_variants(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    note_path = tmp_path / "notes" / "timestamp-strings.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        "---\n"
+        "title: Timestamp Strings\n"
+        "uuid: timestamp-strings-uuid\n"
+        'created: "2026-01-01T00:00:00Z"\n'
+        'updated: "2026-01-02T03:04:05+00:00"\n'
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+
+    resp = TestClient(app).get("/api/companion/vault-browser")
+
+    assert resp.status_code == 200
+    note = next(
+        note for note in resp.json()["notes"] if note["note_path"] == "notes/timestamp-strings.md"
+    )
+    assert note["created"] == "2026-01-01T00:00:00Z"
+    assert note["updated"] == "2026-01-02T03:04:05Z"
+
+
 def test_vault_browser_includes_receipts_from_outbox_projection(
     tmp_path: Path,
     monkeypatch,

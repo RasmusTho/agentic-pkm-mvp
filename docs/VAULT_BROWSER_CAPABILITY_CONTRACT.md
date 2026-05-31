@@ -82,7 +82,7 @@ Required conceptual fields:
 - `trust` — trust tier (`assert` / `suggest` / `apply` per `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`)
 - `origin` — provenance class (human-authored, agent-proposed, imported, mirrored)
 - `source_ref` — pointer to the canonical source artifact when applicable (`docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`)
-- `created`, `updated` — ISO-8601 timestamps
+- `created`, `updated` — ISO-8601 timestamps; UTC timestamp values emitted by the browser API are normalized to `Z`
 
 The artifact's authoritative state is in Markdown/frontmatter where it exists. The browser may carry projection fields beyond this list, but every projection must be reconstructible from vault + governed mirrors.
 
@@ -374,6 +374,8 @@ For future implementation issues, this contract requires:
 The currently shipped Companion UI vault browser (from #1225 / PR #1239 and follow-ups) is the canonical realization of `Vault Browser MLP v0` as defined in §6. Alignment work for that baseline is tracked under #1252. Subsequent slices that introduce metadata, inspector, governed action, or receipt behavior extend this contract without weakening §6 or §8.
 
 **#1253 (normalized metadata read model):** The vault browser API response now includes normalized artifact metadata per note: `uuid`, `kind`, `zone` (frontmatter-preferred, path-derived fallback), `review_state`, `trust`, `origin`, `source_ref`, `created`, `updated`, `frontmatter_valid`, and `missing_required_fields`. Frontmatter is parsed server-side; clients never receive raw YAML. Missing or invalid frontmatter surfaces as explicit health state (`frontmatter_valid: false`), not a crash. Basic metadata badges (`kind`, `review_state`, `trust`) and health warnings render in the browser list view when present. This is an enabling change for §4.1 (`VaultArtifact` fields) without introducing filters (§4.3), inspector (§4.4+), or actions (§4.7) — those remain in subsequent slices.
+
+**#1469 (metadata timestamp serialization):** The vault browser metadata read model now normalizes `created` and `updated` timestamp output server-side. YAML-parsed datetime values and quoted ISO strings that carry UTC as `Z` or `+00:00` are accepted without client parsing and emitted in the browser API payload with UTC normalized to `Z`. Plain date values remain date strings, invalid timestamp strings are preserved as existing string metadata rather than rejected, malformed YAML/frontmatter health behavior remains unchanged, and vault frontmatter is not rewritten on read.
 
 **#1254 (deterministic metadata filters and badges):** The vault browser API now accepts deterministic server-side filter query params: `kind`, `zone`, `review_state`, `trust` (each multi-value, e.g. `?kind=human_note&kind=companion_note`). Active filters are returned in `active_filters` and composed with the existing `q` text search (AND semantics). Notes with a missing field value for an active filter are excluded. Filter chips are rendered in the Companion UI with `data-testid="vault-browser-filter-chip"`, `data-key`, `data-value`, `data-active` attributes. No opaque ranking or hidden heuristics. This enables §4.3 (`VaultQuery`) filter dimensions without introducing inspector, actions, or receipts.
 
