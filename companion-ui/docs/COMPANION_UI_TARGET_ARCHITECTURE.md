@@ -184,6 +184,8 @@ The next browser integration contracts are:
 
 - `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` — read-side workspace aggregate for artifact,
   Canvas, Panel, suggestion, and guard state.
+- `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` — target-state read-only orientation
+  snapshot for note-independent re-entry.
 - `companion-ui/docs/CANVAS_BROWSER_EDITOR_DECISION.md` — interim Canvas browser editor primitive
   and full-body edit delivery decision.
 - `companion-ui/docs/PANEL_STATE_DISCOVERY_DELTA.md` — Panel browser discovery gap analysis.
@@ -261,7 +263,8 @@ The following must not happen under this architecture:
 |---|---|
 | `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` | Cognitive boundary and integration boundary rules; upstream of this doc |
 | `companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md` | Operational detail for the dev page: ports, env vars, UAT steps |
-| `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` | Read-side aggregate contract for browser workspace state |
+| `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` | Read-side aggregate contract for browser artifact workspace state |
+| `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` | Target-state read-only contract for note-independent workspace orientation |
 | `companion-ui/docs/LOCAL_ACCESS_MODEL.md` | Localhost, LAN, Tailscale, token, and CSRF access posture |
 | `companion-ui/docs/CANVAS_BROWSER_EDITOR_DECISION.md` | Canvas browser editor primitive and edit delivery decision |
 | `companion-ui/docs/PANEL_STATE_DISCOVERY_DELTA.md` | Panel discovery delta against the workspace aggregate |

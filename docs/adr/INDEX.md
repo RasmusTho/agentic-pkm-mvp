@@ -12,5 +12,6 @@ State: Index (historical). ADRs are design records and may be partially outdated
 - [ADR 0005: Standardize PER-loop agent base](./0005-per-loop.md)
 - [ADR 0006: DeepAgents as outer agent harness (proposed)](./ADR-0006-deepagents-harness.md)
 - [ADR 0007: Workspace State Contract — artifact-scoped vs note-independent scope split (proposed)](./ADR-0007-workspace-state-contract-scope-split.md)
+- [ADR 0008: Leave-point cursor as bounded operational trace (proposed)](./ADR-0008-leave-point-cursor.md)
 - [ADR: Agentminne v1](./ADR-00X-agent-memory-v1.md)
 - [ADR: Agentminne v4.2](./ADR-00X-agent-memory-v42.md)

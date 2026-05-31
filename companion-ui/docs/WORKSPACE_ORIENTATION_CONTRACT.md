@@ -9,11 +9,12 @@ source_contracts:
   - docs/adr/ADR-0007-workspace-state-contract-scope-split.md
   - companion-ui/docs/WORKSPACE_STATE_CONTRACT.md
   - companion-ui/docs/UI_RUNTIME_BOUNDARIES.md
+  - docs/adr/ADR-0008-leave-point-cursor.md
   - docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md
   - docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
-governing_issue: "#1451"
-implementation_state: implemented
+governing_issue: "#1451; #1454"
+implementation_state: implemented_phase_1; phase_2_cursor_decision_recorded
 ---
 
 # Workspace Orientation Contract
@@ -31,7 +32,9 @@ answers "where am I in the system, what is open, what changed, and what can I
 safely resume?"
 
 This document is the contract for the Phase 1 runtime endpoint and Companion UI
-re-entry consumption. Both shipped surfaces remain read-only projections.
+re-entry consumption. ADR-0008 adds the Phase 2 leave-point cursor projection
+rules for downstream implementation. Both shipped surfaces remain read-only
+projections.
 
 ## Scope
 
@@ -107,6 +110,9 @@ this endpoint; artifact-specific loading belongs to
   state.
 - Runtime health remains owned by `/api/status`. This payload may expose only a
   minimal derived guard/degraded posture needed for orientation rendering.
+- A leave-point cursor, when implemented by later runtime work, is admissible
+  only as an operational trace pointer. The orientation read path may project
+  it but must remain read-only, and orientation must remain correct without it.
 
 ## Success Payload
 
@@ -133,20 +139,18 @@ this endpoint; artifact-specific loading belongs to
     }
   },
   "leave_point": {
-    "kind": "derived_only",
+    "status": "absent | present | stale | artifact_missing | degraded",
     "artifact_ref": {
-      "artifact_id": "string | null",
-      "note_path": "relative/path.md",
-      "title": "string"
+      "artifact_uuid": "string | null",
+      "logical_ref": "relative/path.md | null",
+      "title": "string | null"
     },
-    "label": "string | null",
-    "last_interaction_at": "2026-05-31T11:45:00Z",
+    "captured_at": "2026-05-31T11:45:00Z | null",
     "last_session_id": "string | null",
-    "authority_role": "derived",
+    "authority_role": "operational_trace_pointer | derived_runtime_projection",
     "source_ref": {
-      "kind": "runtime_signal",
-      "ref": "opaque-source-ref",
-      "label": "orientation signals"
+      "kind": "artifact_activation | canvas_session | session_end | null",
+      "trace_id": "trace-id | null"
     }
   },
   "open_loops": [
@@ -266,7 +270,7 @@ The server owns all collection caps. Phase 1 caps are:
 
 | Collection | Cap | Rule |
 |---|---:|---|
-| `leave_point` | 1 | One derived-only leave point. No persistence in MVP. |
+| `leave_point` | 1 | One leave point. Phase 1 is derived-only; Phase 2 may project an admissible operational trace cursor per ADR-0008. |
 | `open_loops` | 8 | Summaries only; no raw note body or raw chat history. |
 | `notable_changes` | 8 | Bounded summaries of recent deltas; no raw note body. |
 | `resurface.candidates` | 5 | Why-now-bearing candidates only. No full retrieval result set. |
@@ -280,11 +284,47 @@ this surface.
 ### `leave_point`
 
 `leave_point` is derived-only in Phase 1. It may point at the last known
-artifact or session posture when existing sources can derive one, but it must
-not persist a leave-point cursor or create restart-surviving continuity state.
+artifact or session posture when existing sources can derive one, but the Phase
+1 implementation does not persist a leave-point cursor or create
+restart-surviving continuity state.
 
-`leave_point.kind` is `derived_only` in Phase 1. Persisted leave-point cursor
-storage belongs to later leave-point ADR/implementation work.
+ADR-0008 admits a Phase 2 leave-point cursor only as bounded operational trace.
+The orientation endpoint may read and project that cursor, but the read path
+must not write it. Orientation must remain correct without the cursor.
+
+The structured `leave_point` shape is:
+
+| Field | Rule |
+|---|---|
+| `status` | One of `absent`, `present`, `stale`, `artifact_missing`, or `degraded`. `present` requires either a valid derived projection or an admissible current operational trace pointer. |
+| `artifact_ref.artifact_uuid` | Primary artifact identity when known. Paths, titles, hashes, and session IDs must not become primary identity. |
+| `artifact_ref.logical_ref` | Optional browser-safe logical reference such as a runtime-relative note path. It must not be an absolute filesystem path. |
+| `artifact_ref.title` | Optional display title derived from the current artifact source. It is projection data, not identity. |
+| `captured_at` | Capture time from the admissible cursor, or derived interaction time when no cursor is used. `null` when absent or degraded. |
+| `last_session_id` | Optional runtime session correlation. It is not session truth and must not authorize workflow resume. |
+| `authority_role` | `operational_trace_pointer` when projected from an admissible cursor; `derived_runtime_projection` when derived without a current cursor. |
+| `source_ref.kind` | One of `artifact_activation`, `canvas_session`, `session_end`, or `null` for cursor projection. |
+| `source_ref.trace_id` | Trace correlation for the source event when available. |
+
+Cursor projection rules:
+
+- `vault_id` and `channel` must match the current orientation scope.
+- `artifact_uuid` must be present and treated as primary identity.
+- `trace_id` and `source_ref` are required on the underlying cursor.
+- The source must be an allowed runtime capture source.
+- Expired, corrupt, or wrong vault/channel cursors are ignored.
+- A content-hash mismatch marks `leave_point.status = "stale"`, never current.
+- A missing artifact marks `leave_point.status = "artifact_missing"`.
+- Source degradation marks `leave_point.status = "degraded"` or falls back to fresh derived orientation.
+
+The cursor is not memory, durable workspace state, session truth, a governance
+receipt, a workflow resume command, UI-owned state, or a vault artifact. It must
+not carry body content, excerpts/snippets/headings, summaries, diffs,
+embeddings, working-set snapshots, open tabs, editor selection, scroll
+position, raw chat history, agent scratchpads, memory candidates, accepted
+memory content, governance decisions, receipts, WriteGuard outputs, absolute
+filesystem paths, UI layout state, orientation summaries, or resurfacing
+candidates.
 
 ### `open_loops`
 
@@ -337,6 +377,8 @@ Allowed Phase 1 values:
 | Value | Meaning |
 |---|---|
 | `derived` | Re-derived projection with no authority of its own. Default for orientation items. |
+| `derived_runtime_projection` | Leave-point projection derived without a current operational trace cursor. |
+| `operational_trace_pointer` | Leave-point projection from an admissible ADR-0008 cursor. This is not durable workspace state or session truth. |
 | `supporting` | Source-linked supporting evidence, such as a receipt outcome summary. |
 | `reference` | Opaque reference to an artifact, trace, status source, or receipt source. |
 
@@ -357,6 +399,9 @@ Allowed Phase 1 `source_ref.kind` values:
 - `runtime_signal`
 - `status`
 - `derived`
+- `artifact_activation`
+- `canvas_session`
+- `session_end`
 
 `source_ref.ref` must be an opaque ID or browser-safe reference. It must not be
 an absolute vault path, raw event payload, raw chat transcript, raw embedding,
@@ -457,6 +502,9 @@ Allowed degraded reason codes include:
 - `governance_source_unavailable`
 - `status_source_unavailable`
 - `partial_source_resolution`
+- `leave_point_stale`
+- `leave_point_artifact_missing`
+- `leave_point_source_degraded`
 
 ### Runtime Unavailable
 
@@ -494,7 +542,8 @@ fresh snapshot.
 - No `orchestration` slice.
 - No detailed `runtime` slice for queues, watchers, workers, leases,
   checkpoints, agent messages, or index internals.
-- No leave-point persistence in MVP.
+- No leave-point persistence in Phase 1. Phase 2 may read and project only the
+  bounded operational trace cursor admitted by ADR-0008.
 - No MemoryCandidate intents in Phase 1.
 - No push, streaming, SSE, WebSocket, notification, or ambient resurfacing
   transport.
@@ -513,8 +562,9 @@ fresh snapshot.
 Implementing `GET /api/companion/orientation` must follow this contract and must
 not imply changes to the artifact-scoped workspace endpoint. The Phase 1
 implementation is limited to the read-only, derived-only MVP shape in this
-contract; leave-point persistence, MemoryCandidate intents, push, and
-multi-agent semantics remain out of scope.
+contract. Leave-point cursor projection is governed by ADR-0008 and remains
+downstream of #1454 until implemented by #1455. MemoryCandidate intents, push,
+and multi-agent semantics remain out of scope.
 
 The Phase 1 Companion UI re-entry surface consumes this endpoint on cold load or
 when no artifact is active. It renders only server-declared fields, uses
