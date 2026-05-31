@@ -183,6 +183,8 @@ The system should support salience-aware behavior, but conservatively.
 This means:
 - use salience to influence ranking or resurfacing, not to silently override trust or scope
   boundaries,
+- use salience as at most one signal for MemoryCandidate intent emission from
+  orientation, never as the sole gate,
 - keep explanations available,
 - avoid treating recency alone as meaning,
 - and let the human recover why something surfaced.

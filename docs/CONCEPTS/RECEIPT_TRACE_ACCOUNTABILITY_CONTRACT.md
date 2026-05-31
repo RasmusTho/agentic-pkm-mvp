@@ -183,6 +183,17 @@ Promotion transition note (#1438):
 - ObjectStore `payload["promotion"]` inline provenance is mirror provenance, not receipt authority;
 - a formal durable promotion receipt remains blocked on the receipt-store/query model.
 
+Orientation MemoryCandidate intent note (#1456):
+- `GET /api/companion/orientation` may emit a bounded MemoryCandidate
+  `mutation_intent` only as a reference-only handoff hint under
+  `docs/adr/ADR-0009-orientation-memory-candidate-intent.md`;
+- that emission requires an operational trace recording intent emission, source
+  reference, threshold signals, intent ID, emitted time, and target queue
+  reference;
+- the trace must not carry raw candidate content;
+- no governance receipt is created at intent emission, because no durable
+  semantic transition has occurred.
+
 ## 6. Minimal accountability rule
 
 For every meaningful system action, the overall system should make it possible to recover:
