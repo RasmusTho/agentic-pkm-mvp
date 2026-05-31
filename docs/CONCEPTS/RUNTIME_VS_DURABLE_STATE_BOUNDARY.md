@@ -5,8 +5,8 @@ Owner: Runtime vs durable state boundary
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-29
-Last verified against: docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/SEMANTIC_AUTHORITY_MATRIX.md, docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md, docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/ARCHITECTURE.md, docs/FRONTMATTER.md, companion-ui/docs/UI_RUNTIME_BOUNDARIES.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, epic #1363, issue #1369.
+Last reviewed: 2026-05-31
+Last verified against: docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/SEMANTIC_AUTHORITY_MATRIX.md, docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md, docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/ARCHITECTURE.md, docs/FRONTMATTER.md, companion-ui/docs/UI_RUNTIME_BOUNDARIES.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, docs/adr/ADR-0008-leave-point-cursor.md, epic #1363, issue #1369, issue #1454.
 
 # Runtime vs Durable Semantic State Boundary
 
@@ -47,7 +47,8 @@ Who owns each runtime structure (which subsystem holds it; none of these own dur
 
 | Runtime structure | Owning subsystem | Notes |
 | --- | --- | --- |
-| Workspace state | Runtime Projection / UI projection | Aggregate view; a projection, not a durable artifact (owners: `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` for the artifact-scoped surface and `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` for the note-independent surface, #1368). Two read-side surfaces with explicit scope: the **artifact-scoped** aggregate (`/api/companion/workspace?note_path=…`, shipped, #1122) and the **note-independent** Workspace Orientation surface (`/api/companion/orientation`, shipped Phase 1 with derived-only leave point). Both are read-only projections that may emit `mutation_intents` but never mutate. Scope split recorded in `docs/adr/ADR-0007-workspace-state-contract-scope-split.md` |
+| Workspace state | Runtime Projection / UI projection | Aggregate view; a projection, not a durable artifact (owners: `WORKSPACE_STATE_CONTRACT.md`, `WORKSPACE_ORIENTATION_CONTRACT.md`, #1368). Two read-side surfaces with explicit scope: the **artifact-scoped** aggregate (`/api/companion/workspace?note_path=…`, shipped, #1122) and the **note-independent** Workspace Orientation surface (`/api/companion/orientation`, planned v6.1). Both are read-only projections that may emit `mutation_intents` but never mutate. Scope split recorded in `docs/adr/ADR-0007-workspace-state-contract-scope-split.md`; leave-point cursor admissibility recorded in `docs/adr/ADR-0008-leave-point-cursor.md` |
+| Leave-point cursor | Runtime trace substrate | Sanctioned only as bounded append-only operational trace pointer for Workspace Orientation. It is not memory, durable workspace state, session truth, a governance receipt, workflow resume command, UI-owned state, or a vault artifact. Default TTL is 72 hours; hard maximum is 7 days unless a later ADR changes retention class. A cursor may be projected by `/api/companion/orientation`, but orientation must remain correct without it. Owner decision: `docs/adr/ADR-0008-leave-point-cursor.md` |
 | Overlays (`zone`, salience) | Runtime Projection | Derived, re-derivable; never a gate (owner: `LAYERING_MODEL.md` Zone) |
 | Retrieval state / ranked candidates | Capability / Runtime Projection | Rebuildable mirror; not durable |
 | Session logs | Governance/Observability | May be durable as a receipt/trace; classify explicitly |
@@ -65,12 +66,14 @@ The prohibited contaminations this contract exists to prevent:
 3. **Runtime metadata polluting frontmatter.** Only the governed frontmatter contract (`FRONTMATTER.md`) defines durable fields. Runtime/session timestamps, evaluation traces, and overlay values do not silently appear there.
 4. **Temporary overlays mutating durable artifacts implicitly.** A `zone`/salience overlay influences ranking and attention only; it must never change an artifact's durable meaning, domain, trust, or content.
 5. **Activation state persisting as authority.** What was in working context for a task is recorded in the bundle receipt for audit; it is not a durable property of the artifacts that were activated.
+6. **Leave-point trace becoming workspace truth.** A leave-point cursor may point to the last focused artifact only as a bounded operational trace. It must not store bodies, summaries, working sets, UI layout, memory, receipts, governance decisions, absolute filesystem paths, orientation summaries, or resurfacing candidates. It must not be stored in the vault or represented as an authoritative mutable "current cursor" row.
 
 ## Discardability semantics
 
 - Runtime, session, workflow, UI, overlay, retrieval, and activation state are **safely discardable**: the system must remain correct and useful after losing any of them (it re-derives or simply starts fresh).
 - A correctness or meaning loss on discarding a piece of "runtime" state is a signal it was actually durable and is misplaced — resolve by routing it to the durable surface under governance, not by quietly persisting it where it sits.
 - Proposal staging state is discardable on rejection without side effects; on acceptance it is consumed into a governed mutation + receipt, not retained as staging state.
+- A leave-point cursor is discardable operational trace. Loss, expiry, corruption, wrong vault/channel, missing artifact, content-hash mismatch, or degraded source must fall back to fresh derived orientation. An expired cursor is ignored as current evidence and may be pruned.
 
 ## Relationship to adjacent boundaries
 
@@ -85,7 +88,8 @@ The prohibited contaminations this contract exists to prevent:
 - Runtime persistence flags per entity: `docs/SEMANTIC_AUTHORITY_MATRIX.md`.
 - Machine mirror boundary (rebuildable vs discardable): `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md`.
 - Receipts vs traces (for session logs): `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
-- UI runtime boundaries and workspace state: `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`, `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` (alignment detailed in #1368).
+- UI runtime boundaries and workspace state: `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md`, `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md`, `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` (alignment detailed in #1368 and #1454).
+- Leave-point cursor trace decision: `docs/adr/ADR-0008-leave-point-cursor.md`.
 - Workflow/proposal staging detail: `docs/CONCEPTS/WORKFLOW_MUTATION_AND_GOVERNANCE_SEMANTICS.md` (#1371).
 
 ## Verification path

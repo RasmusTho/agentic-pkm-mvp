@@ -29,6 +29,7 @@ Foundational documents for cognitive interaction architecture.
 
 ## Surface contracts and feature implementation specs
 - `WORKSPACE_STATE_CONTRACT.md` — read-side aggregate contract for `GET /api/companion/workspace`, combining artifact, runtime, Canvas, Panel, suggestion, and guard state without creating a new authority surface. Governing issue: #1122.
+- `WORKSPACE_ORIENTATION_CONTRACT.md` — target-state read-only contract for `GET /api/companion/orientation`, including the structured leave-point projection admitted by ADR-0008. Governing issue: #1454.
 - `CANVAS_BROWSER_EDITOR_DECISION.md` — decision record choosing `textarea` as the interim Canvas browser editor primitive and preserving full-body replacement semantics. Governing issue: #1126.
 - `PANEL_STATE_DISCOVERY_DELTA.md` — Panel browser discovery gap analysis; confirms the workspace aggregate is sufficient for the current slice. Governing issue: #1127.
 - `CANVAS_AGENT_MVP_CONTRACT.md` — normalized Canvas Agent MVP surface contract: co-authoring posture, session lifecycle, user-present authority, direct in-place editing, undo/rollback, `.chats/` provenance, governance-bearing escape hatch, distinction from Panel and from Canvas bounded suggestion flow. Governing issue: #1021.
