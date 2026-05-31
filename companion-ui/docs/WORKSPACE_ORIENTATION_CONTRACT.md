@@ -13,8 +13,8 @@ source_contracts:
   - docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md
   - docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
-governing_issue: "#1451; #1454"
-implementation_state: implemented_phase_1; phase_2_cursor_decision_recorded
+governing_issue: "#1451; #1454; #1455"
+implementation_state: implemented_phase_2_cursor
 ---
 
 # Workspace Orientation Contract
@@ -31,10 +31,10 @@ Workspace Orientation Snapshot at `GET /api/companion/orientation`, which
 answers "where am I in the system, what is open, what changed, and what can I
 safely resume?"
 
-This document is the contract for the Phase 1 runtime endpoint and Companion UI
-re-entry consumption. ADR-0008 adds the Phase 2 leave-point cursor projection
-rules for downstream implementation. Both shipped surfaces remain read-only
-projections.
+This document is the contract for the runtime endpoint and Companion UI
+re-entry consumption. Phase 2 implements ADR-0008's leave-point cursor
+projection rules as an append-only operational trace pointer. Both shipped
+surfaces remain read-only projections.
 
 ## Scope
 
