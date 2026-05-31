@@ -35,6 +35,17 @@ mutations resulting from Panel confirmation route through the runtime's governed
 execution path: policy → WriteGuard → idempotency → deterministic writer →
 receipt → event emission.
 
+The canonical human-facing confirmation signal is the checked Markdown checkbox
+inside a valid Panel `AI-åtgärder` section:
+
+```markdown
+- [x] ...
+```
+
+Companion UI read-mode confirmation is only a request for the runtime to project
+that same checkbox state. It is not a separate approval store, and the browser
+click does not execute an agent action directly.
+
 Vault state must remain readable and actionable in Obsidian even if Companion
 UI is not running. The vault surface must not become dependent on Companion UI
 presence for Panel state to make sense.
@@ -83,31 +94,38 @@ without requiring Companion UI.
 
 ---
 
-### Confirmed / Submitted
+### Projected checked checkbox
 
-**Trigger:** User confirms a proposal via Companion UI; the confirm endpoint
-call is accepted by the runtime.
+**Trigger:** User clicks a runtime-declared eligible Panel option in Companion
+UI read mode, and the backend validates the current note source, Panel identity,
+option identity, WriteGuard, safe/degraded policy, and idempotency.
 
 **Vault state (intermediate — execution pending):**
 
-- Proposed checkbox may remain as-is until execution completes (avoid premature
-  state divergence).
-- Alternatively, the runtime may mark the checkbox as `[>]` (in-progress
-  annotation if supported by the Panel syntax) to indicate submission.
-  This is an implementation detail; either approach is acceptable provided
-  the vault remains Obsidian-parseable.
+- The targeted checkbox is projected as checked inside the same valid Panel
+  `AI-åtgärder` section:
+  ```markdown
+  - [x] ACTION_ID — description — evidence summary
+  ```
+- This checked checkbox is the durable human-facing confirmation signal.
+- Projection and execution are distinct phases. Projection is the
+  runtime-mediated checked-checkbox write/projection; execution is the normal
+  Panel runtime observing or being triggered from that checked checkbox state.
 - The AI status callout may include an intermediate `🔄 ACTION_ID — confirming`
   entry if the runtime writes an in-progress receipt.
 
 **Companion UI rendering:** `confirming` → `executing` states.
 
-**Writer:** Runtime (via confirm endpoint execution path).
+**Writer:** Runtime (via future source-backed projection endpoint or revised
+confirm endpoint). The current staged `POST /api/panel/confirm` implementation
+does not yet provide this source-backed checkbox projection contract.
 
 ---
 
 ### Executed
 
-**Trigger:** Runtime completes governed execution of a confirmed proposal.
+**Trigger:** Runtime completes governed execution after observing or being
+triggered from the checked Panel checkbox state.
 
 **Vault state:**
 
@@ -178,7 +196,10 @@ or capability constraint.
 **Companion UI rendering:** Proposal row removed or marked dismissed.
 Panel returns to `proposals-staged` (if other proposals remain) or `idle`.
 
-**Writer:** Runtime (on receipt of `action: reject` from the confirm endpoint).
+**Writer:** Runtime (only if a separate reject/dismiss contract is specified).
+
+**First-slice note:** reject/dismiss behavior is not part of the first read-mode
+checkbox projection slice unless a separate implementation issue specifies it.
 
 ---
 
@@ -266,14 +287,14 @@ Companion UI to maintain local action history.
 
 ## Watcher Compatibility
 
-The vault-visible state produced by Panel confirmation via the Companion UI
-confirm endpoint must be compatible with the CLI/watcher flow:
+The vault-visible state produced by Companion UI runtime-mediated checkbox
+projection must be compatible with the CLI/watcher flow:
 
-- A watcher processing the vault after Companion UI confirmation must see the
-  same executed/blocked/logged checkbox state as if the confirmation had come
-  from the CLI.
-- The watcher must not need to distinguish "confirmed via Companion UI" from
-  "confirmed via CLI checkbox."
+- A watcher processing the vault after Companion UI projection must see the
+  same checked checkbox state as if the confirmation had come from Obsidian, a
+  plain text editor, or a CLI-compatible flow.
+- The watcher must not need to distinguish "projected via Companion UI" from
+  "checked directly in vault Markdown."
 - The AI status callout syntax must match the Panel agent runtime's established
   callout format from `docs/PANEL_AGENT.md`.
 
@@ -284,8 +305,9 @@ confirm endpoint must be compatible with the CLI/watcher flow:
 The durable vault projection produced by this confirmation path must be
 equivalent to the checkbox + watcher path:
 
-| Vault element | Checkbox + watcher | Confirm endpoint |
+| Vault element | Checkbox + watcher | Projection endpoint/revision |
 |---|---|---|
+| Checked checkbox confirmation | ✅ (`- [x]` in Panel `AI-åtgärder`) | ✅ (runtime projects `- [x]`) |
 | Executed checkbox removed | ✅ (watcher removes) | ✅ (runtime removes on execute) |
 | AI status callout receipt | ✅ (watcher writes) | ✅ (runtime writes via endpoint) |
 | Event emissions | ✅ (watcher emits) | ✅ (endpoint execution emits) |
@@ -294,6 +316,18 @@ equivalent to the checkbox + watcher path:
 | Idempotency enforced | ✅ | ✅ |
 
 The two paths must converge on the same vault-visible state.
+
+## Race and Idempotency Requirements
+
+- Stale Companion UI content: reject with stale-content status; do not guess by label or rendered DOM position.
+- Watcher overlap: projection and watcher execution must deduplicate through existing Panel idempotency keys and the future durable option identity.
+- Browser retries: the same `idempotency_key` returns the same result and must not write or execute twice.
+- Already checked checkbox: treat as idempotent if it targets the same option and source generation; otherwise return current status.
+- Option missing or moved: fail stale/not-found unless durable `option_id` and source hash validate an unambiguous move.
+- Proposal section removed: fail stale/not-found; do not recreate the proposal.
+- Duplicate labels: never target by label alone.
+- Execution succeeds but UI stale: artifact refresh must show current vault state and receipt; do not re-submit.
+- Projection succeeds but execution fails: keep the checked/projected confirmation status distinct from execution failure; surface blocked/failed runtime status through existing event/outbox/receipt conventions.
 
 ---
 
@@ -312,13 +346,13 @@ Any vault-visible state change as a result of Panel confirmation must flow
 through:
 
 ```
-Companion UI confirm action
-  → confirm endpoint call (POST /api/panel/confirm)
-  → runtime policy evaluation
+Companion UI read-mode checkbox click
+  → source-backed projection request
+  → runtime source/option validation
   → WriteGuard
   → idempotency check
-  → deterministic note-writer (runtime-owned)
-  → vault-visible mutation
+  → deterministic note-writer projects - [x] (runtime-owned)
+  → normal Panel execution observes or is triggered from checked checkbox
   → receipt
   → event emission
 ```
@@ -329,21 +363,31 @@ Companion UI confirm action
 
 The following tests must exist before or alongside projection implementation:
 
-1. `test_panel_projection_executed_removes_checkbox` — after execution, the
+1. `test_panel_projection_checked_checkbox_written` — projection writes `- [x]`
+   for the targeted option inside the valid Panel `AI-åtgärder` section.
+2. `test_panel_projection_rejects_stale_source` — changed content/source hashes
+   reject without guessing by label or DOM order.
+3. `test_panel_projection_dedupes_watcher_overlap` — watcher overlap does not
+   duplicate writes or execution.
+4. `test_panel_projection_retry_idempotent` — duplicate browser retries with the
+   same `idempotency_key` return the same status without duplicate writes.
+5. `test_panel_projection_duplicate_labels_require_option_id` — duplicate labels
+   are never targeted by label alone.
+6. `test_panel_projection_executed_removes_checkbox` — after execution, the
    proposed checkbox is removed from the panel working set in the vault.
-2. `test_panel_projection_executed_writes_receipt_callout` — after execution,
+7. `test_panel_projection_executed_writes_receipt_callout` — after execution,
    the AI status callout contains the execution receipt with the correct format.
-3. `test_panel_projection_blocked_preserves_checkbox` — after a block, the
+8. `test_panel_projection_blocked_preserves_checkbox` — after a block, the
    proposed checkbox remains in the working set.
-4. `test_panel_projection_blocked_writes_blocked_receipt` — a blocked receipt
+9. `test_panel_projection_blocked_writes_blocked_receipt` — a blocked receipt
    entry appears in the AI status callout.
-5. `test_panel_projection_rejected_removes_checkbox_no_execution_receipt` —
+10. `test_panel_projection_rejected_removes_checkbox_no_execution_receipt` —
    after rejection, the checkbox is removed and no execution receipt is written.
-6. `test_panel_projection_watcher_compatible` — the vault state produced by
-   the confirm endpoint path is parseable by the watcher without special-casing.
-7. `test_panel_projection_inverse_action_declared` — executed receipts include
+11. `test_panel_projection_watcher_compatible` — the vault state produced by
+   the projection path is parseable by the watcher without special-casing.
+12. `test_panel_projection_inverse_action_declared` — executed receipts include
    the inverse-action identifier.
-8. `test_panel_projection_companion_ui_does_not_write_vault_directly` —
+13. `test_panel_projection_companion_ui_does_not_write_vault_directly` —
    architecture/import test asserting no vault-write code exists in
    `companion_ui/` modules.
 
@@ -365,6 +409,10 @@ The following tests must exist before or alongside projection implementation:
 5. **Vault locking.** When multiple Companion UI sessions or CLI instances
    could write to the same note simultaneously, how does the runtime arbitrate?
    WriteGuard is expected to handle this; confirm here.
+6. **Option identity marker.** Does the implementation promote `ai:id` into
+   durable `option_id` with stronger generation rules, or introduce a new
+   explicit marker such as `<!--ai:option_id=...-->`? This decision blocks
+   implementation.
 
 ---
 

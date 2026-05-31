@@ -41,6 +41,24 @@ Execution:
 - CI runs the browser suite in `.github/workflows/browser-runtime.yml` as a separate non-blocking
   job. The existing smoke gates must not install browser binaries or depend on this job.
 
+## Panel Read-Mode Checkbox Projection Coverage
+
+Future implementation of Companion UI read-mode Panel checkbox confirmation must include focused
+coverage before it can be claimed as supported runtime behavior:
+
+- Parser/mapping tests proving only valid `AI-åtgärder` task checkboxes are eligible and code-block/ordinary-task checkboxes are excluded.
+- Projection endpoint validation tests for `note_path`/`artifact_id`, `panel_id`, `option_id`, `content_hash`/`source_hash`, pending/selectable status, and stale-content rejection.
+- Stale source tests covering changed content, moved options, missing options, removed proposal sections, and duplicate labels.
+- WriteGuard and safe/degraded-mode tests proving projection does not bypass governed write policy.
+- Idempotency/retry tests for duplicate browser clicks, request retries, already-checked options, watcher overlap, and projection-success/execution-failure separation.
+- Watcher/runtime convergence tests proving Obsidian/plain-text checked checkboxes and Companion UI projection produce the same runtime semantics and receipts.
+- Companion UI read-mode browser tests proving ordinary task checkboxes remain read-only/non-agent controls and only runtime-declared Panel options call the projection endpoint.
+- Ordinary Markdown task-list regression tests proving generic rendered task-list DOM never becomes Panel authority.
+- Obsidian/text-editor compatibility tests proving manually changing `- [ ]` to `- [x]` in a valid Panel remains a valid confirmation path.
+
+This coverage is future-facing. It does not claim the existing `POST /api/panel/confirm` path already
+performs source-backed checkbox projection.
+
 ## Layer mapping
 | Layer | Focus | Representative suites | Command |
 | --- | --- | --- | --- |

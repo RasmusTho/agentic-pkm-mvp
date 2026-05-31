@@ -19,6 +19,7 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `watcher.run` audit rows plus `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
 - `/api/orientation` now provides a minimal read-only orientation runtime seam that returns a situational frame without a query term; explanation remains bounded to `leave_point`, `open_items`, and `notable_change` derived from runtime signals.
+- Leave-point cursor lookup now applies scope filtering at the DB boundary and uses a wider corrupt-row recovery candidate window; this is hardening of the existing read-only orientation seam, not a new mutation surface or semantic authority.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits
   explicit "why now" explanations with signal provenance, and exposes operator-visible receipt/status

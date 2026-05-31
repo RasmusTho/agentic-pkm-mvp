@@ -254,15 +254,15 @@ The Companion UI signals confirmation to the runtime (e.g., via a lightweight ca
 - The UI cannot distinguish "waiting for watcher" from "watcher failed" without additional status polling.
 - Same-turn execution of newly generated proposals is not supported (which is correct by constraint, but the latency is higher).
 
-#### Approach 2: Dedicated confirm endpoint
+#### Approach 2: Dedicated runtime endpoint
 
-The Companion UI calls a dedicated runtime endpoint (e.g., `POST /api/panel/confirm`) that accepts a specific proposal/intent ID, marks it confirmed, and triggers governed execution synchronously or with a status callback.
+The Companion UI calls a dedicated runtime endpoint (for example, a revised `POST /api/panel/confirm` or a separate projection endpoint) that accepts a specific source-backed Panel option target, projects the checked checkbox state through the runtime, and then schedules or triggers governed execution with status feedback.
 
 **Strengths:**
 - Direct feedback loop: Companion UI can display `confirming → executing → receipt` states immediately.
 - No dependency on watcher cadence.
 - Enables richer UX: loading states, cancellation, failure display.
-- Confirmation remains explicit and named (the endpoint call is the authorization signal).
+- Confirmation remains explicit and named in the UI, while durable human-facing confirmation authority remains the vault-visible Panel checkbox state.
 
 **Weaknesses:**
 - Requires a new runtime endpoint (out of scope for this contract; must be a separate implementation issue).
@@ -271,12 +271,24 @@ The Companion UI calls a dedicated runtime endpoint (e.g., `POST /api/panel/conf
 
 ### Proposed Default
 
-**Prefer a dedicated runtime confirm endpoint for Companion UI confirmation.**
+**Prefer runtime-mediated checkbox projection for Companion UI read-mode confirmation.**
 
 Rationale:
-- Richer UX feedback without watcher latency.
-- Direct, named confirmation signal (the endpoint call is the authority event).
-- Better failure visibility (blocked, policy-rejected, partial-complete states are immediately observable).
+- Preserves the vault Markdown checkbox as the canonical human-facing confirmation signal.
+- Allows richer UX feedback without making Companion UI a separate approval authority.
+- Gives the runtime a single place to validate source freshness, WriteGuard, safe/degraded policy, idempotency, and Panel option eligibility before any vault-visible state changes.
+
+When a user clicks a confirmable Panel checkbox in Companion UI read mode, the UI submits a projection request to the runtime for a specific note/artifact, Panel, and option identity. The runtime validates that the target still corresponds to a pending selectable option in the current vault Markdown, validates source freshness, applies WriteGuard and runtime safety policy, and writes/projects the same canonical Markdown state that an Obsidian or plain-text edit would have produced:
+
+```markdown
+- [x] ...
+```
+
+inside the valid Panel `AI-åtgärder` section.
+
+That checked checkbox state is the canonical human-facing confirmation signal. The endpoint request is transport, not approval authority. Companion UI does not create a separate approval model, does not own durable confirmation state, and does not execute a Panel action directly from a browser click.
+
+Current implementation note: the existing `POST /api/panel/confirm` path is a staged proposal confirmation API, not yet the source-backed read-mode checkbox projection contract described here. It does not currently validate current vault Markdown, validate source freshness, and project `- [x]` before execution. A future endpoint revision or separate projection endpoint is required before Companion UI read-mode checkbox clicks can use this contract.
 
 **While preserving durable vault-visible projection / Obsidian-compatible semantics:**
 - The runtime endpoint must produce the same durable vault-visible output as the checkbox + watcher flow: a receipt in the AI status callout, executed checkboxes removed from the panel working set, and event stream emissions.
@@ -303,18 +315,38 @@ The durable vault-visible projection must remain Obsidian-compatible:
 
 Companion UI may render these states more richly, but must not produce a vault state that diverges from what the Panel runtime and Obsidian expect.
 
+### Read-mode checkbox eligibility
+
+Companion UI may attach a live Panel confirmation affordance only to task checkbox render nodes that the runtime has mapped to a valid Panel `AI-åtgärder` option.
+
+The UI must not infer authority from arbitrary rendered task-list DOM. Ordinary Markdown tasks, nested task lists outside a valid Panel actions section, task-like syntax in code blocks, and task checkboxes in receipts or prose are not Panel confirmations.
+
+The renderer may continue to display ordinary Markdown task checkboxes as read-only visual checkboxes. Enabling Panel confirmation is a separate runtime-declared affordance layered only on eligible Panel options.
+
+### Non-goals for the first read-mode checkbox slice
+
+- No generic DOM-to-Markdown mutation.
+- No Companion-only approval store.
+- No multi-select grace, batch confirm, or uncheck semantics unless separately specified.
+- No execution directly from browser click.
+- No treating all Markdown task checkboxes as approvals.
+- No second proposal model.
+- No durable identity inference from labels, rendered DOM order, or `ai:proposed`.
+
 ### Runtime State / API Dependencies
 
 The following runtime state and APIs are required for the confirmation write-back path. These are named here as dependencies; their implementation belongs to separate issues.
 
-Required for dedicated confirm endpoint approach:
-- A confirm endpoint that accepts a proposal/intent ID and initiates governed execution.
+Required for runtime-mediated checkbox projection:
+- A source-backed projection endpoint or revised confirm endpoint that accepts note/artifact identity, `panel_id`, durable `option_id`, expected content/source freshness hashes, and an idempotency key.
+- Runtime validation that the target option is still a pending/selectable task checkbox inside a valid Panel `AI-åtgärder` section and not an ordinary task or code-block checkbox.
+- Runtime projection of the checked checkbox state through the governed backend write path before normal Panel execution observes or is triggered from that state.
 - A status/receipt polling or callback mechanism so the UI can display `confirming → executing → receipt` states.
 - A mapping from endpoint response to durable vault-visible receipt.
 
 Required for all approaches:
 - Runtime exposure of current Panel state for the active note (proposals staged, executing, blocked, no-match, receipt).
-- Proposal ID / intent ID that can be referenced across the confirmation request.
+- Durable option identity that can be referenced across the projection request.
 - Receipt payload with enough information to render `receipt-displayed` state in the UI.
 
 Open questions deferred to implementation:
@@ -367,7 +399,7 @@ The following acceptance criteria map directly to issues #995 and #996.
 ### Confirmation write-back contract (#996)
 
 - [x] Contract compares runtime-mediated checkbox projection + watcher-compatible semantics versus dedicated confirm endpoint, and states that direct Companion UI vault write-back is not viable.
-- [x] Contract records the proposed default (dedicated confirm endpoint) and rationale.
+- [x] Contract records the proposed default (runtime-mediated checkbox projection) and rationale.
 - [x] Contract states confirmation means the user has recognized, corrected, or accepted an agent-manifested artifact-local intention.
 - [x] Contract states UI performs no direct vault I/O.
 - [x] Contract defines confirmation as explicit, named, and reversible before execution begins.
@@ -402,7 +434,7 @@ The following production UI items are not yet implemented and are deferred until
 
 The following items remain pending — spec/contract only, implementation deferred:
 
-- **Panel confirmation endpoint implementation** — based on `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md`. Create a bounded implementation issue for the runtime confirm endpoint: request/response schema, governed execution wiring, and receipt mapping.
+- **Panel read-mode checkbox projection endpoint or endpoint revision** — based on `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md`. Create a bounded implementation issue for a source-backed runtime projection path: request/response schema, current Markdown/source-freshness validation, governed checkbox projection, execution trigger/watcher convergence, and receipt mapping.
 - **Runtime-mediated durable vault-visible projection implementation** — based on `companion-ui/docs/PANEL_DURABLE_PROJECTION_MAPPING.md`. Verify that confirmation via Companion UI produces the same vault-visible receipt and checkbox state as the CLI/watcher flow.
 
 ---
