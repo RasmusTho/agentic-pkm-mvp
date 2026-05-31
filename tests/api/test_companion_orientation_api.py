@@ -15,6 +15,7 @@ import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.observability.status_model import EventCounters, IngestionStatus, WorkerQueueStatus
 from app.observability.status_service import OrientationSignals
+from app.orientation.leave_point_cursor import clear_leave_point_trace
 from app.resurfacing.runtime import (
     ResurfacingCandidate,
     ResurfacingEvaluation,
@@ -27,11 +28,15 @@ from app.resurfacing.runtime import (
 def _clear_runtime_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("PKM_CHANNEL", "test")
+    monkeypatch.setenv("LEAVE_POINT_TRACE_DB", str(tmp_path / "runtime" / "leave-point.sqlite3"))
+    monkeypatch.setattr(companion_module, "_configured_vault_name", lambda: "vault-test")
+    clear_leave_point_trace()
     canvas_module._sessions.clear()
     canvas_module._edit_history.clear()
     canvas_module._undone_history.clear()
     confirm_module._proposal_store.clear()
     confirm_module._idempotency_store.clear()
+    clear_leave_point_trace()
     yield
     canvas_module._sessions.clear()
     canvas_module._edit_history.clear()
@@ -117,7 +122,8 @@ def test_orientation_snapshot_without_note(
     assert data["scope"]["kind"] == "workspace"
     assert data["scope"]["channel"] == "test"
     assert data["meta"]["contract_version"] == "workspace_orientation.v1"
-    assert data["leave_point"]["kind"] == "derived_only"
+    assert data["leave_point"]["status"] == "absent"
+    assert data["leave_point"]["authority_role"] == "derived_runtime_projection"
     assert data["mutation_intents"] == []
     assert "artifact" not in data
     assert "body" not in data
@@ -179,8 +185,10 @@ def test_items_carry_provenance(
 
     assert resp.status_code == 200
     data = resp.json()
+    assert data["leave_point"]["authority_role"]
+    assert "kind" in data["leave_point"]["source_ref"]
+    assert "trace_id" in data["leave_point"]["source_ref"]
     items = [
-        data["leave_point"],
         *data["open_loops"],
         *data["notable_changes"],
         *data["resurface"]["candidates"],

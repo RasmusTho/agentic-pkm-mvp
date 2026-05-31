@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -27,6 +27,7 @@ from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError,
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.config.paths import resolve_vault_root
+from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
 from app.panel.confirmation import _proposal_store as _panel_proposal_store
 
@@ -139,6 +140,61 @@ def _note_body(note_path: Path) -> str:
     return body
 
 
+def _runtime_channel() -> str:
+    raw = (
+        os.getenv("PKM_ENVIRONMENT")
+        or os.getenv("CHANNEL")
+        or os.getenv("PKM_CHANNEL")
+        or ""
+    ).strip().lower()
+    return raw if raw in {"dev", "test", "prod"} else "unknown"
+
+
+def _runtime_vault_id(vault_root: Path) -> str:
+    try:
+        from app.settings.runtime import get_settings_bundle
+
+        bundle = get_settings_bundle()
+        configured = getattr(getattr(getattr(bundle, "instance", None), "vault", None), "name", None)
+        if isinstance(configured, str) and configured.strip():
+            return configured.strip()
+    except Exception:
+        pass
+    return vault_root.name or "default"
+
+
+def _capture_leave_point_for_session(
+    session: SessionLog,
+    *,
+    source_kind: Literal["artifact_activation", "canvas_session", "session_end"],
+    capture_reason: Literal["artifact_focus", "artifact_interaction", "session_end"],
+) -> None:
+    vault_root = _get_vault_root()
+    try:
+        safe_note_path = str(session.note_path.relative_to(vault_root))
+        identity = resolve_note_artifact_identity(
+            artifact_path=session.note_path,
+            vault_root=vault_root,
+            safe_note_path=safe_note_path,
+            body=session.note_path.read_text(encoding="utf-8"),
+            heal_missing_uuid=False,
+        )
+        if identity.artifact_id is None:
+            return
+        capture_leave_point_cursor(
+            vault_id=_runtime_vault_id(vault_root),
+            channel=_runtime_channel(),
+            artifact_uuid=identity.artifact_id,
+            source_kind=source_kind,
+            source_ref_id=safe_note_path,
+            capture_reason=capture_reason,
+            last_session_id=session.session_id,
+            content_hash_at_capture=_content_hash(session.note_path.read_text(encoding="utf-8")),
+        )
+    except Exception:
+        return
+
+
 @router.post("/sessions", response_model=OpenSessionResponse)
 def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
     _require_canvas()
@@ -152,6 +208,11 @@ def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
     _sessions[session.session_id] = session
     _edit_history[session.session_id] = []
     _undone_history[session.session_id] = []
+    _capture_leave_point_for_session(
+        session,
+        source_kind="artifact_activation",
+        capture_reason="artifact_focus",
+    )
     return OpenSessionResponse(
         session_id=session.session_id,
         note_path=str(session.note_path),
@@ -185,6 +246,11 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
             body_after=body_after,
             change_summary=req.change_summary,
         )
+    )
+    _capture_leave_point_for_session(
+        session,
+        source_kind="canvas_session",
+        capture_reason="artifact_interaction",
     )
     return EditResponse(session_id=session_id, ok=True)
 
@@ -280,6 +346,11 @@ def close_session(session_id: str, total_summary: str = "session closed") -> Clo
     vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     log_writer.close_session(session, total_summary)
+    _capture_leave_point_for_session(
+        session,
+        source_kind="session_end",
+        capture_reason="session_end",
+    )
     return CloseResponse(session_id=session_id, log_path=str(session.log_path))
 
 

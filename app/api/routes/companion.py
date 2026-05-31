@@ -22,6 +22,7 @@ from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatte
 from app.config.paths import resolve_vault_root
 from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.status_service import OrientationSignals, get_orientation_signals
+from app.orientation.leave_point_cursor import latest_leave_point_projection
 from app.orientation.runtime import build_orientation_frame
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
@@ -180,19 +181,23 @@ class WorkspaceOrientationSourceRef(BaseModel):
 
 
 class WorkspaceOrientationArtifactRef(BaseModel):
-    artifact_id: str | None = None
-    note_path: str | None = None
+    artifact_uuid: str | None = None
+    logical_ref: str | None = None
     title: str | None = None
 
 
+class WorkspaceOrientationLeavePointSourceRef(BaseModel):
+    kind: str | None = None
+    trace_id: str | None = None
+
+
 class WorkspaceOrientationLeavePoint(BaseModel):
-    kind: Literal["derived_only"] = "derived_only"
-    artifact_ref: WorkspaceOrientationArtifactRef | None = None
-    label: str | None = None
-    last_interaction_at: str | None = None
+    status: Literal["absent", "present", "stale", "artifact_missing", "degraded"] = "absent"
+    artifact_ref: WorkspaceOrientationArtifactRef = Field(default_factory=WorkspaceOrientationArtifactRef)
+    captured_at: str | None = None
     last_session_id: str | None = None
-    authority_role: str = "derived"
-    source_ref: WorkspaceOrientationSourceRef
+    authority_role: Literal["operational_trace_pointer", "derived_runtime_projection"] = "derived_runtime_projection"
+    source_ref: WorkspaceOrientationLeavePointSourceRef = Field(default_factory=WorkspaceOrientationLeavePointSourceRef)
 
 
 class WorkspaceOrientationOpenLoop(BaseModel):
@@ -200,7 +205,7 @@ class WorkspaceOrientationOpenLoop(BaseModel):
     label: str
     status: str
     handoff_hint: str
-    artifact_ref: WorkspaceOrientationArtifactRef | None = None
+    artifact_ref: dict[str, str | None] | None = None
     authority_role: str = "derived"
     source_ref: WorkspaceOrientationSourceRef
 
@@ -210,7 +215,7 @@ class WorkspaceOrientationNotableChange(BaseModel):
     label: str
     summary: str
     changed_at: str | None = None
-    artifact_ref: WorkspaceOrientationArtifactRef | None = None
+    artifact_ref: dict[str, str | None] | None = None
     authority_role: str = "derived"
     source_ref: WorkspaceOrientationSourceRef
 
@@ -220,7 +225,7 @@ class WorkspaceOrientationResurfaceCandidate(BaseModel):
     label: str
     why_now: str
     signal_labels: list[str] = Field(default_factory=list)
-    artifact_ref: WorkspaceOrientationArtifactRef | None = None
+    artifact_ref: dict[str, str | None] | None = None
     authority_role: str = "derived"
     source_ref: WorkspaceOrientationSourceRef
 
@@ -822,15 +827,28 @@ def _orientation_leave_point(
     signals: OrientationSignals,
     *,
     frame_label: str | None,
+    identity: VaultIdentityState,
 ) -> WorkspaceOrientationLeavePoint:
+    projection = latest_leave_point_projection(
+        vault_id=identity.vault_name,
+        channel=identity.channel,
+        vault_root=resolve_vault_root(),
+        derived_label=frame_label,
+        derived_at=_orientation_iso(signals.ingestion.last_run_at),
+    )
     return WorkspaceOrientationLeavePoint(
-        label=frame_label,
-        last_interaction_at=_orientation_iso(signals.ingestion.last_run_at),
-        last_session_id=None,
-        source_ref=_orientation_source_ref(
-            "runtime_signal",
-            "orientation.signals",
-            "orientation signals",
+        status=projection.status,
+        artifact_ref=WorkspaceOrientationArtifactRef(
+            artifact_uuid=projection.artifact_ref.artifact_uuid,
+            logical_ref=projection.artifact_ref.logical_ref,
+            title=projection.artifact_ref.title,
+        ),
+        captured_at=projection.captured_at,
+        last_session_id=projection.last_session_id,
+        authority_role=projection.authority_role,
+        source_ref=WorkspaceOrientationLeavePointSourceRef(
+            kind=projection.source_ref.kind,
+            trace_id=projection.source_ref.trace_id,
         ),
     )
 
@@ -1678,6 +1696,7 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
         leave_point = _orientation_leave_point(
             orientation_signals,
             frame_label=frame.explanation.leave_point,
+            identity=identity,
         )
         open_loops = _orientation_open_loops(frame.explanation.open_items)
         notable_changes = _orientation_notable_changes(
