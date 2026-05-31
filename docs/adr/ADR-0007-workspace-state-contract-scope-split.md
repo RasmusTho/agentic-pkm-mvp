@@ -36,10 +36,11 @@ The project will **preserve the existing artifact-scoped Companion Workspace Con
    - Server-declared classification only. The UI renders; it never classifies governance/authority locally.
    - Snapshot is the recovery path. State is re-derived per read; nothing the contract holds must survive a restart for correctness.
 
-4. **Scope must be explicit in every payload:**
+4. **Scope envelope.** The new Workspace Orientation payload **must** carry an explicit scope envelope:
    ```jsonc
    "scope": { "kind": "artifact | workspace", "artifact_ref": "… | null", "vault_id": "…", "channel": "dev | test | prod" }
    ```
+   This is a hard requirement only for the **new** orientation surface. The shipped artifact-scoped payload (`WorkspaceStateResponse` in `app/api/routes/companion.py`) does **not** carry `scope` today and is **not** retroactively made non-compliant by this ADR — its scope is implied by the mandatory `note_path`. Adding the envelope to the artifact payload is an optional **future/compatibility-phase additive** (it would need its own implementation issue), not a Phase 0 obligation.
 
 5. **Leave-point cursor (strict):** the single persisted continuity datum is a **reference only** — `artifact_uuid + captured_at + last_session_id`. It carries no body content, no working-set snapshot, no derived state. It is classified as an **operational trace** (`RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`), never a durable semantic artifact and never durable session state. Its loss degrades to "fresh orientation," never to incorrectness. (Phase 2 — see below.)
 
