@@ -40,7 +40,8 @@ Workspace State surfaces:
 - **Workspace Orientation Snapshot (planned, v6.1):** a separate
   note-independent surface (`GET /api/companion/orientation`) that exists when
   no note is open — answers "where am I in the system, what is open, and what
-  can I safely resume?"
+  can I safely resume?" The planned contract is
+  `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md`.
 
 Re-entry, continuity, resurfacing-when-idle, and orientation-after-absence are
 **not** served by widening this aggregate; they belong to the note-independent
@@ -48,7 +49,8 @@ surface. The scope split, endpoint shape, and shared invariants
 (read-only + `mutation_intents`, bounded collections, snapshot-level freshness,
 per-item `authority_role`/`source_ref`, no `orchestration`/`runtime` dashboard
 slices) are recorded in
-`docs/adr/ADR-0007-workspace-state-contract-scope-split.md`. The note-independent
+`docs/adr/ADR-0007-workspace-state-contract-scope-split.md` and detailed in
+`companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md`. The note-independent
 surface is target-state v6.1 work and is **not** shipped.
 
 ## Endpoint
