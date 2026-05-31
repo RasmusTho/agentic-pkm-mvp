@@ -306,7 +306,7 @@ def latest_leave_point_projection(
                 FROM leave_point_trace_events
                 WHERE vault_id = ? AND channel = ?
                 ORDER BY captured_at DESC, id DESC
-                LIMIT 20
+                LIMIT 50
                 """,
                 (vault_id, channel),
             ).fetchall()
