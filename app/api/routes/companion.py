@@ -7,6 +7,7 @@ import os
 import heapq
 import re
 from pathlib import Path, PurePosixPath
+from typing import Literal
 from uuid import uuid4
 
 import yaml
@@ -137,6 +138,124 @@ class WorkspaceStateResponse(BaseModel):
     panel: PanelState
     suggestions: SuggestionsState
     guards: GuardState
+
+
+ORIENTATION_CONTRACT_VERSION = "workspace_orientation.v1"
+ORIENTATION_OPEN_LOOPS_CAP = 8
+ORIENTATION_NOTABLE_CHANGES_CAP = 8
+ORIENTATION_RESURFACE_CANDIDATES_CAP = 5
+ORIENTATION_MUTATION_INTENTS_CAP = 0
+ORIENTATION_SOURCE_REFS_PER_ITEM_CAP = 3
+ORIENTATION_STALE_AFTER_SECONDS = 300
+
+
+class WorkspaceOrientationScope(BaseModel):
+    kind: Literal["workspace"] = "workspace"
+    vault_id: str
+    channel: str
+
+
+class WorkspaceOrientationCaps(BaseModel):
+    open_loops: int = ORIENTATION_OPEN_LOOPS_CAP
+    notable_changes: int = ORIENTATION_NOTABLE_CHANGES_CAP
+    resurface_candidates: int = ORIENTATION_RESURFACE_CANDIDATES_CAP
+    mutation_intents: int = ORIENTATION_MUTATION_INTENTS_CAP
+    source_refs_per_item: int = ORIENTATION_SOURCE_REFS_PER_ITEM_CAP
+
+
+class WorkspaceOrientationMeta(BaseModel):
+    contract_version: str = ORIENTATION_CONTRACT_VERSION
+    as_of: str
+    trace_id: str
+    freshness: str
+    stale_after: str
+    degraded_reasons: list[str] = Field(default_factory=list)
+    caps: WorkspaceOrientationCaps = Field(default_factory=WorkspaceOrientationCaps)
+
+
+class WorkspaceOrientationSourceRef(BaseModel):
+    kind: str
+    ref: str
+    label: str | None = None
+
+
+class WorkspaceOrientationArtifactRef(BaseModel):
+    artifact_id: str | None = None
+    note_path: str | None = None
+    title: str | None = None
+
+
+class WorkspaceOrientationLeavePoint(BaseModel):
+    kind: Literal["derived_only"] = "derived_only"
+    artifact_ref: WorkspaceOrientationArtifactRef | None = None
+    label: str | None = None
+    last_interaction_at: str | None = None
+    last_session_id: str | None = None
+    authority_role: str = "derived"
+    source_ref: WorkspaceOrientationSourceRef
+
+
+class WorkspaceOrientationOpenLoop(BaseModel):
+    id: str
+    label: str
+    status: str
+    handoff_hint: str
+    artifact_ref: WorkspaceOrientationArtifactRef | None = None
+    authority_role: str = "derived"
+    source_ref: WorkspaceOrientationSourceRef
+
+
+class WorkspaceOrientationNotableChange(BaseModel):
+    id: str
+    label: str
+    summary: str
+    changed_at: str | None = None
+    artifact_ref: WorkspaceOrientationArtifactRef | None = None
+    authority_role: str = "derived"
+    source_ref: WorkspaceOrientationSourceRef
+
+
+class WorkspaceOrientationResurfaceCandidate(BaseModel):
+    id: str
+    label: str
+    why_now: str
+    signal_labels: list[str] = Field(default_factory=list)
+    artifact_ref: WorkspaceOrientationArtifactRef | None = None
+    authority_role: str = "derived"
+    source_ref: WorkspaceOrientationSourceRef
+
+
+class WorkspaceOrientationResurface(BaseModel):
+    candidates: list[WorkspaceOrientationResurfaceCandidate] = Field(default_factory=list)
+
+
+class WorkspaceOrientationGovernance(BaseModel):
+    pending_proposal_count: int
+    pending_receipt_count: int
+    latest_receipt_outcome: str | None = None
+    authority_role: str = "derived"
+    source_ref: WorkspaceOrientationSourceRef
+
+
+class WorkspaceOrientationGuards(BaseModel):
+    read_only: bool = True
+    runtime_posture: str
+    degraded: bool
+    reasons: list[str] = Field(default_factory=list)
+    authority_role: str = "derived"
+    source_ref: WorkspaceOrientationSourceRef
+
+
+class WorkspaceOrientationResponse(BaseModel):
+    scope: WorkspaceOrientationScope
+    meta: WorkspaceOrientationMeta
+    leave_point: WorkspaceOrientationLeavePoint | None = None
+    open_loops: list[WorkspaceOrientationOpenLoop] = Field(default_factory=list)
+    notable_changes: list[WorkspaceOrientationNotableChange] = Field(default_factory=list)
+    resurface: WorkspaceOrientationResurface
+    governance: WorkspaceOrientationGovernance
+    guards: WorkspaceOrientationGuards
+    mutation_intents: list[str] = Field(default_factory=list)
 
 
 class WorkspaceBodyUpdateRequest(BaseModel):
@@ -683,6 +802,139 @@ def _safe_resurface_source_link(candidate_id: str) -> str:
     if candidate_id in {"resurface-pending-promotions", "resurface-new-activity"}:
         return "status.events"
     return "runtime:resurfacing"
+
+
+def _orientation_iso(dt: datetime.datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _orientation_source_ref(kind: str, ref: str, label: str | None = None) -> WorkspaceOrientationSourceRef:
+    return WorkspaceOrientationSourceRef(kind=kind, ref=ref, label=label)
+
+
+def _orientation_item_id(prefix: str, index: int) -> str:
+    return f"{prefix}-{index + 1}"
+
+
+def _orientation_leave_point(
+    signals: OrientationSignals,
+    *,
+    frame_label: str | None,
+) -> WorkspaceOrientationLeavePoint:
+    return WorkspaceOrientationLeavePoint(
+        label=frame_label,
+        last_interaction_at=_orientation_iso(signals.ingestion.last_run_at),
+        last_session_id=None,
+        source_ref=_orientation_source_ref(
+            "runtime_signal",
+            "orientation.signals",
+            "orientation signals",
+        ),
+    )
+
+
+def _orientation_open_loops(open_items: list[str]) -> list[WorkspaceOrientationOpenLoop]:
+    loops: list[WorkspaceOrientationOpenLoop] = []
+    for index, label in enumerate(open_items[:ORIENTATION_OPEN_LOOPS_CAP]):
+        unresolved = not label.startswith("No unresolved")
+        loops.append(
+            WorkspaceOrientationOpenLoop(
+                id=_orientation_item_id("open-loop", index),
+                label=label,
+                status="open" if unresolved else "unknown",
+                handoff_hint="panel" if unresolved else "none",
+                source_ref=_orientation_source_ref(
+                    "runtime_signal",
+                    "orientation.open_items",
+                    "orientation open items",
+                ),
+            )
+        )
+    return loops
+
+
+def _orientation_notable_changes(
+    signals: OrientationSignals,
+    *,
+    label: str,
+) -> list[WorkspaceOrientationNotableChange]:
+    return [
+        WorkspaceOrientationNotableChange(
+            id="notable-change-1",
+            label=label,
+            summary=label,
+            changed_at=_orientation_iso(signals.ingestion.last_run_at),
+            source_ref=_orientation_source_ref(
+                "runtime_signal",
+                "orientation.notable_change",
+                "orientation notable change",
+            ),
+        )
+    ][:ORIENTATION_NOTABLE_CHANGES_CAP]
+
+
+def _orientation_resurface_source_ref(candidate_id: str) -> WorkspaceOrientationSourceRef:
+    source_link = _safe_resurface_source_link(candidate_id)
+    kind = "runtime_signal" if source_link.startswith("status.") else "derived"
+    return _orientation_source_ref(kind, source_link, "resurfacing signal")
+
+
+def _orientation_resurface_candidates(signals: OrientationSignals) -> list[WorkspaceOrientationResurfaceCandidate]:
+    evaluation = evaluate_resurfacing_candidates(signals=signals)
+    candidates: list[WorkspaceOrientationResurfaceCandidate] = []
+    for candidate in evaluation.candidates[:ORIENTATION_RESURFACE_CANDIDATES_CAP]:
+        signal_labels = [
+            f"{signal.name}={signal.value}"
+            for signal in candidate.why_now.signals[:ORIENTATION_SOURCE_REFS_PER_ITEM_CAP]
+        ]
+        candidates.append(
+            WorkspaceOrientationResurfaceCandidate(
+                id=candidate.candidate_id,
+                label=candidate.label,
+                why_now=candidate.why_now.explanation,
+                signal_labels=signal_labels,
+                source_ref=_orientation_resurface_source_ref(candidate.candidate_id),
+            )
+        )
+    return candidates
+
+
+def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
+    proposals = getattr(confirm_module._proposal_store, "_proposals", {})
+    receipts = getattr(confirm_module._idempotency_store, "_cache", {})
+    receipt_values = list(receipts.values()) if isinstance(receipts, dict) else []
+    latest = receipt_values[-1] if receipt_values else None
+    latest_outcome = getattr(latest, "outcome", None) if latest is not None else None
+    source_kind = "receipt" if receipt_values else "runtime_signal"
+    source_ref = "panel.receipts" if receipt_values else "panel.governance_summary"
+    return WorkspaceOrientationGovernance(
+        pending_proposal_count=len(proposals) if isinstance(proposals, dict) else 0,
+        pending_receipt_count=len(receipt_values),
+        latest_receipt_outcome=latest_outcome,
+        source_ref=_orientation_source_ref(
+            source_kind,
+            source_ref,
+            "governance summary",
+        ),
+    )
+
+
+def _orientation_identity() -> VaultIdentityState:
+    return _vault_identity_state(resolve_vault_root())
+
+
+def _orientation_error(trace_id: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "runtime_unavailable",
+            "message": message,
+            "trace_id": trace_id,
+            "contract_version": ORIENTATION_CONTRACT_VERSION,
+        },
+    )
 
 
 _ARTIFACT_REQUIRED_FIELDS = ("uuid",)
@@ -1395,6 +1647,95 @@ def read_companion_vault_related(
         data_mode="read_only",
         vault_identity=identity,
         identity_available=identity_available,
+    )
+
+
+@router.get("/orientation", response_model=WorkspaceOrientationResponse)
+def read_companion_orientation() -> WorkspaceOrientationResponse:
+    trace_id = uuid4().hex
+    generated_at = datetime.datetime.now(datetime.timezone.utc)
+    stale_after = generated_at + datetime.timedelta(seconds=ORIENTATION_STALE_AFTER_SECONDS)
+
+    try:
+        identity = _orientation_identity()
+        orientation_signals = get_orientation_signals()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _orientation_error(
+            trace_id,
+            "The workspace orientation source could not be reached",
+        ) from exc
+
+    degraded_reasons: list[str] = []
+    leave_point: WorkspaceOrientationLeavePoint | None = None
+    open_loops: list[WorkspaceOrientationOpenLoop] = []
+    notable_changes: list[WorkspaceOrientationNotableChange] = []
+    resurface_candidates: list[WorkspaceOrientationResurfaceCandidate] = []
+
+    try:
+        frame = build_orientation_frame(signals=orientation_signals)
+        leave_point = _orientation_leave_point(
+            orientation_signals,
+            frame_label=frame.explanation.leave_point,
+        )
+        open_loops = _orientation_open_loops(frame.explanation.open_items)
+        notable_changes = _orientation_notable_changes(
+            orientation_signals,
+            label=frame.explanation.notable_change,
+        )
+    except Exception:
+        degraded_reasons.append("orientation_source_unavailable")
+
+    try:
+        resurface_candidates = _orientation_resurface_candidates(orientation_signals)
+    except Exception:
+        degraded_reasons.append("resurfacing_source_unavailable")
+
+    try:
+        governance = _orientation_governance_summary()
+    except Exception:
+        degraded_reasons.append("governance_source_unavailable")
+        governance = WorkspaceOrientationGovernance(
+            pending_proposal_count=0,
+            pending_receipt_count=0,
+            latest_receipt_outcome=None,
+            source_ref=_orientation_source_ref(
+                "derived",
+                "unavailable",
+                "governance source unavailable",
+            ),
+        )
+
+    degraded = bool(degraded_reasons)
+    return WorkspaceOrientationResponse(
+        scope=WorkspaceOrientationScope(
+            vault_id=identity.vault_name,
+            channel=identity.channel,
+        ),
+        meta=WorkspaceOrientationMeta(
+            as_of=_orientation_iso(generated_at) or generated_at.isoformat(),
+            trace_id=trace_id,
+            freshness="partial" if degraded else "fresh",
+            stale_after=_orientation_iso(stale_after) or stale_after.isoformat(),
+            degraded_reasons=degraded_reasons,
+        ),
+        leave_point=leave_point,
+        open_loops=open_loops,
+        notable_changes=notable_changes,
+        resurface=WorkspaceOrientationResurface(candidates=resurface_candidates),
+        governance=governance,
+        guards=WorkspaceOrientationGuards(
+            runtime_posture="degraded" if degraded else "healthy",
+            degraded=degraded,
+            reasons=degraded_reasons,
+            source_ref=_orientation_source_ref(
+                "status",
+                "api-status-derived",
+                "minimal status posture",
+            ),
+        ),
+        mutation_intents=[],
     )
 
 
