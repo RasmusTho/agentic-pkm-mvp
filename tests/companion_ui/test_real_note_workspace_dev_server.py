@@ -479,7 +479,8 @@ class TestHandleGet:
             api_base_url="http://127.0.0.1:18001",
         )
         assert "DEV" in html or "STAGING" in html
-        assert client.get_calls == []
+        assert 'data-testid="workspace-reentry-orientation"' in html
+        assert client.get_calls == [("/api/companion/orientation", {})]
 
     def test_note_path_param_triggers_api_call(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get

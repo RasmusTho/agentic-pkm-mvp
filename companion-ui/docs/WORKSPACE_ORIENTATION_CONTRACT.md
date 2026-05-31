@@ -30,9 +30,8 @@ Workspace Orientation Snapshot at `GET /api/companion/orientation`, which
 answers "where am I in the system, what is open, what changed, and what can I
 safely resume?"
 
-This document is the contract for the Phase 1 runtime endpoint. The shipped
-endpoint remains a read-only projection; Companion UI consumption is tracked by
-the follow-on re-entry surface issue.
+This document is the contract for the Phase 1 runtime endpoint and Companion UI
+re-entry consumption. Both shipped surfaces remain read-only projections.
 
 ## Scope
 
@@ -516,3 +515,8 @@ not imply changes to the artifact-scoped workspace endpoint. The Phase 1
 implementation is limited to the read-only, derived-only MVP shape in this
 contract; leave-point persistence, MemoryCandidate intents, push, and
 multi-agent semantics remain out of scope.
+
+The Phase 1 Companion UI re-entry surface consumes this endpoint on cold load or
+when no artifact is active. It renders only server-declared fields, uses
+runtime-relative artifact refs for `/workspace?note_path=...` deep links, and
+does not issue mutation calls from the re-entry surface.

@@ -4,7 +4,8 @@ DEV/STAGING ONLY — not for production use.
 
 Does not implement auth, TLS, reverse proxy, or public exposure.
 Calls the configured runtime API through WorkspaceHttpClient
-(GET /api/companion/workspace). Does not read vault files directly.
+(GET /api/companion/orientation for re-entry, GET /api/companion/workspace
+for active artifacts). Does not read vault files directly.
 Vault binding is determined by the runtime environment, not by this server.
 
 Environment variables:
@@ -3346,12 +3347,527 @@ def _render_error_section(error: str) -> str:
   </div>"""
 
 
+def _orientation_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _orientation_list(value: object) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _orientation_str(value: object, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    text = str(value)
+    return text if text else fallback
+
+
+def _orientation_artifact_link(artifact_ref: object, *, testid: str) -> str:
+    artifact = _orientation_dict(artifact_ref)
+    note_path = _orientation_str(artifact.get("note_path"))
+    title = _orientation_str(artifact.get("title"), note_path or "Artifact")
+    artifact_id = _orientation_str(artifact.get("artifact_id"))
+    if not note_path:
+        return (
+            f'<span class="orientation-artifact-link orientation-artifact-link--empty" '
+            f'data-testid="{testid}" data-artifact-id="{_e(artifact_id)}">'
+            f"{_e(title)}</span>"
+        )
+    href = "/workspace?note_path=" + quote(note_path, safe="")
+    return (
+        f'<a class="orientation-artifact-link" data-testid="{testid}" '
+        f'data-note-path="{_e(note_path)}" data-artifact-id="{_e(artifact_id)}" '
+        f'href="{_e(href)}">{_e(title)}</a>'
+    )
+
+
+def _orientation_provenance(item: object, *, testid: str) -> str:
+    data = _orientation_dict(item)
+    source_ref = _orientation_dict(data.get("source_ref"))
+    authority_role = _orientation_str(data.get("authority_role"), "unknown")
+    source_kind = _orientation_str(source_ref.get("kind"), "unknown")
+    source_label = _orientation_str(source_ref.get("label"), source_kind)
+    source_ref_value = _orientation_str(source_ref.get("ref"))
+    return (
+        f'<div class="orientation-provenance" data-testid="{testid}" '
+        f'data-authority-role="{_e(authority_role)}" '
+        f'data-source-kind="{_e(source_kind)}" '
+        f'data-source-ref="{_e(source_ref_value)}">'
+        f"{_e(authority_role)} · {_e(source_label)}</div>"
+    )
+
+
+def _orientation_degraded_reasons(orientation: dict) -> list[str]:
+    guards = _orientation_dict(orientation.get("guards"))
+    meta = _orientation_dict(orientation.get("meta"))
+    raw = _orientation_list(guards.get("reasons")) or _orientation_list(
+        meta.get("degraded_reasons")
+    )
+    return [_orientation_str(reason) for reason in raw if _orientation_str(reason)]
+
+
+def _render_orientation_leave_point(leave_point: object) -> str:
+    leave = _orientation_dict(leave_point)
+    if not leave:
+        return """
+        <section class="orientation-section" data-testid="workspace-orientation-leave-point">
+          <div class="orientation-section-kicker">Leave point</div>
+          <p class="orientation-empty">No derived leave point is available yet.</p>
+        </section>"""
+    label = _orientation_str(leave.get("label"), "Derived leave point")
+    last_seen = _orientation_str(leave.get("last_interaction_at"), "time unknown")
+    session_id = _orientation_str(leave.get("last_session_id"))
+    session_html = (
+        f'<span class="orientation-muted">session {_e(session_id)}</span>'
+        if session_id
+        else ""
+    )
+    return f"""
+        <section class="orientation-section orientation-section--primary"
+          data-testid="workspace-orientation-leave-point"
+          data-leave-point-kind="{_e(_orientation_str(leave.get("kind"), "derived_only"))}">
+          <div class="orientation-section-kicker">Leave point</div>
+          <h1 class="orientation-title">{_e(label)}</h1>
+          <div class="orientation-artifact-row">
+            {_orientation_artifact_link(leave.get("artifact_ref"), testid="workspace-orientation-leave-link")}
+          </div>
+          <div class="orientation-meta-row">
+            <span>Last signal: {_e(last_seen)}</span>
+            {session_html}
+          </div>
+          {_orientation_provenance(leave, testid="workspace-orientation-leave-provenance")}
+        </section>"""
+
+
+def _render_orientation_open_loops(open_loops: object) -> str:
+    rows: list[str] = []
+    for item in _orientation_list(open_loops):
+        loop = _orientation_dict(item)
+        rows.append(
+            f"""
+            <article class="orientation-item" data-testid="workspace-orientation-open-loop"
+              data-loop-status="{_e(_orientation_str(loop.get("status"), "unknown"))}"
+              data-handoff-hint="{_e(_orientation_str(loop.get("handoff_hint"), "none"))}">
+              <div class="orientation-item-main">
+                <h3>{_e(_orientation_str(loop.get("label"), "Open loop"))}</h3>
+                {_orientation_artifact_link(loop.get("artifact_ref"), testid="workspace-orientation-open-loop-link")}
+              </div>
+              <div class="orientation-badges">
+                <span>{_e(_orientation_str(loop.get("status"), "unknown"))}</span>
+                <span>handoff: {_e(_orientation_str(loop.get("handoff_hint"), "none"))}</span>
+              </div>
+              {_orientation_provenance(loop, testid="workspace-orientation-open-loop-provenance")}
+            </article>"""
+        )
+    body = "".join(rows) if rows else '<p class="orientation-empty">No open loops declared.</p>'
+    return f"""
+        <section class="orientation-section" data-testid="workspace-orientation-open-loops">
+          <div class="orientation-section-header">
+            <div class="orientation-section-kicker">Open loops</div>
+            <span class="orientation-count">{len(rows)}</span>
+          </div>
+          {body}
+        </section>"""
+
+
+def _render_orientation_notable_changes(changes: object) -> str:
+    rows: list[str] = []
+    for item in _orientation_list(changes):
+        change = _orientation_dict(item)
+        summary = _orientation_str(change.get("summary"))
+        changed_at = _orientation_str(change.get("changed_at"), "time unknown")
+        rows.append(
+            f"""
+            <article class="orientation-item" data-testid="workspace-orientation-notable-change">
+              <div class="orientation-item-main">
+                <h3>{_e(_orientation_str(change.get("label"), "Notable change"))}</h3>
+                <p>{_e(summary)}</p>
+                {_orientation_artifact_link(change.get("artifact_ref"), testid="workspace-orientation-notable-change-link")}
+              </div>
+              <div class="orientation-meta-row">Changed: {_e(changed_at)}</div>
+              {_orientation_provenance(change, testid="workspace-orientation-notable-change-provenance")}
+            </article>"""
+        )
+    body = "".join(rows) if rows else '<p class="orientation-empty">No notable changes declared.</p>'
+    return f"""
+        <section class="orientation-section" data-testid="workspace-orientation-notable-changes">
+          <div class="orientation-section-header">
+            <div class="orientation-section-kicker">Notable changes</div>
+            <span class="orientation-count">{len(rows)}</span>
+          </div>
+          {body}
+        </section>"""
+
+
+def _render_orientation_resurface(resurface: object) -> str:
+    payload = _orientation_dict(resurface)
+    rows: list[str] = []
+    for item in _orientation_list(payload.get("candidates")):
+        candidate = _orientation_dict(item)
+        signals = "".join(
+            f'<span class="orientation-signal">{_e(_orientation_str(signal))}</span>'
+            for signal in _orientation_list(candidate.get("signal_labels"))
+        )
+        rows.append(
+            f"""
+            <article class="orientation-item" data-testid="workspace-orientation-resurface-candidate">
+              <div class="orientation-item-main">
+                <h3>{_e(_orientation_str(candidate.get("label"), "Resurface candidate"))}</h3>
+                <p class="orientation-why" data-testid="workspace-orientation-resurface-why-now">
+                  {_e(_orientation_str(candidate.get("why_now")))}
+                </p>
+                {_orientation_artifact_link(candidate.get("artifact_ref"), testid="workspace-orientation-resurface-link")}
+              </div>
+              <div class="orientation-signals">{signals}</div>
+              {_orientation_provenance(candidate, testid="workspace-orientation-resurface-provenance")}
+            </article>"""
+        )
+    body = "".join(rows) if rows else '<p class="orientation-empty">No resurface candidates declared.</p>'
+    return f"""
+        <section class="orientation-section" data-testid="workspace-orientation-resurface">
+          <div class="orientation-section-header">
+            <div class="orientation-section-kicker">Resurface</div>
+            <span class="orientation-count">{len(rows)}</span>
+          </div>
+          {body}
+        </section>"""
+
+
+def _render_orientation_governance(governance: object) -> str:
+    payload = _orientation_dict(governance)
+    pending_proposals = _orientation_str(payload.get("pending_proposal_count"), "0")
+    pending_receipts = _orientation_str(payload.get("pending_receipt_count"), "0")
+    latest_outcome = _orientation_str(payload.get("latest_receipt_outcome"), "none")
+    return f"""
+        <section class="orientation-section orientation-governance"
+          data-testid="workspace-orientation-governance">
+          <div class="orientation-section-kicker">Governance</div>
+          <div class="orientation-governance-grid">
+            <div><span>{_e(pending_proposals)}</span><small>pending proposals</small></div>
+            <div><span>{_e(pending_receipts)}</span><small>pending receipts</small></div>
+            <div><span>{_e(latest_outcome)}</span><small>latest receipt outcome</small></div>
+          </div>
+          {_orientation_provenance(payload, testid="workspace-orientation-governance-provenance")}
+        </section>"""
+
+
+def _render_orientation_index_html(
+    *,
+    api_base_url: str,
+    note_path: str,
+    orientation: dict,
+    production_profile: bool,
+    diagnostics: bool,
+) -> str:
+    scope = _orientation_dict(orientation.get("scope"))
+    meta = _orientation_dict(orientation.get("meta"))
+    guards = _orientation_dict(orientation.get("guards"))
+    reasons = _orientation_degraded_reasons(orientation)
+    degraded = bool(guards.get("degraded")) or bool(reasons)
+    title_suffix = "PROD" if production_profile else "DEV"
+    dev_chip = "" if production_profile else '<span class="dev-chip">DEV / not production</span>'
+    freshness = _orientation_str(meta.get("freshness"), "unknown")
+    runtime_posture = _orientation_str(guards.get("runtime_posture"), "unknown")
+    reason_html = "".join(
+        f'<span class="orientation-reason">{_e(reason)}</span>' for reason in reasons
+    )
+    degraded_html = (
+        f"""
+        <section class="orientation-degraded" data-testid="workspace-orientation-degraded"
+          data-runtime-posture="{_e(runtime_posture)}">
+          <strong>Partial orientation</strong>
+          <span>Runtime posture: {_e(runtime_posture)}</span>
+          <div>{reason_html}</div>
+        </section>"""
+        if degraded
+        else ""
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
+  <style>
+    :root {{
+      --bg-base: #070b12;
+      --bg-surface: #0c1220;
+      --bg-raised: #111a2e;
+      --fg-1: #dce8f0;
+      --fg-2: #7a9ab8;
+      --fg-3: #3d5570;
+      --border: #152030;
+      --border-strong: #1e3050;
+      --accent: #d4a843;
+      --cyan: #00d4e8;
+      --destructive: #ff3d3d;
+      --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg-base);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      line-height: 1.55;
+    }}
+    .topbar {{
+      align-items: center;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      padding: 8px 20px;
+    }}
+    .topbar-api {{
+      color: var(--fg-2);
+      flex: 1;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      min-width: 0;
+    }}
+    .api-label {{ color: var(--fg-3); letter-spacing: 0.06em; text-transform: uppercase; }}
+    .dev-chip {{
+      border: 1px solid rgba(212,168,67,0.45);
+      border-radius: 4px;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      text-transform: uppercase;
+    }}
+    body[data-diagnostics="false"] .topbar,
+    body[data-diagnostics="false"] .dev-controls-disclosure,
+    body[data-diagnostics="false"] .dev-chip {{ display: none; }}
+    .dev-controls-disclosure {{ background: var(--bg-surface); border-bottom: 1px solid var(--border); }}
+    .dev-controls-summary {{
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 4px 20px;
+    }}
+    .load-bar {{ display: flex; gap: 8px; padding: 10px 20px; }}
+    .load-bar form {{ align-items: center; display: flex; gap: 8px; width: 100%; }}
+    .load-bar label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .load-bar input {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--fg-1);
+      flex: 1;
+      min-width: 0;
+      padding: 7px 10px;
+    }}
+    .load-bar button {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--fg-1);
+      cursor: pointer;
+      padding: 7px 14px;
+    }}
+    .orientation-shell {{
+      display: grid;
+      gap: 16px;
+      margin: 0 auto;
+      max-width: 1180px;
+      padding: 24px;
+    }}
+    .orientation-header {{
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      gap: 8px;
+      padding-bottom: 16px;
+    }}
+    .orientation-eyebrow {{
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .orientation-heading {{
+      font-size: 26px;
+      font-weight: 600;
+      margin: 0;
+    }}
+    .orientation-meta {{
+      color: var(--fg-2);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }}
+    .orientation-grid {{
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+    }}
+    .orientation-column {{ display: grid; gap: 16px; min-width: 0; }}
+    .orientation-section {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }}
+    .orientation-section--primary {{ border-color: var(--border-strong); }}
+    .orientation-section-header {{
+      align-items: center;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }}
+    .orientation-section-kicker {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .orientation-title {{
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0;
+    }}
+    .orientation-item {{
+      border-top: 1px solid var(--border);
+      display: grid;
+      gap: 8px;
+      padding-top: 12px;
+    }}
+    .orientation-item:first-of-type {{ border-top: 0; padding-top: 0; }}
+    .orientation-item h3 {{ font-size: 16px; font-weight: 600; margin: 0; }}
+    .orientation-item p {{ color: var(--fg-2); margin: 0; }}
+    .orientation-artifact-link {{ color: var(--cyan); font-size: 14px; text-decoration: none; }}
+    .orientation-artifact-link:hover {{ text-decoration: underline; }}
+    .orientation-artifact-link--empty {{ color: var(--fg-3); }}
+    .orientation-badges, .orientation-signals, .orientation-meta-row {{
+      color: var(--fg-2);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }}
+    .orientation-badges span, .orientation-signal, .orientation-count, .orientation-reason {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+    }}
+    .orientation-provenance {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }}
+    .orientation-empty {{ color: var(--fg-3); margin: 0; }}
+    .orientation-governance-grid {{
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }}
+    .orientation-governance-grid div {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+    }}
+    .orientation-governance-grid span {{ display: block; font-size: 20px; font-weight: 600; }}
+    .orientation-governance-grid small {{
+      color: var(--fg-2);
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      margin-top: 2px;
+    }}
+    .orientation-degraded {{
+      background: rgba(255,61,61,0.08);
+      border: 1px solid rgba(255,61,61,0.35);
+      border-radius: 8px;
+      color: var(--fg-1);
+      display: grid;
+      gap: 8px;
+      padding: 12px 16px;
+    }}
+    .orientation-degraded strong {{ color: var(--destructive); }}
+    @media (max-width: 860px) {{
+      .orientation-grid {{ grid-template-columns: 1fr; }}
+      .orientation-governance-grid {{ grid-template-columns: 1fr; }}
+      .orientation-shell {{ padding: 16px; }}
+    }}
+  </style>
+</head>
+<body data-diagnostics="{'true' if diagnostics else 'false'}">
+  <div class="topbar">
+    <div class="topbar-api">
+      <span class="api-label">Server-side runtime</span>
+      <span title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
+    </div>
+    {dev_chip}
+  </div>
+  <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
+    <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
+    <div class="load-bar">
+      <form method="GET" action="/workspace">
+        <label for="note_path">note_path</label>
+        <input id="note_path" name="note_path" type="text"
+          value="{_e(note_path)}" placeholder="Some/Note.md" autocomplete="off">
+        <button type="submit">Load</button>
+      </form>
+    </div>
+  </details>
+  <main class="orientation-shell" data-testid="workspace-reentry-orientation"
+    data-read-only="true"
+    data-contract-version="{_e(_orientation_str(meta.get("contract_version"), "unknown"))}"
+    data-freshness="{_e(freshness)}">
+    <header class="orientation-header">
+      <div class="orientation-eyebrow">Workspace orientation</div>
+      <h1 class="orientation-heading">Re-entry snapshot</h1>
+      <div class="orientation-meta">
+        <span>vault: {_e(_orientation_str(scope.get("vault_id"), "unknown"))}</span>
+        <span>channel: {_e(_orientation_str(scope.get("channel"), "unknown"))}</span>
+        <span>freshness: {_e(freshness)}</span>
+        <span>as of: {_e(_orientation_str(meta.get("as_of"), "unknown"))}</span>
+        <span>trace: {_e(_orientation_str(meta.get("trace_id"), "unknown"))}</span>
+      </div>
+    </header>
+    {degraded_html}
+    <div class="orientation-grid">
+      <div class="orientation-column">
+        {_render_orientation_leave_point(orientation.get("leave_point"))}
+        {_render_orientation_open_loops(orientation.get("open_loops"))}
+        {_render_orientation_notable_changes(orientation.get("notable_changes"))}
+      </div>
+      <div class="orientation-column">
+        {_render_orientation_governance(orientation.get("governance"))}
+        {_render_orientation_resurface(orientation.get("resurface"))}
+      </div>
+    </div>
+  </main>
+</body>
+</html>"""
+
+
 def render_index_html(
     *,
     api_base_url: str,
     note_path: str = "",
     fields: Optional[dict] = None,
     error: str = "",
+    orientation: Optional[dict] = None,
     production_profile: bool = False,
     diagnostics: bool = False,
 ) -> str:
@@ -3365,6 +3881,15 @@ def render_index_html(
     real_note_workspace_shell.py. Canvas body-edit and Panel execution
     are not implemented; the agent rail is a placeholder.
     """
+    if orientation is not None and fields is None and not error:
+        return _render_orientation_index_html(
+            api_base_url=api_base_url,
+            note_path=note_path,
+            orientation=orientation,
+            production_profile=production_profile,
+            diagnostics=diagnostics,
+        )
+
     content_section = ""
     if error:
         content_section = _render_error_section(error)
@@ -6194,7 +6719,8 @@ def handle_get(
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
-    Pure except for the WorkspaceHttpClient network call when note_path is present.
+    Pure except for one WorkspaceHttpClient read: artifact workspace when
+    note_path is present, otherwise workspace orientation for re-entry.
     """
     params = parse_qs(query_string)
     note_path = params.get("note_path", [""])[0].strip()
@@ -6203,6 +6729,7 @@ def handle_get(
     # #1418 — diagnostics/operator chrome is opt-in via an explicit route.
     diagnostics = params.get("diagnostics", ["0"])[0].strip().lower() in {"1", "true", "yes", "on"}
     fields: Optional[dict] = None
+    orientation: Optional[dict] = None
     error = ""
 
     if note_path:
@@ -6212,12 +6739,18 @@ def handle_get(
             fields = page.render_fields()
         else:
             error = state.error or "Unknown error"
+    else:
+        try:
+            orientation = client.get("/api/companion/orientation", params={})
+        except WorkspaceClientError as exc:
+            error = str(exc)
 
     return render_index_html(
         api_base_url=api_base_url,
         note_path=note_path,
         fields=fields,
         error=error,
+        orientation=orientation,
         production_profile=production_profile,
         diagnostics=diagnostics,
     )
@@ -6279,6 +6812,14 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path == "/api/companion/orientation":
+                try:
+                    data = self._client.get("/api/companion/orientation", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
                 return
             if parsed.path == "/api/companion/vault/notes":
                 params = parse_qs(parsed.query)
