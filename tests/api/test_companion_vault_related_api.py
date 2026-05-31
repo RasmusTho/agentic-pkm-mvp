@@ -144,6 +144,40 @@ def test_vault_related_accepts_artifact_uuid_scope(
     assert data["results"][0]["note_path"] == "notes/related.md"
 
 
+def test_vault_related_exposes_link_relation_provenance_for_inspector(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    _write_note(
+        tmp_path / "notes" / "current.md",
+        title="Current",
+        uuid="00000000-0000-0000-0000-000000001470",
+        body="See [[Related]].\n",
+    )
+    _write_note(
+        tmp_path / "notes" / "related.md",
+        title="Related",
+        uuid="00000000-0000-0000-0000-000000001471",
+        body="Backlink to [[Current]].\n",
+    )
+
+    resp = TestClient(app).get(
+        "/api/companion/vault-related",
+        params={"note_path": "notes/current.md"},
+    )
+
+    assert resp.status_code == 200
+    signals = resp.json()["results"][0]["ranking_signals"]
+    assert signals
+    assert {signal["signal"] for signal in signals} >= {
+        "wikilink_outlink",
+        "wikilink_backlink",
+    }
+    assert all(signal["provenance"] for signal in signals)
+
+
 def test_vault_related_requires_artifact_scope(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")

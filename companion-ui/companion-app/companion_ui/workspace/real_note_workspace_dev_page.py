@@ -281,6 +281,44 @@ class RealNoteWorkspaceDevPage:
         # Fall back to note_path so note-path-only loads don't fail the shell's
         # non-empty artifact_id invariant.
         resolved_note_path = artifact.get("note_path") or intent.note_path
+        vault_browser_notes = [
+            dict(note)
+            for note in list(vault_browser.get("notes") or [])
+            if isinstance(note, dict)
+        ]
+        active_note_declares_relations = any(
+            note.get("note_path") == resolved_note_path
+            and ("relations" in note or "relations_state" in note)
+            for note in vault_browser_notes
+        )
+        if (
+            isinstance(self._http, WorkspaceHttpClient)
+            and resolved_note_path
+            and not active_note_declares_relations
+        ):
+            try:
+                related_payload = self._http.get(
+                    "/api/companion/vault-related",
+                    params={"note_path": resolved_note_path},
+                )
+                related_results = list(related_payload.get("results") or [])
+                relations_update = {
+                    "relations": related_results,
+                    "relations_state": "ready" if related_results else "empty",
+                }
+            except Exception:
+                relations_update = {"relations_state": "unavailable"}
+            vault_browser_notes = [
+                {
+                    **note,
+                    **(
+                        relations_update
+                        if note.get("note_path") == resolved_note_path
+                        else {}
+                    ),
+                }
+                for note in vault_browser_notes
+            ]
         resolved_artifact_id = (
             artifact.get("artifact_id")
             or intent.artifact_id
@@ -422,7 +460,7 @@ class RealNoteWorkspaceDevPage:
             guard_workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
             guard_workspace_update_config_mode=workspace_update_config_mode,
             active_note_body_update_enabled=workspace_update_available,
-            vault_browser_notes=list(vault_browser.get("notes") or []),
+            vault_browser_notes=vault_browser_notes,
             vault_link_index=vault_link_index,
             vault_browser_query=str(vault_browser.get("query") or ""),
             vault_browser_total_notes=int(vault_browser.get("total_notes") or 0),

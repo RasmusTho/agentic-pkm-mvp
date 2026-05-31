@@ -1543,6 +1543,80 @@ def _render_active_note_body_update_flow(
         </section>"""
 
 
+def _render_inspector_links(note: dict) -> str:
+    """Render read-only relation data declared by the runtime payload."""
+    sentinel = object()
+    relations_raw = note.get("relations", sentinel)
+    declared_state = str(note.get("relations_state") or "").strip()
+    if relations_raw is sentinel:
+        relation_state = declared_state or "unavailable"
+        return (
+            '<section class="inspector-links" '
+            'data-testid="workspace-vault-browser-inspector-links" '
+            f'data-relation-state="{_e(relation_state)}" '
+            'data-affordance-status="read-only">'
+            '<span class="inspector-label">links</span>'
+            '<span class="inspector-links-unavailable">Relation index unavailable.</span>'
+            '</section>'
+        )
+
+    relations: list[dict] = [r for r in list(relations_raw or []) if isinstance(r, dict)]
+    if not relations:
+        return (
+            '<section class="inspector-links" '
+            'data-testid="workspace-vault-browser-inspector-links" '
+            'data-relation-state="empty" '
+            'data-affordance-status="read-only">'
+            '<span class="inspector-label">links</span>'
+            '<span class="inspector-links-empty">No link relations found for this artifact.</span>'
+            '</section>'
+        )
+
+    relation_rows: list[str] = []
+    for relation in relations:
+        signals = [
+            signal
+            for signal in list(relation.get("ranking_signals") or relation.get("signals") or [])
+            if isinstance(signal, dict)
+        ]
+        primary_signal = signals[0] if signals else {}
+        relation_type = str(primary_signal.get("signal") or "related")
+        provenance = str(primary_signal.get("provenance") or "")
+        signal_html = "".join(
+            (
+                '<span class="inspector-link-signal" '
+                'data-testid="vault-browser-inspector-link-signal" '
+                f'data-signal="{_e(str(signal.get("signal") or ""))}" '
+                f'data-weight="{_e(str(signal.get("weight") or ""))}" '
+                f'data-provenance="{_e(str(signal.get("provenance") or ""))}">'
+                f'{_e(str(signal.get("signal") or ""))}'
+                '</span>'
+            )
+            for signal in signals
+        )
+        relation_rows.append(
+            '<article class="inspector-link-relation" '
+            'data-testid="vault-browser-inspector-link-relation" '
+            f'data-mode="{_e(str(relation.get("data_mode") or "read_only"))}" '
+            f'data-note-path="{_e(str(relation.get("note_path") or ""))}" '
+            f'data-relation-type="{_e(relation_type)}" '
+            f'data-provenance="{_e(provenance)}">'
+            f'<span class="inspector-link-title">{_e(str(relation.get("title") or "Related artifact"))}</span>'
+            f'<code class="inspector-link-path">{_e(str(relation.get("note_path") or ""))}</code>'
+            f'{signal_html}'
+            '</article>'
+        )
+    return (
+        '<section class="inspector-links" '
+        'data-testid="workspace-vault-browser-inspector-links" '
+        'data-relation-state="ready" '
+        'data-affordance-status="read-only">'
+        '<span class="inspector-label">links</span>'
+        + "".join(relation_rows)
+        + '</section>'
+    )
+
+
 def _render_artifact_inspector(
     note: dict,
     *,
@@ -1551,7 +1625,7 @@ def _render_artifact_inspector(
 ) -> str:
     """Render a read-only artifact inspector panel for the selected note.
 
-    Tabs/sections: Metadata, Health, Provenance, Links placeholder, Receipts placeholder.
+    Tabs/sections: Metadata, Health, Provenance, Links, Receipts.
     Inspector is read-only; no edit controls rendered. Client uses normalized server
     payload only — no frontmatter parsing here (#1255).
     """
@@ -1632,12 +1706,7 @@ def _render_artifact_inspector(
         f'</div>'
     )
 
-    links_placeholder = (
-        '<div data-testid="workspace-vault-browser-inspector-links-placeholder" '
-        'class="inspector-placeholder" data-affordance-status="unavailable">'
-        'Links: not connected yet.'
-        '</div>'
-    )
+    links_html = _render_inspector_links(note)
     actions_html = _render_vault_actions(note)
     receipts_html = _render_inspector_receipts(note)
     posture_html = _render_inspector_review_posture(note)
@@ -1665,7 +1734,7 @@ def _render_artifact_inspector(
         f'</div>'
         f'{posture_html}'
         f'{actions_html}'
-        f'{links_placeholder}'
+        f'{links_html}'
         f'{receipts_html}'
         f'</section>'
     )

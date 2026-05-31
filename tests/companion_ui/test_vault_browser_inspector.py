@@ -77,8 +77,10 @@ def _browser_note(
     updated: str | None = "2026-05-01",
     frontmatter_valid: bool = True,
     missing_required_fields: list[str] | None = None,
+    relations: list[dict[str, Any]] | None = None,
+    relations_state: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    note = {
         "note_path": note_path,
         "title": title,
         "uuid": uuid,
@@ -93,6 +95,11 @@ def _browser_note(
         "frontmatter_valid": frontmatter_valid,
         "missing_required_fields": missing_required_fields or [],
     }
+    if relations is not None:
+        note["relations"] = relations
+    if relations_state is not None:
+        note["relations_state"] = relations_state
+    return note
 
 
 def _vault_browser_payload(
@@ -128,15 +135,19 @@ def _load_page(
     note_path: str = "notes/current.md",
     workspace_payload: dict[str, Any] | None = None,
     browser_payload: dict[str, Any] | None = None,
+    related_payload: dict[str, Any] | None = None,
 ) -> tuple[RealNoteWorkspaceDevPage, dict | None, str]:
     workspace = _mock_get_response(workspace_payload or _workspace_payload(note_path=note_path))
     browser = _mock_get_response(browser_payload or _vault_browser_payload())
+    related = _mock_get_response(related_payload or {})
 
     def _side_effect(url: str, *, params: dict[str, Any], timeout: float):
         if url.endswith("/api/companion/workspace"):
             return workspace
         if url.endswith("/api/companion/vault-browser"):
             return browser
+        if url.endswith("/api/companion/vault-related") and related_payload is not None:
+            return related
         raise AssertionError(f"Unexpected URL: {url}")
 
     with patch("httpx.get", side_effect=_side_effect):
@@ -255,10 +266,86 @@ def test_inspector_distinguishes_artifact_identity_from_vault_identity() -> None
 # ---- AC5: links and receipts as explicit placeholders ----
 
 
-def test_inspector_renders_links_placeholder() -> None:
-    """AC5: Links section shown as explicit 'not connected yet' placeholder."""
+def test_inspector_renders_links_unavailable_state() -> None:
+    """AC5: Links section shows explicit unavailable state before relation data exists."""
     _, _, html = _load_page()
-    assert 'data-testid="workspace-vault-browser-inspector-links-placeholder"' in html
+    assert 'data-testid="workspace-vault-browser-inspector-links"' in html
+    assert 'data-relation-state="unavailable"' in html
+    assert 'data-testid="workspace-vault-browser-inspector-links-placeholder"' not in html
+
+
+def test_inspector_renders_read_only_links_section() -> None:
+    related_payload = {
+        "results": [
+            {
+                "note_path": "notes/related.md",
+                "title": "Related",
+                "data_mode": "read_only",
+                "ranking_signals": [
+                    {
+                        "signal": "wikilink_outlink",
+                        "value": "notes/related.md",
+                        "weight": 100,
+                        "provenance": "notes/current.md wikilinks to candidate",
+                    }
+                ],
+            }
+        ],
+    }
+    _, _, html = _load_page(related_payload=related_payload)
+
+    assert 'data-testid="workspace-vault-browser-inspector-links"' in html
+    assert 'data-relation-state="ready"' in html
+    assert 'data-testid="vault-browser-inspector-link-relation"' in html
+    assert 'data-relation-type="wikilink_outlink"' in html
+    assert 'data-provenance="notes/current.md wikilinks to candidate"' in html
+
+
+def test_inspector_links_section_distinguishes_empty_from_unavailable() -> None:
+    empty_note = _browser_note(relations=[], relations_state="empty")
+    _, _, empty_html = _load_page(
+        browser_payload=_vault_browser_payload(notes=[empty_note]),
+    )
+    unavailable_note = _browser_note()
+    _, _, unavailable_html = _load_page(
+        browser_payload=_vault_browser_payload(notes=[unavailable_note]),
+    )
+
+    assert 'data-testid="workspace-vault-browser-inspector-links"' in empty_html
+    assert 'data-relation-state="empty"' in empty_html
+    assert 'data-testid="workspace-vault-browser-inspector-links"' in unavailable_html
+    assert 'data-relation-state="unavailable"' in unavailable_html
+
+
+def test_inspector_links_section_is_read_only() -> None:
+    note = _browser_note(
+        relations=[
+            {
+                "note_path": "notes/related.md",
+                "title": "Related",
+                "data_mode": "read_only",
+                "ranking_signals": [
+                    {
+                        "signal": "wikilink_backlink",
+                        "value": "notes/current.md",
+                        "weight": 100,
+                        "provenance": "notes/related.md wikilinks to scope artifact",
+                    }
+                ],
+            }
+        ],
+        relations_state="ready",
+    )
+    _, _, html = _load_page(browser_payload=_vault_browser_payload(notes=[note]))
+    section_start = html.find('data-testid="workspace-vault-browser-inspector-links"')
+    assert section_start != -1
+    section_end = html.find("</section>", section_start)
+    link_section = html[section_start:section_end]
+
+    assert "<button" not in link_section
+    assert "<form" not in link_section
+    assert 'data-api-method="POST"' not in link_section
+    assert 'data-mode="governance_write"' not in link_section
 
 
 def test_inspector_renders_receipts_section() -> None:
