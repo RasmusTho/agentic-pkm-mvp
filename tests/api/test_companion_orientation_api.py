@@ -29,6 +29,10 @@ def _clear_runtime_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("PKM_CHANNEL", "test")
     monkeypatch.setenv("LEAVE_POINT_TRACE_DB", str(tmp_path / "runtime" / "leave-point.sqlite3"))
+    monkeypatch.setenv(
+        "MEMORY_INTENT_TRACE_PATH",
+        str(tmp_path / "runtime" / "orientation-memory-intents.jsonl"),
+    )
     monkeypatch.setattr(companion_module, "_configured_vault_name", lambda: "vault-test")
     clear_leave_point_trace()
     canvas_module._sessions.clear()
@@ -124,7 +128,13 @@ def test_orientation_snapshot_without_note(
     assert data["meta"]["contract_version"] == "workspace_orientation.v1"
     assert data["leave_point"]["status"] == "absent"
     assert data["leave_point"]["authority_role"] == "derived_runtime_projection"
-    assert data["mutation_intents"] == []
+    assert data["memory"]["pending_candidate_count"] == 0
+    assert data["mutation_intents"]
+    assert all(
+        intent["kind"] == "MemoryCandidate"
+        and intent["target_queue"] == "agent_memory.review_queue"
+        for intent in data["mutation_intents"]
+    )
     assert "artifact" not in data
     assert "body" not in data
 
@@ -168,7 +178,7 @@ def test_orientation_is_read_only(
     assert resp.status_code == 200
     data = resp.json()
     assert data["guards"]["read_only"] is True
-    assert data["mutation_intents"] == []
+    assert data["mutation_intents"]
     assert write_note.call_count == 0
     assert write_guard.call_count == 0
     assert canvas_module._sessions == {}

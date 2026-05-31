@@ -37,7 +37,7 @@ Workspace State surfaces:
 
 - **Artifact Workspace Snapshot (this contract):** `GET /api/companion/workspace?note_path=…`
   — answers "what is the state around this artifact?"
-- **Workspace Orientation Snapshot (planned, v6.1):** a separate
+- **Workspace Orientation Snapshot:** a separate
   note-independent surface (`GET /api/companion/orientation`) that exists when
   no note is open — answers "where am I in the system, what is open, and what
   can I safely resume?"
@@ -52,8 +52,9 @@ slices) are recorded in
 note-independent surface shape is governed by
 `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md`; the leave-point cursor
 trace decision is recorded in
-`docs/adr/ADR-0008-leave-point-cursor.md`. The note-independent surface is
-target-state v6.1 work and is **not** shipped.
+`docs/adr/ADR-0008-leave-point-cursor.md`, and the bounded MemoryCandidate
+intent seam is governed by
+`docs/adr/ADR-0009-orientation-memory-candidate-intent.md`.
 
 ## Endpoint
 

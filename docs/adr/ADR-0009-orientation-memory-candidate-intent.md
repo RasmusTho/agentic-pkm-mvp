@@ -1,9 +1,9 @@
-State: Proposed - decision recorded; no runtime behavior is claimed. This ADR gates downstream implementation issue #1457.
+State: Accepted - implemented by the read-only runtime seam in issue #1457.
 
 # ADR-0009: Orientation MemoryCandidate Intent Threshold and Trace Semantics
 
 **Date:** 2026-05-31
-**Status:** Proposed - decision recorded; docs-only
+**Status:** Accepted - runtime seam implemented by #1457
 
 ---
 
@@ -22,7 +22,8 @@ review. That would violate the agent-memory contract: observation must not skip 
 candidate material must pass through review before promotion.
 
 This ADR decides the threshold for a `MemoryCandidate` `mutation_intent` from orientation and whether
-that intent needs trace or receipt semantics. Runtime implementation remains downstream work in #1457.
+that intent needs trace or receipt semantics. Runtime implementation is shipped by #1457 under this
+boundary.
 
 ## Decision
 
@@ -168,12 +169,12 @@ Concept contracts should clarify, where useful, that:
 
 ## Follow-up Issue Impact
 
-#1457 may implement read-only pending MemoryCandidate awareness and bounded intent emission only under this ADR. It must not implement candidate creation, candidate acceptance, promotion, memory storage, push/ambient resurfacing (#1458), multi-agent reads (#1459), or changes to #1455 leave-point cursor semantics.
+#1457 implements read-only pending MemoryCandidate awareness and bounded intent emission only under this ADR. It does not implement candidate creation, candidate acceptance, promotion, memory storage, push/ambient resurfacing (#1458), multi-agent reads (#1459), or changes to #1455 leave-point cursor semantics.
 
 ## References
 
 - Issue #1456: orientation MemoryCandidate intent threshold + trace requirement
-- Issue #1457: downstream runtime implementation
+- Issue #1457: runtime implementation
 - `docs/adr/ADR-0007-workspace-state-contract-scope-split.md`
 - `docs/adr/ADR-0008-leave-point-cursor.md`
 - `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md`
