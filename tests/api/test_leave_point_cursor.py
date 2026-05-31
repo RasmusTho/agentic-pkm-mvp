@@ -388,3 +388,43 @@ def test_cursor_does_not_emit_mutation_intents(
     data = _orientation(client, monkeypatch)
 
     assert data["mutation_intents"] == []
+
+
+def test_scope_filtered_query_finds_valid_cursor_after_many_cross_scope_rows() -> None:
+    # Regression: old code fetched LIMIT 100 globally then filtered in Python,
+    # which hid a valid in-scope cursor when >100 cross-scope rows existed first.
+    vault_root = Path(os.environ["VAULT_ROOT"])
+    _note(vault_root, "notes/cursor.md", "artifact-1")
+
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    # Insert 110 cross-scope rows (wrong channel) with timestamps newer than the valid row.
+    for i in range(110):
+        capture_leave_point_cursor(
+            vault_id="vault-test",
+            channel="other-channel",
+            artifact_uuid=f"artifact-cross-{i}",
+            source_kind="artifact_activation",
+            source_ref_id="notes/cursor.md",
+            capture_reason="artifact_focus",
+            trace_id=f"trace-cross-{i}",
+            captured_at=base + timedelta(seconds=i + 1),
+        )
+
+    # Insert the valid in-scope row with the oldest timestamp among all rows.
+    _capture(
+        artifact_uuid="artifact-1",
+        vault_id="vault-test",
+        channel="test",
+        trace_id="trace-valid",
+        captured_at=base,
+    )
+
+    projection = latest_leave_point_projection(
+        vault_id="vault-test",
+        channel="test",
+        vault_root=vault_root,
+    )
+
+    assert projection.status == "present"
+    assert projection.artifact_ref.artifact_uuid == "artifact-1"
+    assert projection.source_ref.trace_id == "trace-valid"

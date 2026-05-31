@@ -304,9 +304,11 @@ def latest_leave_point_projection(
                 """
                 SELECT payload
                 FROM leave_point_trace_events
+                WHERE vault_id = ? AND channel = ?
                 ORDER BY captured_at DESC, id DESC
-                LIMIT 100
-                """
+                LIMIT 20
+                """,
+                (vault_id, channel),
             ).fetchall()
     except Exception:
         rows = []
