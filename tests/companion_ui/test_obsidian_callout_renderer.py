@@ -43,6 +43,15 @@ def test_basic_callout() -> None:
     assert "Basic note callout body." in html
 
 
+def test_callout_allows_blank_spacer_between_header_and_body() -> None:
+    html = _render_fixture("> [!note]\n\n> Body stays inside the callout.\n")
+
+    fragment = _callout_fragment(html, "note")
+    assert '<div class="vault-callout-body">' in fragment
+    assert "Body stays inside the callout." in fragment
+    assert "<blockquote>Body stays inside" not in html
+
+
 def test_custom_title() -> None:
     html = _render_fixture()
 

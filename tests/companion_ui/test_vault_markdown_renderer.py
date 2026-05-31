@@ -86,6 +86,44 @@ def test_basic_fixtures() -> None:
     assert 'data-language="python"' in basic.html
 
 
+def test_gfm_table_allows_blank_spacer_lines_between_rows() -> None:
+    rendered = render_vault_markdown(
+        "\n".join(
+            [
+                "| Feature | Input syntax | Expected rendering |",
+                "",
+                "|---|---|---|",
+                "",
+                "| Bold | `**text**` | **text** |",
+                "",
+                "| Inline code | `` `code` `` | `code` |",
+            ]
+        )
+    )
+
+    assert "<table>" in rendered.html
+    assert "<th>Feature</th>" in rendered.html
+    assert "<td>Bold</td>" in rendered.html
+    assert "<p>| Feature |" not in rendered.html
+
+
+def test_gfm_table_does_not_capture_pipe_paragraph_after_blank_line() -> None:
+    rendered = render_vault_markdown(
+        "\n".join(
+            [
+                "| A | B |",
+                "|---|---|",
+                "| left | right |",
+                "",
+                "This paragraph has A | B text.",
+            ]
+        )
+    )
+
+    assert rendered.html.count("<tr>") == 2
+    assert "<p>This paragraph has A | B text.</p>" in rendered.html
+
+
 def test_frontmatter_excluded_from_body() -> None:
     rendered = render_vault_markdown(_fixture("frontmatter-properties.md"))
 

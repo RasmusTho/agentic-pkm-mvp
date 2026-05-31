@@ -36,6 +36,14 @@ def test_nested_bulleted_lists_indent_under_parent():
     assert "<li>Nested bullet B</li><li>Item C</li>" not in html
 
 
+def test_nested_bulleted_lists_allow_blank_spacer_lines():
+    md = "- Item A\n\n- Item B\n\n    - Nested bullet B\n\n- Item C\n"
+    html = _html(md)
+
+    assert re.search(r"<li>Item B<ul><li>Nested bullet B</li></ul></li>", html), html
+    assert html.count("<ul>") == 2
+
+
 # ---------------------------------------------------------------------------
 # 3.2 — nested ordered lists restart numbering
 # ---------------------------------------------------------------------------
@@ -61,6 +69,24 @@ def test_nested_ordered_lists_render_nested_ol():
     assert html.count("<ol>") == 2
 
 
+def test_nested_ordered_lists_allow_blank_spacer_lines():
+    md = (
+        "1. First numbered item\n\n"
+        "2. Second numbered item\n\n"
+        "3. Third numbered item\n\n"
+        "    1. Nested numbered item\n\n"
+        "    2. Another nested numbered item\n"
+    )
+    html = _html(md)
+
+    assert re.search(
+        r"<li>Third numbered item<ol><li>Nested numbered item</li>"
+        r"<li>Another nested numbered item</li></ol></li>",
+        html,
+    ), html
+    assert html.count("<ol>") == 2
+
+
 # ---------------------------------------------------------------------------
 # 3.3 — task list checked/unchecked
 # ---------------------------------------------------------------------------
@@ -78,6 +104,19 @@ def test_unchecked_task_remains_unchecked():
     li = re.search(r'<li class="task-list-item"[^>]*>.*?</li>', html, re.S).group(0)
     assert 'data-task-state=" "' in li
     assert "checked" not in li
+
+
+def test_task_list_allows_blank_spacer_lines():
+    html = _html("- [ ] Open task\n\n- [x] Completed task\n")
+
+    assert html.count('<ul class="task-list">') == 1
+    assert html.count('class="task-list-item"') == 2
+
+
+def test_blank_separated_mixed_list_types_keep_marker_semantics():
+    html = _html("- bullet\n\n1. ordered\n")
+
+    assert re.search(r"<ul><li>bullet</li></ul><ol><li>ordered</li></ol>", html), html
 
 
 def test_checked_task_has_completed_styling_hook_in_page_css():

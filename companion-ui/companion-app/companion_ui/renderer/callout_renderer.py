@@ -71,6 +71,17 @@ class ObsidianCalloutRenderer:
         body_lines: list[str] = []
 
         while index < len(lines):
+            if not lines[index].strip():
+                next_index = _next_nonblank_index(lines, index + 1)
+                if next_index is None:
+                    break
+                next_quoted = _QUOTED_LINE_RE.match(lines[next_index])
+                if not next_quoted or CALLOUT_HEADER_RE.match(lines[next_index]):
+                    break
+                if body_lines:
+                    body_lines.append("")
+                index = next_index
+                continue
             quoted_line = _QUOTED_LINE_RE.match(lines[index])
             if not quoted_line:
                 break
@@ -182,6 +193,15 @@ def _fold_state(marker: str | None) -> str:
     if marker == "+":
         return "expanded"
     return "none"
+
+
+def _next_nonblank_index(lines: list[str], start: int) -> int | None:
+    index = start
+    while index < len(lines):
+        if lines[index].strip():
+            return index
+        index += 1
+    return None
 
 
 def _default_title(callout_type: str) -> str:
