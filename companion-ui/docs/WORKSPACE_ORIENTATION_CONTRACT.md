@@ -10,6 +10,7 @@ source_contracts:
   - companion-ui/docs/WORKSPACE_STATE_CONTRACT.md
   - companion-ui/docs/UI_RUNTIME_BOUNDARIES.md
   - docs/adr/ADR-0008-leave-point-cursor.md
+  - docs/adr/ADR-0009-orientation-memory-candidate-intent.md
   - docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md
   - docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
@@ -96,12 +97,14 @@ this endpoint; artifact-specific loading belongs to
   `authority_role`, `source_ref`, governance counts, latest receipt outcome,
   and degraded posture as supplied; it must not infer governance or authority
   locally.
+- The UI renders server-declared `mutation_intents`; it must not classify
+  MemoryCandidate-worthiness locally.
 - `mutation_intents` are handoff hints only. They must never execute, persist,
   enqueue, write receipts, call WriteGuard, promote memory, or mutate state
   through this read path.
 - Phase 1 returns `mutation_intents: []`. MemoryCandidate intent emission is
-  explicitly deferred to a later phase and must not be introduced by this
-  contract.
+  governed by ADR-0009 and may be introduced only by a later implementation
+  slice that satisfies that threshold and trace contract.
 - Every non-trivial item carries `authority_role` and `source_ref`.
 - Snapshot freshness is declared at `meta` level only. Per-item freshness fields
   are intentionally excluded to avoid token amplification.
@@ -113,6 +116,32 @@ this endpoint; artifact-specific loading belongs to
 - A leave-point cursor, when implemented by later runtime work, is admissible
   only as an operational trace pointer. The orientation read path may project
   it but must remain read-only, and orientation must remain correct without it.
+
+## `mutation_intents` Rules
+
+`mutation_intents` are handoff hints only. They do not execute, authorize, or
+persist mutations.
+
+MemoryCandidate intents are admissible only under
+`docs/adr/ADR-0009-orientation-memory-candidate-intent.md`:
+
+- The intent is bounded and reference-only.
+- The intent targets the existing MemoryCandidate review queue or its
+  implementation successor.
+- The intent must include a human-legible reason and source reference, but no
+  raw candidate content.
+- Intent emission does not create a `MemoryCandidate`.
+- Intent emission does not accept, promote, revise, reject, or store memory.
+- Intent emission does not write candidate content or semantic workspace state.
+- The orientation payload must not include raw candidate content, note bodies,
+  chat transcripts, agent scratchpads, embeddings, or accepted memory content.
+- The UI may render the server-declared intent and may route explicit user
+  action to a later governed path, but it must not classify locally or create
+  candidates from the orientation payload.
+
+When orientation emits a MemoryCandidate intent, the backend must record an
+operational trace for the emitted intent. That trace records intent emission
+only; it is not a governance receipt and must not carry raw candidate content.
 
 ## Success Payload
 

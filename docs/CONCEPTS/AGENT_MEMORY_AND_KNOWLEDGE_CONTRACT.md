@@ -173,6 +173,13 @@ The system notices an event, pattern, or candidate fact.
 
 The observed item becomes a candidate memory, not yet truth.
 
+Orientation surfaces may emit a bounded, reference-only `MemoryCandidate`
+intent as a handoff hint only under
+`docs/adr/ADR-0009-orientation-memory-candidate-intent.md`. That intent is not
+candidate creation and must not store candidate content. Candidate creation,
+review, promotion, rejection, and revision remain explicit memory lifecycle
+transitions outside the read-side orientation projection.
+
 ### Review
 
 The candidate is checked by human review, policy, source grounding, or stronger evidence.
@@ -267,6 +274,11 @@ The agent may recall memory as part of a task, but the memory itself should rema
 
 Companion UI may surface memory candidates, promotions, contradictions, and correction paths.
 
+Companion Workspace Orientation may surface only server-declared, reference-only
+MemoryCandidate intents. The UI must not classify candidate-worthiness locally,
+create candidates from orientation, or treat an orientation intent as recalled
+memory.
+
 The UI should expose:
 - what was recalled,
 - where it came from,
@@ -323,4 +335,3 @@ agent_memory:
 ## Relationship to shipped reality
 
 Current runtime may already expose pieces of memory-adjacent behavior through retrieval, receipts, companion notes, and the read-only Chat cognition scaffold. This document does not claim a fully shipped agent-memory system. It defines the target-state relationship between memory, knowledge, runtime state, and machine mirrors.
-
