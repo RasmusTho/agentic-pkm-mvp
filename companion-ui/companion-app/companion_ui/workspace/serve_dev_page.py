@@ -46,7 +46,7 @@ import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from companion_ui.renderer import (
     PropertiesRenderer,
@@ -1249,6 +1249,7 @@ def _render_note_section(fields: dict) -> str:
         vault_channel=str(fields.get("vault_browser_vault_channel") or "unknown"),
         vault_provenance=str(fields.get("vault_browser_vault_provenance") or "unresolved"),
         active_filters=dict(fields.get("vault_browser_active_filters") or {}),
+        pagination=dict(fields.get("vault_browser_pagination") or {}),
     )
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
@@ -2168,6 +2169,78 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     )
 
 
+def _pagination_link(
+    *,
+    note_path: str,
+    query: str,
+    active_filters: dict[str, list[str]],
+    cursor: str | None,
+    limit: object,
+) -> str:
+    params: dict[str, object] = {}
+    if note_path:
+        params["note_path"] = note_path
+    if query:
+        params["q"] = query
+    for key, values in active_filters.items():
+        if values:
+            params[key] = values
+    if cursor:
+        params["cursor"] = cursor
+    if limit:
+        params["limit"] = str(limit)
+    return "/?" + urlencode(params, doseq=True)
+
+
+def _render_vault_browser_pagination(
+    *,
+    note_path: str,
+    query: str,
+    active_filters: dict[str, list[str]],
+    pagination: dict,
+) -> str:
+    if not pagination:
+        return ""
+    next_cursor = str(pagination.get("next_cursor") or "")
+    page_size = pagination.get("page_size") or ""
+    returned = int(pagination.get("returned_notes") or 0)
+    total = int(pagination.get("total_filtered_notes") or 0)
+    has_next = bool(pagination.get("has_next"))
+    has_previous = bool(pagination.get("has_previous"))
+    next_html = (
+        '<a class="vault-browser-pagination-next" '
+        'data-testid="workspace-vault-browser-pagination-next" '
+        f'data-next-cursor="{_e(next_cursor)}" '
+        f'href="{_e(_pagination_link(note_path=note_path, query=query, active_filters=active_filters, cursor=next_cursor, limit=page_size))}">'
+        "Next"
+        "</a>"
+        if has_next and next_cursor
+        else (
+            '<span class="vault-browser-pagination-next" '
+            'data-testid="workspace-vault-browser-pagination-next" '
+            'data-disabled="true">Next</span>'
+        )
+    )
+    previous_html = (
+        '<span class="vault-browser-pagination-previous" '
+        'data-testid="workspace-vault-browser-pagination-previous" '
+        f'data-has-previous="{str(has_previous).lower()}" '
+        'data-disabled="true">Previous</span>'
+    )
+    return (
+        '<nav class="vault-browser-pagination" '
+        'data-testid="workspace-vault-browser-pagination" '
+        f'data-mode="{_e(str(pagination.get("mode") or "cursor"))}" '
+        f'data-has-next="{str(has_next).lower()}" '
+        f'data-has-previous="{str(has_previous).lower()}">'
+        f'<span data-testid="workspace-vault-browser-pagination-summary">'
+        f"{returned} shown from {total} matches"
+        "</span>"
+        f"{previous_html}{next_html}"
+        "</nav>"
+    )
+
+
 def _render_vault_browser(
     *,
     note_path: str,
@@ -2182,6 +2255,7 @@ def _render_vault_browser(
     vault_channel: str,
     vault_provenance: str,
     active_filters: dict[str, list[str]] | None = None,
+    pagination: dict | None = None,
 ) -> str:
     query_text = _e(query or "")
     identity_label = f"{vault_name}/{vault_channel}"
@@ -2246,6 +2320,12 @@ def _render_vault_browser(
     # Calm provenance label for daily-use visibility; raw value in data attribute.
     calm_provenance = "read-only fallback · filesystem index" if read_only else "filesystem index"
     filters_html = _render_filter_chips(notes, active_filters or {})
+    pagination_html = _render_vault_browser_pagination(
+        note_path=note_path,
+        query=query or "",
+        active_filters=active_filters or {},
+        pagination=pagination or {},
+    )
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
     # #1427 — keep the inspector out of the default browse view. The tree is the
     # surface; the inspector metadata/actions sit behind a collapsed disclosure
@@ -2288,6 +2368,7 @@ def _render_vault_browser(
           {filters_html}
           {state_html}
           {list_html}
+          {pagination_html}
           {inspector_html}
         </details>"""
 
@@ -6726,6 +6807,11 @@ def handle_get(
     note_path = params.get("note_path", [""])[0].strip()
     _filter_keys = ("kind", "zone", "review_state", "trust")
     active_filters = {k: params[k] for k in _filter_keys if params.get(k)}
+    cursor = params.get("cursor", [""])[0].strip()
+    try:
+        browser_limit = int(params.get("limit", ["250"])[0])
+    except (TypeError, ValueError):
+        browser_limit = 250
     # #1418 — diagnostics/operator chrome is opt-in via an explicit route.
     diagnostics = params.get("diagnostics", ["0"])[0].strip().lower() in {"1", "true", "yes", "on"}
     fields: Optional[dict] = None
@@ -6734,7 +6820,14 @@ def handle_get(
 
     if note_path:
         page = RealNoteWorkspaceDevPage(client)
-        state = page.load(NoteLoadIntent(note_path=note_path, active_filters=active_filters))
+        state = page.load(
+            NoteLoadIntent(
+                note_path=note_path,
+                active_filters=active_filters,
+                vault_browser_cursor=cursor,
+                vault_browser_limit=browser_limit,
+            )
+        )
         if state.is_loaded:
             fields = page.render_fields()
         else:

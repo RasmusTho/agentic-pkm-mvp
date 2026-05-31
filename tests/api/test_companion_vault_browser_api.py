@@ -125,6 +125,96 @@ def test_vault_browser_cap_preserves_lexicographic_subset(tmp_path: Path, monkey
     assert [n["note_path"] for n in data["notes"]] == ["a/first.md", "m/middle.md"]
 
 
+def test_vault_browser_returns_pagination_metadata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    _write_note(tmp_path / "a" / "first.md", title="First")
+    _write_note(tmp_path / "b" / "second.md", title="Second")
+    _write_note(tmp_path / "c" / "third.md", title="Third")
+
+    resp = TestClient(app).get("/api/companion/vault-browser", params={"limit": 2})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [note["note_path"] for note in data["notes"]] == [
+        "a/first.md",
+        "b/second.md",
+    ]
+    assert data["pagination"] == {
+        "mode": "cursor",
+        "cursor": None,
+        "next_cursor": "b/second.md",
+        "page_size": 2,
+        "returned_notes": 2,
+        "total_filtered_notes": 3,
+        "has_next": True,
+        "has_previous": False,
+    }
+
+
+def test_vault_browser_pagination_composes_with_metadata_filters(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    for relative, title, kind in (
+        ("a/alpha.md", "Alpha", "human_note"),
+        ("b/companion.md", "Companion", "companion_note"),
+        ("c/charlie.md", "Charlie", "human_note"),
+    ):
+        note = tmp_path / relative
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text(
+            f"---\ntitle: {title}\nuuid: {title.lower()}\nkind: {kind}\n---\n\n{title}.\n",
+            encoding="utf-8",
+        )
+
+    client = TestClient(app)
+    first_page = client.get(
+        "/api/companion/vault-browser",
+        params={"kind": "human_note", "limit": 1},
+    ).json()
+    second_page = client.get(
+        "/api/companion/vault-browser",
+        params={
+            "kind": "human_note",
+            "limit": 1,
+            "cursor": first_page["pagination"]["next_cursor"],
+        },
+    ).json()
+
+    assert first_page["active_filters"] == {"kind": ["human_note"]}
+    assert first_page["filtered_notes"] == 2
+    assert [note["note_path"] for note in first_page["notes"]] == ["a/alpha.md"]
+    assert first_page["pagination"]["next_cursor"] == "a/alpha.md"
+    assert [note["note_path"] for note in second_page["notes"]] == ["c/charlie.md"]
+    assert second_page["pagination"]["has_next"] is False
+    assert all(note["kind"] == "human_note" for note in second_page["notes"])
+
+
+def test_vault_browser_pagination_is_read_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    first = tmp_path / "a" / "first.md"
+    second = tmp_path / "b" / "second.md"
+    _write_note(first, title="First")
+    _write_note(second, title="Second")
+    before = {
+        first: first.read_text(encoding="utf-8"),
+        second: second.read_text(encoding="utf-8"),
+    }
+
+    resp = TestClient(app).get(
+        "/api/companion/vault-browser",
+        params={"limit": 1, "cursor": "a/first.md"},
+    )
+
+    assert resp.status_code == 200
+    assert [note["note_path"] for note in resp.json()["notes"]] == ["b/second.md"]
+    assert first.read_text(encoding="utf-8") == before[first]
+    assert second.read_text(encoding="utf-8") == before[second]
+
+
 def test_vault_browser_includes_receipts_from_outbox_projection(
     tmp_path: Path,
     monkeypatch,
