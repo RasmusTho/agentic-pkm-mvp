@@ -99,6 +99,25 @@ def test_matching_content_hash_saves(tmp_path: Path, monkeypatch) -> None:
     assert "v2" in note.read_text(encoding="utf-8")
 
 
+def test_url_fragment_in_note_path_normalized_to_canonical_note(tmp_path: Path, monkeypatch) -> None:
+    # #1447 — a leaked URL section anchor (#...) must not turn a valid edit into a
+    # 404; the fragment is stripped and the canonical note is written.
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    _clear_gates(monkeypatch)
+    note = tmp_path / "Inbox" / "Note.md"
+    _write_note(note, frontmatter="title: N", body="old\n")
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/companion/note/save",
+        json={"note_path": "Inbox/Note.md#14-3-long-section-c", "new_body": "# Saved\n"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["note_path"] == "Inbox/Note.md"
+    assert "# Saved" in note.read_text(encoding="utf-8")
+
+
 def test_missing_note_is_404(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")

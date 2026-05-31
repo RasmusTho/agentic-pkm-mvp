@@ -310,13 +310,16 @@ class TestReadOnlyBodyAffordance:
         assert 'data-testid="workspace-note-body-readonly-indicator"' in html
 
     def test_readonly_indicator_on_note_body(self) -> None:
+        # Direct human editing is always available, so the note body is no longer
+        # read-only just because Canvas is off (#1447). The attribute is present
+        # for inspectability but now reflects the editable state.
         html = _html()
         note_body_m = re.search(
             r'data-testid="workspace-note-body"[^>]*data-read-only="([^"]*)"',
             html,
         )
         assert note_body_m, "workspace-note-body must carry data-read-only attribute"
-        assert note_body_m.group(1) == "true"
+        assert note_body_m.group(1) == "false"
 
     def test_readonly_reason_element_present(self) -> None:
         html = _html()

@@ -101,6 +101,31 @@ def test_no_edit_disabled_nag() -> None:
     assert "Editing is not enabled in this workspace" not in html
 
 
+def test_editor_strips_url_fragment_from_note_path() -> None:
+    # #1447 — the save call strips any #section anchor from the note identity.
+    html = _render()
+    assert ".split('#')[0]" in html
+
+
+def test_editor_shows_human_error_copy_not_raw_json() -> None:
+    # #1447 — failures map to human-readable copy; raw JSON is not surfaced and
+    # the runtime-route-missing (deploy skew) case gets specific guidance.
+    html = _render()
+    assert "needs the latest build" in html  # route-missing / deploy-skew case
+    assert "Note not found for: " in html
+    assert "writes blocked" in html
+    assert "console.error('note save failed'" in html  # raw detail kept inspectable
+    # The old behaviour ('Save failed: ' + raw JSON message) is gone.
+    assert "'Save failed: ' + msg" not in html
+
+
+def test_no_canvas_off_readonly_pill() -> None:
+    # #1447 — editing is always available, so the misleading read-only pill is
+    # suppressed (canvas disabled no longer implies read-only).
+    html = _render(canvas_enabled=False)
+    assert 'data-testid="workspace-read-only-pill"' not in html
+
+
 def test_page_server_proxies_note_save() -> None:
     # The page server must proxy the human-save path to the runtime (same-origin).
     from companion_ui.workspace import serve_dev_page as mod
