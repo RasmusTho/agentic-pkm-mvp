@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import datetime
-import os
 import heapq
+import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field
 
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
+from app.agent_memory.review_queue import MemoryCandidateReviewQueue
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
 from app.config.paths import resolve_vault_root
@@ -145,9 +147,16 @@ ORIENTATION_CONTRACT_VERSION = "workspace_orientation.v1"
 ORIENTATION_OPEN_LOOPS_CAP = 8
 ORIENTATION_NOTABLE_CHANGES_CAP = 8
 ORIENTATION_RESURFACE_CANDIDATES_CAP = 5
-ORIENTATION_MUTATION_INTENTS_CAP = 0
+ORIENTATION_MUTATION_INTENTS_CAP = 3
 ORIENTATION_SOURCE_REFS_PER_ITEM_CAP = 3
 ORIENTATION_STALE_AFTER_SECONDS = 300
+ORIENTATION_MEMORY_INTENT_TRACE_EVENT_TYPE = "orientation.memory_candidate_intent.emitted.v1"
+ORIENTATION_MEMORY_INTENT_TRACE_PATH_ENV = "MEMORY_INTENT_TRACE_PATH"
+ORIENTATION_MEMORY_INTENT_TARGET_QUEUE = "agent_memory.review_queue"
+ORIENTATION_MEMORY_INTENT_HANDOFF_HINT = "panel_governance_review"
+
+
+_MEMORY_CANDIDATE_REVIEW_QUEUE = MemoryCandidateReviewQueue()
 
 
 class WorkspaceOrientationScope(BaseModel):
@@ -178,6 +187,12 @@ class WorkspaceOrientationSourceRef(BaseModel):
     kind: str
     ref: str
     label: str | None = None
+
+
+class WorkspaceOrientationMemory(BaseModel):
+    pending_candidate_count: int = 0
+    authority_role: str = "derived"
+    source_ref: WorkspaceOrientationSourceRef
 
 
 class WorkspaceOrientationArtifactRef(BaseModel):
@@ -251,6 +266,18 @@ class WorkspaceOrientationGuards(BaseModel):
     source_ref: WorkspaceOrientationSourceRef
 
 
+class WorkspaceOrientationMutationIntent(BaseModel):
+    intent_id: str
+    kind: Literal["MemoryCandidate"] = "MemoryCandidate"
+    target_queue: str = ORIENTATION_MEMORY_INTENT_TARGET_QUEUE
+    handoff_hint: str = ORIENTATION_MEMORY_INTENT_HANDOFF_HINT
+    reason: str
+    authority_role: Literal["reference"] = "reference"
+    source_ref: WorkspaceOrientationSourceRef
+    threshold_signals: list[str] = Field(default_factory=list)
+    trace_id: str
+
+
 class WorkspaceOrientationResponse(BaseModel):
     scope: WorkspaceOrientationScope
     meta: WorkspaceOrientationMeta
@@ -258,9 +285,10 @@ class WorkspaceOrientationResponse(BaseModel):
     open_loops: list[WorkspaceOrientationOpenLoop] = Field(default_factory=list)
     notable_changes: list[WorkspaceOrientationNotableChange] = Field(default_factory=list)
     resurface: WorkspaceOrientationResurface
+    memory: WorkspaceOrientationMemory
     governance: WorkspaceOrientationGovernance
     guards: WorkspaceOrientationGuards
-    mutation_intents: list[str] = Field(default_factory=list)
+    mutation_intents: list[WorkspaceOrientationMutationIntent] = Field(default_factory=list)
 
 
 class WorkspaceBodyUpdateRequest(BaseModel):
@@ -831,6 +859,22 @@ def _orientation_source_ref(kind: str, ref: str, label: str | None = None) -> Wo
     return WorkspaceOrientationSourceRef(kind=kind, ref=ref, label=label)
 
 
+def _orientation_memory_review_queue() -> MemoryCandidateReviewQueue:
+    return _MEMORY_CANDIDATE_REVIEW_QUEUE
+
+
+def _orientation_memory_summary() -> WorkspaceOrientationMemory:
+    pending = len(_orientation_memory_review_queue().pending())
+    return WorkspaceOrientationMemory(
+        pending_candidate_count=pending,
+        source_ref=_orientation_source_ref(
+            "agent_memory.review_queue",
+            ORIENTATION_MEMORY_INTENT_TARGET_QUEUE,
+            "memory candidate review queue",
+        ),
+    )
+
+
 def _orientation_item_id(prefix: str, index: int) -> str:
     return f"{prefix}-{index + 1}"
 
@@ -929,6 +973,80 @@ def _orientation_resurface_candidates(signals: OrientationSignals) -> list[Works
             )
         )
     return candidates
+
+
+def _orientation_memory_threshold_signals(
+    candidate: WorkspaceOrientationResurfaceCandidate,
+) -> list[str]:
+    threshold_signals: list[str] = []
+    seen: set[str] = set()
+    for signal_label in candidate.signal_labels:
+        signal_name = signal_label.split("=", 1)[0]
+        if signal_name in seen:
+            continue
+        seen.add(signal_name)
+        threshold_signals.append(signal_label)
+        if len(threshold_signals) >= ORIENTATION_SOURCE_REFS_PER_ITEM_CAP:
+            break
+    return threshold_signals
+
+
+def _orientation_memory_intent_trace_path() -> Path:
+    configured = (os.getenv(ORIENTATION_MEMORY_INTENT_TRACE_PATH_ENV) or "").strip()
+    if configured:
+        return Path(configured)
+    return Path("runtime") / "orientation-memory-intents.jsonl"
+
+
+def _append_orientation_memory_intent_trace(
+    intent: WorkspaceOrientationMutationIntent,
+    *,
+    emitted_at: datetime.datetime,
+) -> None:
+    trace_path = _orientation_memory_intent_trace_path()
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "event_type": ORIENTATION_MEMORY_INTENT_TRACE_EVENT_TYPE,
+        "event_id": f"{intent.intent_id}:{intent.trace_id}",
+        "trace_id": intent.trace_id,
+        "source_ref": intent.source_ref.model_dump(),
+        "threshold_signals": list(intent.threshold_signals),
+        "intent_id": intent.intent_id,
+        "emitted_at": _orientation_iso(emitted_at) or emitted_at.isoformat(),
+        "target_queue": intent.target_queue,
+    }
+    with trace_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def _orientation_memory_mutation_intents(
+    candidates: list[WorkspaceOrientationResurfaceCandidate],
+    *,
+    trace_id: str,
+    emitted_at: datetime.datetime,
+) -> list[WorkspaceOrientationMutationIntent]:
+    intents: list[WorkspaceOrientationMutationIntent] = []
+    for candidate in candidates:
+        if len(intents) >= ORIENTATION_MUTATION_INTENTS_CAP:
+            break
+        threshold_signals = _orientation_memory_threshold_signals(candidate)
+        if len(threshold_signals) < 2:
+            continue
+        if not candidate.authority_role or not candidate.source_ref.ref:
+            continue
+        intent = WorkspaceOrientationMutationIntent(
+            intent_id=f"memory-candidate-intent-{candidate.id}",
+            reason=(
+                "Review queue handoff suggested by multiple independent runtime "
+                "signals; orientation carries references only and creates no candidate."
+            ),
+            source_ref=candidate.source_ref,
+            threshold_signals=threshold_signals,
+            trace_id=trace_id,
+        )
+        _append_orientation_memory_intent_trace(intent, emitted_at=emitted_at)
+        intents.append(intent)
+    return intents
 
 
 def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
@@ -1768,6 +1886,7 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
     open_loops: list[WorkspaceOrientationOpenLoop] = []
     notable_changes: list[WorkspaceOrientationNotableChange] = []
     resurface_candidates: list[WorkspaceOrientationResurfaceCandidate] = []
+    mutation_intents: list[WorkspaceOrientationMutationIntent] = []
 
     try:
         frame = build_orientation_frame(signals=orientation_signals)
@@ -1788,6 +1907,28 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
         resurface_candidates = _orientation_resurface_candidates(orientation_signals)
     except Exception:
         degraded_reasons.append("resurfacing_source_unavailable")
+
+    try:
+        memory = _orientation_memory_summary()
+    except Exception:
+        degraded_reasons.append("memory_source_unavailable")
+        memory = WorkspaceOrientationMemory(
+            pending_candidate_count=0,
+            source_ref=_orientation_source_ref(
+                "derived",
+                "unavailable",
+                "memory source unavailable",
+            ),
+        )
+
+    try:
+        mutation_intents = _orientation_memory_mutation_intents(
+            resurface_candidates,
+            trace_id=trace_id,
+            emitted_at=generated_at,
+        )
+    except Exception:
+        degraded_reasons.append("memory_intent_trace_unavailable")
 
     try:
         governance = _orientation_governance_summary()
@@ -1821,6 +1962,7 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
         open_loops=open_loops,
         notable_changes=notable_changes,
         resurface=WorkspaceOrientationResurface(candidates=resurface_candidates),
+        memory=memory,
         governance=governance,
         guards=WorkspaceOrientationGuards(
             runtime_posture="degraded" if degraded else "healthy",
@@ -1832,7 +1974,7 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
                 "minimal status posture",
             ),
         ),
-        mutation_intents=[],
+        mutation_intents=mutation_intents,
     )
 
 

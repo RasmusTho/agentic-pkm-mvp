@@ -1,8 +1,8 @@
 ---
 name: Companion UI Workspace Orientation Contract
-description: Planned note-independent read-side contract for the Companion UI workspace orientation endpoint
+description: Runtime note-independent read-side contract for the Companion UI workspace orientation endpoint
 doc_role: API contract / spec
-authority: Binding planned read-side contract for `GET /api/companion/orientation` and downstream Companion UI re-entry integration.
+authority: Binding read-side contract for `GET /api/companion/orientation` and downstream Companion UI re-entry integration.
 owner: Companion UI / product architecture
 last_reviewed: 2026-05-31
 source_contracts:
@@ -14,15 +14,15 @@ source_contracts:
   - docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md
   - docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
-governing_issue: "#1451; #1454; #1455"
-implementation_state: implemented_phase_2_cursor
+governing_issue: "#1451; #1454; #1455; #1457"
+implementation_state: implemented_phase_3_memory_intent_seam
 ---
 
 # Workspace Orientation Contract
 
 ## Purpose
 
-Define the planned note-independent read-side orientation snapshot the Companion
+Define the note-independent read-side orientation snapshot the Companion
 UI can use for cold load and re-entry when no artifact is active.
 
 The existing Workspace State Contract remains artifact-scoped:
@@ -33,9 +33,11 @@ answers "where am I in the system, what is open, what changed, and what can I
 safely resume?"
 
 This document is the contract for the runtime endpoint and Companion UI
-re-entry consumption. Phase 2 implements ADR-0008's leave-point cursor
-projection rules as an append-only operational trace pointer. Both shipped
-surfaces remain read-only projections.
+re-entry consumption. Phase 2 implemented ADR-0008's leave-point cursor
+projection rules as an append-only operational trace pointer. Phase 3 adds
+read-only pending MemoryCandidate awareness plus bounded, trace-backed
+`MemoryCandidate` handoff intents under ADR-0009. All shipped surfaces remain
+read-only projections.
 
 ## Scope
 
@@ -102,9 +104,10 @@ this endpoint; artifact-specific loading belongs to
 - `mutation_intents` are handoff hints only. They must never execute, persist,
   enqueue, write receipts, call WriteGuard, promote memory, or mutate state
   through this read path.
-- Phase 1 returns `mutation_intents: []`. MemoryCandidate intent emission is
-  governed by ADR-0009 and may be introduced only by a later implementation
-  slice that satisfies that threshold and trace contract.
+- The Phase 3 endpoint may return bounded `MemoryCandidate` mutation intents
+  only when ADR-0009's source, threshold, and trace requirements are satisfied.
+  These intents target the review boundary by reference only and do not create
+  candidates.
 - Every non-trivial item carries `authority_role` and `source_ref`.
 - Snapshot freshness is declared at `meta` level only. Per-item freshness fields
   are intentionally excluded to avoid token amplification.
@@ -163,7 +166,7 @@ only; it is not a governance receipt and must not carry raw candidate content.
       "open_loops": 8,
       "notable_changes": 8,
       "resurface_candidates": 5,
-      "mutation_intents": 0,
+      "mutation_intents": 3,
       "source_refs_per_item": 3
     }
   },
@@ -241,6 +244,15 @@ only; it is not a governance receipt and must not carry raw candidate content.
       }
     ]
   },
+  "memory": {
+    "pending_candidate_count": 0,
+    "authority_role": "derived",
+    "source_ref": {
+      "kind": "agent_memory.review_queue",
+      "ref": "agent_memory.review_queue",
+      "label": "memory candidate review queue"
+    }
+  },
   "governance": {
     "pending_proposal_count": 0,
     "pending_receipt_count": 0,
@@ -264,7 +276,23 @@ only; it is not a governance receipt and must not carry raw candidate content.
       "label": "minimal status posture"
     }
   },
-  "mutation_intents": []
+  "mutation_intents": [
+    {
+      "intent_id": "memory-candidate-intent-resurface-pending-promotions",
+      "kind": "MemoryCandidate",
+      "target_queue": "agent_memory.review_queue",
+      "handoff_hint": "panel_governance_review",
+      "reason": "Review queue handoff suggested by multiple independent runtime signals; orientation carries references only and creates no candidate.",
+      "authority_role": "reference",
+      "source_ref": {
+        "kind": "runtime_signal",
+        "ref": "status.events",
+        "label": "resurfacing signal"
+      },
+      "threshold_signals": ["pending_promotions=2", "promote_created_total=3"],
+      "trace_id": "trace-id"
+    }
+  ]
 }
 ```
 
@@ -285,7 +313,7 @@ include vault roots, DSNs, secrets, or host-local absolute paths.
 
 | Field | Rule |
 |---|---|
-| `contract_version` | Version label for this payload shape. Initial planned value: `workspace_orientation.v1`. |
+| `contract_version` | Version label for this payload shape. Current value: `workspace_orientation.v1`. |
 | `as_of` | ISO-8601 timestamp for snapshot generation. |
 | `trace_id` | Correlation ID for this aggregate read. |
 | `freshness` | Snapshot-level freshness only: `fresh`, `stale`, `partial`, or `unknown`. |
@@ -295,15 +323,15 @@ include vault roots, DSNs, secrets, or host-local absolute paths.
 
 ### Bounded Collections
 
-The server owns all collection caps. Phase 1 caps are:
+The server owns all collection caps. Current caps are:
 
 | Collection | Cap | Rule |
 |---|---:|---|
-| `leave_point` | 1 | One leave point. Phase 1 is derived-only; Phase 2 may project an admissible operational trace cursor per ADR-0008. |
+| `leave_point` | 1 | One leave point. Phase 2 may project an admissible operational trace cursor per ADR-0008. |
 | `open_loops` | 8 | Summaries only; no raw note body or raw chat history. |
 | `notable_changes` | 8 | Bounded summaries of recent deltas; no raw note body. |
 | `resurface.candidates` | 5 | Why-now-bearing candidates only. No full retrieval result set. |
-| `mutation_intents` | 0 | Phase 1 default is always an empty list. |
+| `mutation_intents` | 3 | Bounded handoff hints only. MemoryCandidate intents require ADR-0009 threshold and trace semantics. |
 | `source_refs_per_item` | 3 | Keep provenance inspectable without expanding into raw logs. |
 
 Implementations may return fewer items. Increasing a cap is a contract change.
@@ -312,12 +340,11 @@ this surface.
 
 ### `leave_point`
 
-`leave_point` is derived-only in Phase 1. It may point at the last known
-artifact or session posture when existing sources can derive one, but the Phase
-1 implementation does not persist a leave-point cursor or create
-restart-surviving continuity state.
+`leave_point` may point at the last known artifact or session posture when
+existing sources can derive one. ADR-0008 admits a leave-point cursor only as
+bounded operational trace; it is not restart-surviving semantic continuity
+state.
 
-ADR-0008 admits a Phase 2 leave-point cursor only as bounded operational trace.
 The orientation endpoint may read and project that cursor, but the read path
 must not write it. Orientation must remain correct without the cursor.
 
@@ -377,7 +404,19 @@ projection only. It cannot upgrade similarity into urgency, change artifact
 meaning, or create durable memory.
 
 Dismiss, snooze, and pin, if the UI offers them later, are UI-local affordances
-only in this Phase 1 surface and must not persist through this read path.
+only and must not persist through this read path.
+
+### `memory`
+
+`memory` exposes read-only awareness of the existing MemoryCandidate review
+boundary. The current shipped field is `pending_candidate_count` only. It is a
+count/surface-awareness field, not candidate content, memory recall, memory
+authority, or a durable state transition.
+
+The orientation endpoint must not expose MemoryCandidate titles, content,
+source refs from queued candidates, accepted memory content, or review decisions
+through this field. It must not create, enqueue, accept, promote, reject, revise,
+or store memory while reading this count.
 
 ### `governance`
 
@@ -401,7 +440,7 @@ by `/api/status` and must not be copied into this payload as dashboard slices.
 ### `authority_role`
 
 `authority_role` declares the role of an item in the orientation snapshot.
-Allowed Phase 1 values:
+Allowed values:
 
 | Value | Meaning |
 |---|---|
@@ -420,9 +459,10 @@ for durable semantics, governance, memory, or orchestration.
 for the runtime to explain where an item came from without exposing unsafe raw
 material to the browser.
 
-Allowed Phase 1 `source_ref.kind` values:
+Allowed `source_ref.kind` values:
 
 - `artifact`
+- `agent_memory.review_queue`
 - `receipt`
 - `trace`
 - `runtime_signal`
@@ -449,17 +489,32 @@ When an item refers to an artifact, it uses `artifact_ref`.
 ## Mutation Intents
 
 `mutation_intents` is present so the payload shape can carry handoff hints
-without gaining write authority. In Phase 1 it is always an empty list.
+without gaining write authority. Phase 3 may return structured
+`MemoryCandidate` intents under ADR-0009.
 
-Future non-empty intents, if accepted by later contract work, must follow these
-rules:
+Current structured intent fields are:
+
+| Field | Rule |
+|---|---|
+| `intent_id` | Opaque deterministic ID for the emitted handoff hint. |
+| `kind` | Currently `MemoryCandidate`. |
+| `target_queue` | Existing review boundary, currently `agent_memory.review_queue`. |
+| `handoff_hint` | UI routing hint, currently `panel_governance_review`; not an execution command. |
+| `reason` | Human-legible bounded reason grounded in explicit signals; no raw candidate content. |
+| `authority_role` | Always `reference`; the intent is not semantic or governance authority. |
+| `source_ref` | Browser-safe provenance pointer to the source item that met the threshold. |
+| `threshold_signals` | Bounded list of independent signal labels that satisfied ADR-0009. |
+| `trace_id` | Correlation ID for the orientation read and emitted trace event. |
+
+Non-empty intents follow these rules:
 
 - The intent is a handoff hint only.
 - The target execution surface is explicit, such as Panel/governance.
 - The intent carries `authority_role` and `source_ref`.
 - The orientation endpoint does not enqueue, execute, persist, or receipt the
   intent.
-- MemoryCandidate intents are not part of Phase 1.
+- MemoryCandidate intents do not create MemoryCandidates; candidate creation,
+  review, promotion, rejection, and revision remain governed downstream paths.
 
 ## Degraded and Error Payloads
 
@@ -487,7 +542,7 @@ and include snapshot-level reason codes.
       "open_loops": 8,
       "notable_changes": 8,
       "resurface_candidates": 5,
-      "mutation_intents": 0,
+      "mutation_intents": 3,
       "source_refs_per_item": 3
     }
   },
@@ -496,6 +551,15 @@ and include snapshot-level reason codes.
   "notable_changes": [],
   "resurface": {
     "candidates": []
+  },
+  "memory": {
+    "pending_candidate_count": 0,
+    "authority_role": "derived",
+    "source_ref": {
+      "kind": "derived",
+      "ref": "unavailable",
+      "label": "memory source unavailable"
+    }
   },
   "governance": {
     "pending_proposal_count": 0,
@@ -528,6 +592,8 @@ Allowed degraded reason codes include:
 
 - `orientation_source_unavailable`
 - `resurfacing_source_unavailable`
+- `memory_source_unavailable`
+- `memory_intent_trace_unavailable`
 - `governance_source_unavailable`
 - `status_source_unavailable`
 - `partial_source_resolution`
@@ -571,9 +637,10 @@ fresh snapshot.
 - No `orchestration` slice.
 - No detailed `runtime` slice for queues, watchers, workers, leases,
   checkpoints, agent messages, or index internals.
-- No leave-point persistence in Phase 1. Phase 2 may read and project only the
-  bounded operational trace cursor admitted by ADR-0008.
-- No MemoryCandidate intents in Phase 1.
+- No leave-point persistence. Phase 2 reads and projects only the bounded
+  operational trace cursor admitted by ADR-0008.
+- MemoryCandidate intents are Phase 3 handoff hints only; they do not create,
+  enqueue, review, promote, reject, revise, or store memory.
 - No push, streaming, SSE, WebSocket, notification, or ambient resurfacing
   transport.
 - No multi-agent semantics.
@@ -589,13 +656,13 @@ fresh snapshot.
 ## Implementation Gate
 
 Implementing `GET /api/companion/orientation` must follow this contract and must
-not imply changes to the artifact-scoped workspace endpoint. The Phase 1
-implementation is limited to the read-only, derived-only MVP shape in this
-contract. Leave-point cursor projection is governed by ADR-0008 and remains
-downstream of #1454 until implemented by #1455. MemoryCandidate intents, push,
-and multi-agent semantics remain out of scope.
+not imply changes to the artifact-scoped workspace endpoint. The current
+implementation is limited to the read-only orientation shape in this contract.
+Leave-point cursor projection is governed by ADR-0008. MemoryCandidate intent
+emission is governed by ADR-0009. Push, ambient resurfacing transport, and
+multi-agent semantics remain out of scope.
 
-The Phase 1 Companion UI re-entry surface consumes this endpoint on cold load or
+The Companion UI re-entry surface consumes this endpoint on cold load or
 when no artifact is active. It renders only server-declared fields, uses
 runtime-relative artifact refs for `/workspace?note_path=...` deep links, and
 does not issue mutation calls from the re-entry surface.
