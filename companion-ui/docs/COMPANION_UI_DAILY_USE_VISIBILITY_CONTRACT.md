@@ -112,13 +112,18 @@ debugging and test assertions.
 
 ## Section D — Read-only body affordance
 
-### Rule: Note body always carries read-only indicator
+### Rule: Note body is editable; read-only chrome is calmed (#1447)
 
-The note body div (`data-testid="workspace-note-body"`) carries `data-read-only="true"`.
-
-A calm, low-noise read-only indicator (`data-testid="workspace-note-body-readonly-indicator"`)
-is always rendered in the note body area when the body is read-only. It uses small monospace
-uppercase text styled with `color: var(--fg-3)`.
+Direct human editing is always available via the note's Read/Edit editor
+(independent of Canvas/the update flow), so the note body is **not** read-only
+merely because Canvas is off. The note body div
+(`data-testid="workspace-note-body"`) carries `data-read-only="false"`, the
+read-only indicator (`data-testid="workspace-note-body-readonly-indicator"`) is
+present for inspectability but rendered `hidden`, and the "Canvas off" read-only
+pill (`data-testid="workspace-read-only-pill"`) is **suppressed** — it
+contradicted the always-available editor and read as unsolicited read-only
+nagging. A genuine write-blocked state (runtime degraded/health) surfaces with
+explicit, human-readable copy at **save time**, not as ambient read-only chrome.
 
 ### Rule: Inline reason with Why? link on focus/click
 

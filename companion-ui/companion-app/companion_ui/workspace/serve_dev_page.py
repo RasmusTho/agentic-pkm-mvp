@@ -886,12 +886,15 @@ def _note_editor_script() -> str:
       save: function () {
         var ta = document.getElementById('note-source-editor');
         if (!ta) { return; }
+        // Strip any URL fragment/anchor from the note identity — the canonical
+        // note path never includes a #section-anchor (#1447).
+        var notePath = (ta.getAttribute('data-note-path') || '').split('#')[0];
         setStatus('', 'Saving\\u2026');
         fetch('/api/companion/note/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            note_path: ta.getAttribute('data-note-path'),
+            note_path: notePath,
             new_body: ta.value,
             expected_content_hash: ta.getAttribute('data-content-hash') || null
           })
@@ -904,14 +907,33 @@ def _note_editor_script() -> str:
             return;
           }
           var d = res.data || {};
-          var msg = (d.message || (d.detail && d.detail.message) || ('HTTP ' + res.status));
-          if (res.status === 409) {
-            setStatus('error', 'Could not save \\u2014 the note changed elsewhere or the runtime is busy. Reload and re-apply.');
+          var detail = d.detail || d;
+          var err = detail.error || d.error || '';
+          var rawMsg = detail.message || d.message || '';
+          // Keep the raw machine detail inspectable (console + hover) without
+          // showing raw JSON to the human (#1447).
+          try { console.error('note save failed', res.status, d); } catch (e) {}
+          var human;
+          if (res.status === 404 && /not\\s*found/i.test(rawMsg) && err !== 'note_not_found') {
+            human = 'Saving is not available on this runtime yet \\u2014 it needs the latest build (restart the runtime API).';
+          } else if (err === 'note_not_found' || res.status === 404) {
+            human = 'Note not found for: ' + notePath + '. Reload the note and try again.';
+          } else if (err === 'content_hash_mismatch') {
+            human = 'This note changed elsewhere since you opened it. Reload and re-apply your edit.';
+          } else if (err === 'runtime_write_blocked') {
+            human = 'The runtime has writes blocked right now (degraded state). Try again shortly.';
+          } else if (err === 'path_escape' || err === 'invalid_note_path' || err === 'not_a_note_file') {
+            human = 'That note path is not valid for editing.';
+          } else if (err === 'frontmatter_in_body') {
+            human = 'The body must not contain a frontmatter block (it is preserved automatically).';
           } else {
-            setStatus('error', 'Save failed: ' + msg);
+            human = 'Save failed (HTTP ' + res.status + '). See the browser console for details.';
           }
+          var s = document.querySelector('.note-edit-status');
+          if (s && rawMsg) { s.setAttribute('title', rawMsg); }
+          setStatus('error', human);
         }).catch(function (e) {
-          setStatus('error', 'Network error: ' + (e && e.message ? e.message : e));
+          setStatus('error', 'Network error \\u2014 the runtime may be unreachable. ' + (e && e.message ? e.message : ''));
         });
       }
     };
@@ -1095,7 +1117,10 @@ def _render_note_section(fields: dict) -> str:
         if vault_unreachable
         else ""
     )
-    read_only_pill_html = _render_read_only_pill() if not canvas_enabled else ""
+    # Direct human editing is always available, so "Canvas off" no longer means
+    # the note is read-only — the misleading read-only pill is suppressed (#1447).
+    # A genuine write-blocked state surfaces with explicit copy at save time.
+    read_only_pill_html = ""
     note_not_found_html = _render_note_not_found(raw_note_path) if note_not_found else ""
     rail_empty_state_html = _render_rail_empty_state(
         panel_proposal_count=proposal_count,
@@ -1360,10 +1385,10 @@ def _render_note_section(fields: dict) -> str:
           aria-label="open outline" data-layout-visible="800-1099"
           onclick="leftPanel.setMode('outline')">☰ outline</button>
         <div class="note-body" data-testid="workspace-note-body" data-region="note-body"
-          data-read-only="true">
+          data-read-only="false">
           <div class="note-body-readonly-indicator"
             data-testid="workspace-note-body-readonly-indicator"
-            data-read-only="true">read-only</div>
+            data-read-only="false" hidden>read-only</div>
           <div class="note-body-readonly-reason"
             data-testid="workspace-note-body-readonly-reason"
             aria-live="polite"

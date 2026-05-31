@@ -44,12 +44,14 @@ def _render(**overrides) -> str:
 
 
 class TestReadOnlyPill:
-    def test_pill_visible_when_canvas_disabled(self) -> None:
+    def test_no_readonly_pill_when_canvas_disabled(self) -> None:
+        # #1447 — direct human editing is always available, so Canvas being off no
+        # longer means the note is read-only. The misleading "Canvas off" read-only
+        # pill is suppressed; a genuine write-blocked state surfaces at save time.
         html = _render(guard_canvas_enabled=False)
-        assert 'data-testid="workspace-read-only-pill"' in html
-        m = re.search(r'data-testid="workspace-read-only-pill"[^>]*title="([^"]+)"', html)
-        assert m, "read-only pill missing title attribute"
-        assert re.search(r"Canvas off", m.group(1)), f"title does not mention Canvas off: {m.group(1)!r}"
+        assert 'data-testid="workspace-read-only-pill"' not in html
+        # The editor is offered instead.
+        assert 'data-testid="workspace-note-edit-toggle"' in html
 
     def test_pill_absent_when_canvas_enabled(self) -> None:
         html = _render(guard_canvas_enabled=True)

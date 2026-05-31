@@ -377,6 +377,10 @@ def list_vault_notes(
 
 
 def _validate_workspace_note_path(note_path_raw: str) -> str:
+    # Strip any URL fragment / section anchor — the canonical note identity never
+    # includes a "#section" suffix; a leaked anchor must not turn a valid edit
+    # into a confusing 404 (#1447). Obsidian note filenames cannot contain '#'.
+    note_path_raw = (note_path_raw or "").split("#", 1)[0]
     candidate = PurePosixPath(note_path_raw)
     if (
         not note_path_raw
