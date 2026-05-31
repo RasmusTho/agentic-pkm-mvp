@@ -249,6 +249,15 @@ def _render_blocks(markdown: str, context: _RenderContext) -> str:
     return "".join(parts)
 
 
+def _next_nonblank_index(lines: list[str], start: int) -> int | None:
+    index = start
+    while index < len(lines):
+        if lines[index].strip():
+            return index
+        index += 1
+    return None
+
+
 def _render_fenced_code(
     lines: list[str],
     start: int,
@@ -335,8 +344,21 @@ def _render_table(
     context: _RenderContext,
 ) -> tuple[str, int]:
     table_lines: list[str] = []
+    expected_columns = len(_split_table_row(lines[start]))
     index = start
-    while index < len(lines) and "|" in lines[index] and lines[index].strip():
+    while index < len(lines):
+        if not lines[index].strip():
+            next_index = _next_nonblank_index(lines, index + 1)
+            if next_index is None or not _is_table_row(
+                lines[next_index],
+                expected_columns=expected_columns,
+                require_outer_pipes=True,
+            ):
+                break
+            index = next_index
+            continue
+        if not _is_table_row(lines[index], expected_columns=expected_columns):
+            break
         table_lines.append(lines[index])
         index += 1
 
@@ -354,6 +376,20 @@ def _render_table(
 def _split_table_row(line: str) -> list[str]:
     stripped = line.strip().strip("|")
     return [cell.strip() for cell in stripped.split("|")]
+
+
+def _is_table_row(
+    line: str,
+    *,
+    expected_columns: int,
+    require_outer_pipes: bool = False,
+) -> bool:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return False
+    if require_outer_pipes and not (stripped.startswith("|") and stripped.endswith("|")):
+        return False
+    return len(_split_table_row(stripped)) == expected_columns
 
 
 def _render_heading(match: re.Match[str], context: _RenderContext) -> str:
@@ -415,7 +451,18 @@ def _render_list_block(
     """
     entries: list[tuple[int, str, str | None, str]] = []
     index = start
+    base_indent = _list_indent(lines[start])
+    base_kind = _list_kind(lines[start])
     while index < len(lines):
+        if not lines[index].strip():
+            next_index = _next_nonblank_index(lines, index + 1)
+            next_kind = _list_kind(lines[next_index]) if next_index is not None else None
+            if next_index is None or next_kind is None:
+                break
+            if _list_indent(lines[next_index]) == base_indent and next_kind != base_kind:
+                break
+            index = next_index
+            continue
         kind = _list_kind(lines[index])
         if kind is None:
             break
@@ -768,10 +815,11 @@ def _render_unsupported_diagnostic(*, code: str, message: str) -> str:
 
 
 def _is_table_start(lines: list[str], index: int) -> bool:
-    return (
-        index + 1 < len(lines)
+    separator_index = _next_nonblank_index(lines, index + 1)
+    return bool(
+        separator_index is not None
         and "|" in lines[index]
-        and bool(_TABLE_SEPARATOR_RE.match(lines[index + 1]))
+        and bool(_TABLE_SEPARATOR_RE.match(lines[separator_index]))
     )
 
 
