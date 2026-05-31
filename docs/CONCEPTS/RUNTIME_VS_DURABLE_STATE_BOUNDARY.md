@@ -47,7 +47,7 @@ Who owns each runtime structure (which subsystem holds it; none of these own dur
 
 | Runtime structure | Owning subsystem | Notes |
 | --- | --- | --- |
-| Workspace state | Runtime Projection / UI projection | Aggregate view; a projection, not a durable artifact (owner: `WORKSPACE_STATE_CONTRACT.md`, #1368) |
+| Workspace state | Runtime Projection / UI projection | Aggregate view; a projection, not a durable artifact (owner: `WORKSPACE_STATE_CONTRACT.md`, #1368). Two read-side surfaces with explicit scope: the **artifact-scoped** aggregate (`/api/companion/workspace?note_path=…`, shipped, #1122) and the **note-independent** Workspace Orientation surface (`/api/companion/orientation`, planned v6.1). Both are read-only projections that may emit `mutation_intents` but never mutate. Scope split recorded in `docs/adr/ADR-0007-workspace-state-contract-scope-split.md` |
 | Overlays (`zone`, salience) | Runtime Projection | Derived, re-derivable; never a gate (owner: `LAYERING_MODEL.md` Zone) |
 | Retrieval state / ranked candidates | Capability / Runtime Projection | Rebuildable mirror; not durable |
 | Session logs | Governance/Observability | May be durable as a receipt/trace; classify explicitly |
