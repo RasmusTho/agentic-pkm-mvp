@@ -13,7 +13,7 @@ source_contracts:
   - docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
 governing_issue: "#1451"
-implementation_state: planned
+implementation_state: implemented
 ---
 
 # Workspace Orientation Contract
@@ -30,9 +30,9 @@ Workspace Orientation Snapshot at `GET /api/companion/orientation`, which
 answers "where am I in the system, what is open, what changed, and what can I
 safely resume?"
 
-This document is a contract only. It does not implement the endpoint. Until the
-runtime implementation issue ships, clients must not assume this endpoint is
-available.
+This document is the contract for the Phase 1 runtime endpoint. The shipped
+endpoint remains a read-only projection; Companion UI consumption is tracked by
+the follow-on re-entry surface issue.
 
 ## Scope
 
@@ -512,5 +512,7 @@ fresh snapshot.
 ## Implementation Gate
 
 Implementing `GET /api/companion/orientation` must follow this contract and must
-not imply changes to the artifact-scoped workspace endpoint. Runtime
-implementation belongs to the follow-on implementation issue for this contract.
+not imply changes to the artifact-scoped workspace endpoint. The Phase 1
+implementation is limited to the read-only, derived-only MVP shape in this
+contract; leave-point persistence, MemoryCandidate intents, push, and
+multi-agent semantics remain out of scope.

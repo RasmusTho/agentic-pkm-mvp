@@ -51,7 +51,8 @@ per-item `authority_role`/`source_ref`, no `orchestration`/`runtime` dashboard
 slices) are recorded in
 `docs/adr/ADR-0007-workspace-state-contract-scope-split.md` and detailed in
 `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md`. The note-independent
-surface is target-state v6.1 work and is **not** shipped.
+surface is shipped as a read-only Phase 1 endpoint; Companion UI consumption is
+tracked separately.
 
 ## Endpoint
 
