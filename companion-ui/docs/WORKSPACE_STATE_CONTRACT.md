@@ -29,6 +29,28 @@ browser integration can proceed.
 
 This document is a contract only. It does not implement the endpoint.
 
+## Scope (artifact-scoped)
+
+This contract is **artifact-scoped**. `note_path` is required; the aggregate
+describes the state *around one active note*. It is one of two read-side
+Workspace State surfaces:
+
+- **Artifact Workspace Snapshot (this contract):** `GET /api/companion/workspace?note_path=…`
+  — answers "what is the state around this artifact?"
+- **Workspace Orientation Snapshot (planned, v6.1):** a separate
+  note-independent surface (`GET /api/companion/orientation`) that exists when
+  no note is open — answers "where am I in the system, what is open, and what
+  can I safely resume?"
+
+Re-entry, continuity, resurfacing-when-idle, and orientation-after-absence are
+**not** served by widening this aggregate; they belong to the note-independent
+surface. The scope split, endpoint shape, and shared invariants
+(read-only + `mutation_intents`, bounded collections, snapshot-level freshness,
+per-item `authority_role`/`source_ref`, no `orchestration`/`runtime` dashboard
+slices) are recorded in
+`docs/adr/ADR-0007-workspace-state-contract-scope-split.md`. The note-independent
+surface is target-state v6.1 work and is **not** shipped.
+
 ## Endpoint
 
 ```http
