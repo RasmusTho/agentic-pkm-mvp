@@ -227,6 +227,21 @@ def test_inspector_renders_metadata_section_fields() -> None:
     assert 'data-testid="workspace-vault-browser-inspector-trust"' in html
 
 
+def test_inspector_renders_normalized_timestamp_fields() -> None:
+    """#1469: Inspector renders normalized timestamp strings from the server payload."""
+    note = _browser_note(
+        created="2026-01-01T00:00:00Z",
+        updated="2026-01-02T03:04:05Z",
+    )
+    browser = _vault_browser_payload(notes=[note])
+    _, _, html = _load_page(note_path="notes/current.md", browser_payload=browser)
+
+    assert 'data-testid="workspace-vault-browser-inspector-created"' in html
+    assert 'data-testid="workspace-vault-browser-inspector-updated"' in html
+    assert "2026-01-01T00:00:00Z" in html
+    assert "2026-01-02T03:04:05Z" in html
+
+
 # ---- AC3: health state visible and not hidden ----
 
 
