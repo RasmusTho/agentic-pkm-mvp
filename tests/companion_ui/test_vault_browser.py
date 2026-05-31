@@ -66,8 +66,9 @@ def _vault_browser_payload(
     total_notes: int = 1,
     filtered_notes: int = 1,
     identity_available: bool = True,
+    pagination: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "notes": notes
         or [
             {
@@ -83,6 +84,9 @@ def _vault_browser_payload(
         "vault_identity": {"vault_name": "Niflheim", "channel": "dev", "provenance": "env"},
         "identity_available": identity_available,
     }
+    if pagination is not None:
+        payload["pagination"] = pagination
+    return payload
 
 
 def _mock_get_response(payload: dict[str, Any]) -> MagicMock:
@@ -500,6 +504,43 @@ def test_handle_get_passes_filter_params_to_vault_browser_api() -> None:
     assert captured["params"]["kind"] == ["human_note"], (
         f"Filter value must be ['human_note']; got: {captured['params']['kind']!r}"
     )
+
+
+def test_vault_browser_renders_pagination_controls_from_api_payload() -> None:
+    page = _load_page(
+        browser_payload=_vault_browser_payload(
+            notes=[
+                {
+                    "note_path": "notes/alpha.md",
+                    "title": "Alpha",
+                    "zone": "notes",
+                }
+            ],
+            total_notes=3,
+            filtered_notes=3,
+            pagination={
+                "mode": "cursor",
+                "cursor": None,
+                "next_cursor": "notes/alpha.md",
+                "page_size": 1,
+                "returned_notes": 1,
+                "total_filtered_notes": 3,
+                "has_next": True,
+                "has_previous": False,
+            },
+        ),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-vault-browser-pagination"' in html
+    assert 'data-testid="workspace-vault-browser-pagination-next"' in html
+    assert 'data-next-cursor="notes/alpha.md"' in html
+    assert "cursor=notes%2Falpha.md" in html
 
 
 def test_vbtoggle_script_block_present_in_page() -> None:

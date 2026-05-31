@@ -87,6 +87,8 @@ class NoteLoadIntent:
     note_path: str
     artifact_id: Optional[str] = None
     active_filters: dict[str, list[str]] = field(default_factory=dict)
+    vault_browser_cursor: str = ""
+    vault_browser_limit: int = 250
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +173,7 @@ class DevPageState:
     vault_browser_vault_channel: str = "unknown"
     vault_browser_vault_provenance: str = "unresolved"
     vault_browser_active_filters: dict[str, Any] = field(default_factory=dict)
+    vault_browser_pagination: dict[str, Any] = field(default_factory=dict)
     is_loaded: bool = False
 
 
@@ -232,6 +235,10 @@ class RealNoteWorkspaceDevPage:
         if isinstance(self._http, WorkspaceHttpClient):
             try:
                 browser_params: dict[str, Any] = {"q": "", "limit": 250}
+                if intent.vault_browser_cursor:
+                    browser_params["cursor"] = intent.vault_browser_cursor
+                if intent.vault_browser_limit:
+                    browser_params["limit"] = intent.vault_browser_limit
                 browser_params.update(intent.active_filters)
                 vault_browser = self._http.get(
                     "/api/companion/vault-browser",
@@ -427,6 +434,7 @@ class RealNoteWorkspaceDevPage:
             vault_browser_vault_channel=str(vault_browser_identity.get("channel") or "unknown"),
             vault_browser_vault_provenance=str(vault_browser_identity.get("provenance") or "unresolved"),
             vault_browser_active_filters=dict(vault_browser.get("active_filters") or {}),
+            vault_browser_pagination=dict(vault_browser.get("pagination") or {}),
             is_loaded=True,
         )
         return self.state
@@ -930,6 +938,7 @@ class RealNoteWorkspaceDevPage:
             "vault_browser_vault_channel": self.state.vault_browser_vault_channel,
             "vault_browser_vault_provenance": self.state.vault_browser_vault_provenance,
             "vault_browser_active_filters": self.state.vault_browser_active_filters,
+            "vault_browser_pagination": self.state.vault_browser_pagination,
             "is_production_ui": self.is_production_ui,
             "dev_page_label": self.dev_page_label,
         }

@@ -315,6 +315,17 @@ class VaultBrowserNoteState(BaseModel):
     )
 
 
+class VaultBrowserPaginationState(BaseModel):
+    mode: Literal["cursor"] = "cursor"
+    cursor: str | None = None
+    next_cursor: str | None = None
+    page_size: int
+    returned_notes: int
+    total_filtered_notes: int
+    has_next: bool
+    has_previous: bool
+
+
 class VaultBrowserStateResponse(BaseModel):
     notes: list[VaultBrowserNoteState]
     query: str
@@ -324,6 +335,7 @@ class VaultBrowserStateResponse(BaseModel):
     vault_identity: VaultIdentityState
     identity_available: bool
     active_filters: dict[str, list[str]] = Field(default_factory=dict)
+    pagination: VaultBrowserPaginationState
 
 
 class VaultLinkIndexResponse(BaseModel):
@@ -1072,13 +1084,16 @@ def _select_vault_notes(
     *,
     query: str,
     limit: int,
+    cursor: str | None = None,
     filters: dict[str, list[str]] | None = None,
-) -> tuple[list[VaultBrowserNoteState], int, int]:
+) -> tuple[list[VaultBrowserNoteState], int, int, bool]:
     needle = query.strip().lower()
+    cursor_path = str(cursor or "").strip() or None
     active_filters = filters or {}
     total_notes = 0
     filtered_notes = 0
-    # Keep only the lexicographically-smallest `limit` note paths without
+    page_window_limit = limit + 1
+    # Keep only the lexicographically-smallest page window without
     # materializing the full sorted collection in memory.
     selected_heap: list[tuple[str, VaultBrowserNoteState]] = []
     for candidate in vault_root.rglob("*.md"):
@@ -1114,14 +1129,35 @@ def _select_vault_notes(
         if not _note_matches_filters(note, active_filters):
             continue
         filtered_notes += 1
+        if cursor_path is not None and note.note_path <= cursor_path:
+            continue
         key = note.note_path
-        if len(selected_heap) < limit:
+        if len(selected_heap) < page_window_limit:
             heapq.heappush(selected_heap, (_invert_lex(key), note))
         elif _invert_lex(key) > selected_heap[0][0]:
             heapq.heapreplace(selected_heap, (_invert_lex(key), note))
 
     selected = sorted((item[1] for item in selected_heap), key=lambda note: note.note_path)
-    return selected, total_notes, filtered_notes
+    return selected[:limit], total_notes, filtered_notes, len(selected) > limit
+
+
+def _vault_browser_pagination(
+    *,
+    notes: list[VaultBrowserNoteState],
+    cursor: str | None,
+    limit: int,
+    filtered_notes: int,
+    has_next: bool,
+) -> VaultBrowserPaginationState:
+    return VaultBrowserPaginationState(
+        cursor=str(cursor).strip() if cursor else None,
+        next_cursor=notes[-1].note_path if has_next else None,
+        page_size=limit,
+        returned_notes=len(notes),
+        total_filtered_notes=filtered_notes,
+        has_next=has_next,
+        has_previous=bool(cursor),
+    )
 
 
 def _attach_receipts_to_notes(
@@ -1509,6 +1545,7 @@ def _compose_note_with_preserved_frontmatter(*, original_content: str, new_body:
 def read_companion_vault_browser(
     q: str = Query("", description="Case-insensitive path/title filter"),
     limit: int = Query(250, ge=1, le=1000),
+    cursor: str | None = Query(None, description="Cursor note_path from the prior page"),
     kind: list[str] = Query(default=[], description="Filter by artifact kind (multi-value)"),
     zone: list[str] = Query(default=[], description="Filter by zone (multi-value)"),
     review_state: list[str] = Query(default=[], description="Filter by review_state (multi-value)"),
@@ -1531,11 +1568,19 @@ def read_companion_vault_browser(
         active_filters["review_state"] = list(review_state)
     if trust:
         active_filters["trust"] = list(trust)
-    selected, total_notes, filtered_notes = _select_vault_notes(
+    selected, total_notes, filtered_notes, has_next_page = _select_vault_notes(
         vault_root,
         query=q,
         limit=effective_limit,
+        cursor=cursor,
         filters=active_filters,
+    )
+    pagination = _vault_browser_pagination(
+        notes=selected,
+        cursor=cursor,
+        limit=effective_limit,
+        filtered_notes=filtered_notes,
+        has_next=has_next_page,
     )
     selected = _attach_receipts_to_notes(selected, vault_root=vault_root)
     identity = _vault_identity_state(vault_root)
@@ -1551,6 +1596,7 @@ def read_companion_vault_browser(
         vault_identity=identity,
         identity_available=identity_available,
         active_filters=active_filters,
+        pagination=pagination,
     )
 
 
