@@ -16,6 +16,13 @@ import re
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
 
 
+class _OrientationClient:
+    def get(self, url: str, *, params: dict) -> dict:
+        assert url == "/api/companion/orientation"
+        assert params == {}
+        return {}
+
+
 def _page(*, diagnostics: bool = False) -> str:
     return render_index_html(
         api_base_url="http://127.0.0.1:18001",
@@ -81,9 +88,10 @@ def test_human_header_strip_is_not_gated_by_diagnostics():
 
 
 def test_handle_get_threads_diagnostics_query_param():
+    client = _OrientationClient()
     html = handle_get(
         query_string="diagnostics=1",
-        client=None,  # no note_path → no network
+        client=client,
         api_base_url="http://127.0.0.1:18001",
     )
     m = re.search(r"<body[^>]*>", html)
@@ -91,7 +99,7 @@ def test_handle_get_threads_diagnostics_query_param():
 
     html2 = handle_get(
         query_string="",
-        client=None,
+        client=client,
         api_base_url="http://127.0.0.1:18001",
     )
     m2 = re.search(r"<body[^>]*>", html2)
