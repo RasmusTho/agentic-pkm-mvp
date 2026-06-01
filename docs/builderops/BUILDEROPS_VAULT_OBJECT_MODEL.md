@@ -1,4 +1,4 @@
-State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer and #1507 docs-freshness capture fields, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, migration, or product/runtime behavior.
+State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, #1507 docs-freshness capture fields, and #1508 roadmap-execution capture fields, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, migration, or product/runtime behavior.
 Doc role: BuilderOps schema contract
 Authority: Defines the initial BuilderOps Vault object model for #1500, subordinate to ADR-0010 for authority and promotion boundaries.
 Owner: BuilderOps governance
@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: ADR-0010 plus issue #1500 until a later BuilderOps implementation owner exists
 Last reviewed: 2026-06-01
-Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, issues #1498/#1499/#1500/#1495/#1507, PR #1510
+Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, issues #1498/#1499/#1500/#1495/#1507/#1508, PR #1510
 
 # BuilderOps Vault Object Model
 
@@ -794,9 +794,10 @@ receipt_refs: [receipt_20260601_005]
 
 ### RoadmapExecutionItem
 
-**Purpose:** Track active roadmap execution state, blockers, movement, next decision, owner, and
-related issues/PRs. It supports future projections so `docs/ROADMAP.md` can remain strategic while
-high-churn execution state moves to BuilderOps Vault.
+**Purpose:** Track active roadmap execution state, theme, capability, status, active issues,
+blockers, last movement, next decision, shipped refs, owner, and related issues/PRs. It supports
+generated projections so `docs/ROADMAP.md` can remain strategic while high-churn execution state
+moves to BuilderOps Vault.
 
 **Authority class:** `operational`. It is projection-support material, not strategic roadmap
 authority.
@@ -822,10 +823,16 @@ authority.
 **Recommended fields:**
 
 - `tags`
+- `theme`
+- `capability`
+- `status`
 - `related_issue_refs`
 - `related_pr_refs`
 - `related_doc_refs`
+- `active_issues`
 - `blockers`
+- `last_movement`
+- `shipped_refs`
 - `movement_log`
 - `current_slice_refs`
 - `parent_issue_refs`
@@ -846,6 +853,11 @@ authority.
 **Source/reference fields:** Must cite the roadmap path or anchor plus related GitHub issues/PRs and
 source docs that define the work. It may cite a RetroCluster or BuilderDecision when execution state
 comes from a retrospective or decision.
+
+**Execution fields:** `theme` names the roadmap theme or delivery line, `capability` names the
+capability being moved, `status` is the operator-readable movement status, `active_issues` names
+current issue work, `blockers` names active blockers, `last_movement` summarizes the latest durable
+movement, and `shipped_refs` cites merged PRs or closed issues that moved the item forward.
 
 **Promotion fields:** May promote to a GitHub Issue, roadmap owner-doc writeback proposal,
 generated projection, BuilderDecision candidate, or discard receipt. Use `promotion_status: none`
@@ -878,12 +890,23 @@ roadmap_ref:
   ref: "#1498"
   locator: "Suggested execution order"
   authority_surface: github
+theme: "BuilderOps Vault"
+capability: "shared operating plane"
 execution_state: in_progress
+status: active
 owner: "BuilderOps governance"
-next_decision: "Review object model contract before minimal store/CLI implementation."
+active_issues:
+  - ref_type: github_issue
+    ref: "#1508"
+blockers: []
+last_movement: "PR #1519 merged #1507."
+next_decision: "Continue with #1508 after #1507 merges."
+shipped_refs:
+  - ref_type: pull_request
+    ref: "#1519"
 related_issue_refs:
   - ref_type: github_issue
-    ref: "#1500"
+    ref: "#1508"
 source_refs:
   - ref_type: github_issue
     ref: "#1498"

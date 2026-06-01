@@ -132,9 +132,16 @@ def test_write_projections_emits_expected_repo_markdown_files(
         id="roadexec_projection_001",
         summary="BuilderOps projection issue active",
         roadmap_ref={"ref_type": "github_issue", "ref": "#1498"},
+        theme="BuilderOps Vault",
+        capability="shared operating plane",
         execution_state="in_progress",
+        status="active",
         owner="BuilderOps governance",
-        next_decision="Continue with #1506 after #1505 merges.",
+        active_issues=[{"ref_type": "github_issue", "ref": "#1508"}],
+        blockers=["none"],
+        last_movement="PR #1519 merged #1507.",
+        next_decision="Continue with #1508 after #1507 merges.",
+        shipped_refs=[{"ref_type": "pull_request", "ref": "#1519"}],
         source_refs=[{"ref_type": "github_issue", "ref": "#1505"}],
         created_by=_actor(),
     )
@@ -175,6 +182,14 @@ def test_write_projections_emits_expected_repo_markdown_files(
     assert "- Stale reasons: none" in docs_freshness
     assert "- Freshness evidence refs: github_issue:#1507" in docs_freshness
     assert "- Next review owner: BuilderOps governance" in docs_freshness
+    roadmap_execution = (output_dir / "roadmap-execution.md").read_text(encoding="utf-8")
+    assert "- Theme: BuilderOps Vault" in roadmap_execution
+    assert "- Capability: shared operating plane" in roadmap_execution
+    assert "- Status: active" in roadmap_execution
+    assert "- Active issues: github_issue:#1508" in roadmap_execution
+    assert "- Blockers: none" in roadmap_execution
+    assert "- Last movement: PR #1519 merged #1507." in roadmap_execution
+    assert "- Shipped refs: pull_request:#1519" in roadmap_execution
     promotion_queue = (output_dir / "promotion-queue.md").read_text(encoding="utf-8")
     assert "Source of truth: BuilderOps Vault" in promotion_queue
     assert "non-authoritative" in promotion_queue

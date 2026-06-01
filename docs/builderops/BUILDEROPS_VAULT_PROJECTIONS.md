@@ -1,4 +1,4 @@
-State: Generated projection support implemented for #1505 and extended for the #1507 docs-freshness split. BuilderOps projections render repo-readable Markdown views over BuilderOps Vault records; they are not source-of-truth records and are not published automatically by CI.
+State: Generated projection support implemented for #1505 and extended for the #1507 docs-freshness split and #1508 roadmap-execution split. BuilderOps projections render repo-readable Markdown views over BuilderOps Vault records; they are not source-of-truth records and are not published automatically by CI.
 Doc role: BuilderOps generated projection reference
 Authority: Documents the #1505 projection generator and output contract. Object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; store mechanics remain owned by `docs/builderops/BUILDEROPS_VAULT_STORE.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: app/builderops/projections.py, BuilderOps Vault records
 Last reviewed: 2026-06-01
-Last verified against: issues #1505/#1507
+Last verified against: issues #1505/#1507/#1508
 
 # BuilderOps Vault Projections
 
@@ -77,6 +77,12 @@ objects, including owner, review cadence, freshness posture, `drift_status`, `la
 evidence refs, and next review owner when those fields are present. This projection is the
 repo-readable freshness queue view after #1507; it does not replace `docs/DOCS_INDEX.md` as the
 stable document role/routing authority.
+
+The `roadmap-execution` projection renders high-churn roadmap movement state from
+`RoadmapExecutionItem` objects, including roadmap ref, theme, capability, execution state, status,
+owner, active issues, blockers, last movement, next decision, and shipped refs when those fields are
+present. This projection is the repo-readable execution movement view after #1508; it does not
+replace `docs/ROADMAP.md` as the strategic sequencing authority.
 
 ## Authority Boundary
 
