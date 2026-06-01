@@ -359,9 +359,16 @@ def append_receipt(
 @builderops.command("create-roadmap-execution-item", help="Create a RoadmapExecutionItem.")
 @click.option("--summary", required=True)
 @click.option("--roadmap-ref", required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option("--theme", default=None)
+@click.option("--capability", default=None)
 @click.option("--execution-state", required=True)
+@click.option("--status", default=None)
 @click.option("--owner", required=True)
+@click.option("--active-issue", multiple=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option("--blocker", multiple=True)
+@click.option("--last-movement", default=None)
 @click.option("--next-decision", required=True)
+@click.option("--shipped-ref", multiple=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", default=None)
@@ -371,9 +378,16 @@ def create_roadmap_execution_item(
     ctx: click.Context,
     summary: str,
     roadmap_ref: str,
+    theme: str | None,
+    capability: str | None,
     execution_state: str,
+    status: str | None,
     owner: str,
+    active_issue: tuple[str, ...],
+    blocker: tuple[str, ...],
+    last_movement: str | None,
     next_decision: str,
+    shipped_ref: tuple[str, ...],
     source_ref: tuple[str, ...],
     created_by: str | None,
     idempotency_key: str | None,
@@ -388,6 +402,20 @@ def create_roadmap_execution_item(
         "source_refs": _parse_refs(source_ref),
         "created_by": _parse_actor(created_by),
     }
+    if theme:
+        payload["theme"] = theme
+    if capability:
+        payload["capability"] = capability
+    if status:
+        payload["status"] = status
+    if active_issue:
+        payload["active_issues"] = _parse_refs(active_issue)
+    if blocker:
+        payload["blockers"] = list(blocker)
+    if last_movement:
+        payload["last_movement"] = last_movement
+    if shipped_ref:
+        payload["shipped_refs"] = _parse_refs(shipped_ref)
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
     _handle_create(ctx, _store(ctx).create_roadmap_execution_item, payload, as_json)

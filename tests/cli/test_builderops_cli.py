@@ -200,19 +200,38 @@ def test_builderops_cli_create_core_records_and_receipt(tmp_path: Path) -> None:
             "CLI roadmap execution",
             "--roadmap-ref",
             "repo_doc:docs/ROADMAP.md",
+            "--theme",
+            "BuilderOps Vault",
+            "--capability",
+            "shared operating plane",
             "--execution-state",
             "in_progress",
+            "--status",
+            "active",
             "--owner",
             "BuilderOps governance",
+            "--active-issue",
+            "github_issue:#1508",
+            "--blocker",
+            "none",
+            "--last-movement",
+            "PR #1519 merged #1507.",
             "--next-decision",
-            "Continue with #1502 after #1501 merges.",
+            "Continue with #1508 after #1507 merges.",
+            "--shipped-ref",
+            "pull_request:#1519",
             "--source-ref",
             "github_issue:#1498",
             "--json",
         ]
     )
     assert roadmap.exit_code == 0, roadmap.output
-    assert _json(roadmap.output)["object_type"] == "RoadmapExecutionItem"
+    roadmap_record = _json(roadmap.output)
+    assert roadmap_record["object_type"] == "RoadmapExecutionItem"
+    assert roadmap_record["theme"] == "BuilderOps Vault"
+    assert roadmap_record["active_issues"] == [{"ref_type": "github_issue", "ref": "#1508"}]
+    assert roadmap_record["last_movement"] == "PR #1519 merged #1507."
+    assert roadmap_record["shipped_refs"] == [{"ref_type": "pull_request", "ref": "#1519"}]
 
     receipt = _run(
         [

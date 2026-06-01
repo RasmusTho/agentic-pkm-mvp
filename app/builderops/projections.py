@@ -62,9 +62,16 @@ PROJECTION_SPECS: dict[str, BuilderOpsProjectionSpec] = {
         description="RoadmapExecutionItem records that describe operational roadmap execution state.",
         field_labels=(
             ("Roadmap ref", "roadmap_ref"),
+            ("Theme", "theme"),
+            ("Capability", "capability"),
             ("Execution state", "execution_state"),
+            ("Status", "status"),
             ("Owner", "owner"),
+            ("Active issues", "active_issues"),
+            ("Blockers", "blockers"),
+            ("Last movement", "last_movement"),
             ("Next decision", "next_decision"),
+            ("Shipped refs", "shipped_refs"),
         ),
     ),
     "promotion-queue": BuilderOpsProjectionSpec(
