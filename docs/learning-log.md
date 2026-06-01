@@ -140,3 +140,8 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** human / pr-integration
 **Diverged:** Some review fixes appeared addressed on intermediate branches before they were actually present on `main`, so the merged-PR sweep had to verify branch-chain repairs against the final target branch rather than trusting the side branch where a fix first landed.
 **Upstream artifact:** `.codex/skills/pr-integration/SKILL.md` and `.codex/skills/verification-and-closure/SKILL.md` — require base-branch truth checks for review repairs that land through chained PRs: the repair is not complete until the fixing commit is reachable from the merge target, or a final integration PR carries it there.
+
+## 2026-06-01 — PR #1486 (Panel checkbox projection merge verification)
+**Source:** human / verification-and-closure
+**Diverged:** The recovery plan assumed the Panel checkbox projection implementation still needed to be published from the current checkout, but current `main` already contained the merged implementation via PR #1486 and the active root checkout had switched back to `main`.
+**Upstream artifact:** `.codex/skills/pr-integration/SKILL.md` + `.codex/skills/verification-and-closure/SKILL.md` — add an explicit post-resume/current-state gate to re-check branch, `origin/main`, merged PRs, and expected implementation files before continuing publication or reimplementation work.
