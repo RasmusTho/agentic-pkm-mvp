@@ -106,7 +106,7 @@ When all prerequisites are met:
 7. if issue-backed, set Issue and PR Project Status to `Done` if automation has not already projected it
 8. if issue-backed, for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
 9. verify final state
-10. if issue-backed, invoke `post-merge-owner-doc` on the merged PR
+10. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, the receipt belongs on the closed issue; for direct-repair, docs-lane, or governance-lane PRs with no closing issue, the receipt belongs on the PR comment thread.
 11. assert the `post-merge owner-doc check:` receipt exists before emitting a delivery receipt; watchdog reminders or pending reminders are not closure receipts. For direct-repair, docs-lane, or governance-lane PRs with no closing issue, verify the receipt on the PR comment thread. [owner-doc-receipt-gate]
 12. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
 
