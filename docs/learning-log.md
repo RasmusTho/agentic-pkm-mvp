@@ -1,16 +1,25 @@
-State: Append-only delivery learning log
-Doc role: Reference
-Authority: Canonical log of plan divergences across delivery. Does not override issue contracts or skill prompts.
+State: Historical compatibility view for delivery learning captured before BuilderOps LearningSignal became the primary operational source in #1506.
+Doc role: Historical / compatibility reference
+Authority: Historical record of pre-BuilderOps delivery learning entries and explicit compatibility fallbacks. Does not override BuilderOps Vault records, issue contracts, or skill prompts.
 Owner: docs/development/DELIVERY_FEEDBACK_LOOP.md
-Temporal class: operational
+Temporal class: snapshot
 Review cadence: per retrospective
-Source of truth: this file
-Last reviewed: 2026-04-20
-Last verified against: docs/development/DELIVERY_FEEDBACK_LOOP.md, PR #523, current repo state at 17eef96 on 2026-04-20
+Source of truth: BuilderOps Vault LearningSignal records for operational learning after #1506; this file for historical entries and explicit compatibility fallbacks
+Last reviewed: 2026-06-01
+Last verified against: docs/development/DELIVERY_FEEDBACK_LOOP.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md, docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md, issue #1506
 
-# Learning Log
+# Learning Log Compatibility View
 
-Append-only flat file. One entry per divergence from plan. Do not edit past entries.
+This file preserves historical delivery learning entries that existed before the BuilderOps Vault
+learning workflow landed. New operational learning capture should create `LearningSignal` records in
+BuilderOps Vault, not treat this Markdown file as the primary store.
+
+`docs/learning-log.md` may still be used as an explicit compatibility fallback when a BuilderOps
+write is unavailable, but such fallback entries are not the source of truth once a corresponding
+`LearningSignal` exists. Do not edit past entries.
+
+The repo-readable generated view for current learning is the `learning-summary` BuilderOps
+projection, generated from `LearningSignal` records.
 
 ## Entry shape
 
@@ -37,7 +46,9 @@ Retrospective completions append:
 --- retro YYYY-MM-DD: applied N/M proposals ---
 ```
 
-This lets `learning-retrospective` scope its next read to entries since the last marker.
+For historical entries, this lets `learning-retrospective` scope its compatibility read to entries
+since the last marker. New retrospective state should be recorded with BuilderOps receipts over the
+LearningSignal records being processed.
 
 ---
 

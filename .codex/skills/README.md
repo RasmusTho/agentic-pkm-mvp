@@ -41,11 +41,11 @@ Conditional / maintenance path:
 - `backlog-reconciliation-drift-audit`
   - backlog and GitHub-state reconciliation support when doc/backlog drift is the main problem
 - `capture-learning`
-  - micro-skill: append one structured divergence entry to `docs/learning-log.md` when a plan divergence occurs; invoke on divergence, not on normal work
+  - micro-skill: create one BuilderOps `LearningSignal` when a plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback
 - `learning-retrospective`
-  - cadence-triggered: read `docs/learning-log.md` since last retro marker, cluster by upstream artifact, propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and appending the retro marker after every entry is resolved or tracked
+  - cadence-triggered: read BuilderOps `LearningSignal` records and the generated learning-summary projection, include historical `docs/learning-log.md` compatibility entries only when needed, cluster by upstream artifact, and propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and recording a BuilderOps retrospective receipt
 - `learning-to-issue`
-  - convert retrospective learnings (learning-log entries, live PR/CI divergences) into canonical bounded GitHub Issues; also normalizes raw-intake issues created outside the standard contract
+  - convert retrospective learnings (BuilderOps LearningSignals, historical learning-log compatibility entries, live PR/CI divergences) into canonical bounded GitHub Issues; also normalizes raw-intake issues created outside the standard contract
 - `promote-to-test`
   - release-channel staged workflow: move a candidate commit into the isolated test channel; runs test-scoped channel-isolation preflight, prepare, execute, and verify; produces a durable test verification receipt required by `promote-test-to-prod`; fail-closed on channel binding mismatches
 - `promote-test-to-prod`
