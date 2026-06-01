@@ -14,5 +14,6 @@ State: Index (historical). ADRs are design records and may be partially outdated
 - [ADR 0007: Workspace State Contract — artifact-scoped vs note-independent scope split (proposed)](./ADR-0007-workspace-state-contract-scope-split.md)
 - [ADR 0008: Leave-point cursor as bounded operational trace (proposed)](./ADR-0008-leave-point-cursor.md)
 - [ADR 0009: Orientation MemoryCandidate intent threshold and trace semantics (accepted, implemented by #1457)](./ADR-0009-orientation-memory-candidate-intent.md)
+- [ADR 0010: BuilderOps Vault authority and promotion boundary (accepted, docs/governance)](./ADR-0010-builderops-vault-authority-boundary.md)
 - [ADR: Agentminne v1](./ADR-00X-agent-memory-v1.md)
 - [ADR: Agentminne v4.2](./ADR-00X-agent-memory-v42.md)
