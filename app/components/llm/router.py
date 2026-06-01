@@ -198,6 +198,8 @@ class LLMRouter:
             override_model = target.model or target_model
         if override_model is None and routing is not None:
             override_model = routing.default_embed_model
+        if override_model is None:
+            override_model = _default_embed_model()
         identity = resolve_embedding_identity(
             profile=profile,
             override_model=override_model,
@@ -206,7 +208,7 @@ class LLMRouter:
         return (
             LLMRoute(
                 provider=identity.provider,
-                model=identity.model,
+                model=override_model or identity.model,
                 mode="embeddings",
                 reason=reason,
                 degraded=degraded,

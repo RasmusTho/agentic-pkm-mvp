@@ -119,12 +119,12 @@ def _resolve_embedding_provider_name(value: str | None) -> str:
 
 
 def _resolve_embedding_model(provider: str, override_model: str | None, configured_model: str | None = None) -> str:
+    if provider == "mock":
+        return _MOCK_EMBED_MODEL
     if override_model:
         return override_model
     if configured_model:
         return configured_model
-    if provider == "mock":
-        return _MOCK_EMBED_MODEL
     env_model = _normalize_name(os.getenv("EMBED_MODEL")) or _normalize_name(os.getenv("OLLAMA_EMBED_MODEL"))
     if env_model:
         return env_model
