@@ -144,6 +144,7 @@ def test_vault_browser_returns_pagination_metadata(tmp_path: Path, monkeypatch) 
         "mode": "cursor",
         "cursor": None,
         "next_cursor": "b/second.md",
+        "previous_cursor": None,
         "page_size": 2,
         "returned_notes": 2,
         "total_filtered_notes": 3,
@@ -189,7 +190,33 @@ def test_vault_browser_pagination_composes_with_metadata_filters(
     assert first_page["pagination"]["next_cursor"] == "a/alpha.md"
     assert [note["note_path"] for note in second_page["notes"]] == ["c/charlie.md"]
     assert second_page["pagination"]["has_next"] is False
+    assert second_page["pagination"]["has_previous"] is True
+    assert second_page["pagination"]["previous_cursor"] is None
     assert all(note["kind"] == "human_note" for note in second_page["notes"])
+
+
+def test_vault_browser_pagination_exposes_previous_cursor_for_later_pages(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    for relative in ("a/first.md", "b/second.md", "c/third.md", "d/fourth.md"):
+        _write_note(tmp_path / relative, title=Path(relative).stem)
+
+    client = TestClient(app)
+    first_page = client.get("/api/companion/vault-browser", params={"limit": 1}).json()
+    second_page = client.get(
+        "/api/companion/vault-browser",
+        params={"limit": 1, "cursor": first_page["pagination"]["next_cursor"]},
+    ).json()
+    third_page = client.get(
+        "/api/companion/vault-browser",
+        params={"limit": 1, "cursor": second_page["pagination"]["next_cursor"]},
+    ).json()
+
+    assert [note["note_path"] for note in third_page["notes"]] == ["c/third.md"]
+    assert third_page["pagination"]["has_previous"] is True
+    assert third_page["pagination"]["previous_cursor"] == "a/first.md"
 
 
 def test_vault_browser_pagination_is_read_only(tmp_path: Path, monkeypatch) -> None:
@@ -269,6 +296,33 @@ def test_vault_browser_accepts_iso_timestamp_variants(
     )
     assert note["created"] == "2026-01-01T00:00:00Z"
     assert note["updated"] == "2026-01-02T03:04:05Z"
+
+
+def test_vault_browser_preserves_non_utc_timestamp_offsets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    note_path = tmp_path / "notes" / "offset-timestamp.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        "---\n"
+        "title: Offset Timestamp\n"
+        "uuid: offset-timestamp-uuid\n"
+        "created: 2026-01-01T12:00:00-05:00\n"
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+
+    resp = TestClient(app).get("/api/companion/vault-browser")
+
+    assert resp.status_code == 200
+    note = next(
+        note for note in resp.json()["notes"] if note["note_path"] == "notes/offset-timestamp.md"
+    )
+    assert note["created"] == "2026-01-01T12:00:00-05:00"
 
 
 def test_vault_browser_includes_receipts_from_outbox_projection(

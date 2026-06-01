@@ -100,7 +100,7 @@ def _review_queue_with_candidate() -> MemoryCandidateReviewQueue:
     return queue
 
 
-def _evaluation(*, qualifying: bool) -> ResurfacingEvaluation:
+def _evaluation(*, qualifying: bool, related_only: bool = False) -> ResurfacingEvaluation:
     signals = [
         ResurfacingSignal(
             name="pending_promotions",
@@ -111,9 +111,9 @@ def _evaluation(*, qualifying: bool) -> ResurfacingEvaluation:
     if qualifying:
         signals.append(
             ResurfacingSignal(
-                name="promote_created_total",
+                name="promote_created_total" if related_only else "worker_queue_pending",
                 value=3,
-                source="/tmp/raw-events-path",
+                source="/tmp/raw-events-path" if related_only else "/tmp/raw-worker-path",
             )
         )
     return ResurfacingEvaluation(
@@ -189,6 +189,26 @@ def test_intent_emitted_no_write(
     assert intent["authority_role"] == "reference"
     assert intent["source_ref"]["ref"] == "status.events"
     assert len(intent["threshold_signals"]) == 2
+
+
+def test_related_promotion_counters_do_not_emit_intent(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = MemoryCandidateReviewQueue()
+    monkeypatch.setattr(companion_module, "_orientation_memory_review_queue", lambda: queue)
+    monkeypatch.setattr(companion_module, "get_orientation_signals", _signals)
+    monkeypatch.setattr(
+        companion_module,
+        "evaluate_resurfacing_candidates",
+        lambda signals=None: _evaluation(qualifying=True, related_only=True),
+    )
+
+    resp = _orientation(client)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mutation_intents"] == []
 
 
 def test_intent_trace_recorded(

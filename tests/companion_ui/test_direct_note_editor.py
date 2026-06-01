@@ -114,6 +114,8 @@ def test_editor_shows_human_error_copy_not_raw_json() -> None:
     assert "needs the latest build" in html  # route-missing / deploy-skew case
     assert "Note not found for: " in html
     assert "writes blocked" in html
+    assert "JSON.parse(d.message)" in html
+    assert "wrapped.detail || wrapped" in html
     assert "console.error('note save failed'" in html  # raw detail kept inspectable
     # The old behaviour ('Save failed: ' + raw JSON message) is gone.
     assert "'Save failed: ' + msg" not in html

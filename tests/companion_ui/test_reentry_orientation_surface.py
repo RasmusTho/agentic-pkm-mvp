@@ -169,6 +169,36 @@ def test_deep_links_to_artifact_workspace() -> None:
     assert 'href="/workspace?note_path=Notes%2Fresurface.md"' in html
 
 
+def test_leave_point_renders_structured_api_shape() -> None:
+    payload = _orientation_payload()
+    payload["leave_point"] = {
+        "status": "present",
+        "artifact_ref": {
+            "artifact_uuid": "artifact-resume",
+            "logical_ref": "Notes/resume.md",
+            "title": "Resume plan",
+        },
+        "captured_at": "2026-05-31T11:45:00Z",
+        "last_session_id": "session-123",
+        "authority_role": "operational_trace_pointer",
+        "source_ref": {
+            "kind": "artifact_activation",
+            "trace_id": "trace-leave",
+        },
+    }
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=payload,
+    )
+
+    assert 'data-leave-point-kind="present"' in html
+    assert 'href="/workspace?note_path=Notes%2Fresume.md"' in html
+    assert 'data-artifact-id="artifact-resume"' in html
+    assert "Last signal: 2026-05-31T11:45:00Z" in html
+    assert 'data-source-ref="trace-leave"' in html
+
+
 def test_degraded_state_rendered() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",

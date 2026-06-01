@@ -51,6 +51,7 @@ This contract is **workspace-scoped** and note-independent.
 {
   "scope": {
     "kind": "workspace",
+    "artifact_ref": null,
     "vault_id": "string",
     "channel": "dev | test | prod | unknown"
   }
@@ -58,7 +59,8 @@ This contract is **workspace-scoped** and note-independent.
 ```
 
 `vault_id` is an opaque runtime label. It must not expose an absolute vault
-filesystem path. Artifact references inside the payload may include
+filesystem path. `artifact_ref` is always `null` for this note-independent
+workspace surface; artifact references inside the payload may include
 browser-safe, runtime-relative `note_path` values for deep links back to the
 artifact workspace, but they must not include raw vault absolute paths or raw
 note bodies.
@@ -152,6 +154,7 @@ only; it is not a governance receipt and must not carry raw candidate content.
 {
   "scope": {
     "kind": "workspace",
+    "artifact_ref": null,
     "vault_id": "default",
     "channel": "dev"
   },
