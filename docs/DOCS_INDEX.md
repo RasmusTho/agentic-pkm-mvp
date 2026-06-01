@@ -414,6 +414,7 @@ These directories are docs-only specification authority for v6.0 capability boun
 | docs/adr/0005-per-loop.md | ADR PER loop | Partially outdated | 2026-02-05 | Historical rationale for shared PER base; v5.5 uses mixed loop/graph implementations; delta noted. |
 | docs/adr/ADR-0006-deepagents-harness.md | ADR DeepAgents harness | Proposed | 2026-03-25 | Evaluation memo for DeepAgents as outer agent harness; decision pending pilot. |
 | docs/adr/ADR-0008-leave-point-cursor.md | ADR leave-point cursor | Proposed | 2026-05-31 | Decides that the Workspace Orientation leave-point cursor is admissible only as a bounded append-only operational trace pointer, not memory, durable workspace state, session truth, receipt, workflow resume command, UI-owned state, or vault artifact. |
+| docs/adr/ADR-0010-builderops-vault-authority-boundary.md | ADR BuilderOps Vault authority boundary | Accepted (docs/governance decision) | 2026-06-01 | Defines BuilderOps Vault as the operating plane for builder-agent work while preserving the repo as product/runtime truth authority; names BuilderOps surfaces, non-authority boundaries, projection boundaries, explicit promotion targets, and the raw worklog boundary from #1495. Docs-only; no runtime/store/CLI/schema/API/MCP/promotion-gateway behavior is implemented. |
 | docs/adrs/ADR-00xx-promotion-agent.md | ADR promotion agent | Partially outdated | 2026-02-05 | Historical lifecycle intent; current baseline uses DB outbox + idempotent promotion consumer; delta noted. |
 
 ## Legacy and Archive
