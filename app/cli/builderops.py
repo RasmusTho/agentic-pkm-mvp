@@ -240,8 +240,23 @@ def create_promotion_intent(
 @click.option("--owner", required=True)
 @click.option("--review-cadence", required=True)
 @click.option("--freshness-posture", required=True)
+@click.option("--drift-status", default=None)
 @click.option("--last-reviewed-at", required=True)
+@click.option(
+    "--last-verified-against",
+    multiple=True,
+    help="JSON ref or shorthand ref_type:ref.",
+)
+@click.option("--last-verified-at", default=None)
 @click.option("--next-review-due-at", required=True)
+@click.option("--stale-reason", multiple=True)
+@click.option(
+    "--freshness-evidence-ref",
+    multiple=True,
+    help="JSON ref or shorthand ref_type:ref.",
+)
+@click.option("--next-review-owner", default=None)
+@click.option("--review-note", default=None)
 @click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", default=None)
@@ -254,8 +269,15 @@ def create_docs_freshness_record(
     owner: str,
     review_cadence: str,
     freshness_posture: str,
+    drift_status: str | None,
     last_reviewed_at: str,
+    last_verified_against: tuple[str, ...],
+    last_verified_at: str | None,
     next_review_due_at: str,
+    stale_reason: tuple[str, ...],
+    freshness_evidence_ref: tuple[str, ...],
+    next_review_owner: str | None,
+    review_note: str | None,
     source_ref: tuple[str, ...],
     created_by: str | None,
     idempotency_key: str | None,
@@ -272,6 +294,20 @@ def create_docs_freshness_record(
         "source_refs": _parse_refs(source_ref),
         "created_by": _parse_actor(created_by),
     }
+    if drift_status:
+        payload["drift_status"] = drift_status
+    if last_verified_against:
+        payload["last_verified_against"] = _parse_refs(last_verified_against)
+    if last_verified_at:
+        payload["last_verified_at"] = last_verified_at
+    if stale_reason:
+        payload["stale_reasons"] = list(stale_reason)
+    if freshness_evidence_ref:
+        payload["freshness_evidence_refs"] = _parse_refs(freshness_evidence_ref)
+    if next_review_owner:
+        payload["next_review_owner"] = next_review_owner
+    if review_note:
+        payload["review_notes"] = review_note
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
     _handle_create(ctx, _store(ctx).create_docs_freshness_record, payload, as_json)

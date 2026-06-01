@@ -1,9 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher safety, panel action provenance, and concurrency guardrails); v5.6 delivery line closed; v6.0 seams baseline shipped at capability-seam level; broader v6 runtime/product consumption is v6.1+. Post-v5.6 follow-ups are tracked separately; see `docs/STATUS.md#version-framing-consistency-note` for the authoritative framing map.
+State: Stable documentation role/routing map for the SoT v5.5 Reality-MVP baseline, the closed v5.6 delivery line, and the v6.0 seams baseline shipped at capability-seam level. High-churn docs freshness observations moved to BuilderOps `DocsFreshnessRecord` records and the generated `docs-freshness` projection in #1507.
 Doc role: Core SoT
-Authority: Canonical map of document roles and review status for the current repo; use it to determine whether a document is Core SoT, Reference, Plan, or Historical.
+Authority: Canonical stable map of document roles, authority routing, and reading order for the current repo; use it to determine whether a document is Core SoT, Reference, Plan, or Historical. Current freshness queues, drift observations, and next-review state are BuilderOps operational records, not this file.
 # Documentation Review Index — SoT v5.5 baseline + v6.0 seams shipped; v6.1+ broader consumption
 
-Central map of active and archived documentation artifacts in this repo. Use this index before treating any document as decision input.
+Central stable map of active and archived documentation artifacts in this repo. Use this index
+before treating any document as decision input. For high-churn docs freshness state, use BuilderOps
+`DocsFreshnessRecord` records and the generated `docs-freshness` projection; projection Markdown is
+non-authoritative and must be regenerated from BuilderOps Vault.
 
 Reading order:
 1. Find the document here and identify its role.
@@ -67,6 +70,21 @@ For a point-in-time review of where documentation roles are at risk of drift, se
 
 Some docs are structurally correct but still drift because time, delivery state, runtime posture,
 or external dependencies move.
+
+### BuilderOps docs freshness boundary
+
+`docs/DOCS_INDEX.md` remains repo authority for stable document roles, authority routing, and
+reading order. It is no longer the daily or weekly operational queue for freshness observations.
+
+Current docs freshness state lives in BuilderOps `DocsFreshnessRecord` objects. Those records track
+owner, review cadence, freshness posture, `drift_status`, `last_reviewed_at`,
+`last_verified_against`, `last_verified_at`, `next_review_due_at`, stale reasons, evidence refs, and
+next review owner. The repo-readable view is the generated BuilderOps `docs-freshness` projection,
+documented in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`.
+
+The tables below may still carry role/review-status snapshots where useful for routing, but they
+should not be updated merely to record transient freshness observations. Add or update
+`DocsFreshnessRecord` material for that operational state instead.
 
 For docs with a strong temporal component, treat the following metadata as mandatory either in the
 document itself or through an explicit owner/index mapping:
@@ -282,11 +300,11 @@ These directories are docs-only specification authority for v6.0 capability boun
 | docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
 | docs/LANGGRAPH_AGENT_ARCHITECTURE.md | LangGraph agent architecture reference | Aligned (forward line v5.x) | 2026-03-28 | Reference pattern for LangGraph agent layering, graph structure, and reusable runtime shape. |
 | AGENTS.md | Builder-agent instructions | Aligned (forward line v5.x) | 2026-03-29 | Canonical root instruction file for development-time builder agents and repo automation; explicitly separate from runtime/system-agent docs. |
-| docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md | BuilderOps Vault object model | Initial schema contract | 2026-06-01 | Defines the initial BuilderOps Vault object types, common reference/promotion/receipt relationships, authority classes, lifecycle states, and per-object required/recommended/optional fields for #1500. ADR-0010 remains the authority baseline; store/CLI mechanics, including #1502 local lease/idempotency semantics, are documented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. |
-| docs/builderops/BUILDEROPS_VAULT_STORE.md | BuilderOps Vault store and CLI | Local implementation reference | 2026-06-01 | Documents the #1501/#1502 local SQLite store and CLI mechanics, default `runtime/builderops/builderops.sqlite3` path, `BUILDEROPS_STATE_DIR` / `BUILDEROPS_DB_PATH` overrides, supported initial record types, local leases, idempotency keys, and receipt-backed state transitions. API/tool boundary mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`; promotion gateway mechanics are documented in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`; generated projection mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. |
+| docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md | BuilderOps Vault object model | Initial schema contract | 2026-06-01 | Defines the initial BuilderOps Vault object types, common reference/promotion/receipt relationships, authority classes, lifecycle states, and per-object required/recommended/optional fields for #1500, including #1507 `DocsFreshnessRecord` drift/verification fields. ADR-0010 remains the authority baseline; store/CLI mechanics, including #1502 local lease/idempotency semantics, are documented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. |
+| docs/builderops/BUILDEROPS_VAULT_STORE.md | BuilderOps Vault store and CLI | Local implementation reference | 2026-06-01 | Documents the #1501/#1502 local SQLite store and CLI mechanics, default `runtime/builderops/builderops.sqlite3` path, `BUILDEROPS_STATE_DIR` / `BUILDEROPS_DB_PATH` overrides, supported initial record types, local leases, idempotency keys, receipt-backed state transitions, and #1507 docs-freshness drift/verification CLI flags. API/tool boundary mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`; promotion gateway mechanics are documented in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`; generated projection mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. |
 | docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md | BuilderOps Vault API/tool boundary | Controlled local boundary reference | 2026-06-01 | Documents the #1503 HTTP API and MCP-style tool boundary for BuilderOps record list/read/create/receipt operations, autonomous-agent-safe operations, human/governance-review-only operations, and explicit non-product-runtime authority boundaries. Promotion gateway and projection generation operations are deliberately outside this autonomous boundary. |
 | docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md | BuilderOps promotion gateway | Explicit proposal/receipt reference | 2026-06-01 | Documents the #1504 explicit PromotionIntent gateway for proposal rendering, GitHub Issue dry-run bodies with source_refs, lease-protected accepted/promoted/rejected/discarded state transitions, discard receipts, and non-mutating repo/GitHub/product authority boundaries. |
-| docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md | BuilderOps generated projections | Generated projection reference | 2026-06-01 | Documents the #1505 generated Markdown projections for learning summaries, docs freshness, roadmap execution, and promotion queue views. Projection files are non-authoritative views over BuilderOps Vault, include `Source of truth: BuilderOps Vault`, and do not replace BuilderOps records, repo authority, GitHub Issues, or product/runtime truth. |
+| docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md | BuilderOps generated projections | Generated projection reference | 2026-06-01 | Documents the #1505 generated Markdown projections for learning summaries, docs freshness, roadmap execution, and promotion queue views, including #1507 docs-freshness owner, review cadence, drift, stale, verification, next-review, and evidence fields. Projection files are non-authoritative views over BuilderOps Vault, include `Source of truth: BuilderOps Vault`, and do not replace BuilderOps records, repo authority, GitHub Issues, or product/runtime truth. |
 | docs/SECURITY-ROADMAP-v6.1.md | Security vulnerabilities roadmap (v6.1 snapshot) | Plan | 2026-04-08 | Point-in-time dependency-vulnerability prioritization snapshot derived from the 2026-04-07 Dependabot alert set; use for remediation planning, not as current runtime SoT. |
 | docs/security/SECURITY_ALERT_TRIAGE_2026-05-15.md | Security alert triage snapshot (2026-05-15) | Snapshot | 2026-05-15 | Point-in-time CodeQL + Dependabot triage capturing P0/P1 fix paths, Companion UI exposure impact, and follow-ups; historical operator artifact, not living posture. |
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-04-22 | Runtime observability contract for heartbeats, counters, spans, and status interpretation; keeps runtime monitoring separate from higher-level architecture ownership, aligns `watcher_runs` semantics with the registry watcher audit stream, documents bounded retry/poison-message observability without claiming a dedicated DLQ, and reflects retrieval view-freshness status metadata. |

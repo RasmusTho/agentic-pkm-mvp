@@ -1,4 +1,4 @@
-State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, migration, or product/runtime behavior.
+State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer and #1507 docs-freshness capture fields, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, migration, or product/runtime behavior.
 Doc role: BuilderOps schema contract
 Authority: Defines the initial BuilderOps Vault object model for #1500, subordinate to ADR-0010 for authority and promotion boundaries.
 Owner: BuilderOps governance
@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: ADR-0010 plus issue #1500 until a later BuilderOps implementation owner exists
 Last reviewed: 2026-06-01
-Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, issues #1498/#1499/#1500/#1495, PR #1510
+Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, issues #1498/#1499/#1500/#1495/#1507, PR #1510
 
 # BuilderOps Vault Object Model
 
@@ -677,9 +677,10 @@ receipt_refs: [receipt_20260601_004]
 
 ### DocsFreshnessRecord
 
-**Purpose:** Track review cadence, stale state, last review, next review, owner, and freshness
-posture for repo docs. It supports future generated projections so `docs/DOCS_INDEX.md` can remain
-stable while high-churn freshness state moves to BuilderOps Vault.
+**Purpose:** Track review cadence, drift/stale state, last review, last verification, next review,
+owner, and freshness posture for repo docs. It supports generated projections so
+`docs/DOCS_INDEX.md` can remain the stable repo authority for document roles, routing, and reading
+order while high-churn freshness state moves to BuilderOps Vault.
 
 **Authority class:** `operational`. It is projection-support material, not the authoritative doc.
 
@@ -711,6 +712,7 @@ stable while high-churn freshness state moves to BuilderOps Vault.
 - `related_doc_refs`
 - `last_verified_against`
 - `last_verified_at`
+- `drift_status`
 - `stale_reasons`
 - `freshness_evidence_refs`
 - `projection_refs`
@@ -729,6 +731,13 @@ stable while high-churn freshness state moves to BuilderOps Vault.
 
 **Source/reference fields:** Must cite the doc path as `doc_ref` and a `source_ref`. It may cite
 issues, PRs, runtime surfaces, or owner docs used to verify freshness.
+
+**Freshness fields:** `freshness_posture` carries the review posture such as `current`,
+`review_due`, `likely_stale`, or `blocked`. `drift_status` may carry the current drift assessment
+such as `none`, `review_due`, `likely_stale`, `confirmed_stale`, or `unknown`.
+`last_verified_against` names the concrete sources used for the latest verification;
+`freshness_evidence_refs` names supporting issues, PRs, docs, runtime surfaces, receipts, or
+generated projections.
 
 **Promotion fields:** Usually not promoted as truth. It may create a PromotionIntent for an
 owner-doc writeback proposal, GitHub Issue, generated projection, or discard receipt. Use
@@ -765,11 +774,17 @@ doc_ref:
 owner: "Documentation role map"
 review_cadence: event-driven
 freshness_posture: current
+drift_status: none
 last_reviewed_at: "2026-06-01T19:20:00Z"
 next_review_due_at: "2026-06-15T00:00:00Z"
 last_verified_against:
   - ref_type: adr
     ref: docs/adr/ADR-0010-builderops-vault-authority-boundary.md
+last_verified_at: "2026-06-01T19:20:00Z"
+freshness_evidence_refs:
+  - ref_type: github_issue
+    ref: "#1507"
+next_review_owner: "BuilderOps governance"
 source_refs:
   - ref_type: repo_doc
     ref: docs/DOCS_INDEX.md

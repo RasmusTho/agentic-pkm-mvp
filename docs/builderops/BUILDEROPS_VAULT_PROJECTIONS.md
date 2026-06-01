@@ -1,4 +1,4 @@
-State: Generated projection support implemented for #1505. BuilderOps projections render repo-readable Markdown views over BuilderOps Vault records; they are not source-of-truth records and are not published automatically by CI.
+State: Generated projection support implemented for #1505 and extended for the #1507 docs-freshness split. BuilderOps projections render repo-readable Markdown views over BuilderOps Vault records; they are not source-of-truth records and are not published automatically by CI.
 Doc role: BuilderOps generated projection reference
 Authority: Documents the #1505 projection generator and output contract. Object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; store mechanics remain owned by `docs/builderops/BUILDEROPS_VAULT_STORE.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: app/builderops/projections.py, BuilderOps Vault records
 Last reviewed: 2026-06-01
-Last verified against: issue #1505
+Last verified against: issues #1505/#1507
 
 # BuilderOps Vault Projections
 
@@ -70,6 +70,13 @@ publish projections automatically in CI.
 | `docs-freshness` | `DocsFreshnessRecord` | `docs-freshness.md` |
 | `roadmap-execution` | `RoadmapExecutionItem` | `roadmap-execution.md` |
 | `promotion-queue` | `PromotionIntent` | `promotion-queue.md` |
+
+The `docs-freshness` projection renders high-churn docs review state from `DocsFreshnessRecord`
+objects, including owner, review cadence, freshness posture, `drift_status`, `last_reviewed_at`,
+`last_verified_against`, `last_verified_at`, `next_review_due_at`, stale reasons, freshness
+evidence refs, and next review owner when those fields are present. This projection is the
+repo-readable freshness queue view after #1507; it does not replace `docs/DOCS_INDEX.md` as the
+stable document role/routing authority.
 
 ## Authority Boundary
 
