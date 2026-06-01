@@ -125,7 +125,7 @@ Allowed promotion targets are:
 - GitHub Issue
 - PR
 - ADR/decision doc
-- owner-doc writeback proposal
+- owner-doc writeback proposal, including skill/AGENTS proposal for BuilderOps-governance surfaces
 - generated projection
 - discard receipt
 
