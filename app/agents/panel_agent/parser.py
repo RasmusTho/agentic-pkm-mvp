@@ -1,22 +1,16 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
 from app.agents.panel.filters import is_ai_fence
+from app.agents.panel.writeback import parse_action_line
 
 _SECTION_MAP: dict[str, Literal["instruction", "actions", "log"]] = {
     "ai-instruktion": "instruction",
     "ai-åtgärder": "actions",
     "ai-logg": "log",
 }
-_ACTION_PATTERN = re.compile(
-    r"^- \[( |x|X)\]\s*(.*?)"
-    r"(?:\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?"
-    r"(?:\s*<!--\s*ai:proposed=([A-Za-z0-9_.-]+)\s*-->)?\s*$"
-)
-
 
 @dataclass
 class PanelBlock:
@@ -29,6 +23,7 @@ class ParsedAction:
     label: str
     checked: bool
     action_id: str | None = None
+    option_id: str | None = None
     proposal_pending: bool = False
 
 
@@ -97,20 +92,15 @@ def _match_section(line: str) -> Literal["instruction", "actions", "log"] | None
 
 
 def _parse_action(line: str) -> ParsedAction | None:
-    match = _ACTION_PATTERN.match(line.strip())
-    if not match:
-        return None
-    checked = match.group(1).lower() == "x"
-    label = match.group(2).strip()
-    action_id = match.group(3) or None
-    proposal_pending = match.group(4) is not None
-    if not label:
+    parsed = parse_action_line(line.strip())
+    if parsed is None:
         return None
     return ParsedAction(
-        label=label,
-        checked=checked,
-        action_id=action_id,
-        proposal_pending=proposal_pending,
+        label=parsed.label,
+        checked=parsed.checked,
+        action_id=parsed.action_id,
+        option_id=parsed.option_id,
+        proposal_pending=parsed.proposal_marker is not None,
     )
 
 

@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from typing import Iterable
+from uuid import uuid4
 
 from app.objects import DomainObject, ObjectStore
 
 ACTION_PATTERN = re.compile(
-    r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)"
-    r"(\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?"
-    r"(\s*<!--\s*ai:proposed=([A-Za-z0-9_.-]+)\s*-->)?\s*$"
+    r"^(\s*-\s*\[( |x|X)\]\s*)(.*?)\s*$"
+)
+AI_METADATA_PATTERN = re.compile(
+    r"<!--\s*ai:(option_id|id|proposed)=([A-Za-z0-9_.-]+)\s*-->"
 )
 AI_STATUS_HEADER = "> [!info]- AI status"
 MAX_RECEIPTS = 20
@@ -23,10 +26,63 @@ MAX_RECEIPTS = 20
 EXECUTED_FALLBACK: dict[str, set[str]] = {}
 
 
+@dataclass(frozen=True)
+class ParsedActionLine:
+    prefix: str
+    checked: bool
+    label: str
+    action_id: str | None = None
+    option_id: str | None = None
+    proposal_marker: str | None = None
+    metadata_comments: tuple[str, ...] = ()
+
+
 def stable_action_id(text: str) -> str:
     """Deterministic short hash for a checkbox label."""
     digest = hashlib.sha1(text.strip().encode("utf-8")).hexdigest()
     return digest[:8]
+
+
+def new_option_id() -> str:
+    """Generate a durable Panel option identity for newly written proposals."""
+    return f"opt_{uuid4().hex}"
+
+
+def parse_action_line(line: str) -> ParsedActionLine | None:
+    """Parse a Panel checkbox line and strip known AI metadata from the label.
+
+    Supports ``ai:option_id``, ``ai:id``, and ``ai:proposed`` comments in any
+    order. Unknown comments remain part of the rendered/action label.
+    """
+    match = ACTION_PATTERN.match(line)
+    if not match:
+        return None
+    rest = match.group(3) or ""
+    metadata: dict[str, str] = {}
+    comments: list[str] = []
+    for meta_match in AI_METADATA_PATTERN.finditer(rest):
+        key = meta_match.group(1)
+        value = meta_match.group(2)
+        metadata[key] = value
+        comments.append(meta_match.group(0))
+    label = AI_METADATA_PATTERN.sub("", rest).strip()
+    if not label:
+        return None
+    return ParsedActionLine(
+        prefix=match.group(1),
+        checked=(match.group(2) or "").lower() == "x",
+        label=label,
+        action_id=metadata.get("id"),
+        option_id=metadata.get("option_id"),
+        proposal_marker=metadata.get("proposed"),
+        metadata_comments=tuple(comments),
+    )
+
+
+def _format_action_line(parsed: ParsedActionLine, metadata_comments: Iterable[str]) -> str:
+    comments = [comment for comment in metadata_comments if comment]
+    suffix = f" {' '.join(comments)}" if comments else ""
+    return f"{parsed.prefix}{parsed.label}{suffix}"
 
 
 def annotate_action_ids(markdown: str) -> str:
@@ -34,17 +90,16 @@ def annotate_action_ids(markdown: str) -> str:
     lines = markdown.splitlines()
     changed = False
     for idx, line in enumerate(lines):
-        match = ACTION_PATTERN.match(line)
-        if not match:
+        parsed = parse_action_line(line)
+        if parsed is None:
             continue
-        label = (match.group(3) or "").strip()
-        action_id = match.group(5)
-        proposed_marker = match.group(6) or ""
-        if action_id:
+        if parsed.action_id:
             continue
-        action_id = stable_action_id(label)
-        prefix = match.group(1)
-        lines[idx] = f"{prefix}{label} <!--ai:id={action_id}-->{proposed_marker}"
+        action_id = stable_action_id(parsed.label)
+        lines[idx] = _format_action_line(
+            parsed,
+            (f"<!--ai:id={action_id}-->", *parsed.metadata_comments),
+        )
         changed = True
     if not changed:
         return markdown
@@ -106,11 +161,9 @@ def remove_actions_from_markdown(markdown: str, action_ids: set[str]) -> str:
         return markdown
     result: list[str] = []
     for line in markdown.splitlines():
-        match = ACTION_PATTERN.match(line)
-        if match:
-            candidate_id = match.group(5)
-            if candidate_id and candidate_id in action_ids:
-                continue
+        parsed = parse_action_line(line)
+        if parsed and parsed.action_id and parsed.action_id in action_ids:
+            continue
         result.append(line)
     return "\n".join(result)
 
@@ -149,10 +202,14 @@ def upsert_executed_ids(note_id: str, action_ids: Iterable[str]) -> None:
 
 __all__ = [
     "ACTION_PATTERN",
+    "AI_METADATA_PATTERN",
     "AI_STATUS_HEADER",
     "EXECUTED_FALLBACK",
     "MAX_RECEIPTS",
+    "ParsedActionLine",
     "annotate_action_ids",
+    "new_option_id",
+    "parse_action_line",
     "remove_actions_from_markdown",
     "stable_action_id",
     "upsert_executed_ids",

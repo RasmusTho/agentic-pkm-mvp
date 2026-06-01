@@ -116,6 +116,39 @@ Capability taxonomy alignment (v6.x cognitive mediation, `docs/CAPABILITY_CONTRA
 - Legacy notes that only use the headings without fences are still parsed; new panels should use fences.
 - Panel content is not indexed or used as knowledge.
 
+### Canonical confirmation semantics
+
+The canonical human-facing confirmation signal for Panel execution is a checked Markdown task item:
+
+```markdown
+- [x] ...
+```
+
+inside a valid Panel `AI-åtgärder` section.
+
+This signal is substrate-neutral. It may be produced by a human in Obsidian, by a plain text editor, by a CLI-compatible flow, by a watcher-compatible flow, or by a Companion UI action that asks the runtime to project the same checked checkbox state. All surfaces converge on the same semantics: the runtime observes a valid checked Panel action, validates it, and only then admits it to governed execution.
+
+Companion UI read-mode clicks are an acceleration of this checkbox semantics. They are not a separate approval model. A browser click must not execute an agent action directly, must not mutate vault files directly, and must not become an authority store separate from the vault-visible Panel state.
+
+Only task checkboxes inside a valid Panel `AI-åtgärder` section are eligible for Panel confirmation. Ordinary Markdown task checkboxes remain ordinary task checkboxes. Checkboxes inside fenced code blocks or other non-Panel regions are not Panel actions.
+
+Current implementation: Companion UI read mode uses `POST /api/panel/checkbox-projection` for runtime-mediated projection of runtime-declared selectable Panel options. The existing staged `POST /api/panel/confirm` endpoint remains the transient staged-proposal confirmation path and is not the source-backed Markdown checkbox projection endpoint.
+
+### Panel identity vocabulary
+
+- `panel_id`: Runtime identifier for one parsed Panel block within one note/artifact. It scopes proposals and options but does not identify an option by itself.
+- `proposal_id`: Identifier for one proposal-generation event or staged proposal set. It groups options produced together and may be useful for receipts or freshness checks, but it is not by itself the durable identity of an individual selectable checkbox option.
+- `option_id`: Durable identity for one selectable Panel option line in `AI-åtgärder`. This is the identity a Companion UI projection request must target. Newly generated runtime proposals use the explicit Markdown marker `<!--ai:option_id=opt_...-->`.
+- `action_id`: Canonical catalog/runtime action identifier, such as `promote.evergreen`. Multiple options may map to the same `action_id` with different labels, parameters, evidence, or source locations.
+- `ai:id`: Existing hidden Markdown marker used by current runtime idempotency/removal paths. Existing implementations may derive it from a label hash. Therefore it MUST NOT be treated as a durable `option_id` until this document explicitly promotes it and defines collision, duplicate-label, and migration semantics.
+- `ai:proposed`: Existing hidden Markdown marker that means the checkbox was system-proposed and is still pending human confirmation. It is not a unique option identity.
+- `source_line` / `source_range`: The source location of the option line in the current note content, using runtime-defined line/range indexing. It is a locator and freshness aid, not authority by itself.
+- `source_hash` / `content_hash`: Hash over the current note content or over the relevant source range, used to reject stale UI projections. The hash proves the UI is acting on the same content snapshot the runtime validates; it is not an identity substitute.
+
+Identity decision: Companion UI read-mode checkbox projection uses a new explicit durable option marker, `<!--ai:option_id=opt_...-->`. Existing `ai:id` is not promoted to durable option identity; it remains legacy/current runtime idempotency and removal metadata. Existing `ai:proposed` remains only a pending/provenance marker.
+
+Companion UI must not infer durable option identity from label text, rendered DOM position, or `ai:proposed`. Existing proposal lines without `ai:option_id` remain parseable for legacy runtime behavior, but they are not Companion UI read-mode clickable.
+
 ### Example
 ```markdown
 %% AI:Start %%

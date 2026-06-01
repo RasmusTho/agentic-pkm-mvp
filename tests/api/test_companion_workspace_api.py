@@ -189,6 +189,39 @@ def test_workspace_panel_state(client: TestClient, vault_note: Path) -> None:
     assert panel["blocked_reason"] is None
 
 
+def test_workspace_panel_state_exposes_source_backed_selectable_options(
+    client: TestClient,
+    vault_note: Path,
+) -> None:
+    vault_note.write_text(
+        "---\n"
+        "uuid: note-uuid-1\n"
+        "---\n\n"
+        "# Test Note\n\n"
+        "- [ ] ordinary task\n\n"
+        "%% AI:Start %%\n"
+        "## AI-instruktion\n"
+        "Do the thing.\n"
+        "## AI-åtgärder\n"
+        "- [ ] Send email <!--ai:option_id=opt_workspace--> <!--ai:id=send.email--> <!--ai:proposed=979-->\n"
+        "%% AI:End %%\n",
+        encoding="utf-8",
+    )
+
+    resp = _workspace(client)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    panel = data["panel"]
+    assert panel["state"] == "proposals-staged"
+    assert panel["proposal_count"] == 1
+    options = panel["selectable_options"]
+    assert len(options) == 1
+    assert options[0]["option_id"] == "opt_workspace"
+    assert options[0]["content_hash"] == data["artifact"]["content_hash"]
+    assert options[0]["selectable"] is True
+
+
 def test_workspace_artifact_id_uses_frontmatter_uuid(client: TestClient, vault_note: Path) -> None:
     resp = _workspace(client)
 

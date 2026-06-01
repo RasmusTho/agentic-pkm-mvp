@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
 from typing import Iterable, Literal
+
+from app.agents.panel.writeback import parse_action_line
 
 from .schema import PanelAction, PanelLogEntry, PanelState
 
@@ -16,11 +17,6 @@ _LABEL_PREFIXES = {
     "actions": ("actions", "åtgärder"),
     "logs": ("log", "logg"),
 }
-_ACTION_PATTERN = re.compile(
-    r"^- \[( |x|X)\]\s*(.*?)"
-    r"(?:\s*<!--\s*ai:id=([A-Za-z0-9_.-]+)\s*-->)?"
-    r"(?:\s*<!--\s*ai:proposed=([A-Za-z0-9_.-]+)\s*-->)?\s*$"
-)
 
 
 def parse_panel(markdown: str) -> PanelState:
@@ -82,7 +78,7 @@ def _collect_panel_sections_from_lines(lines: Iterable[str]) -> dict[str, list[s
         if stripped.startswith("## ") and _is_non_panel_heading(lowered):
             current = None
             continue
-        if _ACTION_PATTERN.match(stripped):
+        if parse_action_line(stripped):
             sections["actions"].append(raw_line.rstrip())
             continue
         if current:
@@ -91,7 +87,7 @@ def _collect_panel_sections_from_lines(lines: Iterable[str]) -> dict[str, list[s
     if not sections["actions"]:
         for raw_line in lines:
             stripped = raw_line.strip()
-            if _ACTION_PATTERN.match(stripped):
+            if parse_action_line(stripped):
                 sections["actions"].append(raw_line.rstrip())
     return sections
 
@@ -164,20 +160,15 @@ def _is_non_panel_heading(line: str) -> bool:
 
 
 def _line_to_action(line: str) -> PanelAction | None:
-    match = _ACTION_PATTERN.match(line.strip())
-    if not match:
-        return None
-    checked = match.group(1).lower() == "x"
-    text = match.group(2).strip()
-    action_id = match.group(3) or None
-    proposal_pending = match.group(4) is not None
-    if not text:
+    parsed = parse_action_line(line.strip())
+    if parsed is None:
         return None
     return PanelAction(
-        checked=checked,
-        text=text,
-        action_id=action_id,
-        proposal_pending=proposal_pending,
+        checked=parsed.checked,
+        text=parsed.label,
+        action_id=parsed.action_id,
+        option_id=parsed.option_id,
+        proposal_pending=parsed.proposal_marker is not None,
     )
 
 
@@ -201,7 +192,7 @@ def _fallback_instruction(lines: list[str]) -> str:
                 if remainder:
                     return remainder
             continue
-        if _ACTION_PATTERN.match(stripped):
+        if parse_action_line(stripped):
             continue
         if stripped.startswith("## ") and _is_non_panel_heading(stripped.lower()):
             continue

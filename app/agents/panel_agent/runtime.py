@@ -5,12 +5,13 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.panel.writeback import (
     annotate_action_ids,
+    new_option_id,
     remove_actions_from_markdown,
     stable_action_id,
     upsert_executed_ids,
@@ -289,7 +290,12 @@ def _existing_panel_proposal_labels(markdown: str) -> set[str]:
     return {action.text.strip() for action in parsed.actions if action.text.strip()}
 
 
-def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, str]]) -> str:
+def _write_proposals_to_panel(
+    markdown: str,
+    proposed_labels: list[tuple[str, str]],
+    *,
+    option_id_factory: Callable[[], str] | None = None,
+) -> str:
     """Write proposed (unchecked) actions into the AI-åtgärder section of a panel.
 
     Finds the correct panel block and inserts proposals after existing checkboxes
@@ -327,6 +333,7 @@ def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, st
         existing_labels = set()
 
     proposal_lines = []
+    make_option_id = option_id_factory or new_option_id
     for action_id, label in proposed_labels:
         label_text = label.strip()
         stable_id = stable_action_id(label_text)
@@ -336,8 +343,9 @@ def _write_proposals_to_panel(markdown: str, proposed_labels: list[tuple[str, st
         # parser can re-surface them as `proposal_pending=True` on subsequent
         # passes. This prevents the LLM from auto-selecting an unchecked
         # proposed line on a later pass and bypassing the human gate (#979).
+        option_id = make_option_id()
         proposal_lines.append(
-            f"- [ ] {label_text} <!--ai:id={stable_id}--> <!--ai:proposed=979-->"
+            f"- [ ] {label_text} <!--ai:option_id={option_id}--> <!--ai:id={stable_id}--> <!--ai:proposed=979-->"
         )
 
     if not proposal_lines:

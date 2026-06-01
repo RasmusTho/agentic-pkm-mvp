@@ -26,6 +26,10 @@ from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.leave_point_cursor import latest_leave_point_projection
 from app.orientation.runtime import build_orientation_frame
+from app.panel.checkbox_projection import (
+    PanelSelectableOption,
+    extract_panel_selectable_options,
+)
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
@@ -109,6 +113,7 @@ class PanelState(BaseModel):
     latest_receipt_outcome: str | None
     blocked_reason: str | None
     no_match_reason: str | None
+    selectable_options: list[PanelSelectableOption] = Field(default_factory=list)
 
 
 class SuggestionsState(BaseModel):
@@ -665,8 +670,13 @@ def _proposal_count_for_artifact(artifact_id: str | None) -> int:
     return sum(1 for proposal in proposals.values() if proposal.artifact_id == artifact_id)
 
 
-def _panel_state(artifact_id: str | None) -> PanelState:
+def _panel_state(
+    artifact_id: str | None,
+    selectable_options: list[PanelSelectableOption] | None = None,
+) -> PanelState:
+    options = list(selectable_options or [])
     proposal_count = _proposal_count_for_artifact(artifact_id)
+    selectable_count = sum(1 for option in options if option.selectable)
     cache = getattr(confirm_module._idempotency_store, "_cache", {})
     relevant = [resp for resp in cache.values() if resp.artifact_id == artifact_id]
     latest = relevant[-1] if relevant else None
@@ -678,7 +688,7 @@ def _panel_state(artifact_id: str | None) -> PanelState:
             blocked_reason = latest.block_reason.message
     if blocked_reason:
         state = "blocked"
-    elif proposal_count:
+    elif proposal_count or selectable_count:
         state = "proposals-staged"
     elif latest_outcome == "success":
         state = "receipt-displayed"
@@ -686,11 +696,12 @@ def _panel_state(artifact_id: str | None) -> PanelState:
         state = "idle"
     return PanelState(
         state=state,
-        proposal_count=proposal_count,
+        proposal_count=proposal_count + selectable_count,
         receipt_count=len(relevant),
         latest_receipt_outcome=latest_outcome,
         blocked_reason=blocked_reason,
         no_match_reason=None,
+        selectable_options=options,
     )
 
 
@@ -2014,6 +2025,16 @@ def read_companion_workspace(
     )
     orientation_signals = get_orientation_signals()
 
+    content_hash = _content_hash(body)
+    selectable_options: list[PanelSelectableOption] = []
+    if identity.artifact_id:
+        selectable_options = extract_panel_selectable_options(
+            body,
+            artifact_id=identity.artifact_id,
+            note_path=safe_note_path,
+            content_hash=content_hash,
+        )
+
     return WorkspaceStateResponse(
         artifact=ArtifactState(
             artifact_id=identity.artifact_id,
@@ -2021,7 +2042,7 @@ def read_companion_workspace(
             note_path=safe_note_path,
             title=_extract_title(body, fallback=artifact_path.stem),
             body=body,
-            content_hash=_content_hash(body),
+            content_hash=content_hash,
             identity_source=identity.identity_source,
             identity_state=identity.identity_state,
             companion_of=identity.companion_of,
@@ -2036,7 +2057,7 @@ def read_companion_workspace(
             resurface=_resurface_state(safe_note_path, signals=orientation_signals),
         ),
         canvas=_canvas_state(safe_note_path, vault_root, canvas_enabled),
-        panel=_panel_state(identity.artifact_id),
+        panel=_panel_state(identity.artifact_id, selectable_options=selectable_options),
         suggestions=SuggestionsState(),
         guards=GuardState(
             canvas_enabled=canvas_enabled,
