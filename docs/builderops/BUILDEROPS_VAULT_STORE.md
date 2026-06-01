@@ -1,19 +1,19 @@
-State: Minimal local BuilderOps Vault store and CLI implemented for #1501. No leases, idempotency semantics, API/MCP boundary, promotion gateway, generated projections, migrations, or product/runtime authority changes are implemented here.
+State: Local BuilderOps Vault store and CLI implemented through #1502. Includes minimal leases, idempotency semantics, and receipt-backed state transitions. No API/MCP boundary, promotion gateway, generated projections, migrations, or product/runtime authority changes are implemented here.
 Doc role: BuilderOps store/CLI reference
-Authority: Documents the #1501 minimal local store/CLI mechanics. Object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; authority boundaries remain owned by ADR-0010.
+Authority: Documents the #1501/#1502 local store/CLI mechanics. Object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: app/builderops, app/cli/builderops.py, ADR-0010, BuilderOps object model
 Last reviewed: 2026-06-01
-Last verified against: issue #1501
+Last verified against: issues #1501/#1502
 
 # BuilderOps Vault Store and CLI
 
 ## Scope
 
-The initial BuilderOps Vault implementation is a minimal local SQLite store plus CLI for creating,
-reading, and listing BuilderOps records.
+The initial BuilderOps Vault implementation is a local SQLite store plus CLI for creating,
+reading, listing, and lease-protected state transitions for BuilderOps records.
 
 The store validates every initial object type from the object model. Typed CLI commands in this
 slice cover:
@@ -28,6 +28,44 @@ slice cover:
 The store preserves the object envelope from the BuilderOps object model, including
 `source_refs`, `promotion_status`, `lifecycle_state`, `authority_class`, timestamps, and actor
 identity. It validates supported `object_type` values and required fields before persistence.
+
+## Multi-Agent Safety
+
+The #1502 safety layer is intentionally local and minimal. It does not provide distributed locking
+across machines, but it does serialize local SQLite writes and gives agents explicit failure modes.
+
+### Agent identity
+
+Every created record still carries `created_by`. Lease acquisition and state transitions require an
+`actor` with `actor_type` and `id`. State transitions also write `updated_by` into the record
+payload.
+
+### Idempotency
+
+Create commands may provide an `idempotency_key`. Receipt creation requires one. The store records
+the operation, request hash, result record, and response payload for each key.
+
+- Retrying the same operation with the same key and same request returns the original response.
+- Reusing a key for different material is rejected as a conflict.
+- Idempotency keys are BuilderOps write-safety metadata only; they do not promote records or mutate
+  repo/GitHub authority.
+
+### Leases
+
+State transitions require an active lease for the target BuilderOps record. Agents acquire a lease
+for a record, perform the transition with the returned `lease_id`, then may release it.
+
+- A second actor cannot acquire an unexpired lease for the same record.
+- Expired leases are rejected on transition and may be replaced by a later acquire.
+- Leases protect BuilderOps material updates only; they do not lock product/runtime state or
+  GitHub/repo authority surfaces.
+
+### Receipts
+
+`transition` appends a `BuilderOpsReceipt` and links it from the transitioned record's
+`receipt_refs`. The receipt captures `previous_state`, `new_state`, the acting agent, source refs,
+and the transition idempotency key. Receipt records are append-only; they are not silently rewritten
+or transitioned.
 
 ## Store Location
 
@@ -57,7 +95,8 @@ python -m app.cli builderops create-worklog \
   --summary "Issue #1501 implementation context" \
   --body "Captured minimal store/CLI implementation context." \
   --task-context '{"issue":"#1501"}' \
-  --source-ref github_issue:#1501
+  --source-ref github_issue:#1501 \
+  --idempotency-key create:awl_example
 
 python -m app.cli builderops create-learning-signal \
   --summary "BuilderOps records need provenance" \
@@ -72,7 +111,8 @@ python -m app.cli builderops create-promotion-intent \
   --target-ref pending \
   --target-authority-class operational \
   --intended-output "Bounded GitHub Issue draft." \
-  --source-ref builderops_object:lrn_example
+  --source-ref builderops_object:lrn_example \
+  --idempotency-key create:prom_example
 
 python -m app.cli builderops create-docs-freshness-record \
   --summary "DOCS_INDEX BuilderOps entry checked" \
@@ -103,6 +143,20 @@ python -m app.cli builderops append-receipt \
   --idempotency-key object_created:lrn_example \
   --source-ref github_issue:#1501
 
+python -m app.cli builderops acquire-lease prom_example \
+  --actor codex \
+  --json
+
+python -m app.cli builderops transition prom_example \
+  --actor codex \
+  --lease-id lease_from_acquire_lease \
+  --idempotency-key transition:prom_example:accepted \
+  --source-ref github_issue:#1502 \
+  --summary "Accepted promotion intent" \
+  --action accept \
+  --receipt-body "Accepted the promotion intent as BuilderOps material." \
+  --lifecycle-state accepted
+
 python -m app.cli builderops list --type AgentWorklog
 python -m app.cli builderops read awl_example
 ```
@@ -123,9 +177,6 @@ later promotion gateway and normal repo/GitHub authority gate act on them.
 
 This slice intentionally does not implement:
 
-- multi-agent leases
-- idempotency semantics beyond SQLite record identity
-- automatic receipts for every create/update
 - API or MCP exposure
 - promotion gateway execution
 - generated repo projections

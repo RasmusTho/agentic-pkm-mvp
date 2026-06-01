@@ -1,9 +1,9 @@
 """Validation helpers for BuilderOps Vault records.
 
-The implementation keeps the #1501 store intentionally small: it validates the
-object envelope and required fields from the object model, then stores the full
-record as JSON. Later issues can add leases, idempotency, and richer receipts
-without changing the record contract exposed here.
+The implementation validates the object envelope and required fields from the
+object model, then stores the full record as JSON. Store-level leases,
+idempotency keys, and transition receipts are layered around this record
+contract without changing the object semantics exposed here.
 """
 
 from __future__ import annotations
@@ -334,6 +334,14 @@ SOURCE_REF_LIST_FIELDS = frozenset({"source_refs", "target_refs"})
 
 class BuilderOpsValidationError(ValueError):
     """Raised when a BuilderOps record does not satisfy the schema contract."""
+
+
+class BuilderOpsConflictError(BuilderOpsValidationError):
+    """Raised when a write conflicts with an existing BuilderOps safety guard."""
+
+
+class BuilderOpsLeaseError(BuilderOpsValidationError):
+    """Raised when a material update lacks a valid BuilderOps lease."""
 
 
 def utc_now() -> str:
