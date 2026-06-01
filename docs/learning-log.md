@@ -125,3 +125,18 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** issue-to-code / pr-integration
 **Diverged:** After CI went green on PR #988, the plan (hot-path step 3) required triaging review feedback before handoff — instead the agent declared "awaiting human review" without checking whether a review was already posted. A Codex P2 comment (stale-log masking in `_get_watcher_lifecycle_status`) was present and needed addressing before merge.
 **Upstream artifact:** `docs/development/PR_HOT_PATH.md` §"Review feedback triage" — make explicit that the agent must check for existing review comments immediately after CI is confirmed green, before any handoff or merge recommendation. The normal next step after CI green + review triage is `verification-and-closure`, not a park for human review.
+
+## 2026-06-01 — #1490 (Recent merged PR review sweep)
+**Source:** human / verification-and-closure
+**Diverged:** The review-feedback skills could identify and repair actionable comments, but multiple merged PRs still had unresolved inline review threads because follow-up fixes did not consistently reply to and resolve the original thread after landing on `main`.
+**Upstream artifact:** `.codex/skills/verification-and-closure/SKILL.md` and `.codex/skills/pr-integration/SKILL.md` — add a thread-state closure step for review-follow-up repairs: when a PR or direct repair addresses prior review feedback, verify the fixing commit is on the target base, reply with the fixing PR/merge commit, and resolve the original review thread before declaring the sweep complete.
+
+## 2026-06-01 — #1490 (Post-merge owner-doc receipt backfill)
+**Source:** human / post-merge-owner-doc
+**Diverged:** The post-merge owner-doc watchdog detected missing receipts, but several merged PRs remained with only watchdog reminders because the delivery loop did not enforce that a `post-merge owner-doc check:` receipt existed before final closure.
+**Upstream artifact:** `.codex/skills/verification-and-closure/SKILL.md` and `.codex/skills/post-merge-owner-doc/SKILL.md` — make receipt verification scriptable after merge, including direct-repair and docs/governance-lane PRs with no closing issue, so a watchdog reminder cannot be mistaken for loop closure.
+
+## 2026-06-01 — #1490 (Branch-chain review repair truth)
+**Source:** human / pr-integration
+**Diverged:** Some review fixes appeared addressed on intermediate branches before they were actually present on `main`, so the merged-PR sweep had to verify branch-chain repairs against the final target branch rather than trusting the side branch where a fix first landed.
+**Upstream artifact:** `.codex/skills/pr-integration/SKILL.md` and `.codex/skills/verification-and-closure/SKILL.md` — require base-branch truth checks for review repairs that land through chained PRs: the repair is not complete until the fixing commit is reachable from the merge target, or a final integration PR carries it there.
