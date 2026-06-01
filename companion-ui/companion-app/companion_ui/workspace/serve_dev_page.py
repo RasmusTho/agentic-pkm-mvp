@@ -5001,6 +5001,13 @@ def render_index_html(
       cursor: pointer;
       border-color: var(--accent);
     }}
+    .vault-markdown-rendered .panel-checkbox-feedback {{
+      display: block;
+      margin-top: 4px;
+      color: var(--destructive);
+      font-size: 0.84rem;
+      line-height: 1.25;
+    }}
     .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked {{
       background: var(--accent);
       border-color: var(--accent);
@@ -6725,6 +6732,37 @@ def render_index_html(
       var url = '/api/companion/workspace?note_path=' + encodeURIComponent(notePath || '');
       return fetch(url, {{method: 'GET'}}).catch(function() {{ return null; }});
     }}
+    function panelProjectionSucceeded(data) {{
+      return data && ['projected', 'executed', 'already_projected'].indexOf(data.status) !== -1;
+    }}
+    function panelProjectionMessage(data, fallback) {{
+      if (!data) return fallback;
+      if (data.block_reason) return data.block_reason;
+      if (data.status === 'blocked') return 'Panel action blocked by runtime guard.';
+      if (data.status === 'failed') return 'Panel action failed before execution completed.';
+      if (data.status === 'stale') return 'Panel action is stale. Refresh the note and try again.';
+      if (data.status === 'not_found') return 'Panel action is no longer available.';
+      if (data.status === 'not_selectable') return 'Panel action is not selectable.';
+      return fallback;
+    }}
+    function setPanelCheckboxFeedback(target, message) {{
+      var item = target.closest ? target.closest('li.task-list-item') : null;
+      if (!item) return;
+      var feedback = item.querySelector('.panel-checkbox-feedback');
+      if (!feedback) {{
+        feedback = document.createElement('span');
+        feedback.className = 'panel-checkbox-feedback';
+        feedback.setAttribute('role', 'status');
+        item.appendChild(feedback);
+      }}
+      feedback.textContent = message || '';
+    }}
+    function clearPanelCheckboxFeedback(target) {{
+      var item = target.closest ? target.closest('li.task-list-item') : null;
+      if (!item) return;
+      var feedback = item.querySelector('.panel-checkbox-feedback');
+      if (feedback) feedback.remove();
+    }}
     document.addEventListener('click', function(event) {{
       var target = event.target && event.target.closest
         ? event.target.closest('input[data-panel-checkbox="true"]')
@@ -6743,6 +6781,7 @@ def render_index_html(
       }};
       target.setAttribute('data-panel-submitting', 'true');
       target.disabled = true;
+      clearPanelCheckboxFeedback(target);
       fetch('/api/panel/checkbox-projection', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
@@ -6752,10 +6791,11 @@ def render_index_html(
           return {{ok: response.ok, status: response.status, data: data}};
         }});
       }}).then(function(result) {{
-        if (!result.ok) {{
+        if (!result.ok || !panelProjectionSucceeded(result.data)) {{
           target.disabled = false;
           target.removeAttribute('data-panel-submitting');
           target.checked = false;
+          setPanelCheckboxFeedback(target, panelProjectionMessage(result.data, 'Panel checkbox projection failed.'));
           try {{ console.error('panel checkbox projection failed', result.status, result.data); }} catch (e) {{}}
           return;
         }}

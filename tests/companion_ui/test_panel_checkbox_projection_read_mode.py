@@ -66,3 +66,7 @@ def test_read_mode_panel_option_has_projection_affordance_and_ordinary_task_is_d
     assert 'data-source-hash="source-hash"' in html
     assert "/api/panel/checkbox-projection" in html
     assert "/api/companion/workspace?note_path=" in html
+    assert "panelProjectionSucceeded(result.data)" in html
+    assert "'blocked'" in html
+    assert "'failed'" in html
+    assert "panel-checkbox-feedback" in html

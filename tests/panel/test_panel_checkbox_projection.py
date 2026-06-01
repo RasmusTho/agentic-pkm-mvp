@@ -222,6 +222,38 @@ def test_projection_endpoint_duplicate_idempotency_key_returns_cached_response(
     assert runtime.call_count == 1
 
 
+def test_projection_endpoint_runtime_failure_rolls_back_for_retry(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = _write_note(tmp_path)
+    runtime = MagicMock(side_effect=RuntimeError("transient"))
+    monkeypatch.setattr(projection_module, "run_panel_note_execution", runtime)
+    body = _request_for(note)
+
+    resp = client.post("/api/panel/checkbox-projection", json=body)
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "failed"
+    assert "- [ ] Send email <!--ai:option_id=opt_abc-->" in note.read_text(encoding="utf-8")
+
+    retry_body = _request_for(note)
+    retry_body["idempotency_key"] = "idem-retry"
+    monkeypatch.setattr(
+        projection_module,
+        "run_panel_note_execution",
+        MagicMock(return_value=MagicMock(runtime_results=[object()])),
+    )
+
+    retry = client.post("/api/panel/checkbox-projection", json=retry_body)
+
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "executed"
+    assert "- [x] Send email <!--ai:option_id=opt_abc-->" in note.read_text(encoding="utf-8")
+
+
 def test_projection_endpoint_writeguard_blocked_does_not_project(
     client: TestClient,
     tmp_path: Path,

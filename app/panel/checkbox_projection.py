@@ -437,6 +437,7 @@ class CheckboxProjectionService:
             request,
             note_path=note_path,
             safe_note_path=safe_note_path,
+            rollback_text=current,
             raw_text=written,
             content_hash_before=content_hash_before,
             content_hash_after=content_hash_after,
@@ -450,6 +451,7 @@ class CheckboxProjectionService:
         *,
         note_path: Path,
         safe_note_path: str,
+        rollback_text: str,
         raw_text: str,
         content_hash_before: str,
         content_hash_after: str,
@@ -467,12 +469,14 @@ class CheckboxProjectionService:
                 trigger="companion",
             )
         except Exception as exc:
+            write_note_from_absolute(note_path, rollback_text, vault_root=resolve_vault_root())
+            rolled_back = note_path.read_text(encoding="utf-8")
             return self._response(
                 request,
                 status="failed",
                 note_path=safe_note_path,
                 before=content_hash_before,
-                after=content_hash_after,
+                after=_content_hash(rolled_back),
                 block_reason=f"runtime_execution_failed:{type(exc).__name__}",
             )
 
