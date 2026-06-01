@@ -52,8 +52,8 @@ Default rule:
 
 These are follow-up tasks, not default PR blockers:
 
-- learning-log retro
-- future adoption observation
+- BuilderOps learning retrospective over `LearningSignal` records
+- future adoption observation captured as `LearningSignal`, `PromotionIntent`, or a follow-up Issue
 - owner-doc reflection
 - full dependency scan
 - board or project polish

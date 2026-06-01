@@ -14,6 +14,22 @@ Hot path:
 Conditional / maintenance path:
 `Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
 
+## BuilderOps Vault routing
+
+BuilderOps Vault is the operational plane for the building system. BuilderOps records are not
+product/runtime truth unless explicitly promoted through the appropriate authority path.
+
+- Raw builder-agent working notes, handoffs, recovery notes, and temporary evidence -> `AgentWorklog`
+- Delivery divergences that name an upstream artifact -> `LearningSignal`
+- High-churn docs freshness observations or review queues -> `DocsFreshnessRecord`
+- Roadmap execution movement, active issue movement, blockers, or shipped refs -> `RoadmapExecutionItem`
+- Requests to cross into GitHub Issue, PR/branch proposal, ADR/decision doc, owner-doc or skill/AGENTS writeback, generated projection, or discard handling -> `PromotionIntent`
+- State transitions, retrospective completions, projections, promotions, supersessions, and discards -> `BuilderOpsReceipt`
+
+Create GitHub Issues from BuilderOps material only when it has become bounded executable work with
+`Verify:` targets. Open PRs only for repo-governed artifact changes. Do not edit canonical docs
+just to capture operational state that belongs in BuilderOps Vault.
+
 ## Skill routing
 
 - `agentic-pkm`

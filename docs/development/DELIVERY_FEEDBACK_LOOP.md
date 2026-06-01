@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: per retrospective
 Source of truth: BuilderOps Vault LearningSignal records for operational learning; this document defines workflow
 Last reviewed: 2026-06-01
-Last verified against: issue #1506, docs/learning-log.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md, docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md, .codex/skills/capture-learning/SKILL.md, .codex/skills/learning-retrospective/SKILL.md
+Last verified against: issues #1506/#1509, docs/learning-log.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md, docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md, .codex/skills/capture-learning/SKILL.md, .codex/skills/learning-retrospective/SKILL.md
 
 # Delivery Feedback Loop
 
@@ -34,6 +34,35 @@ Docs -> Feature -> Slice -> Agent -> PR -> CI -> Verification -> Merge
                AGENTS.md · skill prompts · slice template
                task-contract template · owner-doc conventions
 ```
+
+## BuilderOps operating-plane boundary
+
+BuilderOps records are operational builder-system material. They are not product/runtime truth and
+do not change repo authority unless they are explicitly promoted through GitHub Issues, PRs, ADR or
+owner-doc proposals, generated projections, or discard receipts.
+
+### raw-agent-worklog-boundary
+
+Raw builder-agent work notes belong in BuilderOps Vault as `AgentWorklog` records by default.
+They do not belong in reviewed repo docs, `$CODEX_HOME`, or repo-local ignored state as the durable
+default. Local scratch may exist only as transient execution state.
+
+Promotion path:
+
+```text
+AgentWorklog
+  -> LearningSignal, when the note contains durable workflow learning
+  -> PromotionIntent, when the note should cross into GitHub, PR, ADR, owner-doc, skill, AGENTS, generated projection, or discard handling
+  -> BuilderOpsReceipt, when the note is processed, superseded, projected, promoted, or discarded
+```
+
+Create or update a GitHub Issue only when the promoted material becomes bounded executable work
+with `Verify:` targets. Open a PR only when repo-governed artifacts need to change. Direct edits to
+repo docs are not the capture path for raw working notes, docs freshness queues, roadmap execution
+movement, or unresolved learning.
+
+This section is the raw-worklog storage decision for #1495: BuilderOps Vault is the durable
+operational surface, and explicit promotion is the only path into GitHub/repo authority.
 
 ## Components
 

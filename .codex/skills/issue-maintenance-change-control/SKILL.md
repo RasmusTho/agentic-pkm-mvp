@@ -233,7 +233,7 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
    ```
 
 2. **Use them to track child slice delivery** in comments and body updates, including validation receipts posted by each delivered child
-3. **When the parent is fully repo-verifiable and only future observation remains, close it and move that observation to a follow-up issue or learning-log item**
+3. **When the parent is fully repo-verifiable and only future observation remains, close it and move that observation to a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work**
 
 ### Child Slice Issues
 

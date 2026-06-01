@@ -133,7 +133,7 @@ AC verifiability rule for task specs:
 - Keep implementation tasks independently mergeable. If a task cannot be verified on its own, the breakdown is still too coarse.
 - If the execution order cannot be explained as one flat ordered list, the capability boundary is still too large or needs a plan before breaking down.
 - One task specification can map to many GitHub issues. The spec is the source of truth, not the issue.
-- Parent issues are validation hubs during delivery. After child delivery and repo-verifiable acceptance, close the parent and split future observation into a follow-up issue or learning-log item.
+- Parent issues are validation hubs during delivery. After child delivery and repo-verifiable acceptance, close the parent and split future observation into a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work.
 
 ## When to trigger
 

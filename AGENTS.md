@@ -37,9 +37,9 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
   `.codex/skills/pr-integration/SKILL.md`
 - Delivery verification and feedback-loop closure:
   `.codex/skills/verification-and-closure/SKILL.md`
-- Log a divergence from plan during delivery:
+- Capture a BuilderOps learning signal for a divergence from plan:
   `.codex/skills/capture-learning/SKILL.md`
-- Retrospective over divergence log to improve upstream artifacts:
+- Retrospective over BuilderOps learning signals to improve upstream artifacts:
   `.codex/skills/learning-retrospective/SKILL.md`
 - Promote a reviewed commit from dev to stable prod (produce plan):
   `.codex/skills/prepare-promotion/SKILL.md`
@@ -68,6 +68,15 @@ Workflow state model:
 - `Review` is the agent-review phase before verification; it is not a human-waiting synonym.
 - PR/project `Done` should be projected by automation where possible; skills should only fallback-correct when projection drifts.
 - `pr-integration` is a conditional repair/readiness step, not a mandatory hop after every publish.
+
+BuilderOps Vault workflow boundary:
+
+- BuilderOps Vault governs builder-operations material only. It does not change product/runtime truth, repo owner docs, code, tests, ADRs, or runtime contracts unless material is explicitly promoted through the normal GitHub/PR/repo authority path.
+- Use BuilderOps records instead of direct repo-doc edits for operational state: `AgentWorklog` for raw builder-agent work notes, `LearningSignal` for delivery divergences, `DocsFreshnessRecord` for high-churn docs freshness state, `RoadmapExecutionItem` for roadmap execution movement, `PromotionIntent` for staged cross-surface proposals, and `BuilderOpsReceipt` for transitions, projections, promotions, supersessions, or discards.
+- GitHub Issues remain the executable task-contract surface. Create or update an Issue when BuilderOps material becomes bounded implementation, governance, docs, or follow-up work that needs backlog ownership and `Verify:` targets.
+- Open a PR only when repo-governed artifacts must change: code, tests, authoritative docs, ADRs, `.codex/skills/**`, `AGENTS.md`, or generated projections committed to the repo. A BuilderOps record alone is not a repo change.
+- Use `PromotionIntent` before crossing authority classes. Promotion targets include GitHub Issue, PR/branch proposal, ADR/decision doc proposal, owner-doc or skill/AGENTS writeback proposal, generated projection, or discard receipt. Promotion is a reviewed boundary crossing, not automatic synchronization.
+- Generated BuilderOps projections are repo-readable views, not source of truth. If a projection is stale, regenerate or reconcile from BuilderOps Vault; do not hand-edit the projection as authority.
 
 ## Change classification
 
