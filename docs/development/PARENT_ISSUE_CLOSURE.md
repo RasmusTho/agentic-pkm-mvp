@@ -17,7 +17,9 @@ Close the parent issue when all of the following are true:
 1. All child or slice issues are closed or terminal.
 2. Repo-verifiable parent acceptance criteria are satisfied.
 3. The closure receipt links the child issues, PRs, validation receipts, and the parent-closure handoff or explicit parent-closure issue.
-4. Future adoption, retro notes, or observation work has moved to a follow-up issue or learning-log item.
+4. Future adoption, retro notes, or observation work has moved to the right BuilderOps surface:
+   `LearningSignal` for operational learning, `PromotionIntent` for boundary-crossing proposals,
+   `BuilderOpsReceipt` for discard/supersession, or a follow-up GitHub Issue when it is executable work.
 
 ## Boundary Rules
 
@@ -38,10 +40,10 @@ The closure receipt should name:
 - the validation receipts posted by each delivered child
 - the evidence proving repo-verifiable acceptance
 - the parent-closure handoff or explicit parent-closure issue when the final child delivered the closure
-- any follow-up issue that will hold future adoption or retro work
+- any follow-up issue or BuilderOps record that will hold future adoption or retro work
 
 Minimal receipt shape:
 
 ```text
-PARENT CLOSURE RECEIPT: parent #<n> closed after child issues #<a>, #<b>. Evidence: <links>. Validation receipts: <links>. Parent-closure handoff: <link to issue or receipt>. Follow-up: #<m> or learning-log item.
+PARENT CLOSURE RECEIPT: parent #<n> closed after child issues #<a>, #<b>. Evidence: <links>. Validation receipts: <links>. Parent-closure handoff: <link to issue or receipt>. Follow-up: #<m>, BuilderOps LearningSignal/PromotionIntent, or discard receipt.
 ```

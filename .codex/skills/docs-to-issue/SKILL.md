@@ -31,6 +31,12 @@ Use maintenance skills instead of this lane when the work is a repair, audit, or
 
 - GitHub Issues are the canonical backlog task contract.
 - GitHub Project is the canonical backlog state machine.
+- A BuilderOps `PromotionIntent` can propose a GitHub Issue, but Issue creation is the explicit
+  promotion into the GitHub task-contract surface. Preserve the `PromotionIntent` or receipt link
+  in `Source Anchors` or `Applies learning (optional)` when present.
+- Create a PR from BuilderOps material only when the promoted target is a repo-governed artifact
+  change. A `PromotionIntent` by itself does not mutate code, tests, docs, ADRs, skills, or
+  `AGENTS.md`.
 - Inline doc markers such as `Tracked by: #123` and `Backlog: #123` are secondary convenience notes only.
 - New backlog work must use stable `Source Anchors`.
 - Do not create duplicate Issues.

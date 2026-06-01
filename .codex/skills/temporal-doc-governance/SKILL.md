@@ -11,12 +11,25 @@ This is a periodic maintenance pass, not a hot-path delivery step.
 Typical targets:
 
 - `docs/STATUS.md`
-- `docs/ROADMAP.md`
-- `docs/DOCS_INDEX.md`
+- `docs/ROADMAP.md` for strategic sequencing authority, not daily execution movement
+- `docs/DOCS_INDEX.md` for stable doc roles and reading order, not freshness queue state
 - rollout, track, runbook, and current-state docs
 - any doc that can drift because code, issues, runtime posture, or operational state changed
 
 Use it to repair temporal drift, not to add one-off backlog intake or implementation chatter.
+
+## BuilderOps routing
+
+Write BuilderOps records instead of editing repo docs when the finding is operational state:
+
+- docs freshness posture, stale reasons, evidence, or next review owner -> `DocsFreshnessRecord`
+- roadmap execution movement, active issues, blockers, shipped refs, or next execution decision -> `RoadmapExecutionItem`
+- a proposed doc/index/roadmap writeback -> `PromotionIntent`
+- completion, discard, supersession, or projection evidence -> `BuilderOpsReceipt`
+
+Generated BuilderOps projections are review views, not authority. `docs/DOCS_INDEX.md` remains the
+stable document role/routing authority, and `docs/ROADMAP.md` remains the strategic sequencing
+authority. Do not rewrite either file solely to capture high-churn operational state.
 
 ## First context to load
 
@@ -64,8 +77,11 @@ Use these classes:
 ## Update rules
 
 - Prefer correcting current-state claims over rewriting large sections.
-- Keep `ROADMAP` forward-looking; move delivered truth into the owner/current-state doc.
+- Keep `ROADMAP` forward-looking; move delivered truth into the owner/current-state doc and move
+  daily execution movement into `RoadmapExecutionItem`.
 - Keep `STATUS` explicitly operational; remove roadmap-like language when reality is already shipped or no longer active.
+- Keep `DOCS_INDEX` focused on stable document roles, authority, and reading order; move review
+  queue/freshness state into `DocsFreshnessRecord`.
 - Batch repeated temporal corrections where the same claim appears across multiple docs, and avoid splitting one drift class into many micro-edits unless the surfaces truly diverge.
 - If a claim cannot be verified, mark the uncertainty instead of presenting it as current truth.
 - Update `Last reviewed` whenever the doc is intentionally checked.
@@ -89,4 +105,4 @@ When updating, also report:
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Create a BuilderOps `LearningSignal`; use `docs/learning-log.md` only as an explicit compatibility fallback. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.

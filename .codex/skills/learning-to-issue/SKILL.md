@@ -13,6 +13,8 @@ This is the maintenance-learning intake lane. It is distinct from `docs-to-issue
 
 Invoke when:
 - A BuilderOps `LearningSignal` names a concrete upstream artifact and the repair is bounded enough for the backlog.
+- A BuilderOps `PromotionIntent` targets `github_issue` and the promoted material is bounded,
+  executable work with resolvable `Verify:` targets.
 - A historical `docs/learning-log.md` compatibility entry names a concrete upstream artifact and has not yet been represented by a `LearningSignal`.
 - `learning-retrospective` proposes a concrete edit and the edit requires implementation work (not just a doc change).
 - During `pr-integration` or `verification-and-closure`, a live divergence was observed that needs a tracking issue rather than an inline fix.
@@ -50,7 +52,7 @@ Every issue created by this skill must use the same contract as `docs-to-issue`:
 
 **Required sections (in order):**
 
-- `## Context` - background from the LearningSignal, historical learning-log compatibility entry, or observed divergence; link the source record, entry, or PR
+- `## Context` - background from the LearningSignal, PromotionIntent, historical learning-log compatibility entry, or observed divergence; link the source record, entry, or PR
 - `## Scope` - what changes, what files/artifacts are touched
 - `## Source Anchors` - the named upstream artifact(s) that absorb the fix; use the most local actionable item
 - `## Constraints` - what must not change; what approaches are excluded
@@ -124,7 +126,7 @@ Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and
 **Issue body template (all cases):**
 ```
 ## Context
-<1-2 sentences from the LearningSignal, historical learning-log compatibility entry, or observed divergence. Link the source: `BuilderOps LearningSignal <id>`, `docs/learning-log.md :: YYYY-MM-DD entry`, or `PR #N`>
+<1-2 sentences from the LearningSignal, PromotionIntent, historical learning-log compatibility entry, or observed divergence. Link the source: `BuilderOps LearningSignal <id>`, `BuilderOps PromotionIntent <id>`, `docs/learning-log.md :: YYYY-MM-DD entry`, or `PR #N`>
 
 ## Scope
 <What changes. Name files and artifacts.>
@@ -149,7 +151,7 @@ Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and
 - `<path>`
 
 ## Applies learning (optional)
-Applies learning from `BuilderOps LearningSignal <id>` or `docs/learning-log.md :: YYYY-MM-DD - <compatibility entry title>`.
+Applies learning from `BuilderOps LearningSignal <id>`, `BuilderOps PromotionIntent <id>`, or `docs/learning-log.md :: YYYY-MM-DD - <compatibility entry title>`.
 ```
 
 After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
@@ -196,7 +198,7 @@ Signs a raw-intake issue needs normalization:
 
 **Backlog receipt (new issue):**
 ```
-BACKLOG RECEIPT: Issue #N created - "<title>", labeled type:task/prio:med/agent:ready, added to Project "Agent Delivery Control Plane", Status=Ready. Source: BuilderOps LearningSignal <id> or docs/learning-log.md :: YYYY-MM-DD compatibility entry.
+BACKLOG RECEIPT: Issue #N created - "<title>", labeled type:task/prio:med/agent:ready, added to Project "Agent Delivery Control Plane", Status=Ready. Source: BuilderOps LearningSignal <id>, BuilderOps PromotionIntent <id>, or docs/learning-log.md :: YYYY-MM-DD compatibility entry.
 ```
 
 **Normalization receipt (existing issue updated):**

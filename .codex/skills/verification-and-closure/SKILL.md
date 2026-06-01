@@ -133,7 +133,7 @@ Use [`docs/development/PARENT_ISSUE_CLOSURE.md`](../../../docs/development/PAREN
 - if a slice issue is fully delivered, merge the PR and deliver the Issue
 - if the parent feature still needs validation, keep it open and record the child validation receipt on the parent issue
 - if the parent feature is the final child slice or an explicit closure task, close the parent after repo-verifiable acceptance is satisfied and the parent-closure handoff or explicit parent-closure issue is resolved
-- future adoption or retro work should move to a follow-up Issue or learning-log item, not block delivered repo-verifiable scope
+- future adoption or retro work should move to a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work; it should not block delivered repo-verifiable scope
 
 ## Dependent Issue Unblocking
 
