@@ -909,6 +909,14 @@ def _note_editor_script() -> str:
           }
           var d = res.data || {};
           var detail = d.detail || d;
+          if (d.error === 'runtime_api_error' && typeof d.message === 'string') {
+            try {
+              var wrapped = JSON.parse(d.message);
+              if (wrapped && typeof wrapped === 'object') {
+                detail = wrapped.detail || wrapped;
+              }
+            } catch (e) {}
+          }
           var err = detail.error || d.error || '';
           var rawMsg = detail.message || d.message || '';
           // Keep the raw machine detail inspectable (console + hover) without
@@ -2284,6 +2292,7 @@ def _render_vault_browser_pagination(
     if not pagination:
         return ""
     next_cursor = str(pagination.get("next_cursor") or "")
+    previous_cursor = str(pagination.get("previous_cursor") or "")
     page_size = pagination.get("page_size") or ""
     returned = int(pagination.get("returned_notes") or 0)
     total = int(pagination.get("total_filtered_notes") or 0)
@@ -2304,10 +2313,20 @@ def _render_vault_browser_pagination(
         )
     )
     previous_html = (
-        '<span class="vault-browser-pagination-previous" '
+        '<a class="vault-browser-pagination-previous" '
         'data-testid="workspace-vault-browser-pagination-previous" '
         f'data-has-previous="{str(has_previous).lower()}" '
-        'data-disabled="true">Previous</span>'
+        f'data-previous-cursor="{_e(previous_cursor)}" '
+        f'href="{_e(_pagination_link(note_path=note_path, query=query, active_filters=active_filters, cursor=previous_cursor or None, limit=page_size))}">'
+        "Previous"
+        "</a>"
+        if has_previous
+        else (
+            '<span class="vault-browser-pagination-previous" '
+            'data-testid="workspace-vault-browser-pagination-previous" '
+            'data-has-previous="false" '
+            'data-disabled="true">Previous</span>'
+        )
     )
     return (
         '<nav class="vault-browser-pagination" '
@@ -3537,9 +3556,9 @@ def _orientation_str(value: object, fallback: str = "") -> str:
 
 def _orientation_artifact_link(artifact_ref: object, *, testid: str) -> str:
     artifact = _orientation_dict(artifact_ref)
-    note_path = _orientation_str(artifact.get("note_path"))
+    note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
     title = _orientation_str(artifact.get("title"), note_path or "Artifact")
-    artifact_id = _orientation_str(artifact.get("artifact_id"))
+    artifact_id = _orientation_str(artifact.get("artifact_id") or artifact.get("artifact_uuid"))
     if not note_path:
         return (
             f'<span class="orientation-artifact-link orientation-artifact-link--empty" '
@@ -3560,7 +3579,7 @@ def _orientation_provenance(item: object, *, testid: str) -> str:
     authority_role = _orientation_str(data.get("authority_role"), "unknown")
     source_kind = _orientation_str(source_ref.get("kind"), "unknown")
     source_label = _orientation_str(source_ref.get("label"), source_kind)
-    source_ref_value = _orientation_str(source_ref.get("ref"))
+    source_ref_value = _orientation_str(source_ref.get("ref") or source_ref.get("trace_id"))
     return (
         f'<div class="orientation-provenance" data-testid="{testid}" '
         f'data-authority-role="{_e(authority_role)}" '
@@ -3587,8 +3606,16 @@ def _render_orientation_leave_point(leave_point: object) -> str:
           <div class="orientation-section-kicker">Leave point</div>
           <p class="orientation-empty">No derived leave point is available yet.</p>
         </section>"""
-    label = _orientation_str(leave.get("label"), "Derived leave point")
-    last_seen = _orientation_str(leave.get("last_interaction_at"), "time unknown")
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    status = _orientation_str(leave.get("status"))
+    label = _orientation_str(
+        leave.get("label") or artifact.get("title"),
+        "Derived leave point",
+    )
+    last_seen = _orientation_str(
+        leave.get("last_interaction_at") or leave.get("captured_at"),
+        "time unknown",
+    )
     session_id = _orientation_str(leave.get("last_session_id"))
     session_html = (
         f'<span class="orientation-muted">session {_e(session_id)}</span>'
@@ -3598,7 +3625,7 @@ def _render_orientation_leave_point(leave_point: object) -> str:
     return f"""
         <section class="orientation-section orientation-section--primary"
           data-testid="workspace-orientation-leave-point"
-          data-leave-point-kind="{_e(_orientation_str(leave.get("kind"), "derived_only"))}">
+          data-leave-point-kind="{_e(_orientation_str(leave.get("kind") or status, "derived_only"))}">
           <div class="orientation-section-kicker">Leave point</div>
           <h1 class="orientation-title">{_e(label)}</h1>
           <div class="orientation-artifact-row">

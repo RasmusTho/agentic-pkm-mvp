@@ -166,6 +166,7 @@ _MEMORY_CANDIDATE_REVIEW_QUEUE = MemoryCandidateReviewQueue()
 
 class WorkspaceOrientationScope(BaseModel):
     kind: Literal["workspace"] = "workspace"
+    artifact_ref: dict[str, str | None] | None = None
     vault_id: str
     channel: str
 
@@ -352,6 +353,7 @@ class VaultBrowserPaginationState(BaseModel):
     mode: Literal["cursor"] = "cursor"
     cursor: str | None = None
     next_cursor: str | None = None
+    previous_cursor: str | None = None
     page_size: int
     returned_notes: int
     total_filtered_notes: int
@@ -582,8 +584,25 @@ def _validate_workspace_markdown_note_path(note_path_raw: str) -> str:
 
 
 def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
-    candidate = vault_root / safe_note_path
-    return candidate if candidate.is_file() else None
+    root_real = Path(os.path.realpath(vault_root))
+    for candidate in vault_root.rglob("*.md"):
+        if not candidate.is_file():
+            continue
+        if _vault_relative(candidate, vault_root) != safe_note_path:
+            continue
+        candidate_real = Path(os.path.realpath(candidate))
+        try:
+            candidate_real.relative_to(root_real)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "path_escape",
+                    "message": "Resolved note path is outside the vault.",
+                },
+            ) from exc
+        return candidate_real
+    return None
 
 
 def _vault_contained_abs_path(vault_root: Path, safe_note_path: str) -> Path:
@@ -796,8 +815,9 @@ def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list
         }
 
     open_loops = [
-        item(loop, panel_handoff=not loop.startswith("No unresolved"))
+        item(loop, panel_handoff=True)
         for loop in frame.explanation.open_items
+        if not loop.startswith("No unresolved")
     ]
     candidates = [
         item(intent, panel_handoff=True)
@@ -922,14 +942,18 @@ def _orientation_leave_point(
 
 def _orientation_open_loops(open_items: list[str]) -> list[WorkspaceOrientationOpenLoop]:
     loops: list[WorkspaceOrientationOpenLoop] = []
-    for index, label in enumerate(open_items[:ORIENTATION_OPEN_LOOPS_CAP]):
-        unresolved = not label.startswith("No unresolved")
+    unresolved_items = [
+        label
+        for label in open_items
+        if not label.startswith("No unresolved")
+    ][:ORIENTATION_OPEN_LOOPS_CAP]
+    for index, label in enumerate(unresolved_items):
         loops.append(
             WorkspaceOrientationOpenLoop(
                 id=_orientation_item_id("open-loop", index),
                 label=label,
-                status="open" if unresolved else "unknown",
-                handoff_hint="panel" if unresolved else "none",
+                status="open",
+                handoff_hint="panel",
                 source_ref=_orientation_source_ref(
                     "runtime_signal",
                     "orientation.open_items",
@@ -986,16 +1010,31 @@ def _orientation_resurface_candidates(signals: OrientationSignals) -> list[Works
     return candidates
 
 
+_ORIENTATION_MEMORY_SIGNAL_CATEGORIES = {
+    "pending_promotions": "promotion_backlog",
+    "promote_created_total": "promotion_backlog",
+    "promotion_executed_total": "promotion_backlog",
+    "worker_queue_pending": "worker_queue",
+    "watcher_runs_24h": "watcher_activity",
+    "promote_created_24h": "promotion_activity",
+}
+
+
+def _orientation_memory_signal_category(signal_label: str) -> str | None:
+    signal_name = signal_label.split("=", 1)[0].strip()
+    return _ORIENTATION_MEMORY_SIGNAL_CATEGORIES.get(signal_name)
+
+
 def _orientation_memory_threshold_signals(
     candidate: WorkspaceOrientationResurfaceCandidate,
 ) -> list[str]:
     threshold_signals: list[str] = []
     seen: set[str] = set()
     for signal_label in candidate.signal_labels:
-        signal_name = signal_label.split("=", 1)[0]
-        if signal_name in seen:
+        category = _orientation_memory_signal_category(signal_label)
+        if category is None or category in seen:
             continue
-        seen.add(signal_name)
+        seen.add(category)
         threshold_signals.append(signal_label)
         if len(threshold_signals) >= ORIENTATION_SOURCE_REFS_PER_ITEM_CAP:
             break
@@ -1193,11 +1232,15 @@ def _normalize_timestamp_string(value: str) -> str:
         parsed = datetime.datetime.fromisoformat(parse_value)
     except ValueError:
         return value
+    if parsed.tzinfo is not None and parsed.utcoffset() != datetime.timedelta(0):
+        return value
     return _format_timestamp_datetime(parsed)
 
 
 def _format_timestamp_datetime(value: datetime.datetime) -> str:
     if value.tzinfo is None or value.utcoffset() is None:
+        return value.isoformat()
+    if value.utcoffset() != datetime.timedelta(0):
         return value.isoformat()
     utc_value = value.astimezone(datetime.timezone.utc)
     iso_value = utc_value.isoformat()
@@ -1247,7 +1290,7 @@ def _select_vault_notes(
     limit: int,
     cursor: str | None = None,
     filters: dict[str, list[str]] | None = None,
-) -> tuple[list[VaultBrowserNoteState], int, int, bool]:
+) -> tuple[list[VaultBrowserNoteState], int, int, bool, str | None]:
     needle = query.strip().lower()
     cursor_path = str(cursor or "").strip() or None
     active_filters = filters or {}
@@ -1257,6 +1300,7 @@ def _select_vault_notes(
     # Keep only the lexicographically-smallest page window without
     # materializing the full sorted collection in memory.
     selected_heap: list[tuple[str, VaultBrowserNoteState]] = []
+    previous_cursor_heap: list[str] = []
     for candidate in vault_root.rglob("*.md"):
         if not candidate.is_file():
             continue
@@ -1291,6 +1335,9 @@ def _select_vault_notes(
             continue
         filtered_notes += 1
         if cursor_path is not None and note.note_path <= cursor_path:
+            heapq.heappush(previous_cursor_heap, note.note_path)
+            if len(previous_cursor_heap) > limit + 1:
+                heapq.heappop(previous_cursor_heap)
             continue
         key = note.note_path
         if len(selected_heap) < page_window_limit:
@@ -1299,7 +1346,9 @@ def _select_vault_notes(
             heapq.heapreplace(selected_heap, (_invert_lex(key), note))
 
     selected = sorted((item[1] for item in selected_heap), key=lambda note: note.note_path)
-    return selected[:limit], total_notes, filtered_notes, len(selected) > limit
+    previous_window = sorted(previous_cursor_heap)
+    previous_cursor = previous_window[0] if len(previous_window) > limit else None
+    return selected[:limit], total_notes, filtered_notes, len(selected) > limit, previous_cursor
 
 
 def _vault_browser_pagination(
@@ -1309,10 +1358,12 @@ def _vault_browser_pagination(
     limit: int,
     filtered_notes: int,
     has_next: bool,
+    previous_cursor: str | None,
 ) -> VaultBrowserPaginationState:
     return VaultBrowserPaginationState(
         cursor=str(cursor).strip() if cursor else None,
         next_cursor=notes[-1].note_path if has_next else None,
+        previous_cursor=previous_cursor,
         page_size=limit,
         returned_notes=len(notes),
         total_filtered_notes=filtered_notes,
@@ -1729,7 +1780,7 @@ def read_companion_vault_browser(
         active_filters["review_state"] = list(review_state)
     if trust:
         active_filters["trust"] = list(trust)
-    selected, total_notes, filtered_notes, has_next_page = _select_vault_notes(
+    selected, total_notes, filtered_notes, has_next_page, previous_cursor = _select_vault_notes(
         vault_root,
         query=q,
         limit=effective_limit,
@@ -1742,6 +1793,7 @@ def read_companion_vault_browser(
         limit=effective_limit,
         filtered_notes=filtered_notes,
         has_next=has_next_page,
+        previous_cursor=previous_cursor,
     )
     selected = _attach_receipts_to_notes(selected, vault_root=vault_root)
     identity = _vault_identity_state(vault_root)
@@ -2280,14 +2332,12 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
     vault_root = resolve_vault_root()
-    if _find_workspace_note(vault_root, safe_note_path) is None:
+    note_path = _find_workspace_note(vault_root, safe_note_path)
+    if note_path is None:
         raise HTTPException(
             status_code=404,
             detail={"error": "note_not_found", "message": "No note exists for the requested note_path"},
         )
-    # Defense-in-depth: resolve to an absolute path proven to be inside the vault
-    # before any filesystem read/write.
-    note_path = _vault_contained_abs_path(vault_root, safe_note_path)
 
     if _body_contains_frontmatter(req.new_body):
         raise HTTPException(

@@ -522,6 +522,7 @@ def test_vault_browser_renders_pagination_controls_from_api_payload() -> None:
                 "mode": "cursor",
                 "cursor": None,
                 "next_cursor": "notes/alpha.md",
+                "previous_cursor": None,
                 "page_size": 1,
                 "returned_notes": 1,
                 "total_filtered_notes": 3,
@@ -541,6 +542,44 @@ def test_vault_browser_renders_pagination_controls_from_api_payload() -> None:
     assert 'data-testid="workspace-vault-browser-pagination-next"' in html
     assert 'data-next-cursor="notes/alpha.md"' in html
     assert "cursor=notes%2Falpha.md" in html
+
+
+def test_vault_browser_renders_previous_pagination_link_when_available() -> None:
+    page = _load_page(
+        browser_payload=_vault_browser_payload(
+            notes=[
+                {
+                    "note_path": "notes/gamma.md",
+                    "title": "Gamma",
+                    "zone": "notes",
+                }
+            ],
+            total_notes=4,
+            filtered_notes=4,
+            pagination={
+                "mode": "cursor",
+                "cursor": "notes/beta.md",
+                "next_cursor": "notes/gamma.md",
+                "previous_cursor": "notes/alpha.md",
+                "page_size": 1,
+                "returned_notes": 1,
+                "total_filtered_notes": 4,
+                "has_next": True,
+                "has_previous": True,
+            },
+        ),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    assert 'data-testid="workspace-vault-browser-pagination-previous"' in html
+    assert 'data-previous-cursor="notes/alpha.md"' in html
+    assert "cursor=notes%2Falpha.md" in html
+    assert 'data-disabled="true">Previous' not in html
 
 
 def test_vbtoggle_script_block_present_in_page() -> None:

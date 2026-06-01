@@ -124,6 +124,7 @@ def test_orientation_snapshot_without_note(
     assert resp.status_code == 200
     data = resp.json()
     assert data["scope"]["kind"] == "workspace"
+    assert data["scope"]["artifact_ref"] is None
     assert data["scope"]["channel"] == "test"
     assert data["meta"]["contract_version"] == "workspace_orientation.v1"
     assert data["leave_point"]["status"] == "absent"
@@ -211,6 +212,23 @@ def test_items_carry_provenance(
         assert item["source_ref"]["kind"]
         assert item["source_ref"]["ref"]
         assert not item["source_ref"]["ref"].startswith("/")
+
+
+def test_placeholder_open_loop_is_not_returned(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        companion_module,
+        "get_orientation_signals",
+        lambda: _signals(pending=0, pending_promotions=1),
+    )
+
+    resp = _orientation(client)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["open_loops"] == []
 
 
 def test_degraded_when_source_unavailable(

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
@@ -129,3 +130,27 @@ def test_missing_note_is_404(tmp_path: Path, monkeypatch) -> None:
         json={"note_path": "nope/missing.md", "new_body": "x\n"},
     )
     assert resp.status_code == 404
+
+
+def test_symlink_escape_rejected_before_save(tmp_path: Path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("---\ntitle: Outside\n---\nunchanged\n", encoding="utf-8")
+    link = vault / "linked.md"
+    try:
+        link.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    _clear_gates(monkeypatch)
+
+    resp = TestClient(app).post(
+        "/api/companion/note/save",
+        json={"note_path": "linked.md", "new_body": "changed\n"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "path_escape"
+    assert "unchanged" in outside.read_text(encoding="utf-8")
