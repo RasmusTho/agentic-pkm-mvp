@@ -40,3 +40,23 @@ def test_parse_panel_extracts_instruction_and_actions() -> None:
 
     assert labels == ["Action label 1", "Action label 2", "Action label 3"]
     assert states == [False, True, False]
+
+
+def test_parse_panel_accepts_option_id_metadata_in_any_order() -> None:
+    panel_block = """%% AI:Start %%
+### AI-instruktion
+Gör en sak.
+
+### AI-åtgärder
+- [ ] Action label <!--ai:proposed=979--> <!--ai:option_id=opt_runtime--> <!--ai:id=action.id-->
+%% AI:End %%
+"""
+
+    parsed = parse_panel(panel_block, panel_id="panel-1")
+
+    assert len(parsed.actions) == 1
+    action = parsed.actions[0]
+    assert action.label == "Action label"
+    assert action.option_id == "opt_runtime"
+    assert action.action_id == "action.id"
+    assert action.proposal_pending is True

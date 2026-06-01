@@ -141,3 +141,39 @@ def test_parse_panel_action_with_ai_id_comment():
     assert action.action_id == "promote.evergreen"
     assert action.checked is True
     assert action.text == "Make this note evergreen"
+
+
+def test_parse_panel_action_with_option_id_and_metadata_any_order():
+    markdown = textwrap.dedent(
+        """
+        ## AI-åtgärder
+        - [ ] Make this note evergreen <!--ai:proposed=979--> <!--ai:option_id=opt_abc--> <!--ai:id=promote.evergreen-->
+        """
+    )
+
+    state = parse_panel(markdown)
+
+    assert len(state.actions) == 1
+    action = state.actions[0]
+    assert action.text == "Make this note evergreen"
+    assert action.option_id == "opt_abc"
+    assert action.action_id == "promote.evergreen"
+    assert action.proposal_pending is True
+
+
+def test_parse_panel_label_strips_known_ai_comments_but_keeps_old_lines_parseable():
+    markdown = textwrap.dedent(
+        """
+        ## AI-åtgärder
+        - [ ] Old proposal <!--ai:id=old-id--> <!--ai:proposed=979-->
+        - [ ] New proposal <!--ai:option_id=opt_new--> <!--ai:proposed=979-->
+        """
+    )
+
+    state = parse_panel(markdown)
+
+    assert [action.text for action in state.actions] == ["Old proposal", "New proposal"]
+    assert state.actions[0].action_id == "old-id"
+    assert state.actions[0].option_id is None
+    assert state.actions[0].proposal_pending is True
+    assert state.actions[1].option_id == "opt_new"

@@ -1004,7 +1004,11 @@ def _render_note_section(fields: dict) -> str:
         link_index = _coerce_vault_link_index(raw_link_index)
     link_resolver = VaultLinkResolver(link_index)
     rendered_body = render_vault_markdown(
-        raw_body, note_path=raw_note_path, link_resolver=link_resolver
+        raw_body,
+        note_path=raw_note_path,
+        link_resolver=link_resolver,
+        panel_selectable_options=fields.get("panel_selectable_options") or [],
+        content_hash=content_hash,
     )
     body = rendered_body.html
     # Frontmatter-stripped source for the direct human editor (the save endpoint
@@ -5136,7 +5140,8 @@ def render_index_html(
       border-top: 1px solid var(--border);
       margin: 32px 0;
     }}
-    /* §6.5 — task lists: custom checkboxes; read-only is the truth in v0. */
+    /* §6.5 — task lists: ordinary checkboxes stay read-only; runtime-declared
+       Panel options can request backend checkbox projection. */
     .vault-markdown-rendered ul.task-list {{
       list-style: none;
       padding-left: 4px;
@@ -5160,6 +5165,17 @@ def render_index_html(
       background: transparent;
       cursor: default;
       vertical-align: baseline;
+    }}
+    .vault-markdown-rendered li.task-list-item > input[data-panel-checkbox="true"] {{
+      cursor: pointer;
+      border-color: var(--accent);
+    }}
+    .vault-markdown-rendered .panel-checkbox-feedback {{
+      display: block;
+      margin-top: 4px;
+      color: var(--destructive);
+      font-size: 0.84rem;
+      line-height: 1.25;
     }}
     .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked {{
       background: var(--accent);
@@ -6928,6 +6944,98 @@ def render_index_html(
     window.location.href = url.toString();
   }}
   </script>
+  <script>
+  (function() {{
+    function idempotencyKey() {{
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {{
+        return window.crypto.randomUUID();
+      }}
+      return 'panel-checkbox-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    }}
+    function refreshWorkspace(notePath) {{
+      var url = '/api/companion/workspace?note_path=' + encodeURIComponent(notePath || '');
+      return fetch(url, {{method: 'GET'}}).catch(function() {{ return null; }});
+    }}
+    function panelProjectionSucceeded(data) {{
+      return data && ['projected', 'executed', 'already_projected'].indexOf(data.status) !== -1;
+    }}
+    function panelProjectionMessage(data, fallback) {{
+      if (!data) return fallback;
+      if (data.block_reason) return data.block_reason;
+      if (data.status === 'blocked') return 'Panel action blocked by runtime guard.';
+      if (data.status === 'failed') return 'Panel action failed before execution completed.';
+      if (data.status === 'stale') return 'Panel action is stale. Refresh the note and try again.';
+      if (data.status === 'not_found') return 'Panel action is no longer available.';
+      if (data.status === 'not_selectable') return 'Panel action is not selectable.';
+      return fallback;
+    }}
+    function setPanelCheckboxFeedback(target, message) {{
+      var item = target.closest ? target.closest('li.task-list-item') : null;
+      if (!item) return;
+      var feedback = item.querySelector('.panel-checkbox-feedback');
+      if (!feedback) {{
+        feedback = document.createElement('span');
+        feedback.className = 'panel-checkbox-feedback';
+        feedback.setAttribute('role', 'status');
+        item.appendChild(feedback);
+      }}
+      feedback.textContent = message || '';
+    }}
+    function clearPanelCheckboxFeedback(target) {{
+      var item = target.closest ? target.closest('li.task-list-item') : null;
+      if (!item) return;
+      var feedback = item.querySelector('.panel-checkbox-feedback');
+      if (feedback) feedback.remove();
+    }}
+    document.addEventListener('click', function(event) {{
+      var target = event.target && event.target.closest
+        ? event.target.closest('input[data-panel-checkbox="true"]')
+        : null;
+      if (!target) return;
+      event.preventDefault();
+      if (target.getAttribute('data-panel-submitting') === 'true') return;
+      var payload = {{
+        artifact_id: target.getAttribute('data-artifact-id') || '',
+        note_path: target.getAttribute('data-note-path') || '',
+        panel_id: target.getAttribute('data-panel-id') || '',
+        option_id: target.getAttribute('data-option-id') || '',
+        expected_content_hash: target.getAttribute('data-content-hash') || '',
+        expected_source_hash: target.getAttribute('data-source-hash') || '',
+        idempotency_key: idempotencyKey()
+      }};
+      target.setAttribute('data-panel-submitting', 'true');
+      target.disabled = true;
+      clearPanelCheckboxFeedback(target);
+      fetch('/api/panel/checkbox-projection', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(payload)
+      }}).then(function(response) {{
+        return response.json().then(function(data) {{
+          return {{ok: response.ok, status: response.status, data: data}};
+        }});
+      }}).then(function(result) {{
+        if (!result.ok || !panelProjectionSucceeded(result.data)) {{
+          target.disabled = false;
+          target.removeAttribute('data-panel-submitting');
+          target.checked = false;
+          setPanelCheckboxFeedback(target, panelProjectionMessage(result.data, 'Panel checkbox projection failed.'));
+          try {{ console.error('panel checkbox projection failed', result.status, result.data); }} catch (e) {{}}
+          return;
+        }}
+        target.checked = true;
+        refreshWorkspace(payload.note_path).finally(function() {{
+          window.location.reload();
+        }});
+      }}).catch(function(error) {{
+        target.disabled = false;
+        target.removeAttribute('data-panel-submitting');
+        target.checked = false;
+        try {{ console.error('panel checkbox projection network error', error); }} catch (e) {{}}
+      }});
+    }});
+  }})();
+  </script>
   {_mermaid_runtime_script()}
   {_note_editor_script()}
 </body>
@@ -7057,6 +7165,19 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            if parsed.path == "/api/companion/workspace":
+                params = parse_qs(parsed.query)
+                note_param = params.get("note_path", [""])[0]
+                try:
+                    data = self._client.get(
+                        "/api/companion/workspace",
+                        params={"note_path": note_param},
+                    )
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path == "/api/companion/vault/notes":
                 params = parse_qs(parsed.query)
                 q = params.get("q", [""])[0]
@@ -7088,6 +7209,7 @@ def make_handler(
             {
                 "/api/companion/workspace/body",
                 "/api/companion/note/save",  # direct human note edit
+                "/api/panel/checkbox-projection",
             }
         )
 

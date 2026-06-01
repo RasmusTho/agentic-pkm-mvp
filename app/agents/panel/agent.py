@@ -15,11 +15,11 @@ from .intents import PanelIntent, enrich_panel_intents
 from .parser import parse_panel
 from .schema import PanelState
 from .writeback import (
-    ACTION_PATTERN as _ACTION_PATTERN,
     AI_STATUS_HEADER as _AI_STATUS_HEADER,
     EXECUTED_FALLBACK as _EXECUTED_FALLBACK,
     MAX_RECEIPTS as _MAX_RECEIPTS,
     annotate_action_ids as _annotate_action_ids,
+    parse_action_line as _parse_action_line,
     remove_actions_from_markdown as _remove_actions_from_markdown,
     stable_action_id as _stable_action_id,
     write_receipts as _write_receipts,
@@ -109,14 +109,14 @@ def _existing_suggested_action_checks(panel: list[str]) -> tuple[dict[str, bool]
     default_ids = {_stable_action_id(label) for label in _SUGGESTED_ACTIONS}
 
     for raw in panel[start:end]:
-        match = _ACTION_PATTERN.match(raw)
-        if not match:
+        parsed = _parse_action_line(raw)
+        if parsed is None:
             continue
-        checked = (match.group(2) or "").strip().lower() == "x"
-        label = (match.group(3) or "").strip()
+        checked = parsed.checked
+        label = parsed.label.strip()
         if not label:
             continue
-        action_id = (match.group(5) or "").strip() or _stable_action_id(label)
+        action_id = (parsed.action_id or "").strip() or _stable_action_id(label)
 
         existing_by_id[action_id] = checked
         existing_by_label[label] = checked

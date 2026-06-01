@@ -7,6 +7,7 @@ class PanelAction(BaseModel):
     checked: bool = False
     text: str
     action_id: str | None = None
+    option_id: str | None = None
     proposal_pending: bool = False
 
 
