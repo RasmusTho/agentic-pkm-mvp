@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-31
-Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/companion_aware.py, tests/api/test_companion_workspace_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/agent_memory/test_companion_aware_memory.py, merged PRs #1085/#1448/#1460/#1461/#1463/#1464/#1466/#1475, and current repo state at 332d724e on 2026-05-31
+Last reviewed: 2026-06-01
+Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, app/api/routes/companion.py, app/api/routes/panel.py, app/orientation/leave_point_cursor.py, app/agent_memory/companion_aware.py, app/panel/checkbox_projection.py, tests/api/test_companion_workspace_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/panel/test_panel_checkbox_projection.py, tests/agent_memory/test_companion_aware_memory.py, merged PRs #1085/#1448/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490, and current repo state at e389e08b on 2026-06-01
 
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6.0 seams shipped)
 
@@ -588,7 +588,7 @@ hybrid Chat/Panel crossings are bounded by
 - The Vault Browser is the human-first navigation and orientation projection over the vault hosted in Companion UI.
 - It is a projection layer, not authority: Markdown/frontmatter remains the human control surface; stores/DB remain machine mirrors.
 - Read-only browsing, UI-only state, bounded system writes, governance writes, agent proposals, and blocked actions are kept as distinct action modes; the browser renders server-declared modes and never reclassifies locally.
-- Current shipped behavior is `Vault Browser MLP v0` (read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, and bounded UI states). The long-term capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`.
+- Current shipped behavior is `Vault Browser MLP v0` (read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, bounded UI states, cursor pagination, and UI-only selection state). The long-term capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`.
 
 ## Capability Model
 
