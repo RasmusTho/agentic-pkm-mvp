@@ -110,6 +110,85 @@ OBJECT_DEFAULTS: dict[str, JsonDict] = {
     },
 }
 
+ALLOWED_AUTHORITY_BY_TYPE: dict[str, frozenset[str]] = {
+    "AgentWorklog": frozenset({"raw", "operational"}),
+    "LearningSignal": frozenset({"operational", "analytical"}),
+    "RetroCluster": frozenset({"analytical"}),
+    "BuilderDecision": frozenset({"decision"}),
+    "PromotionIntent": frozenset({"staged"}),
+    "DocsFreshnessRecord": frozenset({"operational"}),
+    "RoadmapExecutionItem": frozenset({"operational"}),
+    "BuilderOpsReceipt": frozenset({"receipt"}),
+}
+
+ALLOWED_LIFECYCLE_BY_TYPE: dict[str, frozenset[str]] = {
+    "AgentWorklog": frozenset({
+        "draft",
+        "active",
+        "review_pending",
+        "promoted",
+        "archived",
+        "discarded",
+        "superseded",
+    }),
+    "LearningSignal": frozenset({
+        "draft",
+        "active",
+        "review_pending",
+        "accepted",
+        "promoted",
+        "archived",
+        "discarded",
+        "superseded",
+    }),
+    "RetroCluster": frozenset({
+        "draft",
+        "active",
+        "review_pending",
+        "accepted",
+        "promoted",
+        "archived",
+        "discarded",
+        "superseded",
+    }),
+    "BuilderDecision": frozenset({
+        "draft",
+        "review_pending",
+        "accepted",
+        "promoted",
+        "archived",
+        "superseded",
+    }),
+    "PromotionIntent": frozenset({
+        "draft",
+        "review_pending",
+        "accepted",
+        "promoted",
+        "discarded",
+        "superseded",
+    }),
+    "DocsFreshnessRecord": frozenset({
+        "draft",
+        "active",
+        "review_pending",
+        "projected",
+        "archived",
+        "discarded",
+        "superseded",
+    }),
+    "RoadmapExecutionItem": frozenset({
+        "draft",
+        "active",
+        "review_pending",
+        "promoted",
+        "projected",
+        "archived",
+        "discarded",
+        "superseded",
+    }),
+    "BuilderOpsReceipt": frozenset({"active", "archived", "superseded"}),
+}
+
 REQUIRED_FIELDS: dict[str, frozenset[str]] = {
     "AgentWorklog": frozenset({
         "id",
@@ -317,6 +396,16 @@ def normalize_record(record: Mapping[str, Any]) -> JsonDict:
         raise BuilderOpsValidationError(f"invalid lifecycle_state: {data['lifecycle_state']}")
     if data["promotion_status"] not in PROMOTION_STATUSES:
         raise BuilderOpsValidationError(f"invalid promotion_status: {data['promotion_status']}")
+    if data["authority_class"] not in ALLOWED_AUTHORITY_BY_TYPE[object_type]:
+        allowed = ", ".join(sorted(ALLOWED_AUTHORITY_BY_TYPE[object_type]))
+        raise BuilderOpsValidationError(
+            f"{object_type} authority_class must be one of: {allowed}"
+        )
+    if data["lifecycle_state"] not in ALLOWED_LIFECYCLE_BY_TYPE[object_type]:
+        allowed = ", ".join(sorted(ALLOWED_LIFECYCLE_BY_TYPE[object_type]))
+        raise BuilderOpsValidationError(
+            f"{object_type} lifecycle_state must be one of: {allowed}"
+        )
     if object_type == "BuilderOpsReceipt" and data["promotion_status"] != "not_promotable":
         raise BuilderOpsValidationError("BuilderOpsReceipt promotion_status must be not_promotable")
 

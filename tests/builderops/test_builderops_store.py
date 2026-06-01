@@ -246,3 +246,47 @@ def test_receipts_are_not_promotable(store: SqliteBuilderOpsStore) -> None:
             created_by=_actor(),
             promotion_status="candidate",
         )
+
+
+def test_object_specific_authority_and_lifecycle_constraints(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    with pytest.raises(BuilderOpsValidationError, match="authority_class must be"):
+        store.append_receipt(
+            summary="Bad receipt authority",
+            event_type="object_created",
+            actor=_actor(),
+            occurred_at="2026-06-01T00:00:00Z",
+            target_refs=[{"ref_type": "builderops_object", "ref": "awl_test_001"}],
+            action="create",
+            receipt_body="Bad authority.",
+            idempotency_key="bad-receipt-authority",
+            source_refs=_source_ref(),
+            created_by=_actor(),
+            authority_class="raw",
+        )
+
+    with pytest.raises(BuilderOpsValidationError, match="lifecycle_state must be"):
+        store.append_receipt(
+            summary="Bad receipt lifecycle",
+            event_type="object_created",
+            actor=_actor(),
+            occurred_at="2026-06-01T00:00:00Z",
+            target_refs=[{"ref_type": "builderops_object", "ref": "awl_test_001"}],
+            action="create",
+            receipt_body="Bad lifecycle.",
+            idempotency_key="bad-receipt-lifecycle",
+            source_refs=_source_ref(),
+            created_by=_actor(),
+            lifecycle_state="discarded",
+        )
+
+    with pytest.raises(BuilderOpsValidationError, match="authority_class must be"):
+        store.create_agent_worklog(
+            summary="Bad worklog authority",
+            body="Worklogs cannot be decision authority.",
+            task_context={"issue": "#1501"},
+            source_refs=_source_ref(),
+            created_by=_actor(),
+            authority_class="decision",
+        )
