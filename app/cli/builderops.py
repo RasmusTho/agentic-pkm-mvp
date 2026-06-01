@@ -8,6 +8,7 @@ import click
 
 from app.builderops.config import load_paths
 from app.builderops.models import BuilderOpsValidationError, normalize_actor
+from app.builderops.promotion_gateway import BuilderOpsPromotionGateway
 from app.builderops.store import SqliteBuilderOpsStore
 
 
@@ -70,6 +71,10 @@ def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
     store = SqliteBuilderOpsStore(Path(db_path))
     store.initialize()
     return store
+
+
+def _gateway(ctx: click.Context) -> BuilderOpsPromotionGateway:
+    return BuilderOpsPromotionGateway(_store(ctx))
 
 
 def _handle_create(ctx: click.Context, create_fn, payload: dict[str, Any], as_json: bool) -> None:
@@ -415,6 +420,92 @@ def transition(
             receipt_body=receipt_body,
             lifecycle_state=lifecycle_state,
             promotion_status=promotion_status,
+        )
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(result, as_json)
+
+
+@builderops.command("promotion-preview", help="Render a PromotionIntent proposal without side effects.")
+@click.argument("record_id")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def promotion_preview(
+    ctx: click.Context,
+    record_id: str,
+    as_json: bool,
+) -> None:
+    try:
+        proposal = _gateway(ctx).render_proposal(record_id)
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(proposal, as_json)
+
+
+@builderops.command("promotion-dry-run", help="Render a promotion proposal and append a dry-run receipt.")
+@click.argument("record_id")
+@click.option("--actor", required=True, help="Actor JSON object or agent id.")
+@click.option("--idempotency-key", required=True)
+@click.option("--source-ref", multiple=True, help="Optional receipt source ref override.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def promotion_dry_run(
+    ctx: click.Context,
+    record_id: str,
+    actor: str,
+    idempotency_key: str,
+    source_ref: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    try:
+        result = _gateway(ctx).dry_run_promotion(
+            record_id,
+            actor=_parse_actor(actor),
+            idempotency_key=idempotency_key,
+            source_refs=_parse_refs(source_ref) if source_ref else None,
+        )
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(result, as_json)
+
+
+@builderops.command("promotion-transition", help="Transition a PromotionIntent through the gateway.")
+@click.argument("record_id")
+@click.option(
+    "--decision",
+    required=True,
+    type=click.Choice(["accepted", "promoted", "rejected", "discarded"]),
+)
+@click.option("--actor", required=True, help="Actor JSON object or agent id.")
+@click.option("--lease-id", required=True)
+@click.option("--idempotency-key", required=True)
+@click.option("--rationale", required=True)
+@click.option("--source-ref", multiple=True, help="Optional transition source ref override.")
+@click.option("--result-ref", multiple=True, help="Optional promoted target/result ref.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def promotion_transition(
+    ctx: click.Context,
+    record_id: str,
+    decision: str,
+    actor: str,
+    lease_id: str,
+    idempotency_key: str,
+    rationale: str,
+    source_ref: tuple[str, ...],
+    result_ref: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    try:
+        result = _gateway(ctx).transition_intent(
+            record_id,
+            decision=decision,
+            actor=_parse_actor(actor),
+            lease_id=lease_id,
+            idempotency_key=idempotency_key,
+            rationale=rationale,
+            source_refs=_parse_refs(source_ref) if source_ref else None,
+            result_refs=_parse_refs(result_ref) if result_ref else None,
         )
     except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc

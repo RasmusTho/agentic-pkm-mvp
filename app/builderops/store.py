@@ -274,6 +274,7 @@ class SqliteBuilderOpsStore:
         receipt_body: str,
         lifecycle_state: str | None = None,
         promotion_status: str | None = None,
+        receipt_extra: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if lifecycle_state is None and promotion_status is None:
             raise BuilderOpsValidationError(
@@ -296,6 +297,7 @@ class SqliteBuilderOpsStore:
             "receipt_body": receipt_body,
             "lifecycle_state": lifecycle_state,
             "promotion_status": promotion_status,
+            "receipt_extra": dict(receipt_extra or {}),
         }
         request_hash = _request_hash(request)
 
@@ -338,29 +340,30 @@ class SqliteBuilderOpsStore:
                 raise BuilderOpsConflictError("transition does not change record state")
 
             now = utc_now()
-            receipt = normalize_record(
-                {
-                    "object_type": "BuilderOpsReceipt",
-                    "summary": summary,
-                    "event_type": "state_transition",
-                    "actor": actor_ref,
-                    "occurred_at": now,
-                    "target_refs": [
-                        {
-                            "ref_type": "builderops_object",
-                            "ref": record_id,
-                            "authority_surface": "builderops",
-                        }
-                    ],
-                    "action": action,
-                    "receipt_body": receipt_body,
-                    "idempotency_key": key,
-                    "source_refs": source_refs,
-                    "created_by": actor_ref,
-                    "previous_state": previous_state,
-                    "new_state": new_state,
-                }
-            )
+            receipt_payload = {
+                "object_type": "BuilderOpsReceipt",
+                "summary": summary,
+                "event_type": "state_transition",
+                "actor": actor_ref,
+                "occurred_at": now,
+                "target_refs": [
+                    {
+                        "ref_type": "builderops_object",
+                        "ref": record_id,
+                        "authority_surface": "builderops",
+                    }
+                ],
+                "action": action,
+                "receipt_body": receipt_body,
+                "idempotency_key": key,
+                "source_refs": source_refs,
+                "created_by": actor_ref,
+                "previous_state": previous_state,
+                "new_state": new_state,
+            }
+            if receipt_extra:
+                receipt_payload.update(dict(receipt_extra))
+            receipt = normalize_record(receipt_payload)
             receipt_refs = list(updated.get("receipt_refs", []))
             receipt_refs.append(receipt["id"])
             updated.update({
