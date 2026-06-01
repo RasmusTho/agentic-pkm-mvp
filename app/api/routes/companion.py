@@ -585,24 +585,20 @@ def _validate_workspace_markdown_note_path(note_path_raw: str) -> str:
 
 def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
     root_real = Path(os.path.realpath(vault_root))
-    for candidate in vault_root.rglob("*.md"):
-        if not candidate.is_file():
-            continue
-        if _vault_relative(candidate, vault_root) != safe_note_path:
-            continue
-        candidate_real = Path(os.path.realpath(candidate))
-        try:
-            candidate_real.relative_to(root_real)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "path_escape",
-                    "message": "Resolved note path is outside the vault.",
-                },
-            ) from exc
-        return candidate_real
-    return None
+    candidate_real = Path(os.path.realpath(os.path.join(root_real, safe_note_path)))
+    try:
+        candidate_real.relative_to(root_real)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "path_escape",
+                "message": "Resolved note path is outside the vault.",
+            },
+        ) from exc
+    if not candidate_real.is_file():
+        return None
+    return candidate_real
 
 
 def _vault_contained_abs_path(vault_root: Path, safe_note_path: str) -> Path:

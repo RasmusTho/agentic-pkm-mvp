@@ -44,6 +44,7 @@ tmp/index-outbox.jsonl
 tmp/index.jsonl
 runtime/settings/
 runtime/dispatcher/
+runtime/orientation/
 verification_report.md
 
 # Local hygiene artifacts

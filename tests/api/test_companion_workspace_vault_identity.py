@@ -121,8 +121,9 @@ def test_vault_provenance_env_when_vault_root_set(
 
 
 def test_vault_provenance_default_when_vault_root_absent(
-    client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("VAULT_ROOT", raising=False)
     default_vault = Path("vault").resolve()
     default_note = default_vault / "notes" / "note.md"
@@ -140,6 +141,7 @@ def test_vault_provenance_default_when_vault_root_absent(
 def test_vault_provenance_fallback_when_vault_root_invalid(
     client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "missing-vault"))
     fallback_vault = Path("vault").resolve()
     fallback_note = fallback_vault / "notes" / "note.md"
@@ -189,6 +191,13 @@ def test_configured_vault_name_survives_container_path_divergence(
 ) -> None:
     # The container bug: host VAULT_ROOT does not exist in-container (would infer
     # `fallback`/`vault`). A configured name overrides that and stays truthful.
+    monkeypatch.chdir(tmp_path)
+    fallback_note = tmp_path / "vault" / "notes" / "note.md"
+    fallback_note.parent.mkdir(parents=True, exist_ok=True)
+    fallback_note.write_text(
+        "---\nuuid: fallback-uuid-1\n---\n\n# Fallback Note\n\nBody.\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "host-only" / "Niflheim"))
     _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
     resp = _workspace(client, note_path="notes/note.md")

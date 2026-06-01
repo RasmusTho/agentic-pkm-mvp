@@ -66,8 +66,21 @@ for pattern in "${patterns[@]}"; do
   done
 done
 
+durable_deleted=()
+if [ "${#deleted[@]}" -gt 0 ]; then
+  for entry in "${deleted[@]}"; do
+    case "$entry" in
+      tmp/index-outbox.jsonl|tmp/index-outbox.*.jsonl|tmp/WATCHER_STOP*|tmp/worker_heartbeat.json|tmp/watcher_heartbeat.json|tmp/watcher_state.json|tmp/watcher_state.*.json|tmp/watcher_states|tmp/health_incidents.jsonl|tmp/worker_heartbeat.*|tmp/runtime.env|tmp/startup_status.json|tmp/latest_watcher_tick_log|tmp-test/index-outbox.jsonl|tmp-test/index-outbox.*.jsonl|tmp-test/WATCHER_STOP*|tmp-test/worker_heartbeat.json|tmp-test/watcher_heartbeat.json|tmp-test/watcher_state.json|tmp-test/watcher_state.*.json|tmp-test/watcher_states|tmp-test/health_incidents.jsonl|tmp-test/worker_heartbeat.*|tmp-test/runtime.env|tmp-test/startup_status.json|tmp-test/latest_watcher_tick_log)
+        ;;
+      *)
+        durable_deleted+=("$entry")
+        ;;
+    esac
+  done
+fi
+
 echo "Identified runtime artifacts to delete:"
-if [ "${#deleted[@]}" -eq 0 ]; then
+if [ "${#durable_deleted[@]}" -eq 0 ]; then
   echo "  (none found)"
 else
   for entry in "${deleted[@]}"; do
@@ -94,7 +107,11 @@ else
       rm -f "$entry"
     fi
   done
-  echo "Removed runtime artifacts."
+  if [ "${#durable_deleted[@]}" -eq 0 ]; then
+    echo "No runtime artifacts existed."
+  else
+    echo "Removed runtime artifacts."
+  fi
 fi
 
 cat <<SUMMARY

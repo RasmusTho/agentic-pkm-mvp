@@ -1745,9 +1745,9 @@ def _render_artifact_inspector(
         f'{vault_identity_html}'
         f'</div>'
         f'{posture_html}'
+        f'{receipts_html}'
         f'{actions_html}'
         f'{links_html}'
-        f'{receipts_html}'
         f'</section>'
     )
 
