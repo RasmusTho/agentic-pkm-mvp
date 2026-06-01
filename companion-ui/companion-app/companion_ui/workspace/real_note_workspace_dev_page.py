@@ -129,6 +129,7 @@ class DevPageState:
     panel_proposal_count: int = 0
     panel_render: dict[str, Any] | None = None
     panel_proposals: list[dict[str, Any]] | None = None
+    panel_selectable_options: list[dict[str, Any]] | None = None
     panel_last_response: dict[str, Any] | None = None
     suggestion_state: str = "idle"
     suggestion_dom_alias: str = "idle"
@@ -346,6 +347,11 @@ class RealNoteWorkspaceDevPage:
             panel=panel,
             artifact_id=resolved_artifact_id,
         )
+        panel_selectable_options = [
+            option
+            for option in (panel.get("selectable_options") or [])
+            if isinstance(option, dict)
+        ]
         suggestion_machine = CanvasRailStateMachine(
             _normalise_suggestion_state(suggestions.get("current_suggestion_state"))
         )
@@ -384,6 +390,7 @@ class RealNoteWorkspaceDevPage:
             panel_proposal_count=panel_count,
             panel_render=panel_render,
             panel_proposals=panel_proposals,
+            panel_selectable_options=panel_selectable_options,
             panel_last_response=panel_last_response,
             suggestion_state=suggestion_machine.state,
             suggestion_dom_alias=suggestion_machine.dom_alias,
@@ -885,6 +892,7 @@ class RealNoteWorkspaceDevPage:
             "panel_proposal_count": self.state.panel_proposal_count,
             "panel_render": self.state.panel_render or {},
             "panel_proposals": self.state.panel_proposals or [],
+            "panel_selectable_options": self.state.panel_selectable_options or [],
             "panel_last_response": self.state.panel_last_response or {},
             "suggestion_state": self.state.suggestion_state,
             "suggestion_dom_alias": self.state.suggestion_dom_alias,

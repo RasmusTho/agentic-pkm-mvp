@@ -20,9 +20,10 @@ source_contracts:
 Define the mapping from Panel confirmation/execution outcome to vault-visible
 state.
 
-This document is **spec/contract only**. It does not implement runtime writer
-behavior, vault writes, or watcher behavior. Implementation belongs to a
-follow-up issue explicitly scoped to runtime projection implementation.
+This document is the contract for runtime writer behavior, vault-visible
+projection, and watcher/runtime convergence. The first read-mode checkbox
+projection slice is implemented through `POST /api/panel/checkbox-projection`;
+future projection behavior must preserve the same mapping.
 
 ---
 
@@ -116,9 +117,9 @@ option identity, WriteGuard, safe/degraded policy, and idempotency.
 
 **Companion UI rendering:** `confirming` → `executing` states.
 
-**Writer:** Runtime (via future source-backed projection endpoint or revised
-confirm endpoint). The current staged `POST /api/panel/confirm` implementation
-does not yet provide this source-backed checkbox projection contract.
+**Writer:** Runtime via `POST /api/panel/checkbox-projection`. The staged
+`POST /api/panel/confirm` implementation is not the source-backed checkbox
+projection endpoint.
 
 ---
 
@@ -320,7 +321,7 @@ The two paths must converge on the same vault-visible state.
 ## Race and Idempotency Requirements
 
 - Stale Companion UI content: reject with stale-content status; do not guess by label or rendered DOM position.
-- Watcher overlap: projection and watcher execution must deduplicate through existing Panel idempotency keys and the future durable option identity.
+- Watcher overlap: projection and watcher execution must deduplicate through existing Panel idempotency keys and the durable `ai:option_id` option identity.
 - Browser retries: the same `idempotency_key` returns the same result and must not write or execute twice.
 - Already checked checkbox: treat as idempotent if it targets the same option and source generation; otherwise return current status.
 - Option missing or moved: fail stale/not-found unless durable `option_id` and source hash validate an unambiguous move.
@@ -381,8 +382,9 @@ The following tests must exist before or alongside projection implementation:
    proposed checkbox remains in the working set.
 9. `test_panel_projection_blocked_writes_blocked_receipt` — a blocked receipt
    entry appears in the AI status callout.
-10. `test_panel_projection_rejected_removes_checkbox_no_execution_receipt` —
-   after rejection, the checkbox is removed and no execution receipt is written.
+10. Reject/dismiss-scope only:
+    `test_panel_projection_rejected_removes_checkbox_no_execution_receipt` —
+    after rejection, the checkbox is removed and no execution receipt is written.
 11. `test_panel_projection_watcher_compatible` — the vault state produced by
    the projection path is parseable by the watcher without special-casing.
 12. `test_panel_projection_inverse_action_declared` — executed receipts include

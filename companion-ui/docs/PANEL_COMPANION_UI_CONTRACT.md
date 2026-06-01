@@ -31,7 +31,7 @@ This document covers:
 2. Panel render contract (states, rendering concepts, invariants).
 3. Panel confirmation / write-back contract (confirmation semantics, write-back boundary, default approach).
 
-This is a contract/docs-only document. It does not implement runtime behavior, UI components, vault write paths, or confirmation endpoints. Those belong to separate implementation issues.
+This is a contract document. Current implementation status is called out where relevant; future Panel behavior beyond the implemented read-mode checkbox projection slice still belongs to separate implementation issues.
 
 ---
 
@@ -256,7 +256,7 @@ The Companion UI signals confirmation to the runtime (e.g., via a lightweight ca
 
 #### Approach 2: Dedicated runtime endpoint
 
-The Companion UI calls a dedicated runtime endpoint (for example, a revised `POST /api/panel/confirm` or a separate projection endpoint) that accepts a specific source-backed Panel option target, projects the checked checkbox state through the runtime, and then schedules or triggers governed execution with status feedback.
+The Companion UI calls a dedicated runtime endpoint that accepts a specific source-backed Panel option target, projects the checked checkbox state through the runtime, and then schedules or triggers governed execution with status feedback. The implemented read-mode endpoint is `POST /api/panel/checkbox-projection`. The legacy `POST /api/panel/confirm` endpoint remains the staged/transient proposal confirmation path.
 
 **Strengths:**
 - Direct feedback loop: Companion UI can display `confirming → executing → receipt` states immediately.
@@ -265,7 +265,7 @@ The Companion UI calls a dedicated runtime endpoint (for example, a revised `POS
 - Confirmation remains explicit and named in the UI, while durable human-facing confirmation authority remains the vault-visible Panel checkbox state.
 
 **Weaknesses:**
-- Requires a new runtime endpoint (out of scope for this contract; must be a separate implementation issue).
+- Requires the dedicated runtime endpoint boundary to stay source-backed and guarded; it must not collapse into a UI-only approval store.
 - Must still produce a durable vault-visible projection and Obsidian-compatible receipt so the vault surface remains consistent.
 - Adds a new integration boundary that must be governed and tested.
 
@@ -288,13 +288,13 @@ inside the valid Panel `AI-åtgärder` section.
 
 That checked checkbox state is the canonical human-facing confirmation signal. The endpoint request is transport, not approval authority. Companion UI does not create a separate approval model, does not own durable confirmation state, and does not execute a Panel action directly from a browser click.
 
-Current implementation note: the existing `POST /api/panel/confirm` path is a staged proposal confirmation API, not yet the source-backed read-mode checkbox projection contract described here. It does not currently validate current vault Markdown, validate source freshness, and project `- [x]` before execution. A future endpoint revision or separate projection endpoint is required before Companion UI read-mode checkbox clicks can use this contract.
+Current implementation note: `POST /api/panel/checkbox-projection` is the source-backed read-mode projection endpoint. The existing `POST /api/panel/confirm` path is still a staged proposal confirmation API and must not be described as the Markdown checkbox projection path.
 
 **While preserving durable vault-visible projection / Obsidian-compatible semantics:**
 - The runtime endpoint must produce the same durable vault-visible output as the checkbox + watcher flow: a receipt in the AI status callout, executed checkboxes removed from the panel working set, and event stream emissions.
 - Obsidian-compatible panel/checkbox semantics must remain possible. The vault surface must not become dependent on Companion UI being present for panel state to make sense.
 
-**Do NOT implement the endpoint in this contract.** The endpoint is a follow-up implementation issue. The decision recorded here is: prefer the dedicated endpoint approach; require it to produce Obsidian-compatible durable vault-visible projection.
+The endpoint decision recorded here is: use the dedicated source-backed projection endpoint for Companion UI read-mode checkbox clicks, and require it to produce Obsidian-compatible durable vault-visible projection.
 
 ### Same-Turn Execution Constraint
 
@@ -338,7 +338,7 @@ The renderer may continue to display ordinary Markdown task checkboxes as read-o
 The following runtime state and APIs are required for the confirmation write-back path. These are named here as dependencies; their implementation belongs to separate issues.
 
 Required for runtime-mediated checkbox projection:
-- A source-backed projection endpoint or revised confirm endpoint that accepts note/artifact identity, `panel_id`, durable `option_id`, expected content/source freshness hashes, and an idempotency key.
+- The source-backed `POST /api/panel/checkbox-projection` endpoint, accepting note/artifact identity, `panel_id`, durable `option_id`, expected content/source freshness hashes, and an idempotency key.
 - Runtime validation that the target option is still a pending/selectable task checkbox inside a valid Panel `AI-åtgärder` section and not an ordinary task or code-block checkbox.
 - Runtime projection of the checked checkbox state through the governed backend write path before normal Panel execution observes or is triggered from that state.
 - A status/receipt polling or callback mechanism so the UI can display `confirming → executing → receipt` states.
@@ -349,9 +349,8 @@ Required for all approaches:
 - Durable option identity that can be referenced across the projection request.
 - Receipt payload with enough information to render `receipt-displayed` state in the UI.
 
-Open questions deferred to implementation:
-- Exact endpoint path and request/response schema.
-- Whether status feedback is synchronous (polling) or async (webhook/SSE).
+Open questions deferred to follow-up implementation:
+- Whether richer status feedback is synchronous (polling) or async (webhook/SSE).
 - How Companion UI discovers the current Panel state on note open (polling, initial load, or event subscription).
 - How cancellation of a confirming or executing proposal is handled.
 
@@ -368,14 +367,13 @@ This contract is docs-only. The following are **not** decided here:
 - Obsidian plugin implementation.
 - Production-ready Panel component shell.
 
-### Open Questions for Implementation Lane
+### Open Questions for Follow-Up Lanes
 
-1. **Confirm endpoint schema.** What fields does the confirm request carry? What does the response include? How does the UI correlate a confirm request to a receipt?
-2. **Panel state discovery on note open.** How does Companion UI learn the current Panel state for the active note (are there proposals already staged? is there a receipt to display)?
-3. **Clarification-needed state interaction.** When the Panel needs more information from the user, how does the UI surface that without collapsing into a chat interface?
-4. **Proposal row correction UX.** When the user wants to correct a proposal before confirming, what does the edit affordance look like? Does it open an inline editor, a modal, or a freeform instruction field?
-5. **Receipt retention.** How long does the Companion UI keep a receipt visible? Does it persist across note navigations?
-6. **Partial-complete state.** When some proposals in a set are confirmed and others are not, how does the Panel state machine track and display the mixed state?
+1. **Richer status feedback.** Should execution status beyond the projection response be exposed through polling, SSE, or workspace refresh only?
+2. **Clarification-needed state interaction.** When the Panel needs more information from the user, how does the UI surface that without collapsing into a chat interface?
+3. **Proposal row correction UX.** When the user wants to correct a proposal before confirming, what does the edit affordance look like? Does it open an inline editor, a modal, or a freeform instruction field?
+4. **Receipt retention.** How long does the Companion UI keep a receipt visible? Does it persist across note navigations?
+5. **Partial-complete state.** When some proposals in a set are confirmed and others are not, how does the Panel state machine track and display the mixed state?
 
 ---
 
@@ -428,14 +426,15 @@ The following production UI items are not yet implemented and are deferred until
 
 - Production visual component integration (if/when required).
 - Styling and design-system integration.
-- Real data loading from runtime state.
+- Richer execution status/receipt streaming beyond workspace refresh.
 
-### Still-pending runtime/projection work
+### Delivered runtime/projection work
 
-The following items remain pending — spec/contract only, implementation deferred:
+The following read-mode projection foundations are delivered:
 
-- **Panel read-mode checkbox projection endpoint or endpoint revision** — based on `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md`. Create a bounded implementation issue for a source-backed runtime projection path: request/response schema, current Markdown/source-freshness validation, governed checkbox projection, execution trigger/watcher convergence, and receipt mapping.
-- **Runtime-mediated durable vault-visible projection implementation** — based on `companion-ui/docs/PANEL_DURABLE_PROJECTION_MAPPING.md`. Verify that confirmation via Companion UI produces the same vault-visible receipt and checkbox state as the CLI/watcher flow.
+- **Panel read-mode checkbox projection endpoint** — `POST /api/panel/checkbox-projection` implements source-backed runtime projection for runtime-declared selectable Panel options.
+- **Runtime-declared selectable options in workspace state** — `/api/companion/workspace` exposes `panel.selectable_options` so the renderer does not infer authority from arbitrary task-list DOM.
+- **Companion read-mode checkbox affordance** — ordinary Markdown task checkboxes remain read-only; only runtime-declared Panel options call the projection endpoint.
 
 ---
 

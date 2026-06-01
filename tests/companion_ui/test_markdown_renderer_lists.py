@@ -104,6 +104,78 @@ def test_unchecked_task_remains_unchecked():
     li = re.search(r'<li class="task-list-item"[^>]*>.*?</li>', html, re.S).group(0)
     assert 'data-task-state=" "' in li
     assert "checked" not in li
+    assert "<input type=\"checkbox\" disabled>" in li
+
+
+def test_panel_selectable_option_checkbox_is_clickable_with_projection_attrs():
+    md = "- [ ] Send email <!--ai:option_id=opt_ui--> <!--ai:id=send.email--> <!--ai:proposed=979-->\n"
+    rendered = render_vault_markdown(
+        md,
+        panel_selectable_options=[
+            {
+                "artifact_id": "note-uuid-1",
+                "note_path": "notes/panel.md",
+                "panel_id": "panel-1",
+                "option_id": "opt_ui",
+                "action_id": "send.email",
+                "label": "Send email",
+                "checked": False,
+                "proposal_pending": True,
+                "source_range": {"start_line": 0, "end_line": 1},
+                "source_hash": "source-hash",
+                "content_hash": "content-hash",
+                "selectable": True,
+            }
+        ],
+    )
+
+    li = re.search(r'<li class="task-list-item"[^>]*>.*?</li>', rendered.html, re.S).group(0)
+    assert 'data-panel-checkbox="true"' in li
+    assert 'data-panel-id="panel-1"' in li
+    assert 'data-option-id="opt_ui"' in li
+    assert 'data-source-hash="source-hash"' in li
+    assert 'data-content-hash="content-hash"' in li
+    assert "<input type=\"checkbox\" disabled" not in li
+
+
+def test_renderer_does_not_enable_task_without_runtime_declared_option():
+    md = "- [ ] Send email <!--ai:option_id=opt_ui--> <!--ai:id=send.email--> <!--ai:proposed=979-->\n"
+    html = render_vault_markdown(md, panel_selectable_options=[]).html
+    li = re.search(r'<li class="task-list-item"[^>]*>.*?</li>', html, re.S).group(0)
+
+    assert 'data-panel-checkbox="true"' not in li
+    assert "<input type=\"checkbox\" disabled>" in li
+
+
+def test_panel_checkbox_source_line_matches_full_markdown_with_frontmatter():
+    md = (
+        "---\n"
+        "uuid: note-uuid-1\n"
+        "---\n\n"
+        "# Note\n\n"
+        "- [ ] Send email <!--ai:option_id=opt_ui--> <!--ai:id=send.email--> <!--ai:proposed=979-->\n"
+    )
+    html = render_vault_markdown(
+        md,
+        panel_selectable_options=[
+            {
+                "artifact_id": "note-uuid-1",
+                "note_path": "notes/panel.md",
+                "panel_id": "panel-1",
+                "option_id": "opt_ui",
+                "action_id": "send.email",
+                "label": "Send email",
+                "checked": False,
+                "proposal_pending": True,
+                "source_range": {"start_line": 6, "end_line": 7},
+                "source_hash": "source-hash",
+                "content_hash": "content-hash",
+                "selectable": True,
+            }
+        ],
+    ).html
+
+    assert 'data-panel-checkbox="true"' in html
 
 
 def test_task_list_allows_blank_spacer_lines():

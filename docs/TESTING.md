@@ -43,8 +43,7 @@ Execution:
 
 ## Panel Read-Mode Checkbox Projection Coverage
 
-Future implementation of Companion UI read-mode Panel checkbox confirmation must include focused
-coverage before it can be claimed as supported runtime behavior:
+Companion UI read-mode Panel checkbox confirmation must keep focused coverage for:
 
 - Parser/mapping tests proving only valid `AI-åtgärder` task checkboxes are eligible and code-block/ordinary-task checkboxes are excluded.
 - Projection endpoint validation tests for `note_path`/`artifact_id`, `panel_id`, `option_id`, `content_hash`/`source_hash`, pending/selectable status, and stale-content rejection.
@@ -56,8 +55,9 @@ coverage before it can be claimed as supported runtime behavior:
 - Ordinary Markdown task-list regression tests proving generic rendered task-list DOM never becomes Panel authority.
 - Obsidian/text-editor compatibility tests proving manually changing `- [ ]` to `- [x]` in a valid Panel remains a valid confirmation path.
 
-This coverage is future-facing. It does not claim the existing `POST /api/panel/confirm` path already
-performs source-backed checkbox projection.
+The source-backed read-mode projection endpoint is `POST /api/panel/checkbox-projection`.
+The existing `POST /api/panel/confirm` path remains the staged/transient confirm API and
+must not be treated as Markdown checkbox projection coverage.
 
 ## Layer mapping
 | Layer | Focus | Representative suites | Command |

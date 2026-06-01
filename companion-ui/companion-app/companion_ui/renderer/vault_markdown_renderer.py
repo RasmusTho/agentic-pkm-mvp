@@ -42,6 +42,9 @@ _ORDERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _CALLOUT_RE = CALLOUT_HEADER_RE
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 _COMMENT_RE = re.compile(r"%%.*?%%", re.DOTALL)
+_AI_METADATA_COMMENT_RE = re.compile(
+    r"<!--\s*ai:(?:option_id|id|proposed)=([A-Za-z0-9_.-]+)\s*-->"
+)
 _DIAGNOSTIC_ONLY_LANGUAGES = {"dataview", "dataviewjs", "query"}
 _BLOCKED_SRC_SCHEMES = ("file:", "javascript:", "data:")
 _ABSOLUTE_PATH_RE = re.compile(r"^(?:/|[A-Za-z]:[\\/])")
@@ -125,6 +128,7 @@ class _RenderContext:
     link_preview: LinkPreviewProtocol | None
     preview_depth: int
     diagnostics: list[MarkdownDiagnostic]
+    panel_options_by_source_line: dict[int, list[dict[str, object]]]
     preview_counter: int = 0
 
 
@@ -150,6 +154,8 @@ class VaultMarkdownRenderer:
         *,
         note_path: str = "",
         preview_depth: int = 0,
+        panel_selectable_options: list[dict[str, object]] | None = None,
+        content_hash: str = "",
     ) -> RenderedVaultMarkdown:
         parsed = parse_vault_markdown(document) if isinstance(document, str) else document
         diagnostics = list(parsed.diagnostics)
@@ -161,9 +167,15 @@ class VaultMarkdownRenderer:
             link_preview=self._link_preview,
             preview_depth=max(0, int(preview_depth)),
             diagnostics=diagnostics,
+            panel_options_by_source_line=_panel_options_by_source_line(
+                panel_selectable_options,
+                content_hash=content_hash,
+            ),
         )
         body_markdown = _strip_obsidian_comments(parsed.body_markdown)
-        body_html = _render_blocks(body_markdown, context)
+        body_offset = max(0, len(parsed.raw_markdown) - len(parsed.body_markdown))
+        body_line_offset = parsed.raw_markdown[:body_offset].count("\n")
+        body_html = _render_blocks(body_markdown, context, line_offset=body_line_offset)
         diagnostics_html = _render_diagnostics(diagnostics)
         rendered_html = (
             '<article class="vault-markdown-rendered" data-renderer="vault-markdown">'
@@ -185,6 +197,8 @@ def render_vault_markdown(
     asset_resolver: AssetResolverProtocol | None = None,
     mermaid_renderer: MermaidBlockRenderer | None = None,
     link_preview: LinkPreviewProtocol | None = None,
+    panel_selectable_options: list[dict[str, object]] | None = None,
+    content_hash: str = "",
 ) -> RenderedVaultMarkdown:
     """Convenience wrapper for one-shot rendering."""
 
@@ -193,10 +207,15 @@ def render_vault_markdown(
         asset_resolver=asset_resolver,
         mermaid_renderer=mermaid_renderer,
         link_preview=link_preview,
-    ).render(raw_markdown, note_path=note_path)
+    ).render(
+        raw_markdown,
+        note_path=note_path,
+        panel_selectable_options=panel_selectable_options,
+        content_hash=content_hash,
+    )
 
 
-def _render_blocks(markdown: str, context: _RenderContext) -> str:
+def _render_blocks(markdown: str, context: _RenderContext, *, line_offset: int = 0) -> str:
     lines = markdown.splitlines()
     parts: list[str] = []
     index = 0
@@ -239,7 +258,7 @@ def _render_blocks(markdown: str, context: _RenderContext) -> str:
             continue
 
         if _list_kind(line) is not None:
-            html_block, index = _render_list_block(lines, index, context)
+            html_block, index = _render_list_block(lines, index, context, line_offset=line_offset)
             parts.append(html_block)
             continue
 
@@ -442,6 +461,8 @@ def _render_list_block(
     lines: list[str],
     start: int,
     context: _RenderContext,
+    *,
+    line_offset: int = 0,
 ) -> tuple[str, int]:
     """Render a (possibly nested) list block, indentation-aware (#1410).
 
@@ -449,7 +470,7 @@ def _render_list_block(
     so nested ordered lists render inside a nested ``<ol>`` (restarting at 1)
     rather than as flattened continuation items.
     """
-    entries: list[tuple[int, str, str | None, str]] = []
+    entries: list[tuple[int, int, str, str | None, str]] = []
     index = start
     base_indent = _list_indent(lines[start])
     base_kind = _list_kind(lines[start])
@@ -470,31 +491,31 @@ def _render_list_block(
         if kind == "task":
             match = _TASK_RE.match(lines[index])
             assert match is not None
-            entries.append((indent, "task", match.group(1).strip() or " ", match.group(2)))
+            entries.append((line_offset + index, indent, "task", match.group(1).strip() or " ", match.group(2)))
         elif kind == "ol":
             match = _ORDERED_RE.match(lines[index])
             assert match is not None
-            entries.append((indent, "ol", None, match.group(1)))
+            entries.append((line_offset + index, indent, "ol", None, match.group(1)))
         else:
             match = _UNORDERED_RE.match(lines[index])
             assert match is not None
-            entries.append((indent, "ul", None, match.group(1)))
+            entries.append((line_offset + index, indent, "ul", None, match.group(1)))
         index += 1
 
-    html, _ = _build_list_html(entries, 0, entries[0][0], context)
+    html, _ = _build_list_html(entries, 0, entries[0][1], context)
     return html, index
 
 
 def _build_list_html(
-    entries: list[tuple[int, str, str | None, str]],
+    entries: list[tuple[int, int, str, str | None, str]],
     pos: int,
     indent: int,
     context: _RenderContext,
 ) -> tuple[str, int]:
-    list_kind = entries[pos][1]
+    list_kind = entries[pos][2]
     items: list[str] = []
-    while pos < len(entries) and entries[pos][0] >= indent:
-        e_indent, e_kind, e_state, e_content = entries[pos]
+    while pos < len(entries) and entries[pos][1] >= indent:
+        e_source_line, e_indent, e_kind, e_state, e_content = entries[pos]
         if e_indent > indent:
             # Deeper than expected without a parent item at this level — attach
             # the nested list to the previous item (or open a bare item).
@@ -506,14 +527,25 @@ def _build_list_html(
             continue
         pos += 1
         nested_html = ""
-        if pos < len(entries) and entries[pos][0] > indent:
-            nested_html, pos = _build_list_html(entries, pos, entries[pos][0], context)
+        if pos < len(entries) and entries[pos][1] > indent:
+            nested_html, pos = _build_list_html(entries, pos, entries[pos][1], context)
         if e_kind == "task":
             checked_attr = " checked" if (e_state or "").lower() == "x" else ""
+            panel_option = _matching_panel_option(
+                context,
+                source_line=e_source_line,
+                state=e_state or " ",
+                content=e_content,
+            )
+            input_attrs = 'type="checkbox"'
+            if panel_option is None:
+                input_attrs += " disabled"
+            else:
+                input_attrs += _panel_checkbox_attrs(panel_option)
             items.append(
                 '<li class="task-list-item" '
                 f'data-task-state="{_e(e_state or " ")}">'
-                f'<input type="checkbox" disabled{checked_attr}> '
+                f'<input {input_attrs}{checked_attr}> '
                 f"{_render_inline(e_content, context)}{nested_html}</li>"
             )
         else:
@@ -522,6 +554,67 @@ def _build_list_html(
     tag = "ol" if list_kind == "ol" else "ul"
     cls = ' class="task-list"' if list_kind == "task" else ""
     return f"<{tag}{cls}>{''.join(items)}</{tag}>", pos
+
+
+def _panel_options_by_source_line(
+    options: list[dict[str, object]] | None,
+    *,
+    content_hash: str,
+) -> dict[int, list[dict[str, object]]]:
+    by_line: dict[int, list[dict[str, object]]] = {}
+    for raw in options or []:
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("selectable") is not True:
+            continue
+        source_range = raw.get("source_range")
+        if not isinstance(source_range, dict):
+            continue
+        try:
+            source_line = int(source_range.get("start_line"))
+        except (TypeError, ValueError):
+            continue
+        normalized = dict(raw)
+        if not normalized.get("content_hash") and content_hash:
+            normalized["content_hash"] = content_hash
+        by_line.setdefault(source_line, []).append(normalized)
+    return by_line
+
+
+def _strip_ai_metadata_comments(text: str) -> str:
+    return _AI_METADATA_COMMENT_RE.sub("", text).strip()
+
+
+def _matching_panel_option(
+    context: _RenderContext,
+    *,
+    source_line: int,
+    state: str,
+    content: str,
+) -> dict[str, object] | None:
+    if (state or "").lower() == "x":
+        return None
+    options = context.panel_options_by_source_line.get(source_line) or []
+    label = _strip_ai_metadata_comments(content)
+    matches = [
+        option
+        for option in options
+        if str(option.get("label") or "").strip() == label
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _panel_checkbox_attrs(option: dict[str, object]) -> str:
+    attrs = {
+        "data-panel-checkbox": "true",
+        "data-artifact-id": option.get("artifact_id") or "",
+        "data-note-path": option.get("note_path") or "",
+        "data-panel-id": option.get("panel_id") or "",
+        "data-option-id": option.get("option_id") or "",
+        "data-source-hash": option.get("source_hash") or "",
+        "data-content-hash": option.get("content_hash") or "",
+    }
+    return "".join(f' {name}="{_e(value)}"' for name, value in attrs.items())
 
 
 def _render_paragraph(
