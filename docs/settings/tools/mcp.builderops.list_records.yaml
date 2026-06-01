@@ -1,0 +1,15 @@
+id: mcp.builderops.list_records
+status: active
+protocol: mcp
+server: builderops
+description: List BuilderOps Vault records through the controlled BuilderOps boundary.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    object_type:
+      type: string
+      description: Optional BuilderOps object_type filter.
+mock_result:
+  status: ok
+  records: []

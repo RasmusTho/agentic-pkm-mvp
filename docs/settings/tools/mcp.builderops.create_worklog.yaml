@@ -1,0 +1,26 @@
+id: mcp.builderops.create_worklog
+status: active
+protocol: mcp
+server: builderops
+description: Create an AgentWorklog through the controlled BuilderOps boundary.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    summary:
+      type: string
+    body:
+      type: string
+    task_context:
+      type: object
+    source_refs:
+      type: array
+    created_by:
+      type: object
+    idempotency_key:
+      type: string
+  required: [summary, body, source_refs]
+mock_result:
+  status: ok
+  record:
+    object_type: AgentWorklog

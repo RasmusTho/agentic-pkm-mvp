@@ -10,6 +10,8 @@ from typing import Any, Callable, Dict, Iterable, Mapping, MutableMapping, Proto
 
 from app.a2a.events import emit_agent_error_event, emit_agent_response_event, send_agent_request
 from app.a2a.schema import AgentRequest, AgentResponse, new_error, new_response
+from app.builderops.boundary import execute_builderops_mcp_tool, is_builderops_mcp_tool
+from app.builderops.models import BuilderOpsValidationError
 from app.domain.state_axes import normalize_promotion_payload
 from app.mcp.vault_tools import VaultToolError, append_note
 from app.orchestrator.agents import AgentPermissionError, _normalize_agent_target, resolve_agent_config, validate_agent_permissions
@@ -239,6 +241,8 @@ class MockPlanExecutor(PlanExecutor):
             if descriptor.kind == "internal":
                 return self._run_internal_tool(descriptor.name, args, context)
             if self._should_use_real_tool(descriptor.name, context):
+                if is_builderops_mcp_tool(descriptor.name):
+                    return self._run_builderops_tool(descriptor.name, args, context)
                 return self._run_vault_append(args, context)
             return dict(descriptor.mock_result or {"status": "ok"})
 
@@ -279,19 +283,40 @@ class MockPlanExecutor(PlanExecutor):
                 raise StepExecutionError(f"missing required argument '{arg}'", error_type="invalid_tool_args")
 
     def _should_use_real_tool(self, tool_name: str, context: StepContext) -> bool:
-        if tool_name != "mcp.vault.append_note":
+        if tool_name != "mcp.vault.append_note" and not is_builderops_mcp_tool(tool_name):
             return False
         settings = context.tool_settings or {}
         allowlist = settings.get("allowed_mcp_tools")
-        enable_flag = settings.get("mcp_vault_enable")
-        if enable_flag is None:
-            enable_flag = settings.get("mcp.enable")
+        if is_builderops_mcp_tool(tool_name):
+            enable_flag = settings.get("mcp_builderops_enable")
+        else:
+            enable_flag = settings.get("mcp_vault_enable")
+            if enable_flag is None:
+                enable_flag = settings.get("mcp.enable")
         if allowlist is None:
             return _flag_enabled(enable_flag)
         try:
             return tool_name in allowlist and _flag_enabled(enable_flag)
         except Exception:
             return False
+
+    def _run_builderops_tool(
+        self,
+        tool_name: str,
+        args: Mapping[str, Any],
+        context: StepContext,
+    ) -> Dict[str, Any]:
+        try:
+            return execute_builderops_mcp_tool(
+                tool_name=tool_name,
+                tool_args=args,
+                settings=context.tool_settings,
+            )
+        except BuilderOpsValidationError as exc:
+            raise StepExecutionError(
+                f"BuilderOps tool failed: {exc}",
+                error_type="mcp_tool_error",
+            ) from exc
 
     def _run_vault_append(self, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
         try:

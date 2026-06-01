@@ -1,0 +1,39 @@
+id: mcp.builderops.create_promotion_intent
+status: active
+protocol: mcp
+server: builderops
+description: Create a staged PromotionIntent through the controlled BuilderOps boundary.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    summary:
+      type: string
+    target_authority_surface:
+      type: string
+    target_action:
+      type: string
+    target_ref:
+      type: string
+    target_authority_class:
+      type: string
+    intended_output:
+      type: string
+    source_refs:
+      type: array
+    created_by:
+      type: object
+    idempotency_key:
+      type: string
+  required:
+    - summary
+    - target_authority_surface
+    - target_action
+    - target_ref
+    - target_authority_class
+    - intended_output
+    - source_refs
+mock_result:
+  status: ok
+  record:
+    object_type: PromotionIntent

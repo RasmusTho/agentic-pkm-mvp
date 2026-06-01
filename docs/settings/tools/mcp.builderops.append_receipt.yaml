@@ -1,0 +1,43 @@
+id: mcp.builderops.append_receipt
+status: active
+protocol: mcp
+server: builderops
+description: Append a BuilderOpsReceipt through the controlled BuilderOps boundary.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    summary:
+      type: string
+    event_type:
+      type: string
+    actor:
+      type: object
+    occurred_at:
+      type: string
+    target_refs:
+      type: array
+    action:
+      type: string
+    receipt_body:
+      type: string
+    idempotency_key:
+      type: string
+    source_refs:
+      type: array
+    created_by:
+      type: object
+  required:
+    - summary
+    - event_type
+    - actor
+    - occurred_at
+    - target_refs
+    - action
+    - receipt_body
+    - idempotency_key
+    - source_refs
+mock_result:
+  status: ok
+  record:
+    object_type: BuilderOpsReceipt

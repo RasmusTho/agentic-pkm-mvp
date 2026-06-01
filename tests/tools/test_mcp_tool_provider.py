@@ -30,6 +30,8 @@ def test_tool_provider_lists_registry_descriptors() -> None:
 
     assert "mcp.search.objects" in descriptors
     assert "mcp.vault.append_note" in descriptors
+    assert "mcp.builderops.create_worklog" in descriptors
+    assert "mcp.builderops.list_records" in descriptors
     assert "vault.read_note.v1" not in descriptors
     assert descriptors["mcp.search.objects"].kind == "mcp"
     assert descriptors["mcp.search.objects"].allowed_args["query"] == "string"
@@ -119,6 +121,124 @@ def test_tool_provider_vault_append_respects_existing_gates(tmp_path: Path) -> N
     )
     assert allowed_result["result"]["note_path"] != "vault/_mcp/mock-note.md"
     assert any(tmp_path.rglob("*.md"))
+
+
+def test_tool_provider_builderops_tools_preserve_store_semantics(tmp_path: Path) -> None:
+    provider = MCPToolProvider()
+    executor = MockPlanExecutor()
+    db_path = tmp_path / "builderops.sqlite3"
+    context = _context(
+        {
+            "mcp_builderops_enable": True,
+            "allowed_mcp_tools": [
+                "mcp.builderops.create_worklog",
+                "mcp.builderops.list_records",
+                "mcp.builderops.read_record",
+                "mcp.builderops.append_receipt",
+            ],
+            "builderops_db_path": str(db_path),
+        }
+    )
+    source_refs = [{"ref_type": "github_issue", "ref": "#1503"}]
+    actor = {"actor_type": "agent", "id": "tool-codex"}
+
+    created = provider.execute_tool_call(
+        tool_name="mcp.builderops.create_worklog",
+        tool_args={
+            "summary": "Tool worklog",
+            "body": "Created through the BuilderOps MCP tool boundary.",
+            "task_context": {"issue": "#1503"},
+            "source_refs": source_refs,
+            "created_by": actor,
+            "idempotency_key": "tool:create-worklog",
+        },
+        context=context,
+        step_id="builderops-create",
+        description="Create BuilderOps worklog",
+        executor=executor,
+    )
+    record = created["result"]["record"]
+    assert record["object_type"] == "AgentWorklog"
+    assert record["created_by"] == actor
+    assert record["idempotency_key"] == "tool:create-worklog"
+
+    duplicate = provider.execute_tool_call(
+        tool_name="mcp.builderops.create_worklog",
+        tool_args={
+            "summary": "Tool worklog",
+            "body": "Created through the BuilderOps MCP tool boundary.",
+            "task_context": {"issue": "#1503"},
+            "source_refs": source_refs,
+            "created_by": actor,
+            "idempotency_key": "tool:create-worklog",
+        },
+        context=context,
+        step_id="builderops-create-retry",
+        description="Retry BuilderOps worklog",
+        executor=executor,
+    )
+    assert duplicate["result"]["record"] == record
+
+    listed = provider.execute_tool_call(
+        tool_name="mcp.builderops.list_records",
+        tool_args={"object_type": "AgentWorklog"},
+        context=context,
+        step_id="builderops-list",
+        description="List BuilderOps worklogs",
+        executor=executor,
+    )
+    assert [item["id"] for item in listed["result"]["records"]] == [record["id"]]
+
+    receipt = provider.execute_tool_call(
+        tool_name="mcp.builderops.append_receipt",
+        tool_args={
+            "summary": "Tool receipt",
+            "event_type": "object_created",
+            "actor": actor,
+            "occurred_at": "2026-06-01T00:00:00Z",
+            "target_refs": [{"ref_type": "builderops_object", "ref": record["id"]}],
+            "action": "create",
+            "receipt_body": "Recorded BuilderOps tool write.",
+            "idempotency_key": "tool:receipt-worklog",
+            "source_refs": source_refs,
+        },
+        context=context,
+        step_id="builderops-receipt",
+        description="Append BuilderOps receipt",
+        executor=executor,
+    )
+    assert receipt["result"]["record"]["object_type"] == "BuilderOpsReceipt"
+    assert receipt["result"]["record"]["actor"] == actor
+
+    read_receipt = provider.execute_tool_call(
+        tool_name="mcp.builderops.read_record",
+        tool_args={"record_id": receipt["result"]["record"]["id"]},
+        context=context,
+        step_id="builderops-read-receipt",
+        description="Read BuilderOps receipt",
+        executor=executor,
+    )
+    assert read_receipt["result"]["record"] == receipt["result"]["record"]
+
+
+def test_tool_provider_builderops_tools_are_mocked_until_enabled(
+    tmp_path: Path,
+) -> None:
+    provider = MCPToolProvider()
+    result = provider.execute_tool_call(
+        tool_name="mcp.builderops.create_worklog",
+        tool_args={
+            "summary": "Mocked worklog",
+            "body": "Should not hit the real store.",
+            "source_refs": [{"ref_type": "github_issue", "ref": "#1503"}],
+        },
+        context=_context({"builderops_db_path": str(tmp_path / "builderops.sqlite3")}),
+        step_id="builderops-mock",
+        description="Mocked BuilderOps worklog",
+    )
+
+    assert result["result"] == {"status": "ok", "record": {"object_type": "AgentWorklog"}}
+    assert not (tmp_path / "builderops.sqlite3").exists()
 
 
 def test_tool_provider_rejects_registry_only_tool_not_in_supported_allowlist() -> None:
