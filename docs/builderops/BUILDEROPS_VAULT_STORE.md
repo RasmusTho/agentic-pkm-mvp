@@ -1,4 +1,4 @@
-State: Local BuilderOps Vault store and CLI implemented through #1502. Includes minimal leases, idempotency semantics, and receipt-backed state transitions. No API/MCP boundary, promotion gateway, generated projections, migrations, or product/runtime authority changes are implemented here.
+State: Local BuilderOps Vault store and CLI implemented through #1502. Includes minimal leases, idempotency semantics, and receipt-backed state transitions. API/tool boundary mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`. No promotion gateway, generated projections, migrations, or product/runtime authority changes are implemented here.
 Doc role: BuilderOps store/CLI reference
 Authority: Documents the #1501/#1502 local store/CLI mechanics. Object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
@@ -82,6 +82,8 @@ Override mechanisms:
 - `BUILDEROPS_DB_PATH` sets the exact SQLite database path.
 - CLI commands also accept `--db-path` for explicit one-command override, which is the preferred
   test path.
+- API/tool callers may set `builderops_db_path` through tool settings or `BUILDEROPS_DB_PATH`
+  through the environment; see `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`.
 
 The default path is repo-local runtime state. It is not `$CODEX_HOME`, not local hidden memory, and
 not a reviewed docs surface.
@@ -177,7 +179,6 @@ later promotion gateway and normal repo/GitHub authority gate act on them.
 
 This slice intentionally does not implement:
 
-- API or MCP exposure
 - promotion gateway execution
 - generated repo projections
 - migrations from `docs/learning-log.md`, `docs/DOCS_INDEX.md`, or `docs/ROADMAP.md`

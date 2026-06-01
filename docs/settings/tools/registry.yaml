@@ -12,6 +12,24 @@ tools:
   - id: mcp.vault.append_note
     path: docs/settings/tools/mcp.vault.append_note.yaml
     status: active
+  - id: mcp.builderops.list_records
+    path: docs/settings/tools/mcp.builderops.list_records.yaml
+    status: active
+  - id: mcp.builderops.read_record
+    path: docs/settings/tools/mcp.builderops.read_record.yaml
+    status: active
+  - id: mcp.builderops.create_worklog
+    path: docs/settings/tools/mcp.builderops.create_worklog.yaml
+    status: active
+  - id: mcp.builderops.create_learning_signal
+    path: docs/settings/tools/mcp.builderops.create_learning_signal.yaml
+    status: active
+  - id: mcp.builderops.create_promotion_intent
+    path: docs/settings/tools/mcp.builderops.create_promotion_intent.yaml
+    status: active
+  - id: mcp.builderops.append_receipt
+    path: docs/settings/tools/mcp.builderops.append_receipt.yaml
+    status: active
   - id: promotion.emit_intent
     path: docs/settings/tools/promotion.emit_intent.yaml
     status: active

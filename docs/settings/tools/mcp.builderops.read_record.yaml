@@ -1,0 +1,16 @@
+id: mcp.builderops.read_record
+status: active
+protocol: mcp
+server: builderops
+description: Read one BuilderOps Vault record through the controlled BuilderOps boundary.
+allowed_args:
+  type: object
+  additionalProperties: false
+  properties:
+    record_id:
+      type: string
+      description: BuilderOps record id.
+  required: [record_id]
+mock_result:
+  status: ok
+  record: {}

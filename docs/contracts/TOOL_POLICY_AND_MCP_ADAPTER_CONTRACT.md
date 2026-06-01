@@ -85,6 +85,12 @@ Current behavior: the executor validates that any argument present in the plan s
 Current hardcoded tools include:
 - `mcp.vault.append_note`
 - `mcp.search.objects`
+- `mcp.builderops.list_records`
+- `mcp.builderops.read_record`
+- `mcp.builderops.create_worklog`
+- `mcp.builderops.create_learning_signal`
+- `mcp.builderops.create_promotion_intent`
+- `mcp.builderops.append_receipt`
 - `internal.ingest_external`
 - `promotion.emit_intent`
 
@@ -154,6 +160,19 @@ The executor respects vault-specific settings when executing `mcp.vault.append_n
 | `vault_root` | string (path) | Root directory for the vault. If not provided, `append_note(...)` uses default resolution. |
 | `mcp_vault_enable` or `mcp.enable` | boolean-like | Feature flag to enable real vault execution. |
 | `allowed_mcp_tools` | list | Allowlist of tools to execute in real mode. |
+
+### BuilderOps settings
+
+The executor respects BuilderOps-specific settings when executing `mcp.builderops.*` tools:
+
+| Setting | Type | Meaning |
+| --- | --- | --- |
+| `builderops_db_path` | string path | Optional BuilderOps SQLite database path. If omitted, normal BuilderOps path resolution applies. |
+| `mcp_builderops_enable` | boolean-like | Feature flag to enable real BuilderOps tool execution. Disabled tools return deterministic mock payloads. |
+| `allowed_mcp_tools` | list | Allowlist of BuilderOps tools to execute in real mode. |
+
+BuilderOps MCP tools are autonomous-agent-safe only for BuilderOps operational records. They do not
+execute promotions, create GitHub Issues, mutate repo docs, or change product/runtime truth.
 
 ## Policy enforcement and authorization
 

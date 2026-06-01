@@ -88,6 +88,11 @@ try:
 except ImportError:
     companion_router = None
 
+try:
+    from app.api.routes.builderops import router as builderops_router
+except ImportError:
+    builderops_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -191,6 +196,8 @@ def _create_app() -> FastAPI:
         application.include_router(artifacts_router, prefix="/api")
     if companion_router is not None:
         application.include_router(companion_router, prefix="/api")
+    if builderops_router is not None:
+        application.include_router(builderops_router, prefix="/api")
     return application
 
 
