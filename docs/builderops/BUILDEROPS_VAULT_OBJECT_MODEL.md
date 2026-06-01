@@ -1,4 +1,4 @@
-State: Initial schema contract for BuilderOps Vault object semantics. Docs/schema-contract only; no persistence, store, CLI, API, MCP, migration, runtime validation, or product/runtime behavior is implemented.
+State: Initial schema contract for BuilderOps Vault object semantics. Minimal store/CLI mechanics are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, generated projection, migration, or product/runtime behavior.
 Doc role: BuilderOps schema contract
 Authority: Defines the initial BuilderOps Vault object model for #1500, subordinate to ADR-0010 for authority and promotion boundaries.
 Owner: BuilderOps governance
@@ -22,14 +22,14 @@ ADR-0010 is the authority baseline for this contract:
 - Generated projections must identify themselves as projections.
 - Raw agent worklogs belong in BuilderOps Vault by default, not reviewed repo docs, `$CODEX_HOME`, or local-only ignored state by default.
 
-This document defines object semantics and schema fields for the initial BuilderOps Vault. It does
-not implement persistence, database tables, Pydantic models, runtime validation, store behavior,
-CLI commands, API/MCP access, migration logic, generated projections, or product/runtime authority
-changes.
+This document defines object semantics and schema fields for the initial BuilderOps Vault. Store and
+CLI mechanics live in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; this contract does not define
+API/MCP access, migration logic, generated projections, promotion-gateway behavior, or
+product/runtime authority changes.
 
-The goal is a contract precise enough for a later minimal store/CLI implementation to use without
-redefining object meaning. Storage layout, indexes, leases, concurrency, validation mechanics, and
-migration of existing docs remain follow-on work.
+The goal is a contract precise enough for implementations to use without redefining object meaning.
+Leases, idempotency, concurrency, projection generation, promotion execution, and migration of
+existing docs remain follow-on work.
 
 No actual BuilderOps records are created by this document. YAML blocks are illustrative examples for
 future implementers.
