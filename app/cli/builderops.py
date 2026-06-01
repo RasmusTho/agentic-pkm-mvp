@@ -9,6 +9,10 @@ import click
 from app.builderops.config import load_paths
 from app.builderops.models import BuilderOpsValidationError, normalize_actor
 from app.builderops.promotion_gateway import BuilderOpsPromotionGateway
+from app.builderops.projections import (
+    PROJECTION_SPECS,
+    BuilderOpsProjectionGenerator,
+)
 from app.builderops.store import SqliteBuilderOpsStore
 
 
@@ -62,6 +66,16 @@ def _emit(payload: Any, as_json: bool) -> None:
     click.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def _emit_projection_results(payload: list[dict[str, Any]], as_json: bool) -> None:
+    if as_json:
+        _emit(payload, True)
+        return
+    for item in payload:
+        click.echo(
+            f"{item['projection_type']}\t{item['record_count']}\t{item['path']}"
+        )
+
+
 def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
     db_path = ctx.obj.get("db_path") if ctx.obj else None
     if db_path is None:
@@ -75,6 +89,10 @@ def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
 
 def _gateway(ctx: click.Context) -> BuilderOpsPromotionGateway:
     return BuilderOpsPromotionGateway(_store(ctx))
+
+
+def _projection_generator(ctx: click.Context) -> BuilderOpsProjectionGenerator:
+    return BuilderOpsProjectionGenerator(_store(ctx))
 
 
 def _handle_create(ctx: click.Context, create_fn, payload: dict[str, Any], as_json: bool) -> None:
@@ -510,6 +528,44 @@ def promotion_transition(
     except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(result, as_json)
+
+
+@builderops.command(
+    "generate-projections",
+    help="Generate non-authoritative BuilderOps Markdown projection files.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("docs/generated/builderops"),
+    show_default=True,
+)
+@click.option(
+    "--type",
+    "projection_type",
+    multiple=True,
+    type=click.Choice(sorted(PROJECTION_SPECS)),
+    help="Projection type to generate. Defaults to all projection types.",
+)
+@click.option("--generated-at", default=None, help="Override the generated timestamp.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def generate_projections(
+    ctx: click.Context,
+    output_dir: Path,
+    projection_type: tuple[str, ...],
+    generated_at: str | None,
+    as_json: bool,
+) -> None:
+    try:
+        result = _projection_generator(ctx).write_projections(
+            output_dir,
+            projection_types=projection_type or None,
+            generated_at=generated_at,
+        )
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit_projection_results(result, as_json)
 
 
 @builderops.command("list", help="List BuilderOps records.")

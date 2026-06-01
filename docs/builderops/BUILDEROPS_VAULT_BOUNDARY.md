@@ -1,4 +1,4 @@
-State: Controlled BuilderOps Vault API/tool boundary implemented for #1503. Promotion gateway mechanics are documented separately in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`; this API/tool boundary still does not execute promotion gateway operations. No generated projections, migrations, rich UI, public remote deployment, or product/runtime authority changes are implemented here.
+State: Controlled BuilderOps Vault API/tool boundary implemented for #1503. Promotion gateway mechanics are documented separately in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this API/tool boundary still does not execute promotion gateway or projection-generation operations. No migrations, rich UI, public remote deployment, or product/runtime authority changes are implemented here.
 Doc role: BuilderOps API and tool boundary reference
 Authority: Documents the #1503 controlled boundary over the BuilderOps store. Store mechanics remain owned by `docs/builderops/BUILDEROPS_VAULT_STORE.md`; object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
@@ -52,6 +52,7 @@ The following operations require human/governance review and are not implemented
 boundary:
 
 - execute a `PromotionIntent`
+- generate or publish repo projection files
 - mutate repo authority surfaces
 - mutate GitHub authority surfaces
 - mutate product/runtime truth
