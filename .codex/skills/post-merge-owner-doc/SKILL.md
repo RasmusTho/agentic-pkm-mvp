@@ -27,6 +27,8 @@ Then answer: does the diff change something those owner docs currently claim?
 
 The receipt comment always goes on the **closed issue** that the PR fixes. If the PR closed multiple issues, post the receipt on each one. If the PR closed no issues (docs-only lane, governance lane), post the receipt as a **PR comment** instead — the PR is then the auditable artifact.
 
+After posting, verify the receipt exists by reading back the issue or PR comments. A watchdog reminder, stale notification, or planned follow-up is not a `post-merge owner-doc check:` receipt. [owner-doc-receipt-gate]
+
 ## Three outcomes
 
 Classify the claim into one of three lanes: immediate action, queued follow-up, or no change.

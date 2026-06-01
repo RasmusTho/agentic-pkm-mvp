@@ -43,7 +43,7 @@ Conditional / maintenance path:
 - `capture-learning`
   - micro-skill: append one structured divergence entry to `docs/learning-log.md` when a plan divergence occurs; invoke on divergence, not on normal work
 - `learning-retrospective`
-  - cadence-triggered: read `docs/learning-log.md` since last retro marker, cluster by upstream artifact, propose concrete edits for human review, append retro marker after human response
+  - cadence-triggered: read `docs/learning-log.md` since last retro marker, cluster by upstream artifact, propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and appending the retro marker after every entry is resolved or tracked
 - `learning-to-issue`
   - convert retrospective learnings (learning-log entries, live PR/CI divergences) into canonical bounded GitHub Issues; also normalizes raw-intake issues created outside the standard contract
 - `promote-to-test`

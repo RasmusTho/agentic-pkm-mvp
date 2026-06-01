@@ -52,14 +52,18 @@ If any condition fails, stop and use the relevant escalation path.
 ## Hot-Path Execution
 
 - Classify the PR with the hot-path fields from `PR_HOT_PATH.md`.
-- Verify branch/worktree/current-SHA sanity before any commit or push.
+- Verify branch/worktree/current-SHA sanity before any commit or push. The active worktree must be the PR worktree, the branch name must match the PR head branch before commit/push, and local `HEAD`, tracked remote branch, and PR head SHA must agree before trusting CI attachment or merge readiness. [branch-truth-gate]
 - Run only the relevant checks for the lane and risk.
 - Triage review feedback into blocking, cheap fix, out-of-scope, or incorrect/not-applicable.
+- For review-feedback repairs, verify the fixing commit is reachable from the target base branch before declaring the repair complete. If the repair addresses an earlier review thread, reply with the fixing PR or merge commit and resolve the original thread. [base-branch-truth] [review-thread-closure]
+- On resume or recovery, re-check the current branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, integration, or reimplementation. [post-resume-current-state-gate]
 - Write the minimal delivery receipt before handoff.
 - A governing issue is required for normal planned workflow; a bounded direct repair PR may proceed without one if the PR body includes a complete `Direct Repair` block.
 - Do not require a separate governance/docs lane checkbox when the `Direct Repair` block already states `Type` and `Validation`.
 - Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.
 - If CI fails, review blocks, branch drifts, or the PR is large or mixed-scope, stop and read `PR_ESCALATION_PATHS.md`.
+- If CI reports an unavailable pytest flag such as `-n`/`--dist`, check for `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and require an explicit `-p <plugin_name>` load before adding or changing dependencies. [plugin-load-guard]
+- After a review-fix push where GitHub's merge ref may differ from branch HEAD, fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, and run at least one targeted test against the merge-ref worktree before declaring `ready-for-verification`. [merge-ref-validation]
 
 ## Escalation References
 
