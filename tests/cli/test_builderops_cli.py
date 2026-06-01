@@ -456,3 +456,61 @@ def test_builderops_cli_promotion_gateway_preview_dry_run_and_transition(
     assert result["record"]["lifecycle_state"] == "accepted"
     assert result["record"]["promotion_status"] == "promotion_pending"
     assert result["receipt"]["promotion_decision"] == "accepted"
+
+
+def test_builderops_cli_generate_projection_files(tmp_path: Path) -> None:
+    db_path = tmp_path / "builderops.sqlite3"
+    output_dir = tmp_path / "projections"
+
+    learning = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "create-learning-signal",
+            "--summary",
+            "CLI projection learning",
+            "--content",
+            "Projection output is generated from BuilderOps records.",
+            "--signal-type",
+            "workflow",
+            "--source-ref",
+            "github_issue:#1505",
+            "--json",
+        ]
+    )
+    assert learning.exit_code == 0, learning.output
+
+    generated = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "generate-projections",
+            "--type",
+            "learning-summary",
+            "--output-dir",
+            str(output_dir),
+            "--generated-at",
+            "2026-06-01T12:00:00Z",
+            "--json",
+        ]
+    )
+    assert generated.exit_code == 0, generated.output
+    result = _json(generated.output)
+    assert result == [
+        {
+            "generated_at": "2026-06-01T12:00:00Z",
+            "object_type": "LearningSignal",
+            "path": str(output_dir / "learning-summary.md"),
+            "projection_type": "learning-summary",
+            "record_count": 1,
+        }
+    ]
+
+    projection = (output_dir / "learning-summary.md").read_text(encoding="utf-8")
+    assert "State: Generated projection" in projection
+    assert "Source of truth: BuilderOps Vault" in projection
+    assert "non-authoritative" in projection
+    assert "CLI projection learning" in projection
+    assert "github_issue:#1505" in projection

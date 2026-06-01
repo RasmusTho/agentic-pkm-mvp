@@ -1,4 +1,4 @@
-State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, generated projection, migration, or product/runtime behavior.
+State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, migration, or product/runtime behavior.
 Doc role: BuilderOps schema contract
 Authority: Defines the initial BuilderOps Vault object model for #1500, subordinate to ADR-0010 for authority and promotion boundaries.
 Owner: BuilderOps governance
@@ -23,12 +23,13 @@ ADR-0010 is the authority baseline for this contract:
 - Raw agent worklogs belong in BuilderOps Vault by default, not reviewed repo docs, `$CODEX_HOME`, or local-only ignored state by default.
 
 This document defines object semantics and schema fields for the initial BuilderOps Vault. Store and
-CLI mechanics live in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; this contract does not define
-API/MCP access, migration logic, generated projections, promotion-gateway behavior, or
-product/runtime authority changes.
+CLI mechanics live in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics
+live in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this contract does not define API/MCP
+access, migration logic, promotion-gateway behavior, or product/runtime authority changes.
 
 The goal is a contract precise enough for implementations to use without redefining object meaning.
-Projection generation, promotion execution, and migration of existing docs remain follow-on work.
+Projection generation is an implementation layer over these objects. Promotion execution and
+migration of existing docs remain follow-on work.
 
 No actual BuilderOps records are created by this document. YAML blocks are illustrative examples for
 future implementers.
@@ -975,11 +976,12 @@ outcome: succeeded
 
 ## Contract Boundaries For Implementers
 
-API/MCP exposure and promotion gateway behavior are implemented separately in
+API/MCP exposure, promotion gateway behavior, and generated projection mechanics are implemented separately in
 `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md` and
-`docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`. Future implementation issues may add generated
-projections or migration tooling. They must preserve these object semantics unless a later ADR or
-schema-contract update explicitly changes them.
+`docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md` and
+`docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. Future implementation issues may add migration
+tooling. They must preserve these object semantics unless a later ADR or schema-contract update
+explicitly changes them.
 
 Implementation-specific IDs, table names, file paths, JSON Schema, Pydantic models, locking,
 retention, encryption, redaction, batching, and indexing rules are intentionally out of scope here.
