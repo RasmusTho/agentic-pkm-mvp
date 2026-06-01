@@ -1,13 +1,13 @@
 ---
 name: learning-retrospective
-description: "Read docs/learning-log.md since the last retro marker, cluster signals by upstream artifact, propose concrete edits for human review, then append a retro marker. Does NOT auto-execute edits."
+description: "Read docs/learning-log.md since the last retro marker, cluster signals by upstream artifact, propose concrete edits for human review, or execute explicit autonomous maintenance when requested."
 ---
 
 # Learning Retrospective
 
 Periodic maintenance pass. Reads batched divergence signals logged since the last retrospective and converts them into concrete, actionable edit proposals for upstream artifacts.
 
-**Does NOT execute edits.** All proposals go to human review first.
+Default mode is proposal-only: do not execute edits unless the human explicitly asks the agent to handle the retro, apply safe workflow fixes, or create Issues for unresolved work.
 
 ## Trigger
 
@@ -62,7 +62,18 @@ Output all proposals clearly. State:
 
 Wait for human response (which proposals to accept, which to reject).
 
-### Step 5: Append retro marker
+### Step 5: Autonomous maintenance mode
+
+Use this mode only when the human explicitly asks the agent to handle the retro end to end, improve the workflow, or create Issues for unresolved learnings.
+
+In autonomous maintenance mode:
+- apply only safe governance-lane edits whose upstream artifact is named by the log entry and whose exact repair is clear;
+- verify whether any proposals were already applied by current repo reality before editing again;
+- create canonical GitHub Issues via `learning-to-issue` for unresolved work, storage decisions, or changes that need human authority;
+- do not change product/runtime behavior;
+- do not append the retro marker until every entry since the last marker is either applied, already satisfied by repo reality, or represented by an Issue.
+
+### Step 6: Append retro marker
 
 After human responds (regardless of how many proposals are accepted), append to `docs/learning-log.md`:
 
@@ -72,7 +83,7 @@ After human responds (regardless of how many proposals are accepted), append to 
 
 Where N = accepted proposals, M = total proposals made.
 
-Accepted proposals should be committed as governance-lane PRs — either by the human or a follow-up agent run using the `publish-pr` skill.
+In autonomous maintenance mode, N = entries resolved directly or already satisfied by repo reality; M = entries considered. Accepted proposals should be committed as governance-lane PRs — either by the human or a follow-up agent run using the `publish-pr` skill.
 
 ## Success signal
 
@@ -86,5 +97,5 @@ After each retrospective, at least one upstream artifact should carry a dated ed
 
 1. Log scope (entries read, date range, last retro marker if any)
 2. Clusters formed (upstream artifact → entry count)
-3. Proposals (numbered, concrete, with artifact path and exact edit text)
+3. Proposals or autonomous actions (numbered, concrete, with artifact path and exact edit text or Issue receipt)
 4. Retro marker appended

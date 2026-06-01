@@ -68,12 +68,14 @@ This lets the retrospective skill scope its next read to entries since the last 
 
 Cadence-triggered (manual, or roughly every 10 deliveries). Reads `docs/learning-log.md` since the last retro marker.
 
-**What it does:**
+**What it does by default:**
 1. Clusters signals by upstream artifact.
 2. Proposes **concrete edits** (diffs or specific line additions) to those artifacts — not vague recommendations.
 3. Does NOT execute edits. Outputs proposals for human review.
 4. Accepted proposals are committed as ordinary governance-lane PRs.
 5. Appends a retro marker to the log.
+
+When the human explicitly asks the agent to handle the retro end to end, the retrospective may run in autonomous maintenance mode: verify which entries are already satisfied by current repo reality, apply safe governance-lane edits for clearly named artifacts, create GitHub Issues for unresolved or decision-bearing work, and append the retro marker only after every entry since the last marker is either applied, already satisfied, or represented by an Issue.
 
 **Success signal for the retrospective itself:** upstream artifacts carry dated edits traceable to log entries. If AGENTS.md and skill prompts are static while the log grows, the retrospective step is broken.
 

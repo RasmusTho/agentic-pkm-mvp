@@ -38,6 +38,7 @@ Default rule:
 - failing checks must be classified before merge
 
 3. Review feedback triage
+- after CI is green and current, fetch existing review comments before any handoff or merge recommendation; do not park the PR as "awaiting human review" until posted comments are classified
 - blocking regression risk -> fix before merge
 - valid non-blocking improvement -> fix if cheap, otherwise file a follow-up
 - out-of-scope -> short response; follow-up only if useful

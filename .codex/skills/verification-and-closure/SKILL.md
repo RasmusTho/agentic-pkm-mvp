@@ -39,6 +39,7 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - roadmap / status / plan docs
 - CI results
 - merge state if already merged
+- current `origin/main` / target-base reachability for any resumed, chained, or review-repair work
 
 ## Validation Rules
 
@@ -54,6 +55,9 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - Verify no duplicate `planned` and `shipped` statements remain active at once
 - Verify project lifecycle state still makes sense
 - Verify closed terminal PR cards do not remain blank in the Project
+- Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
+- If the work addresses earlier review feedback, reply to and resolve the original review thread with the fixing PR or merge commit before final closure. [review-thread-closure]
+- On resume or recovery, re-check branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, reimplementation, or closure. [post-resume-current-state-gate]
 - If the work is a slice under a larger feature, keep post-merge validation evidence on the parent issue
 - If post-merge validation advanced but acceptance is still pending, record the new evidence on the parent issue body or comments
 - If work is incomplete, do not close the loop falsely; create a bounded follow-up Issue instead
@@ -84,6 +88,7 @@ Prerequisites for merge:
 - current SHA truth is intact
 - required checks are green on the current head SHA
 - no unresolved blocking review comments remain
+- no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
 - no scope drift remains
 - the PR fits one of the two verification modes above
 - if issue-backed, all acceptance criteria from the governing Issue are satisfied and every AC's `Verify:` target resolves green on the current head SHA
@@ -101,8 +106,8 @@ When all prerequisites are met:
 7. if issue-backed, set Issue and PR Project Status to `Done` if automation has not already projected it
 8. if issue-backed, for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
 9. verify final state
-10. if issue-backed, invoke `post-merge-owner-doc` on the merged PR
-11. assert the receipt exists before emitting a delivery receipt
+10. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, the receipt belongs on the closed issue; for direct-repair, docs-lane, or governance-lane PRs with no closing issue, the receipt belongs on the PR comment thread.
+11. assert the `post-merge owner-doc check:` receipt exists before emitting a delivery receipt; watchdog reminders or pending reminders are not closure receipts. For direct-repair, docs-lane, or governance-lane PRs with no closing issue, verify the receipt on the PR comment thread. [owner-doc-receipt-gate]
 12. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
 
 ## When Not to Merge
