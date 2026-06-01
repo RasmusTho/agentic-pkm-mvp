@@ -975,8 +975,10 @@ outcome: succeeded
 
 ## Contract Boundaries For Implementers
 
-Future implementation issues may add API/MCP exposure, promotion gateway behavior, generated
-projections, or migration tooling. They must preserve these object semantics unless a later ADR or
+API/MCP exposure and promotion gateway behavior are implemented separately in
+`docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md` and
+`docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`. Future implementation issues may add generated
+projections or migration tooling. They must preserve these object semantics unless a later ADR or
 schema-contract update explicitly changes them.
 
 Implementation-specific IDs, table names, file paths, JSON Schema, Pydantic models, locking,

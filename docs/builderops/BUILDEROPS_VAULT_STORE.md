@@ -1,4 +1,4 @@
-State: Local BuilderOps Vault store and CLI implemented through #1502. Includes minimal leases, idempotency semantics, and receipt-backed state transitions. API/tool boundary mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`. No promotion gateway, generated projections, migrations, or product/runtime authority changes are implemented here.
+State: Local BuilderOps Vault store and CLI implemented through #1502. Includes minimal leases, idempotency semantics, and receipt-backed state transitions. API/tool boundary mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`; promotion gateway mechanics are documented in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`. No generated projections, migrations, or product/runtime authority changes are implemented here.
 Doc role: BuilderOps store/CLI reference
 Authority: Documents the #1501/#1502 local store/CLI mechanics. Object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
@@ -172,14 +172,14 @@ The store is BuilderOps operational infrastructure. Writing a BuilderOps record 
 repo authority, product/runtime truth, GitHub Issues, docs, skills, ADRs, PRs, generated
 projections, or runtime behavior.
 
-Promotion remains explicit and separate. `PromotionIntent` records are staged material only until a
-later promotion gateway and normal repo/GitHub authority gate act on them.
+Promotion remains explicit and separate. `PromotionIntent` records are staged material until the
+promotion gateway renders proposal material, appends receipts, and records explicit state
+transitions. Normal repo/GitHub authority gates still own the target surface.
 
 ## Out Of Scope
 
 This slice intentionally does not implement:
 
-- promotion gateway execution
 - generated repo projections
 - migrations from `docs/learning-log.md`, `docs/DOCS_INDEX.md`, or `docs/ROADMAP.md`
 - product/runtime authority changes

@@ -348,3 +348,111 @@ def test_builderops_cli_rejects_invalid_object_type_on_list(tmp_path: Path) -> N
     )
     assert result.exit_code != 0
     assert "unsupported object_type" in result.output
+
+
+def test_builderops_cli_promotion_gateway_preview_dry_run_and_transition(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "builderops.sqlite3"
+    created = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "create-promotion-intent",
+            "--summary",
+            "Open BuilderOps follow-up",
+            "--target-authority-surface",
+            "github_issue",
+            "--target-action",
+            "create",
+            "--target-ref",
+            "pending",
+            "--target-authority-class",
+            "operational",
+            "--intended-output",
+            "Create a follow-up issue.",
+            "--source-ref",
+            "github_issue:#1498",
+            "--source-ref",
+            "github_issue:#1504",
+            "--created-by",
+            "codex",
+            "--json",
+        ]
+    )
+    assert created.exit_code == 0, created.output
+    intent = _json(created.output)
+
+    preview = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "promotion-preview",
+            intent["id"],
+            "--json",
+        ]
+    )
+    assert preview.exit_code == 0, preview.output
+    proposal = _json(preview.output)
+    assert proposal["proposal_kind"] == "github_issue_draft"
+    assert "Parent: #1498" in proposal["body"]
+
+    dry_run = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "promotion-dry-run",
+            intent["id"],
+            "--actor",
+            "codex",
+            "--idempotency-key",
+            "cli:promotion-dry-run",
+            "--json",
+        ]
+    )
+    assert dry_run.exit_code == 0, dry_run.output
+    assert _json(dry_run.output)["receipt"]["event_type"] == "promotion_dry_run"
+
+    lease = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "acquire-lease",
+            intent["id"],
+            "--actor",
+            "codex",
+            "--json",
+        ]
+    )
+    assert lease.exit_code == 0, lease.output
+    lease_id = _json(lease.output)["lease_id"]
+
+    accepted = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "promotion-transition",
+            intent["id"],
+            "--decision",
+            "accepted",
+            "--actor",
+            "codex",
+            "--lease-id",
+            lease_id,
+            "--idempotency-key",
+            "cli:promotion-accepted",
+            "--rationale",
+            "Accepted as BuilderOps promotion material.",
+            "--json",
+        ]
+    )
+    assert accepted.exit_code == 0, accepted.output
+    result = _json(accepted.output)
+    assert result["record"]["lifecycle_state"] == "accepted"
+    assert result["record"]["promotion_status"] == "promotion_pending"
+    assert result["receipt"]["promotion_decision"] == "accepted"

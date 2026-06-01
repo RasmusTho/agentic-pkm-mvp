@@ -1,4 +1,4 @@
-State: Controlled BuilderOps Vault API/tool boundary implemented for #1503. No promotion gateway execution, generated projections, migrations, rich UI, public remote deployment, or product/runtime authority changes are implemented here.
+State: Controlled BuilderOps Vault API/tool boundary implemented for #1503. Promotion gateway mechanics are documented separately in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`; this API/tool boundary still does not execute promotion gateway operations. No generated projections, migrations, rich UI, public remote deployment, or product/runtime authority changes are implemented here.
 Doc role: BuilderOps API and tool boundary reference
 Authority: Documents the #1503 controlled boundary over the BuilderOps store. Store mechanics remain owned by `docs/builderops/BUILDEROPS_VAULT_STORE.md`; object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
@@ -48,7 +48,8 @@ The following operations are autonomous-agent-safe when source refs and actor id
 - create staged `PromotionIntent`
 - append `BuilderOpsReceipt` for a BuilderOps operation the agent performed
 
-The following operations require human/governance review and are not implemented by this boundary:
+The following operations require human/governance review and are not implemented by this API/tool
+boundary:
 
 - execute a `PromotionIntent`
 - mutate repo authority surfaces
@@ -56,7 +57,8 @@ The following operations require human/governance review and are not implemented
 - mutate product/runtime truth
 - publish a generated projection as truth
 
-Creating a `PromotionIntent` is not promotion execution. It is staged BuilderOps material only.
+Creating a `PromotionIntent` is not promotion execution. Explicit promotion proposal and receipt
+work is handled by the separate promotion gateway, not by autonomous MCP/API calls.
 
 ## Tool Execution
 
@@ -74,5 +76,5 @@ This boundary is BuilderOps operational infrastructure. It does not replace GitH
 current executable task-contract surface, does not bypass PR review, and does not make BuilderOps
 records into repo/product/runtime truth.
 
-Promotion across authority classes remains explicit and is still owned by later promotion-gateway
-work.
+Promotion across authority classes remains explicit and is handled by the separate promotion gateway
+plus the normal target authority gate.
