@@ -4,9 +4,9 @@ Authority: Defines the delivery feedback loop for builder-agent governance; does
 Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: per retrospective
-Source of truth: mixed
-Last reviewed: 2026-04-20
-Last verified against: PR #523, PR #526, docs/learning-log.md, .codex/skills/capture-learning/SKILL.md, .codex/skills/learning-retrospective/SKILL.md, current repo state at 17eef96 on 2026-04-20
+Source of truth: BuilderOps Vault LearningSignal records for operational learning; this document defines workflow
+Last reviewed: 2026-06-01
+Last verified against: issue #1506, docs/learning-log.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md, docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md, .codex/skills/capture-learning/SKILL.md, .codex/skills/learning-retrospective/SKILL.md
 
 # Delivery Feedback Loop
 
@@ -18,13 +18,18 @@ The loop must be pipeline-wide, not owned by verification alone. Any skill that 
 
 ## Design
 
-```
-Docs → Feature → Slice → Agent → PR → CI → Verification → Merge
-         ↑                    ↓ (any skill, on divergence)
-         │              docs/learning-log.md
-         │                    ↓
-         └──── learning-retrospective (cadence-triggered)
-                              ↓
+```text
+Docs -> Feature -> Slice -> Agent -> PR -> CI -> Verification -> Merge
+         ^                    | (any skill, on divergence)
+         |                    v
+         |              BuilderOps LearningSignal
+         |                    |
+         |                    v
+         |              learning-summary projection
+         |                    |
+         +---- learning-retrospective (cadence-triggered)
+                              |
+                              v
                Edits to upstream artifacts:
                AGENTS.md · skill prompts · slice template
                task-contract template · owner-doc conventions
@@ -34,52 +39,73 @@ Docs → Feature → Slice → Agent → PR → CI → Verification → Merge
 
 ### 1. `capture-learning` skill
 
-Single-job micro-skill. Appends one structured entry to `docs/learning-log.md`.
+Single-job micro-skill. Creates one `LearningSignal` record in BuilderOps Vault when a divergence
+is concrete enough to name an upstream artifact now.
 
 **Inputs (required):**
 - **what diverged** — one sentence: the plan said X, reality was Y
 - **upstream artifact** — the named artifact that could absorb the fix (`AGENTS.md §X`, `.codex/skills/issue-to-code/`, task-contract template, etc.). Must be named. If genuinely unknown, write `"unknown — flag for retro"`.
 - **source** — which skill or moment noticed it
 
-**Entry shape:**
-```markdown
-## YYYY-MM-DD — #<issue> (<slice title>)
-**Source:** <skill name or "human">
-**Diverged:** <one sentence>
-**Upstream artifact:** <path or section>
+**LearningSignal content shape:**
+```text
+Issue/context: #<issue> (<slice title>)
+Source: <skill name or "human">
+Diverged: <one sentence>
+Upstream artifact: <path or section>
 ```
 
 **Trigger rule (the important part):** invoke only when you do something you did not expect to do, or discover an earlier artifact was wrong. Not when work went as planned. The heuristic: *if the next agent doing a similar task would benefit from an upstream artifact being different, log it — otherwise don't.*
 
 **The "name an artifact" gate** kills venting. You cannot log without proposing where the fix lives.
 
-### 2. `docs/learning-log.md`
+### 2. BuilderOps `LearningSignal` records
 
-Append-only flat file. No schema beyond the entry shape above. No database, no YAML frontmatter beyond the entry headers.
+Primary operational source for delivery learning after #1506.
+
+The record must carry:
+
+- `object_type: LearningSignal`
+- `signal_type: workflow_divergence` or a similarly specific workflow signal type
+- `source_refs` pointing to the issue/PR/review thread and the upstream artifact named by the signal
+- `content` containing the source, divergence, and proposed upstream artifact
+
+Raw `AgentWorklog` records may be cited through `source_refs`, but raw worklogs are provenance and
+working material, not authoritative learning truth.
+
+### 3. `docs/learning-log.md`
+
+Historical compatibility view. It preserves pre-BuilderOps entries and explicit fallback entries
+when a BuilderOps write is unavailable. It is no longer the primary operational learning store.
 
 Retrospective completions append a marker line:
 ```
 --- retro YYYY-MM-DD: applied N/M proposals ---
 ```
 
-This lets the retrospective skill scope its next read to entries since the last marker.
+This marker remains for historical compatibility entries only. Retrospectives over BuilderOps
+LearningSignals should record their completion with a `BuilderOpsReceipt` that targets the processed
+LearningSignal records.
 
-### 3. `learning-retrospective` skill
+### 4. `learning-retrospective` skill
 
-Cadence-triggered (manual, or roughly every 10 deliveries). Reads `docs/learning-log.md` since the last retro marker.
+Cadence-triggered (manual, or roughly every 10 deliveries). Reads BuilderOps `LearningSignal`
+records and may generate the `learning-summary` projection for a repo-readable view. It reads
+`docs/learning-log.md` only for historical compatibility entries that have not yet been represented
+as BuilderOps records.
 
 **What it does by default:**
 1. Clusters signals by upstream artifact.
 2. Proposes **concrete edits** (diffs or specific line additions) to those artifacts — not vague recommendations.
 3. Does NOT execute edits. Outputs proposals for human review.
 4. Accepted proposals are committed as ordinary governance-lane PRs.
-5. Appends a retro marker to the log.
+5. Records the retrospective outcome with a `BuilderOpsReceipt` over the processed LearningSignals.
 
-When the human explicitly asks the agent to handle the retro end to end, the retrospective may run in autonomous maintenance mode: verify which entries are already satisfied by current repo reality, apply safe governance-lane edits for clearly named artifacts, create GitHub Issues for unresolved or decision-bearing work, and append the retro marker only after every entry since the last marker is either applied, already satisfied, or represented by an Issue.
+When the human explicitly asks the agent to handle the retro end to end, the retrospective may run in autonomous maintenance mode: verify which LearningSignals or compatibility entries are already satisfied by current repo reality, apply safe governance-lane edits for clearly named artifacts, create GitHub Issues for unresolved or decision-bearing work, and record a BuilderOps retrospective receipt only after every signal in scope is either applied, already satisfied, or represented by an Issue.
 
-**Success signal for the retrospective itself:** upstream artifacts carry dated edits traceable to log entries. If AGENTS.md and skill prompts are static while the log grows, the retrospective step is broken.
+**Success signal for the retrospective itself:** upstream artifacts carry dated edits traceable to LearningSignals, BuilderOps receipts, or historical compatibility entries. If AGENTS.md and skill prompts are static while LearningSignals accumulate, the retrospective step is broken.
 
-### 4. Governance lane
+### 5. Governance lane
 
 A distinct work-stream on the Project board for changes to delivery-system artifacts.
 
@@ -95,7 +121,7 @@ A distinct work-stream on the Project board for changes to delivery-system artif
 - Governance specs live under `docs/development/`
 - Verification skill treats `lane:governance` issues with relaxed behavioral-AC rules — non-behavioral `Verify:` targets (adoption evidence, doc presence) are the norm
 
-### 5. "Applies learning" slot in task-contract template
+### 6. "Applies learning" slot in task-contract template
 
 The task-contract template is defined in `.codex/skills/docs-to-issue/SKILL.md` (the "Issue body must contain exactly these sections" list). Agents creating new Issues from docs must follow that template.
 
@@ -113,15 +139,16 @@ Usually blank. When filled, enables tracing whether retro edits actually improve
 
 Every skill in `.codex/skills/` carries this addendum:
 
-> **Capturing learning:** if during this work you notice a divergence from plan — you did something you didn't expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+> **Capturing learning:** if during this work you notice a divergence from plan — you did something you didn't expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Capture a BuilderOps `LearningSignal`; use `docs/learning-log.md` only as an explicit compatibility fallback. Do not batch to end of task; context is freshest now. Only capture if you can name an upstream artifact that could absorb the fix.
 
 ## What this is not
 
 - Not a metrics dashboard
-- Not structured telemetry or auto-classification
+- Not structured product telemetry or auto-classification
 - Not a blocking gate in the delivery path — the loop is asynchronous, delivery velocity is unchanged
 - Not a second Project board or new agent
 - Not mandatory per-delivery — log only on divergence
+- Not product/runtime memory; BuilderOps learning governs the building system only
 
 ## Success criteria
 
@@ -130,6 +157,6 @@ After 3–4 retrospectives:
 - At least one delivered slice has the "applies learning" slot filled
 - Signal volume in the log reflects real divergences, not noise
 
-If those artifacts are static while the log grows: fix the retrospective step.
-If the log is empty while deliveries ship: fix the skill addendums.
-Either failure mode is diagnosable from two files.
+If those artifacts are static while LearningSignals accumulate: fix the retrospective step.
+If LearningSignals are empty while deliveries ship with real divergences: fix the skill addendums.
+Historical compatibility entries in `docs/learning-log.md` should trend toward zero after #1506.

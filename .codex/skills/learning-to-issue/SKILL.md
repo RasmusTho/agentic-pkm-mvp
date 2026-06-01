@@ -1,18 +1,19 @@
 ---
 name: learning-to-issue
-description: "Convert retrospective learnings from learning-log entries, PR/CI failures, and live governance divergences into bounded canonical GitHub Issues. Use after capture-learning or learning-retrospective when a signal is concrete enough for the backlog, or to normalize raw intake issues that were created outside the standard contract."
+description: "Convert retrospective learnings from BuilderOps LearningSignal records, historical learning-log compatibility entries, PR/CI failures, and live governance divergences into bounded canonical GitHub Issues. Use after capture-learning or learning-retrospective when a signal is concrete enough for the backlog, or to normalize raw intake issues that were created outside the standard contract."
 ---
 
 # Learning To Issue
 
 Convert retrospective learnings into bounded, verifiable GitHub Issues that match the repo's canonical issue contract.
 
-This is the maintenance-learning intake lane. It is distinct from `docs-to-issue` (which converts active SoT docs into product-feature backlog) and from `capture-learning` (which appends a divergence entry to `docs/learning-log.md`).
+This is the maintenance-learning intake lane. It is distinct from `docs-to-issue` (which converts active SoT docs into product-feature backlog) and from `capture-learning` (which creates a BuilderOps `LearningSignal`).
 
 ## When to invoke
 
 Invoke when:
-- A `docs/learning-log.md` entry names a concrete upstream artifact and the repair is bounded enough for the backlog.
+- A BuilderOps `LearningSignal` names a concrete upstream artifact and the repair is bounded enough for the backlog.
+- A historical `docs/learning-log.md` compatibility entry names a concrete upstream artifact and has not yet been represented by a `LearningSignal`.
 - `learning-retrospective` proposes a concrete edit and the edit requires implementation work (not just a doc change).
 - During `pr-integration` or `verification-and-closure`, a live divergence was observed that needs a tracking issue rather than an inline fix.
 - An issue was created informally (e.g., during a live incident) and needs normalization to the canonical contract.
@@ -21,7 +22,7 @@ Do NOT invoke when:
 - The signal is vague or cannot name a concrete upstream artifact.
 - The work is already tracked in an open issue (dedupe check first).
 - The fix is a one-line doc correction - use `docs-authoring` or a direct repair PR instead.
-- The learning-log entry itself is the right artifact (no backlog item needed yet).
+- The `LearningSignal` or compatibility entry itself is the right artifact (no backlog item needed yet).
 
 ## Pre-flight: dedupe check (required before creating any issue)
 
@@ -49,7 +50,7 @@ Every issue created by this skill must use the same contract as `docs-to-issue`:
 
 **Required sections (in order):**
 
-- `## Context` - background from the learning-log entry or observed divergence; link the source entry or PR
+- `## Context` - background from the LearningSignal, historical learning-log compatibility entry, or observed divergence; link the source record, entry, or PR
 - `## Scope` - what changes, what files/artifacts are touched
 - `## Source Anchors` - the named upstream artifact(s) that absorb the fix; use the most local actionable item
 - `## Constraints` - what must not change; what approaches are excluded
@@ -57,7 +58,7 @@ Every issue created by this skill must use the same contract as `docs-to-issue`:
 - `## Out of Scope` - what this issue deliberately excludes
 - `## Suggested Validation` - commands that execute the `Verify:` targets
 - `## Source Docs` - paths to referenced docs
-- `## Applies learning (optional)` - link to the learning-log entry or retro marker that produced this issue
+- `## Applies learning (optional)` - link to the BuilderOps LearningSignal/receipt, historical learning-log entry, or retro marker that produced this issue
 
 **Every AC must carry a `Verify:` line:**
 - Behavioral AC -> test pointer: `Verify: \`tests/<path>::<test_name>\``
@@ -123,7 +124,7 @@ Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and
 **Issue body template (all cases):**
 ```
 ## Context
-<1-2 sentences from the learning-log entry or observed divergence. Link the source: `docs/learning-log.md :: YYYY-MM-DD entry` or `PR #N`>
+<1-2 sentences from the LearningSignal, historical learning-log compatibility entry, or observed divergence. Link the source: `BuilderOps LearningSignal <id>`, `docs/learning-log.md :: YYYY-MM-DD entry`, or `PR #N`>
 
 ## Scope
 <What changes. Name files and artifacts.>
@@ -148,7 +149,7 @@ Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and
 - `<path>`
 
 ## Applies learning (optional)
-Applies learning from `docs/learning-log.md :: YYYY-MM-DD - <entry title>`.
+Applies learning from `BuilderOps LearningSignal <id>` or `docs/learning-log.md :: YYYY-MM-DD - <compatibility entry title>`.
 ```
 
 After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
@@ -195,7 +196,7 @@ Signs a raw-intake issue needs normalization:
 
 **Backlog receipt (new issue):**
 ```
-BACKLOG RECEIPT: Issue #N created - "<title>", labeled type:task/prio:med/agent:ready, added to Project "Agent Delivery Control Plane", Status=Ready. Source: docs/learning-log.md :: YYYY-MM-DD entry.
+BACKLOG RECEIPT: Issue #N created - "<title>", labeled type:task/prio:med/agent:ready, added to Project "Agent Delivery Control Plane", Status=Ready. Source: BuilderOps LearningSignal <id> or docs/learning-log.md :: YYYY-MM-DD compatibility entry.
 ```
 
 **Normalization receipt (existing issue updated):**
