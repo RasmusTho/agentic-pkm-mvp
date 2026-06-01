@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-31
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1460/#1461/#1463/#1464/#1466/#1475, and current repo state at 332d724e on 2026-05-31
+Last reviewed: 2026-06-01
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490, and current repo state at e389e08b on 2026-06-01
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.

@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-05-31
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/companion_aware.py, tests/api/test_companion_orientation_api.py, tests/api/test_orientation_memory_seam.py, tests/api/test_leave_point_cursor.py, tests/agent_memory/test_companion_aware_memory.py, merged PRs #1085/#1460/#1461/#1463/#1464/#1466/#1475, GitHub issue #1085 closed 2026-05-22, GitHub issue #1457 implementation evidence, and current repo state at 332d724e on 2026-05-31
+Last reviewed: 2026-06-01
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, app/api/routes/companion.py, app/api/routes/panel.py, app/orientation/leave_point_cursor.py, app/agent_memory/companion_aware.py, app/panel/checkbox_projection.py, tests/api/test_companion_orientation_api.py, tests/api/test_orientation_memory_seam.py, tests/api/test_leave_point_cursor.py, tests/panel/test_panel_checkbox_projection.py, tests/agent_memory/test_companion_aware_memory.py, merged PRs #1085/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490, GitHub issue #1085 closed 2026-05-22, GitHub issue #1457 implementation evidence, and current repo state at e389e08b on 2026-06-01
 
 # Roadmap — Strategic Control
 
