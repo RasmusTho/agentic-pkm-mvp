@@ -117,8 +117,14 @@ def test_write_projections_emits_expected_repo_markdown_files(
         owner="Documentation role map",
         review_cadence="event-driven",
         freshness_posture="current",
+        drift_status="none",
         last_reviewed_at="2026-06-01T00:00:00Z",
+        last_verified_against=[{"ref_type": "repo_doc", "ref": "docs/ARCHITECTURE.md"}],
+        last_verified_at="2026-06-01T01:00:00Z",
         next_review_due_at="2026-06-15T00:00:00Z",
+        stale_reasons=["none"],
+        freshness_evidence_refs=[{"ref_type": "github_issue", "ref": "#1507"}],
+        next_review_owner="BuilderOps governance",
         source_refs=[{"ref_type": "repo_doc", "ref": "docs/DOCS_INDEX.md"}],
         created_by=_actor(),
     )
@@ -162,6 +168,13 @@ def test_write_projections_emits_expected_repo_markdown_files(
         "promotion-queue.md",
         "roadmap-execution.md",
     ]
+    docs_freshness = (output_dir / "docs-freshness.md").read_text(encoding="utf-8")
+    assert "- Drift status: none" in docs_freshness
+    assert "- Last verified against: repo_doc:docs/ARCHITECTURE.md" in docs_freshness
+    assert "- Last verified at: 2026-06-01T01:00:00Z" in docs_freshness
+    assert "- Stale reasons: none" in docs_freshness
+    assert "- Freshness evidence refs: github_issue:#1507" in docs_freshness
+    assert "- Next review owner: BuilderOps governance" in docs_freshness
     promotion_queue = (output_dir / "promotion-queue.md").read_text(encoding="utf-8")
     assert "Source of truth: BuilderOps Vault" in promotion_queue
     assert "non-authoritative" in promotion_queue

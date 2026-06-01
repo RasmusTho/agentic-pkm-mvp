@@ -1,4 +1,4 @@
-State: Local BuilderOps Vault store and CLI implemented through #1502. Includes minimal leases, idempotency semantics, and receipt-backed state transitions. API/tool boundary mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`; promotion gateway mechanics are documented in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`; generated projection mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. No migrations or product/runtime authority changes are implemented here.
+State: Local BuilderOps Vault store and CLI implemented through #1502. Includes minimal leases, idempotency semantics, receipt-backed state transitions, and #1507 DocsFreshnessRecord verification/drift capture flags. API/tool boundary mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`; promotion gateway mechanics are documented in `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`; generated projection mechanics are documented in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. No migrations or product/runtime authority changes are implemented here.
 Doc role: BuilderOps store/CLI reference
 Authority: Documents the #1501/#1502 local store/CLI mechanics. Object semantics remain owned by `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`; authority boundaries remain owned by ADR-0010.
 Owner: BuilderOps governance
@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: app/builderops, app/cli/builderops.py, ADR-0010, BuilderOps object model
 Last reviewed: 2026-06-01
-Last verified against: issues #1501/#1502
+Last verified against: issues #1501/#1502/#1507
 
 # BuilderOps Vault Store and CLI
 
@@ -122,8 +122,13 @@ python -m app.cli builderops create-docs-freshness-record \
   --owner "Documentation role map" \
   --review-cadence event-driven \
   --freshness-posture current \
+  --drift-status none \
   --last-reviewed-at 2026-06-01T00:00:00Z \
+  --last-verified-against repo_doc:docs/ARCHITECTURE.md \
+  --last-verified-at 2026-06-01T01:00:00Z \
   --next-review-due-at 2026-06-15T00:00:00Z \
+  --freshness-evidence-ref github_issue:#1507 \
+  --next-review-owner "BuilderOps governance" \
   --source-ref repo_doc:docs/DOCS_INDEX.md
 
 python -m app.cli builderops create-roadmap-execution-item \
@@ -171,6 +176,11 @@ objects or as shorthand `ref_type:ref`.
 The store is BuilderOps operational infrastructure. Writing a BuilderOps record does not mutate
 repo authority, product/runtime truth, GitHub Issues, docs, skills, ADRs, PRs, generated
 projections, or runtime behavior.
+
+Docs freshness records are the operational place for high-churn review queues, stale/drift
+observations, next-review due dates, and verification evidence. `docs/DOCS_INDEX.md` remains the
+repo-authoritative role/routing map, while the generated `docs-freshness` projection is only a
+repo-readable view over BuilderOps records.
 
 Promotion remains explicit and separate. `PromotionIntent` records are staged material until the
 promotion gateway renders proposal material, appends receipts, and records explicit state

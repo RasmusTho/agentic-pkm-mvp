@@ -158,17 +158,37 @@ def test_builderops_cli_create_core_records_and_receipt(tmp_path: Path) -> None:
             "event-driven",
             "--freshness-posture",
             "current",
+            "--drift-status",
+            "none",
             "--last-reviewed-at",
             "2026-06-01T00:00:00Z",
+            "--last-verified-against",
+            "repo_doc:docs/ARCHITECTURE.md",
+            "--last-verified-at",
+            "2026-06-01T01:00:00Z",
             "--next-review-due-at",
             "2026-06-15T00:00:00Z",
+            "--stale-reason",
+            "none",
+            "--freshness-evidence-ref",
+            "github_issue:#1507",
+            "--next-review-owner",
+            "BuilderOps governance",
             "--source-ref",
             "repo_doc:docs/DOCS_INDEX.md",
             "--json",
         ]
     )
     assert freshness.exit_code == 0, freshness.output
-    assert _json(freshness.output)["object_type"] == "DocsFreshnessRecord"
+    freshness_record = _json(freshness.output)
+    assert freshness_record["object_type"] == "DocsFreshnessRecord"
+    assert freshness_record["drift_status"] == "none"
+    assert freshness_record["last_verified_against"] == [
+        {"ref_type": "repo_doc", "ref": "docs/ARCHITECTURE.md"}
+    ]
+    assert freshness_record["freshness_evidence_refs"] == [
+        {"ref_type": "github_issue", "ref": "#1507"}
+    ]
 
     roadmap = _run(
         [
