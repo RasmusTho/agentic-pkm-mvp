@@ -35,13 +35,40 @@ def test_builderops_cli_create_list_read_worklog(tmp_path: Path) -> None:
             "github_issue:#1501",
             "--created-by",
             "codex",
+            "--idempotency-key",
+            "cli:create-worklog",
             "--json",
         ]
     )
     assert created.exit_code == 0, created.output
     record = _json(created.output)
     assert record["object_type"] == "AgentWorklog"
+    assert record["idempotency_key"] == "cli:create-worklog"
     assert record["source_refs"] == [{"ref_type": "github_issue", "ref": "#1501"}]
+
+    duplicate = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "create-worklog",
+            "--summary",
+            "CLI worklog",
+            "--body",
+            "Captured via CLI.",
+            "--task-context",
+            '{"issue":"#1501"}',
+            "--source-ref",
+            "github_issue:#1501",
+            "--created-by",
+            "codex",
+            "--idempotency-key",
+            "cli:create-worklog",
+            "--json",
+        ]
+    )
+    assert duplicate.exit_code == 0, duplicate.output
+    assert _json(duplicate.output) == record
 
     listed = _run(
         [
@@ -198,6 +225,113 @@ def test_builderops_cli_create_core_records_and_receipt(tmp_path: Path) -> None:
     receipt_record = _json(receipt.output)
     assert receipt_record["object_type"] == "BuilderOpsReceipt"
     assert receipt_record["promotion_status"] == "not_promotable"
+
+
+def test_builderops_cli_lease_and_transition(tmp_path: Path) -> None:
+    db_path = tmp_path / "builderops.sqlite3"
+    promotion = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "create-promotion-intent",
+            "--summary",
+            "CLI promotion transition",
+            "--target-authority-surface",
+            "github_issue",
+            "--target-action",
+            "create",
+            "--target-ref",
+            "pending",
+            "--target-authority-class",
+            "operational",
+            "--intended-output",
+            "Draft follow-up issue.",
+            "--source-ref",
+            "builderops_object:lrn_cli_transition",
+            "--idempotency-key",
+            "cli:create-promotion-transition",
+            "--json",
+        ]
+    )
+    assert promotion.exit_code == 0, promotion.output
+    promotion_record = _json(promotion.output)
+
+    missing_lease = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "transition",
+            promotion_record["id"],
+            "--actor",
+            "codex",
+            "--lease-id",
+            "missing",
+            "--idempotency-key",
+            "cli:transition-promotion",
+            "--source-ref",
+            "github_issue:#1502",
+            "--summary",
+            "Promotion accepted",
+            "--action",
+            "accept",
+            "--receipt-body",
+            "Accepted promotion intent.",
+            "--lifecycle-state",
+            "accepted",
+            "--json",
+        ]
+    )
+    assert missing_lease.exit_code != 0
+    assert "active lease required" in missing_lease.output
+
+    lease = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "acquire-lease",
+            promotion_record["id"],
+            "--actor",
+            "codex",
+            "--json",
+        ]
+    )
+    assert lease.exit_code == 0, lease.output
+    lease_record = _json(lease.output)
+
+    transitioned = _run(
+        [
+            "builderops",
+            "--db-path",
+            str(db_path),
+            "transition",
+            promotion_record["id"],
+            "--actor",
+            "codex",
+            "--lease-id",
+            lease_record["lease_id"],
+            "--idempotency-key",
+            "cli:transition-promotion",
+            "--source-ref",
+            "github_issue:#1502",
+            "--summary",
+            "Promotion accepted",
+            "--action",
+            "accept",
+            "--receipt-body",
+            "Accepted promotion intent.",
+            "--lifecycle-state",
+            "accepted",
+            "--json",
+        ]
+    )
+    assert transitioned.exit_code == 0, transitioned.output
+    result = _json(transitioned.output)
+    assert result["record"]["lifecycle_state"] == "accepted"
+    assert result["receipt"]["object_type"] == "BuilderOpsReceipt"
+    assert result["receipt"]["id"] in result["record"]["receipt_refs"]
 
 
 def test_builderops_cli_rejects_invalid_object_type_on_list(tmp_path: Path) -> None:

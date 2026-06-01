@@ -1,4 +1,4 @@
-State: Initial schema contract for BuilderOps Vault object semantics. Minimal store/CLI mechanics are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, generated projection, migration, or product/runtime behavior.
+State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; this document remains the object semantics contract and does not define API, MCP, promotion gateway, generated projection, migration, or product/runtime behavior.
 Doc role: BuilderOps schema contract
 Authority: Defines the initial BuilderOps Vault object model for #1500, subordinate to ADR-0010 for authority and promotion boundaries.
 Owner: BuilderOps governance
@@ -28,8 +28,7 @@ API/MCP access, migration logic, generated projections, promotion-gateway behavi
 product/runtime authority changes.
 
 The goal is a contract precise enough for implementations to use without redefining object meaning.
-Leases, idempotency, concurrency, projection generation, promotion execution, and migration of
-existing docs remain follow-on work.
+Projection generation, promotion execution, and migration of existing docs remain follow-on work.
 
 No actual BuilderOps records are created by this document. YAML blocks are illustrative examples for
 future implementers.
@@ -976,10 +975,9 @@ outcome: succeeded
 
 ## Contract Boundaries For Implementers
 
-Future implementation issues may add storage mechanics, validation, indexes, leases, idempotency
-rules, CLI commands, API/MCP exposure, promotion gateway behavior, or generated projections. They
-must preserve these object semantics unless a later ADR or schema-contract update explicitly
-changes them.
+Future implementation issues may add API/MCP exposure, promotion gateway behavior, generated
+projections, or migration tooling. They must preserve these object semantics unless a later ADR or
+schema-contract update explicitly changes them.
 
 Implementation-specific IDs, table names, file paths, JSON Schema, Pydantic models, locking,
 retention, encryption, redaction, batching, and indexing rules are intentionally out of scope here.

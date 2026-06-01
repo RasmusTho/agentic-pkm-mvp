@@ -99,6 +99,7 @@ def builderops(ctx: click.Context, db_path: Path | None) -> None:
 @click.option("--task-context", default="{}", help="JSON object with task context.")
 @click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
+@click.option("--idempotency-key", default=None)
 @click.option("--promotion-status", default=None)
 @click.option("--tag", "tags", multiple=True)
 @click.option("--json", "as_json", is_flag=True)
@@ -110,6 +111,7 @@ def create_worklog(
     task_context: str,
     source_ref: tuple[str, ...],
     created_by: str | None,
+    idempotency_key: str | None,
     promotion_status: str | None,
     tags: tuple[str, ...],
     as_json: bool,
@@ -121,6 +123,8 @@ def create_worklog(
         "source_refs": _parse_refs(source_ref),
         "created_by": _parse_actor(created_by),
     }
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
     if promotion_status:
         payload["promotion_status"] = promotion_status
     if tags:
@@ -134,6 +138,7 @@ def create_worklog(
 @click.option("--signal-type", required=True)
 @click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
+@click.option("--idempotency-key", default=None)
 @click.option("--promotion-status", default=None)
 @click.option("--tag", "tags", multiple=True)
 @click.option("--json", "as_json", is_flag=True)
@@ -145,6 +150,7 @@ def create_learning_signal(
     signal_type: str,
     source_ref: tuple[str, ...],
     created_by: str | None,
+    idempotency_key: str | None,
     promotion_status: str | None,
     tags: tuple[str, ...],
     as_json: bool,
@@ -156,6 +162,8 @@ def create_learning_signal(
         "source_refs": _parse_refs(source_ref),
         "created_by": _parse_actor(created_by),
     }
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
     if promotion_status:
         payload["promotion_status"] = promotion_status
     if tags:
@@ -172,6 +180,7 @@ def create_learning_signal(
 @click.option("--intended-output", required=True)
 @click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
+@click.option("--idempotency-key", default=None)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def create_promotion_intent(
@@ -184,6 +193,7 @@ def create_promotion_intent(
     intended_output: str,
     source_ref: tuple[str, ...],
     created_by: str | None,
+    idempotency_key: str | None,
     as_json: bool,
 ) -> None:
     payload = {
@@ -196,6 +206,8 @@ def create_promotion_intent(
         "source_refs": _parse_refs(source_ref),
         "created_by": _parse_actor(created_by),
     }
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
     _handle_create(ctx, _store(ctx).create_promotion_intent, payload, as_json)
 
 
@@ -209,6 +221,7 @@ def create_promotion_intent(
 @click.option("--next-review-due-at", required=True)
 @click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
+@click.option("--idempotency-key", default=None)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def create_docs_freshness_record(
@@ -222,6 +235,7 @@ def create_docs_freshness_record(
     next_review_due_at: str,
     source_ref: tuple[str, ...],
     created_by: str | None,
+    idempotency_key: str | None,
     as_json: bool,
 ) -> None:
     payload = {
@@ -235,6 +249,8 @@ def create_docs_freshness_record(
         "source_refs": _parse_refs(source_ref),
         "created_by": _parse_actor(created_by),
     }
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
     _handle_create(ctx, _store(ctx).create_docs_freshness_record, payload, as_json)
 
 
@@ -289,6 +305,7 @@ def append_receipt(
 @click.option("--next-decision", required=True)
 @click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
+@click.option("--idempotency-key", default=None)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def create_roadmap_execution_item(
@@ -300,6 +317,7 @@ def create_roadmap_execution_item(
     next_decision: str,
     source_ref: tuple[str, ...],
     created_by: str | None,
+    idempotency_key: str | None,
     as_json: bool,
 ) -> None:
     payload = {
@@ -311,7 +329,96 @@ def create_roadmap_execution_item(
         "source_refs": _parse_refs(source_ref),
         "created_by": _parse_actor(created_by),
     }
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
     _handle_create(ctx, _store(ctx).create_roadmap_execution_item, payload, as_json)
+
+
+@builderops.command("acquire-lease", help="Acquire or renew a BuilderOps record lease.")
+@click.argument("record_id")
+@click.option("--actor", required=True, help="Actor JSON object or agent id.")
+@click.option("--ttl-seconds", default=5400, show_default=True, type=int)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def acquire_lease(
+    ctx: click.Context,
+    record_id: str,
+    actor: str,
+    ttl_seconds: int,
+    as_json: bool,
+) -> None:
+    try:
+        lease = _store(ctx).acquire_lease(
+            record_id,
+            actor=_parse_actor(actor),
+            ttl_seconds=ttl_seconds,
+        )
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(lease, as_json)
+
+
+@builderops.command("release-lease", help="Release a BuilderOps record lease.")
+@click.argument("lease_id")
+@click.option("--actor", required=True, help="Actor JSON object or agent id.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def release_lease(
+    ctx: click.Context,
+    lease_id: str,
+    actor: str,
+    as_json: bool,
+) -> None:
+    try:
+        result = _store(ctx).release_lease(lease_id, actor=_parse_actor(actor))
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(result, as_json)
+
+
+@builderops.command("transition", help="Transition a BuilderOps record state under a lease.")
+@click.argument("record_id")
+@click.option("--actor", required=True, help="Actor JSON object or agent id.")
+@click.option("--lease-id", required=True)
+@click.option("--idempotency-key", required=True)
+@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option("--summary", required=True)
+@click.option("--action", required=True)
+@click.option("--receipt-body", required=True)
+@click.option("--lifecycle-state", default=None)
+@click.option("--promotion-status", default=None)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def transition(
+    ctx: click.Context,
+    record_id: str,
+    actor: str,
+    lease_id: str,
+    idempotency_key: str,
+    source_ref: tuple[str, ...],
+    summary: str,
+    action: str,
+    receipt_body: str,
+    lifecycle_state: str | None,
+    promotion_status: str | None,
+    as_json: bool,
+) -> None:
+    try:
+        result = _store(ctx).transition_record_state(
+            record_id,
+            actor=_parse_actor(actor),
+            lease_id=lease_id,
+            idempotency_key=idempotency_key,
+            source_refs=_parse_refs(source_ref),
+            summary=summary,
+            action=action,
+            receipt_body=receipt_body,
+            lifecycle_state=lifecycle_state,
+            promotion_status=promotion_status,
+        )
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(result, as_json)
 
 
 @builderops.command("list", help="List BuilderOps records.")

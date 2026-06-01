@@ -1,6 +1,6 @@
-"""SQLite schema for the minimal BuilderOps Vault store."""
+"""SQLite schema for the BuilderOps Vault store."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DDL_STATEMENTS = [
     """
@@ -27,5 +27,33 @@ DDL_STATEMENTS = [
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS builderops_idempotency_keys (
+        key TEXT PRIMARY KEY,
+        operation TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        result_record_id TEXT NOT NULL,
+        response_payload TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_builderops_idempotency_result
+    ON builderops_idempotency_keys(result_record_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS builderops_leases (
+        resource_id TEXT PRIMARY KEY,
+        lease_id TEXT NOT NULL UNIQUE,
+        actor TEXT NOT NULL,
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_builderops_leases_expires
+    ON builderops_leases(expires_at)
     """,
 ]

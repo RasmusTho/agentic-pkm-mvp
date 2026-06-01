@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from app.builderops.config import load_paths
-from app.builderops.models import BuilderOpsValidationError
+from app.builderops.models import (
+    BuilderOpsConflictError,
+    BuilderOpsLeaseError,
+    BuilderOpsValidationError,
+)
 from app.builderops.schema import SCHEMA_VERSION
 from app.builderops.store import SqliteBuilderOpsStore
 
@@ -41,6 +45,7 @@ def test_initialize_creates_schema(tmp_path: Path) -> None:
             ).fetchall()
         }
         assert {"builderops_records", "builderops_meta"} <= names
+        assert {"builderops_idempotency_keys", "builderops_leases"} <= names
         version = conn.execute(
             "SELECT value FROM builderops_meta WHERE key='schema_version'"
         ).fetchone()[0]
@@ -187,6 +192,200 @@ def test_store_preserves_source_refs_and_promotion_status(
     assert fetched is not None
     assert fetched["promotion_status"] == "promotion_pending"
     assert fetched["source_refs"] == record["source_refs"]
+
+
+def test_idempotent_create_returns_existing_record(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    first = store.create_learning_signal(
+        summary="Idempotent learning",
+        content="Duplicate create attempts should not create duplicate material.",
+        signal_type="workflow",
+        idempotency_key="create:lrn-idempotent",
+        source_refs=_source_ref("#1502"),
+        created_by=_actor(),
+    )
+    second = store.create_learning_signal(
+        summary="Idempotent learning",
+        content="Duplicate create attempts should not create duplicate material.",
+        signal_type="workflow",
+        idempotency_key="create:lrn-idempotent",
+        source_refs=_source_ref("#1502"),
+        created_by=_actor(),
+    )
+
+    assert second == first
+    assert [record["id"] for record in store.list_records("LearningSignal")] == [
+        first["id"]
+    ]
+
+
+def test_idempotency_key_conflict_rejected(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    store.create_agent_worklog(
+        summary="Original worklog",
+        body="Created with an idempotency key.",
+        task_context={"issue": "#1502"},
+        idempotency_key="create:awl-conflict",
+        source_refs=_source_ref("#1502"),
+        created_by=_actor(),
+    )
+
+    with pytest.raises(BuilderOpsConflictError, match="already used"):
+        store.create_agent_worklog(
+            summary="Changed worklog",
+            body="The same key cannot mean different material.",
+            task_context={"issue": "#1502"},
+            idempotency_key="create:awl-conflict",
+            source_refs=_source_ref("#1502"),
+            created_by=_actor(),
+        )
+
+
+def test_transition_requires_lease_and_appends_receipt(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    promotion = store.create_promotion_intent(
+        id="prom_transition_001",
+        summary="Promotion requiring receipt",
+        target_authority_surface="github_issue",
+        target_action="create",
+        target_ref="pending",
+        target_authority_class="operational",
+        intended_output="Draft follow-up issue.",
+        idempotency_key="create:prom-transition",
+        source_refs=[
+            {
+                "ref_type": "builderops_object",
+                "ref": "lrn_test_001",
+                "authority_surface": "builderops",
+            }
+        ],
+        created_by=_actor(),
+    )
+
+    with pytest.raises(BuilderOpsLeaseError, match="active lease required"):
+        store.transition_record_state(
+            promotion["id"],
+            actor=_actor(),
+            lease_id="missing",
+            idempotency_key="transition:prom-transition",
+            source_refs=_source_ref("#1502"),
+            summary="Promotion accepted",
+            action="accept",
+            receipt_body="Accepted the promotion intent as BuilderOps material.",
+            lifecycle_state="accepted",
+        )
+
+    lease = store.acquire_lease(promotion["id"], actor=_actor())
+    result = store.transition_record_state(
+        promotion["id"],
+        actor=_actor(),
+        lease_id=lease["lease_id"],
+        idempotency_key="transition:prom-transition",
+        source_refs=_source_ref("#1502"),
+        summary="Promotion accepted",
+        action="accept",
+        receipt_body="Accepted the promotion intent as BuilderOps material.",
+        lifecycle_state="accepted",
+    )
+
+    updated = result["record"]
+    receipt = result["receipt"]
+    assert updated["lifecycle_state"] == "accepted"
+    assert receipt["object_type"] == "BuilderOpsReceipt"
+    assert receipt["event_type"] == "state_transition"
+    assert receipt["previous_state"]["lifecycle_state"] == "review_pending"
+    assert receipt["new_state"]["lifecycle_state"] == "accepted"
+    assert updated["receipt_refs"] == [receipt["id"]]
+    assert store.get_record(updated["id"]) == updated
+    assert store.get_record(receipt["id"]) == receipt
+
+    duplicate = store.transition_record_state(
+        promotion["id"],
+        actor=_actor(),
+        lease_id=lease["lease_id"],
+        idempotency_key="transition:prom-transition",
+        source_refs=_source_ref("#1502"),
+        summary="Promotion accepted",
+        action="accept",
+        receipt_body="Accepted the promotion intent as BuilderOps material.",
+        lifecycle_state="accepted",
+    )
+    assert duplicate == result
+    assert len(store.list_records("BuilderOpsReceipt")) == 1
+
+
+def test_leases_detect_conflicts_and_expiry(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    worklog = store.create_agent_worklog(
+        id="awl_lease_001",
+        summary="Lease test",
+        body="Lease-protected material.",
+        task_context={"issue": "#1502"},
+        source_refs=_source_ref("#1502"),
+        created_by=_actor(),
+    )
+    lease = store.acquire_lease(worklog["id"], actor=_actor("codex-a"))
+
+    with pytest.raises(BuilderOpsLeaseError, match="active lease already exists"):
+        store.acquire_lease(worklog["id"], actor=_actor("codex-b"))
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "UPDATE builderops_leases SET expires_at = ? WHERE lease_id = ?",
+            ("2000-01-01T00:00:00Z", lease["lease_id"]),
+        )
+
+    with pytest.raises(BuilderOpsLeaseError, match="lease expired"):
+        store.transition_record_state(
+            worklog["id"],
+            actor=_actor("codex-a"),
+            lease_id=lease["lease_id"],
+            idempotency_key="transition:expired-lease",
+            source_refs=_source_ref("#1502"),
+            summary="Archive worklog",
+            action="archive",
+            receipt_body="Attempt with expired lease.",
+            lifecycle_state="archived",
+        )
+
+    replacement = store.acquire_lease(worklog["id"], actor=_actor("codex-b"))
+    assert replacement["actor"] == _actor("codex-b")
+
+
+def test_receipts_cannot_be_transitioned(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    receipt = store.append_receipt(
+        id="receipt_append_only",
+        summary="Append-only receipt",
+        event_type="object_created",
+        actor=_actor(),
+        occurred_at="2026-06-01T00:00:00Z",
+        target_refs=[{"ref_type": "builderops_object", "ref": "awl_test_001"}],
+        action="create",
+        receipt_body="Receipt records are immutable material.",
+        idempotency_key="receipt:append-only",
+        source_refs=_source_ref("#1502"),
+        created_by=_actor(),
+    )
+    lease = store.acquire_lease(receipt["id"], actor=_actor())
+
+    with pytest.raises(BuilderOpsValidationError, match="append-only"):
+        store.transition_record_state(
+            receipt["id"],
+            actor=_actor(),
+            lease_id=lease["lease_id"],
+            idempotency_key="transition:receipt",
+            source_refs=_source_ref("#1502"),
+            summary="Bad transition",
+            action="archive",
+            receipt_body="Receipts must not be silently rewritten.",
+            lifecycle_state="archived",
+        )
 
 
 def test_invalid_object_type_rejected(store: SqliteBuilderOpsStore) -> None:
