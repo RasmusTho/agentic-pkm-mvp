@@ -43,6 +43,7 @@ tmp/index-outbox.jsonl
 *.jsonl
 tmp/index.jsonl
 runtime/settings/
+runtime/builderops/
 runtime/dispatcher/
 runtime/orientation/
 verification_report.md
