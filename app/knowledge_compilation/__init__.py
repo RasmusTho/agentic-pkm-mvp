@@ -2,7 +2,8 @@
 
 Slice #1534 ships the pure runtime artifact contracts
 (``app.knowledge_compilation.runtime_artifacts``); slice #1535 adds the deterministic
-proposal builders (``app.knowledge_compilation.proposal_builders``).
+proposal builders (``app.knowledge_compilation.proposal_builders``); slice #1536 adds
+read-only reorientation packet assembly (``app.knowledge_compilation.reorientation_packet``).
 """
 
 from app.knowledge_compilation.proposal_builders import (
@@ -25,6 +26,10 @@ from app.knowledge_compilation.runtime_artifacts import (
     SourceRef,
     TrustVerb,
 )
+from app.knowledge_compilation.reorientation_packet import (
+    PacketAssemblyError,
+    assemble_reorientation_packet_from_bundle,
+)
 
 __all__ = [
     "AGENT_MEMORY_CLASS",
@@ -37,10 +42,12 @@ __all__ = [
     "ContextAuthorityLimits",
     "CurationCandidate",
     "GeneratedArtifact",
+    "PacketAssemblyError",
     "ProposalContext",
     "ReorientationPacket",
     "SourceRef",
     "TrustVerb",
+    "assemble_reorientation_packet_from_bundle",
     "build_compilation_draft",
     "build_curation_candidate",
 ]
