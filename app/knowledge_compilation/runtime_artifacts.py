@@ -279,3 +279,6 @@ class ReorientationPacket(GeneratedArtifact):
     leave_point_ref: Optional[str] = None  # reference only
     memory_handoff_refs: tuple[str, ...] = Field(default_factory=tuple)  # reference-only ids
     stale_after: Optional[datetime] = None
+    stale_reason: Optional[str] = None
+    excluded_refs: tuple[SourceRef, ...] = Field(default_factory=tuple)
+    exclusion_reasons: tuple[str, ...] = Field(default_factory=tuple)
