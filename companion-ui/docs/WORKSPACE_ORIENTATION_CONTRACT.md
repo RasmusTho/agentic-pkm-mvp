@@ -4,17 +4,18 @@ description: Runtime note-independent read-side contract for the Companion UI wo
 doc_role: API contract / spec
 authority: Binding read-side contract for `GET /api/companion/orientation` and downstream Companion UI re-entry integration.
 owner: Companion UI / product architecture
-last_reviewed: 2026-05-31
+last_reviewed: 2026-06-02
 source_contracts:
   - docs/adr/ADR-0007-workspace-state-contract-scope-split.md
   - companion-ui/docs/WORKSPACE_STATE_CONTRACT.md
   - companion-ui/docs/UI_RUNTIME_BOUNDARIES.md
   - docs/adr/ADR-0008-leave-point-cursor.md
   - docs/adr/ADR-0009-orientation-memory-candidate-intent.md
+  - docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md
   - docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md
   - docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
-governing_issue: "#1451; #1454; #1455; #1457"
+governing_issue: "#1451; #1454; #1455; #1457; #1487"
 implementation_state: implemented_phase_3_memory_intent_seam
 ---
 
@@ -645,7 +646,8 @@ fresh snapshot.
 - MemoryCandidate intents are Phase 3 handoff hints only; they do not create,
   enqueue, review, promote, reject, revise, or store memory.
 - No push, streaming, SSE, WebSocket, notification, or ambient resurfacing
-  transport.
+  transport in the current implementation. Future foreground, client-initiated
+  ambient refresh eligibility is governed by ADR-0011 and remains unimplemented.
 - No multi-agent semantics.
 - No raw vault absolute paths.
 - No raw note bodies.
@@ -663,7 +665,9 @@ not imply changes to the artifact-scoped workspace endpoint. The current
 implementation is limited to the read-only orientation shape in this contract.
 Leave-point cursor projection is governed by ADR-0008. MemoryCandidate intent
 emission is governed by ADR-0009. Push, ambient resurfacing transport, and
-multi-agent semantics remain out of scope.
+multi-agent semantics remain out of scope. ADR-0011 permits only a future
+bounded, default-off, client-initiated foreground ambient refresh child; it does
+not authorize server push, SSE, WebSocket, notifications, or background wakeups.
 
 The Companion UI re-entry surface consumes this endpoint on cold load or
 when no artifact is active. It renders only server-declared fields, uses
