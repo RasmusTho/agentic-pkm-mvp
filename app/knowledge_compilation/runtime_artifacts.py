@@ -229,6 +229,13 @@ class ReorientationPacket(GeneratedArtifact):
     """
 
     artifact_class: Literal["reorientation_packet"] = REORIENTATION_PACKET_CLASS
+    # A reorientation packet exists to support re-orientation, so it is orient-capable by
+    # default (CONTEXT_ACTIVATION_SEMANTICS.md: ``may_orient=true`` permits re-orientation;
+    # leaving it false would strip the one permission the packet needs). Write, promote, and
+    # action authority stay disabled and are still refused by the base validator.
+    authority_limits: ContextAuthorityLimits = Field(
+        default_factory=lambda: ContextAuthorityLimits(may_orient=True)
+    )
     summary: Optional[str] = None
     leave_point_ref: Optional[str] = None  # reference only
     memory_handoff_refs: list[str] = Field(default_factory=list)  # reference-only memory ids

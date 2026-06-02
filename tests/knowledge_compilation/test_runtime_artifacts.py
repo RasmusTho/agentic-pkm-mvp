@@ -89,9 +89,17 @@ def test_reorientation_packet_is_bridge_artifact_not_memory_or_receipt_authority
     assert packet.memory_handoff_refs == ["agentic_memory:cand_123"]
     assert packet.canonical is False
 
-    # Compilation/curation outputs are not bridge artifacts — the classification is meaningful.
+    # Orient-capable by default (its whole purpose is re-orientation), while write/promote/
+    # action authority stay disabled.
+    assert packet.authority_limits.may_orient is True
+    assert packet.authority_limits.may_write is False
+    assert packet.authority_limits.may_promote is False
+    assert packet.authority_limits.may_authorize_action is False
+
+    # Compilation/curation outputs are not bridge artifacts and are not orient-capable.
     draft = CompilationDraft(title="d", source_refs=[_source()])
     assert draft.is_bridge_artifact is False
+    assert draft.authority_limits.may_orient is False
 
 
 def test_unreviewed_memory_and_rankings_cannot_grant_hidden_authority() -> None:
