@@ -5,8 +5,8 @@ Owner: Workflow mutation and governance semantics
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-29
-Last verified against: docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/SEMANTIC_AUTHORITY_MATRIX.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, docs/CONCEPTS/RELATION_TAXONOMY.md, docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md, docs/PANEL_AGENT.md, docs/FRONTMATTER.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, epic #1363, issue #1371.
+Last reviewed: 2026-06-02
+Last verified against: docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/SEMANTIC_AUTHORITY_MATRIX.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, docs/CONCEPTS/RELATION_TAXONOMY.md, docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md, docs/PANEL_AGENT.md, docs/FRONTMATTER.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, epic #1363, issue #1371, issue #1489.
 
 # Workflow Mutation and Governance Semantics
 
@@ -98,15 +98,23 @@ mutation:
 - `payload["promotion"]` in the ObjectStore row is inline operational provenance for the machine
   mirror, not the durable receipt store.
 
-Current state: `PROMOTE_DONE` + `promotion.transition.applied` + ObjectStore inline provenance are
-the correct interim implementation. They provide execution/result trace, transition-accountability
-audit material, and mirror provenance respectively.
-Target state: promotion consumer also writes a formal, durable, queryable promotion receipt record
-to a receipt store.
-Pre-requisite: receipt store model (not yet built).
+Decision (#1489): the v1 formal receipt/query model is a typed, read-only promotion receipt view
+over durable receipt-supporting audit records. For successful promotion applies,
+`promotion.transition.applied` is the transition-accountability source for that view, while
+`PROMOTE_DONE` remains execution/result trace and ObjectStore `payload["promotion"]` remains
+machine-mirror provenance. The final durable/queryable receipt authority for v1 consumers is the
+query contract, not ObjectStore inline metadata and not arbitrary raw event scans.
 
-Until the receipt store is built, do not add ad hoc receipt workarounds or treat DB outbox rows or
-ObjectStore inline provenance as the final durable receipt authority.
+Minimum downstream query surface: artifact UUID/path, receipt or source event id, trace id,
+timestamp, transition family, target maturity, resulting `review_state` / `maturity`, authority,
+basis, outcome, artifact linkage, executor/source, and triggering intent/source event. Consumers
+must handle source-unavailable as an honest unavailable state rather than fabricating receipts.
+
+Follow-up posture: #1403 should be rewritten or split around this query model before implementing
+promotion receipt behavior. #1474 may only consume a read-only, source-limited projection backed by
+this model and must keep agent-memory posture non-authoritative unless a later owner contract
+explicitly changes that authority. A dedicated physical receipt store is deferred until a later
+bounded issue proves the query-over-audit-records model is insufficient.
 
 ## Cross-references
 

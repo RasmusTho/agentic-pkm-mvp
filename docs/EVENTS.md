@@ -255,9 +255,13 @@ Promotion clarification (#1438):
 - `PROMOTION_TRANSITION_APPLIED` records the current transition-accountability semantics:
   `note_uuid`, `note_path`, `transition_family`, `target_maturity`, `authority`, `basis`,
   `outcome`, and `artifact_linkage`.
-- DB outbox events and ObjectStore inline provenance support accountability and audit, but they are
-  not the final durable promotion receipt store. Formal durable promotion receipts remain blocked on
-  a receipt-store/query model.
+- Receipt query decision (#1489): the v1 formal promotion receipt model is a typed, read-only
+  query/projection over durable receipt-supporting audit records. For successful promotion applies,
+  `PROMOTION_TRANSITION_APPLIED` is the receipt-supporting audit source for that query model.
+- `PROMOTE_DONE` remains execution/result trace, ObjectStore `payload["promotion"]` remains
+  machine-mirror provenance, and neither surface is the final durable/queryable receipt authority.
+  Consumers that need promotion receipt posture must use the stable receipt query/projection
+  contract instead of treating arbitrary outbox scans or ObjectStore inline metadata as authority.
 
 ## References
 
