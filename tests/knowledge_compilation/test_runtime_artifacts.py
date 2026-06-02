@@ -65,6 +65,29 @@ def test_generated_artifacts_default_to_noncanonical_suggest_posture() -> None:
         )
 
 
+def test_non_suggest_trust_requires_admission_and_durable_receipt() -> None:
+    # ADMITTED but without a durable receipt ref → refused: a self-marked admitted artifact
+    # must not be indistinguishable from a reviewed one.
+    with pytest.raises(ValueError, match="durable admission_receipt_ref"):
+        CompilationDraft(
+            title="Admitted without receipt",
+            source_refs=[_source()],
+            trust_verb=TrustVerb.ASSERT,
+            admission_state=AdmissionState.ADMITTED,
+        )
+
+    # ADMITTED plus a durable receipt ref → permitted (models the post-#1537 admitted state).
+    admitted = CompilationDraft(
+        title="Admitted with receipt",
+        source_refs=[_source()],
+        trust_verb=TrustVerb.ASSERT,
+        admission_state=AdmissionState.ADMITTED,
+        admission_receipt_ref="receipt:admission:123",
+    )
+    assert admitted.trust_verb is TrustVerb.ASSERT
+    assert admitted.admission_receipt_ref == "receipt:admission:123"
+
+
 def test_reorientation_packet_is_bridge_artifact_not_memory_or_receipt_authority() -> None:
     packet = ReorientationPacket(
         summary="Resume work on X",

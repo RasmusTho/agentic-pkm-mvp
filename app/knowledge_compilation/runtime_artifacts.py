@@ -168,13 +168,19 @@ class GeneratedArtifact(BaseModel):
             raise ValueError(
                 f"generated {self.artifact_class} must remain non-canonical"
             )
-        if (
-            self.trust_verb is not TrustVerb.SUGGEST
-            and self.admission_state is not AdmissionState.ADMITTED
+        if self.trust_verb is not TrustVerb.SUGGEST and (
+            self.admission_state is not AdmissionState.ADMITTED
+            or not self.admission_receipt_ref
         ):
+            # Trust escalation past SUGGEST requires both an explicit ADMITTED decision and a
+            # durable receipt reference (RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md; epic #1533:
+            # "mutation/promotion requires explicit admission plus receipt posture"). Without
+            # the receipt, a self-marked admitted artifact would be indistinguishable from a
+            # reviewed one. The admission handoff that attaches the receipt is slice #1537.
             raise ValueError(
                 f"generated {self.artifact_class} cannot carry trust_verb "
-                f"{self.trust_verb.value} without explicit admission"
+                f"{self.trust_verb.value} without explicit admission and a durable "
+                f"admission_receipt_ref"
             )
         limits = self.authority_limits
         elevated = [
