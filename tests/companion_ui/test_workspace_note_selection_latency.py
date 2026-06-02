@@ -44,6 +44,17 @@ class TestFindWorkspaceNoteDirectLookup:
         result = _find_workspace_note(tmp_path, "Notes/missing.md")
         assert result is None
 
+    def test_rejects_non_markdown_note(self, tmp_path: Path) -> None:
+        # Workspace reads must stay restricted to markdown notes. The direct
+        # lookup replaced an rglob("*.md") scan that was implicitly md-only;
+        # without a suffix guard a request such as attachments/private.txt would
+        # surface arbitrary non-note vault content.
+        from app.api.routes.companion import _find_workspace_note
+
+        _write_note(tmp_path, "attachments/private.txt", "secret content")
+        result = _find_workspace_note(tmp_path, "attachments/private.txt")
+        assert result is None
+
     def test_rejects_symlink_escape(self, tmp_path: Path) -> None:
         from app.api.routes.companion import _find_workspace_note
 

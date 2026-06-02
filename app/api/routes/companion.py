@@ -617,7 +617,17 @@ def _validate_workspace_markdown_note_path(note_path_raw: str) -> str:
 
 
 def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
-    """Resolve a validated note path while preserving direct lookup latency."""
+    """Resolve a validated note path while preserving direct lookup latency.
+
+    Workspace reads are restricted to markdown notes. The direct O(1) lookup
+    replaced an earlier ``rglob("*.md")`` scan that was implicitly
+    markdown-only; without this suffix guard a read such as
+    ``note_path=attachments/private.txt`` would surface arbitrary non-note vault
+    content (the GET read path validates with ``_validate_workspace_note_path``,
+    not the ``.md``-enforcing validator used by write endpoints).
+    """
+    if not safe_note_path.endswith(".md"):
+        return None
     root_real = os.path.realpath(vault_root)
     target_real = os.path.realpath(os.path.join(root_real, safe_note_path))
     if not target_real.startswith(root_real + os.sep):
