@@ -12,10 +12,11 @@ source_contracts:
   - docs/adr/ADR-0008-leave-point-cursor.md
   - docs/adr/ADR-0009-orientation-memory-candidate-intent.md
   - docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md
+  - docs/adr/ADR-0012-orientation-multiagent-reads.md
   - docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md
   - docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
-governing_issue: "#1451; #1454; #1455; #1457; #1487"
+governing_issue: "#1451; #1454; #1455; #1457; #1487; #1459"
 implementation_state: implemented_phase_3_memory_intent_seam
 ---
 
@@ -648,7 +649,8 @@ fresh snapshot.
 - No push, streaming, SSE, WebSocket, notification, or ambient resurfacing
   transport in the current implementation. Future foreground, client-initiated
   ambient refresh eligibility is governed by ADR-0011 and remains unimplemented.
-- No multi-agent semantics.
+- No multi-agent semantics in the current implementation. Future multi-agent
+  read eligibility is governed by ADR-0012 and remains unimplemented.
 - No raw vault absolute paths.
 - No raw note bodies.
 - No raw chat history.
@@ -668,6 +670,9 @@ emission is governed by ADR-0009. Push, ambient resurfacing transport, and
 multi-agent semantics remain out of scope. ADR-0011 permits only a future
 bounded, default-off, client-initiated foreground ambient refresh child; it does
 not authorize server push, SSE, WebSocket, notifications, or background wakeups.
+ADR-0012 permits only a future bounded same-projection read path for agent
+consumers; it does not authorize shared mutable workspace state, A2A routing,
+or orchestration semantics.
 
 The Companion UI re-entry surface consumes this endpoint on cold load or
 when no artifact is active. It renders only server-declared fields, uses
