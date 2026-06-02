@@ -52,7 +52,13 @@ project:
       set_status: Backlog
     - event: issue_reopened_or_relabeled
       reconcile_status_from_issue_state_and_agent_label: true
-    - event: pr_opened
+    - event: pr_opened_non_draft
+      set_status: Review
+    - event: pr_opened_draft
+      set_status: In Progress
+    - event: pr_ready_for_review
+      set_status: Review
+    - event: pr_converted_to_draft
       set_status: In Progress
     - event: pr_review_requested
       set_status: Review
@@ -65,8 +71,8 @@ project:
   interpretation:
     status_is_projection_of_issue_and_pr_truth: true
     ready_requires_agent_ready: true
-    in_progress_covers_open_pr_before_review_handoff: true
-    review_requires_explicit_review_handoff: true
+    in_progress_covers_draft_or_rework_prs: true
+    review_covers_open_non_draft_prs: true
     done_requires_closed_issue_or_terminal_pr_card: true
     project_may_drift_when_platform_access_is_limited: true
 shared_operational_state:
