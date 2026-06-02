@@ -68,6 +68,8 @@ The project will **preserve the existing artifact-scoped Companion Workspace Con
 - **Phase 2:** add the strict leave-point trace cursor for restart-surviving re-entry.
 - **Phase 3:** wire `mutation_intents` → MemoryCandidate review queue (read-only awareness + intent emission only; no write authority).
 - **Phase 4 (deferred, separate ADRs):** push/ambient resurfacing; multi-agent reads.
+  Push/ambient resurfacing is governed by ADR-0011 and remains implementation-deferred until a
+  bounded foreground ambient refresh child issue is written.
 
 ---
 
@@ -76,7 +78,9 @@ The project will **preserve the existing artifact-scoped Companion Workspace Con
 - Leave-point cursor storage medium (DB trace row vs derived-only) — boundary-contract decision (#1368/#1369).
 - Working-set cap value and whether it is a contract constant or policy-configurable.
 - MemoryCandidate intent threshold and whether intent emission itself needs a trace/receipt (#1085 adjacency).
-- Push/streaming enforcement of the "no notification-centric interaction" constraint (`UI_RUNTIME_BOUNDARIES.md`).
+- Push/streaming enforcement of the "no notification-centric interaction" constraint
+  (`UI_RUNTIME_BOUNDARIES.md`) is resolved by ADR-0011: server push remains deferred; only a future
+  bounded, default-off, client-initiated foreground ambient refresh child is eligible.
 
 ---
 
