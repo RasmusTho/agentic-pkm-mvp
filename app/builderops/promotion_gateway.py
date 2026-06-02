@@ -127,6 +127,12 @@ class BuilderOpsPromotionGateway:
         proposal = self.render_proposal(intent_id)
         actor_ref = normalize_actor(actor)
         refs = source_refs if source_refs is not None else intent["source_refs"]
+        existing_receipt = self._existing_dry_run_receipt(
+            intent_id=intent["id"],
+            idempotency_key=idempotency_key,
+        )
+        if existing_receipt is not None:
+            return {"intent": intent, "proposal": proposal, "receipt": existing_receipt}
         receipt = self._store.append_receipt(
             summary=f"Dry-run promotion proposal for {intent['id']}",
             event_type="promotion_dry_run",
@@ -150,6 +156,26 @@ class BuilderOpsPromotionGateway:
             promotion_proposal=proposal,
         )
         return {"intent": intent, "proposal": proposal, "receipt": receipt}
+
+    def _existing_dry_run_receipt(
+        self,
+        *,
+        intent_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        for receipt in self._store.list_records("BuilderOpsReceipt"):
+            if receipt.get("idempotency_key") != idempotency_key:
+                continue
+            if receipt.get("event_type") != "promotion_dry_run":
+                continue
+            for ref in receipt.get("target_refs", []):
+                if (
+                    isinstance(ref, dict)
+                    and ref.get("ref_type") == "builderops_object"
+                    and ref.get("ref") == intent_id
+                ):
+                    return receipt
+        return None
 
     def transition_intent(
         self,

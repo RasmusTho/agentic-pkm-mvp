@@ -66,9 +66,10 @@ def test_github_issue_dry_run_preserves_source_refs_and_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     intent = _create_intent(store)
+    now_values = iter(["2026-06-02T12:00:00Z", "2026-06-02T12:01:00Z"])
     monkeypatch.setattr(
         "app.builderops.promotion_gateway.utc_now",
-        lambda: "2026-06-02T12:00:00Z",
+        lambda: next(now_values),
     )
 
     result = gateway.dry_run_promotion(
@@ -106,6 +107,7 @@ def test_github_issue_dry_run_preserves_source_refs_and_receipt(
         idempotency_key="dry-run:github-issue",
     )
     assert duplicate["receipt"] == receipt
+    assert duplicate["receipt"]["occurred_at"] == "2026-06-02T12:00:00Z"
     assert len(store.list_records("BuilderOpsReceipt")) == 1
 
 
