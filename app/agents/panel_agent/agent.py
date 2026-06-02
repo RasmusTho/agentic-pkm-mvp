@@ -52,6 +52,7 @@ def _map_action(action: ParsedAction, catalog: PanelActionCatalog) -> PanelInten
     action_id = descriptor.id if descriptor else (action.action_id or normalize_label(action.label) or uuid4().hex)
     return PanelIntentAction(
         id=action_id,
+        option_id=action.option_id,
         label=action.label,
         checked=action.checked,
         mapping=mapping,

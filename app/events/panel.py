@@ -21,6 +21,7 @@ class PanelActionMapping(BaseModel):
 
 class PanelIntentAction(BaseModel):
     id: str
+    option_id: str | None = None
     label: str
     checked: bool
     mapping: PanelActionMapping | None = None

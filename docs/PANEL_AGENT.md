@@ -208,6 +208,7 @@ Architectural reading note:
     "actions": [
       {
         "id": "promote.evergreen",
+        "option_id": "opt_example",
         "label": "Gör denna anteckning evergreen",
         "checked": true,
         "mapping": {

@@ -351,10 +351,12 @@ def test_vault_browser_includes_receipts_from_outbox_projection(
                 "timestamp": "2026-05-30T12:00:00Z",
                 "payload": {
                     "intent_event_id": "intent-1279",
+                    "source_event": "intent-1279",
                     "note_uuid": note_uuid,
                     "note_path": "notes/receipt.md",
-                    "outcome": {"status": "applied"},
                     "authority": {"component": "panel_agent.runtime"},
+                    "basis": {"source_event": "intent-1279", "intent_type": "promotion"},
+                    "outcome": {"status": "applied"},
                     "artifact_linkage": {
                         "note_uuid": note_uuid,
                         "note_path": "notes/receipt.md",
