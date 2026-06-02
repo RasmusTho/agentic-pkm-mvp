@@ -193,6 +193,16 @@ def _receipt_detail_html(html: str) -> str:
     return html[start : end + len("</dl>")] if start != -1 and end != -1 else ""
 
 
+def _receipts_section_html(html: str) -> str:
+    marker = 'data-testid="workspace-vault-browser-inspector-receipts"'
+    marker_start = html.find(marker)
+    if marker_start == -1:
+        return ""
+    start = html.rfind("<div", 0, marker_start)
+    end = html.find("</div>", marker_start)
+    return html[start : end + len("</div>")] if start != -1 and end != -1 else ""
+
+
 # ---- AC1: receipt/posture section renders ----
 
 
@@ -385,7 +395,8 @@ def test_no_mutation_controls_in_receipts_section() -> None:
     """AC6: The receipts section contains no write/mutation controls."""
     note = _browser_note(receipts=[_receipt(state="queued")])
     html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
-    assert 'data-api-method="POST"' not in html
-    assert 'data-api-method="DELETE"' not in html
-    assert 'data-api-method="PUT"' not in html
-    assert 'data-api-method="PATCH"' not in html
+    receipts = _receipts_section_html(html)
+    assert 'data-api-method="POST"' not in receipts
+    assert 'data-api-method="DELETE"' not in receipts
+    assert 'data-api-method="PUT"' not in receipts
+    assert 'data-api-method="PATCH"' not in receipts

@@ -57,6 +57,22 @@ mappings:
     params:
       source_zone: "inbox"
       destination_zone: "workbench"
+  - id: "queue_review"
+    kind: "note_lifecycle"
+    labels:
+      - "Köa den här anteckningen för granskning"
+      - "Queue this note for review"
+      - "Queue for review"
+    description: "Stage a governed review proposal for this note without mutating review_state."
+    llm_hint: "Choose this when the instruction asks to queue, schedule, or stage the note for review."
+    intent_type: "note_lifecycle"
+    trust_verb: "APPLY"
+    downstream_event: "panel.governance.requested"
+    capability_class: "governed_execution"
+    authority_class: "governed_effect"
+    requires_human_gate: true
+    params:
+      operation: "queue_review"
   # ---------------------------------------------------------------------------
   # Proposal-only cognitive capabilities (#982).
   #

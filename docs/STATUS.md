@@ -155,6 +155,10 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   and the runtime/client surface now includes `GET /api/artifacts/note` plus the companion-app
   real-note workspace shell and confirm-refresh flow for read-only artifact hydration after
   confirmation.
+- Vault Browser `queue_review` now stages a pending Panel governance proposal through
+  `POST /api/companion/vault-browser/actions/queue-review` when server-resolved artifact scope is
+  available. This is only queue staging: durable execution and receipt-supporting records remain
+  behind `POST /api/panel/confirm`.
 - Runtime event envelopes emitted through the shared outbox helper now include `meta.instance_provenance` (`instance_id`, `instance_role`, `environment`) as backward-compatible operational metadata.
 - Panel mutation gating now enforces explicit trust-verb classification on mutation-capable panel actions: only admitted `APPLY` actions can emit promotion mutation intents; `SUGGEST` remains non-mutating unless promoted through the governed execution path.
 - APPLY transition receipts (`promotion.transition.applied`) now include accountability fields (`verb`, `authority`, `basis`, `outcome`, `artifact_linkage`, `instance_provenance`) as backward-compatible payload extensions.
