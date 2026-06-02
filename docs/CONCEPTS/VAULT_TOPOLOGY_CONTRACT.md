@@ -5,8 +5,8 @@ Owner: Architecture / product
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: SoT
-Last reviewed: 2026-05-14
-Last verified against: docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md
+Last reviewed: 2026-06-02
+Last verified against: docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md, #1488
 
 # Vault Topology Contract
 
@@ -19,6 +19,30 @@ This contract names the vault topologies the system treats as legitimate, and th
 In this contract, a **vault** is a human-addressable, vault-first, Markdown/attachment-bearing tree that the human can open, read, and edit without the runtime. It is the durable human surface defined by `docs/PROJECT_KERNEL.md` and `docs/HUMAN-FLOWS.md`. Databases, indexes, mirrors, receipts, and runtime caches are not vaults; they are system-surface artifacts that may live inside a vault tree or alongside it, governed by `docs/SEPARATING_PERSISTENCE_SURFACES/README.md`.
 
 A **topology** is the choice of how many such vaults exist, which surfaces (writing, retention, system) each one carries, and how they relate to each other for the same human.
+
+## Runtime topology authority decision (#1488)
+
+The current runtime default for Vault Browser reads is **active-vault only**. The active vault filesystem is the enumeration source, Markdown/frontmatter remains the human-readable authority surface, and current `zone` projection is frontmatter-preferred with a vault-relative path fallback. No configured topology registry, multi-vault selector, graph projection, or semantic neighborhood source is authoritative for browser reads today.
+
+The current `zone` field is a cognitive-distance overlay. Its authority order is:
+
+1. Frontmatter `zone`, when present, as durable vault metadata under the human/vault authority model.
+2. First vault-relative path segment as deterministic browser fallback when frontmatter `zone` is absent.
+
+The path-derived fallback is runtime projection, not durable topology authority. It must not rewrite frontmatter, define artifact lifecycle, imply maturity, imply review posture, imply trust, or become a hidden source of semantic ranking. Runtime consumers may read it only as the current browser-compatible fallback for orientation and deterministic filtering.
+
+Future topology-derived browser fields are allowed only as explicit projections over a named source. Each field must carry, or be accompanied by, all of the following:
+
+- `source`: the configured topology source or vault-derived source used to derive the field.
+- `authority_role`: whether the field is durable vault metadata, runtime projection, generated mirror, or unavailable.
+- `provenance`: the concrete path, frontmatter key, registry entry, receipt, or mirror record used to derive it.
+- `degradation`: explicit unavailable/stale/conflict/missing-source state when the topology source cannot be trusted.
+
+When a future topology source is missing, stale, conflicting, or not configured, runtime consumers must degrade to the current active-vault frontmatter/path posture and expose that degradation. They must not fabricate topology, silently prefer a machine mirror, or mutate vault/frontmatter authority to make a projection complete.
+
+Topology-derived zones may be used as explanatory metadata only until a later bounded implementation issue defines their source, fields, UI treatment, and tests. Any future use for ordering, overlays, or filters must surface the contributing topology signal, weight or deterministic rule, provenance, and degradation state in the browser response or UI. Opaque semantic ranking remains out of scope.
+
+#1473 remains deferred after this decision. It may be rewritten or split only into bounded implementation issues that name the concrete topology source, the projection fields, the degradation behavior, and the visible ranking/filter/overlay signals. Until then, the shipped Vault Browser posture remains frontmatter-preferred/path-derived zone projection over the active vault.
 
 ## Allowed topologies
 
