@@ -245,3 +245,19 @@ def test_artifacts_are_frozen_against_post_construction_authority_mutation() -> 
     assert isinstance(draft.source_refs, tuple)
     assert isinstance(packet.memory_handoff_refs, tuple)
     assert not hasattr(draft.source_refs, "clear")
+
+
+def test_model_copy_update_revalidates_invariants() -> None:
+    draft = CompilationDraft(title="orig", source_refs=[_source()])
+
+    # The immutable-update path must not bypass the construction invariants.
+    with pytest.raises(ValueError, match="non-canonical"):
+        draft.model_copy(update={"canonical": True})
+    with pytest.raises(ValueError, match="hidden authority"):
+        draft.model_copy(update={"authority_limits": ContextAuthorityLimits(may_write=True)})
+
+    # A benign copy still works and stays non-canonical / inform-only.
+    renamed = draft.model_copy(update={"title": "updated"})
+    assert renamed.title == "updated"
+    assert renamed.canonical is False
+    assert renamed.authority_limits.may_write is False

@@ -27,9 +27,10 @@ write helpers. Storage, API, events, and UI belong to later slices, not here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, Self
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -166,6 +167,18 @@ class GeneratedArtifact(BaseModel):
         """Generated artifacts may reference receipts but never *are* receipt authority."""
 
         return False
+
+    def model_copy(
+        self, *, update: Mapping[str, Any] | None = None, deep: bool = False
+    ) -> Self:
+        copied = super().model_copy(update=update, deep=deep)
+        # Pydantic's model_copy(update=...) does not re-run validators, so the immutable-update
+        # path could otherwise bypass the construction invariants (e.g.
+        # update={"canonical": True} or an authority-elevating update). Re-validate the copy —
+        # validating a plain mapping (not a model instance) forces the after-validator to run —
+        # so the frozen guarantees also hold across copies.
+        type(self).model_validate(copied.model_dump())
+        return copied
 
     @model_validator(mode="after")
     def _enforce_noncanonical_suggest_posture(self) -> "GeneratedArtifact":
