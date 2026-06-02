@@ -132,6 +132,14 @@ def test_reorientation_packet_is_bridge_artifact_not_memory_or_receipt_authority
     assert draft.authority_limits.may_orient is False
 
 
+def test_generated_artifact_base_cannot_claim_agent_memory_class() -> None:
+    with pytest.raises(ValueError, match="must not claim durable agent-memory class"):
+        runtime_artifacts.GeneratedArtifact(
+            artifact_class=AGENT_MEMORY_CLASS,
+            source_refs=[_source()],
+        )
+
+
 def test_unreviewed_memory_and_rankings_cannot_grant_hidden_authority() -> None:
     # Provenance carrying unreviewed memory, embeddings, retrieval scores, generated summaries.
     hidden_authority_sources = [

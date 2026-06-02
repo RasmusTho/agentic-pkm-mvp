@@ -178,6 +178,10 @@ class GeneratedArtifact(BaseModel):
             raise ValueError(
                 f"generated {self.artifact_class} must remain non-canonical"
             )
+        if self.artifact_class == AGENT_MEMORY_CLASS:
+            raise ValueError(
+                f"generated {self.artifact_class} must not claim durable agent-memory class"
+            )
         # Admission requires durable receipt evidence regardless of trust verb: downstream
         # code keys off admission_state, so a self-marked admitted artifact must not be
         # indistinguishable from a reviewed one (RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md;
