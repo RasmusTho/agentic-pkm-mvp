@@ -55,6 +55,28 @@ Hot path:
 Conditional / maintenance path:
 `Issue maintenance -> Agent` and `Publish PR -> PR integration` only when mergeability, CI attachment, or review repair is still needed.
 
+## BuilderOps routing checkpoint
+
+Before editing and again before PR handoff, decide whether the work produced BuilderOps material.
+This is a required workflow checkpoint, not an optional memory aid.
+
+- Raw handoff/recovery notes or temporary evidence that should survive the turn -> create an
+  `AgentWorklog`.
+- Plan/doc/skill/issue divergence that names an upstream artifact -> invoke `capture-learning` and
+  create a `LearningSignal` immediately.
+- Docs freshness observations or review queues -> create a `DocsFreshnessRecord`.
+- Roadmap execution movement, active blockers, shipped refs, or issue movement that is operational
+  rather than strategic roadmap truth -> create a `RoadmapExecutionItem`.
+- Material that should cross into GitHub, PR, ADR, owner-doc, skill/AGENTS, generated projection, or
+  discard handling -> create a `PromotionIntent` and leave the authority crossing to the normal
+  reviewed path.
+- Completed projections, transitions, promotions, supersessions, or discards -> create or cite a
+  `BuilderOpsReceipt`.
+
+If no BuilderOps record is needed, record `BuilderOps routing: none` with the reason in the PR
+handoff. Never append to `docs/learning-log.md` except as an explicit compatibility fallback when a
+BuilderOps write is unavailable.
+
 Treat these Issue sections as binding for the governing slice issue:
 
 - `Context`
@@ -303,17 +325,19 @@ When continuing through anchor drift:
    - Treat passing acceptance tests as supporting evidence, not the sole gate for delivered classification.
    - If source specs still say "Not yet implemented" while shipped code exists, route the spec-state writeback through docs/governance repair rather than opening duplicate implementation work.
 4. **Execute Action: Begin Implementation Work** (update labels, Issue Project Status, verify).
-5. Restate the bounded outcome from the Issue.
-6. Read source-anchored docs and owning code paths.
-7. If anchor drift exists, resolve it using the rules above before coding.
-8. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
-9. **Test-first for behavioral ACs**: for each AC whose `Verify:` names a test, ensure that test exists in the repo and currently fails against the unchanged code path. If the test is missing, write it first from the AC; if it is present but does not fail, either the AC is already satisfied (stop and validate) or the test does not actually exercise the AC (fix the test).
-10. Implement the smallest complete change that turns every behavioral `Verify:` test green without breaking unrelated tests.
-11. **Writeback for non-behavioral ACs**: perform each non-behavioral `Verify:` target in the same change (doc anchor writeback, roadmap wording cleanup, runtime receipt, etc.).
-12. Update owner docs if shipped behavior/contracts changed.
-13. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
-14. Run `Suggested Validation` plus any obviously necessary focused checks. Confirm every AC's `Verify:` target now resolves green.
-14a. **Branch-Truth Gate — Phase 1: Pre-Commit (mandatory before `git add`/`git commit`)** [branch-truth-gate]
+5. Run the BuilderOps routing checkpoint and create any needed operational record before the context
+   becomes hidden local memory.
+6. Restate the bounded outcome from the Issue.
+7. Read source-anchored docs and owning code paths.
+8. If anchor drift exists, resolve it using the rules above before coding.
+9. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
+10. **Test-first for behavioral ACs**: for each AC whose `Verify:` names a test, ensure that test exists in the repo and currently fails against the unchanged code path. If the test is missing, write it first from the AC; if it is present but does not fail, either the AC is already satisfied (stop and validate) or the test does not actually exercise the AC (fix the test).
+11. Implement the smallest complete change that turns every behavioral `Verify:` test green without breaking unrelated tests.
+12. **Writeback for non-behavioral ACs**: perform each non-behavioral `Verify:` target in the same change (doc anchor writeback, roadmap wording cleanup, runtime receipt, etc.).
+13. Update owner docs if shipped behavior/contracts changed.
+14. Rewrite roadmap/plan wording if the delivered work was previously listed as pending.
+15. Run `Suggested Validation` plus any obviously necessary focused checks. Confirm every AC's `Verify:` target now resolves green.
+15a. **Branch-Truth Gate — Phase 1: Pre-Commit (mandatory before `git add`/`git commit`)** [branch-truth-gate]
 
     For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
 
@@ -330,7 +354,7 @@ When continuing through anchor drift:
 
     Branch name must match. Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
 
-14b. **Branch-Truth Gate — Phase 2: Pre-Push (mandatory before `git push`)** [branch-truth-gate]
+15b. **Branch-Truth Gate — Phase 2: Pre-Push (mandatory before `git push`)** [branch-truth-gate]
 
     ```bash
     EXPECTED_BRANCH="<PR head branch name>"
@@ -345,12 +369,12 @@ When continuing through anchor drift:
 
     If branch name fails at pre-push: stop, switch to the correct worktree, and re-run both phases.
 
-15. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
-16. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.
-17. If any hot-path trigger applies, read `docs/development/PR_ESCALATION_PATHS.md` and use the relevant escalation procedure.
-18. **Execute Action: Request Review** only when review is explicitly requested.
-19. If the slice merges and this is not the final child slice, keep the parent issue open for later acceptance.
-20. If this is the final child slice, route post-merge parent closure through `docs/development/PARENT_ISSUE_CLOSURE.md`.
+16. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
+17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.
+18. If any hot-path trigger applies, read `docs/development/PR_ESCALATION_PATHS.md` and use the relevant escalation procedure.
+19. **Execute Action: Request Review** only when review is explicitly requested.
+20. If the slice merges and this is not the final child slice, keep the parent issue open for later acceptance.
+21. If this is the final child slice, route post-merge parent closure through `docs/development/PARENT_ISSUE_CLOSURE.md`.
 
 ## PR handoff requirements
 
@@ -362,6 +386,7 @@ Before handing off to `publish-pr`, confirm:
 - acceptance criteria are satisfied
 - docs were updated in the same change when needed
 - owner docs and roadmap/plan wording were updated when the work became shipped reality
+- BuilderOps routing is represented by records/projections/receipts or by a short `none` reason
 - the next step is the short PR hot path unless an escalation trigger exists
 
 

@@ -53,6 +53,9 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - Verify owner-doc writeback if shipped behavior or contracts changed and acceptance is complete
 - Verify roadmap or plan wording was cleaned up if the item is now delivered
 - Verify no duplicate `planned` and `shipped` statements remain active at once
+- Verify the PR body includes a BuilderOps routing outcome, and that unresolved learning, docs
+  freshness, roadmap execution, promotion, projection, or receipt material is represented by a
+  BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
 - Verify project lifecycle state still makes sense
 - Verify closed terminal PR cards do not remain blank in the Project
 - Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
@@ -125,6 +128,24 @@ When all prerequisites are met:
 - `Review` is reserved for the review handoff state
 - if project/PR automation already projected `Done`, verify that state rather than writing it again
 - only apply the fallback `Done` mutation when the item still needs terminal projection
+
+## BuilderOps Closure Checkpoint
+
+Before merging or writing the delivery receipt, resolve BuilderOps routing:
+
+- `LearningSignal` exists for any workflow divergence noticed during delivery, or the PR receipt
+  states no divergence was found.
+- `DocsFreshnessRecord` exists for high-churn docs freshness findings that should not become
+  direct `DOCS_INDEX` edits.
+- `RoadmapExecutionItem` exists for operational roadmap movement that should not become strategic
+  `ROADMAP.md` truth.
+- `PromotionIntent` exists for any proposed authority crossing that is not already represented by
+  a GitHub Issue, PR, ADR, or owner-doc change.
+- `BuilderOpsReceipt` exists or is cited when the work processed BuilderOps records, generated
+  projections, promoted material, superseded material, or discarded material.
+
+If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. Do not use
+`docs/learning-log.md` as the primary closure surface.
 
 ## Parent Issue Closure
 

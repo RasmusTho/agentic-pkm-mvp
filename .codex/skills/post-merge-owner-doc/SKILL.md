@@ -53,6 +53,12 @@ Add one comment on the closed issue, verbatim: `post-merge owner-doc check: no o
 
 That comment is the receipt. If it is missing on a closed implementation issue, this skill did not run.
 
+If the merge implies no owner-doc change but reveals future adoption, workflow learning, docs
+freshness, roadmap execution, or promotion material, route that material to BuilderOps first:
+`LearningSignal`, `DocsFreshnessRecord`, `RoadmapExecutionItem`, `PromotionIntent`, or
+`BuilderOpsReceipt` as applicable. Create a GitHub Issue only when the material is bounded executable
+work with `Verify:` targets.
+
 ## Judgment rules
 
 - **Trust the diff, not metadata.** Do not rely on labels, PR-body tokens, or issue classification as primary signal. Read the code/doc change itself.

@@ -40,6 +40,8 @@ turn validated local changes into a truthful branch, commit, pushed head, and PR
 - Do not publish unrelated local changes.
 - For implementation lane PRs, the body must include `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
 - For docs-authoring or governance lane PRs, leave the linked Issue blank unless a governing Issue actually exists.
+- Every PR body must include a `## BuilderOps Routing` section that names relevant BuilderOps
+  records/projections/receipts or states `none` with a short reason.
 - Default to opening an open PR.
 - Use `--draft` only with an explicit reason that the PR is not yet ready for review or still needs integration/repair.
 - Publication does not move work to `Done`.
@@ -163,6 +165,10 @@ Fixes #<ISSUE_NUMBER>
 ## Validation
 <What validation actually ran>
 
+## BuilderOps Routing
+- Records/projections/receipts: <ids or "none">
+- Reason: <why no BuilderOps material was created, or what was routed>
+
 ---
 EOF
 )"
@@ -183,6 +189,10 @@ gh pr create \
 
 ## Validation
 <Docs validation that ran>
+
+## BuilderOps Routing
+- Records/projections/receipts: <ids or "none">
+- Reason: <why no BuilderOps material was created, or what was routed>
 
 ---
 EOF
@@ -205,6 +215,10 @@ gh pr create \
 ## Validation
 <Governance validation that ran>
 
+## BuilderOps Routing
+- Records/projections/receipts: <ids or "none">
+- Reason: <why no BuilderOps material was created, or what was routed>
+
 ---
 EOF
 )"
@@ -225,6 +239,8 @@ Pre-push PR-body contract gate:
   - governance lane: `- [x] Governance lane`
   - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
+- Verify the body includes `## BuilderOps Routing`. If no BuilderOps object was created, the
+  section must still explain why the work did not produce operational BuilderOps material.
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
 

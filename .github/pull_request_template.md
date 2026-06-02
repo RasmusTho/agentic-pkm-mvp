@@ -49,5 +49,9 @@ Governance lane:
 - [ ] Governance checks run as appropriate for the touched surfaces
 - [ ] Any validation gaps or tooling limitations are stated explicitly
 
+## BuilderOps Routing
+- Records/projections/receipts: <ids or "none">
+- Reason: <why no BuilderOps material was created, or what was routed>
+
 ## Notes
 - State any residual risks, follow-ups, or assumptions.

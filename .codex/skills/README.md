@@ -30,6 +30,28 @@ Create GitHub Issues from BuilderOps material only when it has become bounded ex
 `Verify:` targets. Open PRs only for repo-governed artifact changes. Do not edit canonical docs
 just to capture operational state that belongs in BuilderOps Vault.
 
+## BuilderOps workflow checkpoints
+
+The routing decision must live in the skills and automation prompts that agents already execute.
+Do not rely on a human remembering where BuilderOps material belongs.
+
+1. **Start checkpoint:** before implementation, maintenance, or audit work becomes durable, classify
+   any raw notes, recovery context, docs freshness state, roadmap movement, learning, or proposed
+   authority crossing. Create the matching BuilderOps record when the material is not already fully
+   represented by a GitHub Issue, PR, or reviewed repo artifact.
+2. **Divergence checkpoint:** whenever a plan, issue, doc, or skill turns out to be wrong while work
+   is active, invoke `capture-learning` immediately and create a `LearningSignal` instead of saving
+   the observation for a later human memory pass.
+3. **Publication checkpoint:** every PR body must state the BuilderOps routing outcome: records
+   created, projections or receipts updated, or `none` with a short reason. A missing routing outcome
+   is missing delivery traceability.
+4. **Closure checkpoint:** before merge or delivery receipt, unresolved adoption, retro, freshness,
+   roadmap, or promotion observations must be represented by a BuilderOps record, a bounded GitHub
+   Issue with `Verify:` targets, or an explicit `none` reason.
+5. **Automation checkpoint:** recurring Codex automations for this repo must read the relevant
+   workflow skill and route high-churn operational material to BuilderOps first. `docs/learning-log.md`
+   is historical/fallback only; generated projections are readable views only.
+
 ## Skill routing
 
 - `agentic-pkm`

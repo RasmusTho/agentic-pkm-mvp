@@ -27,8 +27,11 @@ def test_hot_path_doc_defers_escalation_and_names_direct_repair_contract() -> No
         "## Direct Repair",
         "Type: docs | governance | code",
         "Validation: <checks run>",
+        "## BuilderOps Routing",
+        "Records/projections/receipts:",
         "Direct repair PRs are allowed without a governing issue when the change is bounded, immediate, and the PR body contains a complete Direct Repair block.",
-        "If this block is present and complete, no separate lane checkbox is required.",
+        "The `Direct Repair` block is the contract for bounded direct repair PRs. The `BuilderOps Routing`",
+        "If the `Direct Repair` block is present and complete, no separate lane checkbox is required.",
         "failing required tests or checks must be classified before merge",
         "delivery traceability must be preserved through either an issue-backed PR or a direct repair block",
     ):
@@ -76,6 +79,9 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
 
     for fragment in (
         "const directRepairSectionMatch = body.match(/## Direct Repair",
+        "const builderOpsRoutingMatch = body.match(/## BuilderOps Routing",
+        "const hasBuilderOpsRouting =",
+        "PR body must include `## BuilderOps Routing`",
         "const isDirectRepair =",
         "if (isDirectRepair) {",
         "includes a complete `Direct Repair` block",
@@ -88,7 +94,21 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
     assert text.index("const directRepairSectionMatch = body.match(/## Direct Repair") < text.index(
         "const docsAuthoringPattern ="
     )
+    assert text.index("const builderOpsRoutingMatch = body.match(/## BuilderOps Routing") < text.index(
+        "const issueLinkPattern ="
+    )
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
+
+
+def test_pr_template_includes_builderops_routing_receipt() -> None:
+    text = _read(".github/pull_request_template.md")
+
+    for fragment in (
+        "## BuilderOps Routing",
+        "Records/projections/receipts:",
+        "Reason:",
+    ):
+        assert fragment in text, fragment
 
 
 import re as _re
@@ -105,6 +125,14 @@ _DIRECT_REPAIR_REGEX = _re.compile(
     r"## Direct Repair[\s\S]*?(?=\n##\s|\n---)|## Direct Repair[\s\S]*",
     _re.IGNORECASE,
 )
+_BUILDEROPS_ROUTING_REGEX = _re.compile(
+    r"## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|## BuilderOps Routing[\s\S]*",
+    _re.IGNORECASE,
+)
+_BUILDEROPS_ROUTING_FIELDS = [
+    _re.compile(r"(?:^|\n)\s*-\s*Records/projections/receipts:\s*\S", _re.IGNORECASE),
+    _re.compile(r"(?:^|\n)\s*-\s*Reason:\s*\S", _re.IGNORECASE),
+]
 
 
 def _is_direct_repair(body: str) -> bool:
@@ -116,23 +144,48 @@ def _is_direct_repair(body: str) -> bool:
     return all(p.search(section) for p in _REQUIRED_FIELDS_PATTERNS)
 
 
+def _has_builderops_routing(body: str) -> bool:
+    """Python port of the JavaScript `hasBuilderOpsRouting` logic."""
+    m = _BUILDEROPS_ROUTING_REGEX.search(body)
+    if not m:
+        return False
+    section = m.group(0)
+    return all(p.search(section) for p in _BUILDEROPS_ROUTING_FIELDS)
+
+
 _VALID_DIRECT_REPAIR_FIELDS = (
     "Type: governance\nReason: bounded fix\nValidation: git diff --check\nIssue required: no"
+)
+
+_VALID_BUILDEROPS_ROUTING = (
+    "## BuilderOps Routing\n"
+    "- Records/projections/receipts: none\n"
+    "- Reason: no operational BuilderOps material produced"
 )
 
 
 def test_direct_repair_accepted_when_block_is_first_section() -> None:
     """AC1: Direct Repair block followed by another section."""
-    body = f"## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}\n\n## Summary\nSome summary here."
+    body = (
+        f"## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}\n\n"
+        f"{_VALID_BUILDEROPS_ROUTING}\n\n"
+        "## Summary\nSome summary here."
+    )
     assert _is_direct_repair(body), "Expected direct repair to be accepted when block is first"
+    assert _has_builderops_routing(body), "Expected BuilderOps routing to be accepted"
 
 
 def test_direct_repair_accepted_when_block_is_last_section_no_trailing_newline() -> None:
     """AC2: Direct Repair block at end with no trailing newline (GitHub strips trailing whitespace)."""
-    body = f"## Summary\nSome summary here.\n\n## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}"
+    body = (
+        "## Summary\nSome summary here.\n\n"
+        f"{_VALID_BUILDEROPS_ROUTING}\n\n"
+        f"## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}"
+    )
     # No trailing newline — this was the failing case before the regex fix
     assert not body.endswith("\n"), "Fixture must have no trailing newline to reproduce the bug"
     assert _is_direct_repair(body), "Expected direct repair to be accepted when block is last with no trailing newline"
+    assert _has_builderops_routing(body), "Expected BuilderOps routing to be accepted"
 
 
 def test_direct_repair_accepted_when_block_is_middle_section() -> None:
@@ -140,9 +193,23 @@ def test_direct_repair_accepted_when_block_is_middle_section() -> None:
     body = (
         "## Summary\nSome summary.\n\n"
         f"## Direct Repair\n{_VALID_DIRECT_REPAIR_FIELDS}\n\n"
+        f"{_VALID_BUILDEROPS_ROUTING}\n\n"
         "## Runtime behavior\nNo change."
     )
     assert _is_direct_repair(body), "Expected direct repair to be accepted when block is in the middle"
+    assert _has_builderops_routing(body), "Expected BuilderOps routing to be accepted"
+
+
+def test_builderops_routing_required_fields() -> None:
+    """PR contract requires an explicit BuilderOps routing receipt."""
+    valid_body = f"Fixes #123\n\n{_VALID_BUILDEROPS_ROUTING}"
+    assert _has_builderops_routing(valid_body), "Expected BuilderOps routing section to be accepted"
+
+    missing_records = "## BuilderOps Routing\n- Reason: no operational BuilderOps material produced"
+    assert not _has_builderops_routing(missing_records), "Expected missing records line to be rejected"
+
+    missing_reason = "## BuilderOps Routing\n- Records/projections/receipts: none"
+    assert not _has_builderops_routing(missing_reason), "Expected missing reason line to be rejected"
 
 
 def test_direct_repair_rejected_when_fields_incomplete() -> None:

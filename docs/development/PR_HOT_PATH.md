@@ -46,6 +46,7 @@ Default rule:
 
 4. Minimal delivery receipt
 - record PR number, issue number(s), current head SHA, lane, risk, checks run, review classification, and next handoff
+- record BuilderOps routing: records/projections/receipts created, or `none` with a short reason
 - include enough traceability to prove the current delivery state without replaying the full procedure
 
 ## Default Non-Blockers
@@ -90,11 +91,17 @@ Reason: <one or two sentences>
 Validation: <checks run>
 Issue required: no — bounded immediate repair
 
-This block is the contract for bounded direct repair PRs.
+## BuilderOps Routing
 
-- If this block is present and complete, no governing issue is required.
-- If this block is present and complete, no separate lane checkbox is required.
-- The merge receipt may reference this block instead of restating it.
+- Records/projections/receipts: <ids or "none">
+- Reason: <why no BuilderOps material was created, or what was routed>
+
+The `Direct Repair` block is the contract for bounded direct repair PRs. The `BuilderOps Routing`
+section is mandatory delivery traceability, not a second lane classifier.
+
+- If the `Direct Repair` block is present and complete, no governing issue is required.
+- If the `Direct Repair` block is present and complete, no separate lane checkbox is required.
+- The merge receipt may reference the `Direct Repair` block instead of restating it.
 - If the repair expands beyond bounded scope, create or link an issue.
 
 Placement: prefer placing the `## Direct Repair` block first in the PR body (before `## Summary`) so it is immediately visible to reviewers. The governance check accepts the block in any position — first, middle, or last — regardless of whether a trailing newline follows.
