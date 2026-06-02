@@ -168,7 +168,7 @@ def desired_pr_status(pr: dict[str, Any], explicit_status: str | None) -> str | 
     if pr.get("mergedAt"):
         return "Done"
     if pr.get("state") == "OPEN":
-        return "In Progress"
+        return "In Progress" if pr.get("isDraft") else "Review"
     if pr.get("state") == "CLOSED":
         # Closed PR cards are terminal Project artifacts and must not remain blank.
         return "Done"
