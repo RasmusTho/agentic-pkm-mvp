@@ -85,8 +85,8 @@ Override mechanisms:
 - API/tool callers may set `builderops_db_path` through tool settings or `BUILDEROPS_DB_PATH`
   through the environment; see `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`.
 
-The default path is repo-local runtime state. It is not `$CODEX_HOME`, not local hidden memory, and
-not a reviewed docs surface.
+The default path is repo-local runtime state and is ignored by Git via `runtime/builderops/`. It is
+not `$CODEX_HOME`, not local hidden memory, not repo authority, and not a reviewed docs surface.
 
 ## CLI
 
