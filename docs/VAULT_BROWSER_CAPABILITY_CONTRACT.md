@@ -5,8 +5,8 @@ Owner: Architecture / Companion UI product
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-24
-Last verified against: docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/HUMAN-FLOWS.md, docs/FRONTMATTER.md, docs/EVENTS.md, docs/AGENTS.md, docs/AGENT_MEMORY/README.md, docs/CONTEXTUALIZATION_LAYER/README.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/ARTIFACT_MODEL_AND_LIFECYCLES.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, docs/CONCEPTS/STATE_AXES_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, governing issues #1251 and #1252.
+Last reviewed: 2026-06-02
+Last verified against: docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/HUMAN-FLOWS.md, docs/FRONTMATTER.md, docs/EVENTS.md, docs/AGENTS.md, docs/AGENT_MEMORY/README.md, docs/CONTEXTUALIZATION_LAYER/README.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/ARTIFACT_MODEL_AND_LIFECYCLES.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, docs/CONCEPTS/STATE_AXES_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, governing issues #1251, #1252, and #1488.
 
 # Vault Browser Capability Contract
 
@@ -85,6 +85,17 @@ Required conceptual fields:
 - `created`, `updated` — ISO-8601 timestamps; UTC timestamp values emitted by the browser API are normalized to `Z`
 
 The artifact's authoritative state is in Markdown/frontmatter where it exists. The browser may carry projection fields beyond this list, but every projection must be reconstructible from vault + governed mirrors.
+
+Current topology/zone authority decision (#1488): browser runtime reads are active-vault only. `zone` is frontmatter-preferred, with the first vault-relative path segment used only as deterministic fallback when frontmatter `zone` is absent. The path-derived fallback is a browser projection, not durable topology authority and not a semantic ranking source.
+
+Future topology-derived artifact fields must be additive to the current `zone` field unless a later owner decision changes the schema explicitly. They must not overwrite frontmatter `zone`, mutate vault metadata, or silently redefine artifact state. Any such projection must expose:
+
+- `source` or equivalent configured topology source reference;
+- `authority_role` or equivalent role such as durable vault metadata, runtime projection, generated mirror, or unavailable;
+- `provenance` pointing to the frontmatter key, vault-relative path, topology registry entry, receipt, or mirror record used;
+- `degradation` or equivalent unavailable/stale/conflict/missing-source state.
+
+When the topology source is unavailable or conflicting, the browser must degrade visibly to the current frontmatter/path posture. It must not fabricate a topology-derived zone, silently prefer a mirror, or use topology data as hidden authority over lifecycle, review state, trust, maturity, or folder identity.
 
 ### 4.2 VaultView
 
@@ -353,6 +364,7 @@ Every Vault Browser implementation must define behavior for the following classe
 - **WriteGuard blocked / safe_mode / degraded / unhealthy** — actions are rendered with `mode=blocked` and a `blocked_reason`
 - **receipt source unavailable** — receipts are absent rather than fabricated
 - **relation index unavailable** — relation projections degrade explicitly (empty + reason), not silently
+- **topology source unavailable** — topology-derived fields are omitted or marked degraded; the browser falls back to frontmatter-preferred/path-derived zone projection
 - **no matches** — distinct from "no notes"
 - **API error** — distinct from "empty" and "identity unavailable"
 
@@ -364,6 +376,7 @@ For future implementation issues, this contract requires:
 
 - The server/runtime owns vault enumeration and metadata normalization. Clients render server-declared state and server-declared action modes.
 - Deterministic filters (text/path/title) are the default. Any added ranking must surface its signals.
+- Topology-derived ordering, overlays, or filters require surfaced source, authority role, provenance, degradation state, and ranking/filter signals. Until those fields exist, topology-derived zones are explanatory metadata only.
 - The browser endpoint must remain read-only in the HTTP sense at the MLP v0 boundary (no mutating verbs accepted on the browser route).
 - UI states (`empty`, `error`, `identity-unavailable`, future `degraded`/`blocked`) must have stable test IDs / data attributes so contract tests can assert them.
 - Read-only contract tests must assert that calling the browser endpoint does not mutate any vault file.
@@ -375,6 +388,8 @@ For future implementation issues, this contract requires:
 The currently shipped Companion UI vault browser (from #1225 / PR #1239 and follow-ups) is the canonical realization of `Vault Browser MLP v0` as defined in §6. Alignment work for that baseline is tracked under #1252. Subsequent slices that introduce metadata, inspector, governed action, or receipt behavior extend this contract without weakening §6 or §8.
 
 **#1253 (normalized metadata read model):** The vault browser API response now includes normalized artifact metadata per note: `uuid`, `kind`, `zone` (frontmatter-preferred, path-derived fallback), `review_state`, `trust`, `origin`, `source_ref`, `created`, `updated`, `frontmatter_valid`, and `missing_required_fields`. Frontmatter is parsed server-side; clients never receive raw YAML. Missing or invalid frontmatter surfaces as explicit health state (`frontmatter_valid: false`), not a crash. Basic metadata badges (`kind`, `review_state`, `trust`) and health warnings render in the browser list view when present. This is an enabling change for §4.1 (`VaultArtifact` fields) without introducing filters (§4.3), inspector (§4.4+), or actions (§4.7) — those remain in subsequent slices.
+
+**#1488 (topology authority/runtime decision):** Runtime Vault Browser reads remain active-vault only. The current browser `zone` source order is frontmatter `zone` first, then first vault-relative path segment as deterministic fallback. No topology registry, graph projection, multi-vault selector, or semantic neighborhood source is authoritative for browser reads. Future topology-derived fields must carry source, authority role, provenance, and degradation behavior; they may not overwrite frontmatter `zone`, mutate vault metadata, or influence ordering/overlays/filters unless a bounded implementation issue surfaces the contributing topology signals and tests the degradation path. #1473 remains deferred until it is rewritten or split with those concrete sources and visible projection semantics.
 
 **#1469 (metadata timestamp serialization):** The vault browser metadata read model now normalizes `created` and `updated` timestamp output server-side. YAML-parsed datetime values and quoted ISO strings that carry UTC as `Z` or `+00:00` are accepted without client parsing and emitted in the browser API payload with UTC normalized to `Z`. Plain date values remain date strings, invalid timestamp strings are preserved as existing string metadata rather than rejected, malformed YAML/frontmatter health behavior remains unchanged, and vault frontmatter is not rewritten on read.
 
