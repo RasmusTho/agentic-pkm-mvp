@@ -419,6 +419,32 @@ def test_required_fields_and_source_refs_enforced(
             created_by=_actor(),
         )
 
+    with pytest.raises(BuilderOpsValidationError, match="active_issues entries require"):
+        store.create_roadmap_execution_item(
+            summary="Malformed active issue ref",
+            roadmap_ref={"ref_type": "github_issue", "ref": "#1498"},
+            execution_state="in_progress",
+            owner="BuilderOps governance",
+            next_decision="Repair malformed roadmap refs.",
+            active_issues=[{"foo": "bar"}],
+            shipped_refs=[{"ref_type": "pull_request", "ref": "#1519"}],
+            source_refs=_source_ref("#1508"),
+            created_by=_actor(),
+        )
+
+    with pytest.raises(BuilderOpsValidationError, match="shipped_refs entries require"):
+        store.create_roadmap_execution_item(
+            summary="Malformed shipped ref",
+            roadmap_ref={"ref_type": "github_issue", "ref": "#1498"},
+            execution_state="in_progress",
+            owner="BuilderOps governance",
+            next_decision="Repair malformed roadmap refs.",
+            active_issues=[{"ref_type": "github_issue", "ref": "#1508"}],
+            shipped_refs=[{"foo": "bar"}],
+            source_refs=_source_ref("#1508"),
+            created_by=_actor(),
+        )
+
 
 def test_store_uses_configured_path(tmp_path: Path) -> None:
     configured = tmp_path / "state" / "custom-builderops.sqlite3"

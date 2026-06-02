@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.builderops.models import BuilderOpsValidationError
 from app.builderops.promotion_gateway import (
     BuilderOpsPromotionError,
     BuilderOpsPromotionGateway,
@@ -62,8 +63,14 @@ def _create_intent(
 def test_github_issue_dry_run_preserves_source_refs_and_receipt(
     store: SqliteBuilderOpsStore,
     gateway: BuilderOpsPromotionGateway,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     intent = _create_intent(store)
+    now_values = iter(["2026-06-02T12:00:00Z", "2026-06-02T12:01:00Z"])
+    monkeypatch.setattr(
+        "app.builderops.promotion_gateway.utc_now",
+        lambda: next(now_values),
+    )
 
     result = gateway.dry_run_promotion(
         intent["id"],
@@ -83,6 +90,7 @@ def test_github_issue_dry_run_preserves_source_refs_and_receipt(
 
     assert receipt["object_type"] == "BuilderOpsReceipt"
     assert receipt["event_type"] == "promotion_dry_run"
+    assert receipt["occurred_at"] == "2026-06-02T12:00:00Z"
     assert receipt["target_refs"] == [
         {
             "ref_type": "builderops_object",
@@ -99,6 +107,7 @@ def test_github_issue_dry_run_preserves_source_refs_and_receipt(
         idempotency_key="dry-run:github-issue",
     )
     assert duplicate["receipt"] == receipt
+    assert duplicate["receipt"]["occurred_at"] == "2026-06-02T12:00:00Z"
     assert len(store.list_records("BuilderOpsReceipt")) == 1
 
 
@@ -149,6 +158,17 @@ def test_promotion_intent_gateway_state_transitions(
             lease_id=lease["lease_id"],
             idempotency_key="transition:promoted-without-result",
             rationale="Promoted transitions need a target receipt.",
+        )
+
+    with pytest.raises(BuilderOpsValidationError, match="result_refs entries require"):
+        gateway.transition_intent(
+            intent["id"],
+            decision="promoted",
+            actor=_actor(),
+            lease_id=lease["lease_id"],
+            idempotency_key="transition:promoted-malformed-result",
+            rationale="Malformed promotion result ref.",
+            result_refs=[{"foo": "bar"}],
         )
 
     promoted = gateway.transition_intent(

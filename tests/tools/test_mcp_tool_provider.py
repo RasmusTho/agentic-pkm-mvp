@@ -132,6 +132,7 @@ def test_tool_provider_builderops_tools_preserve_store_semantics(tmp_path: Path)
             "mcp_builderops_enable": True,
             "allowed_mcp_tools": [
                 "mcp.builderops.create_worklog",
+                "mcp.builderops.create_learning_signal",
                 "mcp.builderops.list_records",
                 "mcp.builderops.read_record",
                 "mcp.builderops.append_receipt",
@@ -178,6 +179,26 @@ def test_tool_provider_builderops_tools_preserve_store_semantics(tmp_path: Path)
         executor=executor,
     )
     assert duplicate["result"]["record"] == record
+
+    signal = provider.execute_tool_call(
+        tool_name="mcp.builderops.create_learning_signal",
+        tool_args={
+            "summary": "Tool learning signal",
+            "content": "BuilderOps content must not be copied into body.",
+            "signal_type": "workflow",
+            "source_refs": source_refs,
+            "created_by": actor,
+            "idempotency_key": "tool:create-learning-signal",
+        },
+        context=context,
+        step_id="builderops-learning",
+        description="Create BuilderOps learning signal",
+        executor=executor,
+    )
+    signal_record = signal["result"]["record"]
+    assert signal_record["object_type"] == "LearningSignal"
+    assert signal_record["content"] == "BuilderOps content must not be copied into body."
+    assert "body" not in signal_record
 
     listed = provider.execute_tool_call(
         tool_name="mcp.builderops.list_records",
