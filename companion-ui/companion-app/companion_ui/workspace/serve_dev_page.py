@@ -1961,6 +1961,7 @@ def _render_vault_actions(note: dict) -> str:
     """
     note_path = str(note.get("note_path") or "").strip()
     artifact_uuid = str(note.get("uuid") or "").strip()
+    has_artifact_scope = bool(note_path or artifact_uuid)
 
     def _action(
         testid: str,
@@ -2047,23 +2048,35 @@ def _render_vault_actions(note: dict) -> str:
             "vault-action-find-related",
             "Find related (read-only)",
             "read_only",
-            affordance="available" if note_path or artifact_uuid else "unavailable",
-            disabled=not (note_path or artifact_uuid),
+            affordance="available" if has_artifact_scope else "unavailable",
+            disabled=not has_artifact_scope,
             disabled_reason=(
-                "" if note_path or artifact_uuid else "Artifact scope unavailable for Find."
+                "" if has_artifact_scope else "Artifact scope unavailable for Find."
             ),
-            data_api_method="GET" if note_path or artifact_uuid else "",
-            data_api_path="/api/companion/vault-related" if note_path or artifact_uuid else "",
+            data_api_method="GET" if has_artifact_scope else "",
+            data_api_path="/api/companion/vault-related" if has_artifact_scope else "",
             data_note_path=note_path,
             data_artifact_uuid=artifact_uuid,
-            onclick="vaultBrowserFindRelated(this)" if note_path or artifact_uuid else "",
+            onclick="vaultBrowserFindRelated(this)" if has_artifact_scope else "",
         ),
         _action(
             "vault-action-queue-review",
             "Queue for review",
             "governance_write",
-            blocked=True,
-            blocked_reason="Review queue not connected. Governed writes require a receipt.",
+            affordance="available" if has_artifact_scope else "unavailable",
+            disabled=not has_artifact_scope,
+            disabled_reason=(
+                "" if has_artifact_scope else "Artifact scope unavailable for queue_review."
+            ),
+            data_api_method="POST" if has_artifact_scope else "",
+            data_api_path=(
+                "/api/companion/vault-browser/actions/queue-review"
+                if has_artifact_scope
+                else ""
+            ),
+            data_note_path=note_path,
+            data_artifact_uuid=artifact_uuid,
+            onclick="vaultBrowserQueueReview(this)" if has_artifact_scope else "",
             requires_receipt=True,
             requires_confirmation=True,
         ),
@@ -6927,6 +6940,50 @@ def render_index_html(
         container.setAttribute('data-mode', 'read_only');
         container.setAttribute('data-state', 'error');
         container.textContent = error.message;
+      }});
+  }}
+
+  function vaultBrowserQueueReview(action) {{
+    if (!action || !action.dataset) return;
+    if (action.getAttribute('data-submitting') === 'true') return;
+    var payload = {{}};
+    if (action.dataset.notePath) payload.note_path = action.dataset.notePath;
+    if (action.dataset.artifactUuid) payload.artifact_uuid = action.dataset.artifactUuid;
+    if (!payload.note_path && !payload.artifact_uuid) return;
+    var endpoint = action.dataset.apiPath || '/api/companion/vault-browser/actions/queue-review';
+    action.setAttribute('data-submitting', 'true');
+    action.setAttribute('data-affordance-status', 'pending');
+    fetch(endpoint, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(payload)
+    }})
+      .then(function(response) {{
+        return response.json().then(function(data) {{
+          return {{ok: response.ok, status: response.status, data: data}};
+        }});
+      }})
+      .then(function(result) {{
+        if (!result.ok) {{
+          var detail = result.data && result.data.detail ? result.data.detail : {{}};
+          var message = detail.message || detail.error || 'queue_review staging failed';
+          throw new Error(message);
+        }}
+        action.removeAttribute('data-submitting');
+        action.setAttribute('data-affordance-status', 'pending_intent');
+        action.setAttribute('data-intent-id', result.data.intent_id || '');
+        action.setAttribute('data-proposal-id', result.data.proposal_id || '');
+        action.setAttribute('data-pending-state', result.data.state || 'pending_intent');
+        action.setAttribute(
+          'data-receipt-state',
+          result.data.receipt_state || 'pending_intent_not_durable_receipt'
+        );
+      }})
+      .catch(function(error) {{
+        action.removeAttribute('data-submitting');
+        action.setAttribute('data-affordance-status', 'blocked');
+        action.setAttribute('data-blocked', 'true');
+        action.setAttribute('data-blocked-reason', error.message);
       }});
   }}
 

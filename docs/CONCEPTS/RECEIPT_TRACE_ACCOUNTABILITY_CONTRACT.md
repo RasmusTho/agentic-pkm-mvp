@@ -174,6 +174,19 @@ Current bounded projection note (#1279):
 - when the source is unavailable, the browser must preserve the `unavailable` state rather than
   fabricating receipt rows.
 
+Vault Browser queue-review staging note (#1472):
+- `POST /api/companion/vault-browser/actions/queue-review` stages a pending Panel governance
+  proposal for `note_lifecycle` / `queue_review`;
+- this pending intent is not a durable VaultReceipt row because no durable semantic transition has
+  occurred at staging time;
+- the response may expose `intent_id` / `proposal_id` and
+  `receipt_state="pending_intent_not_durable_receipt"` so the UI can show pending posture without
+  fabricating receipt authority;
+- durable/accountability receipts remain sourced from governed Panel confirmation and
+  receipt-supporting records such as `panel.action.logged` and `panel.action.blocked`;
+- WriteGuard-blocked staging creates no proposal, no vault/frontmatter/ObjectStore mutation, and no
+  receipt row.
+
 Promotion transition note (#1438):
 - `promote.done` / `PROMOTE_DONE` is an execution-result trace event, not the final durable receipt
   store;

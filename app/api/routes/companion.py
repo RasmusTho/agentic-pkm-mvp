@@ -22,6 +22,15 @@ from app.agent_memory.review_queue import MemoryCandidateReviewQueue
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
 from app.config.paths import resolve_vault_root
+from app.events.panel import (
+    NoteRef,
+    PanelActionMapping,
+    PanelEventSource,
+    PanelInfo,
+    PanelIntentAction,
+    PanelIntentEvent,
+    PanelIntentPayload,
+)
 from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.leave_point_cursor import latest_leave_point_projection
@@ -30,6 +39,7 @@ from app.panel.checkbox_projection import (
     PanelSelectableOption,
     extract_panel_selectable_options,
 )
+from app.panel.confirmation import StagedProposal
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
@@ -421,6 +431,29 @@ class VaultRelatedResponse(BaseModel):
     data_mode: str = "read_only"
     vault_identity: VaultIdentityState
     identity_available: bool
+
+
+class VaultBrowserQueueReviewRequest(BaseModel):
+    note_path: str | None = None
+    artifact_uuid: str | None = None
+
+
+class VaultBrowserQueueReviewResponse(BaseModel):
+    intent_id: str
+    proposal_id: str
+    artifact_id: str
+    artifact_uuid: str | None = None
+    note_path: str
+    state: Literal["pending_intent"] = "pending_intent"
+    action_type: Literal["note_lifecycle"] = "note_lifecycle"
+    operation: Literal["queue_review"] = "queue_review"
+    receipt_state: Literal["pending_intent_not_durable_receipt"] = (
+        "pending_intent_not_durable_receipt"
+    )
+    execution_path: Literal["/api/panel/confirm"] = "/api/panel/confirm"
+    data_mode: Literal["governance_write"] = "governance_write"
+    requires_confirmation: bool = True
+    requires_receipt: bool = True
 
 
 def _truthy_env(name: str, default: bool = False) -> bool:
@@ -1605,6 +1638,112 @@ def _resolve_related_scope(
     return target
 
 
+def _resolve_vault_action_scope(
+    notes: list[dict[str, object]],
+    *,
+    note_path: str | None,
+    artifact_uuid: str | None,
+    action_name: str,
+) -> dict[str, object]:
+    target: dict[str, object] | None = None
+    if note_path:
+        target = next((note for note in notes if note.get("note_path") == note_path), None)
+        if target is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "artifact_not_found",
+                    "message": f"No vault note exists for the requested {action_name} note_path.",
+                    "note_path": note_path,
+                },
+            )
+    if artifact_uuid:
+        uuid_match = next(
+            (note for note in notes if note.get("artifact_uuid") == artifact_uuid),
+            None,
+        )
+        if uuid_match is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "artifact_not_found",
+                    "message": f"No vault note exists for the requested {action_name} artifact_uuid.",
+                    "artifact_uuid": artifact_uuid,
+                },
+            )
+        if target is not None and target.get("note_path") != uuid_match.get("note_path"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "artifact_scope_mismatch",
+                    "message": "note_path and artifact_uuid identify different artifacts.",
+                    "note_path": note_path,
+                    "artifact_uuid": artifact_uuid,
+                },
+            )
+        target = uuid_match
+    if target is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "artifact_scope_required",
+                "message": f"Provide note_path and/or artifact_uuid for {action_name}.",
+            },
+        )
+    return target
+
+
+def _stage_queue_review_panel_proposal(target: dict[str, object]) -> str:
+    note_path = str(target.get("note_path") or "").strip()
+    artifact_uuid = _str_or_none(target.get("artifact_uuid"))
+    artifact_id = artifact_uuid or note_path
+    proposal_id = uuid4().hex
+    payload = {
+        "operation": "queue_review",
+        "note_path": note_path,
+        "artifact_uuid": artifact_uuid,
+        "source": "vault_browser",
+    }
+    intent_event = PanelIntentEvent(
+        source=PanelEventSource(component="vault_browser", trigger="queue_review"),
+        trace_id=proposal_id,
+        payload=PanelIntentPayload(
+            note=NoteRef(
+                uuid=artifact_id,
+                path=note_path,
+                origin="vault_browser/queue_review",
+            ),
+            panel=PanelInfo(
+                panel_id=proposal_id,
+                instruction="vault browser governance: queue_review",
+            ),
+            actions=[
+                PanelIntentAction(
+                    id=proposal_id,
+                    label="Queue for review",
+                    checked=True,
+                    mapping=PanelActionMapping(
+                        id="queue_review",
+                        intent_type="note_lifecycle",
+                        downstream_event="panel.governance.requested",
+                        trust_verb="APPLY",
+                        params=payload,
+                    ),
+                )
+            ],
+        ),
+    )
+    confirm_module._proposal_store.stage(
+        proposal_id,
+        StagedProposal(
+            artifact_id=artifact_id,
+            intent_event=intent_event,
+            trace_id=proposal_id,
+        ),
+    )
+    return proposal_id
+
+
 def _signal(signal: str, value: str, *, weight: int, provenance: str) -> dict[str, object]:
     return {
         "signal": signal,
@@ -1924,6 +2063,52 @@ def read_companion_vault_related(
         data_mode="read_only",
         vault_identity=identity,
         identity_available=identity_available,
+    )
+
+
+@router.post(
+    "/vault-browser/actions/queue-review",
+    response_model=VaultBrowserQueueReviewResponse,
+)
+def queue_vault_browser_review(
+    req: VaultBrowserQueueReviewRequest,
+) -> VaultBrowserQueueReviewResponse:
+    safe_note_path = (
+        _validate_workspace_markdown_note_path(req.note_path)
+        if req.note_path is not None
+        else None
+    )
+    safe_artifact_uuid = req.artifact_uuid.strip() if req.artifact_uuid else None
+    vault_root = resolve_vault_root()
+    target = _resolve_vault_action_scope(
+        _collect_relation_notes(vault_root),
+        note_path=safe_note_path,
+        artifact_uuid=safe_artifact_uuid,
+        action_name="queue_review",
+    )
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed("companion.vault_browser.queue_review")
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "writeguard_blocked",
+                "state": "blocked",
+                "message": str(exc),
+                "reason": exc.reason,
+            },
+        ) from exc
+
+    proposal_id = _stage_queue_review_panel_proposal(target)
+    note_path = str(target.get("note_path") or "")
+    artifact_uuid = _str_or_none(target.get("artifact_uuid"))
+    artifact_id = artifact_uuid or note_path
+    return VaultBrowserQueueReviewResponse(
+        intent_id=proposal_id,
+        proposal_id=proposal_id,
+        artifact_id=artifact_id,
+        artifact_uuid=artifact_uuid,
+        note_path=note_path,
     )
 
 

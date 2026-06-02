@@ -26,7 +26,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from companion_ui.workspace.real_note_workspace_dev_page import NoteLoadIntent, RealNoteWorkspaceDevPage
-from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.serve_dev_page import _render_vault_actions, render_index_html
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 
 
@@ -201,7 +201,8 @@ def test_governance_write_action_carries_governance_mode() -> None:
 
 def test_blocked_governance_action_renders_reason() -> None:
     """AC4: Blocked or disabled governance actions render data-blocked-reason or data-disabled-reason."""
-    html = _inspector_html(_load_html())
+    note = _browser_note(note_path="", uuid=None)
+    html = _render_vault_actions(note)
     assert 'data-blocked="true"' in html or 'data-disabled="true"' in html
     assert "data-blocked-reason" in html or "data-disabled-reason" in html
 
@@ -375,6 +376,52 @@ def test_find_related_js_calls_read_only_endpoint() -> None:
     assert "params.set('artifact_uuid', action.dataset.artifactUuid);" in html
     assert "fetch(url, {method: 'GET'})" in html
     assert "renderVaultBrowserFindRelatedResults(data);" in html
+
+
+def test_queue_review_governance_action_posts_to_staging_endpoint() -> None:
+    """#1472 AC: queue_review carries the scoped governance staging endpoint."""
+    note = _browser_note(note_path="notes/current.md", uuid="uuid-1472")
+    html = _inspector_html(_load_html(browser_payload=_vault_browser_payload(notes=[note])))
+    tag = _action_tag(html, "vault-action-queue-review")
+
+    assert 'data-mode="governance_write"' in tag
+    assert 'data-affordance-status="available"' in tag
+    assert 'data-api-method="POST"' in tag
+    assert 'data-api-path="/api/companion/vault-browser/actions/queue-review"' in tag
+    assert 'data-note-path="notes/current.md"' in tag
+    assert 'data-artifact-uuid="uuid-1472"' in tag
+    assert 'data-requires-confirmation="true"' in tag
+    assert 'data-requires-receipt="true"' in tag
+    assert 'onclick="vaultBrowserQueueReview(this)"' in tag
+    assert "data-blocked" not in tag
+
+
+def test_queue_review_disabled_when_artifact_scope_missing() -> None:
+    """#1472 AC: queue_review remains unavailable when no artifact scope is present."""
+    note = _browser_note(note_path="", uuid=None)
+    html = _render_vault_actions(note)
+    tag = _action_tag(html, "vault-action-queue-review")
+
+    assert 'data-mode="governance_write"' in tag
+    assert 'data-affordance-status="unavailable"' in tag
+    assert 'data-disabled="true"' in tag
+    assert 'data-disabled-reason="Artifact scope unavailable for queue_review."' in tag
+    assert "data-api-path" not in tag
+    assert "onclick=" not in tag
+
+
+def test_queue_review_js_posts_pending_intent_not_panel_confirm() -> None:
+    """#1472 AC: click handler stages queue_review, leaving durable execution to Panel confirm."""
+    html = _load_html()
+
+    assert "function vaultBrowserQueueReview(action)" in html
+    assert "payload.note_path = action.dataset.notePath;" in html
+    assert "payload.artifact_uuid = action.dataset.artifactUuid;" in html
+    assert "'/api/companion/vault-browser/actions/queue-review'" in html
+    assert "method: 'POST'" in html
+    assert "data-proposal-id" in html
+    assert "pending_intent_not_durable_receipt" in html
+    assert "fetch('/api/panel/confirm'" not in html
 
 
 # ---- AC6: body update flow remains separate ----
