@@ -66,8 +66,15 @@ def test_generated_artifacts_default_to_noncanonical_suggest_posture() -> None:
 
 
 def test_non_suggest_trust_requires_admission_and_durable_receipt() -> None:
-    # ADMITTED but without a durable receipt ref → refused: a self-marked admitted artifact
-    # must not be indistinguishable from a reviewed one.
+    # ADMITTED but without a durable receipt ref → refused, even at SUGGEST trust: downstream
+    # code keys off admission_state, so a self-marked admitted artifact must not be
+    # indistinguishable from a reviewed one.
+    with pytest.raises(ValueError, match="durable admission_receipt_ref"):
+        CompilationDraft(
+            title="Admitted at suggest without receipt",
+            source_refs=[_source()],
+            admission_state=AdmissionState.ADMITTED,
+        )
     with pytest.raises(ValueError, match="durable admission_receipt_ref"):
         CompilationDraft(
             title="Admitted without receipt",
@@ -109,7 +116,7 @@ def test_reorientation_packet_is_bridge_artifact_not_memory_or_receipt_authority
     assert packet.grants_receipt_authority is False
 
     # References memory by id only — it does not embed or become memory.
-    assert packet.memory_handoff_refs == ["agentic_memory:cand_123"]
+    assert packet.memory_handoff_refs == ("agentic_memory:cand_123",)
     assert packet.canonical is False
 
     # Orient-capable by default (its whole purpose is re-orientation), while write/promote/
@@ -211,3 +218,22 @@ def test_runtime_artifacts_are_pure_domain_no_db_or_vault_writes() -> None:
     # No DB/vault/outbox/filesystem-write symbols referenced anywhere in the module.
     for symbol in _FORBIDDEN_SYMBOLS:
         assert symbol not in used_names, f"runtime_artifacts must not reference {symbol!r}"
+
+
+def test_artifacts_are_frozen_against_post_construction_authority_mutation() -> None:
+    draft = CompilationDraft(title="frozen", source_refs=[_source()])
+    packet = ReorientationPacket(summary="frozen", source_refs=[_source()])
+
+    # Frozen: post-construction field assignment is rejected, so the construction-time
+    # invariants (non-canonical, no hidden authority, provenance) cannot be bypassed later.
+    with pytest.raises(ValueError):
+        draft.canonical = True
+    with pytest.raises(ValueError):
+        draft.authority_limits.may_write = True
+    with pytest.raises(ValueError):
+        packet.authority_limits.may_authorize_action = True
+
+    # Collection fields are tuples — no in-place mutation API (e.g. .clear()).
+    assert isinstance(draft.source_refs, tuple)
+    assert isinstance(packet.memory_handoff_refs, tuple)
+    assert not hasattr(draft.source_refs, "clear")

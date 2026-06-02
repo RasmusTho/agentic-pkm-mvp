@@ -32,7 +32,7 @@ from enum import Enum
 from typing import Literal, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TrustVerb(str, Enum):
@@ -87,6 +87,8 @@ class SourceRef(BaseModel):
     them never grants authority — see ``ContextAuthorityLimits``.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     artifact_id: str
     note_path: Optional[str] = None
     role: Optional[str] = None
@@ -106,6 +108,8 @@ class ContextAuthorityLimits(BaseModel):
     scores, and generated summaries cannot flip the latter three on.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     may_inform: bool = True
     may_orient: bool = False
     may_propose: bool = False
@@ -123,7 +127,13 @@ class GeneratedArtifact(BaseModel):
     - ``canonical`` stays ``False``;
     - the trust verb stays ``SUGGEST`` unless the artifact is explicitly ``ADMITTED``;
     - the artifact can never carry write/promote/action-authorization authority.
+
+    The model (and its nested authority/provenance models) is frozen so these invariants
+    cannot be bypassed by post-construction mutation; collection fields are tuples so their
+    contents cannot be mutated in place either.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     artifact_class: str
     artifact_id: str = Field(default_factory=lambda: uuid4().hex)
@@ -132,7 +142,7 @@ class GeneratedArtifact(BaseModel):
     admission_state: AdmissionState = Field(default=AdmissionState.PENDING_REVIEW)
     inferred: bool = Field(default=True)
 
-    source_refs: list[SourceRef] = Field(default_factory=list)
+    source_refs: tuple[SourceRef, ...] = Field(default_factory=tuple)
     generated_by: Optional[str] = None
     # Operational trace id only. A trace is not a receipt
     # (``RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md``).
@@ -168,19 +178,25 @@ class GeneratedArtifact(BaseModel):
             raise ValueError(
                 f"generated {self.artifact_class} must remain non-canonical"
             )
-        if self.trust_verb is not TrustVerb.SUGGEST and (
-            self.admission_state is not AdmissionState.ADMITTED
-            or not self.admission_receipt_ref
+        # Admission requires durable receipt evidence regardless of trust verb: downstream
+        # code keys off admission_state, so a self-marked admitted artifact must not be
+        # indistinguishable from a reviewed one (RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md;
+        # epic #1533: "mutation/promotion requires explicit admission plus receipt posture").
+        # The admission handoff that attaches the receipt is slice #1537.
+        if self.admission_state is AdmissionState.ADMITTED and not self.admission_receipt_ref:
+            raise ValueError(
+                f"generated {self.artifact_class} marked admitted requires a durable "
+                f"admission_receipt_ref"
+            )
+        # Trust escalation past SUGGEST additionally requires the explicit ADMITTED decision
+        # (which, by the check above, already carries a receipt).
+        if (
+            self.trust_verb is not TrustVerb.SUGGEST
+            and self.admission_state is not AdmissionState.ADMITTED
         ):
-            # Trust escalation past SUGGEST requires both an explicit ADMITTED decision and a
-            # durable receipt reference (RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md; epic #1533:
-            # "mutation/promotion requires explicit admission plus receipt posture"). Without
-            # the receipt, a self-marked admitted artifact would be indistinguishable from a
-            # reviewed one. The admission handoff that attaches the receipt is slice #1537.
             raise ValueError(
                 f"generated {self.artifact_class} cannot carry trust_verb "
-                f"{self.trust_verb.value} without explicit admission and a durable "
-                f"admission_receipt_ref"
+                f"{self.trust_verb.value} without explicit admission"
             )
         limits = self.authority_limits
         elevated = [
@@ -222,7 +238,7 @@ class CurationCandidate(GeneratedArtifact):
     artifact_class: Literal["curation_candidate"] = CURATION_CANDIDATE_CLASS
     title: str
     rationale: Optional[str] = None
-    excluded_refs: list[SourceRef] = Field(default_factory=list)
+    excluded_refs: tuple[SourceRef, ...] = Field(default_factory=tuple)
 
 
 class ReorientationPacket(GeneratedArtifact):
@@ -244,5 +260,5 @@ class ReorientationPacket(GeneratedArtifact):
     )
     summary: Optional[str] = None
     leave_point_ref: Optional[str] = None  # reference only
-    memory_handoff_refs: list[str] = Field(default_factory=list)  # reference-only memory ids
+    memory_handoff_refs: tuple[str, ...] = Field(default_factory=tuple)  # reference-only ids
     stale_after: Optional[datetime] = None
