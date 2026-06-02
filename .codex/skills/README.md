@@ -46,6 +46,8 @@ just to capture operational state that belongs in BuilderOps Vault.
   - convert active docs into bounded backlog Issues
 - `temporal-doc-governance`
   - audit and refresh time-sensitive current-state docs
+- `automation-maintenance`
+  - inspect Codex app automations for this repository, detect redirect/stale `cwds`, use the Codex app automation update tool when available, and report exact pending changes when local automation state cannot be safely updated
 - `publish-pr`
   - publication boundary for branch, commit, push, and PR creation after local work is ready
 - `pr-integration`
