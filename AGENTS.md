@@ -31,6 +31,8 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
   `.codex/skills/docs-to-issue/SKILL.md`
 - Temporal current-state doc audit / freshness work:
   `.codex/skills/temporal-doc-governance/SKILL.md`
+- Codex app automation cwd drift inspection / maintenance:
+  `.codex/skills/automation-maintenance/SKILL.md`
 - Branch / commit / push / PR publication after local work is ready:
   `.codex/skills/publish-pr/SKILL.md`
 - PR mergeability / CI attachment before verification:
