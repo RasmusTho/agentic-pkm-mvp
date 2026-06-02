@@ -86,6 +86,8 @@ def _memory_handoff_refs(
 ) -> tuple[str, ...]:
     if max_memory_handoff_refs < 0:
         raise PacketAssemblyError("max_memory_handoff_refs must be non-negative")
+    if max_memory_handoff_refs == 0:
+        return ()
     refs: list[str] = []
     for item in included:
         role = (item.source_role or "").lower()

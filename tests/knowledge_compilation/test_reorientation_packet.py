@@ -171,6 +171,14 @@ def test_packet_exposes_reference_only_memory_handoff() -> None:
     assert packet.grants_receipt_authority is False
     assert packet.authority_limits.may_write is False
 
+    no_handoff_packet = assemble_reorientation_packet_from_bundle(
+        bundle,
+        trace_ref="trace:return-to-work:3",
+        now=_NOW,
+        max_memory_handoff_refs=0,
+    )
+    assert no_handoff_packet.memory_handoff_refs == ()
+
 
 def test_packet_refuses_mutation_and_storage_paths() -> None:
     write_bundle = _bundle(
