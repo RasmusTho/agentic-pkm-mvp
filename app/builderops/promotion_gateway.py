@@ -14,6 +14,8 @@ from typing import Any, Mapping
 from app.builderops.models import (
     BuilderOpsValidationError,
     normalize_actor,
+    utc_now,
+    validate_source_refs,
 )
 from app.builderops.store import SqliteBuilderOpsStore
 
@@ -129,7 +131,7 @@ class BuilderOpsPromotionGateway:
             summary=f"Dry-run promotion proposal for {intent['id']}",
             event_type="promotion_dry_run",
             actor=actor_ref,
-            occurred_at=intent["updated_at"],
+            occurred_at=utc_now(),
             target_refs=[
                 {
                     "ref_type": "builderops_object",
@@ -178,6 +180,8 @@ class BuilderOpsPromotionGateway:
             raise BuilderOpsPromotionError(
                 "promoted PromotionIntent transition requires result_refs"
             )
+        if result_refs:
+            validate_source_refs(result_refs, "result_refs")
         proposal = self.render_proposal(intent_id)
         refs = source_refs if source_refs is not None else intent["source_refs"]
         receipt_extra: dict[str, Any] = {

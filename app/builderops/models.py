@@ -329,7 +329,14 @@ REQUIRED_FIELDS: dict[str, frozenset[str]] = {
 }
 
 NONEMPTY_LIST_FIELDS = frozenset({"source_refs", "member_refs", "target_refs"})
-SOURCE_REF_LIST_FIELDS = frozenset({"source_refs", "target_refs"})
+SOURCE_REF_LIST_FIELDS = frozenset({
+    "active_issues",
+    "freshness_evidence_refs",
+    "last_verified_against",
+    "shipped_refs",
+    "source_refs",
+    "target_refs",
+})
 
 
 class BuilderOpsValidationError(ValueError):
@@ -427,10 +434,11 @@ def normalize_record(record: Mapping[str, Any]) -> JsonDict:
             f"{object_type} missing required field(s): {', '.join(missing)}"
         )
 
-    for field in NONEMPTY_LIST_FIELDS & REQUIRED_FIELDS[object_type]:
-        if field in SOURCE_REF_LIST_FIELDS:
+    for field in SOURCE_REF_LIST_FIELDS:
+        if field in data:
             validate_source_refs(data[field], field)
-        else:
+    for field in NONEMPTY_LIST_FIELDS & REQUIRED_FIELDS[object_type]:
+        if field not in SOURCE_REF_LIST_FIELDS:
             validate_nonempty_list(data[field], field)
     validate_source_refs(data["source_refs"])
     return data

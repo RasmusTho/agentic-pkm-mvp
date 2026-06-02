@@ -27,6 +27,7 @@ This is a cold-path repair step, not a hot-path delivery routine.
 
 ```bash
 python -m app.cli builderops list --type LearningSignal --json
+python -m app.cli builderops list --type BuilderOpsReceipt --json
 python -m app.cli builderops generate-projections \
   --type learning-summary \
   --output-dir tmp/builderops-learning-retro \
@@ -36,6 +37,10 @@ cat tmp/builderops-learning-retro/learning-summary.md
 
 Use the generated `learning-summary` projection as the repo-readable review view, but treat
 BuilderOps Vault as the source of truth. Projection Markdown is non-authoritative.
+Before deciding which signals are unprocessed, filter the `BuilderOpsReceipt` records to
+`event_type=learning_retrospective` and inspect their `target_refs` for already-processed
+`LearningSignal` IDs. `LearningSignal` records are not mutated when a retrospective receipt is
+appended, so the receipt stream is the processing ledger.
 
 If there are fewer than 3 unprocessed LearningSignals since the last retrospective receipt, note
 this and ask whether to proceed or wait for more signal.

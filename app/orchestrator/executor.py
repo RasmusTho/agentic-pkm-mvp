@@ -191,7 +191,11 @@ class MockPlanExecutor(PlanExecutor):
         except PermissionError as exc:
             raise StepExecutionError(str(exc), error_type="policy_denied") from exc
         args = dict(step.tool_args or {})
-        if "content" in args and "body" not in args:
+        if (
+            descriptor.name == "mcp.vault.append_note"
+            and "content" in args
+            and "body" not in args
+        ):
             args["body"] = args["content"]
         self._validate_tool_args(args, descriptor.allowed_args)
         self._validate_required_args(args, descriptor.schema.get("required", []))
