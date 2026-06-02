@@ -25,6 +25,8 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
   `.codex/skills/issue-to-code/SKILL.md`
 - Issue, PR, label, or Project lifecycle correction:
   `.codex/skills/issue-maintenance-change-control/SKILL.md`
+- Epic, parent feature issue, Kanban/Project lane, or larger ready-issue set review, pickup planning, and delivery orchestration:
+  `.codex/skills/deliver-issue-set/SKILL.md`
 - Docs-only authoritative spec work:
   `.codex/skills/docs-authoring/SKILL.md`
 - Convert active docs into bounded GitHub backlog:

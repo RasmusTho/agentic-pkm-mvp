@@ -14,6 +14,7 @@ def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
     text = _read("AGENTS.md")
     assert ".codex/skills/README.md" in text
     assert ".codex/skills/issue-to-code/SKILL.md" in text
+    assert ".codex/skills/deliver-issue-set/SKILL.md" in text
     assert "In Progress" in text
     assert "remove `agent:ready`" in text
 
@@ -33,6 +34,7 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     for name in (
         "agentic-pkm",
         "issue-to-code",
+        "deliver-issue-set",
         "publish-pr",
         "issue-maintenance-change-control",
         "pr-integration",
