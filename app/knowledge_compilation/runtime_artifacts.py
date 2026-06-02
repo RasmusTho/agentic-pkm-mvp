@@ -61,6 +61,7 @@ class AdmissionState(str, Enum):
     PENDING_REVIEW = "pending_review"
     ADMITTED = "admitted"
     REJECTED = "rejected"
+    REVISION_REQUESTED = "revision_requested"
 
 
 # Artifact-class tokens. Plain strings to match the house convention

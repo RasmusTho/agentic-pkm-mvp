@@ -3,7 +3,9 @@
 Slice #1534 ships the pure runtime artifact contracts
 (``app.knowledge_compilation.runtime_artifacts``); slice #1535 adds the deterministic
 proposal builders (``app.knowledge_compilation.proposal_builders``); slice #1536 adds
-read-only reorientation packet assembly (``app.knowledge_compilation.reorientation_packet``).
+read-only reorientation packet assembly (``app.knowledge_compilation.reorientation_packet``);
+slice #1537 adds the explicit review/admission handoff
+(``app.knowledge_compilation.review_admission``).
 """
 
 from app.knowledge_compilation.proposal_builders import (
@@ -30,6 +32,16 @@ from app.knowledge_compilation.reorientation_packet import (
     PacketAssemblyError,
     assemble_reorientation_packet_from_bundle,
 )
+from app.knowledge_compilation.review_admission import (
+    AdmissionDecision,
+    AdmissionDecisionRecord,
+    AdmissionHandoff,
+    AdmissionHandoffError,
+    AdmissionReceiptPosture,
+    AdmissionScope,
+    record_admission_decision,
+    route_admitted_memory_to_review_queue,
+)
 
 __all__ = [
     "AGENT_MEMORY_CLASS",
@@ -38,6 +50,12 @@ __all__ = [
     "CURATION_CANDIDATE_CLASS",
     "REORIENTATION_PACKET_CLASS",
     "AdmissionState",
+    "AdmissionDecision",
+    "AdmissionDecisionRecord",
+    "AdmissionHandoff",
+    "AdmissionHandoffError",
+    "AdmissionReceiptPosture",
+    "AdmissionScope",
     "CompilationDraft",
     "ContextAuthorityLimits",
     "CurationCandidate",
@@ -50,4 +68,6 @@ __all__ = [
     "assemble_reorientation_packet_from_bundle",
     "build_compilation_draft",
     "build_curation_candidate",
+    "record_admission_decision",
+    "route_admitted_memory_to_review_queue",
 ]
