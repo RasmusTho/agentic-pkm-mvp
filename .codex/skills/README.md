@@ -40,6 +40,8 @@ just to capture operational state that belongs in BuilderOps Vault.
   - use that transition as the minimal shared claim/lease compatibility signal in multi-agent environments
 - `issue-maintenance-change-control`
   - repair stale or false Issue / PR / label / Project state before or during execution
+- `deliver-issue-set`
+  - review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
 - `docs-authoring`
   - docs-only authoritative authoring lane
 - `docs-to-issue`
@@ -83,6 +85,8 @@ just to capture operational state that belongs in BuilderOps Vault.
   `agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-and-closure -> post-merge-owner-doc`
 - Drift-correction path:
   `issue-maintenance-change-control -> issue-to-code` when the Issue becomes executable again
+- Epic / Kanban issue-set delivery path:
+  `deliver-issue-set -> (issue-maintenance-change-control | docs-to-issue | feature-breakdown) -> issue-to-code -> publish-pr -> pr-integration as needed -> verification-and-closure`
 - Docs backlog path:
   `docs-authoring -> docs-to-issue`
 - Maintenance-learning intake path:
