@@ -142,7 +142,8 @@ def test_harness_records_trace_for_each_generated_artifact() -> None:
 
 
 def test_harness_fails_on_missing_provenance_or_authority_escalation() -> None:
-    draft = _runtime_flow().draft
+    flow = _runtime_flow()
+    draft = flow.draft
 
     missing_provenance = _tamper(draft, source_refs=())
     with pytest.raises(KnowledgeCompilationTraceError, match="provenance"):
@@ -158,6 +159,17 @@ def test_harness_fails_on_missing_provenance_or_authority_escalation() -> None:
     )
     with pytest.raises(KnowledgeCompilationTraceError, match="authority"):
         evaluate_knowledge_compilation_trace(artifacts=(elevated_authority,))
+
+    bad_handoff = flow.handoff.__class__.model_construct(
+        original_artifact=flow.handoff.original_artifact,
+        admitted_artifact=_tamper(
+            flow.handoff.admitted_artifact,
+            authority_limits=ContextAuthorityLimits(may_write=True),
+        ),
+        decision_record=flow.handoff.decision_record,
+    )
+    with pytest.raises(KnowledgeCompilationTraceError, match="authority"):
+        evaluate_knowledge_compilation_trace(artifacts=(), handoffs=(bad_handoff,))
 
 
 def test_harness_requires_admission_receipt_before_promotion_path() -> None:

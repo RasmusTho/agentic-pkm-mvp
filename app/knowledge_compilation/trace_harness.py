@@ -144,6 +144,7 @@ def _validate_artifact_posture(artifact: GeneratedArtifact) -> ArtifactTraceReco
 def _validate_handoff(handoff: AdmissionHandoff) -> AdmissionTraceRecord:
     original = handoff.original_artifact
     admitted = handoff.admitted_artifact
+    admitted_record = _validate_artifact_posture(admitted)
     if original.source_refs != admitted.source_refs:
         raise KnowledgeCompilationTraceError(
             f"admission handoff for {original.artifact_id!r} changed provenance"
@@ -152,12 +153,6 @@ def _validate_handoff(handoff: AdmissionHandoff) -> AdmissionTraceRecord:
         raise KnowledgeCompilationTraceError(
             f"admission handoff for {original.artifact_id!r} changed trace identity"
         )
-    if admitted.canonical:
-        raise KnowledgeCompilationTraceError(
-            f"admission handoff for {original.artifact_id!r} made the artifact canonical"
-        )
-
-    source_ids = _source_ids(admitted.source_refs)
     record = handoff.decision_record
     if admitted.admission_receipt_ref != record.receipt_ref:
         raise KnowledgeCompilationTraceError(
@@ -173,7 +168,7 @@ def _validate_handoff(handoff: AdmissionHandoff) -> AdmissionTraceRecord:
         authority_basis=record.authority_basis,
         receipt_ref=record.receipt_ref,
         trace_ref=admitted.trace_ref,
-        source_ids=source_ids,
+        source_ids=admitted_record.source_ids,
     )
 
 
