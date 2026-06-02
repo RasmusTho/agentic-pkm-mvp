@@ -81,6 +81,7 @@ BuilderOps Vault workflow boundary:
 - Open a PR only when repo-governed artifacts must change: code, tests, authoritative docs, ADRs, `.codex/skills/**`, `AGENTS.md`, or generated projections committed to the repo. A BuilderOps record alone is not a repo change.
 - Use `PromotionIntent` before crossing authority classes. Promotion targets include GitHub Issue, PR/branch proposal, ADR/decision doc proposal, owner-doc or skill/AGENTS writeback proposal, generated projection, or discard receipt. Promotion is a reviewed boundary crossing, not automatic synchronization.
 - Generated BuilderOps projections are repo-readable views, not source of truth. If a projection is stale, regenerate or reconcile from BuilderOps Vault; do not hand-edit the projection as authority.
+- Repo-local workflow skills and Codex app automation prompts must carry BuilderOps routing checks directly. Do not rely on a human remembering where learning logs, docs freshness notes, roadmap movement, or worklog material should go.
 
 ## Change classification
 

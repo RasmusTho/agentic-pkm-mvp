@@ -54,6 +54,23 @@ specific justified exception. The redirect workspace
 - If durable follow-up is needed, create or update a GitHub Issue with the automation id, current
   cwd, intended cwd, and blocker. Do not treat local automation state as repo truth.
 
+## BuilderOps adoption checks
+
+When maintaining repo automations, also inspect whether recurring prompts route BuilderOps material
+without depending on human memory.
+
+- Automations that inspect delivery learning must read BuilderOps `LearningSignal` records first and
+  use `docs/learning-log.md` only for historical or explicit compatibility fallback entries.
+- Automations that audit docs freshness must create or propose `DocsFreshnessRecord` material for
+  high-churn review state instead of editing `docs/DOCS_INDEX.md` as an operational queue.
+- Automations that inspect roadmap or issue movement must create or propose
+  `RoadmapExecutionItem` material for execution state instead of turning `docs/ROADMAP.md` into a
+  daily status log.
+- Automations that discover cross-surface changes must create or propose `PromotionIntent` material
+  before GitHub Issue, PR, ADR, owner-doc, skill, AGENTS, projection, or discard handling.
+- Automation prompts should cite the repo-local skill they are following and should produce a short
+  BuilderOps routing receipt: records created, projections/receipts updated, or `none` with a reason.
+
 ## Receipt shape
 
 Every run must finish with a concise receipt:

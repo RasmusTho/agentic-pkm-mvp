@@ -88,6 +88,18 @@ jobs:
               pull_number: context.payload.pull_request.number,
             });
             const body = pullRequest.body || "";
+            // BuilderOps routing is mandatory delivery traceability for all PRs.
+            // It records the BuilderOps objects/projections/receipts created, or an explicit "none" reason.
+            const builderOpsRoutingMatch = body.match(/## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|## BuilderOps Routing[\s\S]*/i);
+            const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
+            const hasBuilderOpsRouting =
+              Boolean(builderOpsRoutingSection) &&
+              /(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*\S/i.test(builderOpsRoutingSection) &&
+              /(?:^|\n)\s*-\s*Reason:\s*\S/i.test(builderOpsRoutingSection);
+            if (!hasBuilderOpsRouting) {
+              core.setFailed("PR body must include `## BuilderOps Routing` with `Records/projections/receipts:` and `Reason:` lines.");
+              return;
+            }
             const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
             if (issueLinkPattern.test(body)) {
               return;

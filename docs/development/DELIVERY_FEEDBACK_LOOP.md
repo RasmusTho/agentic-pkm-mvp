@@ -170,6 +170,21 @@ Every skill in `.codex/skills/` carries this addendum:
 
 > **Capturing learning:** if during this work you notice a divergence from plan — you did something you didn't expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Capture a BuilderOps `LearningSignal`; use `docs/learning-log.md` only as an explicit compatibility fallback. Do not batch to end of task; context is freshest now. Only capture if you can name an upstream artifact that could absorb the fix.
 
+## Workflow and automation enforcement
+
+BuilderOps adoption is enforced at workflow boundaries, not by human recall.
+
+- `issue-to-code` runs a BuilderOps routing checkpoint before implementation context becomes hidden
+  local memory and again before PR handoff.
+- `publish-pr` requires a `BuilderOps Routing` section in every PR body.
+- `verification-and-closure` verifies that unresolved BuilderOps material is represented by a
+  BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason before merge.
+- `automation-maintenance` audits recurring Codex app prompts for BuilderOps-first routing.
+- Learning-retro automations must read `LearningSignal` records and generated learning projections
+  first, using `docs/learning-log.md` only for historical or explicit compatibility fallback entries.
+- Temporal-doc automations must route high-churn docs freshness and roadmap execution state to
+  `DocsFreshnessRecord` and `RoadmapExecutionItem` records before considering repo-doc writeback.
+
 ## What this is not
 
 - Not a metrics dashboard
