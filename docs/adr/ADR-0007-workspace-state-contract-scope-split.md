@@ -70,6 +70,8 @@ The project will **preserve the existing artifact-scoped Companion Workspace Con
 - **Phase 4 (deferred, separate ADRs):** push/ambient resurfacing; multi-agent reads.
   Push/ambient resurfacing is governed by ADR-0011 and remains implementation-deferred until a
   bounded foreground ambient refresh child issue is written.
+  Multi-agent reads are governed by ADR-0012 and remain implementation-deferred until a bounded
+  same-projection read child issue is written.
 
 ---
 
@@ -81,6 +83,8 @@ The project will **preserve the existing artifact-scoped Companion Workspace Con
 - Push/streaming enforcement of the "no notification-centric interaction" constraint
   (`UI_RUNTIME_BOUNDARIES.md`) is resolved by ADR-0011: server push remains deferred; only a future
   bounded, default-off, client-initiated foreground ambient refresh child is eligible.
+- Multi-agent reads are resolved by ADR-0012: agents may only consume the same read-only orientation
+  projection, and shared mutable workspace state remains prohibited.
 
 ---
 
