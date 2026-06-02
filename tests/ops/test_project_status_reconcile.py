@@ -6,6 +6,7 @@ import pytest
 from scripts import reconcile_project_status
 from scripts.reconcile_project_status import (
     desired_pr_status,
+    get_pr,
     list_project_items,
     load_governance_project_name,
     reconcile_issue,
@@ -13,8 +14,18 @@ from scripts.reconcile_project_status import (
 )
 
 
-def test_desired_pr_status_open_pr_is_in_progress() -> None:
-    assert desired_pr_status({"state": "OPEN", "mergedAt": None}, None) == "In Progress"
+def test_desired_pr_status_open_non_draft_pr_is_review() -> None:
+    assert (
+        desired_pr_status({"state": "OPEN", "isDraft": False, "mergedAt": None}, None)
+        == "Review"
+    )
+
+
+def test_desired_pr_status_open_draft_pr_is_in_progress() -> None:
+    assert (
+        desired_pr_status({"state": "OPEN", "isDraft": True, "mergedAt": None}, None)
+        == "In Progress"
+    )
 
 
 def test_desired_pr_status_closed_unmerged_pr_is_done() -> None:
@@ -26,6 +37,38 @@ def test_desired_pr_status_explicit_status_wins() -> None:
         desired_pr_status({"state": "CLOSED", "mergedAt": None}, "Review")
         == "Review"
     )
+
+
+def test_get_pr_fetches_draft_state(monkeypatch) -> None:
+    commands = []
+
+    def fake_run_gh(*args: str) -> str:
+        commands.append(args)
+        return reconcile_project_status.json.dumps(
+            {
+                "number": 1484,
+                "state": "OPEN",
+                "isDraft": False,
+                "mergedAt": None,
+                "url": "https://github.com/RasmusTho/agentic-pkm-mvp/pull/1484",
+                "title": "Example PR",
+            }
+        )
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+
+    assert get_pr("RasmusTho/agentic-pkm-mvp", 1484)["isDraft"] is False
+    assert commands == [
+        (
+            "pr",
+            "view",
+            "1484",
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--json",
+            "number,state,isDraft,mergedAt,url,title",
+        )
+    ]
 
 
 def test_load_governance_project_name_reads_file(tmp_path, monkeypatch) -> None:
@@ -162,7 +205,7 @@ def test_reconcile_pr_does_not_add_item_found_after_initial_limit(
         {
             "id": "item-501",
             "content": {"type": "PullRequest", "number": 501},
-            "status": "In Progress",
+            "status": "Review",
         },
     ]
     add_calls = []
@@ -191,6 +234,7 @@ def test_reconcile_pr_does_not_add_item_found_after_initial_limit(
         lambda _repo, _number: {
             "number": 501,
             "state": "OPEN",
+            "isDraft": False,
             "mergedAt": None,
             "url": "https://github.com/RasmusTho/agentic-pkm-mvp/pull/501",
         },
@@ -207,11 +251,11 @@ def test_reconcile_pr_does_not_add_item_found_after_initial_limit(
     )
 
     assert (
-        reconcile_pr(args, "RasmusTho", {"number": 1}, "field", {"In Progress": "opt"})
+        reconcile_pr(args, "RasmusTho", {"number": 1}, "field", {"Review": "opt"})
         == 0
     )
     assert add_calls == []
-    assert "pr #501: already In Progress" in capsys.readouterr().out
+    assert "pr #501: already Review" in capsys.readouterr().out
 
 
 def test_reconcile_issue_stops_when_project_listing_fails_before_mutation(
