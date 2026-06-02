@@ -281,6 +281,8 @@ class SqliteBuilderOpsStore:
                 "transition requires lifecycle_state or promotion_status"
             )
         key = _idempotency_key({"idempotency_key": idempotency_key})
+        if key is None:
+            raise BuilderOpsValidationError("idempotency_key must be a non-empty string")
         if not lease_id:
             raise BuilderOpsValidationError("lease_id must not be empty")
         validate_source_refs(source_refs)

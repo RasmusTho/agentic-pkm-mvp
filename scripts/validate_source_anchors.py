@@ -19,20 +19,23 @@ from typing import Optional, Tuple, List
 
 def extract_source_anchors_section(body: str) -> Optional[str]:
     """Extract the Source Anchors section from issue body."""
-    pattern = r'### Source Anchors\s*\n(.*?)(?=\n### |\Z)'
-    match = re.search(pattern, body, re.DOTALL)
+    pattern = r'^#{2,6}\s+Source Anchors\s*\n(.*?)(?=\n#{2,6}\s+|\Z)'
+    match = re.search(pattern, body, re.DOTALL | re.MULTILINE)
     return match.group(1).strip() if match else None
 
 
-def parse_anchors(section: str) -> List[Tuple[str, str]]:
+def parse_anchors(section: str) -> List[Tuple[str, str | None]]:
     """
     Parse anchor entries from the Source Anchors section.
 
     Expected format:
     - `docs/ROADMAP.md :: ORCHV2-TDD`
     - `docs/STATUS.md :: SETTINGS-PROVENANCE`
+    - `docs/PANEL_AGENT.md` :: accepted decision
+    - #1234 / PR #1235
 
-    Returns list of (doc_path, anchor_id) tuples.
+    Returns list of (doc_path, anchor_id) tuples for markdown references.
+    GitHub issue/PR references are represented as ("#1234", None).
     """
     anchors = []
     lines = section.split('\n')
@@ -42,15 +45,30 @@ def parse_anchors(section: str) -> List[Tuple[str, str]]:
         if not line or line.startswith('#'):
             continue
 
-        # Extract from format: - `docs/PATH.md :: ANCHOR-ID`
-        # or: docs/PATH.md :: ANCHOR-ID
-        # Anchor ID can contain alphanumerics, spaces, hyphens, underscores
-        match = re.search(r'`?([^`]+\.md)\s*::\s*([^`\n]+?)\s*`?$', line)
+        if re.search(r'(?:^|\s)(?:#\d+|PR\s+#\d+|pull request\s+#\d+)(?:\b|$)', line, re.IGNORECASE):
+            anchors.append((line, None))
+            continue
+
+        # Extract from formats:
+        # - `docs/PATH.md :: ANCHOR-ID`
+        # - `docs/PATH.md` :: descriptive locator
+        # - docs/PATH.md
+        match = re.search(r'`?([^`\s]+\.md)`?(?:\s*::\s*([^`\n]+?)\s*)?`?$', line)
         if match:
             doc_path, anchor_id = match.groups()
-            anchors.append((doc_path.strip(), anchor_id.strip()))
+            anchors.append((doc_path.strip(), anchor_id.strip() if anchor_id else None))
 
     return anchors
+
+
+def _is_github_ref(ref: str) -> bool:
+    return bool(re.search(r'(?:^|\s)(?:#\d+|PR\s+#\d+|pull request\s+#\d+)(?:\b|$)', ref, re.IGNORECASE))
+
+
+def _looks_like_stable_anchor(anchor_id: str | None) -> bool:
+    if not anchor_id:
+        return False
+    return bool(re.fullmatch(r'[A-Z0-9][A-Z0-9_-]{2,}', anchor_id.strip()))
 
 
 def find_anchor_in_doc(doc_path: str, anchor_id: str) -> bool:
@@ -103,7 +121,7 @@ def validate_issue_body(body: str) -> Tuple[bool, List[str]]:
     # Check for Source Anchors section
     section = extract_source_anchors_section(body)
     if not section:
-        errors.append("Issue is missing required `### Source Anchors` section")
+        errors.append("Issue is missing required `Source Anchors` section")
         return False, errors
 
     # Parse anchors
@@ -114,6 +132,8 @@ def validate_issue_body(body: str) -> Tuple[bool, List[str]]:
 
     # Validate each anchor
     for doc_path, anchor_id in anchors:
+        if _is_github_ref(doc_path):
+            continue
         if not doc_path.endswith('.md'):
             errors.append(f"Invalid anchor path: '{doc_path}' must be a markdown file (.md)")
             continue
@@ -123,7 +143,7 @@ def validate_issue_body(body: str) -> Tuple[bool, List[str]]:
             errors.append(f"Anchor file not found: {doc_path}")
             continue
 
-        if not find_anchor_in_doc(doc_path, anchor_id):
+        if _looks_like_stable_anchor(anchor_id) and not find_anchor_in_doc(doc_path, anchor_id or ""):
             errors.append(f"Anchor not found in {doc_path}: {anchor_id}")
 
     return len(errors) == 0, errors

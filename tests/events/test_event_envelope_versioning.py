@@ -84,6 +84,20 @@ def _panel_record() -> dict[str, object]:
     ).model_dump(mode="json")
 
 
+def test_panel_intent_action_option_id_is_optional_and_serialized() -> None:
+    legacy = PanelIntentAction(id="promote.evergreen", label="Promote", checked=True)
+    assert legacy.option_id is None
+    assert legacy.model_dump(mode="json")["option_id"] is None
+
+    with_option = PanelIntentAction(
+        id="promote.evergreen",
+        option_id="opt_1493",
+        label="Promote",
+        checked=True,
+    )
+    assert with_option.model_dump(mode="json")["option_id"] == "opt_1493"
+
+
 def _outbox_record(event_name: str, *, source: str, trace_id: str, payload: dict[str, object]) -> dict[str, object]:
     return make_outbox_event(event_name, source=source, trace_id=trace_id, payload=payload).model_dump(mode="json")
 

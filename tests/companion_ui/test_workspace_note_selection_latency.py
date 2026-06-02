@@ -12,6 +12,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 
 def _write_note(directory: Path, relative: str, content: str) -> Path:
     path = directory / relative
@@ -40,6 +43,25 @@ class TestFindWorkspaceNoteDirectLookup:
 
         result = _find_workspace_note(tmp_path, "Notes/missing.md")
         assert result is None
+
+    def test_rejects_symlink_escape(self, tmp_path: Path) -> None:
+        from app.api.routes.companion import _find_workspace_note
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        outside = tmp_path / "outside.md"
+        outside.write_text("# Outside\n", encoding="utf-8")
+        link = vault / "linked.md"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"symlink unavailable: {exc}")
+
+        with pytest.raises(HTTPException) as exc_info:
+            _find_workspace_note(vault, "linked.md")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "path_escape"
 
     def test_lookup_is_sub_millisecond_with_many_vault_files(self, tmp_path: Path) -> None:
         from app.api.routes.companion import _find_workspace_note

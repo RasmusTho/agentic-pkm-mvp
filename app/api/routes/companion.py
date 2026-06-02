@@ -617,39 +617,10 @@ def _validate_workspace_markdown_note_path(note_path_raw: str) -> str:
 
 
 def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
-    root_real = Path(os.path.realpath(vault_root))
-    for candidate in vault_root.rglob("*.md"):
-        if not candidate.is_file():
-            continue
-        if _vault_relative(candidate, vault_root) != safe_note_path:
-            continue
-        candidate_real = Path(os.path.realpath(candidate))
-        try:
-            candidate_real.relative_to(root_real)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "path_escape",
-                    "message": "Resolved note path is outside the vault.",
-                },
-            ) from exc
-        return candidate_real
-    return None
-
-
-def _vault_contained_abs_path(vault_root: Path, safe_note_path: str) -> Path:
-    """Resolve a validated relative note path to an absolute path, asserting it
-    stays inside the vault root.
-
-    Defense-in-depth against path traversal and symlink escape on top of
-    ``_validate_workspace_note_path`` (and a sanitizer CodeQL recognizes for the
-    py/path-injection rule): the realpath of the target must be the vault root
-    itself or a descendant of it.
-    """
+    """Resolve a validated note path while preserving direct lookup latency."""
     root_real = os.path.realpath(vault_root)
     target_real = os.path.realpath(os.path.join(root_real, safe_note_path))
-    if target_real != root_real and not target_real.startswith(root_real + os.sep):
+    if not target_real.startswith(root_real + os.sep):
         raise HTTPException(
             status_code=400,
             detail={
@@ -657,6 +628,8 @@ def _vault_contained_abs_path(vault_root: Path, safe_note_path: str) -> Path:
                 "message": "Resolved note path is outside the vault.",
             },
         )
+    if not os.path.isfile(target_real):
+        return None
     return Path(target_real)
 
 

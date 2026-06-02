@@ -72,6 +72,7 @@ from companion_ui.workspace.workspace_http_client import (
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
 def load_config() -> dict:
@@ -85,6 +86,10 @@ def load_config() -> dict:
         "port": int(os.environ.get("PORT", str(_DEFAULT_PORT))),
         "api_base_url": os.environ.get("COMPANION_API_BASE_URL", _DEFAULT_API_BASE_URL),
     }
+
+
+def orientation_ambient_refresh_enabled() -> bool:
+    return os.environ.get("COMPANION_ORIENTATION_AMBIENT_REFRESH", "").strip().lower() in _TRUTHY_ENV
 
 
 def _e(value: str) -> str:
@@ -3771,6 +3776,7 @@ def _render_orientation_index_html(
     orientation: dict,
     production_profile: bool,
     diagnostics: bool,
+    ambient_refresh_enabled: bool = False,
 ) -> str:
     scope = _orientation_dict(orientation.get("scope"))
     meta = _orientation_dict(orientation.get("meta"))
@@ -3780,6 +3786,9 @@ def _render_orientation_index_html(
     title_suffix = "PROD" if production_profile else "DEV"
     dev_chip = "" if production_profile else '<span class="dev-chip">DEV / not production</span>'
     freshness = _orientation_str(meta.get("freshness"), "unknown")
+    stale_after = _orientation_str(meta.get("stale_after"))
+    as_of = _orientation_str(meta.get("as_of"))
+    trace_id = _orientation_str(meta.get("trace_id"), "unknown")
     runtime_posture = _orientation_str(guards.get("runtime_posture"), "unknown")
     reason_html = "".join(
         f'<span class="orientation-reason">{_e(reason)}</span>' for reason in reasons
@@ -3795,6 +3804,23 @@ def _render_orientation_index_html(
         if degraded
         else ""
     )
+    refresh_mode = "foreground_pull" if ambient_refresh_enabled else "manual"
+    refresh_state = "degraded" if degraded else ("scheduled" if ambient_refresh_enabled and stale_after else "manual_refresh")
+    refresh_copy = (
+        "Foreground refresh scheduled from server freshness metadata."
+        if ambient_refresh_enabled and stale_after and not degraded
+        else "Manual refresh"
+    )
+    refresh_html = f"""
+        <section class="orientation-refresh"
+          data-testid="workspace-orientation-ambient-refresh"
+          data-refresh-mode="{_e(refresh_mode)}"
+          data-refresh-state="{_e(refresh_state)}"
+          data-read-only="true">
+          <span>{_e(refresh_copy)}</span>
+          <a href="/" data-testid="workspace-orientation-manual-refresh">Refresh</a>
+        </section>"""
+    ambient_script = _orientation_ambient_refresh_script() if ambient_refresh_enabled else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4016,6 +4042,21 @@ def _render_orientation_index_html(
       padding: 12px 16px;
     }}
     .orientation-degraded strong {{ color: var(--destructive); }}
+    .orientation-refresh {{
+      align-items: center;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--fg-2);
+      display: flex;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      gap: 10px;
+      justify-content: space-between;
+      padding: 10px 12px;
+    }}
+    .orientation-refresh a {{ color: var(--cyan); text-decoration: none; }}
+    .orientation-refresh a:hover {{ text-decoration: underline; }}
     @media (max-width: 860px) {{
       .orientation-grid {{ grid-template-columns: 1fr; }}
       .orientation-governance-grid {{ grid-template-columns: 1fr; }}
@@ -4045,7 +4086,12 @@ def _render_orientation_index_html(
   <main class="orientation-shell" data-testid="workspace-reentry-orientation"
     data-read-only="true"
     data-contract-version="{_e(_orientation_str(meta.get("contract_version"), "unknown"))}"
-    data-freshness="{_e(freshness)}">
+    data-freshness="{_e(freshness)}"
+    data-as-of="{_e(as_of)}"
+    data-stale-after="{_e(stale_after)}"
+    data-trace-id="{_e(trace_id)}"
+    data-degraded="{str(degraded).lower()}"
+    data-ambient-refresh="{'enabled' if ambient_refresh_enabled else 'disabled'}">
     <header class="orientation-header">
       <div class="orientation-eyebrow">Workspace orientation</div>
       <h1 class="orientation-heading">Re-entry snapshot</h1>
@@ -4053,10 +4099,11 @@ def _render_orientation_index_html(
         <span>vault: {_e(_orientation_str(scope.get("vault_id"), "unknown"))}</span>
         <span>channel: {_e(_orientation_str(scope.get("channel"), "unknown"))}</span>
         <span>freshness: {_e(freshness)}</span>
-        <span>as of: {_e(_orientation_str(meta.get("as_of"), "unknown"))}</span>
-        <span>trace: {_e(_orientation_str(meta.get("trace_id"), "unknown"))}</span>
+        <span>as of: {_e(as_of or "unknown")}</span>
+        <span>trace: {_e(trace_id)}</span>
       </div>
     </header>
+    {refresh_html}
     {degraded_html}
     <div class="orientation-grid">
       <div class="orientation-column">
@@ -4070,8 +4117,76 @@ def _render_orientation_index_html(
       </div>
     </div>
   </main>
+  {ambient_script}
 </body>
 </html>"""
+
+
+def _orientation_ambient_refresh_script() -> str:
+    return """
+  <script>
+  (function() {
+    var shell = document.querySelector('[data-testid="workspace-reentry-orientation"]');
+    var status = document.querySelector('[data-testid="workspace-orientation-ambient-refresh"]');
+    if (!shell || shell.dataset.ambientRefresh !== 'enabled') return;
+    var timer = null;
+    function setState(state) {
+      shell.dataset.refreshState = state;
+      if (status) status.dataset.refreshState = state;
+    }
+    function parseDue(raw) {
+      var due = Date.parse(raw || '');
+      return Number.isFinite(due) ? due : null;
+    }
+    function foreground() {
+      return !document.hidden && document.visibilityState !== 'hidden';
+    }
+    function schedule(raw) {
+      if (timer) window.clearTimeout(timer);
+      var due = parseDue(raw || shell.dataset.staleAfter);
+      if (due === null) {
+        setState('manual_refresh');
+        return;
+      }
+      var delay = Math.max(0, due - Date.now());
+      setState(delay > 0 ? 'scheduled' : 'stale');
+      timer = window.setTimeout(refreshIfForeground, delay);
+    }
+    function applyMetadata(data) {
+      var meta = data && data.meta ? data.meta : {};
+      shell.dataset.freshness = meta.freshness || 'unknown';
+      shell.dataset.asOf = meta.as_of || '';
+      shell.dataset.staleAfter = meta.stale_after || '';
+      shell.dataset.traceId = meta.trace_id || '';
+      var degraded = !!(meta.degraded_reasons && meta.degraded_reasons.length);
+      shell.dataset.degraded = degraded ? 'true' : 'false';
+      setState(degraded || shell.dataset.freshness === 'partial' ? 'degraded' : 'fresh');
+      schedule(shell.dataset.staleAfter);
+    }
+    function refreshIfForeground() {
+      if (!foreground()) return;
+      setState('refreshing');
+      fetch('/api/companion/orientation', {method: 'GET'})
+        .then(function(response) {
+          if (!response.ok) throw new Error('orientation refresh failed');
+          return response.json();
+        })
+        .then(applyMetadata)
+        .catch(function() {
+          setState('manual_refresh');
+        });
+    }
+    function refreshWhenStale() {
+      var due = parseDue(shell.dataset.staleAfter);
+      if (due !== null && Date.now() >= due) refreshIfForeground();
+    }
+    document.addEventListener('visibilitychange', function() {
+      if (foreground()) refreshWhenStale();
+    });
+    window.addEventListener('focus', refreshWhenStale);
+    schedule(shell.dataset.staleAfter);
+  }());
+  </script>"""
 
 
 def render_index_html(
@@ -4083,6 +4198,7 @@ def render_index_html(
     orientation: Optional[dict] = None,
     production_profile: bool = False,
     diagnostics: bool = False,
+    ambient_refresh_enabled: bool = False,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -4101,6 +4217,7 @@ def render_index_html(
             orientation=orientation,
             production_profile=production_profile,
             diagnostics=diagnostics,
+            ambient_refresh_enabled=ambient_refresh_enabled,
         )
 
     content_section = ""
@@ -7181,6 +7298,7 @@ def handle_get(
         orientation=orientation,
         production_profile=production_profile,
         diagnostics=diagnostics,
+        ambient_refresh_enabled=orientation_ambient_refresh_enabled(),
     )
 
 

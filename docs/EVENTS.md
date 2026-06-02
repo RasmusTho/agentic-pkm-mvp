@@ -180,7 +180,7 @@ Emitted when an AI panel is parsed for a note and actions are mapped.
 Payload highlights:
 - `note.uuid` (required), plus optional `note.path` / `note.origin`
 - `panel.panel_id`, `panel.instruction`, optional `panel.raw_block`
-- `actions[]`: `id`, `label`, `checked`, optional `mapping` (`intent_type`, `downstream_event`, `params`)
+- `actions[]`: `id`, optional `option_id`, `label`, `checked`, optional `mapping` (`intent_type`, `downstream_event`, `params`)
 
 ### `panel.intent.executed`
 

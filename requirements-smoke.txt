@@ -3,6 +3,7 @@ SQLAlchemy>=2,<3
 httpx
 jsonschema
 pytest
+pytest-asyncio==1.4.0
 click>=8,<9
 watchfiles>=1.0,<2
 requests>=2.0,<3

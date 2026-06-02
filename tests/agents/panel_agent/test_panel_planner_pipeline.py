@@ -167,6 +167,36 @@ def test_execute_panel_intent_direct_does_not_create_plan(tmp_path: Path, monkey
     assert store.list_by_event(events[0].event_id) == []
 
 
+def test_panel_intent_event_preserves_parsed_option_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_uuid = str(uuid4())
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    settings_path = _settings_file(tmp_path)
+    markdown = """%% AI:Start %%
+## AI-instruktion
+Please process this panel.
+## AI-åtgärder
+- [x] Gör denna anteckning evergreen <!--ai:option_id=opt_1493--> <!--ai:id=promote.evergreen-->
+%% AI:End %%
+"""
+    _seed_note(note_uuid, markdown)
+
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-option-id")
+
+    assert len(events) == 1
+    actions = events[0].payload.actions
+    assert len(actions) == 1
+    assert actions[0].id == "promote.evergreen"
+    assert actions[0].option_id == "opt_1493"
+    records = _read_outbox(outbox_path)
+    assert records[0]["payload"]["actions"][0]["option_id"] == "opt_1493"
+
+
 def test_execute_panel_intent_planner_creates_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     note_uuid = str(uuid4())
     outbox_path = tmp_path / "index-outbox.jsonl"

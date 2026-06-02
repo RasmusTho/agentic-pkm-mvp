@@ -646,9 +646,12 @@ fresh snapshot.
   operational trace cursor admitted by ADR-0008.
 - MemoryCandidate intents are Phase 3 handoff hints only; they do not create,
   enqueue, review, promote, reject, revise, or store memory.
-- No push, streaming, SSE, WebSocket, notification, or ambient resurfacing
-  transport in the current implementation. Future foreground, client-initiated
-  ambient refresh eligibility is governed by ADR-0011 and remains unimplemented.
+- No push, streaming, SSE, WebSocket, notification, or server-initiated ambient
+  resurfacing transport in the current implementation. The Companion UI re-entry
+  surface may opt into the ADR-0011 foreground ambient refresh slice with
+  `COMPANION_ORIENTATION_AMBIENT_REFRESH=1`; that refresh is client-initiated,
+  read-only, default-off, and based only on server-declared `meta.freshness` /
+  `meta.stale_after` metadata.
 - No multi-agent semantics in the current implementation. Future multi-agent
   read eligibility is governed by ADR-0012 and remains unimplemented.
 - No raw vault absolute paths.
@@ -666,10 +669,12 @@ Implementing `GET /api/companion/orientation` must follow this contract and must
 not imply changes to the artifact-scoped workspace endpoint. The current
 implementation is limited to the read-only orientation shape in this contract.
 Leave-point cursor projection is governed by ADR-0008. MemoryCandidate intent
-emission is governed by ADR-0009. Push, ambient resurfacing transport, and
-multi-agent semantics remain out of scope. ADR-0011 permits only a future
-bounded, default-off, client-initiated foreground ambient refresh child; it does
-not authorize server push, SSE, WebSocket, notifications, or background wakeups.
+emission is governed by ADR-0009. Push transport and multi-agent semantics
+remain out of scope. ADR-0011 permits only the bounded, default-off,
+client-initiated foreground ambient refresh implemented behind
+`COMPANION_ORIENTATION_AMBIENT_REFRESH=1`; it does not authorize server push,
+SSE, WebSocket, notifications, background wakeups, badges, counters, banners,
+or urgency feeds.
 ADR-0012 permits only a future bounded same-projection read path for agent
 consumers; it does not authorize shared mutable workspace state, A2A routing,
 or orchestration semantics.

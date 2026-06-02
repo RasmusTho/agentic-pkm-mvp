@@ -24,7 +24,12 @@ lint:
 	$(PYTHON) -m mypy app || true
 
 test:
-	export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; $(PYTHON) -m pytest -q -c /dev/null
+	@PYTEST_PLUGIN_ARGS=""; \
+	if $(PYTHON) -c "import pytest_asyncio.plugin" >/dev/null 2>&1; then \
+		PYTEST_PLUGIN_ARGS="-p pytest_asyncio.plugin"; \
+	fi; \
+	export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; \
+	$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib
 
 eval:
 	$(PYTHON) -m app.eval.run
@@ -62,19 +67,29 @@ persist-runtime-repairs:
 	@bash scripts/persist_runtime_repairs.sh
 
 smoke:
-	@XDIST_ARGS=""; \
-	if $(PYTHON) -m pytest -p xdist.plugin --help 2>/dev/null | rg -q -- "^-n "; then \
+	@PYTEST_PLUGIN_ARGS=""; \
+	XDIST_ARGS=""; \
+	if $(PYTHON) -c "import xdist.plugin" >/dev/null 2>&1; then \
+		PYTEST_PLUGIN_ARGS="-p xdist.plugin"; \
 		XDIST_ARGS="-n $(SMOKE_WORKERS) --dist=loadfile"; \
 	fi; \
+	if $(PYTHON) -c "import pytest_asyncio.plugin" >/dev/null 2>&1; then \
+		PYTEST_PLUGIN_ARGS="$$PYTEST_PLUGIN_ARGS -p pytest_asyncio.plugin"; \
+	fi; \
 	PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
-	$(PYTHON) -m pytest -p xdist.plugin -q -c /dev/null -k "not slow and not e2e" $$XDIST_ARGS
+	$(PYTHON) -m pytest $$PYTEST_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib -k "not slow and not e2e" $$XDIST_ARGS
 	@if [ "$(SMOKE_E2E_WORKERS)" != "0" ]; then \
+		PYTEST_E2E_PLUGIN_ARGS=""; \
 		XDIST_E2E_ARGS=""; \
-		if $(PYTHON) -m pytest -p xdist.plugin --help 2>/dev/null | rg -q -- "^-n "; then \
+		if $(PYTHON) -c "import xdist.plugin" >/dev/null 2>&1; then \
+			PYTEST_E2E_PLUGIN_ARGS="-p xdist.plugin"; \
 			XDIST_E2E_ARGS="-n $(SMOKE_E2E_WORKERS) --dist=loadfile"; \
 		fi; \
+		if $(PYTHON) -c "import pytest_asyncio.plugin" >/dev/null 2>&1; then \
+			PYTEST_E2E_PLUGIN_ARGS="$$PYTEST_E2E_PLUGIN_ARGS -p pytest_asyncio.plugin"; \
+		fi; \
 		PYTHONPATH="$(PWD)" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 STORE_BACKEND=memory \
-		$(PYTHON) -m pytest -p xdist.plugin -q -c /dev/null -k "e2e and not slow" $$XDIST_E2E_ARGS ; \
+		$(PYTHON) -m pytest $$PYTEST_E2E_PLUGIN_ARGS -q -c /dev/null --import-mode=importlib -k "e2e and not slow" $$XDIST_E2E_ARGS ; \
 	fi
 
 test-vault-init:
