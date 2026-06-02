@@ -5,7 +5,8 @@ Slice #1534 ships the pure runtime artifact contracts
 proposal builders (``app.knowledge_compilation.proposal_builders``); slice #1536 adds
 read-only reorientation packet assembly (``app.knowledge_compilation.reorientation_packet``);
 slice #1537 adds the explicit review/admission handoff
-(``app.knowledge_compilation.review_admission``).
+(``app.knowledge_compilation.review_admission``); slice #1538 adds the provider-free
+diagnostic trace harness (``app.knowledge_compilation.trace_harness``).
 """
 
 from app.knowledge_compilation.proposal_builders import (
@@ -27,6 +28,13 @@ from app.knowledge_compilation.runtime_artifacts import (
     ReorientationPacket,
     SourceRef,
     TrustVerb,
+)
+from app.knowledge_compilation.trace_harness import (
+    AdmissionTraceRecord,
+    ArtifactTraceRecord,
+    KnowledgeCompilationTraceError,
+    KnowledgeCompilationTraceReport,
+    evaluate_knowledge_compilation_trace,
 )
 from app.knowledge_compilation.reorientation_packet import (
     PacketAssemblyError,
@@ -56,10 +64,14 @@ __all__ = [
     "AdmissionHandoffError",
     "AdmissionReceiptPosture",
     "AdmissionScope",
+    "AdmissionTraceRecord",
+    "ArtifactTraceRecord",
     "CompilationDraft",
     "ContextAuthorityLimits",
     "CurationCandidate",
     "GeneratedArtifact",
+    "KnowledgeCompilationTraceError",
+    "KnowledgeCompilationTraceReport",
     "PacketAssemblyError",
     "ProposalContext",
     "ReorientationPacket",
@@ -68,6 +80,7 @@ __all__ = [
     "assemble_reorientation_packet_from_bundle",
     "build_compilation_draft",
     "build_curation_candidate",
+    "evaluate_knowledge_compilation_trace",
     "record_admission_decision",
     "route_admitted_memory_to_review_queue",
 ]
