@@ -181,7 +181,40 @@ Promotion transition note (#1438):
   transition-accountability event and interim receipt-supporting record for successful promotion
   transitions;
 - ObjectStore `payload["promotion"]` inline provenance is mirror provenance, not receipt authority;
-- a formal durable promotion receipt remains blocked on the receipt-store/query model.
+- the formal promotion receipt query model is defined below.
+
+Promotion receipt query model decision (#1489):
+- The v1 formal promotion receipt model is a typed, read-only query/projection over durable
+  receipt-supporting audit records, not a new write table in the first slice. The source authority
+  for successful promotion applies is the durable `promotion.transition.applied` event record when
+  it carries authority, basis, outcome, artifact linkage, event identity, trace identity, and
+  timestamp.
+- Consumers must use a stable receipt query/projection contract rather than direct ad hoc scans of
+  DB outbox rows or JSONL diagnostics. The current per-artifact browser projection may remain an
+  implementation of that read model while preserving the honest `unavailable` state when no
+  receipt-supporting source is available.
+- The four surfaces have separate authority roles:
+  - `PROMOTE_DONE` is the execution/result trace: it records that promotion execution completed and
+    which durable `maturity` / `review_state` result was applied.
+  - `PROMOTION_TRANSITION_APPLIED` is the transition-accountability audit source and v1
+    receipt-supporting authority for the queryable promotion receipt view.
+  - ObjectStore `payload["promotion"]` is machine-mirror inline provenance and latest mirror
+    posture; it may support display or reconstruction but must not authorize a change or satisfy
+    receipt authority by itself.
+  - The final durable/queryable receipt authority for v1 consumers is the typed promotion receipt
+    read model derived from receipt-supporting audit records. A later implementation may materialize
+    that model into a dedicated physical store, but consumers depend on the query contract rather
+    than the storage shape.
+- Minimum read/query surface: artifact UUID and path; receipt id or source event id; trace id;
+  timestamp; transition family; target maturity; resulting `review_state` / `maturity`; authority;
+  basis; outcome; artifact linkage; executor/source; and the triggering intent/source event. The
+  query surface must support lookup by artifact UUID/path, receipt or event id, trace id,
+  transition family, target maturity, and outcome status, ordered by timestamp.
+- Follow-up posture: #1403 should be rewritten or split into a bounded implementation issue that
+  wires promotion receipt writes/read queries to this model without changing frontmatter field
+  names. #1474 may proceed only against a read-only, source-limited posture/receipt projection that
+  uses this query contract and preserves non-authoritative agent-memory labeling; UI implementation
+  remains blocked if that source/API is unavailable.
 
 Orientation MemoryCandidate intent note (#1456):
 - `GET /api/companion/orientation` may emit a bounded MemoryCandidate
@@ -214,7 +247,7 @@ But the existence of traces alone does not satisfy the rule.
 ## 7. Non-goals
 
 This document does not yet define:
-- a final receipt storage model,
+- a final physical receipt storage model,
 - a final trace schema,
 - exact event payload redesigns,
 - or exact UI surfaces for accountability.

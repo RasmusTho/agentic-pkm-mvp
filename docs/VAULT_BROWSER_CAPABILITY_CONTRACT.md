@@ -242,13 +242,14 @@ Required fields:
 
 Receipts are surfaced read-only in the browser. The browser does not author receipts; receipts come from governed execution (`docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`, `docs/EVENTS.md`).
 
-Current bounded implementation note (#1279): until a final durable receipt store/query model exists,
-the Vault Browser may populate per-artifact receipt rows from an explicit read-only projection over
-governed outbox/event records that already carry receipt/accountability semantics, such as
-`promotion.transition.applied`, `panel.action.logged`, and `panel.action.blocked`. This projection is
-not a parallel receipt authority and must remain batch-oriented over the notes returned by a browser
-load. If no outbox/event receipt source is available, the per-note `receipts` key is omitted so the
-inspector renders `data-receipt-state="unavailable"` honestly.
+Current bounded implementation note (#1279, refined by #1489): the Vault Browser may populate
+per-artifact receipt rows from an explicit read-only projection over governed outbox/event records
+that already carry receipt/accountability semantics, such as `promotion.transition.applied`,
+`panel.action.logged`, and `panel.action.blocked`. This projection is the current implementation of
+the v1 receipt query model for browser consumers, not a parallel receipt authority, not an arbitrary
+event scan, and not an ObjectStore-derived authority surface. It must remain batch-oriented over the
+notes returned by a browser load. If no outbox/event receipt source is available, the per-note
+`receipts` key is omitted so the inspector renders `data-receipt-state="unavailable"` honestly.
 
 Current UI detail implementation note (#1284): receipt rows may expand/collapse locally in the
 inspector to reveal read-only receipt details. The expanded detail displays available VaultReceipt

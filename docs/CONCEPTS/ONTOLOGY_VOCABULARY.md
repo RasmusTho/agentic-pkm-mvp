@@ -171,12 +171,16 @@ They record where the active runtime most clearly compresses multiple ontology l
     the current transition-accountability event / interim receipt-supporting record. It carries
     authority, basis, outcome, and artifact linkage for the applied transition.
   - `payload["promotion"]` in the ObjectStore row provides inline machine-mirror provenance only.
-  - What is missing is a **distinct durable promotion receipt artifact** — separate from the store
-    payload and queryable as an accountability record. Until that is added, accountability is
-    recoverable from the transition-accountability event plus supporting operational traces, not
-    from a final durable receipt store.
-  - Tracked follow-on: issue #1403. Target state: promotion consumer writes a formal receipt record
-    in addition to the store payload mutation. Pre-requisite: receipt store model.
+  - Decision #1489 defines the v1 formal promotion receipt model as a typed, read-only query view
+    over durable receipt-supporting audit records. For successful promotion applies,
+    `promotion.transition.applied` is the transition-accountability source for that view.
+  - The final durable/queryable receipt authority for v1 consumers is the receipt query contract:
+    artifact UUID/path, receipt or source event id, trace id, timestamp, transition family, target
+    maturity, resulting `review_state` / `maturity`, authority, basis, outcome, artifact linkage,
+    executor/source, and triggering intent/source event.
+  - A dedicated physical receipt store remains deferred. #1403 should be rewritten or split around
+    this query model before changing promotion receipt behavior; #1474 may only consume a read-only,
+    source-limited projection that keeps agent-memory posture non-authoritative.
   - This note is an enabling-change annotation, not a current-state claim. Current behavior
     (`PROMOTE_DONE` + `promotion.transition.applied` + `payload["promotion"]`) is the correct
     interim implementation.
