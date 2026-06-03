@@ -130,8 +130,8 @@ _BUILDEROPS_ROUTING_REGEX = _re.compile(
     _re.IGNORECASE,
 )
 _BUILDEROPS_ROUTING_FIELDS = [
-    _re.compile(r"(?:^|\n)\s*-\s*Records/projections/receipts:\s*\S", _re.IGNORECASE),
-    _re.compile(r"(?:^|\n)\s*-\s*Reason:\s*\S", _re.IGNORECASE),
+    _re.compile(r"(?:^|\n)\s*-\s*Records/projections/receipts:\s*(.*?)\s*(?:\n|$)", _re.IGNORECASE),
+    _re.compile(r"(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)", _re.IGNORECASE),
 ]
 
 
@@ -150,7 +150,14 @@ def _has_builderops_routing(body: str) -> bool:
     if not m:
         return False
     section = m.group(0)
-    return all(p.search(section) for p in _BUILDEROPS_ROUTING_FIELDS)
+    for pattern in _BUILDEROPS_ROUTING_FIELDS:
+        match = pattern.search(section)
+        if not match:
+            return False
+        value = match.group(1).strip()
+        if not value or _re.fullmatch(r"<.*>", value):
+            return False
+    return True
 
 
 _VALID_DIRECT_REPAIR_FIELDS = (
@@ -210,6 +217,13 @@ def test_builderops_routing_required_fields() -> None:
 
     missing_reason = "## BuilderOps Routing\n- Records/projections/receipts: none"
     assert not _has_builderops_routing(missing_reason), "Expected missing reason line to be rejected"
+
+    template_placeholders = (
+        '## BuilderOps Routing\n'
+        '- Records/projections/receipts: <ids or "none">\n'
+        "- Reason: <why no BuilderOps material was created, or what was routed>"
+    )
+    assert not _has_builderops_routing(template_placeholders), "Expected unchanged template placeholders to be rejected"
 
 
 def test_direct_repair_rejected_when_fields_incomplete() -> None:
