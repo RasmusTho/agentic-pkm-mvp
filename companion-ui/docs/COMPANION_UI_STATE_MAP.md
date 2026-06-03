@@ -65,7 +65,8 @@ Every surface row below is tagged with exactly one status:
 | Memory candidate boundary (orientation seam) | shipped/dev-staging | Reorient | read-only awareness + intent emission only; never hidden authority | ADR-0009; `tests/api/test_orientation_memory_seam.py` (#1457/#1466) |
 | Agent-memory posture in Vault Browser inspector | shipped/dev-staging | Find, Reorient | read-only projection; server-declared | scope decision #1474 (closed); read-only projection #1547 (closed); Vault Browser surfacing #1551 (`app/agent_memory/posture_projection.py`). See **Known blocked areas**. |
 | Ambient foreground orientation refresh | shipped/dev-staging (default-off) | Reorient | read-only; non-notification | feat #1458 (closed), receipt/orientation fixes #1532 (merged). **Not** an open item. |
-| Resurface affordance (suggestion surfacing) | target-state (minimal runtime seam only) | Resurface | read-only suggestion; never urgency/notification escalation | `app/resurfacing/runtime.py` is a non-mutating evaluator seam; product surface is target-state per product spec §Resurface |
+| Resurface read-side candidates | shipped/dev-staging | Resurface | read-only suggestion display; no persistence or urgency escalation | `app/resurfacing/runtime.py`; `GET /api/companion/workspace` resurface projection; workspace shell rendering/tests; MLP capability docs |
+| Resurface persistence/orchestration (dismiss/snooze/pin, tray, cross-artifact surfacing workflow) | target-state | Resurface | future governed persistence/orchestration; must remain low-pressure unless runtime declares urgency | Product spec §Resurface; `companion-ui/docs/RESURFACING_HEURISTICS.md`; MLP docs mark durable controls unavailable until persistence exists |
 | Act flow visual states (unified propose/stage/apply UX) | target-state (parts shipped via Panel/runtime) | Act | governed handoff; must not blur stage/apply | product spec §Act; Panel flow shipped, unified Companion Act UX target-state |
 
 ## Authority posture per mode
@@ -74,8 +75,9 @@ Every surface row below is tagged with exactly one status:
   material into durable knowledge without a governed flow.
 - **Reorient** — read-only synthesis and proposal. May surface candidates and emit
   `mutation_intents`; never applies them.
-- **Resurface** — read-only suggestion. May suggest; must not escalate to urgent-task
-  semantics. Currently target-state at the product-surface level.
+- **Resurface** — read-only suggestion in the shipped/dev-staging workspace shell. May
+  suggest; must not escalate to urgent-task semantics. Durable dismiss/snooze/pin,
+  tray-level persistence, and richer orchestration remain target-state.
 - **Act** — governed handoff only. Routes through Panel/governance; must not bypass
   WriteGuard or blur propose/stage/apply.
 
@@ -97,7 +99,8 @@ Listed for awareness only. **Do not** create implementation issues from this sec
 without an owner decision; this map exists in part to prevent premature Resurface/Act
 slicing.
 
-- Resurface affordance normalization (product-surface suggestion orchestration).
+- Resurface persistence/orchestration normalization (durable dismiss/snooze/pin,
+  tray-level behavior, and cross-artifact surfacing workflow).
 - Act flow visual hardening (unified propose/stage/apply Companion UX).
 - Fixture-safe UAT / state coverage for Companion UI modes (tracked by #1550).
 - Optional re-entry degraded/manual-refresh audit, only if a concrete post-#1532 gap is
@@ -109,7 +112,8 @@ slicing.
 - #1458 (foreground ambient refresh) is **closed**, not open — treated as shipped
   (default-off).
 - Agent-memory posture references #1474 / #1547 instead of duplicating that scope.
-- Resurface and Act product surfaces are **target-state**, not shipped.
+- Resurface read-side candidate rendering is **shipped/dev-staging**; durable
+  Resurface persistence/orchestration and unified Act UX remain **target-state**.
 - No design/planning language in this doc is runtime truth; runtime truth lives in
   `docs/STATUS.md` and the owner contracts.
 
