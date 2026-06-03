@@ -92,12 +92,20 @@ jobs:
             // It records the BuilderOps objects/projections/receipts created, or an explicit "none" reason.
             const builderOpsRoutingMatch = body.match(/## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|## BuilderOps Routing[\s\S]*/i);
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
+            const hasConcreteBuilderOpsValue = (pattern) => {
+              const match = builderOpsRoutingSection.match(pattern);
+              if (!match) {
+                return false;
+              }
+              const value = match[1].trim();
+              return value.length > 0 && !/^<.*>$/.test(value);
+            };
             const hasBuilderOpsRouting =
               Boolean(builderOpsRoutingSection) &&
-              /(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*\S/i.test(builderOpsRoutingSection) &&
-              /(?:^|\n)\s*-\s*Reason:\s*\S/i.test(builderOpsRoutingSection);
+              hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*(.*?)\s*(?:\n|$)/i) &&
+              hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)/i);
             if (!hasBuilderOpsRouting) {
-              core.setFailed("PR body must include `## BuilderOps Routing` with `Records/projections/receipts:` and `Reason:` lines.");
+              core.setFailed("PR body must include `## BuilderOps Routing` with concrete `Records/projections/receipts:` and `Reason:` lines.");
               return;
             }
             const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;

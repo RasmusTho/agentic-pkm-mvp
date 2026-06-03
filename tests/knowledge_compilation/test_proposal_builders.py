@@ -102,6 +102,15 @@ def test_builders_reject_hidden_authority_context() -> None:
             title="t",
         )
 
+    for review_state in ("queued", "candidate", "rejected"):
+        with pytest.raises(ValueError, match="non-approved review_state"):
+            build_compilation_draft(
+                ProposalContext(
+                    source_refs=(SourceRef(artifact_id=f"m-{review_state}", review_state=review_state),)
+                ),
+                title="t",
+            )
+
     # Retrieval-ranked source presented as approved authority.
     with pytest.raises(ValueError, match="retrieval"):
         build_compilation_draft(

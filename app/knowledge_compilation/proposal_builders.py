@@ -33,6 +33,7 @@ from app.knowledge_compilation.runtime_artifacts import (
 _MACHINE_DERIVATIONS: frozenset[str] = frozenset(
     {"embedding", "generated_summary", "summary", "retrieval", "rerank"}
 )
+_APPROVED_REVIEW_STATES: frozenset[str] = frozenset({"reviewed", "accepted"})
 
 
 class ProposalContext(BaseModel):
@@ -74,9 +75,11 @@ def _reject_hidden_authority(context: ProposalContext) -> None:
             "into a non-canonical proposal"
         )
     for ref in context.source_refs:
-        if (ref.review_state or "").strip().lower() == "unreviewed":
+        review_state = (ref.review_state or "").strip().lower()
+        if review_state and review_state not in _APPROVED_REVIEW_STATES:
             raise ValueError(
-                f"unreviewed source {ref.artifact_id!r} cannot be laundered into a proposal"
+                f"source {ref.artifact_id!r} has non-approved review_state {ref.review_state!r}; "
+                f"only reviewed or accepted sources can be laundered into a proposal"
             )
         if ref.retrieval_score is not None:
             raise ValueError(
