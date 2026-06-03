@@ -1727,6 +1727,7 @@ def _render_artifact_inspector(
     actions_html = _render_vault_actions(note)
     receipts_html = _render_inspector_receipts(note)
     posture_html = _render_inspector_review_posture(note)
+    agent_memory_posture_html = _render_inspector_agent_memory_posture(note)
 
     is_companion_note = kind_val in _COMPANION_KINDS
     inspector_kind_attr = f' data-kind="{_e(str(kind_val))}"' if kind_val else ""
@@ -1750,6 +1751,7 @@ def _render_artifact_inspector(
         f'{vault_identity_html}'
         f'</div>'
         f'{posture_html}'
+        f'{agent_memory_posture_html}'
         f'{receipts_html}'
         f'{actions_html}'
         f'{links_html}'
@@ -1785,6 +1787,63 @@ def _render_inspector_review_posture(note: dict) -> str:
         f'{review_html}'
         f'{trust_html}'
         '</div>'
+    )
+
+
+def _render_inspector_agent_memory_posture(note: dict) -> str:
+    """Render non-authoritative agent-memory posture from server payload."""
+    _SENTINEL = object()
+    posture_raw = note.get("agent_memory_posture", _SENTINEL)
+    if posture_raw is _SENTINEL:
+        return (
+            '<div class="inspector-agent-memory-posture" '
+            'data-testid="workspace-vault-browser-inspector-agent-memory-posture" '
+            'data-agent-memory-authority="non_authoritative" '
+            'data-agent-memory-state="unavailable" '
+            'data-affordance-status="read-only">'
+            '<span class="posture-label">agent memory posture</span>'
+            '<span class="posture-field">source unavailable</span>'
+            '</div>'
+        )
+
+    posture: dict = dict(posture_raw or {})
+    state = str(posture.get("state") or "no_agent_memory")
+    counts = dict(posture.get("counts") or {})
+    items = list(posture.get("items") or [])
+    count_labels = ", ".join(
+        f"{key}: {int(counts.get(key) or 0)}"
+        for key in ("pending", "promoted", "rejected", "revised")
+    )
+    rows = []
+    for item in items:
+        status = str(item.get("status") or "")
+        rows.append(
+            '<div class="agent-memory-posture-row" '
+            'data-testid="vault-browser-agent-memory-posture-row" '
+            f'data-agent-memory-status="{_e(status)}">'
+            f'<span data-testid="vault-browser-agent-memory-candidate-id">{_e(str(item.get("candidate_id") or ""))}</span>'
+            f'<span data-testid="vault-browser-agent-memory-status">{_e(status)}</span>'
+            f'<span data-testid="vault-browser-agent-memory-review-state">{_e(str(item.get("review_state") or ""))}</span>'
+            f'<span data-testid="vault-browser-agent-memory-type">{_e(str(item.get("memory_type") or ""))}</span>'
+            '</div>'
+        )
+    empty = (
+        '<span class="posture-field" data-testid="vault-browser-agent-memory-empty">'
+        'No agent-memory posture found for this artifact.</span>'
+        if not rows
+        else ""
+    )
+    return (
+        '<div class="inspector-agent-memory-posture" '
+        'data-testid="workspace-vault-browser-inspector-agent-memory-posture" '
+        'data-agent-memory-authority="non_authoritative" '
+        f'data-agent-memory-state="{_e(state)}" '
+        'data-affordance-status="read-only">'
+        '<span class="posture-label">agent memory posture</span>'
+        f'<span class="posture-field" data-testid="vault-browser-agent-memory-counts">{_e(count_labels)}</span>'
+        f'{empty}'
+        + "".join(rows)
+        + '</div>'
     )
 
 
