@@ -26,7 +26,7 @@ The #1488 decision (`docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` → "Runtime topo
 
 So the buildable work is **not** "invent a new topology source." It is: make the *existing* `zone` projection self-describing under the #1488 envelope, then surface those signals in the UI. The new-source variant remains deferred and is explicitly out of scope for this directory.
 
-These documents are not issue templates. Each task spec is the source of truth for what must be built; the GitHub issues are execution artifacts derived from it.
+These documents are not issue templates and do not replace the GitHub issues. Each task spec anchors the spec-level intent, constraints, and acceptance shape; the GitHub issue created from it remains the canonical, executable task contract per `AGENTS.md` — agents implement against the issue, including its labels, readiness state, and any updated acceptance criteria, using these specs as the source-doc anchor.
 
 ## Capability boundary
 
