@@ -19,6 +19,10 @@ from pydantic import BaseModel, Field
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.agent_memory.review_queue import MemoryCandidateReviewQueue
+from app.agent_memory.posture_projection import (
+    AgentMemoryPostureTarget,
+    agent_memory_posture_for_artifacts,
+)
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
 from app.config.paths import resolve_vault_root
@@ -338,6 +342,34 @@ class VaultReceiptState(BaseModel):
     state: str
 
 
+class VaultAgentMemoryPostureItemState(BaseModel):
+    candidate_id: str
+    title: str
+    status: Literal["pending", "promoted", "rejected", "revised"]
+    review_state: str
+    memory_type: str
+    inferred: bool
+    source_refs: list[str] = Field(default_factory=list)
+    derived_from: str | None = None
+    generated_by: str | None = None
+    revision_of: str | None = None
+
+
+class VaultAgentMemoryPostureState(BaseModel):
+    source: Literal["agent_memory.review_queue"] = "agent_memory.review_queue"
+    authority: Literal["non_authoritative"] = "non_authoritative"
+    state: Literal[
+        "no_agent_memory",
+        "pending",
+        "promoted",
+        "rejected",
+        "revised",
+        "mixed",
+    ]
+    counts: dict[str, int]
+    items: list[VaultAgentMemoryPostureItemState] = Field(default_factory=list)
+
+
 class VaultBrowserNoteState(BaseModel):
     note_path: str
     title: str
@@ -354,6 +386,10 @@ class VaultBrowserNoteState(BaseModel):
     frontmatter_valid: bool = False
     missing_required_fields: list[str] = Field(default_factory=list)
     receipts: list[VaultReceiptState] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    agent_memory_posture: VaultAgentMemoryPostureState | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -1418,6 +1454,36 @@ def _attach_receipts_to_notes(
     ]
 
 
+def _attach_agent_memory_posture_to_notes(
+    notes: list[VaultBrowserNoteState],
+    *,
+    vault_root: Path,
+) -> list[VaultBrowserNoteState]:
+    projection = agent_memory_posture_for_artifacts(
+        [
+            AgentMemoryPostureTarget(
+                artifact_uuid=note.uuid,
+                note_path=note.note_path,
+            )
+            for note in notes
+        ],
+        queue=_orientation_memory_review_queue(),
+        vault_root=vault_root,
+    )
+    if projection is None:
+        return notes
+    return [
+        note.model_copy(
+            update={
+                "agent_memory_posture": VaultAgentMemoryPostureState.model_validate(
+                    projection[note.note_path]
+                )
+            }
+        )
+        for note in notes
+    ]
+
+
 def _invert_lex(value: str) -> str:
     return "".join(chr(0x10FFFF - ord(ch)) for ch in value)
 
@@ -1918,6 +1984,7 @@ def read_companion_vault_browser(
         previous_cursor=previous_cursor,
     )
     selected = _attach_receipts_to_notes(selected, vault_root=vault_root)
+    selected = _attach_agent_memory_posture_to_notes(selected, vault_root=vault_root)
     identity = _vault_identity_state(vault_root)
     identity_available = (
         bool(identity.vault_name.strip()) and identity.channel in {"dev", "test", "prod"}
