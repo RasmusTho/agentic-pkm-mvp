@@ -109,6 +109,27 @@ def test_vault_browser_agent_memory_posture_is_separate_from_frontmatter_and_rec
     assert "receipts" in note
 
 
+def test_vault_browser_matches_existing_memory_source_ref_formats(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    vault_root = _isolate_sources(tmp_path, monkeypatch)
+    _write_note(vault_root, "notes/source-ref.md", uuid="source-ref-uuid")
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(_candidate("note:notes/source-ref.md"))
+    queue.enqueue(_candidate("vault://notes/source-ref.md"))
+    monkeypatch.setattr(companion_module, "_MEMORY_CANDIDATE_REVIEW_QUEUE", queue)
+
+    resp = TestClient(app).get("/api/companion/vault-browser")
+
+    assert resp.status_code == 200
+    note = next(note for note in resp.json()["notes"] if note["note_path"] == "notes/source-ref.md")
+    posture = note["agent_memory_posture"]
+    assert posture["state"] == "pending"
+    assert posture["counts"]["pending"] == 2
+    assert [item["status"] for item in posture["items"]] == ["pending", "pending"]
+
+
 def test_vault_browser_agent_memory_posture_read_is_non_mutating(
     tmp_path: Path,
     monkeypatch,

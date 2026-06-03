@@ -30,7 +30,7 @@ _STATUS_TO_STATE = {
 }
 _COUNT_KEYS = ("pending", "promoted", "rejected", "revised")
 _UUID_REF_PREFIXES = {"artifact_uuid", "note_uuid", "uuid"}
-_PATH_REF_PREFIXES = {"artifact_path", "note_path", "path", "vault", "vault_path"}
+_PATH_REF_PREFIXES = {"artifact_path", "note", "note_path", "path", "vault", "vault_path"}
 
 
 def agent_memory_posture_for_artifacts(
@@ -131,6 +131,8 @@ def _entry_artifact_refs(entry: ReviewEntry, *, vault_root: Path) -> dict[str, s
         if prefix in _UUID_REF_PREFIXES and value:
             uuids.add(value)
         elif prefix in _PATH_REF_PREFIXES and value:
+            if prefix == "vault" and value.startswith("//"):
+                value = value[2:]
             normalized = normalize_note_path(value, vault_root=vault_root)
             if normalized:
                 paths.add(normalized)
