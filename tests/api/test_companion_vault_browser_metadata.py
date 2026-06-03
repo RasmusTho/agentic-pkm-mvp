@@ -243,6 +243,71 @@ class TestArtifactMetadataDistinctFromVaultIdentity:
         assert second["uuid"] is None
 
 
+class TestZoneProjectionEnvelope:
+    """#1554 — every ``zone`` carries a #1488 source/authority/provenance/degradation envelope.
+
+    Verify targets named in #1473 child issue #1554. The Vault Browser metadata test module is the
+    nearest-authority home (the issue's literal ``tests/api/test_companion_vault_browser.py`` path
+    does not exist; metadata projection tests live here).
+    """
+
+    def test_zone_projection_envelope_frontmatter(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        _write_note(tmp_path / "notes" / "complete.md", _full_frontmatter_note("Complete"))
+
+        note = TestClient(app).get("/api/companion/vault-browser").json()["notes"][0]
+
+        # Frontmatter-authored zone is durable vault metadata, no degradation.
+        assert note["zone"] == "active"
+        assert note["zone_source"] == "frontmatter.zone"
+        assert note["zone_authority_role"] == "durable_vault_metadata"
+        assert note["zone_provenance"] == "frontmatter.zone"
+        assert note["zone_degradation"] == "none"
+
+    def test_zone_projection_envelope_path_fallback(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        # uuid-only note: valid frontmatter, no zone key → path-derived fallback.
+        _write_note(tmp_path / "Projects" / "foo.md", _uuid_only_note("Foo"))
+
+        note = TestClient(app).get("/api/companion/vault-browser").json()["notes"][0]
+
+        assert note["zone"] == "Projects"  # path-derived value unchanged
+        assert note["zone_source"] == "vault_path_segment"
+        assert note["zone_authority_role"] == "runtime_projection"
+        assert note["zone_provenance"] == "vault_path[0]=Projects"
+        assert note["zone_degradation"] == "frontmatter_absent"
+
+    def test_zone_projection_envelope_malformed_frontmatter(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        _write_note(tmp_path / "Inbox" / "broken.md", _malformed_frontmatter_note())
+
+        note = TestClient(app).get("/api/companion/vault-browser").json()["notes"][0]
+
+        # Malformed frontmatter degrades to the path posture; never fabricates a zone.
+        assert note["zone"] == "Inbox"
+        assert note["zone_source"] == "vault_path_segment"
+        assert note["zone_authority_role"] == "runtime_projection"
+        assert note["zone_degradation"] == "frontmatter_invalid"
+
+    def test_zone_projection_envelope_no_frontmatter_is_absent_not_invalid(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        _write_note(tmp_path / "Areas" / "plain.md", _no_frontmatter_note("Plain"))
+
+        note = TestClient(app).get("/api/companion/vault-browser").json()["notes"][0]
+
+        assert note["zone"] == "Areas"
+        assert note["zone_source"] == "vault_path_segment"
+        assert note["zone_degradation"] == "frontmatter_absent"
+
+
 class TestMissingOptionalFieldsAreNullNotCrash:
     def test_optional_fields_absent_from_frontmatter_are_null(
         self, tmp_path: Path, monkeypatch

@@ -374,6 +374,12 @@ class VaultBrowserNoteState(BaseModel):
     note_path: str
     title: str
     zone: str
+    # Zone projection envelope (#1488): where this zone came from, so the UI can distinguish a
+    # durable frontmatter zone from a path-derived runtime projection. Additive to ``zone``.
+    zone_source: str = "unavailable"
+    zone_authority_role: str = "unavailable"
+    zone_provenance: str = "unavailable"
+    zone_degradation: str = "frontmatter_absent"
     # Normalized artifact metadata (server-owned; client never parses YAML)
     uuid: str | None = None
     kind: str | None = None
@@ -1199,12 +1205,47 @@ _ARTIFACT_OPTIONAL_FIELDS = (
 )
 
 
+def _zone_projection_envelope(
+    *, zone: str, path_derived_zone: str, frontmatter_zone_used: bool, frontmatter_invalid: bool
+) -> dict:
+    """Describe where an artifact's ``zone`` came from per the #1488 topology decision.
+
+    Every topology-derived Vault Browser field must carry ``source`` / ``authority_role`` /
+    ``provenance`` / ``degradation`` so a durable, human-authored zone is distinguishable from a
+    path-derived fallback (``docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md`` → "Runtime topology authority
+    decision (#1488)"). This is additive metadata over the existing source — no new topology source.
+    """
+    if frontmatter_zone_used:
+        return {
+            "zone_source": "frontmatter.zone",
+            "zone_authority_role": "durable_vault_metadata",
+            "zone_provenance": "frontmatter.zone",
+            "zone_degradation": "none",
+        }
+    degradation = "frontmatter_invalid" if frontmatter_invalid else "frontmatter_absent"
+    if not zone:
+        # Neither frontmatter nor a path segment yielded a zone — never fabricate one.
+        return {
+            "zone_source": "unavailable",
+            "zone_authority_role": "unavailable",
+            "zone_provenance": "unavailable",
+            "zone_degradation": degradation,
+        }
+    return {
+        "zone_source": "vault_path_segment",
+        "zone_authority_role": "runtime_projection",
+        "zone_provenance": f"vault_path[0]={path_derived_zone}",
+        "zone_degradation": degradation,
+    }
+
+
 def _parse_note_artifact_metadata(body: str, *, path_derived_zone: str) -> dict:
     """Parse frontmatter from a note body and return normalized artifact metadata.
 
     Server-side only — clients must never parse raw YAML.
     Returns a dict with all VaultBrowserNoteState metadata fields populated.
     Missing YAML or malformed YAML → frontmatter_valid=False + missing_required_fields.
+    The ``zone_*`` envelope describes the zone source/authority/provenance/degradation (#1488).
     """
     fm_inner, _ = _split_frontmatter(body)
     if fm_inner is None:
@@ -1212,6 +1253,12 @@ def _parse_note_artifact_metadata(body: str, *, path_derived_zone: str) -> dict:
             "uuid": None,
             "kind": None,
             "zone": path_derived_zone,
+            **_zone_projection_envelope(
+                zone=path_derived_zone,
+                path_derived_zone=path_derived_zone,
+                frontmatter_zone_used=False,
+                frontmatter_invalid=False,
+            ),
             "review_state": None,
             "trust": None,
             "origin": None,
@@ -1237,12 +1284,19 @@ def _parse_note_artifact_metadata(body: str, *, path_derived_zone: str) -> dict:
     frontmatter_valid = not parse_error and not missing
 
     fm_zone = fm.get("zone")
+    frontmatter_zone_used = bool(fm_zone)
     zone = str(fm_zone).strip() if fm_zone else path_derived_zone
 
     return {
         "uuid": normalized_uuid,
         "kind": _str_or_none(fm.get("kind")),
         "zone": zone,
+        **_zone_projection_envelope(
+            zone=zone,
+            path_derived_zone=path_derived_zone,
+            frontmatter_zone_used=frontmatter_zone_used,
+            frontmatter_invalid=parse_error,
+        ),
         "review_state": _str_or_none(fm.get("review_state")),
         "trust": _str_or_none(fm.get("trust")),
         "origin": _str_or_none(fm.get("origin")),
@@ -1372,6 +1426,10 @@ def _select_vault_notes(
             note_path=safe_path,
             title=title,
             zone=metadata["zone"],
+            zone_source=metadata["zone_source"],
+            zone_authority_role=metadata["zone_authority_role"],
+            zone_provenance=metadata["zone_provenance"],
+            zone_degradation=metadata["zone_degradation"],
             uuid=metadata["uuid"],
             kind=metadata["kind"],
             review_state=metadata["review_state"],
