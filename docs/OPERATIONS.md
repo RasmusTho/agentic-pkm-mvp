@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-02
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459, and current repo state at 3ea3e53 on 2026-06-02
+Last reviewed: 2026-06-03
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/trace_harness.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/eval/test_knowledge_compilation_trace_harness.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1538/#1551/#1552, and current repo state at 1fffc11e on 2026-06-03
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
