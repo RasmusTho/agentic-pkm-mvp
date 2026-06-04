@@ -22,6 +22,10 @@ production hardening or broader LAN/Tailscale use is implemented.
 This document is docs-first. It does not implement auth, TLS, reverse proxying,
 token issuance, or session cookies.
 
+For the current production/network exposure review profile, use
+`companion-ui/docs/PRODUCTION_EXPOSURE_SECURITY_PROFILE.md`. That profile consumes this access model
+and the security architecture spine; it does not implement hardening.
+
 ## Localhost Default
 
 Default localhost posture: bind to `127.0.0.1` and require no auth for

@@ -13,6 +13,9 @@ Use this document with:
 - `docs/AGENTS.md` for the current agent matrix and tool authorization semantics.
 - `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md` for backlog/track context and planned MCP/LangGraph integration.
 - `docs/contracts/A2A_CONTRACT_AND_TRACE.md` for agent-to-agent coordination.
+- `docs/security/AGENT_TOOL_EXECUTION_SECURITY_ADDENDUM.md` for security review framing over
+  descriptor trust, remote MCP admission, egress/secrets, trace/audit, and tool-output
+  manipulation.
 
 ## Current posture
 
