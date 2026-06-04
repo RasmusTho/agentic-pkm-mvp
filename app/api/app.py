@@ -98,6 +98,11 @@ try:
 except ImportError:
     context_bundles_router = None
 
+try:
+    from app.api.routes.resurfacing import router as resurfacing_router
+except ImportError:
+    resurfacing_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -205,6 +210,8 @@ def _create_app() -> FastAPI:
         application.include_router(builderops_router, prefix="/api")
     if context_bundles_router is not None:
         application.include_router(context_bundles_router, prefix="/api")
+    if resurfacing_router is not None:
+        application.include_router(resurfacing_router, prefix="/api")
     return application
 
 
