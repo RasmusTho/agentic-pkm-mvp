@@ -43,7 +43,7 @@ class NoteWatcherService:
                 raw_text = note_path.read_text(encoding="utf-8")
                 frontmatter, _ = load_frontmatter(raw_text)
                 had_uuid = bool(str(frontmatter.get("uuid") or "").strip())
-                note_uuid = ensure_note_uuid(note_path)
+                note_uuid = ensure_note_uuid(note_path, vault_root=self.vault_root)
                 content = note_path.read_text(encoding="utf-8")
             except Exception as exc:  # pragma: no cover - defensive
                 errors += 1
@@ -59,7 +59,7 @@ class NoteWatcherService:
                 continue
 
             try:
-                result = process_note_update(note_path, ctx, snapshot_dir=self.snapshot_dir)
+                result = process_note_update(note_path, ctx, vault_root=self.vault_root, snapshot_dir=self.snapshot_dir)
                 result.uuid_added = result.uuid_added or not had_uuid
             except Exception as exc:  # pragma: no cover - defensive
                 errors += 1

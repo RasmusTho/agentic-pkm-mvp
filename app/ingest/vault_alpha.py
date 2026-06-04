@@ -761,7 +761,7 @@ def _ingest_candidates(
                 note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
             if needs_uuid_write and note_uuid:
                 try:
-                    ensure_note_uuid(path, preferred_uuid=note_uuid)
+                    ensure_note_uuid(path, vault_root=vault_root, preferred_uuid=note_uuid)
                 except OSError as exc:
                     if _is_locked_error(exc) or _is_permission_denied_error(exc):
                         click.echo(

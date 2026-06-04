@@ -148,7 +148,7 @@ uuid: test-uuid
 
     attempts = {"count": 0}
 
-    def flaky_ensure(path: Path) -> str:
+    def flaky_ensure(path: Path, *, vault_root: Path) -> str:
         if path == note_path and attempts["count"] == 0:
             attempts["count"] += 1
             raise OSError(2, "No such file or directory")

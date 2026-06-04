@@ -47,6 +47,53 @@ def test_write_note_from_absolute_resolves_locator_and_port(monkeypatch, tmp_pat
     }
 
 
+def test_write_note_from_absolute_rejects_outside_vault_root_before_writing(monkeypatch, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    outside = tmp_path / "outside" / "note.md"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("old", encoding="utf-8")
+    vault.mkdir()
+    monkeypatch.setattr(
+        write_ops,
+        "resolve_knowledge_port",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("port should not resolve")),
+    )
+
+    try:
+        write_ops.write_note_from_absolute(outside, "new", vault_root=vault)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("outside path was accepted")
+
+    assert outside.read_text(encoding="utf-8") == "old"
+
+
+def test_write_note_from_absolute_rejects_symlink_escape(monkeypatch, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    outside = tmp_path / "outside"
+    vault.mkdir()
+    outside.mkdir()
+    escaped = outside / "note.md"
+    escaped.write_text("old", encoding="utf-8")
+    link = vault / "linked.md"
+    link.symlink_to(escaped)
+    monkeypatch.setattr(
+        write_ops,
+        "resolve_knowledge_port",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("port should not resolve")),
+    )
+
+    try:
+        write_ops.write_note_from_absolute(link, "new", vault_root=vault)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("symlink escape was accepted")
+
+    assert escaped.read_text(encoding="utf-8") == "old"
+
+
 def test_write_note_relative_uses_make_note_locator(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
