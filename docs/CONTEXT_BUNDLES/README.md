@@ -94,8 +94,9 @@ surface for that contract.
   all six task specs are merged and internally consistent.
 - All six child slices are delivered. Parent feature issue #894 is closed.
 - Owner-doc promotion beyond the typed-contract layer (e.g. STATUS.md, ARCHITECTURE.md) is gated
-  on runtime integration evidence — production route wiring, real vault emission — which is a
-  separate future slice.
+  on runtime integration evidence in the active follow-up lane `docs/CONTEXT_BUNDLES_RUNTIME/`
+  under parent #1559. Route/emission/consumption/linkage slices have merged; receipt projection and
+  final owner-doc promotion remain open.
 
 ## Evidence Surface
 
@@ -103,8 +104,8 @@ surface for that contract.
 - Slice verification receipts are on the closed child issues (#946–#949) and the closed parent (#894).
 - Parent feature issue [#894](https://github.com/RasmusTho/agentic-pkm-mvp/issues/894) is closed
   with a full validation receipt.
-- Owner docs such as `docs/STATUS.md` and `docs/ARCHITECTURE.md` should update only when runtime
-  route wiring actually delivers production bundle emission.
+- Owner docs such as `docs/STATUS.md` and `docs/ARCHITECTURE.md` should claim full runtime support
+  only after #1559 closes with receipt/query projection and owner-doc promotion evidence.
 
 ## Relationship to GitHub Issues
 
@@ -132,5 +133,6 @@ Promote current-state owner docs only after implementation receipts show all of 
 - write proposals carry bundle linkage without bypassing write guards,
 - and receipts expose bundle provenance and exclusions truthfully.
 
-Capability validation is complete on #894 (closed 2026-05-15). Further owner-doc promotion (STATUS.md,
-ARCHITECTURE.md) is gated on production route wiring delivering actual runtime bundle emission.
+Capability validation is complete on #894 (closed 2026-05-15). Further owner-doc promotion
+(`STATUS.md`, `ARCHITECTURE.md`) is now governed by #1559 and must wait for the receipt/query
+projection (#1565) plus final owner-doc promotion (#1566).

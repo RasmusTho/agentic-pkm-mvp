@@ -1,17 +1,18 @@
-State: Active feature-breakdown lane. Parent feature issue #1559 filed (validation hub, blocked).
-Child issues #1560 (ready), #1562, #1563, #1564, #1565, #1566 (blocked) filed. No runtime behavior
-is claimed here yet — this directory specifies the production runtime integration work that moves
-Context Bundles from typed-contract / Pydantic delivery to wired production routes.
+State: Active feature-breakdown lane. Parent feature issue #1559 remains open as the validation hub.
+Child issues #1560, #1562, #1563, and #1564 are merged; #1565 is in progress via PR #1574; #1566
+remains blocked until #1565 lands and runtime evidence is complete. This directory records the
+bounded integration lane and its current partial-delivery state; full owner-doc promotion waits for
+#1566.
 
 # Context Bundles — Production Runtime Integration
 
 ## Capability Boundary
 
-The Context Bundles capability is delivered at the typed-contract / Pydantic layer (closed parent
-#894 and children #895/#896/#946/#947/#948/#949). Every building block exists as a pure, tested
-function, but none is wired into the production route layer. Verified by import graph: the only
-consumer of the bundle modules today is `app/knowledge_compilation/` — no API route constructs,
-emits, consumes, links, or projects bundles against the real vault.
+The Context Bundles capability was first delivered at the typed-contract / Pydantic layer (closed
+parent #894 and children #895/#896/#946/#947/#948/#949). This runtime directory is the follow-up lane
+for wiring that contract into production surfaces. As of 2026-06-04, the construction route,
+real-retrieval emission, production orientation/resurfacing consumption, and governed write-proposal
+linkage slices are merged. Receipt/query projection and owner-doc promotion are still open.
 
 This directory specifies the bounded work to integrate the existing contract into production runtime:
 
@@ -44,18 +45,18 @@ spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
 
 ## Task List
 
-1. [EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md](EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md) — issue
-   [#1560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1560) (ready).
-2. [EMIT_FROM_REAL_RETRIEVAL.md](EMIT_FROM_REAL_RETRIEVAL.md) — issue
-   [#1562](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1562) (blocked → #1560).
-3. [CONSUME_IN_ORIENTATION_AND_RESURFACING.md](CONSUME_IN_ORIENTATION_AND_RESURFACING.md) — issue
-   [#1563](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1563) (blocked → #1562).
-4. [CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md](CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md) — issue
-   [#1564](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1564) (blocked → #1562).
-5. [EXPOSE_RECEIPT_PROJECTION.md](EXPOSE_RECEIPT_PROJECTION.md) — issue
-   [#1565](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1565) (blocked → #1563, #1564).
-6. [PROMOTE_OWNER_DOCS.md](PROMOTE_OWNER_DOCS.md) — issue
-   [#1566](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1566) (blocked → #1560, #1562-#1565).
+1. [EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md](EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md) — delivered, closed
+   [#1560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1560) via PR #1569.
+2. [EMIT_FROM_REAL_RETRIEVAL.md](EMIT_FROM_REAL_RETRIEVAL.md) — delivered, closed
+   [#1562](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1562) via PR #1570.
+3. [CONSUME_IN_ORIENTATION_AND_RESURFACING.md](CONSUME_IN_ORIENTATION_AND_RESURFACING.md) —
+   delivered, closed [#1563](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1563) via PR #1571.
+4. [CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md](CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md) —
+   delivered, closed [#1564](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1564) via PR #1572.
+5. [EXPOSE_RECEIPT_PROJECTION.md](EXPOSE_RECEIPT_PROJECTION.md) — open
+   [#1565](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1565), in progress via PR #1574.
+6. [PROMOTE_OWNER_DOCS.md](PROMOTE_OWNER_DOCS.md) — blocked
+   [#1566](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1566) until #1565 lands.
 
 ## Flat Execution Order
 
@@ -68,13 +69,13 @@ spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
 
 ## Capability-Level Acceptance Criteria
 
-- [ ] A production route returns an inspectable `ContextBundle` envelope, read-only.
+- [x] A production route returns an inspectable `ContextBundle` envelope, read-only.
   Verify: `docs/CONTEXT_BUNDLES_RUNTIME/EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md` + #1560 PR validation.
-- [ ] Real retrieval emits bundles against the live vault.
+- [x] Real retrieval emits bundles against the live vault.
   Verify: `docs/CONTEXT_BUNDLES_RUNTIME/EMIT_FROM_REAL_RETRIEVAL.md` + #1562 PR validation.
-- [ ] Orientation and resurfacing production paths consume bundles without authority upgrade.
+- [x] Orientation and resurfacing production paths consume bundles without authority upgrade.
   Verify: #1563 PR validation.
-- [ ] Governed write proposals carry bundle linkage without bypassing WriteGuard.
+- [x] Governed write proposals carry bundle linkage without bypassing WriteGuard.
   Verify: #1564 PR validation.
 - [ ] A receipt/query projection exposes bundle provenance and exclusions.
   Verify: #1565 PR validation.
