@@ -89,7 +89,8 @@ Use this tier for properties worth preserving regardless of risk probability:
 
 - human-authored Markdown remains primary for durable meaning,
 - DB, index, and cache state are mirrors, not semantic authority,
-- runtime writes are governed and receipt-bearing,
+- runtime writes follow their applicable authority lane: governance-bearing writes are receipt-bearing,
+  while Canvas body co-authoring uses user-present confirmation, undo, and session-log provenance,
 - Companion UI is a projection/control surface, not file authority,
 - BuilderOps proposes and records, but does not replace repo/product truth,
 - memory and context bundles do not bypass governance,
@@ -101,7 +102,10 @@ These invariants are binding review inputs:
 
 1. Human Markdown remains primary for durable meaning.
 2. DB/index/cache are rebuildable mirrors and cannot originate semantic authority.
-3. Runtime writes must cross governance and produce receipt/accountability evidence.
+3. Runtime writes must cross the applicable governance or co-authoring boundary and produce the
+   matching accountability evidence. Governance-bearing writes produce receipts; Canvas body-edit
+   co-authoring does not produce Panel governance receipts and instead records provenance through
+   the session log, as defined in `companion-ui/docs/CANVAS_SUGGESTION_FLOW.md`.
 4. Companion UI may project, stage, queue, and control through the runtime API; it must not read or
    write vault files directly or classify its own durable authority.
 5. BuilderOps may guide, record, and propose, but product/runtime truth changes only through repo
