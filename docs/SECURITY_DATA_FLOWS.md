@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-04
-Last verified against: docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/ARCHITECTURE.md, docs/PRIVACY.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, companion-ui/docs/LOCAL_ACCESS_MODEL.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md
+Last verified against: docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/security/API_SECURITY_MATRIX.md, docs/ARCHITECTURE.md, docs/PRIVACY.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, companion-ui/docs/LOCAL_ACCESS_MODEL.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md
 
 # Security Data Flows
 
@@ -15,6 +15,10 @@ Last verified against: docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDA
 This document lists the security-relevant data classes and flows that future formal reviews should
 analyze. It is an input to STRIDE, ATT&CK-inspired mapping, attack-path analysis, and API security
 matrix work.
+
+The route-by-route API security inventory lives in `docs/security/API_SECURITY_MATRIX.md`. Use that
+matrix when a data flow crosses the runtime API boundary, changes route exposure, or adds a
+mutation-capable API surface.
 
 Data-flow authority is not the same as semantic authority. Data moving into a component does not
 grant that component authority over meaning, writes, receipts, or product truth. Authority remains
