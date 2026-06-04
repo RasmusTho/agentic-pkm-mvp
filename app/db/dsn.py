@@ -43,4 +43,4 @@ def ping_postgres(*, timeout: float = 1.0, conninfo: t.Optional[str] = None) -> 
                 cur.fetchone()
         return True, "postgres reachable"
     except Exception as exc:
-        return False, f"postgres unreachable: {exc}"
+        return False, f"postgres unreachable ({type(exc).__name__})"
