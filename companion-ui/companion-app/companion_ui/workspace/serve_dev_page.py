@@ -1634,6 +1634,68 @@ def _render_inspector_links(note: dict) -> str:
     )
 
 
+def _render_inspector_zone_field(note: dict) -> str:
+    """Render the zone field with its #1488 source/authority/provenance/degradation envelope.
+
+    The UI reads the server-declared zone envelope verbatim and never re-derives zone authority
+    locally (#1555). A path-derived ``runtime_projection`` zone is rendered visibly distinct from a
+    durable ``durable_vault_metadata`` (frontmatter) zone, and the provenance/degradation are made
+    inspectable so a ``frontmatter_absent`` / ``frontmatter_invalid`` zone is never presented as
+    authoritative. No zone-based ordering/overlay is introduced.
+    """
+    zone_val = note.get("zone")
+    if zone_val is None:
+        return ""
+    authority_role = str(note.get("zone_authority_role") or "").strip()
+    source = str(note.get("zone_source") or "").strip()
+    provenance = str(note.get("zone_provenance") or "").strip()
+    degradation = str(note.get("zone_degradation") or "").strip()
+
+    authority_labels = {
+        "durable_vault_metadata": "frontmatter",
+        "runtime_projection": "derived from path",
+        "unavailable": "unavailable",
+    }
+    authority_label = authority_labels.get(authority_role, "")
+    badge_html = ""
+    if authority_label:
+        badge_html = (
+            '<span class="inspector-zone-authority" '
+            'data-testid="workspace-vault-browser-inspector-zone-authority" '
+            f'data-authority-role="{_e(authority_role)}">'
+            f'{_e(authority_label)}'
+            '</span>'
+        )
+
+    # Provenance + degradation are surfaced whenever the zone is not a clean durable source, so a
+    # degraded (path-derived) zone exposes where it came from rather than masquerading as durable.
+    detail_html = ""
+    if degradation and degradation != "none":
+        detail_title = f"source: {source} · provenance: {provenance} · degradation: {degradation}"
+        detail_html = (
+            '<span class="inspector-zone-provenance" '
+            'data-testid="workspace-vault-browser-inspector-zone-provenance" '
+            f'data-provenance="{_e(provenance)}" '
+            f'data-degradation="{_e(degradation)}" '
+            f'title="{_e(detail_title)}">'
+            f'{_e(f"{provenance} ({degradation})")}'
+            '</span>'
+        )
+
+    return (
+        '<div data-testid="workspace-vault-browser-inspector-zone" class="inspector-field" '
+        f'data-zone-source="{_e(source)}" '
+        f'data-zone-authority-role="{_e(authority_role)}" '
+        f'data-zone-provenance="{_e(provenance)}" '
+        f'data-zone-degradation="{_e(degradation)}">'
+        '<span class="inspector-label">zone</span>'
+        f'<span class="inspector-zone-value">{_e(str(zone_val))}</span>'
+        f'{badge_html}'
+        f'{detail_html}'
+        '</div>'
+    )
+
+
 def _render_artifact_inspector(
     note: dict,
     *,
@@ -1649,7 +1711,6 @@ def _render_artifact_inspector(
     title = _e(str(note.get("title") or ""))
     path = _e(str(note.get("note_path") or ""))
     kind_val = note.get("kind")
-    zone_val = note.get("zone")
     review_state_val = note.get("review_state")
     trust_val = note.get("trust")
     uuid_val = note.get("uuid")
@@ -1680,7 +1741,7 @@ def _render_artifact_inspector(
 
     metadata_rows = "".join([
         _field_row("workspace-vault-browser-inspector-kind", "kind", kind_val),
-        _field_row("workspace-vault-browser-inspector-zone", "zone", zone_val),
+        _render_inspector_zone_field(note),
         _field_row("workspace-vault-browser-inspector-review-state", "review state", review_state_val),
         _field_row("workspace-vault-browser-inspector-trust", "trust", trust_val),
         _field_row("workspace-vault-browser-inspector-origin", "origin", origin_val),
