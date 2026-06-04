@@ -35,6 +35,10 @@ def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dic
     return out
 
 
+def _exception_kind(exc: Exception) -> str:
+    return type(exc).__name__
+
+
 def _annotate_required(payload: Dict[str, Any], *, required: bool, severity: str | None = None) -> Dict[str, Any]:
     payload["required"] = required
     payload["severity"] = severity or ("required" if required else "optional")
@@ -81,7 +85,7 @@ def _check_yt_dlp() -> Dict[str, Any]:
         importlib.import_module("yt_dlp")
         return _result(True, "yt-dlp kan importeras")
     except Exception as exc:  # pragma: no cover - import side-effects differ per env
-        return _result(False, f"yt-dlp import misslyckades: {exc!s}")
+        return _result(False, f"yt-dlp import misslyckades ({_exception_kind(exc)})")
 
 
 def _check_panel_actions() -> Dict[str, Any]:
@@ -108,7 +112,7 @@ def _check_outbox_path() -> Dict[str, Any]:
             ...
         return _result(True, f"Skrivåtkomst bekräftad: {path}")
     except Exception as exc:
-        return _result(False, f"Kan inte skriva till {path}: {exc!s}")
+        return _result(False, f"Kan inte skriva till index-outbox path ({_exception_kind(exc)})")
 
 
 def _check_ollama() -> Dict[str, Any]:
@@ -235,7 +239,7 @@ def _check_embedding_index() -> Dict[str, Any]:
 
         diag = diagnose_index()
     except Exception as exc:
-        return {"ok": False, "detail": f"index doctor failed: {exc}", "status": "fail"}
+        return {"ok": False, "detail": f"index doctor failed ({_exception_kind(exc)})", "status": "fail"}
 
     rebuild_required = bool(diag.get("rebuild_required"))
     empty_index = bool(diag.get("empty_index"))
@@ -336,7 +340,7 @@ def _check_obsidian_dependencies() -> Dict[str, Any]:
     try:
         settings = load_knowledge_settings()
     except KnowledgeConfigError as exc:
-        return _result(False, f"knowledge settings invalid: {exc}")
+        return _result(False, f"knowledge settings invalid ({_exception_kind(exc)})")
     status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
     data = {
         **status.details,
@@ -373,7 +377,7 @@ def _heartbeat_status(
     except Exception as exc:
         return {
             "ok": False,
-            "detail": f"{name} heartbeat malformed ({exc})",
+            "detail": f"{name} heartbeat malformed ({_exception_kind(exc)})",
             "path": str(path),
             "status": "malformed",
         }
@@ -588,7 +592,7 @@ def _check_companion_diagnostics() -> Dict[str, Any]:
     try:
         summary = companion_diagnostics_summary(vault_root)
     except Exception as exc:
-        return _result(True, f"companion diagnostics skipped: {exc}", data={"skipped": True})
+        return _result(True, f"companion diagnostics skipped ({_exception_kind(exc)})", data={"skipped": True})
     count = summary["duplicate_companion_count"]
     ok = count == 0
     detail = "no duplicate companion notes" if ok else f"{count} duplicate companion note(s) detected"
