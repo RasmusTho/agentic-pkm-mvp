@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from app.knowledge.contracts import NoteLocator
@@ -16,8 +17,8 @@ def make_note_locator(path: str | Path, *, vault: str | None = None) -> NoteLoca
 
 
 def make_note_locator_from_absolute(path: str | Path, *, vault_root: str | Path, vault: str | None = None) -> NoteLocator:
-    resolved_path = Path(path).expanduser().resolve()
-    resolved_root = Path(vault_root).expanduser().resolve()
+    resolved_path = Path(os.path.realpath(os.path.expanduser(os.fspath(path))))
+    resolved_root = Path(os.path.realpath(os.path.expanduser(os.fspath(vault_root))))
     rel = resolved_path.relative_to(resolved_root).as_posix()
     return make_note_locator(rel, vault=vault)
 

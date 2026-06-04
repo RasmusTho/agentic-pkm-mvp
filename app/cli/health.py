@@ -147,7 +147,7 @@ def _check_ollama() -> Dict[str, Any]:
             data={"models": [m.get("name") for m in data.get("models", [])] if isinstance(data, dict) else None},
         )
     except Exception as exc:
-        result = _result(False, f"Ollama svarade inte ({base}): {exc!s}")
+        result = _result(False, f"Ollama svarade inte ({_exception_kind(exc)})")
     result["provider"] = provider
     result["base_url"] = base
     return result
