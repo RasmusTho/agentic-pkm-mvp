@@ -29,7 +29,8 @@ async def get_context_bundle(bundle_id: str, query: str | None = None) -> Contex
     """
     if query:
         result, _receipt = retrieve_and_emit_bundle(
-            RetrievalRequest(query=query, trace_id=bundle_id)
+            RetrievalRequest(query=query, trace_id=bundle_id),
+            bundle_id=bundle_id,
         )
         return result.bundle
     return build_inspectable_bundle(bundle_id)

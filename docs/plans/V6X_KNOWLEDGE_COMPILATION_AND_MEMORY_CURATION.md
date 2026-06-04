@@ -1,12 +1,12 @@
-State: Proposed v6.x planning line for knowledge compilation and memory curation; docs-only and not current runtime truth.
+State: v6.x planning line for knowledge compilation and memory curation; first runtime-foundation support seams shipped, while storage/API/event/UI integration and durable promotion remain future work.
 Doc role: Plan
 Authority: Planning contract for v6.x knowledge compilation and memory curation framing; does not override current runtime truth in `docs/ARCHITECTURE.md`, `docs/STATUS.md`, or capability specs.
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-05-07
-Last verified against: docs/HUMAN-FLOWS.md, docs/plans/V60_ARCHITECTURE_TARGET.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/FINDING_AND_REORIENTING/README.md, docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md
+Last reviewed: 2026-06-04
+Last verified against: docs/HUMAN-FLOWS.md, docs/plans/V60_ARCHITECTURE_TARGET.md, docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md, docs/FINDING_AND_REORIENTING/README.md, docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/ROADMAP.md, PR #1557
 
 # v6.x Knowledge Compilation and Memory Curation Plan
 
@@ -17,7 +17,10 @@ Define a bounded v6.x planning line for how the system should support:
 - memory curation that keeps retained artifacts findable, explainable, and reviewable;
 - explicit governance so generated material does not silently become canonical truth.
 
-This plan names the target semantic posture and sequencing recommendation. It does not claim shipped runtime implementation.
+This plan names the target semantic posture and sequencing recommendation. The first
+runtime-foundation support seams shipped under #1534-#1538 as pure, provider-free,
+non-canonical helpers; this plan still does not claim storage/API/event/UI integration,
+durable promotion, or autonomous vault mutation.
 
 ## Human-Flow Grounding
 
@@ -119,7 +122,16 @@ Current related backlog anchors:
 - Roadmap/index cross-reference follow-up: #806
 - Plan authoring slice (this issue): #804
 
-Planned implementation/test anchors should be filed as bounded child issues under #803 before runtime work starts.
+Delivered runtime-foundation anchors under #1533:
+- Runtime artifact contracts: #1534
+- Deterministic proposal builders: #1535
+- Read-only reorientation packet assembly: #1536
+- Explicit admission handoff: #1537
+- Diagnostic trace harness: #1538
+
+These shipped slices are support seams only. Follow-up implementation/test anchors for
+storage, API, event, UI, durable promotion, or governed writeback should still be filed as
+bounded child issues before that broader runtime work starts.
 
 ## Acceptance Criteria for This Plan
 
@@ -140,7 +152,9 @@ Recommended sequencing under parent feature #803:
 3. Add roadmap/index cross-references and visibility in planning maps (#806).
 4. Decompose bounded implementation and test slices from #803 with explicit `Verify:` targets.
 5. Deliver runtime slices incrementally with owner-doc writeback and verification receipts.
+6. Filed and shipped first runtime-foundation support seams (#1534-#1538).
+7. File separate bounded slices before claiming storage/API/event/UI integration or durable promotion.
 
 ## Status Note
 
-This plan is a forward-looking design surface. Current runtime behavior remains authoritative in `docs/ARCHITECTURE.md`, `docs/STATUS.md`, and capability owner docs until bounded implementation slices are delivered.
+This plan is a strategic design surface with the first runtime-foundation seams delivered. Current runtime behavior remains authoritative in `docs/ARCHITECTURE.md`, `docs/STATUS.md`, `docs/ROADMAP.md`, and capability owner docs; future storage/API/event/UI integration requires bounded follow-up slices and owner-doc writeback.

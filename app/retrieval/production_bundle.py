@@ -27,6 +27,7 @@ def emit_bundle_from_response(
     selected_ids: list[str] | None = None,
     excluded: list[ExcludedItem] | None = None,
     scope: BundleScope | None = None,
+    bundle_id: str | None = None,
 ) -> tuple[RetrievalBundleResult, BundleReceipt]:
     """Emit an inspectable bundle from a real ``RetrievalResponse``.
 
@@ -45,6 +46,7 @@ def emit_bundle_from_response(
         selected_ids=selected,
         excluded=excluded,
         scope=scope,
+        bundle_id=bundle_id,
     )
     receipt = record_creation_receipt(result.bundle)
     return result, receipt
@@ -56,6 +58,7 @@ def retrieve_and_emit_bundle(
     selected_ids: list[str] | None = None,
     excluded: list[ExcludedItem] | None = None,
     scope: BundleScope | None = None,
+    bundle_id: str | None = None,
 ) -> tuple[RetrievalBundleResult, BundleReceipt]:
     """Run the real retrieval capability and emit a bundle from the response."""
     response = retrieve(request)
@@ -64,6 +67,7 @@ def retrieve_and_emit_bundle(
         selected_ids=selected_ids,
         excluded=excluded,
         scope=scope,
+        bundle_id=bundle_id,
     )
 
 
