@@ -1,7 +1,9 @@
-State: Active feature-breakdown lane. Parent feature issue #1559 filed (validation hub, blocked).
-Child issues #1560 (ready), #1562, #1563, #1564, #1565, #1566 (blocked) filed. No runtime behavior
-is claimed here yet — this directory specifies the production runtime integration work that moves
-Context Bundles from typed-contract / Pydantic delivery to wired production routes.
+State: Delivered. Parent feature issue #1559 closed 2026-06-04 after children #1560 (PR #1569),
+#1562 (PR #1570), #1563 (PR #1571), #1564 (PR #1572), #1565 (PR #1574), and #1566 (owner-doc
+promotion + closure) merged with validation receipts. Context Bundles are now wired into production
+runtime — construction route, real retrieval emission, orientation/resurfacing consumption, governed
+write-proposal linkage, and a read-only receipt projection — as inspectable bridge objects that carry
+no write authority (`may_write` stays false) and bypass no write guard, trust, or policy gate.
 
 # Context Bundles — Production Runtime Integration
 
@@ -127,4 +129,7 @@ shipped runtime:
 - write proposals carry bundle linkage without bypassing WriteGuard,
 - and receipts expose bundle provenance and exclusions truthfully.
 
-This trigger is executed by `PROMOTE_OWNER_DOCS.md` (#1566), not before.
+**Executed (2026-06-04) by `PROMOTE_OWNER_DOCS.md` (#1566).** All conditions are satisfied with
+merged runtime evidence (#1560, #1562-#1565). `docs/STATUS.md`, `docs/ARCHITECTURE.md`,
+`docs/ROADMAP.md`, and the `docs/CONTEXT_BUNDLES/README.md` trigger were promoted in #1566, and
+parent feature #1559 was closed with a final validation receipt linking all child PRs.

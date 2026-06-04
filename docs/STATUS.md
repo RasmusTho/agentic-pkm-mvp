@@ -292,6 +292,25 @@ are typed-contract implementations (`app/context_bundles/`, `app/orientation/bun
 `app/receipts/bundle_receipts.py`) with full test coverage. No production route wiring has shipped;
 runtime bundle emission in API routes is a separate future slice.
 
+Update (2026-06-04): **Context Bundles production runtime integration shipped.** The typed-contract
+building blocks are now wired into production runtime, delivered by the #1559 wave:
+
+- a read-only construction route `GET /api/context-bundles/{bundle_id}` returning an inspectable
+  bundle envelope — #1560 (PR #1569);
+- real retrieval emission through the capability/ports layer (not the raw-cosine `/search` route),
+  recording a creation receipt — #1562 (PR #1570);
+- production orientation (`GET /api/orientation/bundle/{id}`) and resurfacing
+  (`GET /api/resurfacing/bundle/{id}`) consumers that preserve provenance/exclusions and reject
+  mis-scoped bundles — #1563 (PR #1571);
+- bundle linkage through the governed write-proposal path with WriteGuard kept independent and
+  authoritative — #1564 (PR #1572);
+- a read-only bundle receipt projection over creation/consumption/stale traces — #1565 (PR #1574).
+
+Across every surface, Context Bundles remain inspectable bridge objects, not canonical truth:
+`may_write` stays false, no surface upgrades authority, no bundle content is promoted into
+memory/knowledge, and WriteGuard/trust/policy gates are never bypassed. Parent feature #1559 closed
+on delivery of #1566. See `docs/CONTEXT_BUNDLES_RUNTIME/` for the per-slice specs and receipts.
+
 ### Cognitive mediation alignment (2026-05-16)
 
 `docs/CAPABILITY_CONTRACT_MODEL.md` now carries the 6.x cognitive mediation alignment vocabulary:
