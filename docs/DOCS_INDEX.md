@@ -311,6 +311,10 @@ These directories are docs-only specification authority for v6.0 capability boun
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/guardrails.md | Guardrails | Aligned (forward line v5.x) | 2026-02-05 | Runtime guardrails + concurrency safety aligned with v5.5 baseline. |
+| docs/SECURITY_ARCHITECTURE.md | Security architecture spine | Initial security architecture SoT | 2026-06-04 | Canonical entry point for proportionate security architecture, threat-model tiers, security invariants, and review routing. Study/design-hardening framing only; does not imply high current adversarial exposure or runtime implementation changes. |
+| docs/SECURITY_TRUST_BOUNDARIES.md | Security trust-boundary inventory | Initial security architecture companion | 2026-06-04 | Security interpretation of current runtime, UI, governance, mirror, provider, tool/MCP, BuilderOps, GitHub, environment, and sync/replica boundaries. Reuses `docs/DIAGRAMS.md` and existing authority docs by reference. |
+| docs/SECURITY_DATA_FLOWS.md | Security data-flow inventory | Initial security architecture companion | 2026-06-04 | Security-relevant data classes and flows for future STRIDE, attack-path, and ATT&CK-inspired reviews. Explicitly states that data-flow authority is not semantic authority. |
+| docs/SECURITY_REVIEW_METHOD.md | Security review method | Initial security architecture companion | 2026-06-04 | Proportionate Level 0-4 review method with STRIDE-lite, attack-path, ATT&CK-inspired mapping, agentic failure-mode taxonomy, and finding format. |
 | docs/SECURITY.md | Security | Aligned (forward line v5.x) | 2026-02-05 | Local-first security posture; keys/env handling aligned with v5.5 baseline. |
 | docs/PRIVACY.md | Privacy | Aligned (forward line v5.x) | 2026-02-05 | Local-first, outbound only on optional remote LLMs. |
 | docs/DEPENDENCIES.md | Dependencies | Aligned (forward line v5.x) | 2026-02-05 | External deps aligned to current modules (transcribe, llm, watcher). |
