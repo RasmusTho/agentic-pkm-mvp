@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from app.knowledge.contracts import WriteReceipt
@@ -29,8 +30,8 @@ def write_note_from_absolute(
     *,
     vault_root: Path | str,
 ) -> WriteReceipt:
-    resolved_path = Path(path).expanduser().resolve()
-    resolved_root = Path(vault_root).expanduser().resolve()
+    resolved_path = Path(os.path.realpath(os.path.expanduser(os.fspath(path))))
+    resolved_root = Path(os.path.realpath(os.path.expanduser(os.fspath(vault_root))))
     resolved_path.relative_to(resolved_root)
     locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
     # Absolute path writes target the local filesystem boundary directly.
