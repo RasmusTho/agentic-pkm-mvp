@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
 Last reviewed: 2026-06-04
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/PANEL_AGENT.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/RELEASE_CHANNELS/README.md, docs/RELEASE_CHANNELS/TERMINOLOGY.md, docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, companion-ui/docs/PANEL_DURABLE_PROJECTION_MAPPING.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md, docs/adr/ADR-0012-orientation-multiagent-reads.md, app/api/routes/artifacts.py, app/api/routes/panel.py, app/api/routes/companion.py, app/api/routes/context_bundles.py, app/api/routes/orientation.py, app/api/routes/resurfacing.py, app/retrieval/production_bundle.py, app/writeback/production_proposal.py, app/orientation/leave_point_cursor.py, app/agent_memory/companion_aware.py, app/agent_memory/posture_projection.py, app/panel/checkbox_projection.py, app/knowledge_compilation/runtime_artifacts.py, app/knowledge_compilation/proposal_builders.py, app/knowledge_compilation/reorientation_packet.py, app/knowledge_compilation/review_admission.py, app/knowledge_compilation/trace_harness.py, tests/api/test_artifact_note_read_api.py, tests/api/test_panel_confirm_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_orientation_memory_seam.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/api/test_context_bundle_route.py, tests/api/test_orientation_consumes_bundle.py, tests/api/test_resurfacing_consumes_bundle.py, tests/retrieval/test_production_bundle_emission.py, tests/writeback/test_production_write_proposal_linkage.py, tests/panel/test_panel_checkbox_projection.py, tests/agent_memory/test_companion_aware_memory.py, tests/knowledge_compilation/test_runtime_artifacts.py, tests/knowledge_compilation/test_proposal_builders.py, tests/knowledge_compilation/test_reorientation_packet.py, tests/knowledge_compilation/test_review_admission_handoff.py, tests/eval/test_knowledge_compilation_trace_harness.py, merged PRs #1085/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1569/#1570/#1571/#1572, GitHub issue #1085 closed 2026-05-22, GitHub issue #1457 implementation evidence, open issues #1559/#1565/#1566, open PR #1574, Companion UI test-suite repair #1443 / PR #1475 (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui` -> 1260 passed, 1 skipped), and current repo state at e34a72b6 on 2026-06-04
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/PANEL_AGENT.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/RELEASE_CHANNELS/README.md, docs/RELEASE_CHANNELS/TERMINOLOGY.md, docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, companion-ui/docs/PANEL_DURABLE_PROJECTION_MAPPING.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md, docs/adr/ADR-0012-orientation-multiagent-reads.md, app/api/routes/artifacts.py, app/api/routes/panel.py, app/api/routes/companion.py, app/api/routes/context_bundles.py, app/api/routes/orientation.py, app/api/routes/resurfacing.py, app/retrieval/production_bundle.py, app/writeback/production_proposal.py, app/orientation/leave_point_cursor.py, app/agent_memory/companion_aware.py, app/agent_memory/posture_projection.py, app/panel/checkbox_projection.py, app/knowledge_compilation/runtime_artifacts.py, app/knowledge_compilation/proposal_builders.py, app/knowledge_compilation/reorientation_packet.py, app/knowledge_compilation/review_admission.py, app/knowledge_compilation/trace_harness.py, tests/api/test_artifact_note_read_api.py, tests/api/test_panel_confirm_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_orientation_memory_seam.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/api/test_context_bundle_route.py, tests/api/test_orientation_consumes_bundle.py, tests/api/test_resurfacing_consumes_bundle.py, tests/retrieval/test_production_bundle_emission.py, tests/writeback/test_production_write_proposal_linkage.py, tests/panel/test_panel_checkbox_projection.py, tests/agent_memory/test_companion_aware_memory.py, tests/knowledge_compilation/test_runtime_artifacts.py, tests/knowledge_compilation/test_proposal_builders.py, tests/knowledge_compilation/test_reorientation_packet.py, tests/knowledge_compilation/test_review_admission_handoff.py, tests/eval/test_knowledge_compilation_trace_harness.py, merged PRs #1085/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1569/#1570/#1571/#1572, GitHub issue #1085 closed 2026-05-22, GitHub issue #1457 implementation evidence, closed issues #1559/#1565/#1566 (delivered via PRs #1574/#1577), open bug #1576, Companion UI test-suite repair #1443 / PR #1475 (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui` -> 1260 passed, 1 skipped), and current repo state at e34a72b6 on 2026-06-04
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
@@ -152,11 +152,19 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 ## Current Snapshot
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
-- Context Bundles production runtime integration is partially shipped under parent #1559: the
-  read-only construction route, production retrieval emission, production orientation/resurfacing
-  consumption, and governed write-proposal linkage are merged. Receipt/query projection (#1565 /
-  PR #1574) and owner-doc promotion (#1566) remain open, so the parent capability is not yet closed
-  or promoted as a fully accepted runtime baseline.
+- Context Bundles production runtime integration is shipped and closed: parent #1559 closed
+  2026-06-04 after the read-only construction route (#1560), real retrieval emission (#1562),
+  orientation/resurfacing consumption (#1563), governed write-proposal linkage (#1564), and the
+  read-only receipt projection (#1565) merged, with owner docs promoted in #1566. One bounded
+  follow-up remains open: stable bundle addressing on the retrieval-backed route (#1576).
+- BuilderOps Vault is shipped as a build-plane runtime: `app/builderops/` provides the store,
+  schema, projections, promotion gateway, and boundary layer with CLI and API surfaces, covered by
+  `tests/builderops/`, `tests/cli/test_builderops_cli.py`, and `tests/api/test_builderops_api.py`.
+  Per `docs/adr/ADR-0010-builderops-vault-authority-boundary.md` it governs builder-operations
+  material only; its records and generated projections are explicitly non-authoritative for
+  product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
+  predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
+  reconcile next.)
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /
   `close`, `/api/canvas/sessions*`, session-log persistence, and governance-bearing mutation routing
   are shipped; broader Chat cognition and hybrid Panel/Chat mutation remain separate follow-up work.
@@ -302,13 +310,24 @@ are typed-contract implementations (`app/context_bundles/`, `app/orientation/bun
 `app/receipts/bundle_receipts.py`) with full test coverage. At that delivery point, no production
 route wiring had shipped; runtime bundle emission in API routes was left to a separate future slice.
 
-Update (2026-06-04): Context Bundle production runtime integration is in progress under parent
-#1559. Child slices for the read-only production construction route (#1560 / PR #1569), real
-retrieval emission (#1562 / PR #1570), production orientation/resurfacing consumption (#1563 / PR
-#1571), and governed write-proposal linkage (#1564 / PR #1572) are merged. The receipt/query
-projection (#1565 / PR #1574) and final owner-doc promotion (#1566) remain open. Therefore this
-document may describe the shipped partial runtime surfaces, but must not claim the full Context
-Bundle runtime capability closed until #1559 is validated and #1566 promotes owner docs.
+Update (2026-06-04): **Context Bundles production runtime integration shipped.** The typed-contract
+building blocks are now wired into production runtime, delivered by the #1559 wave:
+
+- a read-only construction route `GET /api/context-bundles/{bundle_id}` returning an inspectable
+  bundle envelope — #1560 (PR #1569);
+- real retrieval emission through the capability/ports layer (not the raw-cosine `/search` route),
+  recording a creation receipt — #1562 (PR #1570);
+- production orientation (`GET /api/orientation/bundle/{id}`) and resurfacing
+  (`GET /api/resurfacing/bundle/{id}`) consumers that preserve provenance/exclusions and reject
+  mis-scoped bundles — #1563 (PR #1571);
+- bundle linkage through the governed write-proposal path with WriteGuard kept independent and
+  authoritative — #1564 (PR #1572);
+- a read-only bundle receipt projection over creation/consumption/stale traces — #1565 (PR #1574).
+
+Across every surface, Context Bundles remain inspectable bridge objects, not canonical truth:
+`may_write` stays false, no surface upgrades authority, no bundle content is promoted into
+memory/knowledge, and WriteGuard/trust/policy gates are never bypassed. Parent feature #1559 closed
+on delivery of #1566. See `docs/CONTEXT_BUNDLES_RUNTIME/` for the per-slice specs and receipts.
 
 ### Cognitive mediation alignment (2026-05-16)
 

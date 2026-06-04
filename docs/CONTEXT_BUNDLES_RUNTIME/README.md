@@ -1,18 +1,19 @@
-State: Active feature-breakdown lane. Parent feature issue #1559 remains open as the validation hub.
-Child issues #1560, #1562, #1563, and #1564 are merged; #1565 is in progress via PR #1574; #1566
-remains blocked until #1565 lands and runtime evidence is complete. This directory records the
-bounded integration lane and its current partial-delivery state; full owner-doc promotion waits for
-#1566.
+State: Delivered. Parent feature issue #1559 closed 2026-06-04 after children #1560 (PR #1569),
+#1562 (PR #1570), #1563 (PR #1571), #1564 (PR #1572), #1565 (PR #1574), and #1566 (owner-doc
+promotion + closure) merged with validation receipts. Context Bundles are now wired into production
+runtime — construction route, real retrieval emission, orientation/resurfacing consumption, governed
+write-proposal linkage, and a read-only receipt projection — as inspectable bridge objects that carry
+no write authority (`may_write` stays false) and bypass no write guard, trust, or policy gate.
 
 # Context Bundles — Production Runtime Integration
 
 ## Capability Boundary
 
-The Context Bundles capability was first delivered at the typed-contract / Pydantic layer (closed
-parent #894 and children #895/#896/#946/#947/#948/#949). This runtime directory is the follow-up lane
-for wiring that contract into production surfaces. As of 2026-06-04, the construction route,
-real-retrieval emission, production orientation/resurfacing consumption, and governed write-proposal
-linkage slices are merged. Receipt/query projection and owner-doc promotion are still open.
+The Context Bundles capability is delivered at the typed-contract / Pydantic layer (closed parent
+#894 and children #895/#896/#946/#947/#948/#949). Every building block exists as a pure, tested
+function, but none is wired into the production route layer. Verified by import graph: the only
+consumer of the bundle modules today is `app/knowledge_compilation/` — no API route constructs,
+emits, consumes, links, or projects bundles against the real vault.
 
 This directory specifies the bounded work to integrate the existing contract into production runtime:
 
@@ -45,18 +46,18 @@ spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
 
 ## Task List
 
-1. [EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md](EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md) — delivered, closed
-   [#1560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1560) via PR #1569.
-2. [EMIT_FROM_REAL_RETRIEVAL.md](EMIT_FROM_REAL_RETRIEVAL.md) — delivered, closed
-   [#1562](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1562) via PR #1570.
-3. [CONSUME_IN_ORIENTATION_AND_RESURFACING.md](CONSUME_IN_ORIENTATION_AND_RESURFACING.md) —
-   delivered, closed [#1563](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1563) via PR #1571.
-4. [CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md](CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md) —
-   delivered, closed [#1564](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1564) via PR #1572.
-5. [EXPOSE_RECEIPT_PROJECTION.md](EXPOSE_RECEIPT_PROJECTION.md) — open
-   [#1565](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1565), in progress via PR #1574.
-6. [PROMOTE_OWNER_DOCS.md](PROMOTE_OWNER_DOCS.md) — blocked
-   [#1566](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1566) until #1565 lands.
+1. [EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md](EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md) — issue
+   [#1560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1560) (ready).
+2. [EMIT_FROM_REAL_RETRIEVAL.md](EMIT_FROM_REAL_RETRIEVAL.md) — issue
+   [#1562](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1562) (blocked → #1560).
+3. [CONSUME_IN_ORIENTATION_AND_RESURFACING.md](CONSUME_IN_ORIENTATION_AND_RESURFACING.md) — issue
+   [#1563](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1563) (blocked → #1562).
+4. [CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md](CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md) — issue
+   [#1564](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1564) (blocked → #1562).
+5. [EXPOSE_RECEIPT_PROJECTION.md](EXPOSE_RECEIPT_PROJECTION.md) — issue
+   [#1565](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1565) (blocked → #1563, #1564).
+6. [PROMOTE_OWNER_DOCS.md](PROMOTE_OWNER_DOCS.md) — issue
+   [#1566](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1566) (blocked → #1560, #1562-#1565).
 
 ## Flat Execution Order
 
@@ -69,13 +70,13 @@ spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
 
 ## Capability-Level Acceptance Criteria
 
-- [x] A production route returns an inspectable `ContextBundle` envelope, read-only.
+- [ ] A production route returns an inspectable `ContextBundle` envelope, read-only.
   Verify: `docs/CONTEXT_BUNDLES_RUNTIME/EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md` + #1560 PR validation.
-- [x] Real retrieval emits bundles against the live vault.
+- [ ] Real retrieval emits bundles against the live vault.
   Verify: `docs/CONTEXT_BUNDLES_RUNTIME/EMIT_FROM_REAL_RETRIEVAL.md` + #1562 PR validation.
-- [x] Orientation and resurfacing production paths consume bundles without authority upgrade.
+- [ ] Orientation and resurfacing production paths consume bundles without authority upgrade.
   Verify: #1563 PR validation.
-- [x] Governed write proposals carry bundle linkage without bypassing WriteGuard.
+- [ ] Governed write proposals carry bundle linkage without bypassing WriteGuard.
   Verify: #1564 PR validation.
 - [ ] A receipt/query projection exposes bundle provenance and exclusions.
   Verify: #1565 PR validation.
@@ -128,4 +129,7 @@ shipped runtime:
 - write proposals carry bundle linkage without bypassing WriteGuard,
 - and receipts expose bundle provenance and exclusions truthfully.
 
-This trigger is executed by `PROMOTE_OWNER_DOCS.md` (#1566), not before.
+**Executed (2026-06-04) by `PROMOTE_OWNER_DOCS.md` (#1566).** All conditions are satisfied with
+merged runtime evidence (#1560, #1562-#1565). `docs/STATUS.md`, `docs/ARCHITECTURE.md`,
+`docs/ROADMAP.md`, and the `docs/CONTEXT_BUNDLES/README.md` trigger were promoted in #1566, and
+parent feature #1559 was closed with a final validation receipt linking all child PRs.

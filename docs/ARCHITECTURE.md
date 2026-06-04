@@ -190,6 +190,14 @@ This repo's runtime therefore depends on clear boundaries between:
 Those boundaries are narrower than the full Yggdrasil ontology, but they must remain explicit in
 current architecture language.
 
+Context Bundles are wired into production runtime read surfaces (2026-06-04, #1559 wave): a read-only
+construction route, real retrieval emission through the capability/ports layer, orientation and
+resurfacing consumption, governed write-proposal linkage that keeps WriteGuard independent, and a
+read-only receipt projection. They are inspectable bridge objects between retrieval, orientation,
+resurfacing, and governed write proposals — not canonical truth: they carry no write authority
+(`may_write` stays false), promote nothing into memory/knowledge, and bypass no write guard, trust,
+or policy gate. See `docs/CONTEXT_BUNDLES_RUNTIME/` and `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md`.
+
 ## Boundary Map (Current)
 - Current architecture boundary map (Mermaid source): `docs/diagrams/architecture.mmd`.
 - Current rendered/runtime-facing diagram companion: `docs/DIAGRAMS.md`.
