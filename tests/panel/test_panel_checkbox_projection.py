@@ -140,6 +140,78 @@ def test_projection_endpoint_rejects_stale_content_hash(
     assert "- [x] Send email" not in note.read_text(encoding="utf-8")
 
 
+def test_projection_endpoint_rejects_absolute_note_path_before_file_io(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = _write_note(tmp_path)
+    body = _request_for(note)
+    body["note_path"] = str(note)
+    read_mock = MagicMock()
+    write_mock = MagicMock()
+    monkeypatch.setattr(Path, "read_text", read_mock)
+    monkeypatch.setattr(projection_module, "write_note_from_absolute", write_mock)
+
+    resp = client.post("/api/panel/checkbox-projection", json=body)
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["block_reason"] == "invalid_note_path"
+    read_mock.assert_not_called()
+    write_mock.assert_not_called()
+
+
+@pytest.mark.parametrize("note_path", ["../secret.md", "notes/../secret.md"])
+def test_projection_endpoint_rejects_traversal_note_path_before_file_io(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    note_path: str,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = _write_note(tmp_path)
+    body = _request_for(note)
+    body["note_path"] = note_path
+    read_mock = MagicMock()
+    write_mock = MagicMock()
+    monkeypatch.setattr(Path, "read_text", read_mock)
+    monkeypatch.setattr(projection_module, "write_note_from_absolute", write_mock)
+
+    resp = client.post("/api/panel/checkbox-projection", json=body)
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["block_reason"] == "invalid_note_path"
+    read_mock.assert_not_called()
+    write_mock.assert_not_called()
+
+
+def test_projection_endpoint_rejects_symlink_escape_before_read_write_sinks(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    vault = tmp_path / "vault"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escaped_note = _write_note(outside)
+    link = vault / "notes"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(escaped_note.parent, target_is_directory=True)
+    body = _request_for(escaped_note)
+    body["note_path"] = "notes/panel.md"
+    write_mock = MagicMock()
+    monkeypatch.setattr(projection_module, "write_note_from_absolute", write_mock)
+
+    resp = client.post("/api/panel/checkbox-projection", json=body)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["block_reason"] == "note_not_found"
+    write_mock.assert_not_called()
+    assert "- [x] Send email" not in escaped_note.read_text(encoding="utf-8")
+
+
 def test_projection_endpoint_rejects_stale_source_hash(
     client: TestClient,
     tmp_path: Path,
