@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.api.routes import health as health_route
 from app.config import llm as llm_config
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.models import SettingsBundle
@@ -321,3 +322,38 @@ def test_health_db_dsn_is_masked_in_response(monkeypatch, tmp_path) -> None:
     dsn = data.get("runtime", {}).get("db", {}).get("dsn", "")
     assert "hunter2" not in dsn
     assert dsn == "" or "***" in dsn
+
+
+def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
+    client = TestClient(app)
+
+    def fake_run_health() -> dict[str, object]:
+        return {
+            "ok": False,
+            "required_ok": False,
+            "trace_id": "trace-health-redaction",
+            "checks": {
+                "embedding_index": {
+                    "ok": False,
+                    "status": "fail",
+                    "detail": "Traceback File \"/Users/me/vault/private.py\" fake_secret=hunter2",
+                }
+            },
+            "runtime": {},
+            "suggested_actions": [],
+        }
+
+    monkeypatch.setattr(health_route, "run_health", fake_run_health)
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Traceback" not in body
+    assert "/Users/me" not in body
+    assert "hunter2" not in body
+    data = resp.json()
+    check = data["checks"]["embedding_index"]
+    assert check["status"] == "fail"
+    assert check["detail"] == "health check detail redacted; inspect server logs with trace_id"
+    assert data["trace_id"] == "trace-health-redaction"
