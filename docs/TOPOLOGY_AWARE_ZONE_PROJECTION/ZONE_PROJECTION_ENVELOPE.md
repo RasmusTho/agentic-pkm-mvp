@@ -2,6 +2,7 @@
 name: Zone Projection Envelope
 description: Wrap the existing frontmatter-preferred/path-derived Vault Browser zone in the #1488 source/authority_role/provenance/degradation envelope.
 task_id: TOPOZONE-01
+state: delivered — #1554 / PR #1558
 source_anchor: docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Runtime topology authority decision (#1488)
 parent_capability: TOPOLOGY_AWARE_ZONE_PROJECTION
 prerequisites: []
@@ -13,7 +14,7 @@ can_parallelize_with: []
 
 ## Purpose
 
-The #1488 decision requires any topology-derived Vault Browser field to describe its `source`, `authority_role`, `provenance`, and `degradation`. The current `zone` projection emits a bare string with none of that, so a frontmatter-authored zone is indistinguishable from a path-derived fallback. This task makes the existing projection self-describing without inventing a new source.
+The #1488 decision requires any topology-derived Vault Browser field to describe its `source`, `authority_role`, `provenance`, and `degradation`. This task made the existing projection self-describing without inventing a new source.
 
 ## What This Task Does
 
@@ -86,4 +87,4 @@ CI:
 
 ## Related GitHub Issues
 
-Implements `TOPOLOGY_AWARE_ZONE_PROJECTION/ZONE_PROJECTION_ENVELOPE`. One bounded backend issue, picked up first; `agent:ready`.
+Delivered by #1554 / PR #1558.

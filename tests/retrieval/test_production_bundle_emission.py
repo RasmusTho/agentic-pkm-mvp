@@ -88,3 +88,16 @@ def test_emission_records_creation_receipt(monkeypatch):
     assert calls.get("bundle_id") == result.bundle.id
     assert receipt.event == "created"
     assert receipt.bundle_id == result.bundle.id
+
+
+def test_emission_can_preserve_requested_bundle_id():
+    from app.retrieval.production_bundle import emit_bundle_from_response
+
+    result, receipt = emit_bundle_from_response(
+        _response(2),
+        selected_ids=["art-0"],
+        bundle_id="cb-requested",
+    )
+
+    assert result.bundle.id == "cb-requested"
+    assert receipt.bundle_id == "cb-requested"

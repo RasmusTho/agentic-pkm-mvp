@@ -279,11 +279,14 @@ def test_reentry_orientation_degraded_state() -> None:
 
 
 def test_active_note_workspace_desktop_state() -> None:
-    """Active note workspace renders from fixtures, read-only and titled."""
+    """Active note workspace renders fixture shell with explicit body edit posture."""
     html = _render_active_note()
 
     assert "Current" in html
-    assert 'data-read-only' in html
+    assert 'data-testid="workspace-note-body"' in html
+    assert 'data-read-only="false"' in html
+    assert 'data-testid="workspace-note-body-readonly-indicator"' in html
+    assert 'data-testid="workspace-note-edit-toggle"' in html
     # active-note shell renders without requiring a private vault
     assert "Unexpected URL" not in html
 

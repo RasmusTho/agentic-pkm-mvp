@@ -37,6 +37,7 @@ def emit_retrieval_bundle(
     selected_ids: list[str],
     excluded: list[ExcludedItem] | None = None,
     scope: BundleScope | None = None,
+    bundle_id: str | None = None,
 ) -> RetrievalBundleResult:
     """Wrap retrieval results in an inspectable ContextBundle.
 
@@ -74,7 +75,7 @@ def emit_retrieval_bundle(
         )
 
     bundle = ContextBundle(
-        id=str(uuid.uuid4()),
+        id=bundle_id or str(uuid.uuid4()),
         created_at=datetime.now(tz=timezone.utc),
         trigger=BundleTrigger(
             type="retrieval",

@@ -2,6 +2,7 @@
 name: Surface Zone Signals In Browser UI
 description: Surface the zone source/authority/provenance/degradation envelope in the Vault Browser UI, with any zone ordering/overlay surfacing its contributing signal.
 task_id: TOPOZONE-02
+state: delivered — #1555 / PR #1561
 source_anchor: docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md :: 4.3 VaultQuery
 parent_capability: TOPOLOGY_AWARE_ZONE_PROJECTION
 prerequisites: [TOPOZONE-01]
@@ -13,7 +14,7 @@ can_parallelize_with: []
 
 ## Purpose
 
-Once the API describes where each `zone` came from (TOPOZONE-01), the Vault Browser UI must make that legible so the human can tell a durable, human-authored zone from a path-derived guess. This is the §2 "expose uncertainty" / "keep attention-state visible" obligation applied to zone.
+The Vault Browser UI makes the server-declared `zone` envelope legible so the human can tell a durable, human-authored zone from a path-derived guess. This is the §2 "expose uncertainty" / "keep attention-state visible" obligation applied to zone.
 
 ## What This Task Does
 
@@ -67,4 +68,4 @@ CI:
 
 ## Related GitHub Issues
 
-Implements `TOPOLOGY_AWARE_ZONE_PROJECTION/SURFACE_ZONE_SIGNALS_IN_BROWSER_UI`. One bounded Companion UI issue; `agent:blocked` until TOPOZONE-01 lands, then promote to `agent:ready`. The final child carries the #1473 parent-closure handoff.
+Delivered by #1555 / PR #1561. Parent #1473 closed after owner-doc promotion PR #1567.

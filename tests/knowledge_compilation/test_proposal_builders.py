@@ -111,6 +111,14 @@ def test_builders_reject_hidden_authority_context() -> None:
                 title="t",
             )
 
+    protected = build_compilation_draft(
+        ProposalContext(
+            source_refs=(SourceRef(artifact_id="note:protected", review_state="protected"),)
+        ),
+        title="protected source",
+    )
+    assert protected.source_refs[0].review_state == "protected"
+
     # Retrieval-ranked source presented as approved authority.
     with pytest.raises(ValueError, match="retrieval"):
         build_compilation_draft(

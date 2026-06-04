@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.context_bundles.construction import build_inspectable_bundle
+from app.retrieval.capability import RetrievalHit, RetrievalResponse
 
 
 def test_route_returns_inspectable_bundle_envelope():
@@ -61,6 +62,33 @@ def test_route_does_not_upgrade_authority():
     # route does not upgrade any flag in transit.
     constructed = build_inspectable_bundle("cb-auth")
     assert body["authority"] == constructed.authority.model_dump()
+
+
+def test_query_route_preserves_requested_bundle_id(monkeypatch):
+    import app.retrieval.production_bundle as production_bundle
+
+    response = RetrievalResponse(
+        query="real query",
+        trace_id="cb-requested",
+        hits=[
+            RetrievalHit(
+                object_id="artifact-1",
+                doc_id="doc-1",
+                text="body",
+                score=1.0,
+                snippet=None,
+                source_ref="vault/note.md",
+                payload={},
+            )
+        ],
+    )
+    monkeypatch.setattr(production_bundle, "retrieve", lambda request: response)
+
+    client = TestClient(app)
+    body = client.get("/api/context-bundles/cb-requested?query=real").json()
+
+    assert body["id"] == "cb-requested"
+    assert body["trigger"]["source"] == "cb-requested"
 
 
 def test_route_registered_via_seam():
