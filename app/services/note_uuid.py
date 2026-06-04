@@ -3,13 +3,15 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
+from app.knowledge.write_ops import write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 
-def ensure_note_uuid(path: Path, *, preferred_uuid: str | None = None) -> str:
+def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str | None = None) -> str:
     resolved = Path(path).resolve()
+    root = Path(vault_root).expanduser().resolve()
+    resolved.relative_to(root)
     text = resolved.read_text(encoding="utf-8")
     frontmatter, body = load_frontmatter(text)
     existing = str(frontmatter.get("uuid") or "").strip()
@@ -21,7 +23,6 @@ def ensure_note_uuid(path: Path, *, preferred_uuid: str | None = None) -> str:
         candidate = str(uuid.uuid4())
     frontmatter["uuid"] = candidate
     DEFAULT_WRITE_GUARD.assert_writes_allowed("ensure uuid")
-    root = default_vault_root_for_path(resolved)
     write_note_from_absolute(resolved, dump_frontmatter(frontmatter, body), vault_root=root)
     return candidate
 

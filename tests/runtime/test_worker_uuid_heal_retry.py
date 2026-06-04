@@ -34,11 +34,11 @@ def test_handle_ingest_vault_changed_retries_uuid_heal_on_eperm(tmp_path: Path, 
 
     attempts = {"n": 0}
 
-    def flaky_ensure(path: Path, *, preferred_uuid: str | None = None) -> str:
+    def flaky_ensure(path: Path, *, vault_root: Path, preferred_uuid: str | None = None) -> str:
         attempts["n"] += 1
         if attempts["n"] < 3:
             raise OSError(errno.EPERM, "Operation not permitted")
-        return real_ensure_note_uuid(path, preferred_uuid=preferred_uuid)
+        return real_ensure_note_uuid(path, vault_root=vault_root, preferred_uuid=preferred_uuid)
 
     monkeypatch.setattr(outbox_worker, "ensure_note_uuid", flaky_ensure)
     monkeypatch.setattr(outbox_worker.time, "sleep", lambda _seconds: None)

@@ -259,7 +259,7 @@ def test_workspace_missing_uuid_unresolved_state_has_no_hash_artifact_id(
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("# Blocked\n\nBody.\n", encoding="utf-8")
 
-    def _blocked(_path: Path) -> str:
+    def _blocked(_path: Path, *, vault_root: Path) -> str:
         raise WritesBlockedError("blocked", "write guard active", "ensure uuid")
 
     monkeypatch.setattr(companion_module, "ensure_note_uuid", _blocked, raising=False)

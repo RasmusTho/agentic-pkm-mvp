@@ -195,7 +195,7 @@ def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
 
     for attempt in range(max_attempts):
         try:
-            healed = ensure_note_uuid(note_path)
+            healed = ensure_note_uuid(note_path, vault_root=vault_root)
             if healed:
                 logger.info("healed uuid for inbox note note_path=%s", note_path)
             return healed
@@ -220,13 +220,13 @@ def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
     return ""
 
 
-def _ensure_uuid_with_backoff(note_path: Path) -> str:
+def _ensure_uuid_with_backoff(note_path: Path, *, vault_root: Path) -> str:
     max_attempts = 5
     base_sleep = 0.2
 
     for attempt in range(max_attempts):
         try:
-            healed = ensure_note_uuid(note_path)
+            healed = ensure_note_uuid(note_path, vault_root=vault_root)
             if healed:
                 logger.info("ensured uuid for note note_path=%s", note_path)
             return healed
@@ -509,7 +509,7 @@ def handle_ingest_vault_changed(
     if not note_uuid and healed_uuid:
         note_uuid = healed_uuid
     if not note_uuid:
-        note_uuid = _ensure_uuid_with_backoff(note_path)
+        note_uuid = _ensure_uuid_with_backoff(note_path, vault_root=resolved_root)
         if note_uuid:
             raw_text = _stabilized_note_text(note_path) or raw_text
             frontmatter, body = load_frontmatter(raw_text)

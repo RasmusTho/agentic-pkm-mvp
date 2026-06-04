@@ -35,7 +35,9 @@ def resolve_note_artifact_identity(
     if companion_identity is not None:
         return companion_identity
 
-    frontmatter = _frontmatter(body if body is not None else artifact_path.read_text(encoding="utf-8"))
+    resolved_root = Path(vault_root).expanduser().resolve()
+    contained_artifact_path = _contained_artifact_path(resolved_root, safe_note_path)
+    frontmatter = _frontmatter(body if body is not None else contained_artifact_path.read_text(encoding="utf-8"))
     frontmatter_uuid = str(frontmatter.get("uuid") or "").strip()
     if frontmatter_uuid:
         return ArtifactIdentity(
@@ -58,7 +60,7 @@ def resolve_note_artifact_identity(
 
     if heal_missing_uuid:
         try:
-            healed_uuid = ensure_note_uuid(artifact_path)
+            healed_uuid = ensure_note_uuid(contained_artifact_path, vault_root=resolved_root)
         except (OSError, ValueError, WritesBlockedError):
             healed_uuid = ""
         if healed_uuid:
@@ -82,6 +84,21 @@ def resolve_note_artifact_identity(
 def _frontmatter(markdown: str) -> dict:
     frontmatter, _ = load_frontmatter(markdown)
     return frontmatter if isinstance(frontmatter, dict) else {}
+
+
+def _contained_artifact_path(vault_root: Path, safe_note_path: str) -> Path:
+    candidate = PurePosixPath(safe_note_path)
+    if (
+        not safe_note_path
+        or candidate.is_absolute()
+        or ".." in candidate.parts
+        or candidate.as_posix() in {"", "."}
+    ):
+        raise ValueError(f"artifact path is outside vault root: {safe_note_path}")
+    resolved_root = Path(vault_root).expanduser().resolve()
+    resolved_path = (resolved_root / Path(*candidate.parts)).resolve()
+    resolved_path.relative_to(resolved_root)
+    return resolved_path
 
 
 def _companion_identity(*, vault_root: Path, safe_note_path: str) -> ArtifactIdentity | None:

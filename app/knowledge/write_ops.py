@@ -27,14 +27,11 @@ def write_note_from_absolute(
     path: Path | str,
     content: str,
     *,
-    vault_root: Path | str | None = None,
+    vault_root: Path | str,
 ) -> WriteReceipt:
     resolved_path = Path(path).expanduser().resolve()
-    resolved_root = (
-        Path(vault_root).expanduser().resolve()
-        if vault_root is not None
-        else default_vault_root_for_path(resolved_path)
-    )
+    resolved_root = Path(vault_root).expanduser().resolve()
+    resolved_path.relative_to(resolved_root)
     locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
     # Absolute path writes target the local filesystem boundary directly.
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())

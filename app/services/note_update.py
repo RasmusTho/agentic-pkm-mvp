@@ -29,9 +29,9 @@ class NoteUpdateResult(BaseModel):
     dispatch_count: int = 0
 
 
-def _write_note_via_knowledge_port(note_path: Path, content: str) -> None:
+def _write_note_via_knowledge_port(note_path: Path, content: str, *, vault_root: Path | None = None) -> None:
     resolved = note_path.resolve()
-    root = default_vault_root_for_path(resolved)
+    root = Path(vault_root).resolve() if vault_root is not None else default_vault_root_for_path(resolved)
     write_note_from_absolute(resolved, content, vault_root=root)
 
 
@@ -93,14 +93,16 @@ def process_note_update(
     note_path: Path,
     ctx: OrchestratorContext | Mapping[str, object] | None,
     *,
+    vault_root: Path | None = None,
     expected_path: Path | None = None,
     snapshot_dir: Path | None = None,
 ) -> NoteUpdateResult:
     resolved_path = Path(note_path).resolve()
+    resolved_root = Path(vault_root).resolve() if vault_root is not None else default_vault_root_for_path(resolved_path)
     original_markdown = resolved_path.read_text(encoding="utf-8")
     original_frontmatter, _ = load_frontmatter(original_markdown)
     had_uuid = bool(str(original_frontmatter.get("uuid") or "").strip())
-    note_uuid = ensure_note_uuid(resolved_path)
+    note_uuid = ensure_note_uuid(resolved_path, vault_root=resolved_root)
     uuid_added = not had_uuid
 
     raw_markdown = resolved_path.read_text(encoding="utf-8")

@@ -322,12 +322,13 @@ def _read_panel_note_with_retry(note_path: Path, *, attempts: int = 5, base_slee
 def _ensure_panel_note_uuid_with_retry(
     note_path: Path,
     *,
+    vault_root: Path,
     attempts: int = 5,
     base_sleep: float = 0.2,
 ) -> str:
     for attempt in range(attempts):
         try:
-            return ensure_note_uuid(note_path)
+            return ensure_note_uuid(note_path, vault_root=vault_root)
         except OSError as exc:
             if exc.errno in {errno.ENOENT, errno.EPERM, errno.EACCES, errno.EROFS} and attempt + 1 < attempts:
                 time.sleep(base_sleep * (2**attempt))
@@ -358,7 +359,7 @@ def _process_panel_note(
         return 0
 
     try:
-        note_uuid = _ensure_panel_note_uuid_with_retry(note_path)
+        note_uuid = _ensure_panel_note_uuid_with_retry(note_path, vault_root=vault_root)
     except Exception as exc:
         state.errors += 1
         print(f"WARN: failed to ensure uuid for {note_path}: {exc}")
@@ -750,7 +751,7 @@ def _maybe_heal_ingest_uuid(
         return mtime, digest
     note_path = cfg.vault_path / rel_path
     try:
-        ensure_note_uuid(note_path)
+        ensure_note_uuid(note_path, vault_root=cfg.vault_path)
     except Exception as exc:
         state.errors += 1
         print(f"WARN: failed to ensure uuid for {note_path}: {exc}")
