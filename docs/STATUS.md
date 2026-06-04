@@ -157,6 +157,10 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   orientation/resurfacing consumption (#1563), governed write-proposal linkage (#1564), and the
   read-only receipt projection (#1565) merged, with owner docs promoted in #1566. One bounded
   follow-up remains open: stable bundle addressing on the retrieval-backed route (#1576).
+- Direct runtime repairs from PR #1573 keep retrieval-backed ContextBundle routes stable by
+  preserving the requested bundle id in emitted bundles/receipts, and keep knowledge-compilation
+  proposal builders aligned with canonical review posture by accepting `review_state: protected`
+  sources alongside `reviewed` and `accepted` while still rejecting non-approved states.
 - BuilderOps Vault is shipped as a build-plane runtime: `app/builderops/` provides the store,
   schema, projections, promotion gateway, and boundary layer with CLI and API surfaces, covered by
   `tests/builderops/`, `tests/cli/test_builderops_cli.py`, and `tests/api/test_builderops_api.py`.
