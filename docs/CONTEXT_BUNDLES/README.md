@@ -132,5 +132,11 @@ Promote current-state owner docs only after implementation receipts show all of 
 - write proposals carry bundle linkage without bypassing write guards,
 - and receipts expose bundle provenance and exclusions truthfully.
 
-Capability validation is complete on #894 (closed 2026-05-15). Further owner-doc promotion (STATUS.md,
-ARCHITECTURE.md) is gated on production route wiring delivering actual runtime bundle emission.
+Capability validation is complete on #894 (closed 2026-05-15).
+
+**Satisfied (2026-06-04).** The production runtime integration wave (#1559) delivered every gating
+condition with merged runtime evidence — a read-only construction route (#1560, PR #1569), real
+retrieval emission (#1562, PR #1570), orientation/resurfacing consumption (#1563, PR #1571),
+governed write-proposal linkage (#1564, PR #1572), and a read-only receipt projection (#1565, PR
+#1574). Owner docs (`docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`) were promoted in
+#1566. See `docs/CONTEXT_BUNDLES_RUNTIME/README.md` for the runtime wave's specs and receipts.
