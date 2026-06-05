@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-03
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/trace_harness.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/eval/test_knowledge_compilation_trace_harness.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1538/#1551/#1552, and current repo state at 1fffc11e on 2026-06-03
+Last reviewed: 2026-06-05
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/SECURITY_DATA_FLOWS.md, docs/security/API_SECURITY_MATRIX.md, docs/security/STRIDE_LITE_REVIEW_2026_06_04.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, app/api/routes/companion.py, app/api/routes/health.py, app/cli/health.py, app/db/dsn.py, app/knowledge/write_ops.py, app/knowledge/locators.py, app/ingest/vault_alpha.py, app/watcher/registry.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/trace_harness.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/api/test_health_api.py, tests/knowledge/test_write_ops.py, tests/watcher/test_panel_watcher_outbox_db.py, tests/eval/test_knowledge_compilation_trace_harness.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1538/#1551/#1552/#1574/#1577/#1581/#1582/#1583/#1584/#1585/#1586/#1591, and current repo state at 9b0564b2 on 2026-06-05
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -15,6 +15,7 @@ Specialized companion documents:
 - `docs/HEALTH.md` - health CLI behavior and runtime health contract
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
 - `docs/INFRASTRUCTURE.md` - local runtime stack, Docker/Colima setup, and local observability stack
+- `docs/SECURITY_ARCHITECTURE.md` - security review routing, threat-model tiers, and security invariants
 
 Reading order:
 1. Start here for runtime expectations, core checks, and escalation paths.
@@ -25,6 +26,9 @@ Reading order:
 6. Use `docs/ENVIRONMENTS.md` when the question is whether behavior belongs to `dev`, `test`, `prod`, or a boundary between them.
 7. Use the parallel-stack recipe in `docs/ENVIRONMENTS.md` when you need to run `dev`, `test`, and `prod` Compose stacks simultaneously on one machine.
 8. Use `docs/RELEASE_CHANNELS/README.md` plus the promotion skills when the question is stable/dev channel promotion, rollback, or prod-checkout pinning.
+9. Use `docs/SECURITY_ARCHITECTURE.md` and `docs/security/API_SECURITY_MATRIX.md` before changing
+   API exposure, auth/rate-limit posture, external provider/tool execution, or mutation-capable
+   route behavior.
 
 CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
@@ -220,6 +224,8 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 
 ## Auth & Rate Limiting
 - Refer to `docs/SECURITY.md` for implementation guidance (API key dependency + `slowapi` limiter).
+- Use `docs/SECURITY_ARCHITECTURE.md` for security review routing and
+  `docs/security/API_SECURITY_MATRIX.md` for route-by-route exposure and mutation classification.
 - Store the API key in environment or secret manager; rotate by updating deployments and monitoring logs for legacy usage.
 
 ## Observability
