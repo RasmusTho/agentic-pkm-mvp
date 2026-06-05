@@ -188,6 +188,15 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   `POST /api/companion/vault-browser/actions/queue-review` when server-resolved artifact scope is
   available. This is only queue staging: durable execution and receipt-supporting records remain
   behind `POST /api/panel/confirm`.
+- Companion UI operational loop (inspect → queue → confirm → receipt) is now a coherent, inspectable
+  control surface over the existing shipped surfaces (#1603). The queue-review response names its
+  loop position (`loop_stage: "queued_pending_confirmation"`), the Panel confirmation response exposes
+  an explicit receipt-visibility posture (`receipt_visibility`: `durable_vault_visible` /
+  `blocked_no_durable_receipt` / `none_rejected`), and the companion-app dev shell renders a
+  derived, read-only operational-loop region showing receipt posture. This wires the existing surfaces
+  into one loop; it does not bypass Panel confirmation, WriteGuard, or trust semantics, does not make
+  the UI durable authority, and is bounded to the proven loop — broader Companion UI production
+  packaging and full Chat mutation remain separate target-state work.
 - Runtime event envelopes emitted through the shared outbox helper now include `meta.instance_provenance` (`instance_id`, `instance_role`, `environment`) as backward-compatible operational metadata.
 - Panel mutation gating now enforces explicit trust-verb classification on mutation-capable panel actions: only admitted `APPLY` actions can emit promotion mutation intents; `SUGGEST` remains non-mutating unless promoted through the governed execution path.
 - APPLY transition receipts (`promotion.transition.applied`) now include accountability fields (`verb`, `authority`, `basis`, `outcome`, `artifact_linkage`, `instance_provenance`) as backward-compatible payload extensions.

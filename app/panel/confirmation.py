@@ -93,6 +93,23 @@ class BlockReason(BaseModel):
     code: str | None = None
 
 
+def _receipt_visibility_for(status: str) -> str:
+    """Map a confirm outcome to its receipt-visibility posture.
+
+    This is the receipt step of the inspect -> queue -> confirm -> receipt
+    operational loop. The posture is a projection of where the durable receipt
+    lives; it is not the durable authority store. Durable receipts are written
+    to the vault AI-status callout by the runtime.
+    """
+    if status in ("executed", "logged"):
+        return "durable_vault_visible"
+    if status == "blocked":
+        return "blocked_no_durable_receipt"
+    if status == "rejected":
+        return "none_rejected"
+    return "none"
+
+
 class ConfirmResponse(BaseModel):
     proposal_id: str
     artifact_id: str
@@ -103,6 +120,16 @@ class ConfirmResponse(BaseModel):
     error: str | None = None
     idempotency_key: str
     events_emitted: list[str] = Field(default_factory=list)
+    # Receipt-visibility posture for the operational loop. Derived from status
+    # when not explicitly provided; the UI surfaces this as visibility, not as
+    # durable approval/execution authority.
+    receipt_visibility: str = ""
+
+    @model_validator(mode="after")
+    def _derive_receipt_visibility(self) -> "ConfirmResponse":
+        if not self.receipt_visibility:
+            self.receipt_visibility = _receipt_visibility_for(self.status)
+        return self
 
 
 class ProposalStore:

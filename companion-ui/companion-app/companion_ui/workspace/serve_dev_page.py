@@ -1787,6 +1787,7 @@ def _render_artifact_inspector(
     links_html = _render_inspector_links(note)
     actions_html = _render_vault_actions(note)
     receipts_html = _render_inspector_receipts(note)
+    operational_loop_html = _render_operational_loop(note)
     posture_html = _render_inspector_review_posture(note)
     agent_memory_posture_html = _render_inspector_agent_memory_posture(note)
 
@@ -1814,9 +1815,50 @@ def _render_artifact_inspector(
         f'{posture_html}'
         f'{agent_memory_posture_html}'
         f'{receipts_html}'
+        f'{operational_loop_html}'
         f'{actions_html}'
         f'{links_html}'
         f'</section>'
+    )
+
+
+def _render_operational_loop(note: dict) -> str:
+    """Render the inspect -> queue -> confirm -> receipt operational loop.
+
+    This ties the otherwise-isolated inspector, queue-review, Panel-confirmation,
+    and receipt surfaces into one coherent, human-inspectable control loop. The
+    receipt posture is *derived* from the server-supplied receipt payload and is
+    rendered read-only: the Companion UI is a projection of receipt visibility,
+    never the durable approval/execution authority.
+
+    Receipt posture states:
+        - 'receipts' key absent       -> unavailable (receipt source not connected)
+        - 'receipts' key present, []  -> awaiting_receipt (queued, not yet confirmed)
+        - 'receipts' key present, [..] -> durable_receipt_visible (confirmed, durable)
+    """
+    _SENTINEL = object()
+    receipts_raw = note.get("receipts", _SENTINEL)
+    if receipts_raw is _SENTINEL:
+        posture = "unavailable"
+    elif not receipts_raw:
+        posture = "awaiting_receipt"
+    else:
+        posture = "durable_receipt_visible"
+
+    stages = ("inspect", "queue", "confirm", "receipt")
+    stage_html = "".join(
+        f'<li class="loop-stage" data-loop-stage="{_e(stage)}">{_e(stage)}</li>'
+        for stage in stages
+    )
+    return (
+        '<div class="operational-loop" '
+        'data-testid="workspace-operational-loop" '
+        'data-authority-role="derived" '
+        'data-affordance-status="read-only" '
+        f'data-receipt-posture="{_e(posture)}">'
+        '<span class="operational-loop-label">operational loop</span>'
+        f'<ol class="operational-loop-stages">{stage_html}</ol>'
+        '</div>'
     )
 
 
