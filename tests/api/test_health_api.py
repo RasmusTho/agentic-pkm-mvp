@@ -357,3 +357,36 @@ def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
     assert check["status"] == "fail"
     assert check["detail"] == "health check detail redacted; inspect server logs with trace_id"
     assert data["trace_id"] == "trace-health-redaction"
+
+
+def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
+    client = TestClient(app)
+
+    def fake_run_health() -> dict[str, object]:
+        return {
+            "ok": True,
+            "required_ok": True,
+            "checks": {
+                "ollama": {
+                    "ok": True,
+                    "status": "ok",
+                    "base_url": "http://127.0.0.1:11434",
+                }
+            },
+            "runtime": {
+                "llm": {
+                    "provider": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                }
+            },
+            "suggested_actions": [],
+        }
+
+    monkeypatch.setattr(health_route, "run_health", fake_run_health)
+
+    resp = client.get("/api/health")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["checks"]["ollama"]["base_url"] == "http://127.0.0.1:11434"
+    assert data["runtime"]["llm"]["base_url"] == "https://api.openai.com/v1"

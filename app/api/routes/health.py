@@ -14,6 +14,7 @@ _SENSITIVE_DETAIL_RE = re.compile(
     r"Traceback|File \"|/[^\\s:]+|[A-Za-z]:\\\\|secret|token|password|api[_-]?key",
     re.IGNORECASE,
 )
+_OPERATOR_VISIBLE_URL_KEYS = {"base_url"}
 
 
 def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
@@ -22,6 +23,8 @@ def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
     if isinstance(value, list):
         return [_sanitize_health_value(item, parent_key=parent_key) for item in value]
     if isinstance(value, str) and _SENSITIVE_DETAIL_RE.search(value):
+        if parent_key in _OPERATOR_VISIBLE_URL_KEYS:
+            return value
         if parent_key == "dsn" and "***" in value:
             return value
         if parent_key == "detail":
