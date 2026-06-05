@@ -39,11 +39,11 @@ stubs unless the owner decides compatibility paths are required again.
 | Watcher, WriteGuard, health | Shipped + verified | Treat as authority spine before expanding autonomy. |
 | PanelAgent + confirmation | Shipped + verified | Use as the first vertical human-agent proof path. |
 | Companion UI | Shipped but dev/staging biased | Define operational promise before polish or broad UX expansion. |
-| AgentState/LangGraph | Bounded shipped usage; AgentState fragmented | Active for ASK/PanelAgent. `AgentState` is defined in three places (`app/agents/ask/state.py`, `app/agents/base/graph.py`, `app/components/reasoning/graph_builder.py`), so the V60 "shared runtime-state contract" invariant is not yet met; PER-loop is historical (ADR-0005). Unify before structural progression. |
+| AgentState/LangGraph | Bounded shipped usage; AgentState fragmented | Active for ASK/PanelAgent. Runtime state is split across `app/agents/ask/state.py::AgentState`, `app/agents/base/graph.py::AgentState`, `app/components/reasoning/graph_builder.py::AgentStateBase`, and `app/agents/panel_agent/state.py::PanelAgentState`, so the V60 "shared runtime-state contract" invariant is not yet met; PER-loop is historical (ADR-0005). Unify before structural progression. |
 | Agent Memory | Bounded shipped slices | Do not expand into broad memory intelligence before admissibility is explicit. |
 | Context Bundles | Shipped + closed | #1559 closed 2026-06-04: route, emission, consumption, linkage, and receipt projection merged; owner docs promoted via #1566. Stable-addressing follow-up #1576 still open. |
 | Contextualization Layer | Contract/doc only | Do not treat as runtime enforcement until code/tests prove it. |
-| BuilderOps | Shipped build plane (store/CLI/API) | `app/builderops/` store, projections, and promotion gateway are shipped and tested but not surfaced in STATUS/ARCHITECTURE, and ADR-0010 still reads "not implemented." Surface as shipped; keep records/projections non-authoritative for product truth. |
+| BuilderOps | Shipped build plane (store/CLI/API) | `app/builderops/` store, projections, and promotion gateway are shipped and tested and are now surfaced in STATUS; ARCHITECTURE still needs explicit build-plane posture, and ADR-0010 still reads "not implemented." Keep records/projections non-authoritative for product truth. |
 | Release channels | Contract/runbook only | Operational acceptance receipt is still required. |
 
 ## Critical Path
@@ -53,8 +53,8 @@ stubs unless the owner decides compatibility paths are required again.
 2. Context Bundle runtime closure is complete: #1559 closed 2026-06-04 (receipt projection #1565/#1574
    and owner-doc promotion #1566 merged). The only bounded item left is the stable-addressing fix
    #1576; do not expand scope beyond it.
-3. Stabilize the runtime authority spine: unify the fragmented `AgentState` (three definitions today)
-   into one shared state/authority/trace contract, then WriteGuard, events, receipts, health,
+3. Stabilize the runtime authority spine: unify the fragmented runtime state contracts (`AgentState`,
+   `AgentStateBase`, and `PanelAgentState`) into one shared state/authority/trace contract, then WriteGuard, events, receipts, health,
    provenance, and explicit no-authority-upgrade rules.
 4. Prove one human-agent vertical loop: vault intent -> proposal -> human confirmation -> bounded
    action -> receipt -> UI/vault visibility.
