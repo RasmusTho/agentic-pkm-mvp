@@ -691,6 +691,43 @@ Guardrails for builder agents:
 This GitHub control plane is a development governance layer around the repo-first/docs-as-code workflow.
 It must not be confused with the runtime agent architecture described elsewhere in this document.
 
+## BuilderOps Build Plane
+
+<!-- builderops-build-plane -->
+
+BuilderOps Vault is the build-plane operating surface for builder-agent work. The following
+components are shipped under `app/builderops/` as build-plane infrastructure:
+
+- **BuilderOps store** — local SQLite store for creating, reading, listing, and lease-protected
+  state transitions for BuilderOps records (`AgentWorklog`, `LearningSignal`, `PromotionIntent`,
+  `DocsFreshnessRecord`, `RoadmapExecutionItem`, `BuilderOpsReceipt`).
+- **BuilderOps CLI** — typed CLI commands under `app/cli/builderops.py` for all record types,
+  lease management, and state transitions.
+- **BuilderOps API/tool boundary** — controlled HTTP API (`/api/builderops/*`) and MCP-style tool
+  boundary (`mcp.builderops.*`) for agent-safe record creation and listing.
+- **BuilderOps promotion gateway** — explicit `PromotionIntent` proposal, dry-run, receipt, and
+  state-transition mechanics. The gateway renders proposals; it does not silently write repo or
+  GitHub authority surfaces.
+- **BuilderOps generated projections** — Markdown projection generator for `learning-summary`,
+  `docs-freshness`, `roadmap-execution`, and `promotion-queue` views over BuilderOps Vault records.
+
+### Authority boundary (BuilderOps non-authority rule)
+
+BuilderOps records and projections are **not product/runtime truth**. The repository remains the
+authority surface for code, tests, product/runtime contracts, ADRs, canonical architecture docs,
+and current-state owner docs.
+
+- BuilderOps governs the building system; repo governs product/runtime truth.
+- Generated projections are non-authoritative views. Editing a projection does not update BuilderOps
+  Vault and must not be treated as an authority transfer.
+- Promotion across authority classes is explicit and gated. A `PromotionIntent` record is staged
+  material, not an executed mutation.
+- No product/runtime contract changes without the repo authority gate (PR review, ADR, owner-doc
+  writeback).
+
+The authoritative decision document is `docs/adr/ADR-0010-builderops-vault-authority-boundary.md`.
+Detailed mechanics for each subsystem live in `docs/builderops/`.
+
 ## Release Channel Identity
 
 <!-- release-channel-identity -->

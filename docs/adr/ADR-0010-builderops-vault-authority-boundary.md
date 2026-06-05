@@ -1,4 +1,4 @@
-State: Accepted - docs/governance decision for BuilderOps Vault authority. No runtime, store, CLI, schema, API, MCP, or promotion-gateway behavior is implemented.
+State: Accepted - docs/governance decision for BuilderOps Vault authority. BuilderOps store, CLI, API/tool boundary, promotion gateway, and generated projections are shipped in app/builderops/ as build-plane infrastructure. BuilderOps records and projections are not product/runtime truth; repo governs product/runtime authority.
 
 # ADR-0010: BuilderOps Vault Authority and Promotion Boundary
 
