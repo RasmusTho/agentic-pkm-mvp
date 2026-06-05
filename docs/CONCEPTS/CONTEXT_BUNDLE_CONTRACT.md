@@ -258,6 +258,32 @@ context_bundle:
 - A bundle created for resurfacing does not automatically authorize writing or promotion.
 - A bundle may be inspectable after expiry, but expired authority does not persist by default.
 
+## Bounded context admissibility posture
+
+Context Bundles are bridge artifacts, not authority escalation primitives.
+
+**`may_write=false` is the default and required posture for all bundles** unless a later
+separately governed contract, with receipts and human review, explicitly changes that posture for
+a specific bundle class.
+
+Bundle-based context may support:
+
+- proposal evidence — as cited support only, with provenance and review posture surfaced;
+- read-side answering, orientation, and resurfacing — when provenance is visible and
+  `may_write=false`.
+
+Bundle-based context must not:
+
+- authorize note writes, state transitions, or promotion moves on its own;
+- promote selected context into memory or knowledge silently;
+- set `may_write=true` without a separate governed contract that explicitly grants it;
+- bypass WriteGuard, trust semantics, or domain boundaries.
+
+This posture is consistent with the admissibility default in
+`docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`. It applies to all existing shipped bundle
+surfaces (retrieval, orientation, resurfacing, write-proposal linkage) until a follow-up governed
+contract explicitly widens it.
+
 ## Examples
 
 ### Retrieval bundle

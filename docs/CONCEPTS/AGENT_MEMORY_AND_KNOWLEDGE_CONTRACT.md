@@ -332,6 +332,36 @@ agent_memory:
 - Recall must be explainable when it influences answers, orientation, or write proposals.
 - Memory promotion must not silently erase the original source or its provenance.
 
+## Bounded memory/context admissibility default
+
+This section records the conservative admissibility default in force until a separate governed
+contract explicitly changes it. It governs how memory and context may be used across three
+influence tiers.
+
+**Read-side awareness, orientation, and resurfacing (allowed).**
+Memory and context may support read-side awareness, orientation, and resurfacing when provenance
+is visible (source, review state, and authority are surfaced rather than hidden) and the authority
+posture is non-write (`may_write=false`). Recall at this tier must not silently promote retrieved
+context into memory or knowledge.
+
+**Proposal influence (allowed only as cited support).**
+Memory and context may support proposal evidence when the recall is cited explicitly (not used as
+a hidden background signal), the review/provenance posture is surfaced to the human or reviewer,
+and the proposal is produced through the governed write-proposal path. Uncited background
+influence from memory or context is disallowed.
+
+**Mutation authority (disallowed from memory/context alone).**
+Memory or context alone must not authorize mutations, note writes, or state transitions.
+`may_write=false` is the required posture for any memory record or context bundle unless a
+separate governed contract explicitly changes it with receipts and human review. Promotion from
+candidate to active memory must not occur silently from context influence; explicit lifecycle
+transitions with receipts are required.
+
+This default is the design-intent posture documented here. Runtime enforcement may be partial at
+any given point. Where the runtime does not yet enforce a tier, the constraint remains normative
+for new work and should drive follow-up implementation issues when a concrete enforcement gap is
+identified.
+
 ## Relationship to shipped reality
 
 Current runtime may already expose pieces of memory-adjacent behavior through retrieval, receipts, companion notes, and the read-only Chat cognition scaffold. This document does not claim a fully shipped agent-memory system. It defines the target-state relationship between memory, knowledge, runtime state, and machine mirrors.

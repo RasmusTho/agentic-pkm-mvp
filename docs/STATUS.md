@@ -168,6 +168,18 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   preserving the requested bundle id in emitted bundles/receipts, and keep knowledge-compilation
   proposal builders aligned with canonical review posture by accepting `review_state: protected`
   sources alongside `reviewed` and `accepted` while still rejecting non-approved states.
+<!-- memory-context-admissibility-default -->
+- Memory/context admissibility default documented (#1598): the conservative admissibility posture
+  is now recorded in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` and
+  `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md`. The shipped bounded seams (Agent Memory runtime
+  slices #1079–#1085; Context Bundles production integration #1559) remain in place; this note
+  distinguishes their bounded read-side/proposal posture from a broader memory/context influence
+  policy that has not shipped. Memory/context may support read-side awareness, orientation, and
+  resurfacing when provenance is visible. It may influence proposals only as cited support with
+  review/provenance posture surfaced. It must not authorize mutation or override human-authored
+  truth. Context Bundles keep `may_write=false` unless a later governed contract explicitly
+  changes that posture. No new runtime enforcement was added by #1598; the constraint is normative
+  and drives future follow-up implementation issues if concrete enforcement gaps are identified.
 - Runtime AgentState contract unification is shipped for the current ASK, generic graph, reasoning
   graph-builder, and PanelAgent state surfaces: `app/agents/runtime_state.py` defines the shared
   trace/authority/proposal/receipt linkage fields and the existing state classes now expose or adapt
