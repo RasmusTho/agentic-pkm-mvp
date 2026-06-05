@@ -1831,9 +1831,12 @@ def _render_operational_loop(note: dict) -> str:
     rendered read-only: the Companion UI is a projection of receipt visibility,
     never the durable approval/execution authority.
 
-    Receipt posture states:
+    Receipt posture mirrors the inspector receipt-state semantics so an empty
+    receipt list is never misread as a queued/pending confirmation (an empty list
+    means the source is connected but no governed records exist, not that a
+    proposal was staged):
         - 'receipts' key absent       -> unavailable (receipt source not connected)
-        - 'receipts' key present, []  -> awaiting_receipt (queued, not yet confirmed)
+        - 'receipts' key present, []  -> no_receipts (source connected, none found)
         - 'receipts' key present, [..] -> durable_receipt_visible (confirmed, durable)
     """
     _SENTINEL = object()
@@ -1841,7 +1844,7 @@ def _render_operational_loop(note: dict) -> str:
     if receipts_raw is _SENTINEL:
         posture = "unavailable"
     elif not receipts_raw:
-        posture = "awaiting_receipt"
+        posture = "no_receipts"
     else:
         posture = "durable_receipt_visible"
 

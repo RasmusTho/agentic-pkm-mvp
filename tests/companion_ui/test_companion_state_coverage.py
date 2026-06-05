@@ -330,3 +330,17 @@ def test_operational_loop_shows_receipt_posture() -> None:
     # the loop region is a derived, read-only projection (UI is not durable authority)
     assert 'data-authority-role="derived"' in html
     assert 'data-affordance-status="read-only"' in html
+
+
+def test_operational_loop_empty_receipts_is_not_awaiting() -> None:
+    """An empty receipts list means 'source connected, none found' — never a
+    queued/pending confirmation. Opening a never-confirmed note must not imply a
+    staged proposal exists.
+    """
+    note = _browser_note()
+    note["receipts"] = []  # source connected, no governed records for this note
+    html = _render_active_note(browser_payload=_vault_browser_payload([note]))
+
+    assert 'data-testid="workspace-operational-loop"' in html
+    assert 'data-receipt-posture="no_receipts"' in html
+    assert 'data-receipt-posture="awaiting_receipt"' not in html
