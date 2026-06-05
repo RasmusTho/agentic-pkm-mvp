@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
-from app.agents.panel_agent.settings import DeciderMode
-from app.components.settings.panel_actions_loader import PanelActionCatalog
 from app.agents.panel_agent.intent import PanelActionIntent
+from app.agents.panel_agent.settings import DeciderMode
+from app.agents.runtime_state import RuntimeStateModel
+from app.components.settings.panel_actions_loader import PanelActionCatalog
 from app.events.panel import (
     NoteRef,
     PanelInfo,
@@ -18,7 +19,7 @@ from app.events.panel import (
 )
 
 
-class PanelAgentState(BaseModel):
+class PanelAgentState(RuntimeStateModel):
     """State container for PanelAgent LangGraph execution."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

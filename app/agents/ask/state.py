@@ -4,6 +4,8 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.agents.runtime_state import RuntimeStateModel
+
 
 class RetrievedHit(BaseModel):
     object_id: str
@@ -18,7 +20,7 @@ class RetrievedHit(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class AgentState(BaseModel):
+class AgentState(RuntimeStateModel):
     trace_id: Optional[str] = None
     query: str
     hits: List[RetrievedHit] = Field(default_factory=list)

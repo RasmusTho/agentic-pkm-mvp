@@ -168,6 +168,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   preserving the requested bundle id in emitted bundles/receipts, and keep knowledge-compilation
   proposal builders aligned with canonical review posture by accepting `review_state: protected`
   sources alongside `reviewed` and `accepted` while still rejecting non-approved states.
+- Runtime AgentState contract unification is shipped for the current ASK, generic graph, reasoning
+  graph-builder, and PanelAgent state surfaces: `app/agents/runtime_state.py` defines the shared
+  trace/authority/proposal/receipt linkage fields and the existing state classes now expose or adapt
+  to that contract. This is runtime linkage only; it does not grant durable memory semantics or
+  bypass WriteGuard/governance authority.
 - BuilderOps Vault is shipped as a build-plane runtime: `app/builderops/` provides the store,
   schema, projections, promotion gateway, and boundary layer with CLI and API surfaces, covered by
   `tests/builderops/`, `tests/cli/test_builderops_cli.py`, and `tests/api/test_builderops_api.py`.
