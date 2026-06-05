@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-04
-Last verified against: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/DOCS_INDEX.md`, `docs/HUMAN-FLOWS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/CONTEXT_BUNDLES_RUNTIME/README.md`, closed issues #1559/#1565/#1566 (delivered via PRs #1574/#1577), open bug #1576, open PR #1573, and `main` at `51ef5d12`.
+Last verified against: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/DOCS_INDEX.md`, `docs/HUMAN-FLOWS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/CONTEXT_BUNDLES_RUNTIME/README.md`, closed issues #1559/#1565/#1566 (delivered via PRs #1574/#1577), closed bug #1576 (completed 2026-06-05), merged PR #1573, and `main` at `4a10d6cb`.
 
 # Major Roadmap Reset - Agentic PKM / Yggdrasil
 
@@ -41,7 +41,7 @@ stubs unless the owner decides compatibility paths are required again.
 | Companion UI | Shipped but dev/staging biased | Define operational promise before polish or broad UX expansion. |
 | AgentState/LangGraph | Bounded shipped usage; AgentState fragmented | Active for ASK/PanelAgent. Runtime state is split across `app/agents/ask/state.py::AgentState`, `app/agents/base/graph.py::AgentState`, `app/components/reasoning/graph_builder.py::AgentStateBase`, and `app/agents/panel_agent/state.py::PanelAgentState`, so the V60 "shared runtime-state contract" invariant is not yet met; PER-loop is historical (ADR-0005). Unify before structural progression. |
 | Agent Memory | Bounded shipped slices | Do not expand into broad memory intelligence before admissibility is explicit. |
-| Context Bundles | Shipped + closed | #1559 closed 2026-06-04: route, emission, consumption, linkage, and receipt projection merged; owner docs promoted via #1566. Stable-addressing follow-up #1576 still open. |
+| Context Bundles | Shipped + closed | #1559 closed 2026-06-04: route, emission, consumption, linkage, and receipt projection merged; owner docs promoted via #1566. Stable-addressing follow-up #1576 closed 2026-06-05. No bounded items remain. |
 | Contextualization Layer | Contract/doc only | Do not treat as runtime enforcement until code/tests prove it. |
 | BuilderOps | Shipped build plane (store/CLI/API) | `app/builderops/` store, projections, and promotion gateway are shipped and tested and are now surfaced in STATUS; ARCHITECTURE still needs explicit build-plane posture, and ADR-0010 still reads "not implemented." Keep records/projections non-authoritative for product truth. |
 | Release channels | Contract/runbook only | Operational acceptance receipt is still required. |
@@ -51,8 +51,8 @@ stubs unless the owner decides compatibility paths are required again.
 1. Keep the reset boundary in force: no broad backlog slicing before the owner accepts current-state
    classifications and decision gates.
 2. Context Bundle runtime closure is complete: #1559 closed 2026-06-04 (receipt projection #1565/#1574
-   and owner-doc promotion #1566 merged). The only bounded item left is the stable-addressing fix
-   #1576; do not expand scope beyond it.
+   and owner-doc promotion #1566 merged), and the stable-addressing follow-up #1576 closed 2026-06-05.
+   No bounded Context Bundles items remain; do not reopen scope here.
 3. Stabilize the runtime authority spine: unify the fragmented runtime state contracts (`AgentState`,
    `AgentStateBase`, and `PanelAgentState`) into one shared state/authority/trace contract, then WriteGuard, events, receipts, health,
    provenance, and explicit no-authority-upgrade rules.
@@ -105,7 +105,7 @@ stubs unless the owner decides compatibility paths are required again.
 Do not create these automatically from this document. They are safe bundle inputs after owner approval:
 
 - Roadmap Reset SoT Reconciliation: update STATUS/ROADMAP/DOCS_INDEX and missing-doc routing.
-- Context Bundles addressing fix: deliver #1576 (stable bundle id on the retrieval-backed route) without scope expansion; #1559 is otherwise closed.
+- Context Bundles: closed line — #1559 and the #1576 stable-addressing follow-up are both delivered; no new bundle is required unless a regression reopens scope.
 - Runtime Authority/Receipt Spine: unify event-vs-receipt posture across governed loops.
 - Companion UI Operational Loop: inspect/queue/confirm/receipt path over existing surfaces.
 - Panel Confirmation Vertical Slice: real note intent-to-receipt UAT.
