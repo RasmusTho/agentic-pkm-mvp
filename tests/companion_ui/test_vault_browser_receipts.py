@@ -105,7 +105,7 @@ def _receipt(
     artifact_path: str = "notes/current.md",
     artifact_uuid: str | None = "note-uuid-abc",
     requested_by: str = "agent:codex",
-    approved_by: str = "human:rasmus",
+    approved_by: str = "human:user",
     status: str = "ok",
     timestamp: str = "2026-05-30T21:00:00Z",
     trace_id: str | None = "trace-001",

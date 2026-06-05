@@ -64,13 +64,13 @@ def test_review_queue_requires_human_decision() -> None:
     decided = queue.decide(
         candidate.candidate_id,
         ReviewDecision.PROMOTE,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         notes="Confirmed in latest session.",
     )
 
     assert decided.status is ReviewStatus.PROMOTED
     assert decided.decision is ReviewDecision.PROMOTE
-    assert decided.decided_by == "reviewer:rasmus"
+    assert decided.decided_by == "reviewer:human"
     assert decided.decided_at is not None
 
     # A decided entry cannot be silently re-decided.
@@ -78,7 +78,7 @@ def test_review_queue_requires_human_decision() -> None:
         queue.decide(
             candidate.candidate_id,
             ReviewDecision.REJECT,
-            decided_by="reviewer:rasmus",
+            decided_by="reviewer:human",
         )
 
 
@@ -133,12 +133,12 @@ def test_review_queue_supports_promote_reject_and_revise() -> None:
     promoted = queue.decide(
         promote_c.candidate_id,
         ReviewDecision.PROMOTE,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
     )
     rejected = queue.decide(
         reject_c.candidate_id,
         ReviewDecision.REJECT,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         notes="Observation was a one-off; not a stable preference.",
     )
 
@@ -156,7 +156,7 @@ def test_review_queue_supports_promote_reject_and_revise() -> None:
     revised = queue.decide(
         revise_c.candidate_id,
         ReviewDecision.REVISE,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         notes="Narrowed to technical-topic preference.",
         revision=revision_candidate,
     )
@@ -189,7 +189,7 @@ def test_review_queue_supports_promote_reject_and_revise() -> None:
         queue.decide(
             other.candidate_id,
             ReviewDecision.REVISE,
-            decided_by="reviewer:rasmus",
+            decided_by="reviewer:human",
         )
 
 
@@ -209,7 +209,7 @@ def test_review_queue_does_not_authorize_unreviewed_recall() -> None:
     queue.decide(
         to_reject.candidate_id,
         ReviewDecision.REJECT,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         notes="Not a real preference.",
     )
 
@@ -220,7 +220,7 @@ def test_review_queue_does_not_authorize_unreviewed_recall() -> None:
     queue.decide(
         to_promote.candidate_id,
         ReviewDecision.PROMOTE,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
     )
 
     recallable_after_promote = queue.recallable_for_working_context()

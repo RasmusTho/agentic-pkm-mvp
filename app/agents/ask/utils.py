@@ -4,7 +4,7 @@ from typing import Any, Iterable, List
 
 from app.reasoning.models import ReasoningMode
 from app.reasoning.provider import run_reasoning
-from app.settings.models import AskSettings
+from app.settings.models import AskSettings, DEFAULT_ASK_SYSTEM_PROMPT, build_ask_system_prompt
 from app.settings.runtime import get_settings_bundle
 
 
@@ -12,10 +12,17 @@ def get_ask_settings() -> AskSettings:
     try:
         bundle = get_settings_bundle()
         raw = getattr(bundle, "agents", {}).get("ask") if hasattr(bundle, "agents") else None
+        ask: AskSettings | None = None
         if isinstance(raw, AskSettings):
-            return raw
-        if isinstance(raw, dict):
-            return AskSettings(**raw)
+            ask = raw
+        elif isinstance(raw, dict):
+            ask = AskSettings(**raw)
+        if ask is not None:
+            if ask.system_prompt == DEFAULT_ASK_SYSTEM_PROMPT:
+                owner_name = getattr(getattr(getattr(bundle, "instance", None), "vault", None), "owner_name", None)
+                if owner_name:
+                    ask = ask.model_copy(update={"system_prompt": build_ask_system_prompt(owner_name)})
+            return ask
     except Exception:
         pass
     return AskSettings()

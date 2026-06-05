@@ -126,7 +126,7 @@ The Chat mutation question is the highest-leverage open decision in the v6.0 int
 - [x] Seven evaluation criteria are listed and each is testable against a candidate resolution.
 - [x] Exactly two candidate resolutions are named: "DESIGN_PRINCIPLES wins" and "V60 plan wins". A third may be added in review but must pass the criteria.
 - [x] Each candidate has explicit arguments-for and arguments-against.
-- [x] A decision owner slot exists and is assigned: Rasmus Thornberg (v6.0 architecture owner), with decision recorded 2026-04-11.
+- [x] A decision owner slot exists and is assigned: architecture owner (v6.0), with decision recorded 2026-04-11.
 - [x] An acceptance condition is stated that allows either a recorded decision or an owned open deferral, but not silent drift.
 - [x] The task does not recommend any edit to files outside this directory inline; it recommends follow-up owner-doc promotion PRs instead.
 - [x] No part of this file presumes which resolution wins. (The framing body is balanced; the `## Decision` section records the authorized outcome.)
@@ -173,7 +173,7 @@ None. If the decision owner selects a resolution that requires edits to docs out
 ## Decision
 
 Status: RESOLVED — Candidate A (DESIGN_PRINCIPLES wins).
-Owner: Rasmus Thornberg (v6.0 architecture owner).
+Owner: architecture owner (v6.0).
 Date: 2026-04-11.
 
 ### Selected resolution

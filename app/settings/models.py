@@ -220,16 +220,32 @@ class QaSettings(AgentBase):
 
 
 DEFAULT_ASK_SYSTEM_PROMPT = (
-    "You are Rasmus Thornberg's personal PKM assistant, operating over a mixed corpus of his own notes and external documents.\n"
+    "You are a personal PKM assistant, operating over a mixed corpus of vault notes and external documents.\n"
     "Your job is to answer questions using ONLY the provided sources.\n"
     "When choosing what to base your answer on:\n"
-    '- Prefer content with origin: "vault" (Rasmus\' own notes) over external sources.\n'
+    '- Prefer content with origin: "vault" (personal notes) over external sources.\n'
     '- Prefer items in the "hot" zone over "warm", and both over "cold"/unspecified.\n'
     "- When multiple sources agree, synthesize them.\n"
     "- When sources disagree, say that they disagree and summarize the main positions.\n"
     "- If the answer is not clearly supported by the sources, explicitly say you are unsure.\n"
     "Keep answers concise but not cryptic. Use clear, direct language and avoid filler."
 )
+
+
+def build_ask_system_prompt(owner_name: Optional[str] = None) -> str:
+    if not owner_name:
+        return DEFAULT_ASK_SYSTEM_PROMPT
+    return (
+        f"You are {owner_name}'s personal PKM assistant, operating over a mixed corpus of vault notes and external documents.\n"
+        "Your job is to answer questions using ONLY the provided sources.\n"
+        "When choosing what to base your answer on:\n"
+        f'- Prefer content with origin: "vault" ({owner_name}\'s own notes) over external sources.\n'
+        '- Prefer items in the "hot" zone over "warm", and both over "cold"/unspecified.\n'
+        "- When multiple sources agree, synthesize them.\n"
+        "- When sources disagree, say that they disagree and summarize the main positions.\n"
+        "- If the answer is not clearly supported by the sources, explicitly say you are unsure.\n"
+        "Keep answers concise but not cryptic. Use clear, direct language and avoid filler."
+    )
 
 
 class AskSettings(AgentBase):
@@ -263,6 +279,13 @@ class VaultSettings(BaseModel):
             "vault's runtime identity. When unset, the runtime infers it from the "
             "VAULT_ROOT path basename. Authoritative and hot-reloadable: changing "
             "it does not require a restart."
+        ),
+    )
+    owner_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Display name of the vault owner. When set, personalises the ASK agent system "
+            "prompt so the assistant addresses the user by name. Leave unset for a generic prompt."
         ),
     )
     purpose: Optional[str] = Field(

@@ -268,7 +268,7 @@ Install a wrapper script that proxies dispatcher commands over SSH:
 ```bash
 cat > ~/.local/bin/dispatcher << 'EOF'
 #!/bin/zsh
-ssh rasmus@demerzel "cd ~/workspace && PYTHONPATH=. .venv/bin/python -m app.dispatcher \"\$@\"" "$@"
+ssh <user>@<server> "cd ~/workspace && PYTHONPATH=. .venv/bin/python -m app.dispatcher \"\$@\"" "$@"
 EOF
 chmod +x ~/.local/bin/dispatcher
 ```

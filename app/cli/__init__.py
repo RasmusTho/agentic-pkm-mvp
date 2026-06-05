@@ -538,14 +538,14 @@ def pipe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
 
 @cli.command(
     name="ingest-vault-root",
-    help="Ingest markdown files from vault root (root-only, non-recursive ingest; defaults to PKM - Alpha vault).",
+    help="Ingest markdown files from vault root (root-only, non-recursive ingest; defaults to DEFAULT_VAULT_ROOT).",
 )
 @click.option(
     "--root",
     "root_dir",
     type=click.Path(path_type=Path),
     default=None,
-    help="Override vault root (default is PKM - Alpha vault).",
+    help="Override vault root (default is DEFAULT_VAULT_ROOT).",
 )
 @click.option("--limit", type=int, default=None, help="Maximum number of markdown files to ingest from the vault root.")
 def ingest_vault_root_cmd(root_dir: Path | None, limit: int | None) -> None:
@@ -564,15 +564,15 @@ def ingest_vault_root_cmd(root_dir: Path | None, limit: int | None) -> None:
 
 
 @cli.command(
-    name="pkm-alpha-ingest",
-    help="Convenience wrapper for ingesting markdown files from the PKM - Alpha vault root.",
+    name="ingest-default-vault",
+    help="Ingest markdown files from DEFAULT_VAULT_ROOT (non-recursive, honours --limit).",
 )
 @click.option(
     "--limit",
     type=int,
     default=50,
     show_default=True,
-    help="Maximum number of markdown files to ingest from the PKM - Alpha vault root.",
+    help="Maximum number of markdown files to ingest from DEFAULT_VAULT_ROOT.",
 )
 def pkm_alpha_ingest(limit: int | None) -> None:
     resolved = DEFAULT_VAULT_ROOT.expanduser()
@@ -580,15 +580,15 @@ def pkm_alpha_ingest(limit: int | None) -> None:
         raise click.BadParameter(f"DEFAULT_VAULT_ROOT not found or not a directory: {resolved}")
 
     click.echo(
-        f"PKM - Alpha ingest (DEFAULT_VAULT_ROOT): {resolved} | limit={limit if limit is not None else 'all'}"
+        f"Ingesting from DEFAULT_VAULT_ROOT: {resolved} | limit={limit if limit is not None else 'all'}"
     )
     count = ingest_vault_root(resolved, limit=limit)
     click.echo(f"Successfully ingested {count} files.")
 
 
 @cli.command(
-    name="vault-alpha-ingest",
-    help="Ingest Concept notes from the PKM - Alpha vault with panel stripping and mirror handling.",
+    name="ingest-vault-concepts",
+    help="Ingest Concept notes from the default vault with panel stripping and mirror handling.",
 )
 @click.option(
     "--vault-root",

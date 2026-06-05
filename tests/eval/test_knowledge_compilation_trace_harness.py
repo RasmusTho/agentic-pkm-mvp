@@ -98,7 +98,7 @@ def _runtime_flow() -> _RuntimeFlow:
     )
     handoff = record_admission_decision(
         draft,
-        reviewer_ref="reviewer:rasmus",
+        reviewer_ref="reviewer:human",
         actor_ref="agent:codex",
         decision=AdmissionDecision.ADMIT,
         scope=AdmissionScope.MEMORY_REVIEW_QUEUE,
