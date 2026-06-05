@@ -10,15 +10,17 @@ from __future__ import annotations
 import inspect
 import logging
 import time
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
+from app.agents.runtime_state import RuntimeStateContract
+
 logger = logging.getLogger(__name__)
 
 
-class AgentStateBase(TypedDict, total=False):
+class AgentStateBase(RuntimeStateContract, total=False):
     """Minimum fields every agent graph state must include."""
 
     trace_id: str

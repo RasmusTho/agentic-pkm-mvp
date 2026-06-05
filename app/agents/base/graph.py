@@ -5,10 +5,11 @@ from typing import Callable, Optional, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.agents.runtime_state import RuntimeStateContract
 from app.domain.commitments import CommitmentHandle
 
 
-class AgentState(TypedDict, total=False):
+class AgentState(RuntimeStateContract, total=False):
     trace_id: str
     input: dict
     plan: object
