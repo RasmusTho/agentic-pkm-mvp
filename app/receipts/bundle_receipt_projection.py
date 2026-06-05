@@ -78,11 +78,13 @@ class BundleReceiptProjection:
     """
 
     def __init__(self, receipts: Iterable[BundleReceipt] | None = None) -> None:
-        self._receipts: list[BundleReceipt] = list(receipts or [])
+        self._receipts: list[BundleReceipt] = [
+            receipt.model_copy(deep=True) for receipt in receipts or []
+        ]
 
     def record(self, receipt: BundleReceipt) -> None:
         """Ingest a trace receipt into the read-only projection."""
-        self._receipts.append(receipt)
+        self._receipts.append(receipt.model_copy(deep=True))
 
     def for_bundle(self, bundle_id: str) -> list[BundleReceiptProjectionRow]:
         """Return projected rows for one bundle, ordered by recorded time."""

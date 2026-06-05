@@ -77,6 +77,37 @@ def test_projection_preserves_exclusions_and_authority():
     assert row.may_write is False
 
 
+def test_projection_snapshots_receipts_on_record():
+    bundle = _bundle()
+    receipt = record_creation_receipt(bundle)
+    proj = BundleReceiptProjection()
+    proj.record(receipt)
+
+    receipt.event = "consumed"
+    receipt.consumer = "mutated"
+    receipt.included_items[0].reason = "mutated"
+    receipt.excluded_items[0].reason = "mutated"
+    receipt.may_write = True
+
+    row = proj.for_bundle("cb-proj-1")[0]
+    assert row.event == "created"
+    assert row.consumer is None
+    assert row.included_items[0].reason == "evidence"
+    assert row.excluded_items[0].reason == "out of scope"
+    assert row.may_write is False
+
+
+def test_projection_snapshots_receipts_on_construction():
+    bundle = _bundle()
+    receipt = record_creation_receipt(bundle)
+    proj = BundleReceiptProjection([receipt])
+
+    receipt.included_items[0].reason = "mutated"
+
+    row = proj.for_bundle("cb-proj-1")[0]
+    assert row.included_items[0].reason == "evidence"
+
+
 def test_projection_does_not_promote_to_memory():
     bundle = _bundle()
     proj = BundleReceiptProjection()

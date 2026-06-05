@@ -9,20 +9,22 @@ no write authority (`may_write` stays false) and bypass no write guard, trust, o
 
 ## Capability Boundary
 
-The Context Bundles capability is delivered at the typed-contract / Pydantic layer (closed parent
-#894 and children #895/#896/#946/#947/#948/#949). Every building block exists as a pure, tested
-function, but none is wired into the production route layer. Verified by import graph: the only
-consumer of the bundle modules today is `app/knowledge_compilation/` — no API route constructs,
-emits, consumes, links, or projects bundles against the real vault.
+The Context Bundles capability has two delivered layers:
 
-This directory specifies the bounded work to integrate the existing contract into production runtime:
+- the typed-contract / Pydantic layer (closed parent #894 and children #895/#896/#946/#947/#948/#949),
+  which established the pure contract building blocks;
+- the production runtime integration wave (closed parent #1559 and children #1560, #1562-#1566),
+  which wired those contracts into route, retrieval, consumption, proposal-linkage, receipt, and
+  owner-doc surfaces.
+
+The shipped runtime integration includes:
 
 - a read-only production route that returns an inspectable `ContextBundle`,
 - bundle emission from the real retrieval path,
 - bundle consumption in the production orientation and resurfacing paths,
 - bundle linkage through governed write proposals,
-- a receipt/query projection for bundle provenance and exclusions,
-- and owner-doc promotion only after runtime evidence exists.
+- a read-only receipt/query projection for bundle provenance and exclusions,
+- and owner-doc promotion after runtime evidence landed.
 
 It is downstream of `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` and downstream of the typed-contract
 spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
@@ -47,17 +49,17 @@ spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
 ## Task List
 
 1. [EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md](EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md) — issue
-   [#1560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1560) (ready).
+   [#1560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1560) (delivered by PR #1569).
 2. [EMIT_FROM_REAL_RETRIEVAL.md](EMIT_FROM_REAL_RETRIEVAL.md) — issue
-   [#1562](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1562) (blocked → #1560).
+   [#1562](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1562) (delivered by PR #1570).
 3. [CONSUME_IN_ORIENTATION_AND_RESURFACING.md](CONSUME_IN_ORIENTATION_AND_RESURFACING.md) — issue
-   [#1563](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1563) (blocked → #1562).
+   [#1563](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1563) (delivered by PR #1571).
 4. [CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md](CARRY_LINKAGE_THROUGH_WRITE_PROPOSALS.md) — issue
-   [#1564](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1564) (blocked → #1562).
+   [#1564](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1564) (delivered by PR #1572).
 5. [EXPOSE_RECEIPT_PROJECTION.md](EXPOSE_RECEIPT_PROJECTION.md) — issue
-   [#1565](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1565) (blocked → #1563, #1564).
+   [#1565](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1565) (delivered by PR #1574).
 6. [PROMOTE_OWNER_DOCS.md](PROMOTE_OWNER_DOCS.md) — issue
-   [#1566](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1566) (blocked → #1560, #1562-#1565).
+   [#1566](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1566) (delivered by PR #1577).
 
 ## Flat Execution Order
 
@@ -70,17 +72,17 @@ spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
 
 ## Capability-Level Acceptance Criteria
 
-- [ ] A production route returns an inspectable `ContextBundle` envelope, read-only.
+- [x] A production route returns an inspectable `ContextBundle` envelope, read-only.
   Verify: `docs/CONTEXT_BUNDLES_RUNTIME/EXPOSE_BUNDLE_CONSTRUCTION_ROUTE.md` + #1560 PR validation.
-- [ ] Real retrieval emits bundles against the live vault.
+- [x] Real retrieval emits bundles against the live vault.
   Verify: `docs/CONTEXT_BUNDLES_RUNTIME/EMIT_FROM_REAL_RETRIEVAL.md` + #1562 PR validation.
-- [ ] Orientation and resurfacing production paths consume bundles without authority upgrade.
+- [x] Orientation and resurfacing production paths consume bundles without authority upgrade.
   Verify: #1563 PR validation.
-- [ ] Governed write proposals carry bundle linkage without bypassing WriteGuard.
+- [x] Governed write proposals carry bundle linkage without bypassing WriteGuard.
   Verify: #1564 PR validation.
-- [ ] A receipt/query projection exposes bundle provenance and exclusions.
+- [x] A receipt/query projection exposes bundle provenance and exclusions.
   Verify: #1565 PR validation.
-- [ ] Owner docs are promoted only after runtime evidence exists.
+- [x] Owner docs are promoted only after runtime evidence exists.
   Verify: #1566 promotes `docs/STATUS.md` and closes parent #1559.
 
 ## Verification Path
