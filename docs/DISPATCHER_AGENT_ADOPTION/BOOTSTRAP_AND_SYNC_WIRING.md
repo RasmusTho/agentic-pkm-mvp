@@ -44,7 +44,7 @@ python -m app.dispatcher next --json
 # exit code 1
 
 # direct pull command
-python -m app.dispatcher pull --repo rasmusthornberg/agentic-pkm-mvp --json
+python -m app.dispatcher pull --repo <owner>/<repo> --json
 # => {"ok": true, "upserted": 9, "skipped": 0, ...}
 ```
 

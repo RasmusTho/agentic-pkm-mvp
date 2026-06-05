@@ -53,7 +53,7 @@ make prod-start-full
 
 - API is exposed on host port **18000**.
 - `VAULT_ROOT` must be set to the real operator vault path by the operator before startup.
-- The prod runtime root is the repo checkout directory (e.g., `/Users/rasmus/workspace`), not a sub-directory. Ensure the correct worktree is used.
+- The prod runtime root is the repo checkout directory (e.g., `/path/to/repo`), not a sub-directory. Ensure the correct worktree is used.
 
 For LLM configuration when using a local Ollama endpoint via the OpenAI-compatible API (provider=`openai`):
 - Set `OPENAI_BASE_URL` to the reachable Ollama base URL (e.g., `http://host.docker.internal:11434/v1`).

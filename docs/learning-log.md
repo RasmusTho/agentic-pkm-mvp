@@ -159,7 +159,7 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 
 ## 2026-06-01 — learning retro (redirected workspace patch path)
 **Source:** learning-retrospective
-**Diverged:** The startup rule said to switch context to the canonical repo root, but a file-edit patch attempt still resolved relative paths against `/Users/rasmusthornberg/Documents/New project` until the repo-root patch command was run from the canonical cwd.
-**Upstream artifact:** `/Users/rasmusthornberg/Documents/New project/AGENTS.md` — make the workspace redirect rule explicit about verifying file-edit tool path resolution before trusting a patch.
+**Diverged:** The startup rule said to switch context to the canonical repo root, but a file-edit patch attempt still resolved relative paths against the stale workspace path until the repo-root patch command was run from the canonical cwd.
+**Upstream artifact:** stale workspace `AGENTS.md` — make the workspace redirect rule explicit about verifying file-edit tool path resolution before trusting a patch.
 
 --- retro 2026-06-01: applied 11/11 proposals ---

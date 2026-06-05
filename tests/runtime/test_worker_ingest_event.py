@@ -208,7 +208,7 @@ def test_handle_ingest_vault_changed_uses_relative_path_when_payload_path_is_hos
         encoding="utf-8",
     )
 
-    host_style_root = Path("/Users/rasmus/Library/Mobile Documents/iCloud~md~obsidian/Documents/PKM - Alpha")
+    host_style_root = Path("/Users/testuser/Library/Mobile Documents/iCloud~md~obsidian/Documents/Vault")
     payload = {
         "vault_path": str(host_style_root / "📥 Inbox" / "host-path-note.md"),
         "relative_path": "📥 Inbox/host-path-note.md",

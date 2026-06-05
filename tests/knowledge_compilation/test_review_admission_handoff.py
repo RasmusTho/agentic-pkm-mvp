@@ -49,7 +49,7 @@ def test_admission_requires_explicit_reviewer_decision_and_receipt_posture() -> 
 
     handoff = record_admission_decision(
         draft,
-        reviewer_ref="reviewer:rasmus",
+        reviewer_ref="reviewer:human",
         actor_ref="agent:codex",
         decision=AdmissionDecision.ADMIT,
         scope=AdmissionScope.MEMORY_REVIEW_QUEUE,
@@ -58,7 +58,7 @@ def test_admission_requires_explicit_reviewer_decision_and_receipt_posture() -> 
         receipt_posture=AdmissionReceiptPosture.DURABLE_RECEIPT_REF,
     )
 
-    assert handoff.decision_record.reviewer_ref == "reviewer:rasmus"
+    assert handoff.decision_record.reviewer_ref == "reviewer:human"
     assert handoff.decision_record.actor_ref == "agent:codex"
     assert handoff.decision_record.decision is AdmissionDecision.ADMIT
     assert handoff.decision_record.scope is AdmissionScope.MEMORY_REVIEW_QUEUE
@@ -82,7 +82,7 @@ def test_admission_requires_explicit_reviewer_decision_and_receipt_posture() -> 
     }
     for field, value in required.items():
         kwargs = {
-            "reviewer_ref": "reviewer:rasmus",
+            "reviewer_ref": "reviewer:human",
             "actor_ref": "agent:codex",
             "decision": AdmissionDecision.ADMIT,
             "scope": AdmissionScope.MEMORY_REVIEW_QUEUE,
@@ -98,7 +98,7 @@ def test_admission_requires_explicit_reviewer_decision_and_receipt_posture() -> 
 def test_handoff_routes_to_review_queue_without_promoting() -> None:
     handoff = record_admission_decision(
         _draft(),
-        reviewer_ref="reviewer:rasmus",
+        reviewer_ref="reviewer:human",
         actor_ref="agent:codex",
         decision=AdmissionDecision.ADMIT,
         scope=AdmissionScope.MEMORY_REVIEW_QUEUE,
@@ -138,7 +138,7 @@ def test_admission_outcomes_preserve_provenance_and_origin() -> None:
     for decision, expected_state in outcomes:
         handoff = record_admission_decision(
             draft,
-            reviewer_ref="reviewer:rasmus",
+            reviewer_ref="reviewer:human",
             actor_ref="agent:codex",
             decision=decision,
             scope=AdmissionScope.COMPILATION_REVIEW,
@@ -172,7 +172,7 @@ def test_direct_apply_or_promotion_without_receipt_is_rejected() -> None:
     with pytest.raises(AdmissionHandoffError, match="APPLY"):
         record_admission_decision(
             apply_artifact,
-            reviewer_ref="reviewer:rasmus",
+            reviewer_ref="reviewer:human",
             actor_ref="agent:codex",
             decision=AdmissionDecision.ADMIT,
             scope=AdmissionScope.MEMORY_REVIEW_QUEUE,
@@ -184,7 +184,7 @@ def test_direct_apply_or_promotion_without_receipt_is_rejected() -> None:
     with pytest.raises(ValidationError):
         record_admission_decision(
             draft,
-            reviewer_ref="reviewer:rasmus",
+            reviewer_ref="reviewer:human",
             actor_ref="agent:codex",
             decision=AdmissionDecision.ADMIT,
             scope="vault_write",
@@ -196,7 +196,7 @@ def test_direct_apply_or_promotion_without_receipt_is_rejected() -> None:
     with pytest.raises(ValidationError):
         record_admission_decision(
             draft,
-            reviewer_ref="reviewer:rasmus",
+            reviewer_ref="reviewer:human",
             actor_ref="agent:codex",
             decision=AdmissionDecision.ADMIT,
             scope=AdmissionScope.MEMORY_REVIEW_QUEUE,

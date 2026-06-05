@@ -557,7 +557,7 @@ created_at: "2026-06-01T15:30:00Z"
 updated_at: "2026-06-01T15:42:05Z"
 created_by:
   actor_type: human
-  id: rasmus
+  id: owner
 summary: "BuilderOps Vault authority boundary"
 decision_domain: builderops
 decision_scope: "BuilderOps operating plane authority"

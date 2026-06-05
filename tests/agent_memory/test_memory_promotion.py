@@ -54,7 +54,7 @@ def _promoted_entry(
     queue: MemoryCandidateReviewQueue,
     candidate: MemoryCandidate,
     *,
-    decided_by: str = "reviewer:rasmus",
+    decided_by: str = "reviewer:human",
     notes: str | None = None,
 ) -> object:
     queue.enqueue(candidate)
@@ -70,7 +70,7 @@ def _rejected_entry(
     queue: MemoryCandidateReviewQueue,
     candidate: MemoryCandidate,
     *,
-    decided_by: str = "reviewer:rasmus",
+    decided_by: str = "reviewer:human",
     notes: str | None = "Not a stable observation.",
 ) -> object:
     queue.enqueue(candidate)
@@ -104,7 +104,7 @@ def test_promoted_memory_preserves_provenance() -> None:
     entry = _promoted_entry(
         queue,
         candidate,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         notes="Confirmed in three consecutive sessions.",
     )
 
@@ -121,7 +121,7 @@ def test_promoted_memory_preserves_provenance() -> None:
     assert result.candidate.generated_by == "companion_agent"
 
     # The review receipt fields are preserved alongside the promoted content
-    assert result.decided_by == "reviewer:rasmus"
+    assert result.decided_by == "reviewer:human"
     assert result.decided_at is not None
     assert result.decision_notes == "Confirmed in three consecutive sessions."
 
@@ -151,7 +151,7 @@ def test_rejected_memory_preserves_review_receipt() -> None:
     entry = _rejected_entry(
         queue,
         candidate,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         notes="Single session; not representative of a stable pattern.",
     )
 
@@ -166,7 +166,7 @@ def test_rejected_memory_preserves_review_receipt() -> None:
     assert result.candidate.source_refs == ["session:2026-05-21T09:00:00Z"]
 
     # The review receipt is preserved: who rejected it, when, and why
-    assert result.decided_by == "reviewer:rasmus"
+    assert result.decided_by == "reviewer:human"
     assert result.decided_at is not None
     assert result.decision_notes == "Single session; not representative of a stable pattern."
 
@@ -226,7 +226,7 @@ def test_revised_memory_preserves_prior_context() -> None:
     revised_queue_entry = queue.decide(
         original.candidate_id,
         ReviewDecision.REVISE,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         notes="Narrowed to technical-topic preference based on multi-session pattern.",
         revision=revision_candidate,
     )
@@ -248,7 +248,7 @@ def test_revised_memory_preserves_prior_context() -> None:
     assert result.candidate.content == "Single session showing short replies."
 
     # The review receipt is preserved: reviewer, timestamp, notes
-    assert result.decided_by == "reviewer:rasmus"
+    assert result.decided_by == "reviewer:human"
     assert result.decided_at is not None
     assert result.decision_notes is not None
 
@@ -382,14 +382,14 @@ def test_revise_rejects_already_rejected_revised_entry() -> None:
     queue.decide(
         original.candidate_id,
         ReviewDecision.REVISE,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
         revision=revision_candidate,
     )
     # Now reject the revision successor
     queue.decide(
         revision_candidate.candidate_id,
         ReviewDecision.REJECT,
-        decided_by="reviewer:rasmus",
+        decided_by="reviewer:human",
     )
 
     original_entry = queue.get(original.candidate_id)

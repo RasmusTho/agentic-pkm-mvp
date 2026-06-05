@@ -66,7 +66,7 @@ def test_unsupported() -> None:
 def test_no_file_urls() -> None:
     resolver = VaultAssetResolver(
         {
-            "test-image.png": "file:///Users/rasmusthornberg/vault/test-image.png",
+            "test-image.png": "file:///Users/testuser/vault/test-image.png",
             "safe-image.png": None,
         }
     )

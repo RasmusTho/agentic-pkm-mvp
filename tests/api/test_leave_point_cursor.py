@@ -304,7 +304,7 @@ def test_cursor_rejects_absolute_note_path() -> None:
             channel="test",
             artifact_uuid="artifact-1",
             source_kind="artifact_activation",
-            source_ref_id="/Users/rasmus/vault/notes/cursor.md",
+            source_ref_id="/Users/testuser/vault/notes/cursor.md",
             capture_reason="artifact_focus",
             trace_id="trace-1",
         )
