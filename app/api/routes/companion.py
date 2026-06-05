@@ -496,6 +496,10 @@ class VaultBrowserQueueReviewResponse(BaseModel):
     data_mode: Literal["governance_write"] = "governance_write"
     requires_confirmation: bool = True
     requires_receipt: bool = True
+    # Position in the inspect -> queue -> confirm -> receipt operational loop.
+    # Queueing leaves the item staged and pending confirmation; no durable
+    # receipt exists until the governed Panel confirmation path runs.
+    loop_stage: Literal["queued_pending_confirmation"] = "queued_pending_confirmation"
 
 
 def _truthy_env(name: str, default: bool = False) -> bool:

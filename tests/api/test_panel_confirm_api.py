@@ -110,6 +110,27 @@ def test_panel_confirm_endpoint_returns_receipt_on_success(
     assert data["proposal_id"] == "prop-1"
 
 
+def test_confirmed_panel_action_returns_receipt_visibility(
+    client: TestClient, monkeypatch
+) -> None:
+    """Operational loop (confirm step): a confirmed action routed through the
+    governed Panel confirmation API exposes an explicit, inspectable receipt
+    posture. The response is a projection of receipt visibility, not the durable
+    authority store — durable receipts live in the vault AI-status callout.
+    """
+    _stage()
+    _mock_execute(monkeypatch)
+    resp = client.post("/api/panel/confirm", json=_valid_body())
+    assert resp.status_code == 200
+    data = resp.json()
+    # confirmation remains routed through the governed Panel confirmation API
+    assert data["status"] == "executed"
+    assert data["receipt"] is not None
+    # receipt posture is explicit: the confirmed action produced a durable,
+    # vault-visible receipt that the UI/API surfaces as visibility, not authority.
+    assert data["receipt_visibility"] == "durable_vault_visible"
+
+
 def test_panel_confirm_endpoint_idempotent(client: TestClient, monkeypatch) -> None:
     _stage()
     mock_fn = _mock_execute(monkeypatch)

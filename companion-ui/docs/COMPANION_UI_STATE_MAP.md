@@ -4,7 +4,7 @@ description: Normalized status map of Companion UI product modes and surfaces (s
 doc_role: Normalized state map / reconciliation reference
 authority: Non-normative reconciliation view. Authority for each surface stays with its owner contract (Panel, Workspace State, Workspace Orientation, Vault Browser, UI Runtime Boundaries) and with shipped runtime truth in docs/STATUS.md. This doc only maps current status; it does not define behavior.
 owner: Companion UI / product architecture
-last_reviewed: 2026-06-03
+last_reviewed: 2026-06-05
 source_contracts:
   - docs/COMPANION_UI_PRODUCT_SPEC.md
   - companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md
@@ -15,7 +15,7 @@ source_contracts:
   - docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md
   - docs/STATUS.md
 ---
-State: Normalized Companion UI state map. Reconciliation/reference doc, not a runtime contract. Captures status as of 2026-06-03.
+State: Normalized Companion UI state map. Reconciliation/reference doc, not a runtime contract. Captures status as of 2026-06-05.
 
 # Companion UI State Map
 
@@ -62,6 +62,7 @@ Every surface row below is tagged with exactly one status:
 | Vault Browser (browse, outline, artifact inspector) | shipped/dev-staging | Find, Reorient | read-only; `queue_review` is governed handoff (`POST /api/companion/vault-browser/actions/queue-review`) | `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; `app/api/routes/companion.py` |
 | Panel / agent rail | shipped/dev-staging | Act | governed handoff (propose → decide → execute → receipt); owns governed action | `companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md`; CanvasPanelPipeline, checkbox projection |
 | Receipts / provenance | shipped/dev-staging | Act, Reorient | read-only display; receipts must not be invented by the UI | `docs/STATUS.md` (APPLY accountability fields); receipt query (#1532) |
+| Operational loop (inspect → queue → confirm → receipt) | shipped/dev-staging | Find, Act, Reorient | derived, read-only loop projection over existing surfaces; queue stages, confirm executes through `POST /api/panel/confirm`, receipt posture is shown not owned; UI is never durable authority | #1603; queue `loop_stage` (`app/api/routes/companion.py`), confirm `receipt_visibility` (`app/panel/confirmation.py`), `workspace-operational-loop` region (`serve_dev_page.py`) |
 | Memory candidate boundary (orientation seam) | shipped/dev-staging | Reorient | read-only awareness + intent emission only; never hidden authority | ADR-0009; `tests/api/test_orientation_memory_seam.py` (#1457/#1466) |
 | Agent-memory posture in Vault Browser inspector | shipped/dev-staging | Find, Reorient | read-only projection; server-declared | scope decision #1474 (closed); read-only projection #1547 (closed); Vault Browser surfacing #1551 (`app/agent_memory/posture_projection.py`). See **Known blocked areas**. |
 | Ambient foreground orientation refresh | shipped/dev-staging (default-off) | Reorient | read-only; non-notification | feat #1458 (closed), receipt/orientation fixes #1532 (merged). **Not** an open item. |

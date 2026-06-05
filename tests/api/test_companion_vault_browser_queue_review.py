@@ -114,6 +114,52 @@ def test_queue_review_stages_panel_proposal_and_returns_pending_intent(
     assert _outbox_records(outbox) == []
 
 
+def test_queue_review_stages_pending_panel_governance_proposal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operational loop (inspect -> queue step): queueing a review stages an
+    inspectable pending Panel *governance* proposal that carries no durable
+    receipt yet, and names its position in the inspect/queue/confirm/receipt loop.
+    """
+    vault = tmp_path / "vault"
+    _write_note(vault, "notes/governed.md", uuid="uuid-gov")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+
+    resp = TestClient(app).post(
+        "/api/companion/vault-browser/actions/queue-review",
+        json={"note_path": "notes/governed.md"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # the staged item is an inspectable pending governance proposal
+    assert data["state"] == "pending_intent"
+    assert data["data_mode"] == "governance_write"
+    assert data["requires_confirmation"] is True
+    assert data["requires_receipt"] is True
+    # it carries no durable receipt yet, and routes confirmation through the
+    # governed Panel confirmation path
+    assert data["receipt_state"] == "pending_intent_not_durable_receipt"
+    assert data["execution_path"] == "/api/panel/confirm"
+    # the response names its position in the operational loop
+    assert data["loop_stage"] == "queued_pending_confirmation"
+
+    # the underlying catalog action is a human-gated governed-execution governance action
+    descriptor = load_panel_action_catalog().get("queue_review")
+    assert descriptor.downstream_event == "panel.governance.requested"
+    assert descriptor.capability_class == "governed_execution"
+    assert descriptor.requires_human_gate is True
+
+    # the staged proposal is inspectable before confirmation and maps to queue_review
+    proposal = _staged_proposal(data["proposal_id"])
+    assert proposal is not None
+    action = proposal.intent_event.payload.actions[0]
+    assert action.mapping is not None
+    assert action.mapping.id == "queue_review"
+
+
 def test_queue_review_accepts_artifact_uuid_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

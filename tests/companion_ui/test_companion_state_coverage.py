@@ -301,3 +301,46 @@ def test_artifact_inspector_review_and_receipt_posture() -> None:
     assert "needs_review" in html
     # receipt posture is a distinct region from review posture
     assert 'data-receipt-state="' in html or 'data-testid="vault-browser-receipt-state"' in html
+
+
+def test_operational_loop_shows_receipt_posture() -> None:
+    """The operational loop region ties inspect -> queue -> confirm -> receipt into
+    one coherent surface and shows the resulting receipt posture as a derived,
+    read-only projection — the UI is not treated as durable authority.
+    """
+    note = _browser_note()
+    note["receipts"] = [
+        {
+            "receipt_id": "rcpt-loop-1",
+            "state": "executed",
+            "action_type": "note_lifecycle",
+            "trace_id": "trace-loop",
+            "status": "success",
+            "timestamp": "2026-06-05T12:00:00Z",
+        }
+    ]
+    html = _render_active_note(browser_payload=_vault_browser_payload([note]))
+
+    # the loop region exists and names all four stages
+    assert 'data-testid="workspace-operational-loop"' in html
+    for stage in ("inspect", "queue", "confirm", "receipt"):
+        assert f'data-loop-stage="{stage}"' in html
+    # a durable confirmed receipt surfaces as durable_receipt_visible posture
+    assert 'data-receipt-posture="durable_receipt_visible"' in html
+    # the loop region is a derived, read-only projection (UI is not durable authority)
+    assert 'data-authority-role="derived"' in html
+    assert 'data-affordance-status="read-only"' in html
+
+
+def test_operational_loop_empty_receipts_is_not_awaiting() -> None:
+    """An empty receipts list means 'source connected, none found' — never a
+    queued/pending confirmation. Opening a never-confirmed note must not imply a
+    staged proposal exists.
+    """
+    note = _browser_note()
+    note["receipts"] = []  # source connected, no governed records for this note
+    html = _render_active_note(browser_payload=_vault_browser_payload([note]))
+
+    assert 'data-testid="workspace-operational-loop"' in html
+    assert 'data-receipt-posture="no_receipts"' in html
+    assert 'data-receipt-posture="awaiting_receipt"' not in html
