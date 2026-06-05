@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.context_bundles.construction import build_inspectable_bundle
+from app.context_bundles.runtime_registry import clear_emitted_bundles, get_emitted_bundle
 from app.retrieval.capability import RetrievalHit, RetrievalResponse
 
 
@@ -67,6 +68,7 @@ def test_route_does_not_upgrade_authority():
 def test_query_route_preserves_requested_bundle_id(monkeypatch):
     import app.retrieval.production_bundle as production_bundle
 
+    clear_emitted_bundles()
     response = RetrievalResponse(
         query="real query",
         trace_id="cb-requested",
@@ -89,6 +91,8 @@ def test_query_route_preserves_requested_bundle_id(monkeypatch):
 
     assert body["id"] == "cb-requested"
     assert body["trigger"]["source"] == "cb-requested"
+    assert get_emitted_bundle("cb-requested") is not None
+    clear_emitted_bundles()
 
 
 def test_route_registered_via_seam():

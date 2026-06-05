@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.context_bundles.construction import build_inspectable_bundle
+from app.context_bundles.runtime_registry import get_emitted_bundle
 from app.context_bundles.schema import ContextBundle
 from app.resurfacing.bundle_consumer import (
     BundleAuthorityViolation,
@@ -23,12 +23,22 @@ router = APIRouter()
 
 
 def _resurfacing_bundle_source(bundle_id: str) -> ContextBundle:
-    """Resolve a resurface-scoped, inspectable bundle for the given id.
+    """Resolve an emitted resurface-scoped bundle for the given id.
 
-    The construction envelope is scoped for ``resurface`` and carries
-    ``may_write=false``; mis-scoped bundles are rejected by the consumer.
+    This route consumes bundles emitted earlier in this process. It must not
+    synthesize a construction envelope when the requested emitted bundle is
+    missing, because that would hide addressability failures from operators.
     """
-    return build_inspectable_bundle(bundle_id)
+    bundle = get_emitted_bundle(bundle_id)
+    if bundle is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"context bundle {bundle_id!r} was not emitted in this runtime process; "
+                "emit it before resurfacing consumption"
+            ),
+        )
+    return bundle
 
 
 @router.get("/resurfacing/bundle/{bundle_id}", response_model=ResurfacingBundleFrame)
