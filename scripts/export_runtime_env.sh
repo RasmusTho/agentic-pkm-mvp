@@ -178,13 +178,43 @@ if [ -n "${VAULT_DESK_DIR_REL:-}" ]; then
   printf "%s\n" "VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL}" >> "$runtime_env_path"
 fi
 
-if [ -n "${WATCHER_STATE_DIR:-}" ]; then
-  printf "%s\n" "WATCHER_STATE_DIR=${WATCHER_STATE_DIR}" >> "$runtime_env_path"
+# Determine whether we are generating a test-channel env file.
+# True when COMPOSE_PROJECT_NAME=pkm-test or the resolved runtime_env_path
+# lives under a tmp-test/ directory.
+_is_test_channel=0
+case "${COMPOSE_PROJECT_NAME:-}" in
+  pkm-test) _is_test_channel=1 ;;
+esac
+if [ "$_is_test_channel" -eq 0 ]; then
+  case "$runtime_env_path" in
+    *tmp-test/*|*/tmp-test/runtime.env|tmp-test/runtime.env) _is_test_channel=1 ;;
+  esac
 fi
 
-if [ -n "${WATCHER_STOP_FILE:-}" ]; then
-  printf "%s\n" "WATCHER_STOP_FILE=${WATCHER_STOP_FILE}" >> "$runtime_env_path"
+if [ "$_is_test_channel" -eq 1 ]; then
+  # Emit test-channel-scoped artifact path overrides.
+  # These unconditionally override the /app/tmp defaults loaded from
+  # config/runtime.defaults.env so containers started under pkm-test write
+  # to /app/tmp-test/ without any manual post-processing of the generated
+  # env file.  The values are hardcoded to the canonical test-channel paths
+  # rather than using ${VAR:-fallback} so that defaults already loaded from
+  # config/runtime.defaults.env do not shadow the test-scoped values.
+  printf "%s\n" "WATCHER_STATE_DIR=tmp-test" >> "$runtime_env_path"
+  printf "%s\n" "WATCHER_STOP_FILE=/app/tmp-test/WATCHER_STOP" >> "$runtime_env_path"
+  printf "%s\n" "INDEX_OUTBOX_PATH=/app/tmp-test/index-outbox.jsonl" >> "$runtime_env_path"
+  printf "%s\n" "WATCHER_HEARTBEAT_PATH=/app/tmp-test/watcher_heartbeat.json" >> "$runtime_env_path"
+  printf "%s\n" "WORKER_HEARTBEAT_PATH=/app/tmp-test/worker_heartbeat.json" >> "$runtime_env_path"
+  printf "%s\n" "WATCHER_STATE_PATH=/app/tmp-test/watcher_state.json" >> "$runtime_env_path"
+else
+  if [ -n "${WATCHER_STATE_DIR:-}" ]; then
+    printf "%s\n" "WATCHER_STATE_DIR=${WATCHER_STATE_DIR}" >> "$runtime_env_path"
+  fi
+
+  if [ -n "${WATCHER_STOP_FILE:-}" ]; then
+    printf "%s\n" "WATCHER_STOP_FILE=${WATCHER_STOP_FILE}" >> "$runtime_env_path"
+  fi
 fi
+unset _is_test_channel
 
 # Only include WATCHER_SCOPE_GLOB if explicitly set by the operator.
 # If unset or blank, the watcher computes a vault-wide default at runtime.

@@ -1,15 +1,22 @@
 """
-Static inspection tests for canonical startup targets (Issue #967).
+Static inspection tests for canonical startup targets (Issue #967, #1629).
 
 Verifies that the Makefile startup targets for test and prod channels
 bind the correct compose file, compose project name, PKM_ENVIRONMENT,
 and vault root — and that both require an explicit VAULT_ROOT.
 
-No Docker required. Tests read the Makefile only.
+Also verifies (Issue #1629) that make test-start-full causes the generated
+runtime.env to carry test-scoped artifact paths so containers under
+pkm-test write to /app/tmp-test/ without manual post-processing.
+
+No Docker required. Tests read the Makefile and invoke export_runtime_env.sh
+directly.
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -114,4 +121,77 @@ def test_full_start_targets_require_vault_root() -> None:
             f"Makefile '{target_name}' target does not enforce VAULT_ROOT. "
             "Add 'require-vault-root' as a prerequisite or an inline guard "
             "to prevent startup without an explicit vault path (Issue #967)."
+        )
+
+
+def test_test_start_full_uses_tmp_test_runtime_artifact_paths(tmp_path: Path) -> None:
+    """make test-start-full must generate a runtime.env file under tmp-test/
+    that carries /app/tmp-test/ artifact paths for all six artifact variables,
+    so pkm-test containers never write runtime artifacts to /app/tmp/.
+
+    This test invokes export_runtime_env.sh with COMPOSE_PROJECT_NAME=pkm-test
+    (mirroring what make test-start-full sets) and verifies the output file
+    contains the expected test-scoped paths.  No Docker required.
+
+    Verify: Issue #1629 AC1 —
+      tests/ops/test_release_channel_startup_targets.py::test_test_start_full_uses_tmp_test_runtime_artifact_paths
+    """
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir(parents=True, exist_ok=True)
+    runtime_env_path = tmp_path / "runtime.env"
+
+    env = os.environ.copy()
+    env["COMPOSE_PROJECT_NAME"] = "pkm-test"
+    env["VAULT_ROOT"] = str(vault_root)
+    env["RUNTIME_ENV_PATH"] = str(runtime_env_path)
+    env.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@db:5432/app_test")
+    # Clear any operator overrides so we test the auto-generation path
+    for var in (
+        "WATCHER_STATE_DIR",
+        "WATCHER_STOP_FILE",
+        "INDEX_OUTBOX_PATH",
+        "WATCHER_HEARTBEAT_PATH",
+        "WORKER_HEARTBEAT_PATH",
+        "WATCHER_STATE_PATH",
+    ):
+        env.pop(var, None)
+
+    subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        check=True,
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert runtime_env_path.exists(), (
+        "export_runtime_env.sh did not create runtime.env for pkm-test channel"
+    )
+    text = runtime_env_path.read_text(encoding="utf-8")
+
+    assert re.search(r"^INDEX_OUTBOX_PATH=/app/tmp-test/", text, re.M), (
+        "INDEX_OUTBOX_PATH must point to /app/tmp-test/ for the pkm-test channel "
+        "(Issue #1629: test containers were inheriting /app/tmp defaults)"
+    )
+    assert re.search(r"^WATCHER_HEARTBEAT_PATH=/app/tmp-test/", text, re.M), (
+        "WATCHER_HEARTBEAT_PATH must point to /app/tmp-test/ for the pkm-test channel"
+    )
+    assert re.search(r"^WORKER_HEARTBEAT_PATH=/app/tmp-test/", text, re.M), (
+        "WORKER_HEARTBEAT_PATH must point to /app/tmp-test/ for the pkm-test channel"
+    )
+    assert re.search(r"^WATCHER_STATE_PATH=/app/tmp-test/", text, re.M), (
+        "WATCHER_STATE_PATH must point to /app/tmp-test/ for the pkm-test channel"
+    )
+    assert re.search(r"^WATCHER_STATE_DIR=tmp-test$", text, re.M), (
+        "WATCHER_STATE_DIR must be 'tmp-test' for the pkm-test channel"
+    )
+    assert re.search(r"^WATCHER_STOP_FILE=/app/tmp-test/", text, re.M), (
+        "WATCHER_STOP_FILE must point to /app/tmp-test/ for the pkm-test channel"
+    )
+    # No bare /app/tmp/ artifact paths should remain for these variables
+    for var in ("INDEX_OUTBOX_PATH", "WATCHER_HEARTBEAT_PATH", "WORKER_HEARTBEAT_PATH",
+                "WATCHER_STATE_PATH", "WATCHER_STOP_FILE"):
+        assert not re.search(rf"^{re.escape(var)}=/app/tmp/", text, re.M), (
+            f"{var} must not point to bare /app/tmp/ in pkm-test runtime.env"
         )
