@@ -33,14 +33,17 @@ The shipped runtime integration includes:
 The production orientation and resurfacing bundle routes consume bundles that were emitted earlier in
 the same runtime process. `GET /api/context-bundles/{bundle_id}?query=...` records the emitted
 bundle in a bounded in-memory registry; `/api/orientation/bundle/{bundle_id}` and
-`/api/resurfacing/bundle/{bundle_id}` resolve through that registry. Callers that need a bundle for
-a specific read-side consumer pass explicit non-write `intended_use` values such as
+`/api/resurfacing/bundle/{bundle_id}` resolve through that registry. The registry keeps a small
+least-recently-used window of emitted bundles for short-lived addressability and may evict older
+entries before process restart. Callers that need a bundle for a specific read-side consumer pass
+explicit non-write `intended_use` values such as
 `intended_use=orient` or `intended_use=resurface`; the route maps those values to matching
 non-write authority flags and keeps `may_write=false`.
 
 This registry is an addressability cache only:
 
 - process-local and cleared on process restart;
+- bounded; older emitted bundles may miss after eviction;
 - non-durable and not a DB/store import path;
 - not agent memory, durable knowledge, or a receipt authority;
 - not a write-authority surface (`may_write` remains false unless a later governed contract changes
