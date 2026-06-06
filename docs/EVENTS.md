@@ -263,6 +263,28 @@ Promotion clarification (#1438):
   Consumers that need promotion receipt posture must use the stable receipt query/projection
   contract instead of treating arbitrary outbox scans or ObjectStore inline metadata as authority.
 
+## Receipt vs Event boundary
+
+Events are operational traces. Receipts are structurally distinct accountability records.
+
+In the governed mutation path (`POST /api/panel/confirm`), `OutboxEvent` and `Receipt` are
+produced together but are never interchangeable:
+
+- `OutboxEvent` carries `trace_id`, `event_id`, `source`, and `event` — runtime coordination
+  fields. It does NOT carry `action_taken`, `inverse_action`, or `receipt`.
+- `Receipt` carries `action_taken`, `outcome`, and `inverse_action` — accountability fields.
+  It does NOT carry `trace_id`, `event_id`, or `source`.
+- `ConfirmResponse.events_emitted` is a list of event trace names (strings); it is the
+  operational trace summary. `ConfirmResponse.receipt` is the accountability record.
+
+For read-only projection paths (orientation, resurfacing, vault browser reads), only
+operational traces are emitted; no receipt is returned. Read-only responses must not carry
+a top-level `receipt` field.
+
+The authoritative concept contract for this separation lives in
+`docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`. The runtime boundary is asserted by
+`tests/runtime/test_receipt_event_boundary.py` (issue #1600).
+
 ## References
 
 - `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md` (canonical compatibility anchor)
