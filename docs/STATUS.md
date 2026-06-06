@@ -214,6 +214,15 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   into one loop; it does not bypass Panel confirmation, WriteGuard, or trust semantics, does not make
   the UI durable authority, and is bounded to the proven loop — broader Companion UI production
   packaging and full Chat mutation remain separate target-state work.
+<!-- receipt-event-boundary -->
+- Receipt/event boundary documented (#1600): `OutboxEvent` (operational trace) and `Receipt`
+  (accountability record) are structurally distinct. For governed mutation paths (`POST
+  /api/panel/confirm`), `ConfirmResponse` carries both a `Receipt` (with `action_taken`,
+  `inverse_action`) and `events_emitted` (list of trace names); these surfaces must not be
+  conflated. For read-only projection paths (orientation, resurfacing, vault browser reads),
+  only operational traces are emitted and no receipt is returned. The boundary is asserted by
+  `tests/runtime/test_receipt_event_boundary.py` and documented in `docs/EVENTS.md` and
+  `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
 - Runtime event envelopes emitted through the shared outbox helper now include `meta.instance_provenance` (`instance_id`, `instance_role`, `environment`) as backward-compatible operational metadata.
 - Panel mutation gating now enforces explicit trust-verb classification on mutation-capable panel actions: only admitted `APPLY` actions can emit promotion mutation intents; `SUGGEST` remains non-mutating unless promoted through the governed execution path.
 - APPLY transition receipts (`promotion.transition.applied`) now include accountability fields (`verb`, `authority`, `basis`, `outcome`, `artifact_linkage`, `instance_provenance`) as backward-compatible payload extensions.

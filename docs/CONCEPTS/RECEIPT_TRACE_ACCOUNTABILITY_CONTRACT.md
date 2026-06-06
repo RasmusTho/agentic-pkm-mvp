@@ -257,7 +257,39 @@ This recovery may involve:
 
 But the existence of traces alone does not satisfy the rule.
 
-## 7. Non-goals
+## 7. Governed loop event/receipt boundary
+
+For the runtime governed mutation path (`POST /api/panel/confirm`), two structurally distinct
+types are produced and must not be conflated:
+
+**`OutboxEvent`** (`app/events/schema.py`) — operational trace:
+- Fields include `event`, `event_id`, `trace_id`, `source`, `timestamp`, `payload`,
+  `context_dimensions`, and `meta`.
+- Has `trace_id` and `event_id` for runtime coordination and deduplication.
+- Does NOT carry `action_taken`, `inverse_action`, or `receipt` fields.
+- Purpose: machine-usable runtime coordination, diagnostics, replay support, observability.
+
+**`Receipt`** (`app/panel/confirmation.py`) — human-legible accountability record:
+- Fields include `action_taken`, `outcome`, `timestamp`, `message`, and `inverse_action`.
+- Has `action_taken` and `inverse_action` for accountability.
+- Does NOT carry `trace_id`, `event_id`, or `source` fields.
+- Purpose: human-legible record of what action was taken, under what authority, with what outcome.
+
+**`ConfirmResponse`** (`app/panel/confirmation.py`) — governed mutation response:
+- Contains `receipt: Receipt | None` — the accountability record.
+- Contains `events_emitted: list[str]` — the list of emitted event trace names (strings).
+- The `receipt` and `events_emitted` surfaces are intentionally separate: one is the
+  accountability artifact, the other is the operational trace summary.
+
+For read-only projection paths (e.g. orientation, resurfacing, vault-browser read operations),
+only operational traces are emitted; no receipt is returned and no accountability record is
+created. Read-only projection responses must not carry a top-level `receipt` field.
+
+This structural separation is asserted by:
+`tests/runtime/test_receipt_event_boundary.py::test_governed_mutation_receipt_is_distinct_from_event_trace`
+`tests/runtime/test_receipt_event_boundary.py::test_read_only_projection_trace_has_no_mutation_authority`
+
+## 8. Non-goals
 
 This document does not yet define:
 - a final physical receipt storage model,
