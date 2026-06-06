@@ -118,15 +118,34 @@ Promotion is the operation that turns an accepted commit on `main` into the runn
    - config / settings delta;
    - risk notes (flags, known regressions, acceptance-criteria status of included PRs).
    The prepare phase produces a **promotion plan** the operator can review before executing.
-2. **Execute.** Move the `stable` ref to the chosen commit. Apply migrations to `pkm_prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
+2. **Execute.** Advance the `stable` ref via a governed PR targeting `stable`. Apply migrations to `pkm_prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
 3. **Verify.** Post-promotion health, status, and smoke checks against the running prod. Health must be green against [HEALTH.md](../HEALTH.md) contracts before the promotion is considered accepted.
-4. **Rollback (conditional).** If verification fails, return `stable` to the previous ref, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
+4. **Rollback (conditional).** If verification fails, return `stable` to the previous ref via a revert PR, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
 
 Promotion trigger is **manual, single-user**. No PR-merge-triggered automation, no CI-driven promotion. The operator decides when to promote.
 
+### Protected-branch promotion invariant
+
+`origin/stable` is a protected branch (`enforce_admins: true`; required status checks: `smoke`, `smoke-docker`, `pr-contract`; PR required). **Direct pushes and refs-API updates are rejected.**
+
+Every stable-ref movement — whether forward (promotion) or backward (rollback) — proceeds through a governed PR targeting `stable`. The PR must pass all three required status checks before an operator merges it. This is non-negotiable; the protection must not be weakened.
+
+### Ancestry preflight invariant
+
+Before any stable-ref movement, `execute-promotion` verifies:
+
+```bash
+git merge-base --is-ancestor origin/stable <candidate-sha>
+```
+
+If this check fails, promotion aborts fail-closed with a reconciliation-PR instruction. Promotion cannot proceed until `stable` is an ancestor of the candidate.
+
+**Current state (verified 2026-06-06):** `git merge-base --is-ancestor origin/stable origin/main` returns exit 0 — PASS. stable/main divergence is resolved.
+
 ## Rollback posture
 
-- The previous stable ref is always resolvable (e.g. previous tag retained, or `stable-prev` pointer maintained).
+- The previous stable ref is always resolvable (recorded as `stable-prev` pointer file in `ops/promotions/` before any stable movement).
+- Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR.
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
 
 ### Vault is not release state
