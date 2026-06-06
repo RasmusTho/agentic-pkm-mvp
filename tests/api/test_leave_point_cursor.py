@@ -317,7 +317,7 @@ def test_latest_valid_cursor_wins_concurrent_sessions(
     vault_root = Path(os.environ["VAULT_ROOT"])
     _note(vault_root, "notes/one.md", "artifact-1", title="One")
     _note(vault_root, "notes/two.md", "artifact-2", title="Two")
-    base = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
+    base = datetime.now(timezone.utc) - timedelta(seconds=30)
     _capture(artifact_uuid="artifact-1", trace_id="trace-old", captured_at=base)
     _capture(artifact_uuid="artifact-2", trace_id="trace-new", captured_at=base + timedelta(seconds=1))
 
