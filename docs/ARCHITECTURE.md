@@ -292,10 +292,35 @@ See also:
 ### Architecture Statement: Bounded Agents on Shared Foundations
 - The architecture is expected to include multiple bounded agents with narrow responsibilities rather than one central general agent.
 - Shared scaffolding such as `AgentState`, LangGraph control patterns, common prompts, policies, and capabilities should provide the reusable foundation for those agents.
-- The shipped shared runtime-state contract is the minimal linkage surface in `app/agents/runtime_state.py`: `trace_id`, `authority`, `authority_basis`, `proposal_id`, and `receipt_event_id`. ASK, generic graph wrappers, the reasoning graph builder, and PanelAgent now expose or adapt to those fields so execution traces, authority posture, proposal linkage, and receipt linkage can be reasoned about consistently without granting durable memory or write authority.
 - Tools/MCP: tools are actions an agent chooses from within its LangGraph or equivalent bounded control flow; they should not be hard-wired at the pipeline/Orchestrator level beyond routing envelopes.
 - Foundational capabilities such as ingestion, indexing, retrieval, reasoning support, and execution/governance support remain first-class even when they are not expressed as standalone agents.
 - Current adoption is phased and mixed: ASK and PanelAgent are active runtime LangGraph surfaces; Reviewer/pilot and older graph wrappers exist for selected agent lanes, CLI/dev use, or tests; most ingest/index production paths still run as deterministic pipelines until later rollout phases.
+
+### Agent State Spine Contract
+
+<!-- agent-state-spine-contract -->
+
+The shared runtime-state linkage contract is defined in `app/agents/runtime_state.py` and must be satisfied by every agent state class that participates in LangGraph execution.
+
+**Mandatory spine fields (`RUNTIME_STATE_CONTRACT_FIELDS`):**
+
+| Field | Semantics |
+| --- | --- |
+| `trace_id` | Correlates execution events, health traces, and receipts across components |
+| `authority` | Bounded authority class dict; read-only by default; no self-upgrade |
+| `authority_basis` | String key naming the authority grant basis (e.g. `"read-only"`, `"explicit-policy"`) |
+| `proposal_id` | Links execution state to a write-proposal when applicable; null otherwise |
+| `receipt_event_id` | Links execution state to a receipt event when the run produced one |
+
+**Compliance:**
+
+- TypedDict-based state classes inherit `RuntimeStateContract`
+- Pydantic-based state classes inherit `RuntimeStateModel`
+- All four active state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`) conform to the spine
+- The spine is intentionally narrow: it standardizes trace/authority/proposal/receipt linkage; it does not make runtime state a source of semantic truth, does not authorize writes, and does not add durable memory semantics
+- WriteGuard remains the mutation gate; the state contract does not override it
+
+Tests: `tests/architecture/test_agent_state_spine.py::test_all_agent_state_classes_carry_trace_id`, `tests/architecture/test_agent_state_spine.py::test_agent_state_spine_compliance`
 
 ## LangGraph as runtime execution substrate
 
