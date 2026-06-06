@@ -281,6 +281,55 @@ fail_preflight() {
   exit 1
 }
 
+check_startup_disk_space() {
+  # Operator escape hatch for one-off recovery: STARTUP_DISK_CHECK=0.
+  if [ "${STARTUP_DISK_CHECK:-1}" != "1" ]; then
+    return 0
+  fi
+
+  local check_path="${STARTUP_DISK_CHECK_PATH:-$ROOT}"
+  local min_free_mib="${STARTUP_DISK_MIN_FREE_MIB:-1024}"
+  local warn_free_mib="${STARTUP_DISK_WARN_FREE_MIB:-5120}"
+  local free_kib free_mib reason
+
+  if ! [ "$min_free_mib" -ge 0 ] 2>/dev/null; then
+    min_free_mib=1024
+  fi
+  if ! [ "$warn_free_mib" -ge 0 ] 2>/dev/null; then
+    warn_free_mib=5120
+  fi
+
+  if ! free_kib=$(df -Pk "$check_path" 2>/dev/null | awk 'NR == 2 {print $4}'); then
+    echo "WARNING: disk-space preflight could not inspect $check_path" >&2
+    return 0
+  fi
+  case "$free_kib" in
+    ""|*[!0-9]*)
+      echo "WARNING: disk-space preflight returned an unexpected value for $check_path: ${free_kib:-<empty>}" >&2
+      return 0
+      ;;
+  esac
+
+  free_mib=$((free_kib / 1024))
+  if [ "$free_mib" -lt "$min_free_mib" ]; then
+    reason="host disk free space ${free_mib} MiB is below STARTUP_DISK_MIN_FREE_MIB=${min_free_mib} for $check_path"
+    PRE_FLIGHT_REASON="$reason"
+    EXIT_REASON="$reason"
+    EXIT_CODE=3
+    export PRE_FLIGHT_REASON EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$reason" >/dev/null 2>&1 || true
+    echo "ERROR: $reason" >&2
+    echo "Safe cleanup candidates before retrying startup:" >&2
+    echo "  find tmp -maxdepth 1 -type f \\( -name 'flightrecorder-*.log' -o -name 'watcher_tick-*.jsonl' \\) -delete" >&2
+    echo "Do not delete live undated runtime files such as tmp/runtime.env, tmp/index-outbox.jsonl, or tmp/watcher_tick.jsonl as a routine startup cleanup." >&2
+    exit 3
+  fi
+
+  if [ "$warn_free_mib" -gt 0 ] && [ "$free_mib" -lt "$warn_free_mib" ]; then
+    echo "WARNING: host disk free space is ${free_mib} MiB below STARTUP_DISK_WARN_FREE_MIB=${warn_free_mib} for $check_path; Docker builds may fail. See docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md for safe cleanup guidance." >&2
+  fi
+}
+
 require_vars() {
   for var in "$@"; do
     if [ -z "${!var:-}" ]; then
@@ -656,20 +705,6 @@ JSON_PARSE_SLEEP_SECONDS="${JSON_PARSE_SLEEP_SECONDS:-1}"
 DB_PROBE_MAX_ATTEMPTS="${DB_PROBE_MAX_ATTEMPTS:-30}"
 DB_PROBE_SLEEP_SECONDS="${DB_PROBE_SLEEP_SECONDS:-2}"
 
-flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
-flight_recorder_pid=""
-if [ "$START_FLIGHT_RECORDER" -eq 1 ]; then
-  scripts/flight_recorder.sh --log-path "$flight_recorder_log_path" --interval "$FLIGHT_RECORDER_INTERVAL" --duration "$FLIGHT_RECORDER_DURATION" >/dev/null 2>&1 &
-  flight_recorder_pid=$!
-  echo "Flight recorder logging to $flight_recorder_log_path"
-  for attempt in 1 2 3 4 5; do
-    if [ -f "$flight_recorder_log_path" ]; then
-      break
-    fi
-    sleep 0.1
-  done
-fi
-
 debug_dump() {
   echo "DEBUG: docker compose ps"
   run_docker_compose ps || true
@@ -693,6 +728,22 @@ for dir in tmp logs tmp/startup-logs; do
     exit 2
   fi
 done
+
+check_startup_disk_space
+
+flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
+flight_recorder_pid=""
+if [ "$START_FLIGHT_RECORDER" -eq 1 ]; then
+  scripts/flight_recorder.sh --log-path "$flight_recorder_log_path" --interval "$FLIGHT_RECORDER_INTERVAL" --duration "$FLIGHT_RECORDER_DURATION" >/dev/null 2>&1 &
+  flight_recorder_pid=$!
+  echo "Flight recorder logging to $flight_recorder_log_path"
+  for attempt in 1 2 3 4 5; do
+    if [ -f "$flight_recorder_log_path" ]; then
+      break
+    fi
+    sleep 0.1
+  done
+fi
 
 startup_log_dir="$ROOT/tmp/startup-logs"
 startup_log_path="$startup_log_dir/startup-$(date -u +"%Y%m%dT%H%M%SZ").log"

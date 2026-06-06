@@ -117,6 +117,21 @@ CUI_BIND_LAN=1 make dev-ui                     # bind UI to 0.0.0.0
 CUI_TARGET_NOTE="Some Note.md" make dev-ui     # also verify a note via the API
 ```
 
+### UAT note staging paths
+
+For dev/Niflheim UAT notes, prefer the vault layout's resolved desk folder. The default local
+dev binding sets:
+
+```text
+VAULT_DESK_DIR_REL=🛠️ Workbench
+```
+
+Use that folder for throwaway notes unless a UAT prompt explicitly names a different path. If a
+prompt says `Workbench/<note>.md` instead of the resolved `VAULT_DESK_DIR_REL`, treat that as an
+explicit non-layout throwaway path and call it out in the handoff receipt. Do not infer that the
+Companion UI dev page owns or changes the vault layout; the runtime API and vault layout settings
+remain the authority for which vault and folders are active.
+
 `make dev-ui-doctor` (→ `scripts/dev/dev_ui_doctor.sh`) is read-only and reports:
 Docker/Colima availability, dev vault resolution (Niflheim), API health, the
 container vault mount, UI-port occupancy (distinguishing a Companion UI listener
