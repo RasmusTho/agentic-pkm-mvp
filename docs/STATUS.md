@@ -213,7 +213,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   derived, read-only operational-loop region showing receipt posture. This wires the existing surfaces
   into one loop; it does not bypass Panel confirmation, WriteGuard, or trust semantics, does not make
   the UI durable authority, and is bounded to the proven loop — broader Companion UI production
-  packaging and full Chat mutation remain separate target-state work.
+  packaging and full Chat mutation remain separate target-state work. The loop was verified on the
+  live Niflheim dev runtime by a real-note UAT (#1604, 2026-06-06): the governed `queue_review`
+  confirm/reject path executed end-to-end with durable receipts visible in the governance/receipt
+  layer (orientation governance summary, `panel.receipts`). The UAT is bounded to that
+  governance-handoff path; the in-note checkbox-projection receipt (`- [x]` + AI-status callout) is
+  tracked as follow-up #1621. Receipt detail: `docs/PANEL_AGENT.md` (Companion UI operational-loop UAT).
 <!-- authority-spine-diagnostic -->
 - Authority spine diagnostic surfaced in health API (#1601): `/api/health` now includes an
   `authority_spine` key with bounded operator-visible posture strings (`write_guard`,
