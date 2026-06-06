@@ -43,7 +43,7 @@ stubs unless the owner decides compatibility paths are required again.
 | Agent Memory | Bounded shipped slices | Do not expand into broad memory intelligence before admissibility is explicit. |
 | Context Bundles | Shipped + closed | #1559 closed 2026-06-04: route, emission, consumption, linkage, and receipt projection merged; owner docs promoted via #1566. Stable-addressing follow-up #1576 closed 2026-06-05. No bounded items remain. |
 | Contextualization Layer | Contract/doc only | Do not treat as runtime enforcement until code/tests prove it. |
-| BuilderOps | Shipped build plane (store/CLI/API) | `app/builderops/` store, projections, and promotion gateway are shipped and tested and are now surfaced in STATUS; ARCHITECTURE still needs explicit build-plane posture, and ADR-0010 still reads "not implemented." Keep records/projections non-authoritative for product truth. |
+| BuilderOps | Shipped build plane (store/CLI/API) | `app/builderops/` store, projections, and promotion gateway are shipped and tested and are now surfaced in STATUS, ARCHITECTURE, ADR-0010, and DOCS_INDEX. Keep records/projections non-authoritative for product truth. |
 | Release channels | Contract/runbook only | Operational acceptance receipt is still required. |
 
 ## Critical Path
