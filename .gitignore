@@ -15,6 +15,10 @@ env/
 .vscode/
 .obsidian/
 vault/.obsidian/
+vault/*
+!vault/@Settings/
+!vault/@Settings/**
+vault-dev/
 dist/
 build/
 .eggs/
@@ -51,6 +55,7 @@ verification_report.md
 # Local hygiene artifacts
 Archive/Trash/
 tmp-dev/
+outputs/
 vault-test/
 vaults/
 tests/__init__.py

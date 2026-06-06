@@ -178,8 +178,8 @@ UAT_IMAGE_SRC = "/api/companion/vault-assets/Attachments%2Fuat_real_image.png"
 
 
 def _uat_asset_resolver() -> VaultAssetResolver:
-    # Mirrors the live resolver boundary: the committed vault asset
-    # (vault/9_Extras/Attachments/uat_real_image.png) is exposed as an allowed,
+    # Mirrors the live resolver boundary: the committed UAT fixture
+    # (tests/fixtures/uat/Attachments/uat_real_image.png) is exposed as an allowed,
     # browser-safe src. The renderer never touches the filesystem (#1347).
     return VaultAssetResolver({UAT_IMAGE_PATH: UAT_IMAGE_SRC})
 

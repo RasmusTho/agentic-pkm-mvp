@@ -162,7 +162,7 @@ provable.
 
 | Field | Value |
 |---|---|
-| Asset path (repo) | `vault/9_Extras/Attachments/uat_real_image.png` |
+| Asset path (repo) | `tests/fixtures/uat/Attachments/uat_real_image.png` |
 | Vault-relative path | `Attachments/uat_real_image.png` |
 | Dimensions / size | 200×112 px, 589 bytes (well under the 50 KB cap) |
 | Format | 8-bit RGB PNG |
@@ -187,7 +187,7 @@ renderer never reads the filesystem; the asset is exposed through the
 
 To complete the human-facing UAT on the live Niflheim runtime
 (`http://10.42.42.10:8111`), the owner should copy
-`vault/9_Extras/Attachments/uat_real_image.png` into the Niflheim vault at
+`tests/fixtures/uat/Attachments/uat_real_image.png` into the Niflheim vault at
 `Attachments/uat_real_image.png` and add both fixture lines (Markdown image +
 Obsidian embed, exactly as in the table above) alongside the existing
 `Attachments/nonexistent-image.png` missing-asset line in

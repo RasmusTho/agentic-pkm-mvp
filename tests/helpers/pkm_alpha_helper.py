@@ -1,7 +1,7 @@
 """Helper for the Mimer Obsidian vault (historically called 'PKM-Alpha') in the Yggdrasil system."""
 # Reasoning entrypoint: app/agents/pipeline.py:ingest_and_chunk() → _run_reasoning_if_enabled()
 # Reviewer entrypoint: app/agents/reviewer/agent.py:run(...) (graph wrapper in app/agents/reviewer/graph.py:invoke)
-# pkm-alpha path: app/ingest/config.DEFAULT_VAULT_ROOT (local repo mirror under vault/)
+# pkm-alpha path: fixture seed under tests/fixtures/pkm_alpha unless PKM_ALPHA_ROOT overrides it.
 from __future__ import annotations
 
 import os
@@ -17,7 +17,8 @@ from app.stores import get_object_store, reset_store_backends
 from app.vault.layout import load_layout
 from app.vault.paths import get_vault_inbox_dir_rel
 
-PKM_ALPHA_ROOT = Path(os.getenv("PKM_ALPHA_ROOT", "vault"))
+FIXTURE_PKM_ALPHA_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "pkm_alpha"
+PKM_ALPHA_ROOT = Path(os.getenv("PKM_ALPHA_ROOT", str(FIXTURE_PKM_ALPHA_ROOT)))
 
 
 def _resolve_workbench_dir() -> str:
