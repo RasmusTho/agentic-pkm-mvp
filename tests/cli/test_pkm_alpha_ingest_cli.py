@@ -5,6 +5,16 @@ from click.testing import CliRunner
 from app.cli import cli
 
 
+def test_ingest_command_legacy_aliases_remain_registered():
+    assert "ingest-default-vault" in cli.commands
+    assert "pkm-alpha-ingest" in cli.commands
+    assert cli.commands["pkm-alpha-ingest"] is cli.commands["ingest-default-vault"]
+
+    assert "ingest-vault-concepts" in cli.commands
+    assert "vault-alpha-ingest" in cli.commands
+    assert cli.commands["vault-alpha-ingest"] is cli.commands["ingest-vault-concepts"]
+
+
 def test_pkm_alpha_ingest_uses_default_root(tmp_path, monkeypatch):
     fake_root = tmp_path / "pkm-alpha"
     fake_root.mkdir()
