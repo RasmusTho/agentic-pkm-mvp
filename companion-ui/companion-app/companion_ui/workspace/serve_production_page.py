@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import os
 import sys
-from http.server import HTTPServer
 
 from companion_ui.workspace.serve_dev_page import (
     _DEFAULT_HOST,
+    CompanionThreadingHTTPServer,
     WorkspaceHttpClient,
     make_handler,
     render_index_html,
@@ -71,7 +71,7 @@ def main() -> None:
         production_profile=True,
         static_assets=_PRODUCTION_STATIC_ASSETS,
     )
-    server = HTTPServer((config["host"], config["port"]), handler)
+    server = CompanionThreadingHTTPServer((config["host"], config["port"]), handler)
     print("[companion-ui] Production profile", flush=True)
     print(f"[companion-ui] Safety:     {_PRODUCTION_SAFETY_WARNING}", flush=True)
     print(
