@@ -183,7 +183,8 @@ test-down:
 verify-test-channel:
 	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest -q \
 		tests/ops/test_release_channel_isolation.py \
-		tests/ops/test_release_channel_startup_targets.py
+		tests/ops/test_release_channel_startup_targets.py \
+		tests/release_channels/test_channel_isolation_preflight.py
 
 verify-prod-channel:
 	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest -q \

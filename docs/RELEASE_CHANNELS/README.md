@@ -108,6 +108,18 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
 
+### Compose/env binding invariant (Issue #1627)
+
+A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB_DSN` to values that match the **intended channel** — not another channel. A test stack whose compose declares `PKM_ENVIRONMENT=prod` would direct all writes at prod resources despite running under the test project namespace; this is a channel-isolation breach.
+
+**Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
+
+- by `scripts/test/test_ui_doctor.sh` (and therefore `make test-ui-doctor`) before any Docker or network check;
+- by `make verify-test-channel` via `tests/release_channels/test_channel_isolation_preflight.py`;
+- and should be called at the start of `promote-to-test` / `execute-promotion` before any stack mutation.
+
+The guard is **read-only**: it reports and fail-closes; it never edits operator files. When it fails, the operator must correct the compose overlay to match the intended channel before proceeding.
+
 ## Promotion contract
 
 Promotion is the operation that turns an accepted commit on `main` into the running `stable` build in prod. It has four explicit phases:
