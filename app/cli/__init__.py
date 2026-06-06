@@ -642,6 +642,11 @@ def vault_alpha_ingest(
         click.echo(f"Scanned {summary.scanned} files; ingested {summary.ingested} notes{suffix}")
     click.echo(f"Included folders: {', '.join(summary.included_folders) if summary.included_folders else '-'}")
 
+
+cli.add_command(pkm_alpha_ingest, "pkm-alpha-ingest")
+cli.add_command(vault_alpha_ingest, "vault-alpha-ingest")
+
+
 @cli.command(
     name="vault-layout-ensure",
     help="Ensure vault layout folders and default vault.layout.md note exist.",
