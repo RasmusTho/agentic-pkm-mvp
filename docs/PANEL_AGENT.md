@@ -45,6 +45,64 @@ For the interaction-surface authority contract, see:
 - `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AUTHORITY_BOUNDARY.md`
 - `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md`
 
+<!-- ACCESSIBLE-PANEL-PROPOSAL-FORMAT -->
+## Normalized Accessible Proposal Format
+
+Panel proposals that require human review or confirmation should be written and rendered as
+decision surfaces. This format is a documentation contract for future proposal authoring and UI
+projection work; it does not claim that every existing generated proposal already conforms, and it
+does not change runtime semantics.
+
+The minimum reviewable proposal shape is:
+
+```text
+What this is:
+Artifact / source:
+What the human needs to decide:
+Recommended action or available option:
+Why this is proposed:
+Facts / evidence / source claims:
+Agent interpretation:
+Risk / uncertainty / consequence:
+Available choices:
+  - Confirm
+  - Defer
+  - Reject
+  - Clarify
+Confirmation authority:
+Source freshness / option identity:
+Expected receipt or status:
+```
+
+Accessibility and cognitive-load requirements:
+
+- Keep facts, source claims, agent interpretation, recommendation, uncertainty, and requested
+  human action visibly separate.
+- Treat the proposal as a non-authoritative projection until explicit human confirmation.
+- Make recommendation is not approval clear in wording and layout.
+- Use short fields and stable field order so listening and text-to-speech (TTS) can read the
+  decision surface without skipping risk, uncertainty, source reference, or available choices.
+- Use self-contained checkbox labels. A checkbox label must remain understandable when read aloud
+  without relying on DOM position, previous prose, or visual grouping.
+- Keep source or source-reference visible. If source anchors are unavailable, state the limitation.
+- Keep `Confirm`, `Defer`, `Reject`, and `Clarify` distinct in the decision surface; do not imply
+  durable defer/reject semantics unless a governed path implements them.
+
+Authority and downstream boundaries:
+
+- Governance-bearing execution requires explicit confirmation. This section does not weaken the
+  rule in the conceptual role above or the PA2-FREEFORM proposal-vs-execution boundary.
+- A recommendation is not approval and must not be treated as execution authority.
+- Companion UI read-mode confirmation is a downstream consumer of this format, not a new approval
+  model.
+- Read-mode checkbox confirmation must continue to route through
+  `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md` and the source-backed
+  `POST /api/panel/checkbox-projection` endpoint.
+- Confirmation identity must preserve `option_id`, `panel_id`, content/source hashes, and source
+  freshness requirements. The UI must not infer authority from label text or rendered position.
+- The format is grounded in `docs/ACCESSIBILITY_PROJECTION_LAYER.md` decision mode and
+  `docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md` ("Proposal Template Pattern For #1642").
+
 ## PanelAgent Runtime V1 (current baseline)
 - Panel should be read as the current mutation-capable interaction surface in the runtime.
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
