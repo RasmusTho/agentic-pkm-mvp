@@ -214,6 +214,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   into one loop; it does not bypass Panel confirmation, WriteGuard, or trust semantics, does not make
   the UI durable authority, and is bounded to the proven loop — broader Companion UI production
   packaging and full Chat mutation remain separate target-state work.
+<!-- authority-spine-diagnostic -->
+- Authority spine diagnostic surfaced in health API (#1601): `/api/health` now includes an
+  `authority_spine` key with bounded operator-visible posture strings (`write_guard`,
+  `authority_non_upgrade`, `provenance_required_for_mutations`, `read_projection_isolation`).
+  This is a diagnostic surface only — it does not grant or deny authority and must not be
+  treated as a semantic authority source. See `docs/HEALTH.md#authority-spine-diagnostic`.
 <!-- receipt-event-boundary -->
 - Receipt/event boundary documented (#1600): `OutboxEvent` (operational trace) and `Receipt`
   (accountability record) are structurally distinct. For governed mutation paths (`POST

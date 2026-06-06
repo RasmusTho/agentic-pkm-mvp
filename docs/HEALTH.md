@@ -69,4 +69,23 @@ python -m app.cli health status --json
 
 An invalid value for any override (e.g. non-numeric string) causes the load to
 fail with `status: "fail"` and the runtime falls back to built-in defaults.
+
+## Authority Spine Diagnostic
+
+The `/api/health` response includes an `authority_spine` key that surfaces a bounded operator-visible posture summary for the runtime governance spine.
+
+**This is a diagnostic surface only — it does not grant or deny authority and must never be treated as a semantic authority source.**
+
+Fields returned under `authority_spine`:
+
+| Field | Possible values | Meaning |
+| --- | --- | --- |
+| `write_guard` | `active`, `blocked`, `unavailable` | Current WriteGuard posture. `active` means writes are permitted; `blocked` means the current health state (e.g. `safe_mode`, `unhealthy`) is blocking writes; `unavailable` means the WriteGuard snapshot could not be read. |
+| `authority_non_upgrade` | `enforced` | Confirms that no health signal is permitted to upgrade operational authority — enforced as an invariant. |
+| `provenance_required_for_mutations` | `yes` | Confirms that all mutation-capable paths require explicit provenance; this cannot be disabled. |
+| `read_projection_isolation` | `active` | Confirms that read projections are isolated from write/mutation paths. |
+
+All values are bounded status strings; no raw state, path, secret, token, or traceback is exposed. The sanitization gate in `_sanitize_health_value()` applies to `authority_spine` exactly as it does to every other health field.
+
+The `write_guard` field reflects the current `HealthContract` state via `DEFAULT_WRITE_GUARD.snapshot_fn()`. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
 <!-- SECTION:HEALTH:END -->

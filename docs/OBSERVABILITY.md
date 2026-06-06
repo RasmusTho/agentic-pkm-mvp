@@ -19,6 +19,10 @@ For adjacent operational surfaces:
 - The DB outbox (DATABASE_URL/DB_DSN) is the authoritative worker queue; JSONL remains audit/telemetry only.
 - If you point a watcher or worker at a different vault or temporary directory, make sure heartbeat paths and `INDEX_OUTBOX_PATH` reference the shared location so health checks see live signals.
 
+## Authority spine posture in health API
+
+The `/api/health` response now includes an `authority_spine` key with bounded operator-visible status strings for the runtime governance spine (`write_guard`, `authority_non_upgrade`, `provenance_required_for_mutations`, `read_projection_isolation`). This is a diagnostic surface only — it does not grant or deny authority and is not a semantic authority source. See `docs/HEALTH.md#authority-spine-diagnostic` for field descriptions and the non-authority boundary.
+
 ## Heartbeat locations and freshness
 - Watcher heartbeat default: `tmp/watcher_heartbeat.json` (override with `WATCHER_HEARTBEAT_PATH`).
 - Worker heartbeat default: `tmp/worker_heartbeat.json` (override with `WORKER_HEARTBEAT_PATH`).

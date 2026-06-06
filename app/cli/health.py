@@ -599,6 +599,30 @@ def _check_companion_diagnostics() -> Dict[str, Any]:
     return _result(ok, detail, data=dict(summary))
 
 
+def _check_authority_spine() -> Dict[str, str]:
+    """Return bounded authority/provenance posture for the runtime governance spine.
+
+    This is a diagnostic surface only. It does not grant or deny authority.
+    Values are bounded status strings safe for operator inspection.
+    """
+    try:
+        from app.write_guard import DEFAULT_WRITE_GUARD
+        from app.health_contract import WRITE_BLOCKED_STATES
+
+        snapshot = DEFAULT_WRITE_GUARD.snapshot_fn()
+        state = snapshot.get("state", "unknown")
+        write_guard_posture = "blocked" if state in WRITE_BLOCKED_STATES else "active"
+    except Exception:
+        write_guard_posture = "unavailable"
+
+    return {
+        "write_guard": write_guard_posture,
+        "authority_non_upgrade": "enforced",
+        "provenance_required_for_mutations": "yes",
+        "read_projection_isolation": "active",
+    }
+
+
 def _check_v6_seams() -> Dict[str, str]:
     def _seam(module: str) -> str:
         try:
@@ -649,5 +673,5 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
-    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": _check_v6_seams()}
+    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": _check_v6_seams(), "authority_spine": _check_authority_spine()}
 __all__ = ["run_health"]
