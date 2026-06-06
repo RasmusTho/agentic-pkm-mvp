@@ -390,3 +390,38 @@ def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
     data = resp.json()
     assert data["checks"]["ollama"]["base_url"] == "http://127.0.0.1:11434"
     assert data["runtime"]["llm"]["base_url"] == "https://api.openai.com/v1"
+
+
+def test_health_api_exposes_bounded_authority_spine_status(tmp_path, monkeypatch) -> None:
+    """Health API exposes bounded authority/provenance posture for governed loops (AC1 for #1601)."""
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    # authority_spine is present and has bounded status fields
+    assert "authority_spine" in data
+    spine = data["authority_spine"]
+    assert "write_guard" in spine
+    assert spine["write_guard"] in {"active", "blocked", "unavailable"}
+    assert "authority_non_upgrade" in spine
+    assert spine["authority_non_upgrade"] == "enforced"
+    assert "provenance_required_for_mutations" in spine
+    assert spine["provenance_required_for_mutations"] == "yes"
+    assert "read_projection_isolation" in spine
+    assert spine["read_projection_isolation"] == "active"
+
+
+def test_health_api_sanitizes_authority_spine_details(tmp_path, monkeypatch) -> None:
+    """Health API authority_spine does not expose secrets, paths, or sensitive details (AC2 for #1601)."""
+    import json
+    import re
+
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    spine = data.get("authority_spine", {})
+    spine_text = json.dumps(spine)
+    # No file paths, no secrets, no tokens, no tracebacks
+    sensitive = re.compile(r"Traceback|File \"|/[^\"'\s]{5,}|secret|token|password|api[_-]?key", re.IGNORECASE)
+    assert not sensitive.search(spine_text), f"authority_spine leaked sensitive details: {spine_text}"
