@@ -240,6 +240,16 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   `tests/runtime/test_receipt_event_boundary.py` and documented in `docs/EVENTS.md` and
   `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
 - Runtime event envelopes emitted through the shared outbox helper now include `meta.instance_provenance` (`instance_id`, `instance_role`, `environment`) as backward-compatible operational metadata.
+<!-- agent-state-spine-contract -->
+- Agent-state spine contract verified (#1625): the shared runtime-state linkage spine (`trace_id`,
+  `authority`, `authority_basis`, `proposal_id`, `receipt_event_id`) defined in
+  `app/agents/runtime_state.py` is now formally documented and compliance-tested. All four active
+  agent state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`)
+  satisfy the contract. A lightweight architecture compliance gate
+  (`tests/architecture/test_agent_state_spine.py`) ensures future state classes surface any spine
+  gap before reaching production. The spine is intentionally narrow: it standardises trace
+  identity, authority posture, proposal linkage, and receipt linkage without granting durable
+  memory or bypassing WriteGuard. See `docs/ARCHITECTURE.md#agent-state-spine-contract`.
 - Panel mutation gating now enforces explicit trust-verb classification on mutation-capable panel actions: only admitted `APPLY` actions can emit promotion mutation intents; `SUGGEST` remains non-mutating unless promoted through the governed execution path.
 - APPLY transition receipts (`promotion.transition.applied`) now include accountability fields (`verb`, `authority`, `basis`, `outcome`, `artifact_linkage`, `instance_provenance`) as backward-compatible payload extensions.
 - Status summaries now expose instance provenance (`instance_id`, `instance_role`, `environment`) for runtime attribution; this does not change artifact identity or companion note identity semantics.
