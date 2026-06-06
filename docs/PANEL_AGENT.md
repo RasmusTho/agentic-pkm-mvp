@@ -210,6 +210,31 @@ Governed `queue_review` loop proven end-to-end:
 
 Scope boundary: this proves the **governance-handoff** (`queue_review`) loop and its durable receipt in the governance/receipt layer. The **in-note checkbox-projection** receipt path (durable `- [x]` + `> [!info]- AI status` callout) was not exercised — the note's `AI-åtgärder` option was not a runtime-declared selectable option — and is tracked as follow-up **#1621**. No broader Companion UI production readiness is claimed.
 
+### In-note checkbox-projection receipt loop — #1621 (2026-06-06)
+
+<!-- CHECKBOX-PROJECTION-UAT -->
+Verification of the **in-note checkbox-projection** receipt path (#1621): the path by which a Panel `AI-åtgärder` option becomes a runtime-declared selectable option and then projects a durable `- [x]` + `> [!info]- AI status` callout receipt into the note. Exercised on a controlled test-vault fixture (no private content).
+
+How the option becomes runtime-declared (panel-agent/watcher declaration path):
+
+The runtime-declaration path requires the action line in `AI-åtgärder` to carry both a durable `<!--ai:option_id=...-->` marker (scoped identity) and a `<!--ai:proposed=...-->` marker (pending-confirmation provenance). These are written by the panel-agent or watcher proposal path when a runtime-generated proposal is staged; they are never hand-inserted by the operator in a UAT scenario. `extract_panel_selectable_options` skips any action line without `option_id`, so only runtime-declared proposals surface in `/api/companion/workspace` `panel.selectable_options`.
+
+Checkbox-projection loop (proven with controlled test vault fixture):
+
+- **Declare** — runtime proposal path writes `- [ ] Send email <!--ai:option_id=opt_abc--> <!--ai:id=send.email--> <!--ai:proposed=979-->` into the note's `AI-åtgärder` section. `extract_panel_selectable_options` returns this as a `PanelSelectableOption` (`selectable=True`).
+- **Project** — `POST /api/panel/checkbox-projection` (request carries `artifact_id`, `note_path`, `panel_id`, `option_id`, `expected_content_hash`, `expected_source_hash`, `idempotency_key`). The service validates note-path safety, content-hash freshness, artifact identity, option presence and source-hash, WriteGuard, then projects the checkbox.
+- **Durable receipt in note** — the note is updated to `- [x] Send email <!--ai:option_id=opt_abc-->` and the runtime appends a `> [!info]- AI status` callout. The service returns `status=executed` (or `projected` when no runtime results) with `content_hash_before != content_hash_after`.
+- **Idempotency** — if the option line is already `- [x]`, the endpoint returns `status=already_projected` (HTTP 200) and does not re-write.
+
+Distinction from `queue_review` / `POST /api/panel/confirm` governance path:
+
+| Path | Mechanism | Durable receipt surface |
+|---|---|---|
+| `queue_review` + `POST /api/panel/confirm` | Stages a governance proposal; human confirms/rejects through the Panel confirmation endpoint; receipt in governance/receipt layer (`panel.receipts`, `receipt_visibility`). | Governance/receipt layer (orientation governance summary, `panel.receipts`). |
+| `POST /api/panel/checkbox-projection` | Source-backed runtime-mediated projection of a runtime-declared selectable checkbox option; validated against content + source hashes; governed writer path; no staged proposal record. | In-note Markdown: `- [x]` + `> [!info]- AI status` callout written directly into the vault note file. |
+
+Evidence: `tests/panel/test_panel_checkbox_projection.py::test_projection_endpoint_checks_markdown_source_and_projects_checkbox` (happy path, `status=executed`, `- [x]` confirmed in note), `test_projection_endpoint_already_checked_is_idempotent` (`status=already_projected`, no duplicate write). Both pass on controlled test-vault fixtures without a live runtime.
+
 ### Event payload (panel.intent.created)
 ```json
 {
