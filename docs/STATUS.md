@@ -164,6 +164,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   read-only receipt projection (#1565) merged, with owner docs promoted in #1566. The stable
   bundle addressing follow-up on the retrieval-backed route (#1576) closed 2026-06-05; no bounded
   Context Bundles items remain.
+- The emitted ContextBundle consumption repair is shipped: retrieval-backed bundle queries record
+  emitted bundles in a bounded process-local addressability registry, and the production
+  orientation/resurfacing bundle routes resolve through that registry instead of reconstructing the
+  synthetic construction envelope. This remains read-only, non-durable, and non-authoritative:
+  `may_write` stays false and missing or evicted bundle ids fail honestly.
 - Direct runtime repairs from PR #1573 keep retrieval-backed ContextBundle routes stable by
   preserving the requested bundle id in emitted bundles/receipts, and keep knowledge-compilation
   proposal builders aligned with canonical review posture by accepting `review_state: protected`
