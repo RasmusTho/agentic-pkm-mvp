@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
 
 import yaml
 
@@ -149,6 +151,72 @@ def test_start_full_system_notes_colima_memory_floor() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
     assert "Colima" in script
     assert "4 GB" in script or "at least 4 GB" in script
+
+
+def test_start_full_system_has_host_disk_space_preflight() -> None:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert "check_startup_disk_space()" in script
+    assert "STARTUP_DISK_MIN_FREE_MIB" in script
+    assert "STARTUP_DISK_WARN_FREE_MIB" in script
+    assert "STARTUP_DISK_CHECK=0" in script
+    assert "flightrecorder-*.log" in script
+    assert "watcher_tick-*.jsonl" in script
+
+
+def test_start_full_system_disk_preflight_fails_before_docker_work(tmp_path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text("#!/usr/bin/env sh\necho docker should not run >&2\nexit 99\n", encoding="utf-8")
+    docker.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env.get('PATH', '')}",
+            "START_FLIGHT_RECORDER": "0",
+            "STARTUP_DISK_CHECK": "1",
+            "STARTUP_DISK_CHECK_PATH": str(Path.cwd()),
+            "STARTUP_DISK_MIN_FREE_MIB": "999999999",
+            "STARTUP_DISK_WARN_FREE_MIB": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "scripts/start_full_system.sh"],
+        check=False,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 3
+    assert "STARTUP_DISK_MIN_FREE_MIB" in result.stderr
+    assert "Safe cleanup candidates" in result.stderr
+    assert "docker should not run" not in result.stderr
+
+
+def test_startup_runbook_documents_disk_and_colima_recovery() -> None:
+    runbook = Path("docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Dev host preflight and safe `tmp/` cleanup" in runbook
+    assert "STARTUP_DISK_MIN_FREE_MIB" in runbook
+    assert "flightrecorder-*.log" in runbook
+    assert "watcher_tick-*.jsonl" in runbook
+    assert "tmp/index-outbox.jsonl" in runbook
+    assert "Dev Colima/Docker recovery without touching prod" in runbook
+    assert "limactl stop -f colima" in runbook
+
+
+def test_companion_dev_page_documents_uat_layout_path_boundary() -> None:
+    doc = Path("companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md").read_text(
+        encoding="utf-8"
+    )
+    assert "UAT note staging paths" in doc
+    assert "VAULT_DESK_DIR_REL=" in doc
+    assert "Workbench" in doc
+    assert "explicit non-layout throwaway path" in doc
 
 
 def test_start_full_system_runs_runtime_verification_and_endpoint_probe() -> None:

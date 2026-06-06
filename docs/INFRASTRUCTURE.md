@@ -75,6 +75,21 @@ API and worker share the same Python image built from the repo.
   - `http://ollama:11434`
 - This reduces drift between host-only Ollama URLs and what containers can actually reach.
 
+### Colima / Docker recovery
+
+If `docker ps`, `docker version`, `docker compose`, or `colima status` hang during startup, treat it
+as a host-runtime problem before debugging app code. First free host disk if it is low, because Docker
+builds and Colima SSH forwards can wedge under disk pressure. Then use the channel-safe sequence in
+`docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md`:
+
+- inspect dev/prod ports from the host before restarting Colima;
+- kill only clearly stuck client/wrapper processes when possible;
+- try `colima stop default && colima start default`;
+- use `LIMA_HOME="$HOME/.colima/_lima" limactl stop -f colima` only when the VM is running but
+  Colima SSH resets or graceful stop hangs;
+- restart only the intended channel target after recovery, for example `make dev-start-full` for
+  `pkm-dev`.
+
 ## Observability
 - Health endpoints: Reality-MVP operators should hit `http://127.0.0.1:18000/healthz` (liveness), `/readyz` (readiness), `/api/health` (structured contract), and `/api/status` (SOT/status payload). Search and ask live at `/search` and `/api/ask` on the same host port. Docker Compose maps host `18000` ↔ container `8000`, so use the host port when invoking curl from the host. The `/agent/health` compatibility route should not be used for go-live checks; rely on `/healthz` (simple OK) and `/api/health` (contract) instead. `/api/health` can report `ok=false` when optional tools like `ffmpeg` are missing; treat this as degraded functionality if core endpoints are healthy.
 - Route truth: Swagger UI at `/docs` and the OpenAPI JSON at `/openapi.json` describe every available path; consult `docs/runbooks/RUNBOOK_GO_LIVE.md` for command examples and the `curl -sS http://127.0.0.1:18000/openapi.json` tip from that runbook when you are unsure.

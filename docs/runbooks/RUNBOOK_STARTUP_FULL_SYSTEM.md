@@ -103,6 +103,95 @@ This:
 
 The API is exposed on host port **18001** for the dev channel.
 
+### Dev host preflight and safe `tmp/` cleanup
+
+`scripts/start_full_system.sh` checks host free space before starting the flight recorder or running
+Docker build/recreate work. The default guard:
+
+- fails startup when the repo filesystem has less than **1024 MiB** free
+  (`STARTUP_DISK_MIN_FREE_MIB`, default `1024`);
+- warns when free space is below **5120 MiB** (`STARTUP_DISK_WARN_FREE_MIB`, default `5120`);
+- checks the repo root by default (`STARTUP_DISK_CHECK_PATH`, default repo root);
+- can be explicitly disabled with `STARTUP_DISK_CHECK=0` for a one-off operator recovery.
+
+When the guard fails or Docker build fails with `No space left on device`, clean only dated
+diagnostic files first:
+
+```bash
+find tmp -maxdepth 1 -type f \
+  \( -name 'flightrecorder-*.log' -o -name 'watcher_tick-*.jsonl' \) \
+  -delete
+df -h .
+```
+
+These dated files are startup diagnostics and watcher tick captures. Do **not** routinely delete
+live undated runtime files such as `tmp/runtime.env`, `tmp/startup_status.json`,
+`tmp/index-outbox.jsonl`, `tmp/index.jsonl`, `tmp/watcher_tick.jsonl`,
+`tmp/latest_watcher_tick_log`, worker/watcher heartbeat files, or `tmp-test/**` unless you are
+intentionally following a reset runbook.
+
+The same rule applies on Demerzel with Colima's 4 GiB VM: free host disk before rebuilding images.
+If disk pressure wedged Docker or Colima, use the recovery sequence below after freeing space.
+
+### Dev Colima/Docker recovery without touching prod
+
+Use this only when Docker/Compose commands hang or fail fast while refreshing the dev channel.
+Do not use prod targets and do not move the `stable` ref.
+
+1. Confirm which channel ports are active from the host:
+
+   ```bash
+   lsof -nP -iTCP:18001 -sTCP:LISTEN || true   # dev API
+   lsof -nP -iTCP:15433 -sTCP:LISTEN || true   # dev DB
+   lsof -nP -iTCP:18000 -sTCP:LISTEN || true   # prod API
+   lsof -nP -iTCP:15432 -sTCP:LISTEN || true   # prod DB
+   ```
+
+   If prod ports are active, stop and reassess before restarting Colima.
+
+2. Check Docker/Colima responsiveness:
+
+   ```bash
+   docker version
+   colima status
+   LIMA_HOME="$HOME/.colima/_lima" limactl shell colima true
+   ```
+
+3. If only stale client commands are stuck, terminate those clients rather than containers:
+
+   ```bash
+   ps -ax -o pid,ppid,stat,etime,command |
+     grep -E 'make dev-start-full|start_full_system|docker info|docker ps|docker compose|colima status' |
+     grep -v grep
+   ```
+
+   Kill only the clearly stuck client/wrapper PIDs. Do not kill unrelated SSH, Colima, Docker, or
+   prod processes based only on a port number.
+
+4. Try graceful Colima recovery first:
+
+   ```bash
+   colima stop default
+   colima start default
+   docker version
+   ```
+
+5. If Colima is reported running but SSH resets or `colima stop` hangs, force-stop the Colima VM
+   and restart it:
+
+   ```bash
+   LIMA_HOME="$HOME/.colima/_lima" limactl stop -f colima
+   colima start default
+   docker version
+   ```
+
+6. Restart only the dev stack:
+
+   ```bash
+   make dev-start-full
+   curl -sS http://localhost:18001/healthz
+   ```
+
 ### How channel-specific env loading works
 
 When `PKM_ENVIRONMENT` (or `CHANNEL` / `PKM_CHANNEL`) is set, `start_full_system.sh` loads
