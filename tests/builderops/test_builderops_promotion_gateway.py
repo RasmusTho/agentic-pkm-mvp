@@ -260,6 +260,25 @@ def test_repo_doc_and_adr_promotions_are_proposal_only(
     assert "## Source Anchors" in proposal["body"]
 
 
+def test_repo_skill_and_workflow_doc_target_renders_as_writeback_proposal(
+    store: SqliteBuilderOpsStore,
+    gateway: BuilderOpsPromotionGateway,
+) -> None:
+    intent = _create_intent(
+        store,
+        intent_id="prom_skill_workflow_doc_001",
+        target_surface="repo_skill_and_workflow_doc",
+        target_ref="repo_doc:.codex/skills/verification-and-closure/SKILL.md",
+    )
+
+    proposal = gateway.render_proposal(intent["id"])
+
+    assert proposal["proposal_kind"] == "owner_doc_writeback_proposal"
+    assert proposal["target_authority_surface"] == "owner_doc_writeback_proposal"
+    assert proposal["requires_pr"] is True
+    assert "normal PR workflow" in proposal["body"]
+
+
 def test_disallowed_target_rejected(
     store: SqliteBuilderOpsStore,
     gateway: BuilderOpsPromotionGateway,
