@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
+from http.server import ThreadingHTTPServer
+
 
 def test_production_port(monkeypatch) -> None:
     monkeypatch.delenv("PORT", raising=False)
@@ -60,6 +63,27 @@ def test_production_safety_warning_is_explicit() -> None:
     assert "reverse proxy" in warning
 
 
+def test_companion_ui_dev_server_uses_threaded_http_server() -> None:
+    from companion_ui.workspace import serve_dev_page
+
+    assert issubclass(serve_dev_page.CompanionThreadingHTTPServer, ThreadingHTTPServer)
+    assert serve_dev_page.CompanionThreadingHTTPServer.daemon_threads is True
+    assert "CompanionThreadingHTTPServer" in inspect.getsource(serve_dev_page.main)
+
+
+def test_companion_ui_production_server_uses_threaded_http_server() -> None:
+    from companion_ui.workspace import serve_dev_page
+    from companion_ui.workspace import serve_production_page
+
+    assert (
+        serve_production_page.CompanionThreadingHTTPServer
+        is serve_dev_page.CompanionThreadingHTTPServer
+    )
+    assert "CompanionThreadingHTTPServer" in inspect.getsource(
+        serve_production_page.main
+    )
+
+
 def test_production_shell_shows_runtime_channel_and_guard_state() -> None:
     from companion_ui.workspace.serve_production_page import render_production_index_html
 
@@ -102,3 +126,16 @@ def test_production_launch_safety_doc_covers_operator_requirements() -> None:
     assert "curl -fsS http://127.0.0.1:18000/health" in doc
     assert "Ctrl-C" in doc
     assert "No direct UI vault writes" in doc
+
+
+def test_production_launch_docs_cover_tailscale_warning() -> None:
+    from pathlib import Path
+
+    doc = Path("companion-ui/docs/MLP_PRODUCTION_LAUNCH_SAFETY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "HOST=0.0.0.0" in doc
+    assert "Tailscale" in doc
+    assert "trusted personal networks or trusted tailnets" in doc
+    assert "Do not expose this profile to the public internet." in doc

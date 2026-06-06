@@ -44,7 +44,7 @@ import os
 import re
 import sys
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
@@ -73,6 +73,12 @@ _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
+
+
+class CompanionThreadingHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server for local/LAN Companion UI browser clients."""
+
+    daemon_threads = True
 
 
 def load_config() -> dict:
@@ -7613,7 +7619,7 @@ def main() -> None:
     config = load_config()
     client = WorkspaceHttpClient(base_url=config["api_base_url"])
     handler = make_handler(client=client, api_base_url=config["api_base_url"])
-    server = HTTPServer((config["host"], config["port"]), handler)
+    server = CompanionThreadingHTTPServer((config["host"], config["port"]), handler)
     print(
         "[companion-ui] DEV/STAGING ONLY — real-note workspace dev server",
         flush=True,

@@ -66,6 +66,8 @@ HOST=0.0.0.0 PORT=8113 COMPANION_API_BASE_URL=http://<trusted-host>:18000 \
 
 Use LAN/Tailscale only on trusted personal networks or trusted tailnets. Prefer Tailscale over open LAN when another device needs access.
 
+The production and dev/test UI launchers use threaded request handling so a slow browser, LAN, or Tailscale client connection does not block unrelated local requests. This does not change the exposure posture: LAN/Tailscale binding is still explicit operator opt-in, and public internet exposure remains unsupported.
+
 ## No Public Exposure
 
 Do not expose this profile to the public internet.
