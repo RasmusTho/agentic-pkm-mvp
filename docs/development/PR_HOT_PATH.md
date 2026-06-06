@@ -39,6 +39,8 @@ Default rule:
 
 3. Review feedback triage
 - after CI is green and current, fetch existing review comments before any handoff or merge recommendation; do not park the PR as "awaiting human review" until posted comments are classified
+- do not run GraphQL `reviewThreads` closure sweeps by default
+- run GraphQL review-thread closure checks only when triggered by a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback
 - blocking regression risk -> fix before merge
 - valid non-blocking improvement -> fix if cheap, otherwise file a follow-up
 - out-of-scope -> short response; follow-up only if useful
@@ -137,6 +139,7 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 - branch/worktree sanity before commit, push, or merge
 - required checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified
+- review-thread closure checks are trigger-based; ordinary PRs without prior-review anchors or known unresolved feedback stay on the lightweight hot path
 - failing required tests or checks must be classified before merge
 - minimal delivery receipt is required
 - delivery traceability must be preserved through either an issue-backed PR or a direct repair block

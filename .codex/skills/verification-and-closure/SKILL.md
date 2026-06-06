@@ -59,7 +59,8 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - Verify project lifecycle state still makes sense
 - Verify closed terminal PR cards do not remain blank in the Project
 - Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
-- If the work addresses earlier review feedback, reply to and resolve the original review thread with the fixing PR or merge commit before final closure. [review-thread-closure]
+- Run GitHub GraphQL `reviewThreads` closure checks only when a review-thread closure trigger is present: a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback. Preserve the lightweight hot path for ordinary PRs with no trigger. [review-thread-closure]
+- When a review-thread closure trigger applies and the work addresses earlier review feedback, reply to and resolve the original review thread with the fixing PR or merge commit before final closure. [review-thread-closure]
 - On resume or recovery, re-check branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, reimplementation, or closure. [post-resume-current-state-gate]
 - If the work is a slice under a larger feature, keep post-merge validation evidence on the parent issue
 - If post-merge validation advanced but acceptance is still pending, record the new evidence on the parent issue body or comments
@@ -91,7 +92,7 @@ Prerequisites for merge:
 - current SHA truth is intact
 - required checks are green on the current head SHA
 - no unresolved blocking review comments remain
-- no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
+- when a review-thread closure trigger applies, no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
 - no scope drift remains
 - the PR fits one of the two verification modes above
 - if issue-backed, all acceptance criteria from the governing Issue are satisfied and every AC's `Verify:` target resolves green on the current head SHA
