@@ -163,3 +163,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Upstream artifact:** stale workspace `AGENTS.md` — make the workspace redirect rule explicit about verifying file-edit tool path resolution before trusting a patch.
 
 --- retro 2026-06-01: applied 11/11 proposals ---
+
+## 2026-06-06 — #1603 / #1597 (Defensive readiness gate on a buildable slice)
+**Source:** deliver-issue-set / human
+**Diverged:** #1603 (and its epic #1597 / sibling #1604) were minted `agent:needs-human` with a "coordinate with #1596" constraint, implying a blocking dependency. On evidence the gate did not hold: the inspect/queue/confirm/receipt surfaces already shipped and passed tests, #1596's children were internal refactors #1603 neither changed nor depended on, and the slice was buildable and delivered (PR #1605) independently of #1596. The `agent:needs-human` was a defensive wave-acceptance posture, not a real block — the owner had to challenge it ("real problem or anxious defensive posture?") to release it.
+**Upstream artifact:** `.codex/skills/feature-breakdown/SKILL.md` — do not default bounded child slices with resolvable `Source Anchors` and concrete `Verify:` targets to `agent:needs-human`; reserve `agent:needs-human`/`agent:blocked` for genuine human decisions or live dependencies, and make any cross-issue "coordinate with #N" note explicit about whether it is a hard prerequisite or coordination-only. `.codex/skills/deliver-issue-set/SKILL.md` should interrogate such gates on evidence before deferring (counter-case: #1604's UAT fixture was a genuine human gate and correctly stayed needs-human).
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: the BuilderOps CLI cannot import `app` in this environment (`app.config.llm` import chain fails). Convert this entry to a `LearningSignal` when the store is reachable.
