@@ -285,6 +285,7 @@ Use `python -m app.cli <command> --help` for the full, current argument list. Th
 | `canvas open|edit|close` | Operate the bounded canvas co-authoring surface when `CANVAS_ENABLED=1`. |
 | `llm check` | Probe LLM/embedding endpoint reachability. |
 | `pipe <note.md>` | Run ingest for a note/path outside the watcher loop. |
+| `pkm-alpha-ingest`, `vault-alpha-ingest` | Compatibility aliases for legacy startup and ingest callers; prefer the neutral ingest commands for new scripts. |
 | `make verify-runtime` | Check container health plus in-container runtime health/status for the live Docker stack. |
 
 Flow mapping:
