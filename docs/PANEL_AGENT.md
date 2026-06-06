@@ -196,6 +196,20 @@ Architectural reading note:
 ## UAT / Trying it out
 - The quickest way to exercise PanelAgent + watcher flows on a small set of notes is in `docs/runbooks/UAT_PANEL_WATCHER.md` (prep notes, targeted ingest, panel run-many, watcher dry-run/run, and what to observe).
 
+### Companion UI operational-loop UAT — #1604 (2026-06-06)
+
+Real-note vertical UAT of the inspect → queue → confirm → receipt operational loop (#1597 / #1603) on the **live Niflheim dev runtime** (dev API on the canonical dev host, code at `main` including PR #1605). Fixture: a throwaway dev-vault note staged for the UAT (synthetic uuid, no private content), removable afterward. Privacy-preserving evidence only — status/posture values, no note bodies.
+
+Governed `queue_review` loop proven end-to-end:
+
+- **Inspect** — `GET /api/companion/workspace` resolved the note; identity resolved; WriteGuard `ok`.
+- **Queue** — `POST /api/companion/vault-browser/actions/queue-review` → `state=pending_intent`, `loop_stage=queued_pending_confirmation`, `receipt_state=pending_intent_not_durable_receipt`, `execution_path=/api/panel/confirm`.
+- **Confirm** — `POST /api/panel/confirm` → `status=executed`, receipt `outcome=success`, `receipt_visibility=durable_vault_visible`; events `panel.intent.executed`, `panel.action.logged`, `panel.log.created`, `panel.governance.requested`.
+- **Reject** (second proposal) — `status=rejected`, `receipt=null`, `receipt_visibility=none_rejected`, no execution.
+- **Durable receipt visibility** — the workspace orientation governance summary reflected the governed receipts (`latest_receipt_outcome=rejected`, pending proposal/receipt counts, `source_ref.kind=receipt` / `panel.receipts`).
+
+Scope boundary: this proves the **governance-handoff** (`queue_review`) loop and its durable receipt in the governance/receipt layer. The **in-note checkbox-projection** receipt path (durable `- [x]` + `> [!info]- AI status` callout) was not exercised — the note's `AI-åtgärder` option was not a runtime-declared selectable option — and is tracked as follow-up **#1621**. No broader Companion UI production readiness is claimed.
+
 ### Event payload (panel.intent.created)
 ```json
 {
