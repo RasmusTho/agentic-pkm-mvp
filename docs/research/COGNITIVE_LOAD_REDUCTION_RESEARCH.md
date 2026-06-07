@@ -61,6 +61,9 @@ Repository reconciliation as of 2026-06-07:
   checkbox through the governed backend writer path. The non-mutation invariant applies to
   display/proposal/projection behavior before explicit human confirmation, and to summaries or
   display/readability transformations that are not routed through governance.
+- Code-level verification confirms the checkbox-projection write path checks WriteGuard through
+  `panel.checkbox_projection` before calling the note writer. The remaining #1657 gap is receipt
+  completeness/classification for executed projections, not proof of an ungated write path.
 - The long RQ-9 simplification-vs-authority checklist is a useful proposed owner gate, but it is
   not yet a hard runtime or product norm. The compact owner-doc version currently lives in
   `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md` as the Decision Test. A future owner-doc change should
@@ -111,7 +114,9 @@ Wave 2 adds this taxonomy:
 
 Repository reconciliation as of 2026-06-07:
 
-- The Companion UI product spec is available at `docs/COMPANION_UI_PRODUCT_SPEC.md`.
+- The Companion UI product spec is available at `docs/COMPANION_UI_PRODUCT_SPEC.md`. There is no
+  `companion-ui/docs/COMPANION_UI_PRODUCT_SPEC.md`; the local Companion API contracts are the
+  workspace orientation/state contracts under `companion-ui/docs/`.
 - `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` defines the shipped read-only
   `GET /api/companion/orientation` projection with `leave_point`, open loops, notable changes,
   resurfacing, memory, governance, guards, and mutation-intent hints.
@@ -119,6 +124,9 @@ Repository reconciliation as of 2026-06-07:
   read-side aggregate with `panel.selectable_options`.
 - `app/api/routes/companion.py` implements workspace/orientation reads and multiple human-present
   body-edit or save paths, including `POST /api/companion/note/save`.
+- `app/api/routes/ingest.py` exposes `POST /ingest` for generic knowledge-object ingest. Future
+  encoding assistance can sit before ingest/capture text enters that route, but correction output
+  remains proposal/draft-class until the human confirms the intended text.
 - `tests/companion_ui/test_direct_note_editor.py` verifies a direct human note editor using a
   native `<textarea spellcheck>` and the `/api/companion/note/save` path.
 - `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md` and
@@ -158,6 +166,9 @@ Repo reconciliation as of 2026-06-07:
 
 - The direct note editor currently uses a native `<textarea spellcheck>` path and saves through
   `/api/companion/note/save`.
+- `POST /ingest` exists as a capture/knowledge-object entry route. The Phase B contract applies
+  before user-produced text is submitted through ingest, but this PR does not implement an ingest
+  correction UI or runtime API.
 - The dev page currently emits `autocorrect="on"` for that textarea. Phase B rejects
   autocorrect-on-type, so a follow-up implementation issue is required after the contract lands.
 - Canvas body co-authoring and staged Canvas suggestions already have distinct authority models:
@@ -211,6 +222,13 @@ Repository reconciliation as of 2026-06-07:
   `GET /api/companion/orientation` shape with `leave_point`, `open_loops`, `notable_changes`,
   `resurface.candidates`, memory awareness, governance, guards, server-declared caps, and bounded
   `mutation_intents`.
+- The canonical API payload field names are `open_loops` and `notable_changes`. Internal
+  reorientation explanations may still use `open_items` / `notable_change` while being mapped into
+  the API response, but future docs should not cite those internal names as the external contract.
+- The shipped caps are explicit: `open_loops=8`, `notable_changes=8`,
+  `resurface.candidates=5`, `mutation_intents=3`, and `source_refs_per_item=3`. The owner
+  calibration question is therefore not whether a budget exists, but whether the simultaneously
+  displayed subset should be lower for the 2e working-memory ceiling.
 - ADR-0011 confirms the shipped orientation posture remains pull, snapshot, and read-only. It
   allows only later bounded foreground ambient refresh, not server push, notifications, badges,
   inboxes, urgency feeds, or focus stealing.
@@ -578,7 +596,8 @@ Repo authority:
 - `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md` — cognitive-load projection boundary.
 - `docs/PANEL_AGENT.md` — artifact-local intent manifestation and Canonical confirmation semantics.
 - `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md` — checkbox projection endpoint and boundary.
-- `app/panel/checkbox_projection.py` — `extract_panel_selectable_options` and projection implementation.
+- `app/panel/checkbox_projection.py` — `extract_panel_selectable_options`, checkbox-projection
+  implementation, WriteGuard check, and governed note-writer call.
 - `tests/panel/test_panel_checkbox_projection.py` — executable boundary proof.
 - `docs/COMPANION_UI_PRODUCT_SPEC.md` — Companion UI product mode model.
 - `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` — note-independent orientation projection.
@@ -593,6 +612,8 @@ Repo authority:
   `tests/resurfacing/test_resurfacing_runtime.py` — executable resurfacing boundary proof.
 - `app/api/routes/companion.py` — current Companion workspace, orientation, body update, and note
   save endpoints.
+- `app/api/routes/ingest.py` and `api/openapi.yaml` — generic `POST /ingest` knowledge-object
+  ingest route.
 - `tests/companion_ui/test_direct_note_editor.py` — direct human note editor and native spellcheck
   coverage.
 - `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py` — current direct note

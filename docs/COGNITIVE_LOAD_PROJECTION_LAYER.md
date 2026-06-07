@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-07
-Last verified against: docs/HUMAN-FLOWS.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md
+Last verified against: docs/HUMAN-FLOWS.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, app/api/routes/ingest.py, docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md
 
 # Cognitive Load Projection Layer
 
@@ -196,8 +196,9 @@ carry a short pointer-first "why now" with source/provenance and should remain T
 ### Text-production mode
 
 Text-production mode supports the human while writing into the system. The current shipped surfaces
-already include direct note editing and Canvas/body-edit paths; this mode defines the boundary for
-future spelling, dictation, correction, and read-back support on those surfaces.
+already include direct note editing, Canvas/body-edit paths, and ingest/capture routes where text
+enters the system; this mode defines the boundary for future spelling, dictation, correction, and
+read-back support on those surfaces.
 
 Dictation/STT output is draft text. Spelling, grammar, real-word-error, or rewriting assistance is
 a suggestion over the draft, not a silent canonical rewrite. Any assistive layer must make changed
@@ -213,10 +214,10 @@ The correction-as-proposal contract is stricter than ordinary display assistance
 - Transparency of every change. Each proposed change must show the original token and proposed
   token. Anything beyond a pure spelling fix must also show why it is being suggested.
 - Canonical content remains untouched until confirmation. Confirmed corrections route through the
-  authorized save/apply path for the current surface: direct note save, Canvas user-present
-  body-edit with undo/session-log provenance, staged Canvas body suggestion, or Panel/governed
-  execution when the operation is governance-bearing. Do not invent a stronger receipt claim than
-  the owning surface provides.
+  authorized save/apply path for the current surface: direct note save, ingest/capture submission,
+  Canvas user-present body-edit with undo/session-log provenance, staged Canvas body suggestion, or
+  Panel/governed execution when the operation is governance-bearing. Do not invent a stronger
+  receipt claim than the owning surface provides.
 - Meaning-affecting changes require more friction than spelling fixes. Orthographic fixes,
   real-word/context flags, and grammar/phrasing rewrites must be visually and procedurally
   distinct.
