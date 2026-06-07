@@ -4849,7 +4849,7 @@ def render_index_html(
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
   {production_static_link}
   <style>
     /* Yggdrasil design tokens (subset inlined for offline resilience) */
@@ -4865,12 +4865,30 @@ def render_index_html(
       --border-strong: #1e3050;
       --border-focus:  #00d4e8;
       --accent:        #d4a843;
+      --accent-dim:    #80621a;
+      --accent-muted:  #2a1e06;
       --cyan:          #00d4e8;
+      --cyan-dim:      #007a8a;
       --cyan-muted:    #001e28;
+      --vault:         #39e87d;
+      --vault-dim:     #1a7840;
+      --vault-muted:   #041a10;
       --agent:         #4a9eff;
+      --agent-dim:     #1e5a9a;
       --agent-muted:   #051228;
+      --amber:         #f09030;
+      --amber-dim:     #805010;
+      --amber-muted:   #1a0e02;
       --destructive:      #ff3d3d;
+      --destructive-dim:  #8a1a1a;
       --destructive-muted:#160404;
+      --au-canonical:  var(--vault);
+      --au-projection: var(--cyan);
+      --au-proposal:   var(--agent);
+      --au-confirm:    var(--accent);
+      --au-receipt:    #b98be0;
+      --au-local:      #6b7a90;
+      --au-blocked:    var(--destructive);
       --font-display:  'EB Garamond', Georgia, serif;
       --font-ui:       'Space Grotesk', system-ui, sans-serif;
       --font-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
@@ -4886,10 +4904,6 @@ def render_index_html(
     html {{ font-size: 16px; -webkit-font-smoothing: antialiased; }}
     body {{
       background: var(--bg-base);
-      background-image:
-        linear-gradient(rgba(0,212,232,0.022) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0,212,232,0.022) 1px, transparent 1px);
-      background-size: 48px 48px;
       color: var(--fg-1);
       font-family: var(--font-ui);
       font-size: var(--text-base);
@@ -5841,7 +5855,7 @@ def render_index_html(
       font-size: 40px;
       line-height: 44px;
       font-weight: 400;
-      letter-spacing: -0.02em;
+      letter-spacing: 0;
       color: var(--fg-1);
       margin: 0 0 32px;
     }}
@@ -5850,7 +5864,7 @@ def render_index_html(
       font-size: 22px;
       line-height: 28px;
       font-weight: 600;
-      letter-spacing: -0.005em;
+      letter-spacing: 0;
       color: var(--fg-1);
       margin: 40px 0 12px;
       padding-bottom: 6px;
@@ -6016,7 +6030,7 @@ def render_index_html(
     }}
     .vault-markdown-rendered li.task-list-item > input[data-panel-checkbox="true"] {{
       cursor: pointer;
-      border-color: var(--accent);
+      border-color: var(--cyan);
     }}
     .vault-markdown-rendered .panel-decision-option-label {{
       font-weight: 600;
@@ -6080,8 +6094,8 @@ def render_index_html(
       line-height: 1.25;
     }}
     .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked {{
-      background: var(--accent);
-      border-color: var(--accent);
+      background: var(--cyan);
+      border-color: var(--cyan);
     }}
     .vault-markdown-rendered li.task-list-item > input[type="checkbox"]:checked::after {{
       content: "";
@@ -6321,8 +6335,8 @@ def render_index_html(
       max-width: 100%;
     }}
     .suggested-insertion {{
-      background: rgba(212,168,67,0.08);
-      border-left: 3px solid var(--accent);
+      background: var(--amber-muted);
+      border-left: 3px solid var(--amber);
       color: var(--fg-1);
       display: block;
       font-family: var(--font-mono);
@@ -6334,7 +6348,7 @@ def render_index_html(
       word-break: break-word;
     }}
     .suggested-insertion-label {{
-      color: var(--accent);
+      color: var(--amber);
       display: block;
       font-size: var(--text-xs);
       letter-spacing: 0.06em;
@@ -6372,7 +6386,7 @@ def render_index_html(
       width: 280px;
       flex-shrink: 0;
       background: var(--bg-surface);
-      border-left: 1px solid var(--border);
+      border-left: 1px solid var(--au-proposal);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -6398,8 +6412,8 @@ def render_index_html(
       padding: 1px 7px;
       border-radius: var(--radius-sm);
       background: var(--agent-muted);
-      border: 1px solid rgba(74,158,255,0.2);
-      color: var(--agent);
+      border: 1px solid var(--agent-dim);
+      color: var(--au-proposal);
       letter-spacing: 0.04em;
     }}
     .rail-placeholder-body {{
@@ -6437,8 +6451,8 @@ def render_index_html(
     }}
     .rail-alert-blocked {{
       background: var(--destructive-muted);
-      border: 1px solid rgba(255,61,61,0.3);
-      color: var(--destructive);
+      border: 1px solid var(--destructive-dim);
+      color: var(--au-blocked);
     }}
     .rail-alert-muted {{
       background: var(--bg-raised);
@@ -6446,7 +6460,7 @@ def render_index_html(
       color: var(--fg-2);
     }}
     .panel-message {{
-      border-left: 2px solid var(--accent);
+      border-left: 2px solid var(--au-proposal);
       color: var(--fg-2);
       font-size: var(--text-sm);
       padding-left: 10px;
@@ -6523,9 +6537,9 @@ def render_index_html(
     }}
     .canvas-recovery-conflict {{
       background: var(--destructive-muted);
-      border: 1px solid rgba(255,61,61,0.3);
+      border: 1px solid var(--destructive-dim);
       border-radius: var(--radius-md);
-      color: var(--destructive);
+      color: var(--au-blocked);
       display: flex;
       flex-direction: column;
       font-family: var(--font-mono);
@@ -6580,7 +6594,8 @@ def render_index_html(
     }}
     .suggestion-card {{
       background: var(--bg-raised);
-      border: 1px solid var(--border);
+      border: 1px solid var(--agent-dim);
+      border-left: 3px solid var(--au-proposal);
       border-radius: var(--radius-md);
       color: var(--fg-2);
       display: flex;
@@ -6589,11 +6604,19 @@ def render_index_html(
       padding: 10px;
     }}
     .suggestion-card[data-variant="blocked"] {{
-      border-color: rgba(255,61,61,0.3);
+      background: var(--destructive-muted);
+      border-color: var(--destructive-dim);
+      border-left-color: var(--au-blocked);
     }}
     .suggestion-card-title {{
       color: var(--fg-1);
       font-size: var(--text-sm);
+    }}
+    .suggestion-card-notice {{
+      color: var(--au-proposal);
+    }}
+    .suggestion-card-denial {{
+      color: var(--amber);
     }}
     .suggestion-card-preview, .suggestion-card-notice, .suggestion-card-denial {{
       font-family: var(--font-mono);
@@ -6613,6 +6636,10 @@ def render_index_html(
       font-size: var(--text-xs);
       padding: 4px 7px;
       text-transform: uppercase;
+    }}
+    .suggestion-action:hover, .panel-proposal-action:hover, .panel-action-discard:hover {{
+      border-color: var(--cyan);
+      color: var(--cyan);
     }}
     .shortcut-map {{
       background: var(--bg-raised);
@@ -6811,8 +6838,8 @@ def render_index_html(
     }}
     .panel-section[data-section-state="active"] {{
       background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-left: 2px solid var(--agent);
+      border: 1px solid var(--agent-dim);
+      border-left: 2px solid var(--au-proposal);
       border-radius: 4px;
       padding: 10px;
     }}
@@ -6827,7 +6854,7 @@ def render_index_html(
       color: var(--fg-3);
     }}
     .panel-section[data-section-state="active"] .panel-section-title {{
-      color: var(--agent);
+      color: var(--au-proposal);
     }}
     .panel-section-provenance {{
       color: var(--fg-3);
@@ -6842,10 +6869,10 @@ def render_index_html(
       margin-top: 4px;
     }}
     .panel-action-apply {{
-      background: var(--accent);
-      border: none;
+      background: transparent;
+      border: 1px solid var(--cyan);
       border-radius: var(--radius-md);
-      color: white;
+      color: var(--cyan);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: 12px;
@@ -6887,7 +6914,8 @@ def render_index_html(
     .reorient-recall-body {{ margin-top: 8px; }}
     .panel-proposal-row {{
       background: var(--bg-raised);
-      border: 1px solid var(--border);
+      border: 1px solid var(--agent-dim);
+      border-left: 3px solid var(--au-proposal);
       border-radius: var(--radius-md);
       color: var(--fg-2);
       display: flex;
@@ -6930,8 +6958,8 @@ def render_index_html(
       gap: 5px;
       padding: 10px;
     }}
-    .panel-confirm-receipt {{ color: var(--fg-1); }}
-    .panel-confirm-blocked {{ color: var(--destructive); }}
+    .panel-confirm-receipt {{ color: var(--au-receipt); }}
+    .panel-confirm-blocked {{ color: var(--au-blocked); }}
     /* Body edit panel */
     /* #1416 — the composer is shrink-locked and height-bounded so it cannot
        squeeze the central note reading surface in the fixed-height shell
@@ -7296,15 +7324,20 @@ def render_index_html(
       flex-shrink: 0;
     }}
     .receipt-row {{
+      background: color-mix(in srgb, var(--au-receipt) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--au-receipt) 55%, transparent);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
       cursor: pointer;
       display: grid;
       gap: 4px;
       grid-template-columns: minmax(0, 1fr) auto;
-      padding: 3px 0;
+      margin: 2px 0;
+      padding: 5px 7px;
     }}
     .receipt-row:focus-visible {{
       border-radius: var(--radius-sm);
-      outline: 1px solid var(--accent);
+      outline: 2px solid var(--cyan);
       outline-offset: 2px;
     }}
     .receipt-detail {{
