@@ -48,6 +48,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+import httpx
+
 from companion_ui.renderer import (
     PropertiesRenderer,
     VaultMarkdownDocument,
@@ -925,16 +927,14 @@ def _display_preferences_script() -> str:
 
 
 def _note_readback_script() -> str:
-    """Browser-local TTS/read-back controls for the rendered note surface."""
+    """Local-first TTS/read-back controls for the rendered note surface."""
 
     return """
   <script>
   (function () {
     var proposalFieldOrder = ['decision', 'recommendation', 'why', 'risk', 'source', 'choices', 'status'];
+    var currentAudio = null;
     function el(sel) { return document.querySelector(sel); }
-    function supportsSpeech() {
-      return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
-    }
     function status(text, state) {
       var node = el('[data-testid="tts-readback-status"]');
       if (!node) return;
@@ -965,23 +965,51 @@ def _note_readback_script() -> str:
       var editor = document.getElementById('note-source-editor');
       return editor ? String(editor.value || '') : '';
     }
+    function postJson(path, payload) {
+      return fetch(path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      }).then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) {
+            var detail = data && data.detail ? data.detail : data;
+            var message = detail && detail.reason ? detail.reason : 'Local TTS unavailable.';
+            throw new Error(message);
+          }
+          return data;
+        });
+      });
+    }
     function readText(text, label) {
-      if (!supportsSpeech()) {
-        status('Speech synthesis unavailable in this browser.', 'unavailable');
-        return;
-      }
       var normalized = String(text || '').trim();
       if (!normalized) {
         status('Nothing selected for read-back.', 'empty');
         return;
       }
-      window.speechSynthesis.cancel();
-      var utterance = new SpeechSynthesisUtterance(normalized);
-      utterance.rate = rate();
-      utterance.onend = function () { status('Read-back finished.', 'idle'); };
-      utterance.onerror = function () { status('Read-back failed.', 'error'); };
-      status(label || 'Reading source text.', 'playing');
-      window.speechSynthesis.speak(utterance);
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio = null;
+      }
+      status('Planning local TTS.', 'planning');
+      postJson('/api/companion/tts/plan', {text: normalized, rate: rate()})
+        .then(function () {
+          status('Synthesizing local audio.', 'synthesizing');
+          return postJson('/api/companion/tts/synthesize', {text: normalized, rate: rate()});
+        })
+        .then(function (result) {
+          if (!result.audio_url) {
+            throw new Error(result.reason || 'Local TTS did not return audio.');
+          }
+          currentAudio = new Audio(result.audio_url);
+          currentAudio.onended = function () { status('Read-back finished.', 'idle'); };
+          currentAudio.onerror = function () { status('Read-back failed.', 'error'); };
+          status(label || 'Reading local audio.', result.cached ? 'cached' : 'playing');
+          return currentAudio.play();
+        })
+        .catch(function (err) {
+          status(err && err.message ? err.message : 'Local TTS unavailable.', 'unavailable');
+        });
     }
     window.noteReadback = {
       readFullNote: function () { readText(textOf(el('.note-body-content')), 'Reading note source.'); },
@@ -989,32 +1017,28 @@ def _note_readback_script() -> str:
       readProposal: function () { readText(proposalText(), 'Reading Panel proposal fields.'); },
       readDraft: function () { readText(draftText(), 'Reading editor draft.'); },
       pause: function () {
-        if (supportsSpeech()) {
-          window.speechSynthesis.pause();
+        if (currentAudio) {
+          currentAudio.pause();
           status('Read-back paused.', 'paused');
         }
       },
       resume: function () {
-        if (supportsSpeech()) {
-          window.speechSynthesis.resume();
+        if (currentAudio) {
+          currentAudio.play();
           status('Read-back resumed.', 'playing');
         }
       },
       stop: function () {
-        if (supportsSpeech()) {
-          window.speechSynthesis.cancel();
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio.currentTime = 0;
+          currentAudio = null;
           status('Read-back stopped.', 'idle');
         }
       }
     };
     document.addEventListener('DOMContentLoaded', function () {
-      var controls = document.querySelectorAll('[data-tts-requires-speech="true"]');
-      if (!supportsSpeech()) {
-        for (var i = 0; i < controls.length; i++) {
-          controls[i].disabled = true;
-        }
-        status('Speech synthesis unavailable in this browser.', 'unavailable');
-      }
+      status('Local TTS idle.', 'idle');
     });
   })();
   </script>"""
@@ -8144,6 +8168,28 @@ def make_handler(
                 },
             )
 
+        def _proxy_audio(self, path: str) -> None:
+            if re.fullmatch(r"/api/companion/tts/audio/[a-f0-9]{64}\.wav", path) is None:
+                self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
+                return
+            try:
+                response = httpx.get(self._api_base_url.rstrip("/") + path, timeout=10.0)
+            except httpx.RequestError as exc:
+                self._send_json(
+                    502,
+                    {
+                        "error": "runtime_unavailable",
+                        "message": str(exc),
+                        "next_step": "Verify the Companion runtime API is running on the server host.",
+                    },
+                )
+                return
+            self.send_response(response.status_code)
+            self.send_header("Content-Type", response.headers.get("Content-Type", "audio/wav"))
+            self.send_header("Content-Length", str(len(response.content)))
+            self.end_headers()
+            self.wfile.write(response.content)
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path in self._static_assets:
@@ -8188,6 +8234,9 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            if parsed.path.startswith("/api/companion/tts/audio/"):
+                self._proxy_audio(parsed.path)
+                return
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
@@ -8206,6 +8255,8 @@ def make_handler(
             {
                 "/api/companion/workspace/body",
                 "/api/companion/note/save",  # direct human note edit
+                "/api/companion/tts/plan",
+                "/api/companion/tts/synthesize",
                 "/api/panel/checkbox-projection",
             }
         )

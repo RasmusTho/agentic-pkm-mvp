@@ -1,0 +1,9 @@
+{
+  "items": [
+    {
+      "id": "mixed-sv-en",
+      "text": "Hej, jag läser den här anteckningen. Then I continue in English.",
+      "expected_languages": ["sv-SE", "en-US"]
+    }
+  ]
+}
