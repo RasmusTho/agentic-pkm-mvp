@@ -77,4 +77,3 @@ for source review, cognitive-load support turns into authority loss.
 
 - Existing execution issue: [#1679](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1679).
 - Related separate parent: [#1646](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1646).
-
