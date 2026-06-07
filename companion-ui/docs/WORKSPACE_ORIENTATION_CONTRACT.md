@@ -343,6 +343,27 @@ Implementations may return fewer items. Increasing a cap is a contract change.
 The UI must not widen these collections by issuing its own broader read through
 this surface.
 
+### Cognitive-Load Display Budget
+
+The server-declared caps above are transport ceilings, not a requirement to show
+every returned item at once. The Companion UI may render a scarcer displayed
+subset to protect the orientation moment from becoming a new working-memory
+burden.
+
+Current FA-5 budget posture:
+
+| Budget field | Status | Rule |
+|---|---|---|
+| `items_per_orientation_moment` | Owner-pending | Display a scarce subset across `open_loops`, `notable_changes`, and `resurface.candidates`; proposed calibration range is 3-5 total visible items before deliberate expansion. |
+| `foreground_refresh_frequency` | Owner-pending | Default to manual pull. If ADR-0011 ambient refresh is enabled, refresh only while the surface is visible/foregrounded and only after server-declared staleness or a later owner-approved interval. |
+| `resurface_salience_threshold` | Owner-pending | Below threshold, return no candidate or mark the resurfacing slice degraded. Do not show weak material with a confident why-now. |
+
+The UI may offer deliberate expansion or drill-in controls, but it must not turn
+overflow into a notification inbox, badge, urgency feed, or queue the human is
+expected to process. Display scarcity must not silently reorder canonical user
+artifacts or imply priority, urgency, approval, memory promotion, or action
+authorization.
+
 ### `leave_point`
 
 `leave_point` may point at the last known artifact or session posture when
@@ -407,6 +428,24 @@ candidate explains the server-derived reason it surfaced in `why_now` and
 carries provenance through `source_ref`. Resurfacing is an attentional
 projection only. It cannot upgrade similarity into urgency, change artifact
 meaning, or create durable memory.
+
+`why_now` must be pointer/provenance-first and bounded. The minimal shape is:
+
+- trigger: the server-declared signal that caused the item to surface, such as a
+  leave-point return, related current artifact, new activity, or unresolved open
+  loop;
+- source: `source_ref` pointing to the artifact, trace, receipt, or runtime
+  signal backing the resurfacing decision;
+- relevance basis: a short human-checkable relation, not a persuasive generated
+  rationale;
+- confidence/degradation: either an honest signal label/confidence posture or a
+  degraded/omitted candidate when the signal is weak.
+
+Cards must be short, self-contained, pointer-first, source-linked, and
+TTS-ready. They should help the human decide whether to inspect the source; they
+must not embed raw note bodies, raw diffs, raw event logs, raw embeddings, or
+long generated explanations. A resurfaced item is not priority, urgency,
+approval, memory promotion, or write authority.
 
 Dismiss, snooze, and pin, if the UI offers them later, are UI-local affordances
 only and must not persist through this read path.
