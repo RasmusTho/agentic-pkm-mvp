@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-05-12
-Last verified against: docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md, docs/FINDING_AND_REORIENTING/README.md, docs/STATUS.md
+Last verified against: docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/COGNITIVE_LOAD_PROJECTION_LAYER.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md, docs/FINDING_AND_REORIENTING/README.md, docs/STATUS.md
 
 # Companion UI Product Spec
 
@@ -156,6 +156,10 @@ Current shipped runtime truth is owned by:
 - Chat is not source of truth.
 - Agent memory is not hidden authority.
 - Human-readable artifacts remain primary.
+- Cognitive-load support is central to the Companion experience: reduce decoding, parsing,
+  spelling, review, and resumption friction without simplifying away the human's reasoning task.
+- Review surfaces should be verifiability-first: source and consequences stay reachable before an
+  agent projection becomes a decision.
 - The UI should reveal enough system state to support trust without exposing unnecessary runtime
   machinery.
 

@@ -70,6 +70,11 @@ system should carry externalizable burdens that otherwise sit in working memory:
 the human left off, keeping source and proposal together, preserving pending decision state,
 separating facts from interpretation, and making receipts visible after action.
 
+The rule is: reduce friction, not intelligence. The system should remove mechanical costs around
+decoding, parsing, spelling, text production, source comparison, and resumption without flattening
+the content, hiding uncertainty, or treating the human's slowest channel as the human's reasoning
+capacity.
+
 This function must not reduce load by hiding consequences, replacing source review with agent
 summary, or making the system's recommendation behave like approval. Reading-support and
 accessibility techniques can help implement the function, but the owning product category is

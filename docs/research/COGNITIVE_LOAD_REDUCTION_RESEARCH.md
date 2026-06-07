@@ -84,13 +84,78 @@ Proposed RQ-9 gate, in owner-review form:
   distance, context switches, and resumption cost. It must not lower intrinsic burden by hiding the
   judgment the human is being asked to make.
 
+## Wave 2 Addendum: Comprehension, Reading Throughput, And Text Production
+
+Wave 2 sharpens the framing rather than reversing Wave 1. Cognitive-load reduction should be
+treated as a central Human-First capability, not as an accessibility sidecar. The owner's concrete
+profile calibrates the system, but the owning category is cognitive prosthesis design.
+
+The practical principle is:
+
+> Reduce friction, not intelligence.
+
+The system should preserve complexity, nuance, vocabulary, source fidelity, and human judgment. It
+should aggressively remove mechanical costs around decoding, parsing, spelling, transcribing,
+re-reading, and resuming work because those costs consume the same working-memory budget needed for
+high-level reasoning.
+
+Wave 2 adds this taxonomy:
+
+- Working-memory load: proposal density, option count, chunking, and self-contained labels.
+- Reading throughput: TTS/listening, shorter columns, spacing, pacing, and
+  comprehension-per-effort.
+- Text-production / encoding load: spelling, dictation/STT drafts, correction suggestions,
+  real-word-error checks, and TTS read-back.
+- Decision / confirmation load: the Wave 1 authority surface.
+- Orientation / resumption load: re-entry, open loops, notable changes, and source proximity.
+
+Repository reconciliation as of 2026-06-07:
+
+- The Companion UI product spec is available at `docs/COMPANION_UI_PRODUCT_SPEC.md`.
+- `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` defines the shipped read-only
+  `GET /api/companion/orientation` projection with `leave_point`, open loops, notable changes,
+  resurfacing, memory, governance, guards, and mutation-intent hints.
+- `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` defines `GET /api/companion/workspace` as a
+  read-side aggregate with `panel.selectable_options`.
+- `app/api/routes/companion.py` implements workspace/orientation reads and multiple human-present
+  body-edit or save paths, including `POST /api/companion/note/save`.
+- `tests/companion_ui/test_direct_note_editor.py` verifies a direct human note editor using a
+  native `<textarea spellcheck>` and the `/api/companion/note/save` path.
+- `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md` and
+  `companion-ui/docs/CANVAS_SUGGESTION_FLOW.md` already define Canvas body co-authoring and staged
+  body-edit suggestion lanes.
+
+The Wave 2 intake conclusion should therefore be corrected from "no authoring surface confirmed" to
+"authoring surfaces exist, but the advanced text-production/encoding support contract is missing."
+Native OS spellcheck exists in the direct note editor, but the research basis says that is not
+enough for severe spelling/encoding load: standard spellcheck misses far-from-target misspellings,
+does not reliably catch real-word errors, and assumes the human can identify the correct suggestion
+from a list.
+
+Design consequences:
+
+- Dictation/STT output is draft text, not authority.
+- Correction and rewrite assistance are proposal-class over the human's draft. They must show the
+  changed text and preserve meaning/voice; silent canonical rewriting is an authority transfer.
+- TTS/read-back should be paired with dictation or correction so verification is not purely visual.
+- Reading throughput should optimize comprehension per unit effort, not raw words per minute.
+- Listening must be user-controlled; forced simultaneous identical audio/text is not the safe
+  default for every review task.
+- Summaries remain subordinate, source-traceable entry points. They do not replace source review.
+- The Companion comprehension surface should be verifiability-first: orient, compare with source,
+  then decide. It should not become a persuasion surface that front-loads agent reasoning as a
+  trust signal.
+
 ## Evidence Ranking
 
 | Intervention / concern | Evidence posture | Yggdrasil implication |
 | --- | --- | --- |
+| Twice-exceptional cognitive profile | Strong enough to treat higher-order reasoning and mechanical decoding/encoding as separable design parameters. | Preserve full intellectual complexity; reduce decoding, spelling, parsing, and working-memory friction. |
 | Cognitive Load Theory framing | Strong conceptual fit for separating intrinsic difficulty from avoidable interface load. | Optimize proposal/review surfaces by reducing unnecessary parsing, source distance, context switches, and ambiguous action identity. |
 | TTS / listening / read-aloud | Moderate positive evidence for readers with reading disabilities; still variable by user and setup. | Treat TTS/listening as a credible P0/P1 review aid, especially for source review and decision confirmation. |
-| Spacing, line height, layout, clear structure | Strong accessibility guidance and low-risk adaptability requirement. | Support render-only spacing/layout preferences and structured sections; do not encode them into canonical Markdown. |
+| Shorter lines, spacing, line height, layout, clear structure | Evidence is user/subset-dependent but low-risk as render-only adaptation. | Support render-only throughput/layout preferences and structured sections; do not encode them into canonical Markdown. |
+| Dictation/STT plus read-back | Positive accommodation evidence, with proofreading burden shifted to verification. | Treat STT as draft capture; pair correction/dictation with TTS read-back and human confirmation before save. |
+| Standard spellcheck for severe spelling load | Insufficient; misses far-from-target and real-word errors and leaves suggestion selection to the human. | Native spellcheck is a baseline only; smarter correction must remain proposal-class and transparent. |
 | Dyslexia-specific fonts | Mixed to weak. Studies often find no reliable speed/accuracy gain from the typeface itself; user preference can still matter. | Offer as optional display preference, not as a claimed core intervention. |
 | Bionic-style rendering | Weak/negative current evidence for reading speed and eye-movement benefit. | Mark experimental only; do not make it the primary cognitive-load support story. |
 | Automation bias | Strong enough to require design safeguards around AI recommendations. | Do not make agent recommendations look like settled decisions; show source, uncertainty, risk, and reject/defer/clarify paths. |
@@ -378,6 +443,12 @@ receipt/status. It should not read only the recommendation and skip risk or sour
   directory?
 - Should listening/TTS be specified as a Companion UI capability, a general interaction-surface
   capability, or both?
+- Which authoring surfaces should receive the first text-production contract: direct note editor,
+  Canvas body edit, Panel clarification fields, ASK queries, or Inbox capture?
+- Should dictation/STT support require TTS read-back before save on selected surfaces, or expose
+  read-back as a strongly recommended verification affordance?
+- What correction policy should govern severe spelling, real-word-error, and rewrite assistance:
+  suggestion-only, diff-before-save, or Canvas user-present apply with undo and provenance?
 - What is the minimum status/receipt feedback required after read-mode confirmation in #1645?
 - Should defer/reject be local UI affordances first, or should they wait for a governed proposal
   lifecycle contract?
@@ -396,6 +467,15 @@ Repo authority:
 - `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md` — checkbox projection endpoint and boundary.
 - `app/panel/checkbox_projection.py` — `extract_panel_selectable_options` and projection implementation.
 - `tests/panel/test_panel_checkbox_projection.py` — executable boundary proof.
+- `docs/COMPANION_UI_PRODUCT_SPEC.md` — Companion UI product mode model.
+- `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` — note-independent orientation projection.
+- `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` — artifact-scoped workspace/read aggregate.
+- `app/api/routes/companion.py` — current Companion workspace, orientation, body update, and note
+  save endpoints.
+- `tests/companion_ui/test_direct_note_editor.py` — direct human note editor and native spellcheck
+  coverage.
+- `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md` — Canvas co-authoring authority model.
+- `companion-ui/docs/CANVAS_SUGGESTION_FLOW.md` — staged Canvas suggestion flow.
 
 External evidence context:
 

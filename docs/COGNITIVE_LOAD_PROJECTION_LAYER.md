@@ -1,6 +1,6 @@
 State: Capability boundary contract for human-facing cognitive-load projections; docs-only, no runtime implementation claim.
 Doc role: Cognitive load projection contract
-Authority: Binding source-of-truth boundary for Cognitive Load Projection Layer docs and downstream issue contracts. It defines how cognitive-load aids, display preferences, listening surfaces, and accessibility techniques may project, render, summarize, or structure human-facing views without mutating canonical artifacts or changing authority. Current runtime truth remains owned by shipped implementation docs and tests.
+Authority: Binding source-of-truth boundary for Cognitive Load Projection Layer docs and downstream issue contracts. It defines how cognitive-load aids, display preferences, listening surfaces, text-production aids, and accessibility techniques may project, render, summarize, structure, or propose changes on human-facing views without mutating canonical artifacts or changing authority. Current runtime truth remains owned by shipped implementation docs and tests.
 Owner: Product / Companion UI / interaction authority
 Temporal class: strategic
 Review cadence: event-driven
@@ -21,14 +21,40 @@ hold less in working memory, recover context after interruption, compare source 
 decide without losing authorship or authority. Accessibility techniques are valid tools inside
 that function, but they are not the owning category.
 
-Its purpose is to reduce avoidable reading, review, orientation, and decision burden while
-preserving the system's authority spine: canonical Markdown, source authority, WriteGuard,
-receipts, provenance, runtime authority, and human confirmation.
+Its purpose is to reduce avoidable reading, review, orientation, text-production, and decision
+burden while preserving the system's authority spine: canonical Markdown, source authority,
+WriteGuard, receipts, provenance, runtime authority, and human confirmation.
 
 Cognitive-load reduction is a workflow capability, not a UI theme. The layer supports the Human
 Flow loops `Source -> interpret -> stabilize` and `Intent -> propose -> decide -> execute -> receipt`
 by making source material, proposals, risk, uncertainty, choices, and receipts easier to inspect.
 It does not make projections authoritative.
+
+The governing design principle is:
+
+> Reduce friction, not intelligence.
+
+The system should remove mechanical friction around decoding, parsing, remembering, spelling,
+reviewing, and resuming work. It must not simplify away the human's reasoning task, flatten nuance,
+hide consequences, or replace the source with a more persuasive agent projection.
+
+## Capability Taxonomy
+
+This work is filed under cognitive load as a central Human-First capability. Diagnosis-specific
+language is useful evidence and calibration, but not the top-level product category.
+
+The active sub-areas are:
+
+- Working-memory load: proposal density, option count, self-contained labels, and holding-in-mind
+  cost.
+- Reading throughput: TTS/listening, shorter readable columns, spacing, pacing, and
+  comprehension-per-effort.
+- Text-production / encoding load: spelling, dictation drafts, correction suggestions,
+  real-word-error flags, and read-back verification.
+- Decision / confirmation load: proposal review, risk-tiering, explicit confirmation, and receipt
+  visibility.
+- Orientation / resumption load: `leave_point`, open loops, notable changes, and stable re-entry
+  after interruption.
 
 ## Core Rules
 
@@ -44,11 +70,13 @@ Every projection in this layer must satisfy these rules:
 - It must distinguish source text, agent interpretation, recommendation, uncertainty, and requested
   human action when those concepts are present.
 - It must keep local display preferences separate from semantic transformations.
+- It must treat dictation output, spelling correction, and rewriting assistance as draft or
+  proposal-class until the human confirms the intended text.
 - It must route any authority transfer through the existing governed confirmation or mutation path.
 
-The layer may improve readability, listening, comparison, orientation, and decision review. It may
-not decide for the human, silently approve an agent recommendation, or make a summary behave as
-canonical truth.
+The layer may improve readability, listening, comparison, orientation, text production, and
+decision review. It may not decide for the human, silently approve an agent recommendation,
+silently rewrite the human's intended meaning, or make a summary behave as canonical truth.
 
 ## Projection Stack
 
@@ -57,7 +85,7 @@ flowchart TD
     canonical["Canonical Markdown, frontmatter, receipts, provenance"]
     runtime["Runtime and machine mirrors (indexes, aggregates, hashes, guard state)"]
     layer["Cognitive Load Projection Layer"]
-    views["Human-facing views: reading, listening, decision, review"]
+    views["Human-facing views: reading, listening, text-production, decision, review"]
     governed["Governed mutation path: server classification, WriteGuard, receipt"]
 
     canonical --> runtime
@@ -119,8 +147,8 @@ transfer and must use a governed confirmation path.
 
 ## Mode Scope
 
-This contract scopes reading mode, listening mode, decision mode, review mode, and experimental
-projections as projection behaviors, not implementation claims.
+This contract scopes reading mode, listening mode, text-production mode, decision mode, review
+mode, and experimental projections as projection behaviors, not implementation claims.
 
 ### Reading mode
 
@@ -128,12 +156,32 @@ Reading mode presents canonical material in a lower-load layout. It may apply di
 structure, spacing, focus layout, source-adjacent labels, and local navigation aids. It must not
 mutate source Markdown or encode preference choices into canonical artifacts.
 
+Reading throughput is measured as comprehension per unit effort, not raw words per minute. Shorter
+columns, spacing, and similar render-only aids are valid only while they re-present the same source
+content and preserve anchors, option identity, and review posture.
+
 ### Listening mode
 
 Listening mode re-presents source or projection content through text-to-speech or read-aloud
 ordering. It should preserve source comparison and stable field order. For proposal review, it
 must not read only the recommendation while skipping risk, uncertainty, source reference, or
 available choices.
+
+Listening should be user-controlled. A forced simultaneous identical audio/text stream can add
+load for some review tasks; the safe contract is to support reading, listening, sequential review,
+or narration with source-adjacent highlights without making one modality authoritative.
+
+### Text-production mode
+
+Text-production mode supports the human while writing into the system. The current shipped surfaces
+already include direct note editing and Canvas/body-edit paths; this mode defines the boundary for
+future spelling, dictation, correction, and read-back support on those surfaces.
+
+Dictation/STT output is draft text. Spelling, grammar, real-word-error, or rewriting assistance is
+a suggestion over the draft, not a silent canonical rewrite. Any assistive layer must make changed
+text inspectable, preserve the human's intended meaning and voice, and leave the human as the
+authority over what is saved. TTS/read-back is the preferred verification companion for
+dictation/correction because visual proofreading is not the only review path.
 
 ### Decision mode
 
@@ -163,6 +211,7 @@ Use this test before implementing or documenting a cognitive-load projection:
 | --- | --- | --- |
 | Does it only change visual or auditory presentation of the same content? | Display preference | Keep local and render-only. |
 | Does it summarize, simplify, rank, filter, recommend, or explain? | Semantic transformation | Preserve source and review posture. |
+| Does it correct, rewrite, or transcribe human-authored input? | Draft/proposal over text input | Show the change and require human confirmation before canonical save. |
 | Does it change what the human is considered to have approved? | Authority transfer | Route through governed confirmation. |
 | Does it write canonical Markdown, receipts, provenance, memory extraction inputs, runtime authority, or agent interpretation? | Durable or authority-bearing mutation | Use an owner-doc contract, WriteGuard, and receipt path. |
 
@@ -180,12 +229,16 @@ Downstream issues should use this layer as a boundary, not as implementation evi
 - #1643 should specify display preferences as render-only projections.
 - #1645 should implement confirmation only through the existing checkbox projection endpoint and
   should not treat this contract as permission to bypass `PANEL_CONFIRMATION_API_CONTRACT`.
+- A follow-up text-production issue should specify dictation, correction-as-proposal,
+  real-word-error flagging, and read-back verification against the existing direct note editor and
+  Canvas/body-edit surfaces.
 
 ## Non-Goals
 
 - This document does not implement runtime behavior.
 - This document does not implement Companion UI controls.
 - This document does not implement text-to-speech.
+- This document does not implement dictation, spellchecking, or correction assistance.
 - This document does not implement display preferences.
 - This document does not change Panel confirmation semantics.
 - This document does not create durable reject, defer, or clarify semantics.
