@@ -193,6 +193,35 @@ pull-by-default with bounded foreground ambient refresh only where an owner cont
 alerts, badges, notification inboxes, urgency feeds, or focus stealing. Each surfaced item should
 carry a short pointer-first "why now" with source/provenance and should remain TTS-ready.
 
+#### FA-5 resurfacing budget and why-now contract
+
+FA-5 is task-support resurfacing unless a later owner-doc explicitly admits a learning mode.
+Task-support resurfacing restores context for action now. Learning resurfacing is spaced retrieval
+practice and remains a separate future capability with separate scheduling, success metrics, and
+verification. A task-support resurfacing implementation must not reuse a spaced-retrieval timer, and
+a learning implementation must not present answers as passive re-reading in the orientation surface.
+
+The contract fields are:
+
+| Field | Contract posture |
+| --- | --- |
+| `items_per_orientation_moment` | Owner-pending display budget. The displayed subset must be scarce and may be lower than backend caps; target range under review is 3-5 surfaced items across the visible orientation moment. |
+| `foreground_refresh_frequency` | Owner-pending refresh budget. Default is manual pull. Any ambient refresh must be client-initiated, foreground-only, default-off, and no more eager than server-declared freshness/staleness. |
+| `salience_threshold` | If the relevance/salience signal is weak, show nothing or mark degraded. Do not manufacture a confident reason. |
+| `why_now` | One short, structured pointer: trigger, source, relevance basis, and confidence/degraded posture. Prefer provenance over generated rationale. |
+
+Budgeted resurfacing is not a ranking authority. A resurfaced item says "this may help re-orient
+you"; it does not say "this is important", "this is urgent", "this is approved", "this should be
+acted on", or "this belongs in memory". If filtering or ordering is used, the surface must make the
+server-declared basis inspectable through `why_now`, `signal_labels`, and `source_ref`; it must not
+silently re-prioritize canonical lists or open loops.
+
+Resurfacing cards must be short, self-contained, pointer-first, source-linked, and TTS-ready. They
+should surface where to resume, why this is shown now, and what source backs it. They should not
+force re-reading of long note bodies, raw diffs, raw event logs, or generated persuasive rationale.
+Any open/read action remains read-only. Any write, review, memory, promotion, lifecycle, or
+governance action routes through the owning governed path and receipt semantics.
+
 ### Text-production mode
 
 Text-production mode supports the human while writing into the system. The current shipped surfaces
@@ -291,8 +320,8 @@ Downstream issues should use this layer as a boundary, not as implementation evi
 - A follow-up text-production issue should specify dictation, correction-as-proposal,
   real-word-error flagging, and read-back verification against the existing direct note editor and
   Canvas/body-edit surfaces.
-- A follow-up resurfacing issue should reconcile FA-5 against the shipped Workspace Orientation and
-  resurfacing seams: hard caps/budgets, pull-default, bounded ambient refresh, pointer-first
+- #1662 defines FA-5 against the shipped Workspace Orientation and resurfacing seams: backend caps
+  versus scarce displayed budgets, pull-default, bounded foreground ambient refresh, pointer-first
   why-now provenance, and the task-support-versus-learning split.
 
 ## Non-Goals
