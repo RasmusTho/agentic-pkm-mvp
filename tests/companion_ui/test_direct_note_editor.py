@@ -68,10 +68,11 @@ def test_editor_present_when_canvas_enabled() -> None:
 
 def test_editor_has_native_spellcheck() -> None:
     html = _render()
-    # Native browser/OS spellcheck — the state-of-the-art path (impossible in CM).
+    # Native browser/OS spellcheck remains available, but autocorrect-on-type is disabled.
     assert 'spellcheck="true"' in html
     assert 'autocapitalize="sentences"' in html
-    assert 'autocorrect="on"' in html
+    assert 'autocorrect="off"' in html
+    assert "autocorrect=" + '"on"' not in html
 
 
 def test_editor_carries_frontmatter_stripped_source_and_hash() -> None:

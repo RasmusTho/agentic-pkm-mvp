@@ -169,8 +169,9 @@ Repo reconciliation as of 2026-06-07:
 - `POST /ingest` exists as a capture/knowledge-object entry route. The Phase B contract applies
   before user-produced text is submitted through ingest, but this PR does not implement an ingest
   correction UI or runtime API.
-- The dev page currently emits `autocorrect="on"` for that textarea. Phase B rejects
-  autocorrect-on-type, so a follow-up implementation issue is required after the contract lands.
+- Follow-up #1663 disables autocorrect-on-type for that textarea while preserving native
+  spellcheck. Phase B rejects silent correction before human decision; native spellcheck remains a
+  baseline display/input aid only.
 - Canvas body co-authoring and staged Canvas suggestions already have distinct authority models:
   user-present body edit with undo/session-log provenance, and staged body edit proposals.
 - Panel confirmation remains the governed execution path for governance-bearing action, but not
@@ -617,8 +618,8 @@ Repo authority:
 - `tests/companion_ui/test_direct_note_editor.py` — direct human note editor and native spellcheck
   coverage.
 - `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py` — current direct note
-  editor textarea rendering; as of this memo it still emits `autocorrect="on"` and needs follow-up
-  after the correction-as-proposal contract lands.
+  editor textarea rendering; follow-up #1663 disables autocorrect-on-type while preserving native
+  spellcheck after the correction-as-proposal contract lands.
 - `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md` — Canvas co-authoring authority model.
 - `companion-ui/docs/CANVAS_SUGGESTION_FLOW.md` — staged Canvas suggestion flow.
 
