@@ -41,6 +41,10 @@ class TestStateCreation:
     def test_default_values(self):
         """State has sensible defaults."""
         state = PilotAgentState(trace_id="t1", note_uuid="n1")
+        assert state.authority is None
+        assert state.authority_basis == "read-only"
+        assert state.proposal_id is None
+        assert state.receipt_event_id is None
         assert state.budget == 10
         assert state.step_count == 0
         assert state.messages == []
@@ -50,6 +54,22 @@ class TestStateCreation:
         assert state.decision == ""
         assert state.executed_actions == []
         assert state.error is None
+
+    def test_state_carries_authority_spine_fields(self):
+        """Pilot state carries the shared runtime authority/proposal/receipt spine."""
+        state = PilotAgentState(
+            trace_id="trace-123",
+            note_uuid="note-456",
+            authority={"component": "pilot-agent"},
+            authority_basis="explicit-test-contract",
+            proposal_id="proposal-1652",
+            receipt_event_id="receipt-1652",
+        )
+
+        assert state.authority == {"component": "pilot-agent"}
+        assert state.authority_basis == "explicit-test-contract"
+        assert state.proposal_id == "proposal-1652"
+        assert state.receipt_event_id == "receipt-1652"
 
 
 class TestStateCopy:
@@ -88,11 +108,19 @@ class TestStateCopy:
         state = PilotAgentState(
             trace_id="t1",
             note_uuid="n1",
+            authority={"component": "pilot-agent"},
+            authority_basis="explicit-test-contract",
+            proposal_id="proposal-1652",
+            receipt_event_id="receipt-1652",
             reason="old reason",
             decision="skip",
         )
         new_state = state.copy(update={"step_count": 1})
         assert new_state.trace_id == state.trace_id
+        assert new_state.authority == {"component": "pilot-agent"}
+        assert new_state.authority_basis == "explicit-test-contract"
+        assert new_state.proposal_id == "proposal-1652"
+        assert new_state.receipt_event_id == "receipt-1652"
         assert new_state.reason == "old reason"
         assert new_state.decision == "skip"
 
