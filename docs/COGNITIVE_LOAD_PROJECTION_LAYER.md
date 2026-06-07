@@ -168,14 +168,30 @@ content and preserve anchors, option identity, and review posture.
 
 ### Listening mode
 
-Listening mode re-presents source or projection content through text-to-speech or read-aloud
-ordering. It should preserve source comparison and stable field order. For proposal review, it
-must not read only the recommendation while skipping risk, uncertainty, source reference, or
-available choices.
+Listening mode is a first-class comprehension path for the human-agent loop. It re-presents source
+or projection content through text-to-speech or read-aloud ordering as a read-only projection. It
+is not authority, not source replacement, and not a mutation path.
 
-Listening should be user-controlled. A forced simultaneous identical audio/text stream can add
-load for some review tasks; the safe contract is to support reading, listening, sequential review,
-or narration with source-adjacent highlights without making one modality authoritative.
+Listening must be user-controlled: no autoplay, explicit play/pause, adjustable rate, and clear
+scope such as selected text, full artifact, draft, source field, proposal field, or resurfacing
+card. A forced simultaneous identical audio/text stream can add load for some review tasks; the
+safe contract is to support reading, listening, sequential review, or narration with
+source-adjacent highlights without making one modality authoritative.
+
+Source audio and summary audio have different authority posture. Source audio may read canonical
+source text or a source-anchored excerpt. Summary audio, clarification audio, and proposal audio
+remain subordinate to source review: they may help the human enter the material, but they must not
+be presented as the source itself or as sufficient confirmation for governance-bearing actions.
+
+For proposal review, the proposal-review audio order is stable: what this is, what the human needs
+to decide, recommendation or option, why this is proposed, risk/uncertainty, source/reference,
+available choices, and expected receipt/status. Listening must not read only the recommendation
+while skipping risk, uncertainty, source reference, choices, or expected receipt/status.
+
+For text-production, listening is verification. Dictation and correction flows close as
+`draft -> TTS read-back -> human confirm -> authorized save/apply path`. Read-back must read the
+actual draft or proposal text under review, not a silently cleaned, corrected, summarized, or
+normalized version.
 
 ### Resurfacing mode
 
@@ -226,6 +242,9 @@ should surface where to resume, why this is shown now, and what source backs it.
 force re-reading of long note bodies, raw diffs, raw event logs, or generated persuasive rationale.
 Any open/read action remains read-only. Any write, review, memory, promotion, lifecycle, or
 governance action routes through the owning governed path and receipt semantics.
+
+Audio-ready resurfacing uses the same cognitive-load budget as the visual surface, or a smaller
+one when listening cost is higher. It should not turn a scarce card set into a longer audio queue.
 
 ### Text-production mode
 
@@ -328,6 +347,9 @@ Downstream issues should use this layer as a boundary, not as implementation evi
 - #1662 defines FA-5 against the shipped Workspace Orientation and resurfacing seams: backend caps
   versus scarce displayed budgets, pull-default, bounded foreground ambient refresh, pointer-first
   why-now provenance, and the task-support-versus-learning split.
+- A browser-local TTS/read-back MVP should use local UI state and browser playback where available,
+  add no backend API, avoid autoplay, and keep `/api/companion/note/save` and
+  `POST /api/panel/checkbox-projection` as the unchanged save/confirmation paths.
 
 ## Non-Goals
 
