@@ -270,6 +270,50 @@ Design consequences:
   reliable pointers and review posture, but it should not aggressively volunteer to remember more
   than the human chose.
 
+## Wave 4 Addendum: Listening And Bimodal Support
+
+Wave 4 promotes listening from an optional accessibility convenience to a first-class
+comprehension path inside the cognitive-load capability. The core finding is stable with earlier
+waves: listening can reduce decoding and proofreading burden, especially for long source review,
+proposal review, dictation/correction verification, and resurfacing, but it must remain a
+read-only projection under the same authority spine as reading and display aids.
+
+Repository reconciliation as of 2026-06-07:
+
+- `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md :: Listening mode` now carries the owner contract for
+  listening/TTS. The contract treats listening as a first-class comprehension path and read-only
+  projection, not authority and not source replacement.
+- `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md :: Text-production mode` already defines the
+  correction-as-proposal and dictation/read-back boundary. Wave 4 sharpens that read-back must
+  read the actual draft or proposal under review, not a silently cleaned version.
+- `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md :: Resurfacing mode` and #1662 define resurfacing cards
+  as scarce, pointer-first, source-linked, and TTS-ready. Wave 4 adds that audio-ready resurfacing
+  should use the same or smaller budget as the visual surface because audio cannot be scanned.
+- #1657, #1659, #1662, and #1663 are delivered. They should not be reused as evidence of unresolved
+  authority debt for this listening slice.
+
+Design consequences:
+
+- Listening/TTS is a first-class comprehension path for the human-agent loop, especially for source
+  review, proposal review, confirmation review, and text-production verification.
+- Listening is a read-only projection. It does not mutate canonical Markdown, receipts,
+  provenance, memory extraction, runtime authority, or agent interpretation.
+- There is no autoplay. Playback remains user-controlled with explicit play/pause, adjustable
+  rate, and scoped targets such as selected text, full artifact, draft, source field, proposal
+  field, or resurfacing card.
+- Source audio and summary audio are separate. Source audio may read source text or a
+  source-anchored excerpt; summary audio and projection audio remain subordinate to source review
+  and cannot be used as summary-only confirmation for governance-bearing actions.
+- Proposal-review audio order should be stable: what this is, decision, option/recommendation,
+  why, risk/uncertainty, source/reference, choices, and receipt/status. The system must not read
+  only the recommendation while skipping risk or source.
+- Dictation and correction flows close as `draft -> TTS read-back -> human confirm -> authorized
+  save/apply path`. Read-back should read the actual draft, not silently cleaned or corrected text.
+- A browser-local TTS/read-back MVP can be implemented later without backend API changes by using
+  local UI state and browser playback where available. It should degrade visibly when playback is
+  unavailable and should leave `/api/companion/note/save` and
+  `POST /api/panel/checkbox-projection` unchanged.
+
 ## Evidence Ranking
 
 | Intervention / concern | Evidence posture | Yggdrasil implication |
@@ -545,6 +589,11 @@ or recommends action, it is not merely render-only.
 
 ## Listening And Review Implications For #1641
 
+Listening/TTS is both a Companion UI capability and a general cognitive-load projection posture.
+The first implementation target should be a browser-local TTS/read-back MVP with no backend API
+change, no autoplay, explicit play/pause/rate/scope controls, and degraded-state handling when
+browser playback is unavailable.
+
 Listening should support the review chain:
 
 - intake
@@ -558,21 +607,20 @@ Listening should support the review chain:
 
 For proposal review, listening should read fields in a stable order: what this is, what the human
 needs to decide, recommendation, why, risk/uncertainty, source/reference, choices, and expected
-receipt/status. It should not read only the recommendation and skip risk or source.
+receipt/status. It should not read only the recommendation and skip risk or source. Summary audio
+and projection audio remain subordinate to source review and must not become summary-only
+confirmation for governance-bearing actions.
+
+For text production, read-back is not cleanup. It should read the actual draft or proposal text
+that would be saved or applied. Dictation and correction support should stay draft/proposal-class
+until the human confirms the intended text through the authorized save/apply path.
 
 ## Open owner decisions
 
 - Should the proposed RQ-9 simplification-vs-authority gate be promoted into an owner-doc contract,
   and if so which parts become hard blockers versus review guidance?
-- Where should the durable product contract for the Cognitive Load Projection Layer live after
-  #1640: `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, Companion UI docs, or a new capability
-  directory?
-- Should listening/TTS be specified as a Companion UI capability, a general interaction-surface
-  capability, or both?
 - Which authoring surfaces should receive the first text-production contract: direct note editor,
   Canvas body edit, Panel clarification fields, ASK queries, or Inbox capture?
-- Should read-back also be required for typed drafts on selected surfaces, or only for dictation/STT
-  support?
 - What is the first implementation slice for correction-as-proposal: disable autocorrect-on-type in
   the direct editor, add a Tier 1 flag-only prototype, or add TTS read-back for dictated drafts?
 - What resurfacing budget should become contractual for the cognitive-load layer: items per
