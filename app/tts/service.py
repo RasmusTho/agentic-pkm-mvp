@@ -66,7 +66,9 @@ def synthesize_tts(
     if not acquired:
         return _unavailable(plan, "tts_concurrency_limit_reached")
     try:
-        synthesize_with_voice(str(plan["normalized_text"]), voice, output_path)
+        synthesize_with_voice(str(plan["normalized_text"]), voice, output_path, rate=rate)
+    except Exception as exc:
+        return _unavailable(plan, f"provider_execution_failed: {exc}")
     finally:
         _semaphore(config.max_concurrent_jobs).release()
     if not output_path.exists() or output_path.stat().st_size == 0:

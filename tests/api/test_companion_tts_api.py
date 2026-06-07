@@ -60,23 +60,29 @@ def test_synthesize_uses_cache_on_repeat(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, float]] = []
 
-    def fake_synthesize(text: str, voice: TTSVoice, output_path: Path) -> None:
-        calls.append((text, voice.voice_id))
+    def fake_synthesize(
+        text: str,
+        voice: TTSVoice,
+        output_path: Path,
+        *,
+        rate: float = 1.0,
+    ) -> None:
+        calls.append((text, voice.voice_id, rate))
         _write_wav(output_path)
 
     monkeypatch.setattr("app.tts.service.synthesize_with_voice", fake_synthesize)
 
-    first = client.post("/api/companion/tts/synthesize", json={"text": "Hej världen."})
-    second = client.post("/api/companion/tts/synthesize", json={"text": "Hej världen."})
+    first = client.post("/api/companion/tts/synthesize", json={"text": "Hej världen.", "rate": 1.35})
+    second = client.post("/api/companion/tts/synthesize", json={"text": "Hej världen.", "rate": 1.35})
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["state"] == "generated"
     assert second.json()["state"] == "cached"
     assert first.json()["cache_key"] == second.json()["cache_key"]
-    assert calls == [("Hej världen.", "sv_SE-nst-medium")]
+    assert calls == [("Hej världen.", "sv_SE-nst-medium", 1.35)]
 
     audio = client.get(first.json()["audio_url"])
     assert audio.status_code == 200
@@ -97,3 +103,28 @@ def test_synthesize_refuses_missing_local_provider(
     detail = resp.json()["detail"]
     assert detail["ok"] is False
     assert "piper command" in detail["reason"]
+
+
+def test_synthesize_returns_structured_unavailable_on_provider_failure(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_synthesize(
+        text: str,
+        voice: TTSVoice,
+        output_path: Path,
+        *,
+        rate: float = 1.0,
+    ) -> None:
+        raise RuntimeError("local model failed")
+
+    monkeypatch.setattr("app.tts.service.synthesize_with_voice", failing_synthesize)
+
+    resp = client.post("/api/companion/tts/synthesize", json={"text": "Hej världen."})
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert detail["ok"] is False
+    assert detail["state"] == "unavailable"
+    assert "provider_execution_failed" in detail["reason"]
+    assert "local model failed" in detail["reason"]

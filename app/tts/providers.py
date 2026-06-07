@@ -83,7 +83,13 @@ def resolve_voice(config: TTSConfig, language: str) -> TTSVoice:
     )
 
 
-def synthesize_with_voice(text: str, voice: TTSVoice, output_path: Path) -> None:
+def synthesize_with_voice(
+    text: str,
+    voice: TTSVoice,
+    output_path: Path,
+    *,
+    rate: float = 1.0,
+) -> None:
     if not voice.available:
         raise RuntimeError(voice.unavailable_reason or "tts provider unavailable")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +97,15 @@ def synthesize_with_voice(text: str, voice: TTSVoice, output_path: Path) -> None
         if voice.command is None:
             raise RuntimeError(voice.unavailable_reason or "piper command unavailable")
         subprocess.run(
-            [voice.command, "--model", str(voice.model_path), "--output_file", str(output_path)],
+            [
+                voice.command,
+                "--model",
+                str(voice.model_path),
+                "--length_scale",
+                str(1 / rate),
+                "--output_file",
+                str(output_path),
+            ],
             input=text,
             text=True,
             check=True,
@@ -110,6 +124,8 @@ def synthesize_with_voice(text: str, voice: TTSVoice, output_path: Path) -> None
                     str(voice.voice_path),
                     "--output",
                     str(output_path),
+                    "--speed",
+                    str(rate),
                     "--text",
                     text,
                     "--lang",
@@ -120,12 +136,18 @@ def synthesize_with_voice(text: str, voice: TTSVoice, output_path: Path) -> None
                 stderr=subprocess.PIPE,
             )
             return
-        _synthesize_with_kokoro_onnx(text, voice, output_path)
+        _synthesize_with_kokoro_onnx(text, voice, output_path, rate=rate)
         return
     raise RuntimeError(f"unsupported tts provider: {voice.provider}")
 
 
-def _synthesize_with_kokoro_onnx(text: str, voice: TTSVoice, output_path: Path) -> None:
+def _synthesize_with_kokoro_onnx(
+    text: str,
+    voice: TTSVoice,
+    output_path: Path,
+    *,
+    rate: float = 1.0,
+) -> None:
     import numpy as np
     from kokoro_onnx import Kokoro
 
@@ -133,7 +155,7 @@ def _synthesize_with_kokoro_onnx(text: str, voice: TTSVoice, output_path: Path) 
         raise RuntimeError("kokoro voices path unavailable")
     lang = "en-gb" if voice.language == "en-GB" else "en-us"
     kokoro = Kokoro(str(voice.model_path), str(voice.voice_path))
-    audio, sample_rate = kokoro.create(text, voice=voice.voice_id, speed=1.0, lang=lang)
+    audio, sample_rate = kokoro.create(text, voice=voice.voice_id, speed=rate, lang=lang)
     samples = np.clip(audio, -1.0, 1.0)
     pcm = (samples * 32767).astype(np.int16)
     output_path.parent.mkdir(parents=True, exist_ok=True)
