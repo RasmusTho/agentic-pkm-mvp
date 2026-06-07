@@ -1,6 +1,6 @@
 State: Filed parent feature issue. GitHub Issue #1638 is the authoritative backlog and validation
-surface for Cognitive Load Runtime Adoption. This file is the local source/reference copy for source
-anchors, child task order, and the validation path.
+surface for Cognitive Load Runtime Adoption. Runtime/UI children #1679, #1680, and #1681 are
+delivered; #1682 remains the final owner-doc and parent-closure issue.
 
 # Epic: Cognitive Load Runtime Adoption
 
@@ -14,9 +14,8 @@ cognitive-prosthesis capability: reduce decoding, parsing, spelling, source-comp
 orientation, and resumption friction without reducing the human's reasoning task or transferring
 authority to projections.
 
-Most foundation work for #1638 is delivered. The remaining parent work is runtime/UI adoption:
-prove source-preserving summary review, render scarce source-linked resurfacing cards, stage draft
-correction proposals without silent save, then promote owner docs and close the parent.
+Most foundation and runtime/UI work for #1638 is delivered. The remaining parent work is to promote
+owner docs and close the parent after final validation.
 
 Source Understanding Mode (#1646/#1647) is related but separate. It reuses the same source-primary,
 non-authoritative review posture, but it is not a child of #1638.
@@ -24,10 +23,8 @@ non-authoritative review posture, but it is not a child of #1638.
 ## Scope
 
 - Treat #1638 as the live validation hub.
-- Map #1679 to source-preserving summary regression fixtures.
-- Add bounded child work for Companion UI resurfacing-card display.
-- Add bounded child work for direct note-editor correction-as-proposal review.
-- Add a final child for owner-doc promotion and parent closure.
+- Preserve the delivered child map for #1679, #1680, and #1681.
+- Keep #1682 as the final child for owner-doc promotion and parent closure.
 
 ## Source Anchors
 
@@ -69,14 +66,14 @@ non-authoritative review posture, but it is not a child of #1638.
 
 ## Implementation Tasks
 
-1. `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/PROVE_SOURCE_PRESERVING_SUMMARY_REVIEW.md` - existing
-   issue #1679.
+1. `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/PROVE_SOURCE_PRESERVING_SUMMARY_REVIEW.md` - delivered by
+   issue #1679 / PR #1689.
 2. `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/SURFACE_SCARCE_RESURFACING_CARDS.md` - filed as #1680
-   (ready).
+   and delivered by PR #1689.
 3. `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/STAGE_TEXT_CORRECTION_PROPOSALS.md` - filed as #1681
-   (ready).
+   and delivered by PR #1689.
 4. `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/PROMOTE_COGNITIVE_LOAD_OWNER_DOCS.md` - filed as #1682
-   (blocked final child).
+   (remaining final child).
 
 ## Verification Path
 

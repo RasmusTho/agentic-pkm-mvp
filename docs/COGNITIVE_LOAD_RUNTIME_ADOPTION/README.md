@@ -11,8 +11,8 @@ related_docs:
   - companion-ui/docs/WORKSPACE_STATE_CONTRACT.md
 ---
 
-State: Filed specification for open parent feature issue #1638. GitHub Issue #1638 remains the
-authoritative backlog and validation surface.
+State: Filed specification for open parent feature issue #1638. Runtime/UI children #1679, #1680,
+and #1681 are delivered; #1682 is the remaining final owner-doc and parent-closure issue.
 
 # Cognitive Load Runtime Adoption Specification
 
@@ -39,21 +39,20 @@ non-authoritative posture informs this specification, but #1647 is not a child i
 ## Task List
 
 1. [PROVE_SOURCE_PRESERVING_SUMMARY_REVIEW.md](PROVE_SOURCE_PRESERVING_SUMMARY_REVIEW.md) - existing
-   issue [#1679](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1679), ready.
+   issue [#1679](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1679), delivered.
 2. [SURFACE_SCARCE_RESURFACING_CARDS.md](SURFACE_SCARCE_RESURFACING_CARDS.md) - issue
-   [#1680](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1680), ready.
+   [#1680](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1680), delivered.
 3. [STAGE_TEXT_CORRECTION_PROPOSALS.md](STAGE_TEXT_CORRECTION_PROPOSALS.md) - issue
-   [#1681](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1681), ready.
+   [#1681](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1681), delivered.
 4. [PROMOTE_COGNITIVE_LOAD_OWNER_DOCS.md](PROMOTE_COGNITIVE_LOAD_OWNER_DOCS.md) - final closure and
    owner-doc promotion issue [#1682](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1682),
-   blocked until the three runtime/UI children are delivered.
+   ready after the three runtime/UI children delivered.
 
 ## Flat Execution Order
 
-1. Deliver #1679.
-2. Deliver scarce resurfacing cards and text correction proposals. These may run in parallel if
-   separate worktrees avoid Companion UI conflicts.
-3. Deliver owner-doc promotion and close #1638 only after child receipts are posted.
+1. Delivered: #1679.
+2. Delivered: scarce resurfacing cards (#1680) and text correction proposals (#1681).
+3. Remaining: deliver owner-doc promotion (#1682) and close #1638 only after final validation.
 
 ## Capability-Level Acceptance Criteria
 
@@ -87,7 +86,7 @@ The live parent feature issue is [#1638](https://github.com/RasmusTho/agentic-pk
 Child issues are execution artifacts. This specification is the source reference for their
 acceptance criteria and verification approach.
 
-- #1679 - source-preserving summary fixtures.
-- #1680 - scarce resurfacing cards.
-- #1681 - text correction proposals.
-- #1682 - owner-doc promotion and parent closure.
+- #1679 - source-preserving summary fixtures, delivered by PR #1689.
+- #1680 - scarce resurfacing cards, delivered by PR #1689.
+- #1681 - text correction proposals, delivered by PR #1689.
+- #1682 - owner-doc promotion and parent closure, remaining final closure issue.
