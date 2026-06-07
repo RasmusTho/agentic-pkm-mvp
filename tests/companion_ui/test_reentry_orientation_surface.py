@@ -137,6 +137,22 @@ def _orientation_payload(*, degraded: bool = False) -> dict[str, Any]:
     }
 
 
+def _with_resurface_candidates(payload: dict[str, Any], count: int) -> dict[str, Any]:
+    payload["resurface"]["candidates"] = [
+        {
+            "id": f"candidate-{idx}",
+            "label": f"Candidate {idx}",
+            "why_now": f"Relevant now because signal {idx} changed.",
+            "signal_labels": [f"signal={idx}"],
+            "artifact_ref": _artifact_ref(f"Notes/resurface-{idx}.md", f"Candidate {idx}", f"art-{idx}"),
+            "authority_role": "derived",
+            "source_ref": _source_ref(f"resurfacing signal {idx}"),
+        }
+        for idx in range(count)
+    ]
+    return payload
+
+
 def test_renders_orientation_with_no_active_note() -> None:
     client = _OrientationClient(_orientation_payload())
 
@@ -227,3 +243,64 @@ def test_no_mutation_calls() -> None:
     assert "/api/companion/note/save" not in html
     assert "/api/companion/workspace/body" not in html
     assert "/api/panel/confirm" not in html
+
+
+def test_resurfacing_cards_are_budgeted_to_three_by_default() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 5),
+    )
+
+    assert html.count('data-testid="workspace-orientation-resurface-candidate"') == 3
+    assert 'data-resurface-default-budget="3"' in html
+    assert 'data-resurface-overflow-count="2"' in html
+
+
+def test_resurfacing_cards_can_expand_to_server_cap() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 5),
+    )
+
+    assert 'data-testid="workspace-orientation-resurface-expand"' in html
+    assert 'data-server-cap="5"' in html
+    assert html.count('data-testid="workspace-orientation-resurface-overflow-candidate"') == 2
+    assert "Candidate 4" in html
+
+
+def test_resurfacing_cards_show_why_now_source_signals_and_authority() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 1),
+    )
+
+    assert 'data-testid="workspace-orientation-resurface-why-now"' in html
+    assert 'data-testid="workspace-orientation-resurface-provenance"' in html
+    assert 'data-authority-role="derived"' in html
+    assert "signal=0" in html
+    assert "resurfacing signal 0" in html
+
+
+def test_resurfacing_cards_surface_degraded_posture() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(degraded=True), 2),
+    )
+
+    assert 'data-testid="workspace-orientation-resurface"' in html
+    assert 'data-resurface-posture="degraded"' in html
+    assert "resurfacing_source_unavailable" in html
+
+
+def test_resurfacing_cards_do_not_create_notification_semantics() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 5),
+    )
+    section = html.split('data-testid="workspace-orientation-resurface"', 1)[1].split("</section>", 1)[0]
+
+    assert 'data-notification="false"' in section
+    assert 'data-urgency="none"' in section
+    assert "badge" not in section.lower()
+    assert "inbox" not in section.lower()
+    assert "urgent" not in section.lower()

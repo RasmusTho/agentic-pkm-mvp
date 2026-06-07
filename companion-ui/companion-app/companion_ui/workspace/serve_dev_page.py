@@ -1039,6 +1039,9 @@ def _note_editor_script() -> str:
       var s = el('.note-edit-status');
       if (s) { s.className = 'note-edit-status' + (cls ? ' ' + cls : ''); s.textContent = text || ''; }
     }
+    function proposalButton(id, action) {
+      return document.querySelector('[data-correction-id="' + id + '"][data-correction-action="' + action + '"]');
+    }
     window.noteEditor = {
       start: function () {
         var ta = document.getElementById('note-source-editor');
@@ -1063,6 +1066,27 @@ def _note_editor_script() -> str:
         if (actions) { actions.hidden = true; }
         if (toggle) { toggle.hidden = false; }
         setStatus('', '');
+      },
+      applyCorrection: function (id) {
+        var ta = document.getElementById('note-source-editor');
+        var button = proposalButton(id, 'accept');
+        if (!ta || !button) { return; }
+        var start = parseInt(button.getAttribute('data-range-start') || '-1', 10);
+        var end = parseInt(button.getAttribute('data-range-end') || '-1', 10);
+        var proposed = button.getAttribute('data-proposed-text') || '';
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) { return; }
+        ta.value = ta.value.slice(0, start) + proposed + ta.value.slice(end);
+        ta.dataset.correctionReviewState = 'accepted';
+        var card = button.closest('[data-testid="text-correction-proposal"]');
+        if (card) { card.setAttribute('data-review-state', 'accepted-local-draft'); }
+        setStatus('', 'Correction applied to the local draft. Save explicitly to update the note.');
+      },
+      keepCorrection: function (id) {
+        var button = proposalButton(id, 'keep-mine');
+        if (!button) { return; }
+        var card = button.closest('[data-testid="text-correction-proposal"]');
+        if (card) { card.setAttribute('data-review-state', 'kept-mine'); }
+        setStatus('', 'Kept your text. No durable change was written.');
       },
       save: function () {
         var ta = document.getElementById('note-source-editor');
@@ -1128,6 +1152,107 @@ def _note_editor_script() -> str:
     };
   })();
   </script>"""
+
+
+def _correction_proposals_for_editor(editor_body: str) -> list[dict[str, object]]:
+    proposals: list[dict[str, object]] = []
+    for original, proposed, tier, reason, meaning_cue in (
+        (
+            "recieve",
+            "receive",
+            0,
+            "orthographic spelling proposal",
+            "receive means to get or accept something.",
+        ),
+        (
+            "form",
+            "from",
+            1,
+            "real-word/context flag",
+            "Check whether `form` is intended, or possibly `from` in this sentence.",
+        ),
+    ):
+        start = editor_body.find(original)
+        if start < 0:
+            continue
+        proposals.append(
+            {
+                "id": f"correction-{len(proposals) + 1}",
+                "tier": tier,
+                "original_text": original,
+                "proposed_text": proposed,
+                "range": {"start": start, "end": start + len(original)},
+                "reason": reason,
+                "meaning_cue": meaning_cue,
+                "posture": "proposal-class",
+                "auto_apply": False,
+            }
+        )
+    return proposals
+
+
+def _render_text_correction_proposals(editor_body: str) -> str:
+    proposals = _correction_proposals_for_editor(editor_body)
+    if not proposals:
+        return (
+            '<section class="text-correction-proposals" '
+            'data-testid="text-correction-proposals" '
+            'data-authority="proposal-class-ui-internal" '
+            'data-backend-api="none" data-proposal-count="0" hidden></section>'
+        )
+    rows: list[str] = []
+    for proposal in proposals:
+        span = proposal["range"]
+        assert isinstance(span, dict)
+        proposal_id = str(proposal["id"])
+        tier = int(proposal["tier"])
+        original = str(proposal["original_text"])
+        proposed = str(proposal["proposed_text"])
+        rows.append(
+            f"""
+            <article class="text-correction-proposal"
+              data-testid="text-correction-proposal"
+              data-correction-id="{_e(proposal_id)}"
+              data-correction-tier="{tier}"
+              data-auto-apply="false"
+              data-review-state="pending">
+              <div class="correction-token-row">
+                <span data-testid="text-correction-original">{_e(original)}</span>
+                <span aria-hidden="true">→</span>
+                <span data-testid="text-correction-proposed">{_e(proposed)}</span>
+              </div>
+              <div class="correction-meta">
+                <span data-testid="text-correction-tier">tier {tier}</span>
+                <span data-testid="text-correction-reason">{_e(proposal["reason"])}</span>
+                <span data-testid="text-correction-meaning-cue">{_e(proposal["meaning_cue"])}</span>
+              </div>
+              <div class="correction-actions">
+                <button type="button"
+                  data-correction-id="{_e(proposal_id)}"
+                  data-correction-action="accept"
+                  data-range-start="{int(span["start"])}"
+                  data-range-end="{int(span["end"])}"
+                  data-proposed-text="{_e(proposed)}"
+                  onclick="noteEditor.applyCorrection('{_e(proposal_id)}')">
+                  Accept proposal
+                </button>
+                <button type="button"
+                  data-correction-id="{_e(proposal_id)}"
+                  data-correction-action="keep-mine"
+                  onclick="noteEditor.keepCorrection('{_e(proposal_id)}')">
+                  Keep mine
+                </button>
+              </div>
+            </article>"""
+        )
+    return f"""
+          <section class="text-correction-proposals"
+            data-testid="text-correction-proposals"
+            data-authority="proposal-class-ui-internal"
+            data-backend-api="none"
+            data-proposal-count="{len(rows)}">
+            {"".join(rows)}
+          </section>"""
 
 
 def _coerce_vault_link_index(value: object) -> dict[str, list[str]]:
@@ -1202,6 +1327,7 @@ def _render_note_section(fields: dict) -> str:
     # Frontmatter-stripped source for the direct human editor (the save endpoint
     # preserves frontmatter and rejects a frontmatter block in the body).
     editor_body = str(getattr(rendered_body.document, "body_markdown", "") or "")
+    text_correction_proposals_html = _render_text_correction_proposals(editor_body)
     outline_html = render_note_outline(rendered_body.document)
     has_headings = bool(tuple(rendered_body.document.headings))
     hidden_frontmatter_html, rendered_props = _render_note_frontmatter_region(rendered_body.document)
@@ -1687,6 +1813,7 @@ def _render_note_section(fields: dict) -> str:
               <span class="note-edit-status" data-testid="workspace-note-edit-status"
                 aria-live="polite"></span>
             </div>
+            {text_correction_proposals_html}
           </div>
           <div class="note-body-content" data-testid="workspace-note-rendered"
             data-content-hash="{content_hash}">{body}</div>
@@ -4139,18 +4266,32 @@ def _render_orientation_notable_changes(changes: object) -> str:
         </section>"""
 
 
-def _render_orientation_resurface(resurface: object) -> str:
+def _render_orientation_resurface(
+    resurface: object,
+    *,
+    meta: object | None = None,
+    degraded_reasons: list[str] | None = None,
+) -> str:
     payload = _orientation_dict(resurface)
-    rows: list[str] = []
-    for item in _orientation_list(payload.get("candidates")):
-        candidate = _orientation_dict(item)
+    meta_payload = _orientation_dict(meta)
+    caps = _orientation_dict(meta_payload.get("caps"))
+    server_cap = int(caps.get("resurface_candidates") or 0)
+    default_budget = 3
+    reasons = degraded_reasons or []
+    posture = "degraded" if reasons else "read-only"
+    reason_html = "".join(
+        f'<span class="orientation-reason">{_e(reason)}</span>' for reason in reasons
+    )
+
+    def _candidate_row(candidate: dict, *, testid: str, visible_default: bool) -> str:
         signals = "".join(
             f'<span class="orientation-signal">{_e(_orientation_str(signal))}</span>'
             for signal in _orientation_list(candidate.get("signal_labels"))
         )
-        rows.append(
-            f"""
-            <article class="orientation-item" data-testid="workspace-orientation-resurface-candidate">
+        return f"""
+            <article class="orientation-item"
+              data-testid="{testid}"
+              data-visible-by-default="{str(visible_default).lower()}">
               <div class="orientation-item-main">
                 <h3>{_e(_orientation_str(candidate.get("label"), "Resurface candidate"))}</h3>
                 <p class="orientation-why" data-testid="workspace-orientation-resurface-why-now">
@@ -4161,15 +4302,56 @@ def _render_orientation_resurface(resurface: object) -> str:
               <div class="orientation-signals">{signals}</div>
               {_orientation_provenance(candidate, testid="workspace-orientation-resurface-provenance")}
             </article>"""
+
+    candidates = [_orientation_dict(item) for item in _orientation_list(payload.get("candidates"))]
+    capped_candidates = candidates[:server_cap] if server_cap else candidates
+    default_candidates = capped_candidates[:default_budget]
+    overflow_candidates = capped_candidates[default_budget:]
+    rows: list[str] = []
+    for candidate in default_candidates:
+        rows.append(
+            _candidate_row(
+                candidate,
+                testid="workspace-orientation-resurface-candidate",
+                visible_default=True,
+            )
         )
+    overflow_html = ""
+    if overflow_candidates:
+        overflow_rows = "".join(
+            _candidate_row(
+                candidate,
+                testid="workspace-orientation-resurface-overflow-candidate",
+                visible_default=False,
+            )
+            for candidate in overflow_candidates
+        )
+        overflow_html = f"""
+          <details class="orientation-resurface-expand"
+            data-testid="workspace-orientation-resurface-expand"
+            data-server-cap="{server_cap or len(capped_candidates)}"
+            data-overflow-count="{len(overflow_candidates)}">
+            <summary>Show {len(overflow_candidates)} more resurfacing card(s)</summary>
+            {overflow_rows}
+          </details>"""
     body = "".join(rows) if rows else '<p class="orientation-empty">No resurface candidates declared.</p>'
     return f"""
-        <section class="orientation-section" data-testid="workspace-orientation-resurface">
+        <section class="orientation-section"
+          data-testid="workspace-orientation-resurface"
+          data-resurface-posture="{posture}"
+          data-resurface-default-budget="{default_budget}"
+          data-resurface-overflow-count="{len(overflow_candidates)}"
+          data-notification="false"
+          data-urgency="none"
+          data-persistence-backed="false"
+          data-authority="read-only-projection">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Resurface</div>
             <span class="orientation-count">{len(rows)}</span>
           </div>
+          {reason_html}
           {body}
+          {overflow_html}
         </section>"""
 
 
@@ -4535,7 +4717,11 @@ def _render_orientation_index_html(
       </div>
       <div class="orientation-column">
         {_render_orientation_governance(orientation.get("governance"))}
-        {_render_orientation_resurface(orientation.get("resurface"))}
+        {_render_orientation_resurface(
+            orientation.get("resurface"),
+            meta=meta,
+            degraded_reasons=reasons,
+        )}
       </div>
     </div>
   </main>
