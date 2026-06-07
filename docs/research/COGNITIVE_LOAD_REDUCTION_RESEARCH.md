@@ -146,6 +146,54 @@ Design consequences:
   then decide. It should not become a persuasion surface that front-loads agent reasoning as a
   trust signal.
 
+## WP-T1 Phase B Addendum: Correction-As-Proposal Contract
+
+Phase B turns the Wave 2 text-production gap into an owner-contract shape. The governing
+distinction is:
+
+> Mapping a misspelling to the word the human already intended is help; changing what the human
+> said is authorship.
+
+Repo reconciliation as of 2026-06-07:
+
+- The direct note editor currently uses a native `<textarea spellcheck>` path and saves through
+  `/api/companion/note/save`.
+- The dev page currently emits `autocorrect="on"` for that textarea. Phase B rejects
+  autocorrect-on-type, so a follow-up implementation issue is required after the contract lands.
+- Canvas body co-authoring and staged Canvas suggestions already have distinct authority models:
+  user-present body edit with undo/session-log provenance, and staged body edit proposals.
+- Panel confirmation remains the governed execution path for governance-bearing action, but not
+  every text correction is a Panel governance action. The correct write route depends on the
+  owning authoring surface.
+
+Binding rules for correction assistance:
+
+- Suggestion, never silent rewrite. No assistive layer edits user-authored text automatically.
+- Transparency of every change: original token, proposed token, and, for anything beyond pure
+  spelling, why.
+- Canonical content is untouched until the human confirms. Confirmation routes through the current
+  surface's authorized save/apply path; do not overclaim Panel-style receipts for direct note save
+  or Canvas body edit.
+- Meaning-affecting changes require a higher bar than spelling fixes.
+- Voice and meaning are owned by the human. Stylistic smoothing is out of scope unless requested
+  per instance and shown as a reviewable proposal.
+
+Correction tiers:
+
+| Tier | Class | Posture |
+| --- | --- | --- |
+| 0 | Orthographic non-word to intended word | Light confirmation, never automatic. |
+| 1 | Real-word / context flag | Flag only; never auto-apply because the system is guessing intent. |
+| 2 | Grammar / phrasing / voice | Most explicit confirmation; default is keep the human's text. |
+
+The selection problem is first-class. Suggestions should be few, read aloud on focus, and carry a
+meaning cue such as a short definition or the word in the user's own sentence. The surface must
+offer "keep mine" so the human is never forced to accept a wrong fix.
+
+Dictation closes through listening: dictate -> draft -> TTS read-back -> human confirm. Read-back
+is required for dictation support because eye-only proofreading is exactly the weak verification
+path for this profile.
+
 ## Wave 3 Addendum: Resurfacing And Memory/Context Support Without Overload
 
 Wave 3 confirms resurfacing as part of the same central cognitive-load capability. Resurfacing is
@@ -504,10 +552,10 @@ receipt/status. It should not read only the recommendation and skip risk or sour
   capability, or both?
 - Which authoring surfaces should receive the first text-production contract: direct note editor,
   Canvas body edit, Panel clarification fields, ASK queries, or Inbox capture?
-- Should dictation/STT support require TTS read-back before save on selected surfaces, or expose
-  read-back as a strongly recommended verification affordance?
-- What correction policy should govern severe spelling, real-word-error, and rewrite assistance:
-  suggestion-only, diff-before-save, or Canvas user-present apply with undo and provenance?
+- Should read-back also be required for typed drafts on selected surfaces, or only for dictation/STT
+  support?
+- What is the first implementation slice for correction-as-proposal: disable autocorrect-on-type in
+  the direct editor, add a Tier 1 flag-only prototype, or add TTS read-back for dictated drafts?
 - What resurfacing budget should become contractual for the cognitive-load layer: items per
   orientation moment, foreground refresh frequency, and minimum salience threshold?
 - Should learning-oriented resurfacing stay out of FA-5 and become a later spaced-retrieval
@@ -547,6 +595,9 @@ Repo authority:
   save endpoints.
 - `tests/companion_ui/test_direct_note_editor.py` — direct human note editor and native spellcheck
   coverage.
+- `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py` — current direct note
+  editor textarea rendering; as of this memo it still emits `autocorrect="on"` and needs follow-up
+  after the correction-as-proposal contract lands.
 - `companion-ui/docs/CANVAS_AGENT_MVP_CONTRACT.md` — Canvas co-authoring authority model.
 - `companion-ui/docs/CANVAS_SUGGESTION_FLOW.md` — staged Canvas suggestion flow.
 

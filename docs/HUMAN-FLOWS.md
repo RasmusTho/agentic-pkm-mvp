@@ -75,6 +75,10 @@ decoding, parsing, spelling, text production, source comparison, and resumption 
 the content, hiding uncertainty, or treating the human's slowest channel as the human's reasoning
 capacity.
 
+Encoding assistance belongs to this function only when it preserves the human's intended meaning
+and voice. A correction may reduce spelling friction; it must not silently rewrite authorship,
+normalize style, or replace what the human meant.
+
 Resurfacing belongs to this function only when it lowers orientation and memory-context load. It
 should be scarce, source-linked, and non-authoritative; a persistent stream of suggestions that the
 human must monitor is a new burden, not a prosthetic aid.

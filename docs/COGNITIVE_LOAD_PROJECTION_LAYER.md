@@ -205,6 +205,40 @@ text inspectable, preserve the human's intended meaning and voice, and leave the
 authority over what is saved. TTS/read-back is the preferred verification companion for
 dictation/correction because visual proofreading is not the only review path.
 
+The correction-as-proposal contract is stricter than ordinary display assistance:
+
+- Suggestion, never silent rewrite. No assistive layer edits user-authored text automatically.
+  Autocorrect-on-type is prohibited because it acts before the human decides and can silently
+  replace the intended word with a wrong real word.
+- Transparency of every change. Each proposed change must show the original token and proposed
+  token. Anything beyond a pure spelling fix must also show why it is being suggested.
+- Canonical content remains untouched until confirmation. Confirmed corrections route through the
+  authorized save/apply path for the current surface: direct note save, Canvas user-present
+  body-edit with undo/session-log provenance, staged Canvas body suggestion, or Panel/governed
+  execution when the operation is governance-bearing. Do not invent a stronger receipt claim than
+  the owning surface provides.
+- Meaning-affecting changes require more friction than spelling fixes. Orthographic fixes,
+  real-word/context flags, and grammar/phrasing rewrites must be visually and procedurally
+  distinct.
+- Voice and meaning belong to the human. Stylistic smoothing is out of scope unless explicitly
+  requested for the current instance and shown as a reviewable proposal.
+
+Correction tiers:
+
+| Tier | Class | Example | Required posture |
+| --- | --- | --- | --- |
+| 0 | Orthographic | `recieve` -> `receive` | Light confirmation; still not automatic. |
+| 1 | Real-word / context flag | `form` possibly `from` | Flag only; never auto-apply because intent is inferred. |
+| 2 | Grammar / phrasing / voice | rewriting a sentence | Most explicit confirmation; default is keep the user's text. |
+
+The selection problem is part of the contract. A suggestion list should stay small, offer
+read-aloud on focus, include a short meaning cue such as a definition or the word in the user's own
+sentence, and always expose a clear "keep mine" path.
+
+Dictation closes through listening: dictate, draft, TTS read-back, then human confirm. Read-back is
+required for dictation support because it routes verification through listening rather than forcing
+proofreading only by eye.
+
 ### Decision mode
 
 Decision mode structures a proposal or choice so the human can understand what is being decided.
@@ -235,6 +269,7 @@ Use this test before implementing or documenting a cognitive-load projection:
 | Does it summarize, simplify, rank, filter, recommend, or explain? | Semantic transformation | Preserve source and review posture. |
 | Does it resurface, rank, filter, or reorder context for attention? | Resurfacing projection | Show source-linked why-now, respect budget/caps, and do not make resurfacing priority or authority. |
 | Does it correct, rewrite, or transcribe human-authored input? | Draft/proposal over text input | Show the change and require human confirmation before canonical save. |
+| Does it silently autocorrect, smooth, or normalize style? | Authority/voice transfer | Reject unless the human explicitly requested that specific proposal and can review it. |
 | Does it change what the human is considered to have approved? | Authority transfer | Route through governed confirmation. |
 | Does it write canonical Markdown, receipts, provenance, memory extraction inputs, runtime authority, or agent interpretation? | Durable or authority-bearing mutation | Use an owner-doc contract, WriteGuard, and receipt path. |
 
