@@ -924,6 +924,102 @@ def _display_preferences_script() -> str:
   </script>"""
 
 
+def _note_readback_script() -> str:
+    """Browser-local TTS/read-back controls for the rendered note surface."""
+
+    return """
+  <script>
+  (function () {
+    var proposalFieldOrder = ['decision', 'recommendation', 'why', 'risk', 'source', 'choices', 'status'];
+    function el(sel) { return document.querySelector(sel); }
+    function supportsSpeech() {
+      return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+    }
+    function status(text, state) {
+      var node = el('[data-testid="tts-readback-status"]');
+      if (!node) return;
+      node.textContent = text || '';
+      node.setAttribute('data-state', state || 'idle');
+    }
+    function rate() {
+      var control = el('[data-testid="tts-rate"]');
+      var parsed = control ? parseFloat(control.value) : 1;
+      return Number.isFinite(parsed) ? parsed : 1;
+    }
+    function textOf(node) {
+      return node ? String(node.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+    }
+    function selectedText() {
+      var selection = window.getSelection ? window.getSelection() : null;
+      return selection ? String(selection.toString() || '').trim() : '';
+    }
+    function proposalText() {
+      var surface = el('.panel-decision-surface');
+      if (!surface) return '';
+      return proposalFieldOrder.map(function (field) {
+        var node = surface.querySelector('[data-panel-decision-field="' + field + '"]');
+        return textOf(node);
+      }).filter(Boolean).join('. ');
+    }
+    function draftText() {
+      var editor = document.getElementById('note-source-editor');
+      return editor ? String(editor.value || '') : '';
+    }
+    function readText(text, label) {
+      if (!supportsSpeech()) {
+        status('Speech synthesis unavailable in this browser.', 'unavailable');
+        return;
+      }
+      var normalized = String(text || '').trim();
+      if (!normalized) {
+        status('Nothing selected for read-back.', 'empty');
+        return;
+      }
+      window.speechSynthesis.cancel();
+      var utterance = new SpeechSynthesisUtterance(normalized);
+      utterance.rate = rate();
+      utterance.onend = function () { status('Read-back finished.', 'idle'); };
+      utterance.onerror = function () { status('Read-back failed.', 'error'); };
+      status(label || 'Reading source text.', 'playing');
+      window.speechSynthesis.speak(utterance);
+    }
+    window.noteReadback = {
+      readFullNote: function () { readText(textOf(el('.note-body-content')), 'Reading note source.'); },
+      readSelection: function () { readText(selectedText(), 'Reading selected source text.'); },
+      readProposal: function () { readText(proposalText(), 'Reading Panel proposal fields.'); },
+      readDraft: function () { readText(draftText(), 'Reading editor draft.'); },
+      pause: function () {
+        if (supportsSpeech()) {
+          window.speechSynthesis.pause();
+          status('Read-back paused.', 'paused');
+        }
+      },
+      resume: function () {
+        if (supportsSpeech()) {
+          window.speechSynthesis.resume();
+          status('Read-back resumed.', 'playing');
+        }
+      },
+      stop: function () {
+        if (supportsSpeech()) {
+          window.speechSynthesis.cancel();
+          status('Read-back stopped.', 'idle');
+        }
+      }
+    };
+    document.addEventListener('DOMContentLoaded', function () {
+      var controls = document.querySelectorAll('[data-tts-requires-speech="true"]');
+      if (!supportsSpeech()) {
+        for (var i = 0; i < controls.length; i++) {
+          controls[i].disabled = true;
+        }
+        status('Speech synthesis unavailable in this browser.', 'unavailable');
+      }
+    });
+  })();
+  </script>"""
+
+
 def _note_editor_script() -> str:
     """Direct human note editor: Read <-> Edit toggle over a plain textarea.
 
@@ -1496,6 +1592,40 @@ def _render_note_section(fields: dict) -> str:
               data-testid="workspace-note-body-readonly-why">Why?</a>
           </div>
           {read_only_pill_html}
+          <div class="tts-readback-controls"
+            data-testid="tts-readback-controls"
+            data-authority="read-only-projection"
+            data-source-scope="source-and-proposal">
+            <label class="tts-rate-control">
+              <span>Rate</span>
+              <select data-testid="tts-rate" aria-label="Read-back rate">
+                <option value="0.85">0.85</option>
+                <option value="1" selected>1.0</option>
+                <option value="1.15">1.15</option>
+                <option value="1.3">1.3</option>
+              </select>
+            </label>
+            <button type="button" data-testid="tts-read-full-note"
+              data-tts-action="read-full-note" data-tts-requires-speech="true"
+              onclick="noteReadback.readFullNote()">Read note</button>
+            <button type="button" data-testid="tts-read-selection"
+              data-tts-action="read-selection" data-tts-requires-speech="true"
+              onclick="noteReadback.readSelection()">Selection</button>
+            <button type="button" data-testid="tts-read-proposal"
+              data-tts-action="read-proposal" data-tts-requires-speech="true"
+              onclick="noteReadback.readProposal()">Proposal</button>
+            <button type="button" data-testid="tts-pause"
+              data-tts-action="pause" data-tts-requires-speech="true"
+              onclick="noteReadback.pause()">Pause</button>
+            <button type="button" data-testid="tts-resume"
+              data-tts-action="resume" data-tts-requires-speech="true"
+              onclick="noteReadback.resume()">Resume</button>
+            <button type="button" data-testid="tts-stop"
+              data-tts-action="stop" data-tts-requires-speech="true"
+              onclick="noteReadback.stop()">Stop</button>
+            <span class="tts-readback-status" data-testid="tts-readback-status"
+              data-state="idle" aria-live="polite">Read-back idle.</span>
+          </div>
           <form class="display-preferences"
             data-testid="display-preferences"
             data-storage-scope="browser-local"
@@ -1544,6 +1674,10 @@ def _render_note_section(fields: dict) -> str:
               data-testid="workspace-note-edit-toggle"
               onclick="noteEditor.start()">&#9998;&#160;Edit</button>
             <div class="note-edit-actions" data-testid="workspace-note-edit-actions" hidden>
+              <button type="button" class="note-edit-readback"
+                data-testid="workspace-note-edit-read-draft"
+                data-tts-action="read-draft" data-tts-requires-speech="true"
+                onclick="noteReadback.readDraft()">Read draft</button>
               <button type="button" class="note-edit-save"
                 data-testid="workspace-note-edit-save"
                 onclick="noteEditor.save()">Save</button>
@@ -5364,6 +5498,56 @@ def render_index_html(
       overflow-y: auto;
       padding: 24px 24px 96px;
     }}
+    .tts-readback-controls {{
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 auto 10px;
+      max-width: var(--display-reading-width, 68ch);
+      padding: 0 32px;
+    }}
+    .tts-readback-controls button,
+    .note-edit-readback {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-1);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--text-xs);
+      min-height: 26px;
+      padding: 2px 8px;
+    }}
+    .tts-readback-controls button:hover,
+    .note-edit-readback:hover {{
+      border-color: var(--accent);
+    }}
+    .tts-readback-controls button:disabled,
+    .note-edit-readback:disabled {{
+      cursor: not-allowed;
+      opacity: 0.5;
+    }}
+    .tts-rate-control {{
+      align-items: center;
+      color: var(--fg-2);
+      display: inline-flex;
+      gap: 6px;
+      font-size: var(--text-xs);
+    }}
+    .tts-rate-control select {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-1);
+      font: inherit;
+      min-height: 26px;
+      padding: 2px 6px;
+    }}
+    .tts-readback-status {{
+      color: var(--fg-3);
+      font-size: var(--text-xs);
+    }}
     .display-preferences {{
       align-items: center;
       display: flex;
@@ -7629,6 +7813,7 @@ def render_index_html(
   </script>
   {_mermaid_runtime_script()}
   {_display_preferences_script()}
+  {_note_readback_script()}
   {_note_editor_script()}
 </body>
 </html>"""
