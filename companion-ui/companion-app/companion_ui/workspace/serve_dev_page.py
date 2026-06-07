@@ -851,6 +851,79 @@ def _mermaid_runtime_script() -> str:
   </script>"""
 
 
+def _display_preferences_script() -> str:
+    """Browser-local display preferences for the rendered reading surface."""
+
+    return """
+  <script>
+  (function () {
+    var storageKey = 'companion.displayPreferences.v1';
+    var defaults = {
+      fontSize: '16px',
+      lineHeight: '1.65',
+      readingWidth: '68ch',
+      focusMode: false
+    };
+    function readPrefs() {
+      try {
+        var raw = window.localStorage ? window.localStorage.getItem(storageKey) : null;
+        return raw ? Object.assign({}, defaults, JSON.parse(raw)) : Object.assign({}, defaults);
+      } catch (e) {
+        return Object.assign({}, defaults);
+      }
+    }
+    function writePrefs(prefs) {
+      try {
+        if (window.localStorage) {
+          window.localStorage.setItem(storageKey, JSON.stringify(prefs));
+        }
+      } catch (e) {}
+    }
+    function applyPrefs(prefs) {
+      var root = document.documentElement;
+      root.style.setProperty('--display-font-size', prefs.fontSize || defaults.fontSize);
+      root.style.setProperty('--display-line-height', prefs.lineHeight || defaults.lineHeight);
+      root.style.setProperty('--display-reading-width', prefs.readingWidth || defaults.readingWidth);
+      document.body.classList.toggle('display-pref-focus', Boolean(prefs.focusMode));
+    }
+    function syncControls(prefs) {
+      var fontSize = document.querySelector('[data-testid="display-pref-font-size"]');
+      var lineHeight = document.querySelector('[data-testid="display-pref-line-height"]');
+      var readingWidth = document.querySelector('[data-testid="display-pref-reading-width"]');
+      var focusMode = document.querySelector('[data-testid="display-pref-focus-mode"]');
+      if (fontSize) fontSize.value = prefs.fontSize;
+      if (lineHeight) lineHeight.value = prefs.lineHeight;
+      if (readingWidth) readingWidth.value = prefs.readingWidth;
+      if (focusMode) focusMode.checked = Boolean(prefs.focusMode);
+    }
+    function prefsFromControls(current) {
+      var fontSize = document.querySelector('[data-testid="display-pref-font-size"]');
+      var lineHeight = document.querySelector('[data-testid="display-pref-line-height"]');
+      var readingWidth = document.querySelector('[data-testid="display-pref-reading-width"]');
+      var focusMode = document.querySelector('[data-testid="display-pref-focus-mode"]');
+      return {
+        fontSize: fontSize ? fontSize.value : current.fontSize,
+        lineHeight: lineHeight ? lineHeight.value : current.lineHeight,
+        readingWidth: readingWidth ? readingWidth.value : current.readingWidth,
+        focusMode: focusMode ? Boolean(focusMode.checked) : Boolean(current.focusMode)
+      };
+    }
+    var prefs = readPrefs();
+    applyPrefs(prefs);
+    document.addEventListener('DOMContentLoaded', function () {
+      syncControls(prefs);
+      var panel = document.querySelector('[data-testid="display-preferences"]');
+      if (!panel) return;
+      panel.addEventListener('change', function () {
+        prefs = prefsFromControls(prefs);
+        applyPrefs(prefs);
+        writePrefs(prefs);
+      });
+    });
+  })();
+  </script>"""
+
+
 def _note_editor_script() -> str:
     """Direct human note editor: Read <-> Edit toggle over a plain textarea.
 
@@ -1423,6 +1496,49 @@ def _render_note_section(fields: dict) -> str:
               data-testid="workspace-note-body-readonly-why">Why?</a>
           </div>
           {read_only_pill_html}
+          <form class="display-preferences"
+            data-testid="display-preferences"
+            data-storage-scope="browser-local"
+            data-authority="render-only">
+            <label class="display-preference-control">
+              <span>Font size</span>
+              <select data-testid="display-pref-font-size"
+                name="font-size"
+                aria-label="Font size">
+                <option value="15px">15</option>
+                <option value="16px">16</option>
+                <option value="18px">18</option>
+                <option value="20px">20</option>
+              </select>
+            </label>
+            <label class="display-preference-control">
+              <span>Line height</span>
+              <select data-testid="display-pref-line-height"
+                name="line-height"
+                aria-label="Line height">
+                <option value="1.45">1.45</option>
+                <option value="1.65">1.65</option>
+                <option value="1.85">1.85</option>
+                <option value="2">2.0</option>
+              </select>
+            </label>
+            <label class="display-preference-control">
+              <span>Reading width</span>
+              <select data-testid="display-pref-reading-width"
+                name="reading-width"
+                aria-label="Reading width">
+                <option value="56ch">56ch</option>
+                <option value="68ch">68ch</option>
+                <option value="78ch">78ch</option>
+              </select>
+            </label>
+            <label class="display-preference-toggle">
+              <input type="checkbox"
+                data-testid="display-pref-focus-mode"
+                name="focus-mode">
+              <span>Focus mode</span>
+            </label>
+          </form>
           <div class="note-edit-bar" data-testid="workspace-note-edit-bar">
             <button type="button" class="note-edit-toggle"
               data-testid="workspace-note-edit-toggle"
@@ -1438,7 +1554,8 @@ def _render_note_section(fields: dict) -> str:
                 aria-live="polite"></span>
             </div>
           </div>
-          <div class="note-body-content" data-testid="workspace-note-rendered">{body}</div>
+          <div class="note-body-content" data-testid="workspace-note-rendered"
+            data-content-hash="{content_hash}">{body}</div>
           <textarea class="note-source-editor" id="note-source-editor"
             data-testid="workspace-note-source-editor"
             spellcheck="true" autocapitalize="sentences" autocorrect="off"
@@ -5247,6 +5364,35 @@ def render_index_html(
       overflow-y: auto;
       padding: 24px 24px 96px;
     }}
+    .display-preferences {{
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin: 0 auto 12px;
+      max-width: var(--display-reading-width, 68ch);
+      padding: 0 32px;
+    }}
+    .display-preference-control,
+    .display-preference-toggle {{
+      align-items: center;
+      color: var(--fg-2);
+      display: inline-flex;
+      gap: 6px;
+      font-size: var(--text-xs);
+    }}
+    .display-preference-control select {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-1);
+      font: inherit;
+      min-height: 26px;
+      padding: 2px 6px;
+    }}
+    .display-preference-toggle input {{
+      accent-color: var(--accent);
+    }}
     /* ---- Direct human note editor (Read <-> Edit) ---- */
     .note-edit-bar {{
       display: flex;
@@ -5305,15 +5451,19 @@ def render_index_html(
       border: none;
       border-radius: 0;
       margin: 0 auto;
-      max-width: 68ch;
+      max-width: var(--display-reading-width, 68ch);
       min-height: 0;
       padding: 40px 32px 48px;
       font-family: var(--font-ui);
-      font-size: var(--text-base);
+      font-size: var(--display-font-size, var(--text-base));
       color: var(--fg-1);
       /* §6.3 — paragraph rhythm */
-      line-height: 1.65;
+      line-height: var(--display-line-height, 1.65);
       word-break: break-word;
+    }}
+    body.display-pref-focus .vault-browser-left-pane,
+    body.display-pref-focus .agent-rail {{
+      opacity: 0.54;
     }}
     /* Design review §6.2 — heading scale (sharp step-down between levels). */
     .vault-markdown-rendered h1 {{
@@ -7478,6 +7628,7 @@ def render_index_html(
   }})();
   </script>
   {_mermaid_runtime_script()}
+  {_display_preferences_script()}
   {_note_editor_script()}
 </body>
 </html>"""
