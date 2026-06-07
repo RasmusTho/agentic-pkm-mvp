@@ -90,6 +90,15 @@ make alpha-smoke
 CI jobs parse `CI SUMMARY …` lines and fail merges when `GATES.ok != true`.
 See `docs/TESTING.md` and `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`.
 
+## License
+This repository is currently source-available under a limited preview license.
+It is intentionally not released as open source while the project is unstable.
+See [LICENSE.md](LICENSE.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Contributions
+Contributions and collaborations are welcome by prior discussion. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for contribution and relicensing terms.
+
 ## Historical References
 SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current runtime truth. Read `docs/STATUS.md` and `docs/ARCHITECTURE.md` first; use the references below only for background:
 - `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
