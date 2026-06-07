@@ -354,15 +354,20 @@ Current FA-5 budget posture:
 
 | Budget field | Status | Rule |
 |---|---|---|
-| `items_per_orientation_moment` | Owner-pending | Display a scarce subset across `open_loops`, `notable_changes`, and `resurface.candidates`; proposed calibration range is 3-5 total visible items before deliberate expansion. |
-| `foreground_refresh_frequency` | Owner-pending | Default to manual pull. If ADR-0011 ambient refresh is enabled, refresh only while the surface is visible/foregrounded and only after server-declared staleness or a later owner-approved interval. |
-| `resurface_salience_threshold` | Owner-pending | Below threshold, return no candidate or mark the resurfacing slice degraded. Do not show weak material with a confident why-now. |
+| `items_per_orientation_moment` | Parametric | Display a scarce subset across `open_loops`, `notable_changes`, and `resurface.candidates`; settings may tune the exact count later, but visible cards must fit the human-first working-memory and screen-space budget before deliberate expansion. |
+| `foreground_refresh_frequency` | Parametric | Default to manual pull. If ADR-0011 ambient refresh is enabled, refresh only while the surface is visible/foregrounded and only after server-declared staleness or a later settings-controlled interval that does not create notification pressure. |
+| `resurface_salience_threshold` | Parametric | Below threshold, return no candidate or mark the resurfacing slice degraded. Do not show weak material with a confident why-now. |
 
 The UI may offer deliberate expansion or drill-in controls, but it must not turn
 overflow into a notification inbox, badge, urgency feed, or queue the human is
 expected to process. Display scarcity must not silently reorder canonical user
 artifacts or imply priority, urgency, approval, memory promotion, or action
 authorization.
+
+Parametric settings must not override footprint constraints. When card footprint,
+available screen space, or reading/working-memory load would make the orientation
+moment heavy, the implementation should choose the smaller displayed subset and
+leave additional items behind a deliberate expansion affordance.
 
 ### `leave_point`
 

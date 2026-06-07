@@ -205,10 +205,15 @@ The contract fields are:
 
 | Field | Contract posture |
 | --- | --- |
-| `items_per_orientation_moment` | Owner-pending display budget. The displayed subset must be scarce and may be lower than backend caps; target range under review is 3-5 surfaced items across the visible orientation moment. |
-| `foreground_refresh_frequency` | Owner-pending refresh budget. Default is manual pull. Any ambient refresh must be client-initiated, foreground-only, default-off, and no more eager than server-declared freshness/staleness. |
-| `salience_threshold` | If the relevance/salience signal is weak, show nothing or mark degraded. Do not manufacture a confident reason. |
+| `items_per_orientation_moment` | Parametric display budget. The displayed subset must be scarce and may be lower than backend caps; settings may tune the exact value later, but the visible footprint must stay within the human-first working-memory and screen-space budget. |
+| `foreground_refresh_frequency` | Parametric refresh budget. Default is manual pull. Any ambient refresh must be client-initiated, foreground-only, default-off, and no more eager than server-declared freshness/staleness; settings may tune cadence later without creating notification pressure. |
+| `salience_threshold` | Parametric relevance threshold. If the relevance/salience signal is weak, show nothing or mark degraded. Do not manufacture a confident reason. |
 | `why_now` | One short, structured pointer: trigger, source, relevance basis, and confidence/degraded posture. Prefer provenance over generated rationale. |
+
+Parametric does not mean unbounded. When available screen space, card footprint, reading cost, or
+working-memory load constrains the surface, the implementation should choose the smaller
+human-first display budget and put overflow behind deliberate expansion rather than asking the owner
+to decide a fixed number up front.
 
 Budgeted resurfacing is not a ranking authority. A resurfaced item says "this may help re-orient
 you"; it does not say "this is important", "this is urgent", "this is approved", "this should be
