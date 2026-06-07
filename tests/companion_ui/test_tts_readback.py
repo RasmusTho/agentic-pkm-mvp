@@ -104,15 +104,17 @@ def test_tts_readback_controls_render() -> None:
     assert draft_index < save_index
 
 
-def test_tts_readback_degrades_when_speech_synthesis_is_unavailable() -> None:
+def test_tts_readback_uses_local_server_tts_not_browser_speech() -> None:
     html = _html()
     script = _readback_script(html)
 
-    assert "'speechSynthesis' in window" in script
-    assert "'SpeechSynthesisUtterance' in window" in script
+    assert "'speechSynthesis' in window" not in script
+    assert "SpeechSynthesisUtterance" not in script
+    assert "/api/companion/tts/plan" in script
+    assert "/api/companion/tts/synthesize" in script
     assert "data-tts-requires-speech=\"true\"" in html
-    assert "controls[i].disabled = true" in script
-    assert "Speech synthesis unavailable in this browser." in script
+    assert "controls[i].disabled = true" not in script
+    assert "Local TTS idle." in script
 
 
 def test_tts_readback_has_no_autoplay_or_backend_mutation_calls() -> None:
@@ -121,11 +123,12 @@ def test_tts_readback_has_no_autoplay_or_backend_mutation_calls() -> None:
 
     before_read_action = script[: script.index("function readText")]
     dom_ready = script[script.index("DOMContentLoaded") :]
-    assert "speak(" not in before_read_action
-    assert "speak(" not in dom_ready
-    assert "fetch(" not in script
+    assert ".play()" not in before_read_action
+    assert ".play()" not in dom_ready
+    assert "fetch(" in script
     assert "/api/companion/note/save" not in script
     assert "/api/panel/checkbox-projection" not in script
+    assert "/api/companion/tts/plan" in script
 
 
 def test_tts_proposal_readback_uses_stable_field_order() -> None:

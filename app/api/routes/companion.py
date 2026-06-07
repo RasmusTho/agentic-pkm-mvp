@@ -14,6 +14,7 @@ from uuid import uuid4
 import yaml
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import app.api.routes.canvas as canvas_module
@@ -47,6 +48,10 @@ from app.panel.confirmation import StagedProposal
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
+from app.tts.cache import audio_path
+from app.tts.config import load_tts_config
+from app.tts.planning import build_tts_plan
+from app.tts.service import synthesize_tts
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
@@ -69,6 +74,49 @@ class VaultIdentityState(BaseModel):
     vault_name: str
     channel: str
     provenance: str
+
+
+class CompanionTTSRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    language: str | None = None
+    rate: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
+class CompanionTTSSegment(BaseModel):
+    index: int
+    text: str
+    language: str
+
+
+class CompanionTTSPlanResponse(BaseModel):
+    enabled: bool
+    local_only: bool
+    allow_browser_fallback: bool
+    allow_cloud_fallback: bool
+    normalized_text: str
+    language: str
+    provider: str
+    voice_id: str
+    provider_available: bool
+    provider_reason: str | None
+    cache_key: str
+    cached: bool
+    mixed_language: bool
+    segments: list[CompanionTTSSegment]
+    audio_url: str
+
+
+class CompanionTTSSynthesizeResponse(BaseModel):
+    ok: bool
+    state: str
+    cached: bool
+    cache_key: str
+    audio_url: str | None
+    content_type: str
+    provider: str
+    language: str
+    voice_id: str
+    reason: str | None
 
 
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
@@ -2336,6 +2384,62 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
         ),
         mutation_intents=mutation_intents,
     )
+
+
+@router.post("/tts/plan", response_model=CompanionTTSPlanResponse)
+def plan_companion_tts(req: CompanionTTSRequest) -> CompanionTTSPlanResponse:
+    config = load_tts_config()
+    try:
+        plan = build_tts_plan(
+            text=req.text,
+            config=config,
+            language=req.language,
+            rate=req.rate,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "tts_request_too_large", "message": str(exc)},
+        ) from exc
+    return CompanionTTSPlanResponse.model_validate(plan)
+
+
+@router.post("/tts/synthesize", response_model=CompanionTTSSynthesizeResponse)
+def synthesize_companion_tts(req: CompanionTTSRequest) -> CompanionTTSSynthesizeResponse:
+    config = load_tts_config()
+    try:
+        result = synthesize_tts(
+            text=req.text,
+            config=config,
+            language=req.language,
+            rate=req.rate,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "tts_request_too_large", "message": str(exc)},
+        ) from exc
+    status_code = 200 if result["ok"] or result["state"] == "cached" else 503
+    if status_code != 200:
+        raise HTTPException(status_code=status_code, detail=result)
+    return CompanionTTSSynthesizeResponse.model_validate(result)
+
+
+@router.get("/tts/audio/{cache_key}.wav")
+def read_companion_tts_audio(cache_key: str) -> FileResponse:
+    if re.fullmatch(r"[a-f0-9]{64}", cache_key) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "audio_not_found", "message": "No cached audio exists for the requested key."},
+        )
+    config = load_tts_config()
+    path = audio_path(config, cache_key)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "audio_not_found", "message": "No cached audio exists for the requested key."},
+        )
+    return FileResponse(path, media_type="audio/wav")
 
 
 @router.get("/workspace", response_model=WorkspaceStateResponse)
