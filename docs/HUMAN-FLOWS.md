@@ -5,8 +5,8 @@ Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-05
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/SECURITY_DATA_FLOWS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md, docs/adr/ADR-0012-orientation-multiagent-reads.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/runtime_artifacts.py, app/knowledge_compilation/proposal_builders.py, app/knowledge_compilation/reorientation_packet.py, app/knowledge_compilation/review_admission.py, tests/api/test_companion_workspace_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/knowledge_compilation/test_runtime_artifacts.py, tests/knowledge_compilation/test_proposal_builders.py, tests/knowledge_compilation/test_reorientation_packet.py, tests/knowledge_compilation/test_review_admission_handoff.py, merged PRs #1448/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1586/#1591, and current repo state at 9b0564b2 on 2026-06-05
+Last reviewed: 2026-06-07
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/SECURITY_DATA_FLOWS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/COGNITIVE_LOAD_PROJECTION_LAYER.md, docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md, docs/adr/ADR-0012-orientation-multiagent-reads.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/runtime_artifacts.py, app/knowledge_compilation/proposal_builders.py, app/knowledge_compilation/reorientation_packet.py, app/knowledge_compilation/review_admission.py, tests/api/test_companion_workspace_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/knowledge_compilation/test_runtime_artifacts.py, tests/knowledge_compilation/test_proposal_builders.py, tests/knowledge_compilation/test_reorientation_packet.py, tests/knowledge_compilation/test_review_admission_handoff.py, merged PRs #1448/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1586/#1591/#1648/#1649/#1650, and current repo state at 07cc1cb1 on 2026-06-07
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
@@ -62,6 +62,32 @@ authorship, accountability, and local-first artifact control rather than replaci
 The full product-level statement of this thesis, including the failure modes that would
 violate it, lives in `docs/COGNITIVE_PROSTHESIS_CHARTER.md`. The bridge from these human flows
 to the runtime substrate lives in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`.
+
+### Cognitive-load reduction as prosthetic function
+
+Reducing cognitive load is a central human-first function, not an accessibility side topic. The
+system should carry externalizable burdens that otherwise sit in working memory: remembering where
+the human left off, keeping source and proposal together, preserving pending decision state,
+separating facts from interpretation, and making receipts visible after action.
+
+The rule is: reduce friction, not intelligence. The system should remove mechanical costs around
+decoding, parsing, spelling, text production, source comparison, and resumption without flattening
+the content, hiding uncertainty, or treating the human's slowest channel as the human's reasoning
+capacity.
+
+Encoding assistance belongs to this function only when it preserves the human's intended meaning
+and voice. A correction may reduce spelling friction; it must not silently rewrite authorship,
+normalize style, or replace what the human meant.
+
+Resurfacing belongs to this function only when it lowers orientation and memory-context load. It
+should be scarce, source-linked, and non-authoritative; a persistent stream of suggestions that the
+human must monitor is a new burden, not a prosthetic aid.
+
+This function must not reduce load by hiding consequences, replacing source review with agent
+summary, or making the system's recommendation behave like approval. Reading-support and
+accessibility techniques can help implement the function, but the owning product category is
+authority-preserving cognitive offloading. The projection boundary for this work is
+`docs/COGNITIVE_LOAD_PROJECTION_LAYER.md`.
 
 ## 1. What the system is meant to do
 

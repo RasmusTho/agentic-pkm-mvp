@@ -46,7 +46,7 @@ For the interaction-surface authority contract, see:
 - `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md`
 
 <!-- ACCESSIBLE-PANEL-PROPOSAL-FORMAT -->
-## Normalized Accessible Proposal Format
+## Normalized Decision-Surface Proposal Format
 
 Panel proposals that require human review or confirmation should be written and rendered as
 decision surfaces. This format is a documentation contract for future proposal authoring and UI
@@ -74,7 +74,7 @@ Source freshness / option identity:
 Expected receipt or status:
 ```
 
-Accessibility and cognitive-load requirements:
+Cognitive-load and review requirements:
 
 - Keep facts, source claims, agent interpretation, recommendation, uncertainty, and requested
   human action visibly separate.
@@ -100,7 +100,7 @@ Authority and downstream boundaries:
   `POST /api/panel/checkbox-projection` endpoint.
 - Confirmation identity must preserve `option_id`, `panel_id`, content/source hashes, and source
   freshness requirements. The UI must not infer authority from label text or rendered position.
-- The format is grounded in `docs/ACCESSIBILITY_PROJECTION_LAYER.md` decision mode and
+- The format is grounded in `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md` decision mode and
   `docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md` ("Proposal Template Pattern For #1642").
 
 ## PanelAgent Runtime V1 (current baseline)
