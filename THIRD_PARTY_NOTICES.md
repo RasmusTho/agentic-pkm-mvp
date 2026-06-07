@@ -15,13 +15,13 @@ Dependency sources currently include:
 - [requirements-smoke.txt](./requirements-smoke.txt)
 
 Most declared Python dependencies are permissively licensed, such as MIT, BSD,
-Apache-2.0, ISC, PSF, or public-domain style licenses.
+Apache-2.0, ISC, PSF, or public-domain style licenses. For example, `orjson`
+is declared upstream as `Apache-2.0 OR MIT`.
 
 The current dependency set also includes notice-relevant weak copyleft examples:
 
 - `psycopg` is declared as `psycopg[binary]` and is LGPL-licensed upstream.
-- `certifi`, `orjson`, and `tqdm` include MPL-2.0 licensing in their upstream
-  metadata.
+- `certifi` and `tqdm` include MPL-2.0 licensing in their upstream metadata.
 
 Using these packages as external dependencies does not make this repository's
 own code LGPL or MPL. If this project is redistributed, packaged, or shipped as
