@@ -222,12 +222,15 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   live Niflheim dev runtime by a real-note UAT (#1604, 2026-06-06): the governed `queue_review`
   confirm/reject path executed end-to-end with durable receipts visible in the governance/receipt
   layer (orientation governance summary, `panel.receipts`). The UAT is bounded to that
-  governance-handoff path; the in-note checkbox-projection receipt (`- [x]` + AI-status callout) is
-  now separately verified (#1621, 2026-06-06): see `docs/PANEL_AGENT.md` (In-note checkbox-projection
-  receipt loop — #1621) for the UAT receipt. The two receipt paths are distinct: the `queue_review` +
+  governance-handoff path; the in-note checkbox-projection path is separately verified for durable
+  source-backed `- [x]` projection (#1621, 2026-06-06): see `docs/PANEL_AGENT.md` (In-note
+  checkbox-projection receipt loop — #1621) for the narrowed fixture evidence. AI-status callout
+  receipt visibility on that path is runtime-result specific, not a universal claim for every
+  mapped/logged action. The two receipt paths are distinct: the `queue_review` +
   `POST /api/panel/confirm` path writes a durable receipt into the governance/receipt layer
   (`panel.receipts`, `receipt_visibility`); the `POST /api/panel/checkbox-projection` path writes a
-  durable `- [x]` + `> [!info]- AI status` callout directly into the vault note Markdown.
+  durable checked checkbox directly into the vault note Markdown and may also surface an AI-status
+  callout when the invoked Panel runtime path emits one.
 <!-- authority-spine-diagnostic -->
 - Authority spine diagnostic surfaced in health API (#1601): `/api/health` now includes an
   `authority_spine` key with bounded operator-visible posture strings (`write_guard`,
