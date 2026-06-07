@@ -29,6 +29,10 @@ class PilotAgentState:
     # Framework
     trace_id: str
     note_uuid: str
+    authority: dict[str, Any] | None = None
+    authority_basis: str | None = "read-only"
+    proposal_id: str | None = None
+    receipt_event_id: str | None = None
     budget: int = 10
     step_count: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -73,6 +77,10 @@ class PilotAgentState:
         # Build kwargs with current values
         kwargs = {
             "trace_id": self.trace_id,
+            "authority": dict(self.authority) if self.authority is not None else None,
+            "authority_basis": self.authority_basis,
+            "proposal_id": self.proposal_id,
+            "receipt_event_id": self.receipt_event_id,
             "budget": self.budget,
             "step_count": self.step_count,
             "messages": list(self.messages),

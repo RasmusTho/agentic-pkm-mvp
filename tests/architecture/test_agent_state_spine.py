@@ -28,6 +28,7 @@ from __future__ import annotations
 from app.agents.ask.state import AgentState as AskAgentState
 from app.agents.base.graph import AgentState as GraphAgentState
 from app.agents.panel_agent.state import PanelAgentState
+from app.agents.pilot_agent.state import PilotAgentState
 from app.agents.runtime_state import (
     RUNTIME_STATE_CONTRACT_FIELDS,
     conforms_to_runtime_state_contract,
@@ -41,7 +42,14 @@ _KNOWN_AGENT_STATE_CLASSES = [
     GraphAgentState,
     AgentStateBase,
     PanelAgentState,
+    PilotAgentState,
 ]
+
+
+def test_agent_state_spine_covers_active_langgraph_states() -> None:
+    """All active LangGraph state classes named in runtime graph builders are gated."""
+
+    assert PilotAgentState in _KNOWN_AGENT_STATE_CLASSES
 
 
 def test_all_agent_state_classes_carry_trace_id() -> None:
