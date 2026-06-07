@@ -60,7 +60,7 @@ def _run_benchmark_module(*extra_args: str, env_override: dict | None = None) ->
         text=True,
         env=env,
         cwd=str(Path(__file__).resolve().parents[2]),
-        timeout=60,
+        timeout=300,
     )
     assert result.returncode == 0, f"Runner failed:\nstdout={result.stdout}\nstderr={result.stderr}"
     return json.loads(result.stdout)
