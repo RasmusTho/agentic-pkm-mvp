@@ -5498,6 +5498,60 @@ def render_index_html(
       cursor: pointer;
       border-color: var(--accent);
     }}
+    .vault-markdown-rendered .panel-decision-option-label {{
+      font-weight: 600;
+      color: var(--fg-1);
+    }}
+    .vault-markdown-rendered .panel-decision-surface {{
+      margin: 8px 0 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-surface);
+    }}
+    .vault-markdown-rendered .panel-decision-fields {{
+      display: grid;
+      gap: 8px;
+      margin: 0;
+    }}
+    .vault-markdown-rendered .panel-decision-field {{
+      display: grid;
+      grid-template-columns: minmax(92px, 0.28fr) 1fr;
+      gap: 8px;
+      align-items: start;
+    }}
+    .vault-markdown-rendered .panel-decision-field dt {{
+      margin: 0;
+      color: var(--fg-2);
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }}
+    .vault-markdown-rendered .panel-decision-field dd {{
+      margin: 0;
+      color: var(--fg-1);
+    }}
+    .vault-markdown-rendered .panel-local-choice {{
+      margin-left: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--fg-1);
+      font: inherit;
+      font-size: 0.84rem;
+      padding: 2px 8px;
+      cursor: pointer;
+    }}
+    .vault-markdown-rendered .panel-local-choice:hover {{
+      border-color: var(--fg-3);
+      background: var(--bg-raised);
+    }}
+    .vault-markdown-rendered .panel-decision-identity {{
+      margin: 8px 0 0;
+      color: var(--fg-3);
+      font-size: 0.78rem;
+      line-height: 1.3;
+    }}
     .vault-markdown-rendered .panel-checkbox-feedback {{
       display: block;
       margin-top: 4px;
@@ -7359,6 +7413,21 @@ def render_index_html(
       var feedback = item.querySelector('.panel-checkbox-feedback');
       if (feedback) feedback.remove();
     }}
+    document.addEventListener('click', function(event) {{
+      var target = event.target && event.target.closest
+        ? event.target.closest('button[data-panel-local-choice]')
+        : null;
+      if (!target) return;
+      event.preventDefault();
+      var item = target.closest ? target.closest('li.task-list-item') : null;
+      if (!item) return;
+      var feedback = item.querySelector('.panel-checkbox-feedback');
+      if (!feedback) return;
+      var choice = target.getAttribute('data-panel-local-choice') || 'choice';
+      feedback.setAttribute('data-panel-status', 'local-only');
+      feedback.textContent = choice.charAt(0).toUpperCase() + choice.slice(1)
+        + ' is local only in this slice; no durable change was written.';
+    }});
     document.addEventListener('click', function(event) {{
       var target = event.target && event.target.closest
         ? event.target.closest('input[data-panel-checkbox="true"]')

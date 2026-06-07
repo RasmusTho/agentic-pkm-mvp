@@ -540,13 +540,19 @@ def _build_list_html(
             input_attrs = 'type="checkbox"'
             if panel_option is None:
                 input_attrs += " disabled"
+                rendered_content = _render_inline(e_content, context)
             else:
                 input_attrs += _panel_checkbox_attrs(panel_option)
+                rendered_content = (
+                    f'<span class="panel-decision-option-label">'
+                    f"{_render_inline(e_content, context)}</span>"
+                    f"{_render_panel_decision_surface(panel_option)}"
+                )
             items.append(
                 '<li class="task-list-item" '
                 f'data-task-state="{_e(e_state or " ")}">'
                 f'<input {input_attrs}{checked_attr}> '
-                f"{_render_inline(e_content, context)}{nested_html}</li>"
+                f"{rendered_content}{nested_html}</li>"
             )
         else:
             items.append(f"<li>{_render_inline(e_content, context)}{nested_html}</li>")
@@ -615,6 +621,68 @@ def _panel_checkbox_attrs(option: dict[str, object]) -> str:
         "data-content-hash": option.get("content_hash") or "",
     }
     return "".join(f' {name}="{_e(value)}"' for name, value in attrs.items())
+
+
+def _render_panel_decision_surface(option: dict[str, object]) -> str:
+    label = _e(_strip_ai_metadata_comments(str(option.get("label") or "Panel option")))
+    action_id = _e(option.get("action_id") or "runtime-declared option")
+    note_path = _e(option.get("note_path") or "")
+    panel_id = _e(option.get("panel_id") or "")
+    option_id = _e(option.get("option_id") or "")
+    source_hash = _e(option.get("source_hash") or "")
+    content_hash = _e(option.get("content_hash") or "")
+    source_reference = _panel_source_reference(option)
+    return (
+        '<section class="panel-decision-surface" '
+        'aria-label="Panel proposal decision surface">'
+        '<dl class="panel-decision-fields">'
+        '<div class="panel-decision-field" data-panel-decision-field="decision">'
+        "<dt>Decision</dt><dd>Confirm this Panel proposal?</dd></div>"
+        '<div class="panel-decision-field" data-panel-decision-field="recommendation">'
+        f"<dt>Recommendation</dt><dd>{label}</dd></div>"
+        '<div class="panel-decision-field" data-panel-decision-field="why">'
+        f"<dt>Why</dt><dd>Panel staged action <code>{action_id}</code> for this artifact.</dd></div>"
+        '<div class="panel-decision-field" data-panel-decision-field="risk">'
+        "<dt>Risk / uncertainty</dt>"
+        "<dd>Confirming may mutate governed state; source freshness is checked before projection.</dd></div>"
+        '<div class="panel-decision-field" data-panel-decision-field="source">'
+        f"<dt>Source</dt><dd>{source_reference}</dd></div>"
+        '<div class="panel-decision-field" data-panel-decision-field="choices">'
+        "<dt>Choices</dt>"
+        '<dd><span data-panel-choice="confirm">Confirm with the checkbox</span>'
+        '<button type="button" class="panel-local-choice" '
+        'data-panel-local-choice="defer" data-affordance-status="local-only">'
+        "Defer</button>"
+        '<button type="button" class="panel-local-choice" '
+        'data-panel-local-choice="reject" data-affordance-status="local-only">'
+        "Reject</button></dd></div>"
+        '<div class="panel-decision-field" data-panel-decision-field="status">'
+        '<dt>Status / receipt</dt>'
+        '<dd><span class="panel-checkbox-feedback" role="status" aria-live="polite" '
+        'data-panel-status="pending">Awaiting confirmation.</span></dd></div>'
+        "</dl>"
+        '<p class="panel-decision-identity" '
+        f'data-note-path="{note_path}" data-panel-id="{panel_id}" '
+        f'data-option-id="{option_id}" data-source-hash="{source_hash}" '
+        f'data-content-hash="{content_hash}">'
+        "Projection identity is bound by runtime option id and source hash."
+        "</p>"
+        "</section>"
+    )
+
+
+def _panel_source_reference(option: dict[str, object]) -> str:
+    note_path = str(option.get("note_path") or "current note")
+    source_range = option.get("source_range")
+    if isinstance(source_range, dict):
+        start_line = source_range.get("start_line")
+        end_line = source_range.get("end_line")
+        if start_line is not None and end_line is not None:
+            return (
+                f"{_e(note_path)} lines {_e(start_line)}-{_e(end_line)}; "
+                f"source hash {_e(option.get('source_hash') or 'required')}"
+            )
+    return f"{_e(note_path)}; source hash {_e(option.get('source_hash') or 'required')}"
 
 
 def _render_paragraph(
