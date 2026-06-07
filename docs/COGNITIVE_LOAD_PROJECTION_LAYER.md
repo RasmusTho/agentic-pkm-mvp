@@ -1,19 +1,25 @@
-State: Capability boundary contract for cognitive-load and accessibility projections; docs-only, no runtime implementation claim.
-Doc role: Accessibility projection contract
-Authority: Binding source-of-truth boundary for Accessibility Projection Layer docs and downstream issue contracts. It defines how accessibility and cognitive-load aids may project, render, summarize, or structure human-facing views without mutating canonical artifacts or changing authority. Current runtime truth remains owned by shipped implementation docs and tests.
+State: Capability boundary contract for human-facing cognitive-load projections; docs-only, no runtime implementation claim.
+Doc role: Cognitive load projection contract
+Authority: Binding source-of-truth boundary for Cognitive Load Projection Layer docs and downstream issue contracts. It defines how cognitive-load aids, display preferences, listening surfaces, and accessibility techniques may project, render, summarize, or structure human-facing views without mutating canonical artifacts or changing authority. Current runtime truth remains owned by shipped implementation docs and tests.
 Owner: Product / Companion UI / interaction authority
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-06
+Last reviewed: 2026-06-07
 Last verified against: docs/HUMAN-FLOWS.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md
 
-# Accessibility Projection Layer
+# Cognitive Load Projection Layer
 
 ## Purpose
 
-The Accessibility Projection Layer is the governed boundary between canonical artifacts and
-human-facing accessibility or cognitive-load views.
+The Cognitive Load Projection Layer is the governed boundary between canonical artifacts and
+human-facing cognitive-load projections.
+
+This is not an accessibility sidecar for a subset of users. In Yggdrasil, cognitive-load
+reduction is one of the central functions of the cognitive prosthesis: the system helps the human
+hold less in working memory, recover context after interruption, compare source and proposal, and
+decide without losing authorship or authority. Accessibility techniques are valid tools inside
+that function, but they are not the owning category.
 
 Its purpose is to reduce avoidable reading, review, orientation, and decision burden while
 preserving the system's authority spine: canonical Markdown, source authority, WriteGuard,
@@ -26,7 +32,7 @@ It does not make projections authoritative.
 
 ## Core Rules
 
-Accessibility projections are non-authoritative. They are not authority, not a replacement for
+Cognitive-load projections are non-authoritative. They are not authority, not a replacement for
 source artifacts, and not a hidden route around governed mutation paths.
 
 Every projection in this layer must satisfy these rules:
@@ -50,7 +56,7 @@ canonical truth.
 flowchart TD
     canonical["Canonical Markdown, frontmatter, receipts, provenance"]
     runtime["Runtime and machine mirrors (indexes, aggregates, hashes, guard state)"]
-    layer["Accessibility Projection Layer"]
+    layer["Cognitive Load Projection Layer"]
     views["Human-facing views: reading, listening, decision, review"]
     governed["Governed mutation path: server classification, WriteGuard, receipt"]
 
@@ -68,7 +74,7 @@ through the governed mutation path before canonical artifacts change.
 
 ## Architecture Placement
 
-This layer sits in the Companion UI projection zone, aligned with Layer 7 in
+This layer sits in the human-facing projection zone, aligned with Companion UI Layer 7 in
 `companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md`. It inherits the shared Companion UI rule that
 the UI may project, render, summarize, overlay, stage, queue, and propose, but durable mutation
 requires server-side classification, WriteGuard, provenance, and receipt production.
@@ -83,16 +89,16 @@ Existing contracts already define important neighbors:
   `POST /api/panel/checkbox-projection` as the source-backed, runtime-mediated checkbox projection
   path for Panel read-mode confirmation.
 - `docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md` supplies evidence grounding and the
-  simplification-vs-authority decision test for downstream accessibility work.
+  simplification-vs-authority decision test for downstream cognitive-load work.
 
-The Accessibility Projection Layer does not replace those contracts. It names the cross-cutting
-accessibility and cognitive-load boundary that downstream reading, listening, display, and decision
-surfaces must satisfy.
+The Cognitive Load Projection Layer does not replace those contracts. It names the cross-cutting
+human-first boundary that downstream reading, listening, display, review, and decision surfaces
+must satisfy.
 
 ## Display Preferences Vs Semantic Transformations
 
 Display preferences are local rendering choices. Examples include font size, line height, paragraph
-spacing, column width, reduced clutter, focus layout, optional dyslexia-oriented font preference,
+spacing, column width, reduced clutter, focus layout, optional reading-support font preference,
 and experimental Bionic-style rendering.
 
 Display preferences remain render-only when they present the same source or proposal without
@@ -145,13 +151,13 @@ governed action.
 ### Experimental projections
 
 Experimental projections include weakly supported or highly user-specific aids such as Bionic-style
-rendering or dyslexia-oriented font presets. They must be opt-in, reversible, render-only where
+rendering or reading-support font presets. They must be opt-in, reversible, render-only where
 possible, clearly marked as experimental, and disabled by default unless a later owner-doc update
 changes that posture.
 
 ## Decision Test
 
-Use this test before implementing or documenting an accessibility projection:
+Use this test before implementing or documenting a cognitive-load projection:
 
 | Question | Projection class | Required route |
 | --- | --- | --- |

@@ -4,9 +4,9 @@ Authority: Evidence grounding for cognitive-load reduction issue #1644. This mem
 downstream issue contracts and owner-doc proposals, but it does not override current-state owner
 docs, Panel runtime contracts, Companion UI contracts, or shipped implementation truth.
 Owner: `docs/HUMAN-FLOWS.md` / Companion UI and Panel downstream issue lanes
-Last reviewed: 2026-06-06
+Last reviewed: 2026-06-07
 Last verified against: docs/HUMAN-FLOWS.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md,
-docs/PANEL_AGENT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md,
+docs/COGNITIVE_LOAD_PROJECTION_LAYER.md, docs/PANEL_AGENT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md,
 app/panel/checkbox_projection.py, tests/panel/test_panel_checkbox_projection.py,
 docs/DOCS_INDEX.md
 
@@ -14,9 +14,10 @@ docs/DOCS_INDEX.md
 
 ## Purpose
 
-This memo grounds issue #1644: cognitive-load reduction as a Yggdrasil capability, with
-dyslexia-aware support as a forcing function. It is research material, not a shipped-runtime
-contract.
+This memo grounds issue #1644: cognitive-load reduction as a central Yggdrasil cognitive-prosthetic
+capability. Dyslexia and reading-disability evidence are used as constraints and stress tests for
+the design, not as the category that owns the work. This is research material, not a
+shipped-runtime contract.
 
 The practical conclusion is:
 
@@ -34,7 +35,7 @@ The evidence and repo contracts point to a layered approach:
 1. Reduce avoidable extraneous load around review and decision handoff.
 2. Keep intrinsic task difficulty visible instead of hiding risk or uncertainty.
 3. Use listening, spacing, layout, and structured decision patterns as aids.
-4. Treat dyslexia-specific fonts and Bionic-style rendering as optional or experimental, not core.
+4. Treat diagnosis-specific fonts and Bionic-style rendering as optional or experimental, not core.
 5. Keep summaries, simplifications, and display transformations non-authoritative.
 6. Keep confirmation as an authority surface, not a convenience click.
 
@@ -42,6 +43,46 @@ In repo terms, cognitive-load reduction must not mutate canonical Markdown, rece
 memory extraction, runtime authority, or agent interpretation. It should produce human-facing
 projections over source material and proposals, and it should make source comparison and review
 easier before action.
+
+## Wave 1 Addendum: Agent Proposal-And-Confirmation Surface
+
+A later Wave 1 memo on FA-1 / FA-2 / RQ-9 matches the merged repo work in its core architecture:
+proposal rendering is non-authoritative, human confirmation is the authority boundary, and governed
+mutation routes through the existing policy, WriteGuard, idempotency, and receipt path. Treat that
+memo as an upstream research addendum, not as a replacement for this document or the owner docs.
+
+Repository reconciliation as of 2026-06-07:
+
+- The earlier caveat that `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md` and
+  `app/panel/checkbox_projection.py` could not be read should not be carried forward in repo-local
+  docs. They are available and are part of the verification source set for this memo.
+- `POST /api/panel/checkbox-projection` is not a pure read-only projection. It is the
+  source-backed, runtime-mediated confirmation path that may project a human-confirmed `- [x]`
+  checkbox through the governed backend writer path. The non-mutation invariant applies to
+  display/proposal/projection behavior before explicit human confirmation, and to summaries or
+  display/readability transformations that are not routed through governance.
+- The long RQ-9 simplification-vs-authority checklist is a useful proposed owner gate, but it is
+  not yet a hard runtime or product norm. The compact owner-doc version currently lives in
+  `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md` as the Decision Test. A future owner-doc change should
+  decide whether to promote the longer gate wholesale or narrow it.
+- Thresholds such as option-count ceilings, one-decision-per-surface, and verify prompts should be
+  treated as recommendations until an owner contract adopts them. They are especially useful for
+  design review, but they should not be described as shipped behavior.
+
+Proposed RQ-9 gate, in owner-review form:
+
+- Presentation may reduce parsing cost, but must not replace source review or rewrite the decision.
+- The human must still make the decision; no pre-checked governance-bearing actions, auto-confirm,
+  or confirm-all over governed effects.
+- Consequences, uncertainty, reversibility, and source posture must remain visible before
+  confirmation.
+- Projection/rendering must not mutate canonical Markdown, receipts, provenance, memory inputs,
+  runtime authority, or agent interpretation unless routed through the governed mutation path.
+- Explanations must not be used as a trust signal. They should be checkable, source-adjacent, and
+  on demand when detail would otherwise overload review.
+- Load reduction should lower extraneous burden: proposal length, option count, nesting, source
+  distance, context switches, and resumption cost. It must not lower intrinsic burden by hiding the
+  judgment the human is being asked to make.
 
 ## Evidence Ranking
 
@@ -51,7 +92,7 @@ easier before action.
 | TTS / listening / read-aloud | Moderate positive evidence for readers with reading disabilities; still variable by user and setup. | Treat TTS/listening as a credible P0/P1 review aid, especially for source review and decision confirmation. |
 | Spacing, line height, layout, clear structure | Strong accessibility guidance and low-risk adaptability requirement. | Support render-only spacing/layout preferences and structured sections; do not encode them into canonical Markdown. |
 | Dyslexia-specific fonts | Mixed to weak. Studies often find no reliable speed/accuracy gain from the typeface itself; user preference can still matter. | Offer as optional display preference, not as a claimed core intervention. |
-| Bionic-style rendering | Weak/negative current evidence for reading speed and eye-movement benefit. | Mark experimental only; do not make it the primary dyslexia support story. |
+| Bionic-style rendering | Weak/negative current evidence for reading speed and eye-movement benefit. | Mark experimental only; do not make it the primary cognitive-load support story. |
 | Automation bias | Strong enough to require design safeguards around AI recommendations. | Do not make agent recommendations look like settled decisions; show source, uncertainty, risk, and reject/defer/clarify paths. |
 | Summarization faithfulness | Active risk area; factual consistency evaluation remains difficult, especially outside simple news summaries. | Summaries must be source-preserving projections with review posture, not authoritative replacements for the source. |
 | Cognitive offloading / intention offloading | Useful and well-aligned, but offloading can change what users remember and rely on. | External aids should preserve reviewability, cues, receipts, and provenance so offloading does not become hidden authority transfer. |
@@ -89,7 +130,7 @@ Soft proxies to track or inspect:
 These should remain soft signals. They are not hard product limits because intrinsic difficulty
 varies by task, source, user expertise, risk tier, and artifact class.
 
-## WP-B: Dyslexia, Listening, And Display Evidence Dossier
+## WP-B: Listening, Structure, And Display Evidence Dossier
 
 ### TTS And Listening
 
@@ -149,7 +190,7 @@ Yggdrasil implication:
 
 - Bionic-style rendering should be explicitly experimental.
 - It should be opt-in, reversible, render-only, and disabled by default.
-- It must not be the central accessibility story or a substitute for governed source-preserving
+- It must not be the central cognitive-load story or a substitute for governed source-preserving
   review.
 
 ## WP-C: Confirmation Flow And Checkbox Authority Study
@@ -247,7 +288,7 @@ review posture, not generic summary replacement.
 
 ## WP-F: Simplification-Vs-Authority Decision Memo
 
-Use this test before accepting any cognitive-load or accessibility projection:
+Use this test before accepting any cognitive-load projection:
 
 | Question | If yes | If no |
 | --- | --- | --- |
@@ -304,7 +345,7 @@ Display preferences are local rendering aids:
 - column width
 - reduced visual clutter
 - focus mode
-- optional dyslexia-oriented font preference
+- optional reading-support font preference
 - experimental Bionic-style rendering
 
 They must not mutate canonical Markdown, receipts, provenance, memory extraction, runtime authority,
@@ -330,9 +371,11 @@ receipt/status. It should not read only the recommendation and skip risk or sour
 
 ## Open owner decisions
 
-- Where should the durable product contract for "Cognitive-load / Accessibility Projection Layer"
-  live after #1640: `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, Companion UI docs, or a new
-  capability directory?
+- Should the proposed RQ-9 simplification-vs-authority gate be promoted into an owner-doc contract,
+  and if so which parts become hard blockers versus review guidance?
+- Where should the durable product contract for the Cognitive Load Projection Layer live after
+  #1640: `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, Companion UI docs, or a new capability
+  directory?
 - Should listening/TTS be specified as a Companion UI capability, a general interaction-surface
   capability, or both?
 - What is the minimum status/receipt feedback required after read-mode confirmation in #1645?
@@ -348,6 +391,7 @@ Repo authority:
 
 - `docs/HUMAN-FLOWS.md` — product thesis and loops, including `Intent -> propose -> decide -> execute -> receipt`.
 - `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — provenance, source authority, WriteGuard, events, receipts.
+- `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md` — cognitive-load projection boundary.
 - `docs/PANEL_AGENT.md` — artifact-local intent manifestation and Canonical confirmation semantics.
 - `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md` — checkbox projection endpoint and boundary.
 - `app/panel/checkbox_projection.py` — `extract_panel_selectable_options` and projection implementation.
