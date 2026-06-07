@@ -101,25 +101,30 @@ Current shipped runtime truth is owned by:
 ### 3) Resurface
 
 - Human question it answers: "What quietly important thing should return to attention now?"
-- Cognitive burden it reduces: missed follow-up, forgotten relevance, and attention drift.
-- Primary surface(s): Companion suggestions rail/area across Chat/Panel host context; optional
-  automation-triggered surfacing.
+- Cognitive burden it reduces: missed follow-up, forgotten relevance, and re-orientation effort
+  after attention drift.
+- Primary surface(s): Companion orientation/resurface areas across Chat/Panel host context. The
+  baseline posture is pull/snapshot/read-only; ambient refresh is bounded foreground refresh only
+  where ADR-0011 or a successor owner decision admits it.
 - Supporting runtime capabilities: resurfacing capability contract; relevance-change signals;
   context-bundle support for explanation.
 - Context bundle usage: resurfacing bundle should carry why-now signals, linked artifacts, and
   relation context.
 - Agent memory usage: optional contextual hinting; memory contribution must be explicit and
   reviewable.
-- Provenance/receipt expectations: resurfacing should explain "why now" and keep semantic
-  relatedness distinct from priority, trust, authority, and actionability.
+- Provenance/receipt expectations: resurfacing should explain "why now" with short
+  pointer/provenance-first signals and keep semantic relatedness distinct from priority, trust,
+  authority, and actionability.
 - Authority limits: Resurface can suggest; it must not escalate to urgent-task semantics unless
-  explicitly promoted/escalated.
+  explicitly promoted/escalated. Resurfacing presence must not become approval, urgency, memory
+  promotion, or write authority.
 - Failure modes:
   - semantic similarity mistaken for urgency;
   - suggestion pressure that feels mandatory;
   - hidden ranking logic with no explanation.
-- Target-state UX behavior: low-pressure suggestions with clear actions: dismiss, snooze, pin, or
-  inspect.
+- Target-state UX behavior: scarce, low-pressure, source-linked suggestions with clear actions:
+  inspect, dismiss, snooze, or pin when those actions are explicitly scoped. No alert, badge,
+  notification inbox, focus stealing, or persistent monitoring stream is implied by this mode.
 - Current-state caveat: minimal resurfacing runtime seams exist; full product-surface suggestion
   orchestration remains target-state.
 

@@ -146,6 +146,63 @@ Design consequences:
   then decide. It should not become a persuasion surface that front-loads agent reasoning as a
   trust signal.
 
+## Wave 3 Addendum: Resurfacing And Memory/Context Support Without Overload
+
+Wave 3 confirms resurfacing as part of the same central cognitive-load capability. Resurfacing is
+valuable because cognitive offloading can free working-memory resources and reduce prospective
+memory failures, but it becomes a net load if it turns into a stream the human must monitor.
+
+The design posture is:
+
+> Scarce, justified, non-authoritative, cheap to consume.
+
+Repository reconciliation as of 2026-06-07:
+
+- The orientation and resurfacing source files named in the external memo are readable in the repo.
+- `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` defines the shipped
+  `GET /api/companion/orientation` shape with `leave_point`, `open_loops`, `notable_changes`,
+  `resurface.candidates`, memory awareness, governance, guards, server-declared caps, and bounded
+  `mutation_intents`.
+- ADR-0011 confirms the shipped orientation posture remains pull, snapshot, and read-only. It
+  allows only later bounded foreground ambient refresh, not server push, notifications, badges,
+  inboxes, urgency feeds, or focus stealing.
+- `app/orientation/bundle_consumer.py` rejects orientation bundles with `may_write=True` and
+  returns `may_write=False`.
+- `app/resurfacing/bundle_consumer.py` requires `may_resurface=True`, rejects `may_write=True`,
+  requires `intended_use` to include `resurface`, preserves exclusions, separates relatedness from
+  priority, and returns `suggestion_only=True`, `may_write=False`.
+- `app/resurfacing/runtime.py` evaluates derived relevance-change signals as read-only and returns
+  no mutation intents.
+- Tests in `tests/resurfacing/test_context_bundle_resurfacing.py`,
+  `tests/resurfacing/test_resurfacing_runtime.py`, `tests/orientation/test_context_bundle_orientation.py`,
+  and `tests/knowledge_compilation/test_reorientation_packet.py` prove the non-write posture at
+  code level.
+
+The Wave 3 caveat should therefore be corrected from "may_write=false is inferred" to
+"may_write=false is confirmed for the shipped orientation/resurfacing/context-bundle seams." The
+remaining #1657 issue is real, but it concerns an overbroad Panel checkbox-projection AI-status
+receipt claim. It should not be used as evidence that resurfacing has a mutation or receipt
+problem.
+
+Design consequences:
+
+- Resurfacing-for-task-support and resurfacing-for-learning are different modes. Task support uses
+  just-in-time orientation cues; learning uses spaced retrieval practice. Do not share one timer,
+  card shape, or metric.
+- Resurfacing should be budgeted: small caps per orientation moment, low-frequency foreground
+  refresh only, and a relevance/salience threshold below which nothing surfaces.
+- Pull is the default. Bounded ambient refresh is an owner-contract exception and must remain
+  read-only, foreground, and low-noise.
+- Each item needs a short, source-linked "why now". Prefer pointer/provenance over generated
+  rationale.
+- Resurfacing must not silently re-prioritize the human's work. If ranking/filtering is used, the
+  basis must be visible and source-linked.
+- Resurfaced cards should be short, self-contained, pointer-first, and TTS-ready. A wall of
+  resurfaced text reintroduces the reading load the feature is meant to reduce.
+- Memory/context resurfacing should avoid system-driven over-offloading. The system may preserve
+  reliable pointers and review posture, but it should not aggressively volunteer to remember more
+  than the human chose.
+
 ## Evidence Ranking
 
 | Intervention / concern | Evidence posture | Yggdrasil implication |
@@ -156,6 +213,8 @@ Design consequences:
 | Shorter lines, spacing, line height, layout, clear structure | Evidence is user/subset-dependent but low-risk as render-only adaptation. | Support render-only throughput/layout preferences and structured sections; do not encode them into canonical Markdown. |
 | Dictation/STT plus read-back | Positive accommodation evidence, with proofreading burden shifted to verification. | Treat STT as draft capture; pair correction/dictation with TTS read-back and human confirmation before save. |
 | Standard spellcheck for severe spelling load | Insufficient; misses far-from-target and real-word errors and leaves suggestion selection to the human. | Native spellcheck is a baseline only; smarter correction must remain proposal-class and transparent. |
+| Cognitive offloading / resurfacing | Net-positive when reliable, scarce, and provenance-backed; risky when it becomes noisy, unreliable, or over-encourages offloading. | Treat resurfacing as bounded read-only orientation support with hard caps, why-now provenance, and no notification-style monitoring burden. |
+| Task-support vs learning resurfacing | Different evidence bases and timing logic. | Keep just-in-time orientation separate from spaced retrieval practice. |
 | Dyslexia-specific fonts | Mixed to weak. Studies often find no reliable speed/accuracy gain from the typeface itself; user preference can still matter. | Offer as optional display preference, not as a claimed core intervention. |
 | Bionic-style rendering | Weak/negative current evidence for reading speed and eye-movement benefit. | Mark experimental only; do not make it the primary cognitive-load support story. |
 | Automation bias | Strong enough to require design safeguards around AI recommendations. | Do not make agent recommendations look like settled decisions; show source, uncertainty, risk, and reject/defer/clarify paths. |
@@ -449,6 +508,12 @@ receipt/status. It should not read only the recommendation and skip risk or sour
   read-back as a strongly recommended verification affordance?
 - What correction policy should govern severe spelling, real-word-error, and rewrite assistance:
   suggestion-only, diff-before-save, or Canvas user-present apply with undo and provenance?
+- What resurfacing budget should become contractual for the cognitive-load layer: items per
+  orientation moment, foreground refresh frequency, and minimum salience threshold?
+- Should learning-oriented resurfacing stay out of FA-5 and become a later spaced-retrieval
+  capability so it does not get conflated with task-support orientation?
+- What is the minimal "why now" field shape for resurfacing cards: trigger, source, relevance basis,
+  and confidence/degradation in one bounded line?
 - What is the minimum status/receipt feedback required after read-mode confirmation in #1645?
 - Should defer/reject be local UI affordances first, or should they wait for a governed proposal
   lifecycle contract?
@@ -470,6 +535,14 @@ Repo authority:
 - `docs/COMPANION_UI_PRODUCT_SPEC.md` — Companion UI product mode model.
 - `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md` — note-independent orientation projection.
 - `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` — artifact-scoped workspace/read aggregate.
+- `docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md` — pull/snapshot/read-only ambient
+  resurfacing boundary.
+- `app/orientation/bundle_consumer.py` — orientation context-bundle consumer and non-write guard.
+- `app/resurfacing/bundle_consumer.py` — resurfacing context-bundle consumer, why-now signal, and
+  `may_write=False` guard.
+- `app/resurfacing/runtime.py` — read-only derived-signal resurfacing runtime seam.
+- `tests/resurfacing/test_context_bundle_resurfacing.py` and
+  `tests/resurfacing/test_resurfacing_runtime.py` — executable resurfacing boundary proof.
 - `app/api/routes/companion.py` — current Companion workspace, orientation, body update, and note
   save endpoints.
 - `tests/companion_ui/test_direct_note_editor.py` — direct human note editor and native spellcheck

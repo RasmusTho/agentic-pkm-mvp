@@ -1,6 +1,6 @@
 State: Capability boundary contract for human-facing cognitive-load projections; docs-only, no runtime implementation claim.
 Doc role: Cognitive load projection contract
-Authority: Binding source-of-truth boundary for Cognitive Load Projection Layer docs and downstream issue contracts. It defines how cognitive-load aids, display preferences, listening surfaces, text-production aids, and accessibility techniques may project, render, summarize, structure, or propose changes on human-facing views without mutating canonical artifacts or changing authority. Current runtime truth remains owned by shipped implementation docs and tests.
+Authority: Binding source-of-truth boundary for Cognitive Load Projection Layer docs and downstream issue contracts. It defines how cognitive-load aids, display preferences, listening surfaces, text-production aids, resurfacing aids, and accessibility techniques may project, render, summarize, structure, or propose changes on human-facing views without mutating canonical artifacts or changing authority. Current runtime truth remains owned by shipped implementation docs and tests.
 Owner: Product / Companion UI / interaction authority
 Temporal class: strategic
 Review cadence: event-driven
@@ -21,9 +21,9 @@ hold less in working memory, recover context after interruption, compare source 
 decide without losing authorship or authority. Accessibility techniques are valid tools inside
 that function, but they are not the owning category.
 
-Its purpose is to reduce avoidable reading, review, orientation, text-production, and decision
-burden while preserving the system's authority spine: canonical Markdown, source authority,
-WriteGuard, receipts, provenance, runtime authority, and human confirmation.
+Its purpose is to reduce avoidable reading, review, orientation, resurfacing, text-production, and
+decision burden while preserving the system's authority spine: canonical Markdown, source
+authority, WriteGuard, receipts, provenance, runtime authority, and human confirmation.
 
 Cognitive-load reduction is a workflow capability, not a UI theme. The layer supports the Human
 Flow loops `Source -> interpret -> stabilize` and `Intent -> propose -> decide -> execute -> receipt`
@@ -55,6 +55,8 @@ The active sub-areas are:
   visibility.
 - Orientation / resumption load: `leave_point`, open loops, notable changes, and stable re-entry
   after interruption.
+- Resurfacing / memory-context load: scarce, justified, non-authoritative return of relevant
+  context, with pointer-first provenance and no notification-style monitoring burden.
 
 ## Core Rules
 
@@ -70,13 +72,16 @@ Every projection in this layer must satisfy these rules:
 - It must distinguish source text, agent interpretation, recommendation, uncertainty, and requested
   human action when those concepts are present.
 - It must keep local display preferences separate from semantic transformations.
+- It must keep resurfacing scarce, source-linked, and explicitly non-authoritative; resurfacing
+  presence must not become priority, urgency, or approval.
 - It must treat dictation output, spelling correction, and rewriting assistance as draft or
   proposal-class until the human confirms the intended text.
 - It must route any authority transfer through the existing governed confirmation or mutation path.
 
-The layer may improve readability, listening, comparison, orientation, text production, and
-decision review. It may not decide for the human, silently approve an agent recommendation,
-silently rewrite the human's intended meaning, or make a summary behave as canonical truth.
+The layer may improve readability, listening, comparison, orientation, resurfacing, text
+production, and decision review. It may not decide for the human, silently approve an agent
+recommendation, silently rewrite the human's intended meaning, silently re-prioritize the human's
+work, or make a summary behave as canonical truth.
 
 ## Projection Stack
 
@@ -85,7 +90,7 @@ flowchart TD
     canonical["Canonical Markdown, frontmatter, receipts, provenance"]
     runtime["Runtime and machine mirrors (indexes, aggregates, hashes, guard state)"]
     layer["Cognitive Load Projection Layer"]
-    views["Human-facing views: reading, listening, text-production, decision, review"]
+    views["Human-facing views: reading, listening, resurfacing, text-production, decision, review"]
     governed["Governed mutation path: server classification, WriteGuard, receipt"]
 
     canonical --> runtime
@@ -147,8 +152,9 @@ transfer and must use a governed confirmation path.
 
 ## Mode Scope
 
-This contract scopes reading mode, listening mode, text-production mode, decision mode, review
-mode, and experimental projections as projection behaviors, not implementation claims.
+This contract scopes reading mode, listening mode, resurfacing mode, text-production mode,
+decision mode, review mode, and experimental projections as projection behaviors, not
+implementation claims.
 
 ### Reading mode
 
@@ -170,6 +176,22 @@ available choices.
 Listening should be user-controlled. A forced simultaneous identical audio/text stream can add
 load for some review tasks; the safe contract is to support reading, listening, sequential review,
 or narration with source-adjacent highlights without making one modality authoritative.
+
+### Resurfacing mode
+
+Resurfacing mode returns existing context to attention when the runtime has a source-linked reason
+to believe it is relevant again. It is a projection/orientation aid, not a notification system, not
+priority authority, and not memory promotion.
+
+Task-support resurfacing and learning resurfacing are different modes. Task-support resurfacing
+helps the human resume or orient now; it should attach to `leave_point`, open loops, notable
+changes, and bounded why-now signals. Learning resurfacing is spaced retrieval practice and should
+not reuse task-orientation timing or present answers as passive re-reading.
+
+Resurfacing must be scarce, justified, non-authoritative, and cheap to consume. The safe posture is
+pull-by-default with bounded foreground ambient refresh only where an owner contract admits it; no
+alerts, badges, notification inboxes, urgency feeds, or focus stealing. Each surfaced item should
+carry a short pointer-first "why now" with source/provenance and should remain TTS-ready.
 
 ### Text-production mode
 
@@ -211,6 +233,7 @@ Use this test before implementing or documenting a cognitive-load projection:
 | --- | --- | --- |
 | Does it only change visual or auditory presentation of the same content? | Display preference | Keep local and render-only. |
 | Does it summarize, simplify, rank, filter, recommend, or explain? | Semantic transformation | Preserve source and review posture. |
+| Does it resurface, rank, filter, or reorder context for attention? | Resurfacing projection | Show source-linked why-now, respect budget/caps, and do not make resurfacing priority or authority. |
 | Does it correct, rewrite, or transcribe human-authored input? | Draft/proposal over text input | Show the change and require human confirmation before canonical save. |
 | Does it change what the human is considered to have approved? | Authority transfer | Route through governed confirmation. |
 | Does it write canonical Markdown, receipts, provenance, memory extraction inputs, runtime authority, or agent interpretation? | Durable or authority-bearing mutation | Use an owner-doc contract, WriteGuard, and receipt path. |
@@ -232,12 +255,17 @@ Downstream issues should use this layer as a boundary, not as implementation evi
 - A follow-up text-production issue should specify dictation, correction-as-proposal,
   real-word-error flagging, and read-back verification against the existing direct note editor and
   Canvas/body-edit surfaces.
+- A follow-up resurfacing issue should reconcile FA-5 against the shipped Workspace Orientation and
+  resurfacing seams: hard caps/budgets, pull-default, bounded ambient refresh, pointer-first
+  why-now provenance, and the task-support-versus-learning split.
 
 ## Non-Goals
 
 - This document does not implement runtime behavior.
 - This document does not implement Companion UI controls.
 - This document does not implement text-to-speech.
+- This document does not implement resurfacing budgets, ambient refresh, notifications, or learning
+  schedules.
 - This document does not implement dictation, spellchecking, or correction assistance.
 - This document does not implement display preferences.
 - This document does not change Panel confirmation semantics.

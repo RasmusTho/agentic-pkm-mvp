@@ -75,6 +75,10 @@ decoding, parsing, spelling, text production, source comparison, and resumption 
 the content, hiding uncertainty, or treating the human's slowest channel as the human's reasoning
 capacity.
 
+Resurfacing belongs to this function only when it lowers orientation and memory-context load. It
+should be scarce, source-linked, and non-authoritative; a persistent stream of suggestions that the
+human must monitor is a new burden, not a prosthetic aid.
+
 This function must not reduce load by hiding consequences, replacing source review with agent
 summary, or making the system's recommendation behave like approval. Reading-support and
 accessibility techniques can help implement the function, but the owning product category is
