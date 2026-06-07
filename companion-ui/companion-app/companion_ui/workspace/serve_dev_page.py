@@ -1441,7 +1441,7 @@ def _render_note_section(fields: dict) -> str:
           <div class="note-body-content" data-testid="workspace-note-rendered">{body}</div>
           <textarea class="note-source-editor" id="note-source-editor"
             data-testid="workspace-note-source-editor"
-            spellcheck="true" autocapitalize="sentences" autocorrect="on"
+            spellcheck="true" autocapitalize="sentences" autocorrect="off"
             autocomplete="off" wrap="soft"
             aria-label="Edit note source"
             data-note-path="{note_path_val}" data-content-hash="{content_hash}"
