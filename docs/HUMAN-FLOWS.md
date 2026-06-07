@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-07
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/SECURITY_DATA_FLOWS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/COGNITIVE_LOAD_PROJECTION_LAYER.md, docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md, docs/adr/ADR-0012-orientation-multiagent-reads.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/runtime_artifacts.py, app/knowledge_compilation/proposal_builders.py, app/knowledge_compilation/reorientation_packet.py, app/knowledge_compilation/review_admission.py, tests/api/test_companion_workspace_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/knowledge_compilation/test_runtime_artifacts.py, tests/knowledge_compilation/test_proposal_builders.py, tests/knowledge_compilation/test_reorientation_packet.py, tests/knowledge_compilation/test_review_admission_handoff.py, merged PRs #1448/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1586/#1591/#1648/#1649/#1650, and current repo state at 07cc1cb1 on 2026-06-07
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/SECURITY_DATA_FLOWS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/COGNITIVE_LOAD_PROJECTION_LAYER.md, docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md, docs/adr/ADR-0012-orientation-multiagent-reads.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/runtime_artifacts.py, app/knowledge_compilation/proposal_builders.py, app/knowledge_compilation/reorientation_packet.py, app/knowledge_compilation/review_admission.py, app/source_understanding/p0.py, app/source_understanding/handoff.py, app/source_understanding/lenses.py, app/source_understanding/integration_action.py, tests/api/test_companion_workspace_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/knowledge_compilation/test_runtime_artifacts.py, tests/knowledge_compilation/test_proposal_builders.py, tests/knowledge_compilation/test_reorientation_packet.py, tests/knowledge_compilation/test_review_admission_handoff.py, tests/source_understanding/test_p0_packet.py, tests/source_understanding/test_stabilized_note_handoff.py, tests/source_understanding/test_concept_critique_lenses.py, tests/source_understanding/test_integration_action_lenses.py, merged PRs #1448/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1586/#1591/#1648/#1649/#1650/#1689/#1691/#1692/#1693, and current repo state at dc993299 on 2026-06-07
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
@@ -173,6 +173,37 @@ Scope note:
 - It is not a blanket requirement that every runtime interaction must pass through a human approval step before the system can propose or execute low-risk work.
 - The runtime should reduce cognitive load by generating autonomous proposals where the action is low-risk and the artifact value is not threatened, while reserving harder guardrails for writes or transitions that could damage artifact integrity, provenance, or user trust.
 - Suggested actions may surface as proposed checkbox items in an AI panel when the system has enough context to help but not enough certainty or authority to mutate directly.
+
+### Source -> interpret -> stabilize
+
+Shipped Source Understanding support (#1646, delivered by #1689/#1691/#1692/#1693) gives this loop
+a narrow runtime seam for source material and selected passages. It is not generic summarization,
+automatic literature review, or durable knowledge creation.
+
+The shipped surface is:
+
+- `POST /api/source-understanding/p0`, which accepts one source or selected passage and returns a
+  non-authoritative Source Understanding packet with Orientation, Structure, Claims, and Evidence;
+- a stabilized-note proposal handoff model that stages review material without auto-promotion;
+- Concept and Critique lens projections that distinguish source-defined concepts, agent
+  clarification, source-stated limitations, and agent-inferred review concerns; and
+- Integration and Action lens projections that distinguish caller-supplied retrieved context from
+  agent speculation, degrade when broader context is unavailable, and keep possible next steps as
+  proposal-class review objects.
+
+All Source Understanding packets and lenses are non-authoritative projections. They preserve source
+identity, source references, selection scope, line anchors where supplied, and explicit anchor
+limitations where exact anchors are unavailable. Selection-scoped output must not claim
+whole-document understanding.
+
+The shipped runtime does not mutate canonical Markdown, notes, relations, metadata, receipts,
+memory, tasks, or commitments by generation alone. Stabilized notes, concept notes, integration
+links, and action execution remain target-state or governed handoff work unless a later accepted
+proposal crosses an existing governed mutation path with WriteGuard and receipt posture.
+
+Related cognitive-load work under #1638 supports the same authority-preserving projection posture
+through source-preserving summaries, resurfacing, and correction-as-proposal surfaces. It remains a
+separate parent path; #1646 owns Source Understanding Mode.
 
 ### Capture
 
