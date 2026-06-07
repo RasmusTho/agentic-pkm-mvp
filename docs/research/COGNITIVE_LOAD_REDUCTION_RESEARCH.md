@@ -314,6 +314,52 @@ Design consequences:
   unavailable and should leave `/api/companion/note/save` and
   `POST /api/panel/checkbox-projection` unchanged.
 
+## Wave 5 Addendum: Display Preferences As Local Rendering Aids
+
+Wave 5 confirms that display preferences are useful but downstream. They are not the core
+cognitive-load intervention and should not replace proposal design, source-preserving review,
+listening/read-back, text-production support, or resurfacing budgets. Their safe architectural
+shape is local, opt-in, render-only UI config.
+
+Repository reconciliation as of 2026-06-07:
+
+- `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md :: Display Preferences Vs Semantic Transformations` is
+  the owner contract for display preferences. It now defines display preferences as local, opt-in,
+  render-only UI config.
+- Display settings must leave canonical Markdown byte-for-byte unchanged. They do not mutate
+  frontmatter, receipts, provenance, memory extraction, runtime authority, agent interpretation, or
+  content hash inputs.
+- Display preference state belongs in Companion UI workspace/local UI state. It is not canonical
+  knowledge, artifact metadata, frontmatter, memory, receipt posture, or source interpretation.
+- `companion-ui/docs/WORKSPACE_STATE_CONTRACT.md` remains a read-side aggregate contract and should
+  not be widened into semantic authority for display preferences.
+
+Evidence tiers:
+
+- Tier 1: line length, column width, line spacing, and paragraph spacing. These are low-risk,
+  user-calibratable render-only aids and should be first in a local display-preferences UI slice.
+- Tier 2: practical style guidance such as readable sans-serif font family, adequate font size,
+  contrast/theme, ragged-right layout, reduced clutter, and focus mode. These are useful local
+  preferences but still subordinate to source review and proposal design.
+- Tier 3: dyslexia fonts, colored overlays, and Bionic-style rendering. These remain experimental,
+  optional, reversible, and off by default because the evidence does not justify treating them as a
+  core intervention.
+
+Design consequences:
+
+- Allowed local preference fields include font family, font size, column width, line spacing,
+  paragraph spacing, contrast/theme, reduced clutter, focus mode, and optional experimental
+  Bionic-style rendering.
+- A local display-preferences UI slice should apply CSS/classes over the rendered view only, add no
+  backend API, and prove that canonical body/content hash is unchanged when preferences change.
+- Display preferences must be separated from semantic simplification, summaries, source
+  interpretation, ranking, confirmation authority, and approval. If a change selects, ranks,
+  summarizes, recommends, or changes what the human is considered to have approved, it is not a
+  display preference.
+- RQ-23 personal calibration should measure comprehension-per-effort rather than raw speed or
+  generic defaults. The calibration should compare display/listening variants using subjective
+  effort, short comprehension checks, time-to-decision, and error/rollback signals where available.
+
 ## Evidence Ranking
 
 | Intervention / concern | Evidence posture | Yggdrasil implication |
@@ -572,20 +618,37 @@ Criteria:
 
 ## Render-Only Boundary For #1640 And #1643
 
-Display preferences are local rendering aids:
+Display preferences are local, opt-in, render-only UI config:
 
+- font family
 - font size
-- line height
+- line spacing
 - paragraph spacing
 - column width
+- contrast/theme
 - reduced visual clutter
 - focus mode
 - optional reading-support font preference
 - experimental Bionic-style rendering
 
-They must not mutate canonical Markdown, receipts, provenance, memory extraction, runtime authority,
-or agent interpretation. If a transformation changes meaning, selects content, summarizes, ranks,
-or recommends action, it is not merely render-only.
+They must leave canonical Markdown byte-for-byte unchanged and must not mutate frontmatter,
+receipts, provenance, memory extraction, runtime authority, agent interpretation, or content hash
+inputs. Display preference state belongs in Companion UI workspace/local UI state, not canonical
+knowledge or artifact metadata. If a transformation changes meaning, selects content, summarizes,
+ranks, performs source interpretation, changes confirmation authority, or recommends action, it is
+not merely render-only.
+
+Evidence should be tiered for implementation:
+
+- Tier 1: line length/column width and spacing controls.
+- Tier 2: practical style guidance such as font size, readable font family, contrast/theme,
+  reduced clutter, and focus mode.
+- Tier 3: dyslexia fonts, colored overlays, and Bionic-style rendering; experimental and off by
+  default.
+
+RQ-23 personal calibration should tune display/listening defaults by comprehension-per-effort:
+subjective effort, short comprehension check, time-to-decision, reread count where observable, and
+error/rollback rate after confirmation when applicable.
 
 ## Listening And Review Implications For #1641
 
@@ -632,7 +695,6 @@ until the human confirms the intended text through the authorized save/apply pat
 - What is the minimum status/receipt feedback required after read-mode confirmation in #1645?
 - Should defer/reject be local UI affordances first, or should they wait for a governed proposal
   lifecycle contract?
-- Which user preferences are persisted locally, and where, without becoming semantic authority?
 - How should Source Understanding Mode (#1646/#1647) reuse the source-preserving summary pattern
   without conflating research-source interpretation and Panel proposal confirmation?
 

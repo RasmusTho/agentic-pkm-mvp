@@ -130,12 +130,28 @@ must satisfy.
 
 ## Display Preferences Vs Semantic Transformations
 
-Display preferences are local rendering choices. Examples include font size, line height, paragraph
-spacing, column width, reduced clutter, focus layout, optional reading-support font preference,
-and experimental Bionic-style rendering.
+Display preferences are local, opt-in, render-only UI config. Examples include font family, font
+size, line spacing, paragraph spacing, column width, contrast/theme, reduced clutter, focus mode,
+optional reading-support font preference, and experimental Bionic-style rendering.
 
 Display preferences remain render-only when they present the same source or proposal without
 changing meaning, selection, recommendation, approval, receipt posture, or agent interpretation.
+They must not mutate canonical Markdown, frontmatter, receipts, provenance, memory extraction,
+runtime authority, agent interpretation, or content hash inputs. Canonical Markdown remains
+byte-for-byte unchanged regardless of display settings.
+
+Display preference state belongs in Companion UI workspace/local UI state. It is not canonical
+knowledge, artifact metadata, frontmatter, memory input, receipt input, or source interpretation.
+Future UI implementation may persist preferences locally for the browser/session, but it must not
+introduce a backend API or a durable artifact write just to remember display choices.
+
+Evidence tiers for display preferences:
+
+| Tier | Aid | Posture |
+| --- | --- | --- |
+| Tier 1 | line length, column width, line spacing, paragraph spacing | Highest-priority render-only defaults and local controls because they are low-risk and user-calibratable. |
+| Tier 2 | practical style guidance such as readable sans-serif font family, adequate font size, contrast/theme, ragged-right layout, reduced clutter, and focus mode | Useful local preferences, still subordinate to source review and proposal design. |
+| Tier 3 | dyslexia fonts, colored overlays, and Bionic-style rendering | Experimental, optional, reversible, and off by default; never the core cognitive-load intervention. |
 
 Semantic transformations are different. Summaries, simplifications, extracted decisions,
 recommendations, risk labels, source comparisons, and reordered proposal fields can help the human,
@@ -165,6 +181,12 @@ mutate source Markdown or encode preference choices into canonical artifacts.
 Reading throughput is measured as comprehension per unit effort, not raw words per minute. Shorter
 columns, spacing, and similar render-only aids are valid only while they re-present the same source
 content and preserve anchors, option identity, and review posture.
+
+RQ-23 personal calibration should measure comprehension-per-effort for display/listening defaults
+instead of assuming a generic accessibility preset. A lightweight calibration pass may compare
+normal versus short lines, spacing levels, contrast/theme, read-only versus TTS/bimodal review,
+subjective effort, time-to-decision, and short comprehension checks. Calibration output is a local
+preference aid, not source truth or agent authority.
 
 ### Listening mode
 
@@ -350,6 +372,8 @@ Downstream issues should use this layer as a boundary, not as implementation evi
 - A browser-local TTS/read-back MVP should use local UI state and browser playback where available,
   add no backend API, avoid autoplay, and keep `/api/companion/note/save` and
   `POST /api/panel/checkbox-projection` as the unchanged save/confirmation paths.
+- A local display-preferences UI slice should apply CSS/classes over the rendered view only, add no
+  backend API, and prove the canonical body/content hash is unchanged when preferences change.
 
 ## Non-Goals
 
