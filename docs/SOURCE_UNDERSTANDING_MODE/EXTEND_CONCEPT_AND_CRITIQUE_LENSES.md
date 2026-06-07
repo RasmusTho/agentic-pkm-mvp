@@ -4,7 +4,7 @@ description: Add Concept and Critique lenses after the P0 source-to-understandin
 task_id: SUMODE-P1
 state: blocked-post-p0
 issue: 1685
-source_anchor: GitHub Issue #1646 :: Analysis lenses
+source_anchor: docs/SOURCE_UNDERSTANDING_MODE/PARENT_FEATURE_ISSUE.md :: Implementation Tasks
 parent_capability: SOURCE_UNDERSTANDING_MODE
 prerequisites: [SUMODE-P0]
 depends_on: [DELIVER_P0_SOURCE_UNDERSTANDING_PACKET.md]

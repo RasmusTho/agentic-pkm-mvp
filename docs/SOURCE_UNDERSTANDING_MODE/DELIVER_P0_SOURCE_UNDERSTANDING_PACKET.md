@@ -3,7 +3,7 @@ name: Deliver P0 Source Understanding Packet
 description: Deliver the first source-anchored Orientation, Structure, Claims, and Evidence packet for one narrow source or selection input path.
 task_id: SUMODE-P0
 state: ready-existing-issue-1647
-source_anchor: GitHub Issue #1647 :: Scope
+source_anchor: docs/SOURCE_UNDERSTANDING_MODE/PARENT_FEATURE_ISSUE.md :: Implementation Tasks
 parent_capability: SOURCE_UNDERSTANDING_MODE
 prerequisites: []
 depends_on: []

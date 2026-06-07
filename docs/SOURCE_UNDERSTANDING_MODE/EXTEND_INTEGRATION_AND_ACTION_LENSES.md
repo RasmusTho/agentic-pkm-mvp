@@ -4,7 +4,7 @@ description: Add Integration and Action lenses as source-bounded proposal output
 task_id: SUMODE-P2
 state: blocked-post-p1
 issue: 1686
-source_anchor: GitHub Issue #1646 :: Prioritization
+source_anchor: docs/SOURCE_UNDERSTANDING_MODE/PARENT_FEATURE_ISSUE.md :: Implementation Tasks
 parent_capability: SOURCE_UNDERSTANDING_MODE
 prerequisites: [SUMODE-P0, SUMODE-P1, SUMODE-HANDOFF]
 depends_on: [DELIVER_P0_SOURCE_UNDERSTANDING_PACKET.md, CONNECT_STABILIZED_NOTE_PROPOSAL_HANDOFF.md, EXTEND_CONCEPT_AND_CRITIQUE_LENSES.md]

@@ -4,7 +4,7 @@ description: Turn the validated P0 understanding packet into a reviewable stabil
 task_id: SUMODE-HANDOFF
 state: blocked-post-p0
 issue: 1684
-source_anchor: GitHub Issue #1646 :: Expected child work
+source_anchor: docs/SOURCE_UNDERSTANDING_MODE/PARENT_FEATURE_ISSUE.md :: Implementation Tasks
 parent_capability: SOURCE_UNDERSTANDING_MODE
 prerequisites: [SUMODE-P0]
 depends_on: [DELIVER_P0_SOURCE_UNDERSTANDING_PACKET.md]

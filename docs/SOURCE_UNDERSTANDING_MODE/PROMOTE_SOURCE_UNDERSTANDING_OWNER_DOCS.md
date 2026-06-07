@@ -4,7 +4,7 @@ description: Promote delivered Source Understanding truth into owner docs and cl
 task_id: SUMODE-CLOSE
 state: blocked-final-closure
 issue: 1687
-source_anchor: GitHub Issue #1646 :: Done condition
+source_anchor: docs/SOURCE_UNDERSTANDING_MODE/PARENT_FEATURE_ISSUE.md :: Implementation Tasks
 parent_capability: SOURCE_UNDERSTANDING_MODE
 prerequisites: [SUMODE-P0, SUMODE-HANDOFF, SUMODE-P1, SUMODE-P2]
 depends_on: [DELIVER_P0_SOURCE_UNDERSTANDING_PACKET.md, CONNECT_STABILIZED_NOTE_PROPOSAL_HANDOFF.md, EXTEND_CONCEPT_AND_CRITIQUE_LENSES.md, EXTEND_INTEGRATION_AND_ACTION_LENSES.md]
