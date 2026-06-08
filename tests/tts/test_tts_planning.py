@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from app.tts.config import TTSConfig
-from app.tts.planning import build_tts_plan
+from app.tts.planning import build_tts_plan, tts_config_warnings
 
 
 def _config(tmp_path: Path, *, enabled: bool = True) -> TTSConfig:
@@ -22,6 +22,7 @@ def _config(tmp_path: Path, *, enabled: bool = True) -> TTSConfig:
         local_only=True,
         model_dir=model_dir,
         cache_dir=tmp_path / "cache",
+        log_dir=tmp_path / "logs",
         cache_max_gb=2,
         cache_eviction="lru",
         max_concurrent_jobs=1,
@@ -86,3 +87,28 @@ def test_plan_reports_missing_local_command_without_cloud_fallback(
     assert plan["provider_available"] is False
     assert "piper command" in plan["provider_reason"]
     assert plan["allow_cloud_fallback"] is False
+
+
+def test_tts_config_warns_on_repo_local_storage_paths() -> None:
+    repo_root = Path.cwd()
+    config = TTSConfig(
+        enabled=True,
+        local_only=True,
+        model_dir=repo_root / "tmp" / "tts-models",
+        cache_dir=repo_root / "tmp" / "tts-cache",
+        log_dir=repo_root / "tmp" / "tts-logs",
+        cache_max_gb=2,
+        cache_eviction="lru",
+        max_concurrent_jobs=1,
+        max_chars_per_request=4000,
+        allow_browser_fallback=False,
+        allow_cloud_fallback=False,
+        piper_command="/bin/echo",
+        kokoro_command="/bin/echo",
+    )
+
+    warnings = tts_config_warnings(config)
+
+    assert "model_dir_repo_local" in warnings
+    assert "cache_dir_repo_local" in warnings
+    assert "log_dir_repo_local" in warnings

@@ -2,15 +2,27 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.tts.cache import audio_path, cache_key_for, ensure_cache_dirs, write_plan
+from app.tts.cache import audio_path, cache_key_for, ensure_cache_dirs, is_path_inside, repo_root, write_plan
 from app.tts.config import TTSConfig
 from app.tts.language import detect_language, segment_by_language
-from app.tts.normalization import normalize_tts_text
+from app.tts.normalization import normalize_tts_text, tts_normalization_warnings
 from app.tts.providers import resolve_voice
 
 
 class TTSNormalizedTextEmptyError(ValueError):
     """Raised when request text becomes empty after TTS normalization."""
+
+
+def tts_config_warnings(config: TTSConfig) -> list[str]:
+    root = repo_root()
+    warnings: list[str] = []
+    if is_path_inside(config.model_dir, root):
+        warnings.append("model_dir_repo_local")
+    if is_path_inside(config.cache_dir, root):
+        warnings.append("cache_dir_repo_local")
+    if is_path_inside(config.log_dir, root):
+        warnings.append("log_dir_repo_local")
+    return warnings
 
 
 def build_tts_plan(
@@ -30,6 +42,11 @@ def build_tts_plan(
     segments = segment_by_language(normalized_text, requested=language)
     mixed = len({str(segment["language"]) for segment in segments}) > 1
     voice = resolve_voice(config, detected_language)
+    warnings = tts_config_warnings(config) + tts_normalization_warnings(text)
+    if mixed:
+        warnings.append("uncertain mixed-language text")
+    if not voice.available:
+        warnings.append("local provider or model unavailable")
     payload = {
         "text": normalized_text,
         "language": detected_language,
@@ -52,6 +69,7 @@ def build_tts_plan(
         "voice_id": voice.voice_id,
         "provider_available": voice.available,
         "provider_reason": voice.unavailable_reason,
+        "warnings": warnings,
         "cache_key": cache_key,
         "cached": audio_path(config, cache_key).exists(),
         "mixed_language": mixed,

@@ -52,6 +52,7 @@ from app.tts.cache import audio_path
 from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
+from app.tts.status import tts_runtime_status
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
@@ -99,6 +100,7 @@ class CompanionTTSPlanResponse(BaseModel):
     voice_id: str
     provider_available: bool
     provider_reason: str | None
+    warnings: list[str] = Field(default_factory=list)
     cache_key: str
     cached: bool
     mixed_language: bool
@@ -117,6 +119,15 @@ class CompanionTTSSynthesizeResponse(BaseModel):
     language: str
     voice_id: str
     reason: str | None
+
+
+class CompanionTTSStatusResponse(BaseModel):
+    environment: dict[str, bool]
+    config: dict[str, object]
+    paths: dict[str, dict[str, object]]
+    providers: dict[str, dict[str, object]]
+    cache: dict[str, object]
+    operator_receipt: dict[str, object]
 
 
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
@@ -2433,6 +2444,12 @@ def synthesize_companion_tts(req: CompanionTTSRequest) -> CompanionTTSSynthesize
     if status_code != 200:
         raise HTTPException(status_code=status_code, detail=result)
     return CompanionTTSSynthesizeResponse.model_validate(result)
+
+
+@router.get("/tts/status", response_model=CompanionTTSStatusResponse)
+def read_companion_tts_status() -> CompanionTTSStatusResponse:
+    config = load_tts_config()
+    return CompanionTTSStatusResponse.model_validate(tts_runtime_status(config))
 
 
 @router.get("/tts/audio/{cache_key}.wav")
