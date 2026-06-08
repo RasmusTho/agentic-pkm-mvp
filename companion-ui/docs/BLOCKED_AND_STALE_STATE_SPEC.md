@@ -36,7 +36,7 @@ A held boundary is a success of the governance model, not a failure of the app. 
 - **Trigger:** `panel.action.blocked` with `{gate, reason, proposal_id}`, or confirmation rejected by WriteGuard, safe mode, or per-note opt-out.
 - **Shows:** gate, reason text, "intent preserved; nothing mutated," and the resolve action.
 - **Affordances:** Resolve, Retry, Defer.
-- **Class:** Proposal under guard; no receipt is written unless the runtime explicitly emits one.
+- **Authority class:** Proposal. Guard posture is carried by the state/copy; no receipt is written unless the runtime explicitly emits one.
 - **Must not:** present as a generic error or discard the confirmed intent.
 
 ### Stale — source changed since generated
@@ -44,7 +44,7 @@ A held boundary is a success of the governance model, not a failure of the app. 
 - **Trigger:** `expected_source_hash` or `expected_content_hash` mismatch at confirm/projection time.
 - **Shows:** old vs new hash in short form, "source changed since this was generated," and a Regenerate affordance.
 - **Affordances:** Regenerate, Discard.
-- **Class:** Proposal under guard.
+- **Authority class:** Proposal. Guard posture is carried by the state/copy.
 - **Must not:** allow confirm against the stale hash or conflate with a policy block.
 
 ### Blocked — identity mismatch
@@ -58,7 +58,7 @@ A held boundary is a success of the governance model, not a failure of the app. 
 
 - **Trigger:** projection/confirm returns `status=already_projected` or `already_confirmed` with no rewrite.
 - **Shows:** "already applied — no change" and a link/pointer to the existing receipt when the runtime supplies one.
-- **Class:** Receipt posture if a prior receipt exists; otherwise read-only idempotent projection.
+- **Authority class:** Receipt when a prior receipt exists; otherwise the UI renders a read-only idempotent projection without inventing receipt authority.
 - **Must not:** rewrite, double-count, or imply a new execution occurred.
 
 ## Visual contract
