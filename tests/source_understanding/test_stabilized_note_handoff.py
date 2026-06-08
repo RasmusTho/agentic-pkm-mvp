@@ -62,6 +62,13 @@ def test_stabilized_note_proposal_preserves_source_and_packet_provenance() -> No
     assert any("Agent interpretation remains review-required" in item for item in proposal.packet_provenance)
 
 
+def test_stabilized_note_proposal_identity_includes_source_anchors() -> None:
+    first = stage_stabilized_note_proposal(_packet(selection_start_line=12, selection_end_line=18))
+    second = stage_stabilized_note_proposal(_packet(selection_start_line=13, selection_end_line=19))
+
+    assert first.proposal_id != second.proposal_id
+
+
 def test_handoff_exposes_distinct_review_choices() -> None:
     proposal = stage_stabilized_note_proposal(_packet())
 

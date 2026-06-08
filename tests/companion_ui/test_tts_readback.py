@@ -158,6 +158,15 @@ def test_tts_draft_readback_reads_editor_textarea_without_save() -> None:
     assert "noteEditor.save" not in script
 
 
+def test_tts_full_note_readback_excludes_injected_panel_decision_surface() -> None:
+    html = _html()
+    script = _readback_script(html)
+
+    assert "function sourceNoteText()" in script
+    assert "clone.querySelectorAll('.panel-decision-surface')" in script
+    assert "readFullNote: function () { readText(sourceNoteText(), 'Reading note source.'); }" in script
+
+
 def test_tts_readback_does_not_present_summary_as_source_audio() -> None:
     html = _html()
     script = _readback_script(html)

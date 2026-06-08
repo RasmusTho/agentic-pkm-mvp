@@ -965,6 +965,15 @@ def _note_readback_script() -> str:
       var editor = document.getElementById('note-source-editor');
       return editor ? String(editor.value || '') : '';
     }
+    function sourceNoteText() {
+      var body = el('.note-body-content');
+      if (!body) { return ''; }
+      var clone = body.cloneNode(true);
+      Array.prototype.slice.call(clone.querySelectorAll('.panel-decision-surface')).forEach(function (node) {
+        node.remove();
+      });
+      return textOf(clone);
+    }
     function postJson(path, payload) {
       return fetch(path, {
         method: 'POST',
@@ -1012,7 +1021,7 @@ def _note_readback_script() -> str:
         });
     }
     window.noteReadback = {
-      readFullNote: function () { readText(textOf(el('.note-body-content')), 'Reading note source.'); },
+      readFullNote: function () { readText(sourceNoteText(), 'Reading note source.'); },
       readSelection: function () { readText(selectedText(), 'Reading selected source text.'); },
       readProposal: function () { readText(proposalText(), 'Reading Panel proposal fields.'); },
       readDraft: function () { readText(draftText(), 'Reading editor draft.'); },
@@ -1196,9 +1205,10 @@ def _correction_proposals_for_editor(editor_body: str) -> list[dict[str, object]
             "Check whether `form` is intended, or possibly `from` in this sentence.",
         ),
     ):
-        start = editor_body.find(original)
-        if start < 0:
+        match = re.search(rf"(?<![A-Za-z0-9_]){re.escape(original)}(?![A-Za-z0-9_])", editor_body)
+        if match is None:
             continue
+        start = match.start()
         proposals.append(
             {
                 "id": f"correction-{len(proposals) + 1}",

@@ -64,6 +64,10 @@ class StabilizedNoteReviewResult(BaseModel):
 
 
 def _proposal_id(packet: SourceUnderstandingPacket, target_note_kind: StabilizedNoteKind) -> str:
+    anchor_basis = [
+        f"{anchor.source_id}:{anchor.source_ref}:{anchor.start_line}:{anchor.end_line}:{anchor.limitation or ''}"
+        for anchor in _unique_anchors(packet)
+    ]
     basis = "|".join(
         [
             packet.source.source_id,
@@ -71,6 +75,7 @@ def _proposal_id(packet: SourceUnderstandingPacket, target_note_kind: Stabilized
             packet.scope,
             target_note_kind,
             packet.claims[0].claim if packet.claims else "",
+            *anchor_basis,
         ]
     )
     return f"su-proposal-{sha256(basis.encode('utf-8')).hexdigest()[:16]}"

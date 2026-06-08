@@ -268,8 +268,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 <!-- agent-state-spine-contract -->
 - Agent-state spine contract verified (#1625): the shared runtime-state linkage spine (`trace_id`,
   `authority`, `authority_basis`, `proposal_id`, `receipt_event_id`) defined in
-  `app/agents/runtime_state.py` is now formally documented and compliance-tested. All four active
-  agent state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`)
+  `app/agents/runtime_state.py` is now formally documented and compliance-tested. All five active
+  agent state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`, `PilotAgentState`)
   satisfy the contract. A lightweight architecture compliance gate
   (`tests/architecture/test_agent_state_spine.py`) ensures future state classes surface any spine
   gap before reaching production. The spine is intentionally narrow: it standardises trace

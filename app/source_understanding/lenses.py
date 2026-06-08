@@ -36,6 +36,14 @@ _AGENT_CONCERN_MARKERS = (
 )
 
 
+def _term_parts(term: str) -> set[str]:
+    return {
+        part.casefold()
+        for part in re.findall(r"[A-Za-z0-9]+", term)
+        if part
+    }
+
+
 class SourceUnderstandingConcept(BaseModel):
     term: str
     posture: ConceptPosture
@@ -94,7 +102,10 @@ def _definition_concepts(packet: SourceUnderstandingPacket) -> list[SourceUnders
 
 def _agent_clarified_concepts(packet: SourceUnderstandingPacket) -> list[SourceUnderstandingConcept]:
     concepts: list[SourceUnderstandingConcept] = []
-    seen = {concept.term.casefold() for concept in _definition_concepts(packet)}
+    seen: set[str] = set()
+    for concept in _definition_concepts(packet):
+        seen.add(concept.term.casefold())
+        seen.update(_term_parts(concept.term))
     for claim in packet.claims:
         words = [word.strip(".,:;()[]") for word in claim.claim.split()]
         candidates = [

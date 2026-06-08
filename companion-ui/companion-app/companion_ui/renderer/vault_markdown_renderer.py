@@ -675,11 +675,16 @@ def _panel_source_reference(option: dict[str, object]) -> str:
     note_path = str(option.get("note_path") or "current note")
     source_range = option.get("source_range")
     if isinstance(source_range, dict):
-        start_line = source_range.get("start_line")
-        end_line = source_range.get("end_line")
+        try:
+            start_line = int(source_range.get("start_line"))
+            end_line = int(source_range.get("end_line"))
+        except (TypeError, ValueError):
+            start_line = end_line = None
         if start_line is not None and end_line is not None:
+            display_start = start_line + 1
+            display_end = max(display_start, end_line)
             return (
-                f"{_e(note_path)} lines {_e(start_line)}-{_e(end_line)}; "
+                f"{_e(note_path)} lines {_e(display_start)}-{_e(display_end)}; "
                 f"source hash {_e(option.get('source_hash') or 'required')}"
             )
     return f"{_e(note_path)}; source hash {_e(option.get('source_hash') or 'required')}"

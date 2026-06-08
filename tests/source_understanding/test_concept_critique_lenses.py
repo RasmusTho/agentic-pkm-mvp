@@ -47,6 +47,19 @@ def test_concept_lens_separates_source_defined_and_agent_clarified_terms() -> No
     assert "verify" in agent_clarified.agent_clarification
 
 
+def test_agent_clarified_concepts_skip_words_from_source_defined_multiword_terms() -> None:
+    lens = build_concept_critique_lenses(_packet())
+
+    agent_terms = {
+        concept.term.casefold()
+        for concept in lens.concepts
+        if concept.posture == "agent_clarified"
+    }
+
+    assert "working" not in agent_terms
+    assert "memory" not in agent_terms
+
+
 def test_concept_lens_degrades_when_term_anchors_are_unavailable() -> None:
     lens = build_concept_critique_lenses(
         _packet(selection_start_line=None, selection_end_line=None)
