@@ -231,6 +231,24 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   (`panel.receipts`, `receipt_visibility`); the `POST /api/panel/checkbox-projection` path writes a
   durable checked checkbox directly into the vault note Markdown and may also surface an AI-status
   callout when the invoked Panel runtime path emits one.
+- Cognitive-load Phase 0 verification snapshot (#1638/#1657, 2026-06-07): code inspection of
+  `app/panel/checkbox_projection.py` confirms the source-backed checkbox-projection path validates
+  `expected_content_hash`, resolves artifact identity, validates `expected_source_hash`, verifies
+  option selectability, and calls `WriteGuard.assert_writes_allowed("panel.checkbox_projection")`
+  before `write_note_from_absolute(...)`. It does **not** fully confirm the #1657 receipt-status
+  invariant at response level: `_execute_or_projected(...)` can return `status="executed"` when
+  `result.runtime_results` is truthy, but `CheckboxProjectionResponse.receipt` is always `None`.
+  The durable in-note AI-status callout may still be written by the Panel runtime, but the endpoint
+  response does not carry or prove that receipt. Treat the code-level result as
+  `DISPROVEN-PARTIAL` for later cognitive-load Receipt-class work until a bounded issue either
+  attaches the receipt/callout evidence to the response or changes the executed-status contract.
+  Display/listening preference verification found no implemented preference write path; current TTS
+  endpoints (`POST /api/companion/tts/plan`, `POST /api/companion/tts/synthesize`) are local-first
+  speech planning/synthesis and not preference persistence. `WORKSPACE_STATE_CONTRACT.md` remains
+  the storage-home owner for future local UI preference state. Orientation and resurfacing read
+  paths remain read-side projections; context-bundle consumption explicitly keeps `may_write=false`.
+  Runtime/UI fixing for #1690 remains gated by the issue pickup rule because the issue is labelled
+  `agent:ready` but Project status is currently `Backlog`, not `Ready`.
 <!-- authority-spine-diagnostic -->
 - Authority spine diagnostic surfaced in health API (#1601): `/api/health` now includes an
   `authority_spine` key with bounded operator-visible posture strings (`write_guard`,

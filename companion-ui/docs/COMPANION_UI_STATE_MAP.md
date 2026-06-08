@@ -133,6 +133,49 @@ These invariants hold across every mode and surface above:
 - The UI must not infer governance, memory authority, urgency, salience, or actionability
   locally.
 
+## Cognitive-load state extension
+
+The cognitive-load operating model adds a per-state authority-class map for fixture planning and
+scripted UAT. This table is a reconciliation/reference extension only. It does not add APIs,
+authority semantics, or shipped behavior.
+
+Authority classes: `Canonical`, `Projection`, `Proposal`, `Confirmation`, `Receipt`, and `Local UI`.
+The class is server-declared; the UI must not infer it locally.
+
+| State | Mode | Class | Status | User-facing posture | System MUST NOT | Fixture |
+|---|---|---|---|---|---|---|
+| Empty workspace | Reorient | Projection | shipped/dev-staging | No open sessions; one way in | Manufacture activity | `empty_state` |
+| Returning to task | Reorient | Projection | shipped/dev-staging | Re-entry cue; resume/open/dismiss | Trap with no path forward (#1690) | `cold_load` |
+| Note browsing | Find | Projection | shipped/dev-staging | Browse/search/open vault notes | Reclassify zone locally | `browser_tree` |
+| Note reading | Find/Reorient | Canonical | shipped/dev-staging | Body primary; display prefs/read/listen | Mutate body from projection | `read_mode` |
+| Proposal available | Act | Proposal | shipped/dev-staging | Distinct card; unchecked options | Pre-check or present as truth | `proposal_avail` |
+| Proposal expanded | Act | Proposal | shipped/dev-staging | Consequence and provenance upfront | Hide consequence behind disclosure | `proposal_expand` |
+| Multiple options | Act | Proposal | shipped/dev-staging | Small bounded option set | Confirm-all; infer id by position | `multi_option` |
+| Stale proposal | Act | Proposal | target-state | Guard-held: source changed; regenerate | Confirm against stale hash | `stale_source` |
+| Selected, not executed | Act | Proposal | shipped/dev-staging | Checked option; no execution yet | Treat checkbox as execution | `checkbox_selected` |
+| Executing | Act | Confirmation | shipped/dev-staging | Applying via governed path | Imply projection did the write | `executing` |
+| Blocked — WriteGuard | Act | Proposal | target-state | Guard-held: gate, reason, path forward | Present as generic error | `blocked_guard` |
+| Blocked — stale hash | Act | Proposal | target-state | Guard-held: source/identity mismatch | Conflate with policy block | `blocked_hash` |
+| Receipt written | Act/Reorient | Receipt | shipped/dev-staging | Outcome, id, before/after where available | Hide receipt | `receipt_written` |
+| Already confirmed | Act | Receipt | shipped/dev-staging | Idempotent receipt posture; no change | Rewrite or double-count | `idempotent` |
+| Rejected | Act | Proposal | shipped/dev-staging | Dismissed/logged; no durable apply receipt | Write a durable apply receipt | `rejected` |
+| Deferred | Act | Proposal | target-state | Parked with return condition | Auto-resurface without why-now | `deferred` |
+| Clarification requested | Act | Proposal | shipped/dev-staging | One bounded question | Treat answer as governed write | `clarify` |
+| Resurfacing available | Resurface | Projection | shipped/dev-staging | Scarce why-now card with source | Surface without why-now/provenance | `resurface_avail` |
+| Resurfacing dismissed | Resurface | Projection | target-state | Gone for the session | Re-push dismissed item | `resurface_dismiss` |
+| Resurfacing capped | Resurface | Projection | target-state | Budget/cap visible | Exceed budget via push | `resurface_capped` |
+| Memory candidate | Reorient | Proposal | shipped/dev-staging | Inspectable candidate/provenance | Treat candidate as memory truth | `memory_candidate` |
+| Dictation draft | Capture | Proposal | target-state | Non-authoritative draft | Save without read-back/confirm | `dictation_draft` |
+| Correction proposal | Capture | Proposal | shipped/dev-staging | Staged diff; real-word flags | Apply silently or alter meaning | `correction` |
+| Read-back verification | Capture | Projection | target-state | Faithful narration of draft | Read a cleaned version | `read_back` |
+| Listening mode | all | Local UI | target-state | Local modality control over projection content | Auto-play or summary-as-source | `tts_mode` |
+| Local display override | all | Local UI | shipped/dev-staging | Local-only badge; byte-unchanged | Write preference to vault | `display_override` |
+| Error / conflict | all | Projection | target-state | Calm degraded state | Alarm or block-as-error | `render_degraded` |
+
+Blocked and stale are not independent authority classes. They are Proposal or Confirmation states
+held by a guard; presentation is governed by
+`companion-ui/docs/BLOCKED_AND_STALE_STATE_SPEC.md`.
+
 ## Related docs
 
 - `docs/COMPANION_UI_PRODUCT_SPEC.md` — mode model (Find/Reorient/Resurface/Act)
