@@ -3,20 +3,32 @@ from __future__ import annotations
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
+from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
 
 class _OrientationClient:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        vault_browser_payload: dict[str, Any] | None = None,
+        orientation_error: Exception | None = None,
+    ) -> None:
         self.payload = payload
+        self.vault_browser_payload = vault_browser_payload or _vault_browser_payload()
+        self.orientation_error = orientation_error
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
         self.post_calls: list[tuple[str, dict[str, Any]]] = []
         self.delete_calls: list[tuple[str, dict[str, Any] | None]] = []
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
         self.get_calls.append((url, params))
-        if url != "/api/companion/orientation":
-            raise AssertionError(f"unexpected GET from re-entry surface: {url}")
-        return self.payload
+        if url == "/api/companion/orientation":
+            if self.orientation_error is not None:
+                raise self.orientation_error
+            return self.payload
+        if url == "/api/companion/vault-browser":
+            return self.vault_browser_payload
+        raise AssertionError(f"unexpected GET from re-entry surface: {url}")
 
     def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
         self.post_calls.append((url, json))
@@ -153,6 +165,39 @@ def _with_resurface_candidates(payload: dict[str, Any], count: int) -> dict[str,
     return payload
 
 
+def _vault_browser_payload() -> dict[str, Any]:
+    return {
+        "notes": [
+            {
+                "note_path": "Notes/resume.md",
+                "title": "Resume plan",
+                "zone": "Notes",
+                "kind": "human_note",
+                "frontmatter_valid": True,
+                "missing_required_fields": [],
+            },
+            {
+                "note_path": "Projects/Deep work.md",
+                "title": "Deep work",
+                "zone": "Projects",
+                "kind": "human_note",
+                "frontmatter_valid": True,
+                "missing_required_fields": [],
+            },
+        ],
+        "query": "",
+        "total_notes": 2,
+        "filtered_notes": 2,
+        "read_only": True,
+        "identity_available": True,
+        "vault_identity": {
+            "vault_name": "dev-vault",
+            "channel": "dev",
+            "provenance": "env",
+        },
+    }
+
+
 def test_renders_orientation_with_no_active_note() -> None:
     client = _OrientationClient(_orientation_payload())
 
@@ -162,7 +207,10 @@ def test_renders_orientation_with_no_active_note() -> None:
         api_base_url="http://127.0.0.1:18001",
     )
 
-    assert client.get_calls == [("/api/companion/orientation", {})]
+    assert client.get_calls == [
+        ("/api/companion/orientation", {}),
+        ("/api/companion/vault-browser", {"q": "", "limit": 250}),
+    ]
     assert 'data-testid="workspace-reentry-orientation"' in html
     assert 'data-read-only="true"' in html
     assert "Resume the runtime API contract" in html
@@ -172,17 +220,41 @@ def test_renders_orientation_with_no_active_note() -> None:
     assert "pending proposals" in html
     assert "logged" in html
     assert 'data-authority-role="derived"' in html
+    assert 'data-testid="workspace-orientation-vault-entry"' in html
+    assert 'data-testid="workspace-vault-browser-note-link"' in html
+    assert 'href="/?note_path=Notes/resume.md"' in html
 
 
 def test_deep_links_to_artifact_workspace() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         orientation=_orientation_payload(),
+        orientation_vault_browser=_vault_browser_payload(),
     )
 
     assert 'href="/workspace?note_path=Notes%2Fresume.md"' in html
     assert 'href="/workspace?note_path=Notes%2Frecent.md"' in html
     assert 'href="/workspace?note_path=Notes%2Fresurface.md"' in html
+
+
+def test_root_keeps_vault_entry_when_orientation_unavailable() -> None:
+    client = _OrientationClient(
+        _orientation_payload(),
+        orientation_error=WorkspaceClientNetworkError("orientation connection refused"),
+    )
+
+    html = handle_get(
+        query_string="",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+
+    assert 'data-testid="workspace-reentry-orientation"' in html
+    assert 'data-testid="workspace-orientation-degraded"' in html
+    assert "orientation_unavailable" in html
+    assert 'data-testid="workspace-orientation-vault-entry"' in html
+    assert 'data-testid="workspace-vault-browser-note-link"' in html
+    assert 'data-testid="workspace-error-state"' not in html
 
 
 def test_leave_point_renders_structured_api_shape() -> None:
@@ -206,6 +278,7 @@ def test_leave_point_renders_structured_api_shape() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         orientation=payload,
+        orientation_vault_browser=_vault_browser_payload(),
     )
 
     assert 'data-leave-point-kind="present"' in html
@@ -219,6 +292,7 @@ def test_degraded_state_rendered() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         orientation=_orientation_payload(degraded=True),
+        orientation_vault_browser=_vault_browser_payload(),
     )
 
     assert 'data-testid="workspace-orientation-degraded"' in html
