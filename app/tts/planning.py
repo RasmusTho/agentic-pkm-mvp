@@ -9,6 +9,10 @@ from app.tts.normalization import normalize_tts_text
 from app.tts.providers import resolve_voice
 
 
+class TTSNormalizedTextEmptyError(ValueError):
+    """Raised when request text becomes empty after TTS normalization."""
+
+
 def build_tts_plan(
     *,
     text: str,
@@ -17,6 +21,8 @@ def build_tts_plan(
     rate: float = 1.0,
 ) -> dict[str, Any]:
     normalized_text = normalize_tts_text(text)
+    if not normalized_text:
+        raise TTSNormalizedTextEmptyError("text is empty after TTS normalization")
     if len(normalized_text) > config.max_chars_per_request:
         raise ValueError("text exceeds TTS_MAX_CHARS_PER_REQUEST")
 

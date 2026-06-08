@@ -24,6 +24,10 @@ Endpoints:
 The plan endpoint normalizes text, detects or honors language, selects a local voice provider, and
 returns a cache key plus provider availability. It does not generate audio.
 
+Requests whose text is empty after Markdown/text normalization are invalid for both planning and
+synthesis. The API rejects normalized-empty input before provider selection, cache-key generation,
+plan persistence, audio URL construction, or provider availability reporting.
+
 The synthesize endpoint first checks the audio cache. If cached audio exists, it returns the cached
 audio URL without invoking a provider. If audio is not cached, it invokes a local provider only when
 `TTS_ENABLED=true`, `TTS_LOCAL_ONLY=true`, local model files exist, and the provider command is
