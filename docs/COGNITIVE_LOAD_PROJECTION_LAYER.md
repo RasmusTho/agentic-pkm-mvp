@@ -245,7 +245,7 @@ The contract fields are:
 | --- | --- |
 | `items_per_orientation_moment` | Parametric display budget. The displayed subset must be scarce and may be lower than backend caps; settings may tune the exact value later, but the visible footprint must stay within the human-first working-memory and screen-space budget. |
 | `foreground_refresh_frequency` | Parametric refresh budget. Default is manual pull. Any ambient refresh must be client-initiated, foreground-only, default-off, and no more eager than server-declared freshness/staleness; settings may tune cadence later without creating notification pressure. |
-| `salience_threshold` | Parametric relevance threshold. If the relevance/salience signal is weak, show nothing or mark degraded. Do not manufacture a confident reason. |
+| `resurface_salience_threshold` | Parametric relevance threshold. If the relevance/salience signal is weak, show nothing or mark degraded. Do not manufacture a confident reason. |
 | `why_now` | One short, structured pointer: trigger, source, relevance basis, and confidence/degraded posture. Prefer provenance over generated rationale. |
 
 Parametric does not mean unbounded. When available screen space, card footprint, reading cost, or

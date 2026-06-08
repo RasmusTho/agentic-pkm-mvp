@@ -316,7 +316,7 @@ The shared runtime-state linkage contract is defined in `app/agents/runtime_stat
 
 - TypedDict-based state classes inherit `RuntimeStateContract`
 - Pydantic-based state classes inherit `RuntimeStateModel`
-- All four active state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`) conform to the spine
+- All five active state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`, `PilotAgentState`) conform to the spine
 - The spine is intentionally narrow: it standardizes trace/authority/proposal/receipt linkage; it does not make runtime state a source of semantic truth, does not authorize writes, and does not add durable memory semantics
 - WriteGuard remains the mutation gate; the state contract does not override it
 

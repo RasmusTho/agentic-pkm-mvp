@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.serve_dev_page import (
+    _correction_proposals_for_editor,
+    render_index_html,
+)
 
 
 def _fields(*, body: str = "# Draft\n\nI will recieve the form tomorrow.\n") -> dict:
@@ -101,6 +104,13 @@ def test_real_word_flags_are_never_auto_applied() -> None:
     assert "real-word/context flag" in html
     assert 'data-auto-apply="false"' in html
     assert "possibly `from`" in html
+
+
+def test_real_word_correction_matches_only_whole_words() -> None:
+    proposals = _correction_proposals_for_editor("Platform forms are valid, but form may be from.")
+
+    assert [proposal["original_text"] for proposal in proposals] == ["form"]
+    assert proposals[0]["range"] == {"start": 30, "end": 34}
 
 
 def test_readback_targets_actual_draft_after_correction_review() -> None:

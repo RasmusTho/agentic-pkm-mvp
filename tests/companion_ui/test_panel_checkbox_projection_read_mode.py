@@ -91,7 +91,8 @@ def test_read_mode_panel_option_renders_structured_decision_surface() -> None:
     assert "Send email" in html
     assert "Panel staged action" in html
     assert "source freshness is checked before projection" in html
-    assert "notes/panel.md lines 8-9; source hash source-hash" in html
+    assert "notes/panel.md lines 9-9; source hash source-hash" in html
+    assert "notes/panel.md lines 8-9" not in html
     assert 'data-panel-choice="confirm"' in html
     assert 'data-panel-local-choice="defer"' in html
     assert 'data-panel-local-choice="reject"' in html
