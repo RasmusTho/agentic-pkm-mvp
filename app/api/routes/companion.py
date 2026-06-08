@@ -50,7 +50,7 @@ from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.tts.cache import audio_path
 from app.tts.config import load_tts_config
-from app.tts.planning import build_tts_plan
+from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
@@ -2396,6 +2396,11 @@ def plan_companion_tts(req: CompanionTTSRequest) -> CompanionTTSPlanResponse:
             language=req.language,
             rate=req.rate,
         )
+    except TTSNormalizedTextEmptyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "tts_text_empty_after_normalization", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=413,
@@ -2414,6 +2419,11 @@ def synthesize_companion_tts(req: CompanionTTSRequest) -> CompanionTTSSynthesize
             language=req.language,
             rate=req.rate,
         )
+    except TTSNormalizedTextEmptyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "tts_text_empty_after_normalization", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=413,

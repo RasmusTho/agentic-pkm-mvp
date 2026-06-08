@@ -56,6 +56,16 @@ def test_plan_endpoint_is_local_only(client: TestClient) -> None:
     assert data["audio_url"].startswith("/api/companion/tts/audio/")
 
 
+def test_plan_rejects_whitespace_only_text(client: TestClient) -> None:
+    resp = client.post("/api/companion/tts/plan", json={"text": " \t\n\u00a0 "})
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "tts_text_empty_after_normalization"
+    assert "cache_key" not in detail
+    assert "audio_url" not in detail
+
+
 def test_synthesize_uses_cache_on_repeat(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -88,6 +98,16 @@ def test_synthesize_uses_cache_on_repeat(
     assert audio.status_code == 200
     assert audio.headers["content-type"].startswith("audio/wav")
     assert audio.content.startswith(b"RIFF")
+
+
+def test_synthesize_rejects_whitespace_only_text(client: TestClient) -> None:
+    resp = client.post("/api/companion/tts/synthesize", json={"text": " \t\n\u00a0 "})
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "tts_text_empty_after_normalization"
+    assert "cache_key" not in detail
+    assert "audio_url" not in detail
 
 
 def test_synthesize_refuses_missing_local_provider(
