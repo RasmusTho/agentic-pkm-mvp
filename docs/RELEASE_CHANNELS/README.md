@@ -132,7 +132,7 @@ Promotion is the operation that turns an accepted commit on `main` into the runn
    The prepare phase produces a **promotion plan** the operator can review before executing.
 2. **Execute.** Advance the `stable` ref via a governed PR targeting `stable`. Apply migrations to `pkm_prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
 3. **Verify.** Post-promotion health, status, and smoke checks against the running prod. Health must be green against [HEALTH.md](../HEALTH.md) contracts before the promotion is considered accepted.
-4. **Rollback (conditional).** If verification fails, return `stable` to the previous ref via a revert PR, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
+4. **Rollback (conditional).** If verification fails, return `stable` through a governed rollback PR, update prod to the merged `origin/stable` rollback commit, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
 
 Promotion trigger is **manual, single-user**. No PR-merge-triggered automation, no CI-driven promotion. The operator decides when to promote.
 
@@ -157,7 +157,7 @@ If this check fails, promotion aborts fail-closed with a reconciliation-PR instr
 ## Rollback posture
 
 - The previous stable ref is always resolvable (recorded as `stable-prev` pointer file in `ops/promotions/` before any stable movement).
-- Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR.
+- Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR. After merge, prod is updated to the merged `origin/stable` rollback commit before reversible migrations are reversed; `stable-prev` remains the rollback target/anchor.
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
 
 ### Vault is not release state
@@ -193,7 +193,7 @@ skill per job, per the human-first one-agent-one-job principle:
 - `prepare-promotion` — produce the promotion plan (code/migration/config delta, risk notes, AC status).
 - `execute-promotion` — move the `stable` ref, apply migrations, restart prod.
 - `verify-promotion` — post-promotion health, status, and smoke checks.
-- `rollback-promotion` — reverse ref, reverse reversible migrations, restart.
+- `rollback-promotion` — merge governed rollback PR, update prod to merged `origin/stable`, reverse reversible migrations, restart.
 
 The skills remain downstream artifacts. Their shape is specified in the task files and the skill
 entrypoints under `.codex/skills/`, not redefined here.
