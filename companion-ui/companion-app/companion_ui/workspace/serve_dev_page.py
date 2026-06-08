@@ -4199,6 +4199,52 @@ def _orientation_degraded_reasons(orientation: dict) -> list[str]:
     return [_orientation_str(reason) for reason in raw if _orientation_str(reason)]
 
 
+def _orientation_unavailable_frame(error: str) -> dict:
+    """Fallback orientation frame used when only vault browsing is available."""
+    return {
+        "scope": {
+            "kind": "workspace",
+            "vault_id": "unknown",
+            "channel": "unknown",
+        },
+        "meta": {
+            "contract_version": "workspace_orientation.v1",
+            "freshness": "partial",
+            "as_of": "",
+            "trace_id": "orientation-unavailable",
+            "degraded_reasons": ["orientation_unavailable"],
+        },
+        "leave_point": None,
+        "open_loops": [],
+        "notable_changes": [],
+        "resurface": {"candidates": []},
+        "governance": {
+            "pending_proposal_count": 0,
+            "pending_receipt_count": 0,
+            "latest_receipt_outcome": "unknown",
+            "authority_role": "unavailable",
+            "source_ref": {
+                "kind": "runtime_error",
+                "ref": "api.companion.orientation",
+                "label": error or "orientation endpoint unavailable",
+            },
+        },
+        "guards": {
+            "read_only": True,
+            "runtime_posture": "degraded",
+            "degraded": True,
+            "reasons": ["orientation_unavailable"],
+            "authority_role": "unavailable",
+            "source_ref": {
+                "kind": "runtime_error",
+                "ref": "api.companion.orientation",
+                "label": error or "orientation endpoint unavailable",
+            },
+        },
+        "mutation_intents": [],
+    }
+
+
 def _render_orientation_leave_point(leave_point: object) -> str:
     leave = _orientation_dict(leave_point)
     if not leave:
@@ -4407,13 +4453,66 @@ def _render_orientation_governance(governance: object) -> str:
         </section>"""
 
 
+def _render_orientation_vault_entry(
+    vault_browser: Optional[dict],
+    *,
+    error: str = "",
+) -> str:
+    """Render a concrete vault entrypoint on the no-active-note surface.
+
+    Re-entry/orientation is derived runtime context. The root workspace must
+    still provide a direct path into the human vault even when the orientation
+    frame is sparse, stale, or unhelpful.
+    """
+    if vault_browser is None and not error:
+        return ""
+
+    payload = vault_browser or {}
+    notes = [
+        dict(note)
+        for note in list(payload.get("notes") or [])
+        if isinstance(note, dict)
+    ]
+    identity = _orientation_dict(payload.get("vault_identity"))
+    browser_html = _render_vault_browser(
+        note_path="",
+        notes=notes,
+        query=str(payload.get("query") or ""),
+        total_notes=int(payload.get("total_notes") or 0),
+        filtered_notes=int(payload.get("filtered_notes") or 0),
+        error=error,
+        read_only=bool(payload.get("read_only", True)),
+        identity_available=bool(payload.get("identity_available", False)),
+        vault_name=str(identity.get("vault_name") or "unresolved"),
+        vault_channel=str(identity.get("channel") or "unknown"),
+        vault_provenance=str(identity.get("provenance") or "unresolved"),
+        active_filters=dict(payload.get("active_filters") or {}),
+        pagination=dict(payload.get("pagination") or {}),
+    )
+    return f"""
+        <section class="orientation-section orientation-vault-entry"
+          data-testid="workspace-orientation-vault-entry"
+          data-read-only="true">
+          <div class="orientation-section-header">
+            <div>
+              <div class="orientation-section-kicker">Vault</div>
+              <h2 class="orientation-subheading">Browse notes</h2>
+            </div>
+            <a class="orientation-vault-open" href="/?diagnostics=0">Root</a>
+          </div>
+          {browser_html}
+        </section>"""
+
+
 def _render_orientation_index_html(
     *,
     api_base_url: str,
     note_path: str,
     orientation: dict,
-    production_profile: bool,
-    diagnostics: bool,
+    vault_browser: Optional[dict] = None,
+    vault_browser_error: str = "",
+    production_profile: bool = False,
+    diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
 ) -> str:
     scope = _orientation_dict(orientation.get("scope"))
@@ -4459,6 +4558,10 @@ def _render_orientation_index_html(
           <a href="/" data-testid="workspace-orientation-manual-refresh">Refresh</a>
         </section>"""
     ambient_script = _orientation_ambient_refresh_script() if ambient_refresh_enabled else ""
+    vault_entry_html = _render_orientation_vault_entry(
+        vault_browser,
+        error=vault_browser_error,
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4619,6 +4722,73 @@ def _render_orientation_index_html(
       font-weight: 600;
       margin: 0;
     }}
+    .orientation-subheading {{
+      font-size: 18px;
+      font-weight: 600;
+      margin: 4px 0 0;
+    }}
+    .orientation-vault-entry {{
+      grid-column: 1 / -1;
+    }}
+    .orientation-vault-entry .vault-browser {{
+      background: transparent;
+      border: 0;
+      padding: 0;
+    }}
+    .orientation-vault-entry .vault-browser > summary {{
+      display: none;
+    }}
+    .orientation-vault-open {{
+      color: var(--cyan);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      text-decoration: none;
+    }}
+    .orientation-vault-open:hover {{ text-decoration: underline; }}
+    .orientation-vault-entry .vault-browser-list {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      list-style: none;
+      margin: 0;
+      max-height: 360px;
+      overflow: auto;
+      padding: 10px;
+    }}
+    .orientation-vault-entry .vault-tree-children {{
+      list-style: none;
+      margin: 4px 0 0 14px;
+      padding: 0;
+    }}
+    .orientation-vault-entry .vault-tree-folder-summary {{
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 3px 0;
+    }}
+    .orientation-vault-entry .vault-browser-row {{
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      min-height: 28px;
+    }}
+    .orientation-vault-entry .vault-browser-selection-toggle {{
+      flex: 0 0 auto;
+    }}
+    .orientation-vault-entry .vault-browser-row-title {{
+      color: var(--cyan);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-decoration: none;
+      white-space: nowrap;
+    }}
+    .orientation-vault-entry .vault-browser-row-title:hover {{ text-decoration: underline; }}
+    .orientation-vault-entry .vault-browser-zone-label,
+    .orientation-vault-entry .note-badge--nav-hidden {{
+      display: none;
+    }}
     .orientation-item {{
       border-top: 1px solid var(--border);
       display: grid;
@@ -4757,6 +4927,7 @@ def _render_orientation_index_html(
             degraded_reasons=reasons,
         )}
       </div>
+      {vault_entry_html}
     </div>
   </main>
   {ambient_script}
@@ -4838,6 +5009,8 @@ def render_index_html(
     fields: Optional[dict] = None,
     error: str = "",
     orientation: Optional[dict] = None,
+    orientation_vault_browser: Optional[dict] = None,
+    orientation_vault_browser_error: str = "",
     production_profile: bool = False,
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
@@ -4857,6 +5030,8 @@ def render_index_html(
             api_base_url=api_base_url,
             note_path=note_path,
             orientation=orientation,
+            vault_browser=orientation_vault_browser,
+            vault_browser_error=orientation_vault_browser_error,
             production_profile=production_profile,
             diagnostics=diagnostics,
             ambient_refresh_enabled=ambient_refresh_enabled,
@@ -8097,6 +8272,9 @@ def handle_get(
     diagnostics = params.get("diagnostics", ["0"])[0].strip().lower() in {"1", "true", "yes", "on"}
     fields: Optional[dict] = None
     orientation: Optional[dict] = None
+    orientation_vault_browser: Optional[dict] = None
+    orientation_vault_browser_error = ""
+    orientation_error = ""
     error = ""
 
     if note_path:
@@ -8117,7 +8295,25 @@ def handle_get(
         try:
             orientation = client.get("/api/companion/orientation", params={})
         except WorkspaceClientError as exc:
-            error = str(exc)
+            orientation_error = str(exc)
+        try:
+            browser_params: dict = {
+                "q": params.get("q", [""])[0].strip(),
+                "limit": browser_limit,
+            }
+            if cursor:
+                browser_params["cursor"] = cursor
+            browser_params.update(active_filters)
+            orientation_vault_browser = client.get(
+                "/api/companion/vault-browser",
+                params=browser_params,
+            )
+        except WorkspaceClientError as exc:
+            orientation_vault_browser_error = str(exc)
+        if orientation is None and orientation_vault_browser is not None:
+            orientation = _orientation_unavailable_frame(orientation_error)
+        elif orientation is None:
+            error = orientation_error or orientation_vault_browser_error
 
     return render_index_html(
         api_base_url=api_base_url,
@@ -8125,6 +8321,8 @@ def handle_get(
         fields=fields,
         error=error,
         orientation=orientation,
+        orientation_vault_browser=orientation_vault_browser,
+        orientation_vault_browser_error=orientation_vault_browser_error,
         production_profile=production_profile,
         diagnostics=diagnostics,
         ambient_refresh_enabled=orientation_ambient_refresh_enabled(),
