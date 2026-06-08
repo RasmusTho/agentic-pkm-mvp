@@ -472,7 +472,37 @@ class TestHandleGet:
     def test_empty_query_renders_index_no_note(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
 
-        client = _FakeClient()
+        class _RootClient(_FakeClient):
+            def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+                self.get_calls.append((url, params))
+                if url == "/api/companion/orientation":
+                    return {}
+                if url == "/api/companion/vault-browser":
+                    return {
+                        "notes": [
+                            {
+                                "note_path": "Notes/resume.md",
+                                "title": "Resume plan",
+                                "zone": "Notes",
+                                "kind": "human_note",
+                                "frontmatter_valid": True,
+                                "missing_required_fields": [],
+                            }
+                        ],
+                        "query": "",
+                        "total_notes": 1,
+                        "filtered_notes": 1,
+                        "read_only": True,
+                        "identity_available": True,
+                        "vault_identity": {
+                            "vault_name": "dev-vault",
+                            "channel": "dev",
+                            "provenance": "env",
+                        },
+                    }
+                raise AssertionError(f"unexpected GET from empty-root surface: {url}")
+
+        client = _RootClient()
         html = handle_get(
             query_string="",
             client=client,
@@ -480,7 +510,14 @@ class TestHandleGet:
         )
         assert "DEV" in html or "STAGING" in html
         assert 'data-testid="workspace-reentry-orientation"' in html
-        assert client.get_calls == [("/api/companion/orientation", {})]
+        assert client.get_calls == [
+            ("/api/companion/orientation", {}),
+            ("/api/companion/vault-browser", {"q": "", "limit": 250}),
+        ]
+        assert 'data-testid="workspace-orientation-vault-entry"' in html
+        assert 'data-read-only="true"' in html
+        assert 'data-testid="workspace-vault-browser-note-link"' in html
+        assert 'href="/?note_path=Notes/resume.md"' in html
 
     def test_note_path_param_triggers_api_call(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
