@@ -8,6 +8,7 @@ Live tests (pg marker) require a running pkm-test Docker stack.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -133,6 +134,36 @@ def test_test_compose_watcher_env_has_valid_pkm_environment() -> None:
             f"but active_environment() only accepts {valid_environments}. "
             "Use 'test', 'dev', or 'prod' (Issue #698 / #968)."
         )
+
+
+def test_test_compose_watcher_state_dir_overrides_parent_env() -> None:
+    """The effective pkm-test watcher env must not inherit parent tmp paths.
+
+    Verify: Issue #1656 — parent WATCHER_STATE_DIR=tmp cannot shadow the
+    test-channel watcher override after base + test compose files are merged.
+    """
+    parent_env = os.environ.copy()
+    parent_env["WATCHER_STATE_DIR"] = "tmp"
+
+    base = _load_compose(BASE_COMPOSE)
+    test_overlay = _load_compose(TEST_COMPOSE)
+    base_watcher_env = _compose_env((base["services"] or {})["watcher"])
+    overlay_watcher_env = _compose_env((test_overlay["services"] or {})["watcher"])
+
+    # Compose interpolates this base entry from the parent environment before
+    # the test overlay environment map is merged.
+    assert base_watcher_env["WATCHER_STATE_DIR"] == "${WATCHER_STATE_DIR:-}"
+    interpolated_base_env = dict(base_watcher_env)
+    interpolated_base_env["WATCHER_STATE_DIR"] = parent_env["WATCHER_STATE_DIR"]
+
+    watcher_env = {**interpolated_base_env, **overlay_watcher_env}
+
+    assert watcher_env["WATCHER_STATE_DIR"] == "tmp-test"
+    assert watcher_env["WATCHER_STOP_FILE"] == "/app/tmp-test/WATCHER_STOP"
+    assert watcher_env["INDEX_OUTBOX_PATH"] == "/app/tmp-test/index-outbox.jsonl"
+    assert watcher_env["WATCHER_HEARTBEAT_PATH"] == "/app/tmp-test/watcher_heartbeat.json"
+    assert watcher_env["WORKER_HEARTBEAT_PATH"] == "/app/tmp-test/worker_heartbeat.json"
+    assert watcher_env["WATCHER_STATE_PATH"] == "/app/tmp-test/watcher_state.json"
 
 
 def test_make_test_up_starts_watcher_without_restart_loop() -> None:
