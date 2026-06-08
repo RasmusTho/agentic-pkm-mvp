@@ -463,7 +463,7 @@ class CheckboxProjectionService:
                 raw_text=raw_text,
                 trace_id=request.idempotency_key,
             )
-            result = run_panel_note_execution(
+            run_panel_note_execution(
                 request.artifact_id,
                 trace_id=request.idempotency_key,
                 trigger="companion",
@@ -480,10 +480,12 @@ class CheckboxProjectionService:
                 block_reason=f"runtime_execution_failed:{type(exc).__name__}",
             )
 
-        status: ProjectionStatus = "executed" if result.runtime_results else "projected"
+        # Do not report execution without response-level receipt evidence.
+        # The current runtime invocation may write its own durable callout, but
+        # this endpoint does not observe or return that evidence.
         return self._response(
             request,
-            status=status,
+            status="projected",
             note_path=safe_note_path,
             before=content_hash_before,
             after=content_hash_after,
