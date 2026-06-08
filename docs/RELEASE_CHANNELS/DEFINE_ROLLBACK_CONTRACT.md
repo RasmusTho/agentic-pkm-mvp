@@ -33,16 +33,17 @@ Rollback under branch protection proceeds as follows:
 
 1. `rollback-promotion` opens a **revert PR** targeting `stable` (reverting the promotion merge commit, or targeting `stable-prev` via a dedicated rollback branch).
 2. The revert PR must pass all three required status checks: `smoke`, `smoke-docker`, `pr-contract`.
-3. An operator reviews and merges the revert PR. After merge, `stable` points to `stable-prev`.
-4. The rollback receipt records the revert PR URL as the ref-restoration evidence.
+3. An operator reviews and merges the revert PR. After merge, `origin/stable` points to the protected rollback head. That head may be a merge commit whose tree restores the previous stable state.
+4. Prod fetches and checks out the merged `origin/stable` rollback commit before any reversible prod migrations are reversed.
+5. The rollback receipt records the revert PR URL, the `stable-prev` target/anchor, and the merged `origin/stable` rollback SHA as ref-restoration evidence.
 
 This contract does **not** promise a direct protected-branch write as a rollback path. Any instruction that would require bypassing branch protection to complete rollback is outside this contract.
 
 ## Concretely
 
 - **Previous-stable resolution**: `execute-promotion` records the previous `stable` commit as `stable-prev` (pointer file in `ops/promotions/`). `rollback-promotion` resolves the previous-stable without ambiguity from this record.
-- **Ref movement**: rollback restores `stable` to the previous commit via a governed revert PR targeting `stable` (see Protected-branch rollback above). Updates the prod checkout's HEAD after the revert PR merges.
-- **Migration reversal**: migrations flagged reversible per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION` are reversed in the reverse order they were applied. Migrations flagged forward-only were already acknowledged by the operator at promotion time; rollback does not attempt to reverse them, and the operator understands that the DB shape may not return to its pre-promotion state.
+- **Ref movement**: rollback restores `stable` through a governed revert PR targeting `stable` (see Protected-branch rollback above). `stable-prev` is the rollback target/anchor, while the prod checkout's HEAD is updated to the merged `origin/stable` rollback commit after the revert PR merges.
+- **Migration reversal**: migrations flagged reversible per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION` are reversed in the reverse order they were applied, but only after prod is running code from the merged `origin/stable` rollback commit. Migrations flagged forward-only were already acknowledged by the operator at promotion time; rollback does not attempt to reverse them, and the operator understands that the DB shape may not return to its pre-promotion state.
 - **Vault**: the real vault is not rewound. The operator's authored content during the promoted period remains intact. Note-level undo is a vault concern.
 - **Runtime artifacts**: prod's runtime artifacts (`tmp/`) are allowed to be regenerated; no rollback-specific snapshot/restore of these artifacts is required.
 - **External effects**: anything the promoted code caused outside the prod channel's scope (e.g. notifications sent, files written outside the vault/DB/artifacts boundary) is not reversed by rollback. If such side-effects exist, they should be called out as risk notes in the promotion plan.
