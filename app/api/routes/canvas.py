@@ -24,9 +24,11 @@ from pydantic import BaseModel
 from app.api.routes.artifacts import _content_hash
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError, _split_frontmatter
+from app.chat.coauthoring_cognition import CoAuthoringCognition, CoAuthoringUnavailableError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.config.paths import resolve_vault_root
+from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
 from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
 from app.panel.confirmation import _proposal_store as _panel_proposal_store
@@ -62,6 +64,15 @@ def _get_vault_root() -> Path:
     return resolve_vault_root().expanduser().resolve()
 
 
+def _coauthor_facade_factory() -> ReasoningFacade:
+    """Reasoning facade used by the co-authoring cognition.
+
+    Indirected through a module-level function so tests can substitute a
+    deterministic stub without a live LLM provider.
+    """
+    return get_reasoning_facade()
+
+
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
@@ -87,6 +98,18 @@ class EditRequest(BaseModel):
 class EditResponse(BaseModel):
     session_id: str
     ok: bool
+
+
+class CoAuthorRequest(BaseModel):
+    intent: str
+    change_summary: str | None = None
+
+
+class CoAuthorResponse(BaseModel):
+    session_id: str
+    applied_body: str
+    change_summary: str
+    generated: bool
 
 
 class UndoResponse(BaseModel):
@@ -253,6 +276,99 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
         capture_reason="artifact_interaction",
     )
     return EditResponse(session_id=session_id, ok=True)
+
+
+def _route_governance_bearing(session: SessionLog, vault_root: Path) -> None:
+    """Route a governance-bearing co-authoring generation to the Panel pipeline.
+
+    Used when the generated body carries frontmatter (or another
+    governance-bearing target). The note is never mutated here; an intent is
+    queued through ``GovernanceRouter`` so the gated Panel admission path owns
+    execution. Raises ``HTTPException(409)`` to signal the body was not
+    applied in place.
+    """
+    log_writer = SessionLogWriter(vault_root=vault_root)
+    safe_note_path = str(session.note_path.relative_to(vault_root))
+    identity = resolve_note_artifact_identity(
+        artifact_path=session.note_path,
+        vault_root=vault_root,
+        safe_note_path=safe_note_path,
+    )
+    if identity.artifact_id is not None:
+        pipeline = CanvasPanelPipeline(
+            proposal_store=_panel_proposal_store,
+            artifact_id=identity.artifact_id,
+            note_path=safe_note_path,
+        )
+        gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
+        gov.request_governance_action(session, GovernanceActionType.FRONTMATTER_UPDATE, {})
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Co-authoring generation is governance-bearing — routed to the "
+            "gated governance pipeline; note body left unchanged."
+        ),
+    )
+
+
+@router.post("/sessions/{session_id}/coauthor", response_model=CoAuthorResponse)
+def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse:
+    _require_canvas()
+    session = _sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+
+    vault_root = _get_vault_root()
+    current_body = _note_body(session.note_path)
+    cognition = CoAuthoringCognition(facade_factory=_coauthor_facade_factory)
+    try:
+        generated = cognition.generate_body(
+            intent=req.intent,
+            current_body=current_body,
+        )
+    except GovernanceBearingMutationError:
+        # Generation produced a frontmatter/governance-bearing body: do not
+        # apply in place; route through the gated pipeline (raises 409).
+        _route_governance_bearing(session, vault_root)
+    except CoAuthoringUnavailableError as exc:
+        # No edit-capable provider produced a usable body (mock/degraded
+        # backend or failed run). Leave the note unchanged; do not write
+        # diagnostic text into the body.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    change_summary = req.change_summary or f"co-authored: {req.intent.strip()}"
+    body_before = current_body
+    log_writer = SessionLogWriter(vault_root=vault_root)
+    writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
+    # Record the user's intent as provenance in the session log.
+    log_writer.append_turn(session, user_prompt=req.intent, change_summary=change_summary)
+    try:
+        writer.apply_edit(session, generated.body, change_summary)
+    except GovernanceBearingMutationError:
+        # Defense in depth: the writer caught a governance-bearing body the
+        # cognition let through. Route it rather than applying in place.
+        _route_governance_bearing(session, vault_root)
+
+    body_after = _note_body(session.note_path)
+    _edit_history.setdefault(session_id, []).append(
+        _AppliedBodyEdit(
+            edit_id=str(uuid4()),
+            body_before=body_before,
+            body_after=body_after,
+            change_summary=change_summary,
+        )
+    )
+    _capture_leave_point_for_session(
+        session,
+        source_kind="canvas_session",
+        capture_reason="artifact_interaction",
+    )
+    return CoAuthorResponse(
+        session_id=session_id,
+        applied_body=body_after,
+        change_summary=change_summary,
+        generated=generated.generated,
+    )
 
 
 @router.delete("/sessions/{session_id}/edits/last", response_model=UndoResponse)
