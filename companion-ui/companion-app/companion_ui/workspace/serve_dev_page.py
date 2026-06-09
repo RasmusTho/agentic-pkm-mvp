@@ -1297,6 +1297,20 @@ def _canvas_coauthor_script(canvas_enabled: bool) -> str:
       if (result) result.setAttribute('data-result-state', 'routed_to_panel');
     }
 
+    function renderExploratory(data) {
+      // Exploratory 200 (status='exploratory_no_edit'): read-only, non-mutating.
+      // Must NOT render an applied edit — the note body is unchanged and there is
+      // no applied_body/change_summary to show. Surface the server-declared
+      // detail as a non-mutating notice instead.
+      if (result) result.setAttribute('data-result-state', 'exploratory_no_edit');
+      if (notice) {
+        notice.hidden = false;
+        notice.setAttribute('data-notice-state', 'exploratory_no_edit');
+        notice.textContent = (data && data.detail)
+          || 'Exploratory intent — read-only response; note body left unchanged.';
+      }
+    }
+
     submit.addEventListener('click', function() {
       if (submit.getAttribute('data-submitting') === 'true') return;
       var intent = intentInput ? intentInput.value : '';
@@ -1325,6 +1339,10 @@ def _canvas_coauthor_script(canvas_enabled: bool) -> str:
           }
           if (res.status === 503) {
             showNotice('Co-authoring provider is unavailable right now. Nothing was changed.');
+            return;
+          }
+          if (res.ok && res.data && res.data.status === 'exploratory_no_edit') {
+            renderExploratory(res.data);
             return;
           }
           if (res.ok) {
