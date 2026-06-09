@@ -124,19 +124,21 @@ Phase 2 acceptance (validated on parent feature issue #1715 — **delivered**, c
 
 ## Phase 3 — Chat→Panel Governance Handoff
 
-Phase 2 made co-authoring reachable and routes governance-bearing generations to the Panel
-pipeline server-side — but the handoff is **dead-ended in the UI**. `_route_governance_bearing`
-stages a Panel intent via `GovernanceRouter` and then discards the `intent_id`, raising an opaque
-409; the canvas region shows only a generic "routed to Panel" flag with no link to the proposal or
-its receipt. Phase 3 makes the crossing navigable end to end, per
-`docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md` (still Agentic Lab,
-gated behind `CANVAS_ENABLED`; Panel stays the primary command surface; receipts stay server-owned).
+**Delivered (dev/staging, 2026-06-09).** Phase 2 made co-authoring reachable and routed
+governance-bearing generations to the Panel pipeline server-side, but the handoff was previously
+dead-ended in the UI (`_route_governance_bearing` discarded the `intent_id` and raised an opaque
+409). Phase 3 made the crossing navigable end to end, per
+`docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md` (Agentic Lab, gated
+behind `CANVAS_ENABLED`; Panel stays the primary command surface; receipts stay server-owned). One
+follow-up remains: wiring the served dev page to invoke `/coauthor` in live JS (#1733).
 
-| Order | Task File | Issue | What It Builds | Parallelizable |
-|-------|-----------|-------|----------------|----------------|
-| 1 | [RETURN_GOVERNANCE_HANDOFF_REFERENCE.md](RETURN_GOVERNANCE_HANDOFF_REFERENCE.md) | #1726 (`agent:ready`) | API returns a structured handoff reference (`intent_id`/`action_type`/`status`); staged proposal marked `origin="canvas_coauthoring"` | — |
-| 2 | [SURFACE_CHAT_TO_PANEL_HANDOFF.md](SURFACE_CHAT_TO_PANEL_HANDOFF.md) | #1727 (`agent:blocked` on #1726) | Canvas region links to the staged proposal; Panel rail shows canvas origin; confirm via existing flow | depends on 1 |
-| 3 | [REFLECT_HANDOFF_RECEIPT.md](REFLECT_HANDOFF_RECEIPT.md) | #1728 (`agent:blocked` on #1727) | Executed receipt reflected back into the canvas/originating context (read-only, server-declared) | depends on 2 |
+| Order | Task File | Issue | What It Builds | Status |
+|-------|-----------|-------|----------------|--------|
+| 1 | [RETURN_GOVERNANCE_HANDOFF_REFERENCE.md](RETURN_GOVERNANCE_HANDOFF_REFERENCE.md) | #1726 (PR #1731) | API returns a structured handoff reference (`intent_id`/`action_type`/`status`); staged proposal marked proposal-scoped `proposal_origin="canvas_coauthoring"` | `closed` |
+| 2 | [SURFACE_CHAT_TO_PANEL_HANDOFF.md](SURFACE_CHAT_TO_PANEL_HANDOFF.md) | #1727 (PR #1732) | Canvas region links to the staged proposal; Panel rail shows canvas origin; confirm via existing flow | `closed` |
+| 3 | [REFLECT_HANDOFF_RECEIPT.md](REFLECT_HANDOFF_RECEIPT.md) | #1728 (PR #1734) | Executed receipt reflected back into the canvas/originating context (read-only, server-declared) | `closed` |
+
+Follow-up: #1733 — wire the live `serve_dev_page` co-authoring flow to call `/coauthor` and render the handoff affordance (`agent:ready`).
 
 ```
 RETURN_GOVERNANCE_HANDOFF_REFERENCE
@@ -146,14 +148,14 @@ SURFACE_CHAT_TO_PANEL_HANDOFF
 REFLECT_HANDOFF_RECEIPT
 ```
 
-Phase 3 parent feature issue: **#1725** — live validation hub; closes only after the dev-shell demo passes and the `docs/STATUS.md` claim is promoted.
+Phase 3 parent feature issue: **#1725** — validation hub (**delivered**; closed 2026-06-09).
 
-Phase 3 acceptance (validated on the Phase 3 parent feature issue):
+Phase 3 acceptance (validated on parent feature issue #1725 — **delivered**):
 
-- [ ] A governance-bearing co-authoring intent returns a handoff reference correlating it to a Panel proposal.
-- [ ] The Companion UI links the canvas intent to the canvas-originated Panel proposal and confirms via the existing Panel flow.
-- [ ] The executed receipt is reflected back into the originating context, read-only and server-declared.
-- [ ] Panel remains the primary command surface; the gated-execution invariant and "receipts not invented" hold.
-- [ ] `docs/STATUS.md` records the Phase 3 delivery receipt once accepted.
+- [x] A governance-bearing co-authoring intent returns a handoff reference correlating it to a Panel proposal.
+- [x] The Companion UI links the canvas intent to the canvas-originated Panel proposal and confirms via the existing Panel flow.
+- [x] The executed receipt is reflected back into the originating context, read-only and server-declared.
+- [x] Panel remains the primary command surface; the gated-execution invariant and "receipts not invented" hold.
+- [x] `docs/STATUS.md` records the Phase 3 delivery receipt (PR #1735).
 
 Phase 2 parent feature issue: **#1715** — live validation hub; closes only after the dev-shell demo passes and the `docs/STATUS.md` Companion UI claim is promoted.
