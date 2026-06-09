@@ -20,7 +20,11 @@ def _writable(path: Path) -> bool:
     """
     if not path.exists():
         return False
-    return path.is_dir() and os.access(path, os.W_OK)
+    # A directory needs both write and search/execute permission before files can
+    # actually be created inside it, so report W_OK alone as insufficient: check
+    # W_OK | X_OK to avoid an over-optimistic "writable: true" for a dir the
+    # process cannot create entries in (write-only / ACL-restricted dirs).
+    return path.is_dir() and os.access(path, os.W_OK | os.X_OK)
 
 
 def _path_status(path: Path) -> dict[str, Any]:
