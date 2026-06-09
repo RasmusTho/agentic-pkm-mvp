@@ -17,13 +17,16 @@ inference, receipts never invented.
 
 from __future__ import annotations
 
+import io
+import json
 from typing import Any
 
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
 )
-from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.serve_dev_page import make_handler, render_index_html
+from companion_ui.workspace.workspace_http_client import WorkspaceClientHTTPError
 from tests.companion_ui.vault_browser_test_helpers import (
     default_vault_browser_payload,
     is_vault_browser_get,
@@ -145,3 +148,114 @@ def test_served_page_canvas_coauthor_absent_when_disabled() -> None:
     assert 'data-testid="workspace-canvas-view-in-panel"' not in html
     assert 'data-capability="canvas.coauthor"' not in html
     assert "/coauthor" not in html
+
+
+# ---------------------------------------------------------------------------
+# Same-origin POST proxy: the dynamic /coauthor path must reach the runtime and
+# preserve the governance handoff body, otherwise the served page 404s the
+# request locally and the 409/503 handling never runs.
+# ---------------------------------------------------------------------------
+
+
+class _ProxyClient:
+    def __init__(self, *, post_result: Any = None, post_error: Exception | None = None) -> None:
+        self.post_result = post_result if post_result is not None else {"ok": True}
+        self.post_error = post_error
+        self.post_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        self.post_calls.append((url, json))
+        if self.post_error is not None:
+            raise self.post_error
+        return self.post_result
+
+
+class _CapturingHandler:
+    """Drives a make_handler subclass' do_POST without a real socket."""
+
+    def __init__(self, handler_cls: type, path: str, body: dict[str, Any]) -> None:
+        raw = json.dumps(body).encode("utf-8")
+        self._instance = handler_cls.__new__(handler_cls)
+        self._instance.path = path
+        self._instance.rfile = io.BytesIO(raw)
+        self._instance.wfile = io.BytesIO()
+        self._instance.headers = {"Content-Length": str(len(raw))}
+        self.status_code: int | None = None
+        self.payload: dict[str, Any] | None = None
+
+        def _send_json(status_code: int, payload: dict[str, Any]) -> None:
+            self.status_code = status_code
+            self.payload = payload
+
+        self._instance._send_json = _send_json  # type: ignore[method-assign]
+
+    def run_post(self) -> None:
+        self._instance.do_POST()
+
+
+def test_page_server_proxies_coauthor_and_forwards_applied_body() -> None:
+    client = _ProxyClient(
+        post_result={
+            "applied_body": "# Note\n\nTightened.",
+            "change_summary": "tightened intro",
+        }
+    )
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+    driver = _CapturingHandler(
+        handler_cls,
+        "/api/canvas/sessions/sess-1/coauthor",
+        {"intent": "tighten the intro"},
+    )
+
+    driver.run_post()
+
+    # The dynamic coauthor path was forwarded to the runtime (not 404'd locally).
+    assert client.post_calls == [
+        ("/api/canvas/sessions/sess-1/coauthor", {"intent": "tighten the intro"})
+    ]
+    assert driver.status_code == 200
+    assert driver.payload == {
+        "applied_body": "# Note\n\nTightened.",
+        "change_summary": "tightened intro",
+    }
+
+
+def test_page_server_proxy_preserves_409_governance_handoff_body() -> None:
+    # The runtime returns the governance handoff as a 409 JSON body; the proxy
+    # must forward that body verbatim (status + intent_id) so the page can key
+    # the view-in-Panel affordance to it.
+    governance_body = {
+        "status": "routed_to_panel",
+        "intent_id": "abc123",
+        "action_type": "maturity_transition",
+        "detail": "governance-bearing mutation routed to Panel",
+    }
+    client = _ProxyClient(
+        post_error=WorkspaceClientHTTPError(409, json.dumps(governance_body))
+    )
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+    driver = _CapturingHandler(
+        handler_cls,
+        "/api/canvas/sessions/sess-1/coauthor",
+        {"intent": "promote to evergreen"},
+    )
+
+    driver.run_post()
+
+    assert driver.status_code == 409
+    assert driver.payload == governance_body
+
+
+def test_page_server_proxy_rejects_unknown_canvas_post_path() -> None:
+    client = _ProxyClient()
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+    driver = _CapturingHandler(
+        handler_cls,
+        "/api/canvas/sessions/sess-1/coauthor/extra",
+        {"intent": "x"},
+    )
+
+    driver.run_post()
+
+    assert driver.status_code == 404
+    assert client.post_calls == []

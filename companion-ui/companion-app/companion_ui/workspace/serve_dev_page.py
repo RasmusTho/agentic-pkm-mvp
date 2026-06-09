@@ -8662,6 +8662,19 @@ def make_handler(
 
         def _proxy_error(self, exc: WorkspaceClientError) -> None:
             if isinstance(exc, WorkspaceClientHTTPError):
+                # Forward the runtime's JSON error body verbatim when it is JSON
+                # (preserving the original status code) so structured handoff
+                # references survive to the page — e.g. the canvas co-authoring
+                # 409 body {"status":"routed_to_panel","intent_id":...} the
+                # served page renders as the view-in-Panel affordance (#1733).
+                # Non-JSON details fall back to the wrapped diagnostic shape.
+                try:
+                    runtime_body = json.loads(exc.detail)
+                except (json.JSONDecodeError, TypeError):
+                    runtime_body = None
+                if isinstance(runtime_body, dict):
+                    self._send_json(exc.status_code, runtime_body)
+                    return
                 self._send_json(
                     exc.status_code,
                     {
@@ -8773,9 +8786,24 @@ def make_handler(
             }
         )
 
+        # Dynamic POST proxy paths (session id in the path). The live canvas
+        # co-authoring loop (#1733) posts the user's intent here; the runtime
+        # composes/applies the body or routes a governance-bearing intent to the
+        # Panel via HTTP 409. The 409/503 JSON body must be forwarded verbatim so
+        # the served page can render the view-in-Panel handoff (intent_id) and
+        # the provider-unavailable notice — server declares, UI renders.
+        _POST_PROXY_PATTERNS = (
+            re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
+        )
+
+        def _post_path_allowed(self, path: str) -> bool:
+            if path in self._POST_PROXY_PATHS:
+                return True
+            return any(pattern.fullmatch(path) for pattern in self._POST_PROXY_PATTERNS)
+
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path not in self._POST_PROXY_PATHS:
+            if not self._post_path_allowed(parsed.path):
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
             try:
