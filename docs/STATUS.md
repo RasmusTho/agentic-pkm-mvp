@@ -201,6 +201,18 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /
   `close`, `/api/canvas/sessions*`, session-log persistence, and governance-bearing mutation routing
   are shipped; broader Chat cognition and hybrid Panel/Chat mutation remain separate follow-up work.
+- Agentic Canvas Co-Authoring (Phase 2, dev/staging, `CANVAS_ENABLED`) is now shipped: the canvas
+  surface is no longer a write-pipe without an author. A write-capable co-authoring cognition
+  (`app/chat/coauthoring_cognition.py`) turns a user intent plus the current note body into a
+  generated body edit applied through the existing `CanvasWriter` via `POST /api/canvas/sessions/{id}/coauthor`;
+  mock/degraded LLM responses are rejected (503) rather than written, and frontmatter/cross-note
+  generations route through `GovernanceRouter` (409). The Companion UI shell exposes a server-gated
+  co-authoring region (intent input, applied-edit render, undo) wired to `/coauthor` and
+  `/edits/last`, reachable only when the runtime declares `guards.canvas_enabled`. Delivery:
+  capability spec `docs/CANVAS_CHAT_SURFACE/` Phase 2; parent #1715, tasks #1716 (PR #1720) and
+  #1717 (PR #1723), spec docs PR #1719. Core Runtime defaults and the read-only Chat scaffold are
+  unchanged. A live operator browser demo of the open→intent→applied-edit→undo loop remains the
+  optional end-to-end confirmation; in-process and CI (`companion-ui-browser-runtime`) validation passed.
 - Panel confirmation is now a bounded shipped runtime path: `POST /api/panel/confirm` confirms
   explicit panel actions through the governed confirmation path, preserves blocked/rejected receipts,
   and the runtime/client surface now includes `GET /api/artifacts/note` plus the companion-app
