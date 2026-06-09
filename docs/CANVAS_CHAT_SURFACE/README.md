@@ -28,7 +28,7 @@ This is the human flow described in `docs/HUMAN-FLOWS.md` §8: "I want to think 
 
 ## What This Capability Does Not Build
 
-- A UI or editor library. Hosting location (Obsidian, standalone, web) is deferred.
+- A general-purpose UI or editor library, and no production hosting decision (Obsidian, standalone, web). **Scope note:** Phase 1 (the four tasks below) builds no UI. Phase 2 ("Agentic Canvas Co-Authoring", further below) narrows this exclusion: it adds a *bounded* Companion UI co-authoring surface in the dev/staging shell — not a general editor library and not a production hosting decision, both of which remain deferred.
 - Workspace mode (multi-note sessions across related notes).
 - Hybrid Panel/Chat integration. That is a separate downstream capability.
 - Retention policy enforcement. Retention window duration is a policy decision deferred to a later slice.
