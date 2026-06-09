@@ -32,6 +32,11 @@ class CanvasPanelPipeline:
     with artifact_id equal to the note_path relative to vault_root.
     """
 
+    #: Proposal-scoped origin recorded on every canvas-originated Panel proposal.
+    #: This is distinct from the vault-note/frontmatter ``origin`` field; it marks
+    #: the *proposal* as canvas co-authoring provenance for Panel attribution.
+    PROPOSAL_ORIGIN = "canvas_coauthoring"
+
     def __init__(self, proposal_store: ProposalStore, artifact_id: str, note_path: str) -> None:
         self._store = proposal_store
         self._artifact_id = artifact_id
@@ -78,6 +83,7 @@ class CanvasPanelPipeline:
                 artifact_id=self._artifact_id,
                 intent_event=intent_event,
                 trace_id=proposal_id,
+                proposal_origin=self.PROPOSAL_ORIGIN,
             ),
         )
         return proposal_id

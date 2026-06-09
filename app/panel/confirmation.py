@@ -49,6 +49,10 @@ class StagedProposal:
     intent_event: PanelIntentEvent
     proposed_at: float = field(default_factory=time.time)
     trace_id: str = ""
+    # Proposal-scoped provenance — which surface staged this Panel proposal
+    # (e.g. "canvas_coauthoring"). Distinct from the vault-note/frontmatter
+    # ``origin`` field; Panel attribution must never overwrite artifact origin.
+    proposal_origin: str | None = None
 
 
 class CorrectionFields(BaseModel):

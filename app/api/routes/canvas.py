@@ -19,6 +19,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api.routes.artifacts import _content_hash
@@ -124,10 +125,29 @@ class GovernanceRequest(BaseModel):
     payload: dict[str, Any] = {}
 
 
+class GovernanceHandoffRef(BaseModel):
+    """Structured reference returned when a canvas intent is routed to the Panel.
+
+    Surfaces the staged Panel intent so the UI can correlate the canvas
+    co-authoring intent with the Panel proposal it produced. The note is never
+    mutated on this path — execution stays in the gated Panel pipeline.
+    """
+
+    status: Literal["routed_to_panel"] = "routed_to_panel"
+    intent_id: str
+    action_type: str
+    detail: str = (
+        "Governance-bearing — routed to the gated Panel pipeline; "
+        "note body left unchanged."
+    )
+
+
 class GovernanceResponse(BaseModel):
     intent_id: str
     session_id: str
     artifact_id: str
+    action_type: str
+    status: Literal["routed_to_panel"] = "routed_to_panel"
 
 
 class CloseResponse(BaseModel):
@@ -278,14 +298,19 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
     return EditResponse(session_id=session_id, ok=True)
 
 
-def _route_governance_bearing(session: SessionLog, vault_root: Path) -> None:
+def _route_governance_bearing(session: SessionLog, vault_root: Path) -> GovernanceHandoffRef:
     """Route a governance-bearing co-authoring generation to the Panel pipeline.
 
     Used when the generated body carries frontmatter (or another
     governance-bearing target). The note is never mutated here; an intent is
     queued through ``GovernanceRouter`` so the gated Panel admission path owns
-    execution. Raises ``HTTPException(409)`` to signal the body was not
-    applied in place.
+    execution.
+
+    Returns a :class:`GovernanceHandoffRef` carrying the staged Panel
+    ``intent_id`` and ``action_type`` so the caller can surface a structured
+    handoff reference (a 409 with this body). Raises ``HTTPException(409)``
+    only when the note artifact identity is unresolved and no Panel proposal
+    could be staged.
     """
     log_writer = SessionLogWriter(vault_root=vault_root)
     safe_note_path = str(session.note_path.relative_to(vault_root))
@@ -294,25 +319,35 @@ def _route_governance_bearing(session: SessionLog, vault_root: Path) -> None:
         vault_root=vault_root,
         safe_note_path=safe_note_path,
     )
-    if identity.artifact_id is not None:
-        pipeline = CanvasPanelPipeline(
-            proposal_store=_panel_proposal_store,
-            artifact_id=identity.artifact_id,
-            note_path=safe_note_path,
+    if identity.artifact_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Co-authoring generation is governance-bearing — routed to the "
+                "gated governance pipeline; note body left unchanged."
+            ),
         )
-        gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
-        gov.request_governance_action(session, GovernanceActionType.FRONTMATTER_UPDATE, {})
-    raise HTTPException(
-        status_code=409,
-        detail=(
-            "Co-authoring generation is governance-bearing — routed to the "
-            "gated governance pipeline; note body left unchanged."
-        ),
+    pipeline = CanvasPanelPipeline(
+        proposal_store=_panel_proposal_store,
+        artifact_id=identity.artifact_id,
+        note_path=safe_note_path,
+    )
+    gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
+    action_type = GovernanceActionType.FRONTMATTER_UPDATE
+    pending = gov.request_governance_action(session, action_type, {})
+    return GovernanceHandoffRef(
+        intent_id=pending.intent_id,
+        action_type=pending.action_type.value,
     )
 
 
+def _handoff_response(ref: GovernanceHandoffRef) -> JSONResponse:
+    """Render a governance handoff reference as a structured 409 body."""
+    return JSONResponse(status_code=409, content=ref.model_dump())
+
+
 @router.post("/sessions/{session_id}/coauthor", response_model=CoAuthorResponse)
-def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse:
+def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONResponse:
     _require_canvas()
     session = _sessions.get(session_id)
     if session is None:
@@ -328,8 +363,9 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse:
         )
     except GovernanceBearingMutationError:
         # Generation produced a frontmatter/governance-bearing body: do not
-        # apply in place; route through the gated pipeline (raises 409).
-        _route_governance_bearing(session, vault_root)
+        # apply in place; route through the gated pipeline and return a
+        # structured handoff reference (409).
+        return _handoff_response(_route_governance_bearing(session, vault_root))
     except CoAuthoringUnavailableError as exc:
         # No edit-capable provider produced a usable body (mock/degraded
         # backend or failed run). Leave the note unchanged; do not write
@@ -347,7 +383,7 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse:
     except GovernanceBearingMutationError:
         # Defense in depth: the writer caught a governance-bearing body the
         # cognition let through. Route it rather than applying in place.
-        _route_governance_bearing(session, vault_root)
+        return _handoff_response(_route_governance_bearing(session, vault_root))
 
     body_after = _note_body(session.note_path)
     _edit_history.setdefault(session_id, []).append(
@@ -448,6 +484,7 @@ def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResp
         intent_id=pending.intent_id,
         session_id=pending.session_id,
         artifact_id=artifact_id,
+        action_type=pending.action_type.value,
     )
 
 
