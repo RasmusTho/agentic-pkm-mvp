@@ -363,9 +363,10 @@ Downstream issues should use this layer as a boundary, not as implementation evi
 - #1643 should specify display preferences as render-only projections.
 - #1645 should implement confirmation only through the existing checkbox projection endpoint and
   should not treat this contract as permission to bypass `PANEL_CONFIRMATION_API_CONTRACT`.
-- A follow-up text-production issue should specify dictation, correction-as-proposal,
-  real-word-error flagging, and read-back verification against the existing direct note editor and
-  Canvas/body-edit surfaces.
+- Correction-as-proposal, real-word-error flagging, and draft read-back verification are delivered
+  for the direct note editor (#1681 via PR #1689; browser-local read-back via #1677/PR #1678). A
+  follow-up text-production issue should specify dictation/STT against the same direct note editor
+  and Canvas/body-edit surfaces.
 - #1662 defines FA-5 against the shipped Workspace Orientation and resurfacing seams: backend caps
   versus scarce displayed budgets, pull-default, bounded foreground ambient refresh, pointer-first
   why-now provenance, and the task-support-versus-learning split.
