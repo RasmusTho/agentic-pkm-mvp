@@ -240,6 +240,49 @@ def test_panel_rail_origin_absent_for_non_canvas_proposal() -> None:
     assert rows[0]["proposal_origin"] is None
 
 
+def test_panel_rail_html_renders_canvas_origin_attribution() -> None:
+    """The served Panel rail HTML must consume proposal_origin, not just the row dict."""
+    from companion_ui.workspace.serve_dev_page import _render_panel_proposal_rows
+
+    html = _render_panel_proposal_rows(
+        [
+            {
+                "proposal_id": INTENT_ID,
+                "artifact_id": "note-uuid-1",
+                "description": "promote to evergreen",
+                "status": "staged",
+                "proposal_origin": "canvas_coauthoring",
+                "affordances": {"confirm": True},
+                "evidence": {"trigger_summary": "t"},
+            }
+        ],
+        writeguard_blocked=False,
+    )
+    assert 'data-testid="workspace-panel-proposal-origin"' in html
+    assert 'data-proposal-origin="canvas_coauthoring"' in html
+    assert "canvas co-authoring" in html
+
+
+def test_panel_rail_html_omits_origin_when_absent() -> None:
+    """No server-declared proposal_origin -> no origin attribution in the HTML."""
+    from companion_ui.workspace.serve_dev_page import _render_panel_proposal_rows
+
+    html = _render_panel_proposal_rows(
+        [
+            {
+                "proposal_id": "prop-x",
+                "artifact_id": "note-uuid-1",
+                "description": "ordinary proposal",
+                "status": "staged",
+                "affordances": {"confirm": True},
+                "evidence": {"trigger_summary": "t"},
+            }
+        ],
+        writeguard_blocked=False,
+    )
+    assert "workspace-panel-proposal-origin" not in html
+
+
 # ---------------------------------------------------------------------------
 # AC 4: confirmation routes through the existing POST /api/panel/confirm path
 # ---------------------------------------------------------------------------
