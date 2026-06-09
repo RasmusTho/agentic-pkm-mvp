@@ -178,6 +178,12 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         "vault-properties-header",
         "vault-properties-list",
         "vault-property",
+        # In-shell Help drawer
+        "help-toggle",
+        "help-drawer-head",
+        "help-drawer-title",
+        "help-drawer-sub",
+        "help-drawer-close",
     }
 )
 

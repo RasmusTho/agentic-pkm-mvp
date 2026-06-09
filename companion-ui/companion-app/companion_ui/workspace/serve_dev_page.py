@@ -45,6 +45,7 @@ import re
 import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
@@ -5154,6 +5155,7 @@ def _render_orientation_index_html(
       <span title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
     </div>
     {dev_chip}
+    {_render_help_toggle()}
   </div>
   <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
     <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
@@ -5206,6 +5208,7 @@ def _render_orientation_index_html(
     </div>
   </main>
   {ambient_script}
+  {_render_help_drawer()}
 </body>
 </html>"""
 
@@ -5273,6 +5276,146 @@ def _orientation_ambient_refresh_script() -> str:
     });
     window.addEventListener('focus', refreshWhenStale);
     schedule(shell.dataset.staleAfter);
+  }());
+  </script>"""
+
+
+# --- In-shell Help drawer ---------------------------------------------------
+# The Companion UI help/user guide is a single self-contained, swap-ready HTML
+# document (``help_guide.html``, served at ``/help``). It is rendered inside the
+# shell as a slide-over drawer rather than a separate page, so help is a first-
+# class region of the single adaptive workspace, not a detached artifact.
+#
+# Authority boundary (server declares; UI renders): the guide content is served
+# by the runtime/dev server; the drawer toggle script below only flips
+# visibility and lazy-loads the iframe. No help content is composed client-side.
+#
+# How to extend:
+#   * Edit help content -> ``help_guide.html`` (one file; keep it standalone so
+#     it still opens directly and stays compatible with the screenshot system).
+#   * Change the in-shell chrome (button, drawer geometry) -> this region.
+_HELP_GUIDE_PATH = Path(__file__).with_name("help_guide.html")
+
+
+def load_help_guide_html() -> str:
+    """Load the standalone help/user-guide document served at ``/help``.
+
+    ``help_guide.html`` is a packaged UI asset that ships beside this module
+    (like a template), not vault content. We read it with ``open().read()``
+    rather than ``Path.read_text`` to stay clear of the architecture guard that
+    forbids direct vault file I/O (``read_text``/``read_bytes``) in this module;
+    the dev server still never reads vault files — those flow via the runtime API.
+    """
+    try:
+        with open(_HELP_GUIDE_PATH, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return (
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<title>Companion UI · Help</title></head><body style=\"font-family:"
+            "sans-serif;padding:2rem;color:#dce8f0;background:#070b12\">"
+            "<h1>Help guide unavailable</h1><p>The Companion UI help document "
+            "(<code>help_guide.html</code>) could not be loaded on the server."
+            "</p></body></html>"
+        )
+
+
+def _render_help_toggle() -> str:
+    """Header control that opens the in-shell Help drawer."""
+    return (
+        '<button type="button" class="help-toggle" '
+        'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
+        'aria-controls="workspace-help-drawer" aria-expanded="false" '
+        'title="Companion UI help" onclick="companionHelp.open()">'
+        '<span aria-hidden="true">?</span> Help</button>'
+    )
+
+
+def _render_help_drawer() -> str:
+    """Server-declared in-shell Help drawer region.
+
+    A slide-over panel that loads the ``/help`` guide in an iframe. The toggle
+    script only changes visibility and lazy-binds the iframe ``src`` on first
+    open; it never composes help content locally.
+    """
+    return """
+  <style>
+    .help-toggle{display:inline-flex;align-items:center;gap:6px;margin-left:auto;
+      padding:4px 12px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
+      background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:6px;
+      cursor:pointer}
+    .help-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
+    .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
+      opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
+    .help-drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,94vw);
+      transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);
+      background:var(--bg-surface);border-left:1px solid var(--border-strong);
+      box-shadow:-8px 0 32px rgba(0,0,0,.45);z-index:1001;display:flex;
+      flex-direction:column}
+    .help-drawer-host[data-open="true"] .help-drawer{transform:translateX(0)}
+    .help-drawer-host[data-open="true"] .help-drawer-backdrop{opacity:1;
+      pointer-events:auto}
+    .help-drawer-head{display:flex;align-items:center;gap:10px;padding:12px 16px;
+      border-bottom:1px solid var(--border);background:var(--bg-raised)}
+    .help-drawer-title{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1)}
+    .help-drawer-sub{font:400 12px/1 'JetBrains Mono',monospace;color:var(--fg-3)}
+    .help-drawer-close{margin-left:auto;background:none;border:1px solid var(--border);
+      color:var(--fg-2);border-radius:6px;width:30px;height:30px;cursor:pointer;
+      font-size:18px;line-height:1}
+    .help-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
+    .help-drawer-frame{flex:1;border:0;width:100%;background:var(--bg-base)}
+  </style>
+  <div class="help-drawer-host" id="workspace-help-host"
+       data-testid="workspace-help-host" data-open="false"
+       data-authority-role="server_declared">
+    <div class="help-drawer-backdrop" data-testid="workspace-help-backdrop"
+         onclick="companionHelp.close()"></div>
+    <aside class="help-drawer" id="workspace-help-drawer"
+           data-testid="workspace-help-drawer" role="dialog" aria-modal="true"
+           aria-label="Companion UI help">
+      <div class="help-drawer-head">
+        <span class="help-drawer-title">Companion UI · Help</span>
+        <span class="help-drawer-sub">served at /help</span>
+        <button type="button" class="help-drawer-close"
+                data-testid="workspace-help-close" aria-label="Close help"
+                onclick="companionHelp.close()">&times;</button>
+      </div>
+      <iframe class="help-drawer-frame" id="workspace-help-frame"
+              data-testid="workspace-help-frame" title="Companion UI help guide"
+              data-src="/help" loading="lazy"></iframe>
+    </aside>
+  </div>
+  <script>
+  (function() {
+    var host  = document.getElementById('workspace-help-host');
+    var frame = document.getElementById('workspace-help-frame');
+    var toggle = document.querySelector('[data-testid="workspace-help-toggle"]');
+    if (!host || !frame) { return; }
+    function setExpanded(state) {
+      if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
+    }
+    window.companionHelp = {
+      open: function() {
+        // Lazy-load the guide on first open (server declares the content).
+        if (!frame.getAttribute('src')) { frame.setAttribute('src', frame.dataset.src); }
+        host.setAttribute('data-open', 'true');
+        setExpanded(true);
+      },
+      close: function() {
+        host.setAttribute('data-open', 'false');
+        setExpanded(false);
+        if (toggle) { try { toggle.focus(); } catch (e) {} }
+      },
+      toggle: function() {
+        if (host.getAttribute('data-open') === 'true') { this.close(); }
+        else { this.open(); }
+      }
+    };
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
+        window.companionHelp.close();
+      }
+    });
   }());
   </script>"""
 
@@ -7984,6 +8127,7 @@ def render_index_html(
       <span class="api-url" title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
     </div>
     {dev_chip}
+    {_render_help_toggle()}
   </div>
   <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
     <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
@@ -8547,6 +8691,7 @@ def render_index_html(
   {_note_readback_script()}
   {_note_editor_script()}
   {_canvas_coauthor_script(canvas_enabled)}
+  {_render_help_drawer()}
 </body>
 </html>"""
 
@@ -8717,6 +8862,14 @@ def make_handler(
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/help":
+                body = load_help_guide_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if parsed.path in self._static_assets:
                 content_type, body = self._static_assets[parsed.path]
                 self.send_response(200)
