@@ -1235,6 +1235,112 @@ def _note_editor_script() -> str:
   </script>"""
 
 
+def _canvas_coauthor_script(canvas_enabled: bool) -> str:
+    """Live canvas co-authoring loop wiring (#1733).
+
+    The user states an intent; the served page POSTs ``{intent: ...}`` to
+    ``/api/canvas/sessions/{id}/coauthor`` (endpoint read off the form's
+    ``data-api-path``) and renders the server-applied body + change summary —
+    server declares, UI renders, no local body composition. A governance-bearing
+    409 (``status="routed_to_panel"``) surfaces a read-only "view in Panel"
+    affordance keyed to the returned ``intent_id`` and applies no body edit. A
+    503 shows a calm, non-destructive notice. Receipts are never invented.
+
+    Emitted only when canvas is enabled; with the flag off there is no intent
+    input, no co-author control, and no ``/coauthor`` call. Returned as a plain
+    string so JS braces are not double-escaped by the page template.
+    """
+    if not canvas_enabled:
+        return ""
+    return """
+  <script>
+  (function() {
+    var form = document.querySelector('[data-testid="workspace-canvas-coauthor"]');
+    if (!form) return;
+    var submit = form.querySelector('[data-testid="workspace-canvas-coauthor-submit"]');
+    var intentInput = form.querySelector('[data-testid="workspace-canvas-coauthor-intent"]');
+    var notice = form.querySelector('[data-testid="workspace-canvas-coauthor-notice"]');
+    var result = form.querySelector('[data-testid="workspace-canvas-coauthor-result"]');
+    var appliedBody = form.querySelector('[data-testid="workspace-canvas-coauthor-applied-body"]');
+    var changeSummary = form.querySelector('[data-testid="workspace-canvas-coauthor-change-summary"]');
+    var handoff = form.querySelector('[data-testid="workspace-canvas-coauthor-handoff"]');
+    var viewInPanel = form.querySelector('[data-testid="workspace-canvas-view-in-panel"]');
+    if (!submit) return;
+
+    function showNotice(message) {
+      if (!notice) return;
+      notice.hidden = false;
+      notice.setAttribute('data-notice-state', 'provider_unavailable');
+      notice.textContent = message;
+    }
+
+    function clearTransient() {
+      if (notice) { notice.hidden = true; notice.setAttribute('data-notice-state', 'idle'); notice.textContent = ''; }
+      if (handoff) { handoff.hidden = true; handoff.setAttribute('data-handoff-state', 'idle'); }
+      if (viewInPanel) { viewInPanel.setAttribute('data-intent-id', ''); }
+    }
+
+    function renderApplied(data) {
+      // Server-declared body only; the UI composes nothing locally.
+      if (result) result.setAttribute('data-result-state', 'applied');
+      if (appliedBody) appliedBody.textContent = (data && data.applied_body) || '';
+      if (changeSummary) changeSummary.textContent = (data && data.change_summary) || '';
+    }
+
+    function renderRoutedToPanel(data) {
+      // Governance-bearing 409: do NOT apply a body edit; surface the
+      // view-in-Panel affordance keyed to the server-provided intent_id.
+      var intentId = (data && data.intent_id) || '';
+      if (handoff) { handoff.hidden = false; handoff.setAttribute('data-handoff-state', 'routed_to_panel'); }
+      if (viewInPanel) viewInPanel.setAttribute('data-intent-id', intentId);
+      if (result) result.setAttribute('data-result-state', 'routed_to_panel');
+    }
+
+    submit.addEventListener('click', function() {
+      if (submit.getAttribute('data-submitting') === 'true') return;
+      var intent = intentInput ? intentInput.value : '';
+      if (!intent) return;
+      var endpoint = form.getAttribute('data-api-path') || submit.getAttribute('data-api-path');
+      if (!endpoint) return;
+      clearTransient();
+      submit.setAttribute('data-submitting', 'true');
+      fetch(endpoint, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({intent: intent})
+      })
+        .then(function(response) {
+          return response.json().then(function(data) {
+            return {status: response.status, ok: response.ok, data: data};
+          }).catch(function() {
+            return {status: response.status, ok: response.ok, data: {}};
+          });
+        })
+        .then(function(res) {
+          submit.removeAttribute('data-submitting');
+          if (res.status === 409 && res.data && res.data.status === 'routed_to_panel') {
+            renderRoutedToPanel(res.data);
+            return;
+          }
+          if (res.status === 503) {
+            showNotice('Co-authoring provider is unavailable right now. Nothing was changed.');
+            return;
+          }
+          if (res.ok) {
+            renderApplied(res.data);
+            return;
+          }
+          showNotice('Co-authoring request failed. Nothing was changed.');
+        })
+        .catch(function() {
+          submit.removeAttribute('data-submitting');
+          showNotice('Co-authoring request failed. Nothing was changed.');
+        });
+    });
+  })();
+  </script>"""
+
+
 def _correction_proposals_for_editor(editor_body: str) -> list[dict[str, object]]:
     proposals: list[dict[str, object]] = []
     for original, proposed, tier, reason, meaning_cue in (
@@ -3755,6 +3861,7 @@ def _render_canvas_session_controls(
     canvas_blocked = not canvas_enabled or writeguard_blocked or (not workspace_update_available)
     edit_api_path = f"/api/canvas/sessions/{session_id}/edits" if session_id else ""
     undo_api_path = f"/api/canvas/sessions/{session_id}/edits/last" if session_id else ""
+    coauthor_api_path = f"/api/canvas/sessions/{session_id}/coauthor" if session_id else ""
     present_text = (
         "User is present for Canvas editing."
         if user_present
@@ -3976,6 +4083,66 @@ def _render_canvas_session_controls(
               data-api-method="LOCAL"
               data-api-path="{recovery_api_path}">Acknowledge</button>
           </div>"""
+    # Live agentic co-authoring loop (#1733). Gated strictly by canvas_enabled and
+    # an active session: the user states an intent, the server composes and applies
+    # the body (server declares, UI renders). A governance-bearing 409 routes to
+    # Panel; a 503 surfaces a calm, non-destructive notice. No local body
+    # composition, no governance inference, receipts never invented.
+    coauthor_html = ""
+    if canvas_enabled and session_id and can_edit_body and not canvas_blocked:
+        coauthor_html = f"""
+          <form
+            class="canvas-coauthor"
+            data-testid="workspace-canvas-coauthor"
+            data-affordance-status="active"
+            data-capability="canvas.coauthor"
+            data-api-method="POST"
+            data-api-path="{coauthor_api_path}">
+            <label for="canvas_coauthor_intent">Co-authoring intent</label>
+            <input
+              type="text"
+              id="canvas_coauthor_intent"
+              name="intent"
+              data-testid="workspace-canvas-coauthor-intent"
+              aria-label="Co-authoring intent"
+              placeholder="e.g. tighten the intro paragraph">
+            <button
+              type="button"
+              data-testid="workspace-canvas-coauthor-submit"
+              data-affordance-status="active"
+              data-capability="canvas.coauthor"
+              data-runtime-backed="true"
+              data-api-method="POST"
+              data-api-path="{coauthor_api_path}">Co-author</button>
+            <div
+              class="canvas-coauthor-notice"
+              data-testid="workspace-canvas-coauthor-notice"
+              data-notice-state="idle"
+              hidden></div>
+            <div
+              class="canvas-coauthor-result"
+              data-testid="workspace-canvas-coauthor-result"
+              data-result-state="idle">
+              <pre
+                class="canvas-coauthor-applied-body"
+                data-testid="workspace-canvas-coauthor-applied-body"></pre>
+              <span
+                class="canvas-coauthor-change-summary"
+                data-testid="workspace-canvas-coauthor-change-summary"></span>
+            </div>
+            <div
+              class="canvas-coauthor-handoff"
+              data-testid="workspace-canvas-coauthor-handoff"
+              data-handoff-state="idle"
+              hidden>
+              <a
+                href="#workspace-panel-label"
+                data-testid="workspace-canvas-view-in-panel"
+                data-affordance-status="read-only"
+                data-authority-role="server_declared"
+                data-intent-id="">view in Panel</a>
+            </div>
+          </form>"""
     return f"""
         <div class="canvas-controls" data-testid="workspace-canvas-session-controls">
           {start_html}
@@ -3985,6 +4152,7 @@ def _render_canvas_session_controls(
           {unavailable_html}
           <span class="canvas-presence" data-testid="workspace-canvas-user-present" data-user-present="{'true' if user_present else 'false'}">{present_text}</span>
           {composer_html}
+          {coauthor_html}
           {recovery_html}
           {undo_state_html}
           <div class="canvas-provenance" data-testid="workspace-canvas-provenance">
@@ -5149,6 +5317,10 @@ def render_index_html(
         content_section = _render_error_section(error)
     elif fields is not None:
         content_section = _render_note_section(fields)
+    # Live co-authoring wiring is gated by the server-declared canvas flag,
+    # matching _render_note_section's guard derivation. With no fields (error /
+    # orientation) the canvas surface is absent, so the script is not emitted.
+    canvas_enabled = bool(fields.get("guard_canvas_enabled", True)) if fields is not None else False
     title_suffix = "PROD" if production_profile else "DEV"
     dev_chip = "" if production_profile else '<span class="dev-chip">DEV / not production</span>'
     production_static_link = (
@@ -8374,6 +8546,7 @@ def render_index_html(
   {_display_preferences_script()}
   {_note_readback_script()}
   {_note_editor_script()}
+  {_canvas_coauthor_script(canvas_enabled)}
 </body>
 </html>"""
 
