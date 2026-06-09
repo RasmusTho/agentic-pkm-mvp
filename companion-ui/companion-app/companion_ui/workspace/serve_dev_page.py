@@ -4055,6 +4055,41 @@ def _render_panel_proposal_rows(
                 f"origin:&nbsp;{_e(origin_label)}"
                 "</div>"
             )
+        # Server-declared reflected receipt posture (CHAT-PANEL-HANDOFF-03).
+        # Read-only: the canvas-originated proposal's executed receipt reflected
+        # back into the originating context, correlated by intent_id. Surfaced
+        # only when the server supplied it; the UI invents no receipt.
+        reflected_receipt = proposal.get("reflected_receipt")
+        reflected_receipt_html = ""
+        if isinstance(reflected_receipt, dict) and reflected_receipt:
+            rr_state = str(reflected_receipt.get("state") or "")
+            rr_visibility = str(reflected_receipt.get("receipt_visibility") or "")
+            rr_receipt_id = str(reflected_receipt.get("receipt_id") or "")
+            rr_outcome = str(reflected_receipt.get("outcome") or "")
+            rr_intent_id = str(reflected_receipt.get("intent_id") or "")
+            if rr_state == "receipt_visible":
+                rr_label = f"receipt: {rr_outcome or 'applied'}"
+            elif rr_state == "blocked":
+                rr_label = f"blocked: {rr_outcome or 'no durable receipt'}"
+            else:
+                rr_label = "awaiting decision"
+            rr_id_html = (
+                f'<span data-testid="workspace-panel-reflected-receipt-id">'
+                f"{_e(rr_receipt_id)}</span>"
+                if rr_receipt_id
+                else ""
+            )
+            reflected_receipt_html = (
+                '<div class="panel-proposal-reflected-receipt" '
+                'data-testid="workspace-panel-reflected-receipt" '
+                'data-authority-role="server_declared" '
+                'data-affordance-status="read-only" '
+                f'data-receipt-state="{_e(rr_state)}" '
+                f'data-receipt-visibility="{_e(rr_visibility)}" '
+                f'data-intent-id="{_e(rr_intent_id)}">'
+                f"{_e(rr_label)}{rr_id_html}"
+                "</div>"
+            )
         buttons = "".join(
             (
                 f'<button type="button" class="panel-proposal-action {_ACTION_CSS[label]}" '
@@ -4089,6 +4124,7 @@ def _render_panel_proposal_rows(
           <div class="panel-section-title">{_e(proposal.get("description", ""))}</div>
           {provenance_html if proposal_available else ""}
           {origin_html}
+          {reflected_receipt_html}
           <div class="panel-proposal-meta">
             <span data-testid="workspace-panel-proposal-id">{proposal_id}</span>
             <span data-testid="workspace-panel-artifact-id">{artifact_id}</span>
