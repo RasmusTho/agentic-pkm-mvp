@@ -41,9 +41,12 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 ## Publication discipline
 
 - Route branch / commit / push / PR actions through `.codex/skills/publish-pr/SKILL.md` — do not run an ad hoc commit/push from this lane. `publish-pr` owns the branch-truth gate.
-- Branch-truth gate (mandatory) [branch-truth-gate]: prefer a dedicated worktree, and before commit and before push run the hardened preflight so a concurrent agent switching the shared root worktree's branch cannot land your docs commit on the wrong branch:
+- Branch-truth gate (mandatory) [branch-truth-gate]: prefer a dedicated worktree. Capture `EXPECTED_BRANCH` and `EXPECTED_WORKTREE` when you create/switch the branch, then before commit and before push run the hardened preflight so a concurrent agent switching the shared root worktree's branch cannot land your docs commit on the wrong branch. The capture is required — if these variables are empty the wrapper omits both drift checks and the gate passes without enforcing anything:
 
   ```bash
+  EXPECTED_BRANCH="<branch-name>"
+  EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"
+
   scripts/agent_workspace_preflight.sh \
     --expected-branch "$EXPECTED_BRANCH" \
     --expected-worktree "$EXPECTED_WORKTREE" \
