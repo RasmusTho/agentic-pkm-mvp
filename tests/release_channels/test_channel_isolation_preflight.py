@@ -416,3 +416,202 @@ def test_ui_doctor_surfaces_compose_mismatch(tmp_path: Path) -> None:
     # Non-zero exit behavior: result.ok is False, so callers must use non-zero exit.
     # The CLI entry point maps this to exit code 1.
     assert result.ok is False
+
+
+# ---------------------------------------------------------------------------
+# AC1 (Issue #1655): omitted DSN in app-service overlay fails closed
+# ---------------------------------------------------------------------------
+
+def test_omitted_dsn_in_test_overlay_fails_closed(tmp_path: Path) -> None:
+    """A test overlay that sets PKM_ENVIRONMENT=test but omits DATABASE_URL / DB_DSN
+    must FAIL the preflight (fail-closed behaviour, Issue #1655).
+
+    Scenario: the base docker-compose.yaml env_file supplies
+    DATABASE_URL=.../app (prod DB). The test overlay sets PKM_ENVIRONMENT=test
+    but forgets to override the DSN keys.  After compose layering the effective
+    DATABASE_URL still points at the prod 'app' database — a channel-isolation
+    breach the operator cannot see from the overlay alone.
+
+    The preflight must detect the omission of channel-critical DSN keys and
+    fail closed so the operator is forced to add explicit test-channel DSNs.
+    """
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: test
+              WATCHER_STATE_DIR: tmp-test
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "test")
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when DATABASE_URL / DB_DSN are omitted "
+        "from a test-channel overlay that does set PKM_ENVIRONMENT — the "
+        "effective DSN can fall back to the prod 'app' DB via the base compose "
+        "env_file.  Got: " + result.summary()
+    )
+    dsn_violations = [v for v in result.violations if v.field in ("DATABASE_URL", "DB_DSN")]
+    assert dsn_violations, (
+        "Expected violations for missing DATABASE_URL / DB_DSN, "
+        f"but violations list was: {result.violations}"
+    )
+    for v in dsn_violations:
+        assert "app_test" in v.expected, (
+            f"Violation expected value should mention 'app_test', got: {v.expected!r}"
+        )
+
+
+def test_omitted_database_url_only_fails_closed(tmp_path: Path) -> None:
+    """Only DATABASE_URL is omitted; DB_DSN is correctly set.
+
+    Both keys are channel-critical; omitting either one is a violation.
+    """
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "test")
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when DATABASE_URL is omitted even if "
+        "DB_DSN is correctly set.  Got: " + result.summary()
+    )
+    missing_url_violations = [v for v in result.violations if v.field == "DATABASE_URL"]
+    assert missing_url_violations, (
+        "Expected a violation for missing DATABASE_URL, "
+        f"but violations were: {result.violations}"
+    )
+
+
+def test_omitted_db_dsn_only_fails_closed(tmp_path: Path) -> None:
+    """Only DB_DSN is omitted; DATABASE_URL is correctly set.
+
+    Both keys are channel-critical; omitting either one is a violation.
+    """
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "test")
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when DB_DSN is omitted even if "
+        "DATABASE_URL is correctly set.  Got: " + result.summary()
+    )
+    missing_dsn_violations = [v for v in result.violations if v.field == "DB_DSN"]
+    assert missing_dsn_violations, (
+        "Expected a violation for missing DB_DSN, "
+        f"but violations were: {result.violations}"
+    )
+
+
+def test_both_dsn_omitted_from_all_services_fails_closed(tmp_path: Path) -> None:
+    """All three channel services omit DATABASE_URL / DB_DSN; all must be flagged."""
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: test
+          worker:
+            environment:
+              PKM_ENVIRONMENT: test
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: test
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "test")
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when all three services omit DSN keys.  "
+        "Got: " + result.summary()
+    )
+    violating_services = {v.service for v in result.violations}
+    assert "api" in violating_services
+    assert "worker" in violating_services
+    assert "watcher" in violating_services
+
+
+def test_service_with_no_env_block_is_not_flagged_for_missing_dsn(tmp_path: Path) -> None:
+    """A service that has NO environment block at all is not flagged for missing DSN.
+
+    The omitted-DSN check only applies when the service IS present in the overlay
+    and HAS some environment keys set.  A completely absent service section is
+    already handled by the existing skip-if-no-env rule.
+    """
+    # Only 'db' appears; all app services are absent from this overlay.
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          db:
+            environment:
+              POSTGRES_DB: app_test
+            ports: !override
+              - "15434:5432"
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "test")
+
+    assert result.ok, (
+        "Expected PASS when no app services appear in the overlay at all, "
+        f"but got: {result.summary()}"
+    )
+
+
+def test_correctly_declared_test_dsn_still_passes(tmp_path: Path) -> None:
+    """Positive case: PKM_ENVIRONMENT=test with both DSN keys set to app_test passes.
+
+    This is the AC2 regression guard from Issue #1655 — the fix must not break
+    overlays that correctly declare all three channel-critical keys.
+    """
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+          worker:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "test")
+
+    assert result.ok, (
+        "Expected PASS for a correctly declared test-channel overlay, "
+        f"but got violations:\n{result.summary()}"
+    )

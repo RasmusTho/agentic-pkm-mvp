@@ -112,7 +112,7 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 
 A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB_DSN` to values that match the **intended channel** — not another channel. A test stack whose compose declares `PKM_ENVIRONMENT=prod` would direct all writes at prod resources despite running under the test project namespace; this is a channel-isolation breach.
 
-**Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
+**Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. Omitting `DATABASE_URL` or `DB_DSN` from an app-service overlay (while other env keys for that service are declared) is also treated as a violation: the base compose `env_file` supplies prod-pointing DSN defaults, so an absent key resolves to the wrong channel after compose layering (Issue #1655). It is invoked:
 
 - by `scripts/test/test_ui_doctor.sh` (and therefore `make test-ui-doctor`) before any Docker or network check;
 - by `make verify-test-channel` via `tests/release_channels/test_channel_isolation_preflight.py`;

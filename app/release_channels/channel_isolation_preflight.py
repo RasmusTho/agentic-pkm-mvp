@@ -212,13 +212,35 @@ def _check_db_dsn(
     env: dict[str, str | None],
     spec: dict[str, Any],
 ) -> None:
-    """Validate DATABASE_URL / DB_DSN bindings match the expected channel."""
+    """Validate DATABASE_URL / DB_DSN bindings match the expected channel.
+
+    Fail-closed policy (Issue #1655): if a service has any environment keys
+    declared in the overlay but omits a channel-critical DSN key
+    (DATABASE_URL or DB_DSN), the effective value after compose layering could
+    resolve to the base compose env_file default — which for the prod channel
+    points at the 'app' database.  Omission is therefore treated as a
+    violation, not a skip.
+    """
+    db_fragment = spec.get("db_name_fragment")
+
     for key in ("DATABASE_URL", "DB_DSN"):
         dsn = env.get(key)
+
         if dsn is None:
+            # Key is absent from the overlay.  Fail closed: if this service is
+            # present in the overlay (has any env keys), the omitted DSN can
+            # resolve to the wrong channel via the base compose env_file.
+            if db_fragment:
+                result.violations.append(
+                    BindingViolation(
+                        service=svc_name,
+                        field=key,
+                        expected=f"DSN containing {db_fragment!r} (key must be explicit in overlay)",
+                        actual=None,
+                    )
+                )
             continue
 
-        db_fragment = spec.get("db_name_fragment")
         if db_fragment and db_fragment not in dsn:
             result.violations.append(
                 BindingViolation(
