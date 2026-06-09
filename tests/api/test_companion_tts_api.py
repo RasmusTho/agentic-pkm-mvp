@@ -183,6 +183,39 @@ def test_tts_runtime_status_reports_local_only_fallback_policy(client: TestClien
     assert data["config"]["allow_cloud_fallback"] is False
 
 
+def test_tts_runtime_status_does_not_create_missing_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Status endpoint must not create directories or probe files when paths are missing."""
+    model_dir = tmp_path / "missing-models"
+    cache_dir = tmp_path / "missing-cache"
+    log_dir = tmp_path / "missing-logs"
+
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_LOCAL_ONLY", "true")
+    monkeypatch.setenv("TTS_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("TTS_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("TTS_LOG_DIR", str(log_dir))
+    monkeypatch.setenv("TTS_ALLOW_BROWSER_FALLBACK", "false")
+    monkeypatch.setenv("TTS_ALLOW_CLOUD_FALLBACK", "false")
+    monkeypatch.setenv("PATH", "")
+
+    resp = TestClient(app).get("/api/companion/tts/status")
+
+    assert resp.status_code == 200
+    # Paths must not have been created by the status endpoint
+    assert not model_dir.exists(), "status endpoint must not create model_dir"
+    assert not cache_dir.exists(), "status endpoint must not create cache_dir"
+    assert not log_dir.exists(), "status endpoint must not create log_dir"
+    # Response shape is preserved: paths are reported with exists=False and writable=False
+    paths = resp.json()["paths"]
+    assert paths["model_dir"]["exists"] is False
+    assert paths["model_dir"]["writable"] is False
+    assert paths["cache_dir"]["exists"] is False
+    assert paths["log_dir"]["exists"] is False
+
+
 def test_tts_runtime_status_reports_provider_availability_without_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -199,6 +232,10 @@ def test_tts_runtime_status_reports_provider_availability_without_models(
     resp = TestClient(app).get("/api/companion/tts/status")
 
     assert resp.status_code == 200
+    # Directories must not have been created as a side-effect of the status call
+    assert not (tmp_path / "missing-models").exists()
+    assert not (tmp_path / "cache").exists()
+    assert not (tmp_path / "logs").exists()
     providers = resp.json()["providers"]
     assert set(providers) == {"sv-SE", "en-US", "en-GB"}
     assert providers["sv-SE"]["provider"] == "piper"
