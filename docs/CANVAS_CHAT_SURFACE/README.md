@@ -193,7 +193,7 @@ Phase 4 parent feature issue: **#1742** — validation hub (blocked while child 
 Phase 4 acceptance (validated on the parent feature issue):
 
 - [ ] A natural-language governance intent through `/coauthor` routes to the gated Panel pipeline with the correct `action_type`, body unchanged, no body generated.
-- [ ] Co-authoring / exploratory intents still generate and apply in place.
+- [ ] Co-authoring intents still generate and apply in place; exploratory intents are read-only and never mutate the note.
 - [ ] A degraded/unavailable classifier falls through to the existing behavior (no regression, no fabricated routing); the body-frontmatter backstop remains.
 - [ ] The gated-execution invariant and Panel-as-primary-command-surface posture hold; Core Runtime defaults unchanged.
 - [ ] The UAT runbook §4 "Known limitation" note is replaced with a deterministic natural-language routing walkthrough.

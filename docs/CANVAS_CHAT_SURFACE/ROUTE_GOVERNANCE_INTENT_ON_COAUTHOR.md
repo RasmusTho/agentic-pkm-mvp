@@ -21,13 +21,14 @@ Last reviewed: 2026-06-09
 
 ## Purpose
 
-Close the gap the classifier was built for. `POST /coauthor` must decide intent class from the *intent*, not the generated body: a governance-bearing intent routes to the gated Panel pipeline (returning the existing `GovernanceHandoffRef`) with the **correct** `GovernanceActionType`, before any body is generated; co-authoring / exploratory intents take the existing generate-and-apply path. The note is never mutated on the governance path.
+Close the gap the classifier was built for. `POST /coauthor` must decide intent class from the *intent*, not the generated body: a governance-bearing intent routes to the gated Panel pipeline (returning the existing `GovernanceHandoffRef`) with the **correct** `GovernanceActionType`, before any body is generated; a co-authoring intent takes the existing generate-and-apply path; an **exploratory** intent is read-only and never mutates the note. The note is never mutated on the governance or exploratory path.
 
 ## What This Task Does
 
 - In `app/api/routes/canvas.py`, run `IntentClassifierCognition.classify(intent=req.intent, current_body=...)` at the top of `coauthor()` (after the session lookup), using a module-level `_intent_classifier_facade_factory()` indirection mirroring `_coauthor_facade_factory()` so tests inject a stub.
 - If `intent_class == GOVERNANCE_BEARING`: route immediately via `_route_governance_bearing(session, vault_root, action_type=classification.action_type)` and return the `GovernanceHandoffRef` (HTTP 409). **Do not call `generate_body`**; the body is never generated or applied.
-- If `intent_class` is `CO_AUTHORING` / `EXPLORATORY`, **or** `classified is False` (degraded backend): fall through to the existing `generate_body` → `CanvasWriter.apply_edit` path unchanged. This preserves today's behavior when the classifier is unavailable.
+- If `intent_class == CO_AUTHORING`, **or** `classified is False` (degraded backend): fall through to the existing `generate_body` → `CanvasWriter.apply_edit` path unchanged. The degraded default is `CO_AUTHORING`, so an unavailable classifier preserves today's behavior.
+- If `intent_class == EXPLORATORY`: **do not** call `generate_body` or `apply_edit` — exploratory intent is non-mutating per `HYBRID_CHAT_INTEGRATION_SCHEMA.md` :: Intent Classes ("does not itself authorize durable mutation"). Return a read-only, non-mutating response (note unchanged) — e.g. HTTP 200 with a `status: "exploratory_no_edit"` marker. Surfacing an actual read-only *answer* (via the read-only cognition) is optional and out of scope for this slice; the **binding requirement is no mutation**. Only a confident `EXPLORATORY` classification takes this path — a degraded backend never lands here (it defaults to `CO_AUTHORING`).
 - Change `_route_governance_bearing` to accept `action_type: GovernanceActionType` and use it instead of the hardcoded `GovernanceActionType.FRONTMATTER_UPDATE`. The existing **body-frontmatter defense-in-depth** branches (the `except GovernanceBearingMutationError` handlers) call it with the default `FRONTMATTER_UPDATE`, preserving the backstop when a generation slips frontmatter through.
 - Keep the path gated behind `CANVAS_ENABLED`; do not change Core Runtime defaults (this stays Agentic Lab).
 - **Owner-doc closure, bundled in this PR** (no separate docs follow-up):
@@ -60,6 +61,11 @@ POST /api/canvas/sessions/{id}/coauthor
 POST /api/canvas/sessions/{id}/coauthor
 { "intent": "expand the decision section with trade-offs" }
 # classifier -> CO_AUTHORING -> existing generate+apply path -> 200, body edited in place.
+
+POST /api/canvas/sessions/{id}/coauthor
+{ "intent": "what does this note argue?" }
+# classifier -> EXPLORATORY -> no generation, no write -> 200 {"status":"exploratory_no_edit", ...}
+# note body unchanged.
 ```
 
 ## Why This Matters
@@ -72,8 +78,10 @@ Without intent-level routing the governance handoff is dead on arrival for natur
   Verify: `tests/api/test_canvas_coauthor_api.py::test_natural_governance_intent_routes_to_panel`
 - [ ] The returned handoff reference carries the classified `action_type` (`maturity_transition`), not a hardcoded `frontmatter_update`.
   Verify: `tests/api/test_canvas_coauthor_api.py::test_handoff_action_type_reflects_classified_intent`
-- [ ] A pure body-edit intent still generates and applies in place.
+- [ ] A pure body-edit (co-authoring) intent still generates and applies in place.
   Verify: `tests/api/test_canvas_coauthor_api.py::test_coauthor_applies_generated_body`
+- [ ] An exploratory intent ("what does this note argue?") does **not** generate or apply — the note body is unchanged and a non-mutating response is returned.
+  Verify: `tests/api/test_canvas_coauthor_api.py::test_exploratory_intent_does_not_mutate`
 - [ ] The body-frontmatter defense-in-depth still routes a frontmatter-bearing generation (classifier labels it co-authoring; backstop fires with `frontmatter_update`).
   Verify: `tests/api/test_canvas_coauthor_api.py::test_coauthor_governance_bearing_is_routed_not_applied`
 - [ ] When the classifier is degraded (`classified=False`), the route falls through to the existing generate path with no fabricated governance routing.
