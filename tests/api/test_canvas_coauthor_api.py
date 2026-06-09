@@ -139,6 +139,26 @@ def test_coauthor_governance_bearing_is_routed_not_applied(monkeypatch, vault: P
     assert (vault / "note.md").read_text(encoding="utf-8") == original
 
 
+def test_governance_bearing_returns_handoff_reference(monkeypatch, vault: Path) -> None:
+    # The generated body contains a frontmatter block — governance-bearing.
+    generated = "---\ntype: evergreen\n---\n\n# Hello\n\nRewritten body.\n"
+    client = _make_client(monkeypatch, vault, generated)
+    session_id = _open_session(client)
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "promote this note to evergreen"},
+    )
+
+    # Structured handoff reference is returned (status preserved at 409).
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["status"] == "routed_to_panel"
+    assert isinstance(body["intent_id"], str) and body["intent_id"]
+    assert body["action_type"] == "frontmatter_update"
+    assert "detail" in body
+
+
 def test_coauthor_mock_generation_is_not_applied(monkeypatch, vault: Path) -> None:
     # A mock/degraded backend response must not be written into the note.
     generated = "MOCK_ASK_ANSWER: expand the decision section | context: ..."
