@@ -164,23 +164,21 @@ Phase 2 parent feature issue: **#1715** — live validation hub; closes only aft
 
 ## Phase 4 — Intent-level governance classification on `/coauthor`
 
-**Specification lane (filed; delivery pending).** Phase 3 made the Chat→Panel handoff navigable, but
-`/coauthor` still decides whether a mutation is governance-bearing only by inspecting the *generated
-body* for a frontmatter block. The co-authoring prompt forbids frontmatter, so a semantically
-governance-bearing natural-language intent (e.g. "promote this note to evergreen") produces an
-ordinary in-place body edit and the governance handoff is unreachable through normal intents — only
-the explicit `POST /governance` endpoint triggers it deterministically (the "known limitation" noted
-in `docs/runbooks/UAT_CANVAS_COAUTHORING.md` §4). Phase 4 classifies the **intent** (per
-`HYBRID_CHAT_INTEGRATION_SCHEMA.md` :: Intent Classes) with an LLM-backed cognition and routes
-governance-bearing intents to the gated Panel pipeline — with the correct `GovernanceActionType` —
-before and independent of body generation. Agentic Lab, gated behind `CANVAS_ENABLED`; the
-gated-execution invariant and Panel-as-primary-command-surface posture are preserved, and the
-body-frontmatter check stays as defense-in-depth.
+**Delivered (dev/staging, 2026-06-09).** Phase 3 made the Chat→Panel handoff navigable, but
+`/coauthor` still decided whether a mutation was governance-bearing only by inspecting the *generated
+body* for a frontmatter block — the "known limitation" recorded in
+`docs/runbooks/UAT_CANVAS_COAUTHORING.md` §4. Phase 4 closes that gap: `/coauthor` now classifies
+the **intent** with an LLM-backed `IntentClassifierCognition` before any body is generated.
+Governance-bearing natural-language intents (e.g. "promote this note to evergreen") route to the
+gated Panel pipeline with the correct `GovernanceActionType` — the note is never touched. Exploratory
+intents return a non-mutating read-only response. Co-authoring intents and a degraded classifier fall
+through to the existing generate-and-apply path unchanged. The body-frontmatter check is kept as
+defense-in-depth. Agentic Lab, gated behind `CANVAS_ENABLED`; Core Runtime defaults unchanged.
 
 | Order | Task File | Issue | What It Builds | Status |
 |-------|-----------|-------|----------------|--------|
-| 1 | [CLASSIFY_COAUTHORING_INTENT.md](CLASSIFY_COAUTHORING_INTENT.md) | #1743 (`agent:ready`) | LLM-backed `IntentClassifierCognition` labeling intent as co-authoring / governance-bearing / exploratory (+ `GovernanceActionType`); conservative degraded default; pure, no mutation | spec |
-| 2 | [ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md](ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md) | #1744 (`agent:blocked` on #1743) | Wire classifier into `POST /coauthor`: governance-bearing intents route to Panel with the classified action_type before generation; body-frontmatter check kept as backstop; runbook + README closure bundled | spec (blocked on 1) |
+| 1 | [CLASSIFY_COAUTHORING_INTENT.md](CLASSIFY_COAUTHORING_INTENT.md) | #1743 (PR #1747) | LLM-backed `IntentClassifierCognition` labeling intent as co-authoring / governance-bearing / exploratory (+ `GovernanceActionType`); conservative degraded default; pure, no mutation | `closed` |
+| 2 | [ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md](ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md) | #1744 (PR #1754) | Wire classifier into `POST /coauthor`: governance-bearing intents route to Panel with the classified action_type before generation; body-frontmatter check kept as backstop; runbook + README closure bundled | `closed` |
 
 ```
 CLASSIFY_COAUTHORING_INTENT
@@ -188,12 +186,12 @@ CLASSIFY_COAUTHORING_INTENT
 ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR
 ```
 
-Phase 4 parent feature issue: **#1742** — validation hub (blocked while child slices are outstanding).
+Phase 4 parent feature issue: **#1742** — validation hub (closed after both child slices delivered).
 
-Phase 4 acceptance (validated on the parent feature issue):
+Phase 4 acceptance (validated on the parent feature issue — **delivered**):
 
-- [ ] A natural-language governance intent through `/coauthor` routes to the gated Panel pipeline with the correct `action_type`, body unchanged, no body generated.
-- [ ] Co-authoring intents still generate and apply in place; exploratory intents are read-only and never mutate the note.
-- [ ] A degraded/unavailable classifier falls through to the existing behavior (no regression, no fabricated routing); the body-frontmatter backstop remains.
-- [ ] The gated-execution invariant and Panel-as-primary-command-surface posture hold; Core Runtime defaults unchanged.
-- [ ] The UAT runbook §4 "Known limitation" note is replaced with a deterministic natural-language routing walkthrough.
+- [x] A natural-language governance intent through `/coauthor` routes to the gated Panel pipeline with the correct `action_type`, body unchanged, no body generated.
+- [x] Co-authoring intents still generate and apply in place; exploratory intents are read-only and never mutate the note.
+- [x] A degraded/unavailable classifier falls through to the existing behavior (no regression, no fabricated routing); the body-frontmatter backstop remains.
+- [x] The gated-execution invariant and Panel-as-primary-command-surface posture hold; Core Runtime defaults unchanged.
+- [x] The UAT runbook §4 "Known limitation" note is replaced with a deterministic natural-language routing walkthrough.
