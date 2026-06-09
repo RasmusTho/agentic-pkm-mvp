@@ -108,9 +108,16 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
 
-### Compose/env binding invariant (Issue #1627)
+### Compose/env binding invariant (Issues #1627, #1655)
 
 A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB_DSN` to values that match the **intended channel** — not another channel. A test stack whose compose declares `PKM_ENVIRONMENT=prod` would direct all writes at prod resources despite running under the test project namespace; this is a channel-isolation breach.
+
+**Omitted bindings are violations (Issue #1655).** The base compose file feeds every app service (`api`, `worker`, `watcher`) from `config/runtime.defaults.env`, which carries the prod `app` DSNs. If a channel's overlay omits `DATABASE_URL` / `DB_DSN` for a channel-critical service — by dropping the keys or the entire service block — compose layering silently falls back to those base defaults. The preflight therefore checks the **effective** binding (overlay value, else base default) and fail-closes when:
+
+- the effective DSN resolves to another channel (e.g. a test overlay whose omitted DSN falls back to the prod `app` DB), or
+- the base defaults file cannot be read, making the effective binding unverifiable.
+
+Omission is only acceptable when the fallback already binds the intended channel (e.g. `docker-compose.prod.yml` relies on the prod base defaults). This is channel-aware resolution of one shared rule, not a per-channel behavior split.
 
 **Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
 

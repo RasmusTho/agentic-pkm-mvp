@@ -1,4 +1,4 @@
-"""Channel-isolation preflight guard (Issue #1627).
+"""Channel-isolation preflight guard (Issues #1627, #1655).
 
 Fail-closed check that a compose overlay's effective env bindings
 (PKM_ENVIRONMENT, DATABASE_URL / DB_DSN, vault) match the *intended* channel
@@ -9,9 +9,18 @@ Policy authority: docs/RELEASE_CHANNELS/README.md §Invariants.
 
 Design constraints:
 - Read-only: this module NEVER mutates operator files.
-- No Docker, no network: parses compose YAML only.
+- No Docker, no network: parses compose YAML plus the base env_file only.
 - Covers both committed and working-tree compose drift.
 - Must cover all services that carry channel env vars (api, worker, watcher).
+
+Omitted-binding semantics (Issue #1655): the base compose file feeds every app
+service from ``config/runtime.defaults.env``, which carries the prod ``app``
+DSNs. When an overlay omits ``DATABASE_URL`` / ``DB_DSN`` for a
+channel-critical service — by dropping the keys or the whole service block —
+compose layering silently falls back to those base defaults. The preflight
+therefore resolves the *effective* binding (overlay value, else base default)
+and fails closed when it lands on another channel, or when the base defaults
+cannot be read at all.
 """
 from __future__ import annotations
 
@@ -50,6 +59,13 @@ CHANNEL_SPECS: dict[str, dict[str, Any]] = {
 
 #: Services inside a compose overlay that carry channel env vars.
 CHANNEL_SERVICES = ("api", "worker", "watcher")
+
+#: Env keys whose effective value decides which channel's DB a service writes to.
+CHANNEL_CRITICAL_DSN_KEYS = ("DATABASE_URL", "DB_DSN")
+
+#: Base compose env_file that supplies default DSNs to every app service,
+#: relative to the compose file directory (see docker-compose.yaml `env_file`).
+BASE_ENV_DEFAULTS_REL = Path("config") / "runtime.defaults.env"
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +146,34 @@ def _load_compose(path: Path) -> dict[str, Any]:
     return yaml.load(path.read_text(encoding="utf-8"), Loader=loader) or {}
 
 
+def _load_base_env_defaults(
+    compose_path: Path,
+    base_defaults_path: Path | None = None,
+) -> dict[str, str] | None:
+    """Load the base compose env_file defaults that back omitted overlay keys.
+
+    Returns the KEY=VALUE mapping from ``config/runtime.defaults.env`` next to
+    the compose overlay (or *base_defaults_path* when given), or ``None`` when
+    the file cannot be read. ``None`` means omitted channel-critical bindings
+    are unverifiable and must fail closed.
+    """
+    path = base_defaults_path or (compose_path.resolve().parent / BASE_ENV_DEFAULTS_REL)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    defaults: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep:
+            defaults[key.strip()] = value.strip()
+    return defaults
+
+
 def _service_env(service_dict: dict[str, Any]) -> dict[str, str | None]:
     """Return the environment mapping for a single compose service dict."""
     raw = service_dict.get("environment") or {}
@@ -150,11 +194,16 @@ def _service_env(service_dict: dict[str, Any]) -> dict[str, str | None]:
 def check_compose_channel_isolation(
     compose_path: Path,
     channel: str,
+    base_defaults_path: Path | None = None,
 ) -> PreflightResult:
     """Check that *compose_path* overlay binds correctly for *channel*.
 
     Reads the overlay YAML from disk (working-tree copy) so uncommitted drift
-    is caught immediately.
+    is caught immediately. DSN bindings are checked against the *effective*
+    value after compose layering: the overlay value when declared, else the
+    base default from ``config/runtime.defaults.env`` (or
+    *base_defaults_path*). Omitted bindings whose fallback resolves to another
+    channel — or cannot be resolved at all — are violations (Issue #1655).
 
     Returns a :class:`PreflightResult`; call ``.ok`` to test pass/fail.
     Raises ``ValueError`` if *channel* is unknown.
@@ -167,18 +216,19 @@ def check_compose_channel_isolation(
     spec = CHANNEL_SPECS[channel]
     compose_data = _load_compose(compose_path)
     services = compose_data.get("services") or {}
+    base_defaults = _load_base_env_defaults(compose_path, base_defaults_path)
 
     result = PreflightResult(channel=channel, compose_path=str(compose_path))
 
     for svc_name in CHANNEL_SERVICES:
+        # Channel-critical services are checked even when absent from the
+        # overlay: compose layering still starts them from the base file with
+        # the base default DSNs.
         svc = services.get(svc_name) or {}
         env = _service_env(svc)
-        if not env:
-            # Service not overridden in this overlay — nothing to check.
-            continue
 
         _check_pkm_environment(result, svc_name, env, spec)
-        _check_db_dsn(result, svc_name, env, spec)
+        _check_db_dsn(result, svc_name, env, spec, base_defaults)
 
     return result
 
@@ -206,39 +256,97 @@ def _check_pkm_environment(
         )
 
 
+def _dsn_violation(dsn: str, spec: dict[str, Any]) -> str | None:
+    """Return the expected-binding description if *dsn* violates *spec*, else None."""
+    db_fragment = spec.get("db_name_fragment")
+    if db_fragment and db_fragment not in dsn:
+        return f"DSN containing {db_fragment!r}"
+
+    # For prod: additionally ban test/dev fragments in DSN
+    banned_pattern = spec.get("db_name_fragment_banned")
+    if banned_pattern and banned_pattern.search(dsn):
+        return "prod DSN (not app_test/app_dev)"
+
+    return None
+
+
 def _check_db_dsn(
     result: PreflightResult,
     svc_name: str,
     env: dict[str, str | None],
     spec: dict[str, Any],
+    base_defaults: dict[str, str] | None,
 ) -> None:
-    """Validate DATABASE_URL / DB_DSN bindings match the expected channel."""
-    for key in ("DATABASE_URL", "DB_DSN"):
+    """Validate effective DATABASE_URL / DB_DSN bindings match the channel.
+
+    The effective binding is the overlay value when declared, else the base
+    compose env_file default. Fail closed (Issue #1655): an omitted binding is
+    a violation when its fallback resolves to another channel, and also when
+    the base defaults cannot be read — an unverifiable binding is never safe.
+    """
+    db_fragment = spec.get("db_name_fragment")
+    for key in CHANNEL_CRITICAL_DSN_KEYS:
         dsn = env.get(key)
-        if dsn is None:
+        if dsn is not None:
+            expected_on_violation = _dsn_violation(dsn, spec)
+            if expected_on_violation:
+                result.violations.append(
+                    BindingViolation(
+                        service=svc_name,
+                        field=key,
+                        expected=expected_on_violation,
+                        actual=dsn,
+                    )
+                )
             continue
 
-        db_fragment = spec.get("db_name_fragment")
-        if db_fragment and db_fragment not in dsn:
+        # Key omitted from the overlay (or whole service absent): compose
+        # layering falls back to the base env_file default.
+        if base_defaults is None:
             result.violations.append(
                 BindingViolation(
                     service=svc_name,
                     field=key,
-                    expected=f"DSN containing {db_fragment!r}",
-                    actual=dsn,
+                    expected=(
+                        f"DSN containing {db_fragment!r} declared in the overlay, "
+                        "or a resolvable channel-correct base default"
+                    ),
+                    actual=(
+                        "omitted from overlay; base defaults "
+                        f"({BASE_ENV_DEFAULTS_REL}) unreadable — effective "
+                        "binding unverifiable"
+                    ),
                 )
             )
             continue
 
-        # For prod: additionally ban test/dev fragments in DSN
-        banned_pattern = spec.get("db_name_fragment_banned")
-        if banned_pattern and banned_pattern.search(dsn):
+        fallback = base_defaults.get(key)
+        if fallback is None:
+            # No overlay value and no base default: the service would start
+            # without this binding at all. Treat as unverifiable — fail closed.
             result.violations.append(
                 BindingViolation(
                     service=svc_name,
                     field=key,
-                    expected="prod DSN (not app_test/app_dev)",
-                    actual=dsn,
+                    expected=(
+                        f"DSN containing {db_fragment!r} declared in the overlay "
+                        "or via base defaults"
+                    ),
+                    actual="omitted from overlay and absent from base defaults",
+                )
+            )
+            continue
+
+        expected_on_violation = _dsn_violation(fallback, spec)
+        if expected_on_violation:
+            result.violations.append(
+                BindingViolation(
+                    service=svc_name,
+                    field=key,
+                    expected=f"{expected_on_violation} (explicit in the overlay)",
+                    actual=(
+                        f"omitted from overlay; falls back to base default {fallback!r}"
+                    ),
                 )
             )
 
