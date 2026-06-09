@@ -78,6 +78,11 @@ class ProposalRow:
     # origin; surfaced for attribution only. None when the server did not declare
     # one — the UI never infers it.
     proposal_origin: Optional[str] = None
+    # Server-declared reflected receipt posture (CHAT-PANEL-HANDOFF-03), correlated
+    # by intent_id, for a canvas-originated proposal that has executed. Read-only;
+    # the UI invents no receipt and infers no success. None unless the server
+    # supplied a reflected-receipt posture for this proposal.
+    reflected_receipt: Optional[dict] = None
 
     def __post_init__(self) -> None:
         if not self.proposal_id:
@@ -110,6 +115,7 @@ class ProposalRow:
             "evidence": self.evidence.as_dict(),
             "status": self.status,
             "proposal_origin": self.proposal_origin,
+            "reflected_receipt": self.reflected_receipt,
             "affordances": {
                 "confirm": self.can_confirm(),
                 "correct": self.can_correct(),

@@ -281,6 +281,75 @@ def test_panel_rail_html_renders_reflected_receipt() -> None:
     assert "rcpt-001" in html
 
 
+def test_proposal_rows_adapter_passes_through_reflected_receipt() -> None:
+    """The live adapter preserves a server-declared reflected_receipt verbatim.
+
+    Without this pass-through the served HTML branch would be dead in the real
+    workspace flow (server payload -> _proposal_rows_from_panel ->
+    ProposalRow.as_render_dict -> _render_panel_proposal_rows).
+    """
+    from companion_ui.workspace.real_note_workspace_dev_page import (
+        _proposal_rows_from_panel,
+    )
+
+    reflected = {
+        "intent_id": INTENT_ID,
+        "outcome": "executed",
+        "receipt_id": "rcpt-001",
+        "receipt_visibility": "durable_vault_visible",
+        "state": "receipt_visible",
+        "affordance_status": "read-only",
+        "authority_role": "server_declared",
+    }
+    panel = {
+        "proposals": [
+            {
+                "proposal_id": INTENT_ID,
+                "artifact_id": "note-uuid-1",
+                "description": "promote to evergreen",
+                "status": "staged",
+                "proposal_origin": "canvas_coauthoring",
+                "reflected_receipt": reflected,
+                "evidence": {
+                    "trigger_summary": "t",
+                    "action_class": "maturity_transition",
+                    "cognition_route": "rule",
+                },
+            }
+        ]
+    }
+    rows = _proposal_rows_from_panel(panel=panel, artifact_id="note-uuid-1")
+
+    assert len(rows) == 1
+    assert rows[0]["reflected_receipt"] == reflected
+
+
+def test_proposal_rows_adapter_omits_reflected_receipt_when_undeclared() -> None:
+    """No server-declared reflected_receipt -> None (the UI invents nothing)."""
+    from companion_ui.workspace.real_note_workspace_dev_page import (
+        _proposal_rows_from_panel,
+    )
+
+    panel = {
+        "proposals": [
+            {
+                "proposal_id": "prop-x",
+                "artifact_id": "note-uuid-1",
+                "description": "ordinary proposal",
+                "status": "staged",
+                "evidence": {
+                    "trigger_summary": "t",
+                    "action_class": "lifecycle.move",
+                    "cognition_route": "rule",
+                },
+            }
+        ]
+    }
+    rows = _proposal_rows_from_panel(panel=panel, artifact_id="note-uuid-1")
+
+    assert rows[0]["reflected_receipt"] is None
+
+
 def test_panel_rail_html_omits_reflected_receipt_when_absent() -> None:
     """No server-declared receipt projection -> no reflected-receipt block."""
     from companion_ui.workspace.serve_dev_page import _render_panel_proposal_rows
