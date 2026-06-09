@@ -5479,10 +5479,14 @@ def render_operator_overlay_html(
         events_html = _degraded_banner(events_error)
     elif events_payload is not None:
         events = events_payload.get("events") or []
+        # The events-tail JSONL shape is not uniform: the common record uses
+        # `event`, some use `event_type`, and the outbox uses `topic`. Fall back
+        # across all three (matching the legacy dashboard) so a populated tail
+        # never renders a blank Event column.
         event_rows = "".join(
             f"<tr>"
             f"<td>{_e(ev.get('timestamp', ''))}</td>"
-            f"<td>{_e(ev.get('event_type', ''))}</td>"
+            f"<td>{_e(ev.get('event') or ev.get('event_type') or ev.get('topic') or '')}</td>"
             f"<td>{_e(str(ev.get('trace_id', ''))[:12])}</td>"
             f"</tr>"
             for ev in events[:50]

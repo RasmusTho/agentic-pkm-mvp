@@ -111,6 +111,33 @@ def test_operator_overlay_renders_all_panels() -> None:
     assert "/api/operator/ask" in html
 
 
+def test_operator_overlay_renders_event_field_across_shapes() -> None:
+    """The Event column falls back across `event`, `event_type`, and `topic`.
+
+    Regression guard for PR #1770 Codex P2: the events-tail JSONL shape is not
+    uniform — the common record uses `event`, some use `event_type`, and the
+    outbox uses `topic`. A populated tail must never render a blank Event column.
+    """
+    payload = {
+        "events": [
+            {"timestamp": "t1", "event": "panel.confirm", "trace_id": "aaa"},
+            {"timestamp": "t2", "event_type": "watcher.tick", "trace_id": "bbb"},
+            {"timestamp": "t3", "topic": "outbox.flush", "trace_id": "ccc"},
+        ]
+    }
+
+    html = render_operator_overlay_html(
+        status_payload=_STATUS_PAYLOAD,
+        health_payload=_HEALTH_PAYLOAD,
+        settings_payload=_SETTINGS_PAYLOAD,
+        events_payload=payload,
+    )
+
+    assert "panel.confirm" in html  # `event`
+    assert "watcher.tick" in html   # `event_type`
+    assert "outbox.flush" in html   # `topic`
+
+
 # ---------------------------------------------------------------------------
 # test_operator_overlay_is_operator_badged_and_dims_workspace
 # ---------------------------------------------------------------------------
