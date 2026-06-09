@@ -5296,27 +5296,43 @@ def _orientation_ambient_refresh_script() -> str:
 _HELP_GUIDE_PATH = Path(__file__).with_name("help_guide.html")
 _HELP_ASSETS_DIR = Path(__file__).with_name("help_assets")
 _HELP_ASSET_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.png$")
+_HELP_ASSET_CACHE: dict[str, bytes] | None = None
+
+
+def _help_asset_cache() -> dict[str, bytes]:
+    """Preload packaged help-guide PNGs into an in-memory name->bytes map.
+
+    Paths come only from a filesystem enumeration of ``help_assets`` (never from
+    request input), so the request path is a pure dict lookup with no path
+    expression — a request name can never reach the filesystem. ``open().read()``
+    is used (these are packaged UI assets, not vault content) to stay clear of
+    the vault-I/O architecture guard.
+    """
+    global _HELP_ASSET_CACHE
+    if _HELP_ASSET_CACHE is None:
+        cache: dict[str, bytes] = {}
+        try:
+            entries = sorted(_HELP_ASSETS_DIR.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            if entry.suffix == ".png" and _HELP_ASSET_NAME.fullmatch(entry.name) and entry.is_file():
+                try:
+                    with open(entry, "rb") as fh:
+                        cache[entry.name] = fh.read()
+                except OSError:
+                    continue
+        _HELP_ASSET_CACHE = cache
+    return _HELP_ASSET_CACHE
 
 
 def load_help_asset(name: str) -> bytes | None:
-    """Load a help-guide image asset (PNG) by bounded name, or None.
+    """Return a help-guide image asset (PNG) by exact name, or None.
 
-    Serves the real-UI screenshots referenced by the guide. The name is
-    validated against a strict pattern and resolved only inside ``help_assets``
-    so the route cannot read arbitrary files. Uses ``open().read()`` to stay
-    clear of the vault-I/O architecture guard (these are packaged UI assets,
-    not vault content).
+    Pure lookup into the preloaded asset map: the request-supplied ``name`` is
+    only ever used as a dict key, so it cannot influence a filesystem path.
     """
-    if not _HELP_ASSET_NAME.fullmatch(name):
-        return None
-    target = (_HELP_ASSETS_DIR / name).resolve()
-    if _HELP_ASSETS_DIR.resolve() not in target.parents:
-        return None
-    try:
-        with open(target, "rb") as fh:
-            return fh.read()
-    except OSError:
-        return None
+    return _help_asset_cache().get(name)
 
 
 def load_help_guide_html() -> str:
