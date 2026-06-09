@@ -274,6 +274,17 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   paths remain read-side projections; context-bundle consumption explicitly keeps `may_write=false`.
   Runtime/UI fixing for #1690 remains gated by the issue pickup rule because the issue is labelled
   `agent:ready` but Project status is currently `Backlog`, not `Ready`.
+- Cognitive-load runtime adoption delivered and closed (#1638, 2026-06-09): the bounded runtime/UI
+  children are shipped — source-preserving summary regression fixtures (#1679), scarce pointer-first
+  `why_now` resurfacing cards (#1680), and correction-as-proposal review for direct note-editor draft
+  text (#1681), all delivered via PR #1689 — and the owner-doc promotion (#1682) is delivered, so
+  parent #1638 is closed. Shipped support stays within the existing read-side projection and
+  proposal-class boundaries: resurfacing has no notification/urgency/priority semantics, summaries and
+  corrections remain non-authoritative and cannot mutate canonical Markdown without the authorized
+  human save/confirm path. Broader cognitive-support behaviour beyond these bounded surfaces remains
+  target-state (`docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md`). Source Understanding Mode
+  (#1646/#1647) is a separate, still-open parent path — it reuses the same source-primary posture but
+  was never a #1638 child or blocker. See `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/`.
 <!-- authority-spine-diagnostic -->
 - Authority spine diagnostic surfaced in health API (#1601): `/api/health` now includes an
   `authority_spine` key with bounded operator-visible posture strings (`write_guard`,

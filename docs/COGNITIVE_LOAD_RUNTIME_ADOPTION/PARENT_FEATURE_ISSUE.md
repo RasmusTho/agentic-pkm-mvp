@@ -1,6 +1,7 @@
-State: Filed parent feature issue. GitHub Issue #1638 is the authoritative backlog and validation
-surface for Cognitive Load Runtime Adoption. Runtime/UI children #1679, #1680, and #1681 are
-delivered; #1682 remains the final owner-doc and parent-closure issue.
+State: Delivered and closed. GitHub Issue #1638 was the authoritative backlog and validation surface
+for Cognitive Load Runtime Adoption. Runtime/UI children #1679, #1680, and #1681 are delivered
+(PR #1689) and the final owner-doc promotion #1682 is delivered; #1638 is closed after final
+validation. Source Understanding Mode (#1646/#1647) remains a separate, still-open parent path.
 
 # Epic: Cognitive Load Runtime Adoption
 
