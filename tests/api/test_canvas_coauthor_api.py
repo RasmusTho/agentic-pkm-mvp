@@ -60,14 +60,52 @@ def vault(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _make_client(monkeypatch, vault: Path, generated_body: str) -> TestClient:
+# Classifier labels returned by the intent-classifier facade stub. The route
+# classifies the *intent* first; existing generate-path tests pin the classifier
+# to co-authoring so the body-frontmatter backstop is what is under test.
+_CO_AUTHORING_LABEL = '{"intent_class": "co_authoring", "action_type": null}'
+_GOVERNANCE_MATURITY_LABEL = (
+    '{"intent_class": "governance_bearing", "action_type": "maturity_transition"}'
+)
+_EXPLORATORY_LABEL = '{"intent_class": "exploratory", "action_type": null}'
+# Mock/degraded backend sentinel — the classifier returns classified=False.
+_DEGRADED_LABEL = "MOCK_ASK_ANSWER: classify intent | context: ..."
+
+
+def _make_client_with_facades(
+    monkeypatch,
+    vault: Path,
+    generated_body: str,
+    *,
+    intent_label: str = _CO_AUTHORING_LABEL,
+) -> tuple[TestClient, _StubFacade, _StubFacade]:
+    """Build a TestClient with both the co-authoring and intent-classifier
+    facades stubbed. Returns (client, coauthor_facade, classifier_facade) so
+    tests can assert whether body generation was consulted at all."""
     monkeypatch.setenv("CANVAS_ENABLED", "1")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
-    facade = _StubFacade(generated_body)
+    coauthor_facade = _StubFacade(generated_body)
     monkeypatch.setattr(
-        canvas_module, "_coauthor_facade_factory", lambda: facade
+        canvas_module, "_coauthor_facade_factory", lambda: coauthor_facade
     )
-    return TestClient(app)
+    classifier_facade = _StubFacade(intent_label)
+    monkeypatch.setattr(
+        canvas_module, "_intent_classifier_facade_factory", lambda: classifier_facade
+    )
+    return TestClient(app), coauthor_facade, classifier_facade
+
+
+def _make_client(
+    monkeypatch,
+    vault: Path,
+    generated_body: str,
+    *,
+    intent_label: str = _CO_AUTHORING_LABEL,
+) -> TestClient:
+    client, _, _ = _make_client_with_facades(
+        monkeypatch, vault, generated_body, intent_label=intent_label
+    )
+    return client
 
 
 def _open_session(client: TestClient) -> str:
@@ -184,3 +222,95 @@ def test_coauthor_requires_canvas_enabled(monkeypatch, vault: Path) -> None:
         json={"intent": "do something"},
     )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Intent-level governance routing (ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR, #1744)
+# ---------------------------------------------------------------------------
+
+
+def test_natural_governance_intent_routes_to_panel(monkeypatch, vault: Path) -> None:
+    # The co-authoring stub would return a frontmatter-FREE body — under the old
+    # body-only detection this would have been applied in place. The classified
+    # intent must route to Panel before any body is generated.
+    generated = "# Hello\n\nRewritten body without any frontmatter.\n"
+    client, coauthor_facade, _ = _make_client_with_facades(
+        monkeypatch, vault, generated, intent_label=_GOVERNANCE_MATURITY_LABEL
+    )
+    session_id = _open_session(client)
+    original = (vault / "note.md").read_text(encoding="utf-8")
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "promote this note to evergreen"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["status"] == "routed_to_panel"
+    assert isinstance(body["intent_id"], str) and body["intent_id"]
+    # Note never mutated on the governance path.
+    assert (vault / "note.md").read_text(encoding="utf-8") == original
+    # No body was generated: the co-authoring facade was never consulted.
+    assert coauthor_facade.calls == []
+
+
+def test_handoff_action_type_reflects_classified_intent(monkeypatch, vault: Path) -> None:
+    # The handoff reference carries the classified action_type, not the
+    # hardcoded frontmatter_update of the body-frontmatter backstop.
+    generated = "# Hello\n\nRewritten body without any frontmatter.\n"
+    client, _, _ = _make_client_with_facades(
+        monkeypatch, vault, generated, intent_label=_GOVERNANCE_MATURITY_LABEL
+    )
+    session_id = _open_session(client)
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "promote this note to evergreen"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["action_type"] == "maturity_transition"
+
+
+def test_exploratory_intent_does_not_mutate(monkeypatch, vault: Path) -> None:
+    generated = "# Hello\n\nA body that must never be generated or applied.\n"
+    client, coauthor_facade, _ = _make_client_with_facades(
+        monkeypatch, vault, generated, intent_label=_EXPLORATORY_LABEL
+    )
+    session_id = _open_session(client)
+    original = (vault / "note.md").read_text(encoding="utf-8")
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "what does this note argue?"},
+    )
+
+    # Read-only, non-mutating response: no generation, no write.
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "exploratory_no_edit"
+    assert (vault / "note.md").read_text(encoding="utf-8") == original
+    assert coauthor_facade.calls == []
+
+
+def test_classifier_degraded_falls_through(monkeypatch, vault: Path) -> None:
+    # A degraded classifier (classified=False) must not fabricate a governance
+    # routing; the route falls through to the existing generate-and-apply path.
+    generated = "# Hello\n\nExpanded decision section with trade-offs.\n"
+    client, coauthor_facade, _ = _make_client_with_facades(
+        monkeypatch, vault, generated, intent_label=_DEGRADED_LABEL
+    )
+    session_id = _open_session(client)
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "expand the decision section"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["applied_body"].strip() == generated.strip()
+    note_text = (vault / "note.md").read_text(encoding="utf-8")
+    assert "Expanded decision section with trade-offs." in note_text
+    # The generate path WAS consulted (fall-through, no regression).
+    assert coauthor_facade.calls, "expected fall-through to the generate path"

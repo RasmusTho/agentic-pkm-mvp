@@ -164,23 +164,26 @@ Phase 2 parent feature issue: **#1715** — live validation hub; closes only aft
 
 ## Phase 4 — Intent-level governance classification on `/coauthor`
 
-**Specification lane (filed; delivery pending).** Phase 3 made the Chat→Panel handoff navigable, but
-`/coauthor` still decides whether a mutation is governance-bearing only by inspecting the *generated
-body* for a frontmatter block. The co-authoring prompt forbids frontmatter, so a semantically
-governance-bearing natural-language intent (e.g. "promote this note to evergreen") produces an
-ordinary in-place body edit and the governance handoff is unreachable through normal intents — only
-the explicit `POST /governance` endpoint triggers it deterministically (the "known limitation" noted
-in `docs/runbooks/UAT_CANVAS_COAUTHORING.md` §4). Phase 4 classifies the **intent** (per
-`HYBRID_CHAT_INTEGRATION_SCHEMA.md` :: Intent Classes) with an LLM-backed cognition and routes
-governance-bearing intents to the gated Panel pipeline — with the correct `GovernanceActionType` —
-before and independent of body generation. Agentic Lab, gated behind `CANVAS_ENABLED`; the
-gated-execution invariant and Panel-as-primary-command-surface posture are preserved, and the
-body-frontmatter check stays as defense-in-depth.
+**Delivered (dev/staging, 2026-06-09).** Phase 3 made the Chat→Panel handoff navigable, but
+`/coauthor` previously decided whether a mutation was governance-bearing only by inspecting the
+*generated body* for a frontmatter block. The co-authoring prompt forbids frontmatter, so a
+semantically governance-bearing natural-language intent (e.g. "promote this note to evergreen")
+produced an ordinary in-place body edit and the governance handoff was unreachable through normal
+intents — the "known limitation" formerly noted in `docs/runbooks/UAT_CANVAS_COAUTHORING.md` §4.
+Phase 4 closed that gap: `/coauthor` now classifies the **intent** (per
+`HYBRID_CHAT_INTEGRATION_SCHEMA.md` :: Intent Classes) with the LLM-backed
+`IntentClassifierCognition` and routes governance-bearing intents to the gated Panel pipeline —
+with the correct classified `GovernanceActionType` — before and independent of body generation.
+Exploratory intents are read-only (`exploratory_no_edit`, no generation, no write); a degraded
+classifier falls through to the existing generate path rather than fabricating a routing. Agentic
+Lab, gated behind `CANVAS_ENABLED`; the gated-execution invariant and
+Panel-as-primary-command-surface posture are preserved, and the body-frontmatter check stays as
+defense-in-depth.
 
 | Order | Task File | Issue | What It Builds | Status |
 |-------|-----------|-------|----------------|--------|
-| 1 | [CLASSIFY_COAUTHORING_INTENT.md](CLASSIFY_COAUTHORING_INTENT.md) | #1743 (`agent:ready`) | LLM-backed `IntentClassifierCognition` labeling intent as co-authoring / governance-bearing / exploratory (+ `GovernanceActionType`); conservative degraded default; pure, no mutation | spec |
-| 2 | [ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md](ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md) | #1744 (`agent:blocked` on #1743) | Wire classifier into `POST /coauthor`: governance-bearing intents route to Panel with the classified action_type before generation; body-frontmatter check kept as backstop; runbook + README closure bundled | spec (blocked on 1) |
+| 1 | [CLASSIFY_COAUTHORING_INTENT.md](CLASSIFY_COAUTHORING_INTENT.md) | #1743 | LLM-backed `IntentClassifierCognition` labeling intent as co-authoring / governance-bearing / exploratory (+ `GovernanceActionType`); conservative degraded default; pure, no mutation | `closed` |
+| 2 | [ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md](ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR.md) | #1744 | Wire classifier into `POST /coauthor`: governance-bearing intents route to Panel with the classified action_type before generation; body-frontmatter check kept as backstop; runbook + README closure bundled | delivered |
 
 ```
 CLASSIFY_COAUTHORING_INTENT
@@ -188,7 +191,9 @@ CLASSIFY_COAUTHORING_INTENT
 ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR
 ```
 
-Phase 4 parent feature issue: **#1742** — validation hub (blocked while child slices are outstanding).
+Phase 4 parent feature issue: **#1742** — validation hub; closes after the acceptance below is
+validated on the parent (both child slices are delivered; behavioral proof lives in
+`tests/api/test_canvas_coauthor_api.py` and `tests/chat/test_intent_classifier.py`).
 
 Phase 4 acceptance (validated on the parent feature issue):
 
