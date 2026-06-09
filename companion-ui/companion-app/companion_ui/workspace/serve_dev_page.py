@@ -974,6 +974,47 @@ def _note_readback_script() -> str:
       });
       return textOf(clone);
     }
+    function cacheStatus(plan) {
+      return plan && plan.cached ? 'cached' : 'not cached';
+    }
+    function renderSpeechPlan(plan) {
+      var node = el('[data-testid="tts-plan-inspection"]');
+      if (!node || !plan) { return; }
+      var warnings = Array.isArray(plan.warnings) ? plan.warnings.slice() : [];
+      if (plan.mixed_language) {
+        warnings.push('mixed_language');
+      }
+      if (plan.provider_available === false) {
+        warnings.push('provider_available false');
+      }
+      if (warnings.indexOf('skipped code block') >= 0) {
+        warnings.push('skipped code blocks were omitted from read-back');
+      }
+      var segments = Array.isArray(plan.segments) ? plan.segments : [];
+      var segmentRows = segments.map(function (segment) {
+        return '<li>' + escapeHtml(segment.language || plan.language || 'unknown') +
+          ' / ' + escapeHtml(plan.provider || 'unknown') +
+          ' / ' + escapeHtml(plan.voice_id || 'unknown') +
+          ' / ' + escapeHtml(cacheStatus(plan)) +
+          ': ' + escapeHtml(segment.text || '') + '</li>';
+      }).join('');
+      var warningRows = warnings.map(function (warning) {
+        return '<li class="tts-warning">' + escapeHtml(warning) + '</li>';
+      }).join('');
+      node.hidden = false;
+      node.innerHTML =
+        '<div class="tts-plan-text">' + escapeHtml(plan.normalized_text || '') + '</div>' +
+        '<ul class="tts-plan-segments">' + segmentRows + '</ul>' +
+        '<ul class="tts-plan-warnings">' + warningRows + '</ul>';
+    }
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
     function postJson(path, payload) {
       return fetch(path, {
         method: 'POST',
@@ -1002,7 +1043,14 @@ def _note_readback_script() -> str:
       }
       status('Planning local TTS.', 'planning');
       postJson('/api/companion/tts/plan', {text: normalized, rate: rate()})
-        .then(function () {
+        .then(function (plan) {
+          renderSpeechPlan(plan);
+          if (!plan.cached && plan.mixed_language) {
+            throw new Error('Local TTS stopped: uncertain mixed-language text.');
+          }
+          if (!plan.cached && plan.provider_available === false) {
+            throw new Error(plan.provider_reason || 'Local TTS provider/model unavailable.');
+          }
           status('Synthesizing local audio.', 'synthesizing');
           return postJson('/api/companion/tts/synthesize', {text: normalized, rate: rate()});
         })
@@ -1786,6 +1834,11 @@ def _render_note_section(fields: dict) -> str:
             <span class="tts-readback-status" data-testid="tts-readback-status"
               data-state="idle" aria-live="polite">Read-back idle.</span>
           </div>
+          <div class="tts-plan-inspection"
+            data-testid="tts-plan-inspection"
+            data-authority="read-only-projection"
+            aria-live="polite"
+            hidden></div>
           <form class="display-preferences"
             data-testid="display-preferences"
             data-storage-scope="browser-local"
@@ -5956,6 +6009,30 @@ def render_index_html(
     .tts-readback-status {{
       color: var(--fg-3);
       font-size: var(--text-xs);
+    }}
+    .tts-plan-inspection {{
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      font-size: var(--text-xs);
+      margin: 0 auto 12px;
+      max-width: var(--display-reading-width, 68ch);
+      padding: 8px 32px;
+    }}
+    .tts-plan-inspection[hidden] {{
+      display: none;
+    }}
+    .tts-plan-text {{
+      color: var(--fg-1);
+      margin-bottom: 6px;
+    }}
+    .tts-plan-segments,
+    .tts-plan-warnings {{
+      margin: 4px 0;
+      padding-left: 18px;
+    }}
+    .tts-warning {{
+      color: var(--accent);
     }}
     .display-preferences {{
       align-items: center;

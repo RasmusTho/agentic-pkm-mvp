@@ -27,7 +27,8 @@ class TTSConfig:
     local_only: bool
     model_dir: Path
     cache_dir: Path
-    cache_max_gb: int
+    log_dir: Path
+    cache_max_gb: float
     cache_eviction: str
     max_concurrent_jobs: int
     max_chars_per_request: int
@@ -49,11 +50,13 @@ def load_tts_config() -> TTSConfig:
     default_root = Path.home() / ".local" / "share" / "agentic-pkm" / "tts"
     model_dir = Path(os.getenv("TTS_MODEL_DIR") or default_root / "models")
     cache_dir = Path(os.getenv("TTS_CACHE_DIR") or default_root / "cache")
+    log_dir = Path(os.getenv("TTS_LOG_DIR") or default_root / "logs")
     return TTSConfig(
         enabled=_truthy_env("TTS_ENABLED"),
         local_only=_truthy_env("TTS_LOCAL_ONLY", default=True),
         model_dir=model_dir,
         cache_dir=cache_dir,
+        log_dir=log_dir,
         cache_max_gb=_int_env("TTS_CACHE_MAX_GB", default=2),
         cache_eviction=(os.getenv("TTS_CACHE_EVICTION") or "lru").strip().lower(),
         max_concurrent_jobs=_int_env("TTS_MAX_CONCURRENT_JOBS", default=1),

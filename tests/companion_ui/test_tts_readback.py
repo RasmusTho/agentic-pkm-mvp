@@ -174,3 +174,55 @@ def test_tts_readback_does_not_present_summary_as_source_audio() -> None:
     assert 'data-tts-action="read-summary"' not in html
     assert "summary" not in script.lower()
     assert 'data-source-scope="source-and-proposal"' in html
+
+
+def test_readback_fetches_plan_before_synthesis() -> None:
+    html = _html()
+    script = _readback_script(html)
+
+    plan_index = script.index("postJson('/api/companion/tts/plan'")
+    synthesize_index = script.index("postJson('/api/companion/tts/synthesize'")
+    assert plan_index < synthesize_index
+    assert "renderSpeechPlan(plan)" in script
+    assert "if (!plan.cached && plan.mixed_language)" in script
+
+
+def test_readback_preserves_cached_playback_when_provider_unavailable() -> None:
+    html = _html()
+    script = _readback_script(html)
+
+    assert "if (!plan.cached && plan.mixed_language)" in script
+    assert "if (!plan.cached && plan.provider_available === false)" in script
+
+
+def test_readback_plan_inspection_surfaces_segment_metadata() -> None:
+    html = _html()
+    script = _readback_script(html)
+
+    assert 'data-testid="tts-plan-inspection"' in html
+    assert "segment.language" in script
+    assert "plan.provider" in script
+    assert "plan.voice_id" in script
+    assert "cacheStatus" in script
+
+
+def test_readback_plan_inspection_surfaces_warnings_before_playback() -> None:
+    html = _html()
+    script = _readback_script(html)
+
+    warning_index = script.index("renderSpeechPlan(plan)")
+    play_index = script.index("currentAudio.play()")
+    assert warning_index < play_index
+    assert "tts-warning" in script
+    assert "mixed_language" in script
+    assert "provider_available" in script
+    assert "skipped code" in script.lower()
+
+
+def test_browser_speech_synthesis_is_not_default_readback_path() -> None:
+    html = _html()
+    script = _readback_script(html)
+
+    assert "speechSynthesis" not in script
+    assert "SpeechSynthesisUtterance" not in script
+    assert "/api/companion/tts/synthesize" in script

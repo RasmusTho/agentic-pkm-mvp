@@ -25,6 +25,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("TTS_LOCAL_ONLY", "true")
     monkeypatch.setenv("TTS_MODEL_DIR", str(model_dir))
     monkeypatch.setenv("TTS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("TTS_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("TTS_CACHE_MAX_GB", "2")
     monkeypatch.setenv("TTS_CACHE_EVICTION", "lru")
     monkeypatch.setenv("TTS_MAX_CONCURRENT_JOBS", "1")
@@ -125,6 +126,24 @@ def test_synthesize_refuses_missing_local_provider(
     assert "piper command" in detail["reason"]
 
 
+def test_tts_plan_refuses_repo_local_cache_before_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_cache = Path.cwd() / "tmp" / "unsafe-tts-cache"
+    plan_path = repo_cache / "plans"
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_LOCAL_ONLY", "true")
+    monkeypatch.setenv("TTS_CACHE_DIR", str(repo_cache))
+    monkeypatch.setenv("TTS_LOG_DIR", str(Path.cwd().parent / "tts-test-logs"))
+    monkeypatch.setenv("TTS_PIPER_COMMAND", "/bin/echo")
+
+    resp = TestClient(app).post("/api/companion/tts/plan", json={"text": "Hej världen."})
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "tts_unsafe_cache_root"
+    assert not plan_path.exists()
+
+
 def test_synthesize_returns_structured_unavailable_on_provider_failure(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -148,3 +167,84 @@ def test_synthesize_returns_structured_unavailable_on_provider_failure(
     assert detail["state"] == "unavailable"
     assert "provider_execution_failed" in detail["reason"]
     assert "local model failed" in detail["reason"]
+
+
+def test_tts_runtime_status_reports_local_only_fallback_policy(client: TestClient) -> None:
+    resp = client.get("/api/companion/tts/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["environment"]["TTS_ENABLED"] is True
+    assert data["environment"]["TTS_LOCAL_ONLY"] is True
+    assert data["environment"]["TTS_ALLOW_BROWSER_FALLBACK"] is False
+    assert data["environment"]["TTS_ALLOW_CLOUD_FALLBACK"] is False
+    assert data["config"]["local_only"] is True
+    assert data["config"]["allow_browser_fallback"] is False
+    assert data["config"]["allow_cloud_fallback"] is False
+
+
+def test_tts_runtime_status_reports_provider_availability_without_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_LOCAL_ONLY", "true")
+    monkeypatch.setenv("TTS_MODEL_DIR", str(tmp_path / "missing-models"))
+    monkeypatch.setenv("TTS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("TTS_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("TTS_ALLOW_BROWSER_FALLBACK", "false")
+    monkeypatch.setenv("TTS_ALLOW_CLOUD_FALLBACK", "false")
+    monkeypatch.setenv("PATH", "")
+
+    resp = TestClient(app).get("/api/companion/tts/status")
+
+    assert resp.status_code == 200
+    providers = resp.json()["providers"]
+    assert set(providers) == {"sv-SE", "en-US", "en-GB"}
+    assert providers["sv-SE"]["provider"] == "piper"
+    assert providers["sv-SE"]["available"] is False
+    assert "sv_SE-nst-medium.onnx" in providers["sv-SE"]["reason"]
+    assert providers["en-US"]["provider"] == "kokoro"
+    assert providers["en-GB"]["voice_id"] == "bf_emma"
+
+
+def test_tts_synthesize_reuses_cache_after_lru_cleanup(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_synthesize(
+        text: str,
+        voice: TTSVoice,
+        output_path: Path,
+        *,
+        rate: float = 1.0,
+    ) -> None:
+        calls.append(text)
+        _write_wav(output_path)
+
+    monkeypatch.setattr("app.tts.service.synthesize_with_voice", fake_synthesize)
+
+    first = client.post("/api/companion/tts/synthesize", json={"text": "Hej världen."})
+    status = client.get("/api/companion/tts/status")
+    second = client.post("/api/companion/tts/synthesize", json={"text": "Hej världen."})
+
+    assert first.status_code == 200
+    assert status.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["state"] == "cached"
+    assert calls == ["Hej världen."]
+
+
+def test_tts_runtime_status_reports_cache_size_and_eviction_policy(client: TestClient) -> None:
+    resp = client.get("/api/companion/tts/status")
+
+    assert resp.status_code == 200
+    cache = resp.json()["cache"]
+    assert cache["eviction_policy"] == "lru"
+    assert cache["max_gb"] == 2
+    assert cache["max_bytes"] == 2 * 1024 * 1024 * 1024
+    assert cache["size_bytes"] >= 0
+    assert cache["audio_file_count"] >= 0
+    assert cache["plan_file_count"] >= 0

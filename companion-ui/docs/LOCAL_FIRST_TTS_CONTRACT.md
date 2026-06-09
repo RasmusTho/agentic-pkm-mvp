@@ -5,8 +5,8 @@ Owner: Companion UI / runtime integration
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code + local runtime setup
-Last reviewed: 2026-06-07
-Last verified against: `app/tts/**`, `tests/tts/test_tts_planning.py`, `tests/api/test_companion_tts_api.py`
+Last reviewed: 2026-06-08
+Last verified against: `app/tts/**`, `tests/tts/test_tts_planning.py`, `tests/tts/test_tts_cache.py`, `tests/api/test_companion_tts_api.py`, `tests/companion_ui/test_tts_readback.py`
 
 # Local-First TTS Contract
 
@@ -19,10 +19,12 @@ Endpoints:
 
 - `POST /api/companion/tts/plan`
 - `POST /api/companion/tts/synthesize`
+- `GET /api/companion/tts/status`
 - `GET /api/companion/tts/audio/{cache_key}.wav`
 
-The plan endpoint normalizes text, detects or honors language, selects a local voice provider, and
-returns a cache key plus provider availability. It does not generate audio.
+The plan endpoint normalizes text, skips fenced code blocks, detects or honors language, selects a
+local voice provider, and returns a cache key plus provider availability, cache status, segments,
+and warnings. It does not generate audio.
 
 Requests whose text is empty after Markdown/text normalization are invalid for both planning and
 synthesis. The API rejects normalized-empty input before provider selection, cache-key generation,
@@ -36,6 +38,12 @@ available.
 The audio route serves only cache-key-addressed WAV files from `TTS_CACHE_DIR`. It does not expose
 absolute filesystem paths.
 
+The status endpoint reports active local-only/fallback policy, configured model/cache/log paths,
+whether those paths are outside the repo, provider/model availability for Piper `sv-SE` and Kokoro
+`en-US` / `en-GB`, cache size/eviction policy, path writability, and the Mac mini operator receipt
+path. The receipt path records runtime path/config evidence only; generated audio remains in the
+cache and must not be written to the repo.
+
 ## Required Local Environment
 
 The Mac mini Companion UI host keeps runtime TTS state outside the repo:
@@ -45,6 +53,7 @@ TTS_ENABLED=true
 TTS_LOCAL_ONLY=true
 TTS_MODEL_DIR=/Volumes/T7/CompanionData/tts/models
 TTS_CACHE_DIR=/Volumes/T7/CompanionData/tts/cache
+TTS_LOG_DIR=/Volumes/T7/CompanionData/tts/logs
 TTS_CACHE_MAX_GB=2
 TTS_CACHE_EVICTION=lru
 TTS_MAX_CONCURRENT_JOBS=1
@@ -82,6 +91,16 @@ Provider commands are local executables only:
 If a command is missing, the API reports the provider as unavailable instead of falling back to
 browser/system TTS or a cloud API.
 
+## Cache and Logs
+
+The cache is bounded by `TTS_CACHE_MAX_GB` and `TTS_CACHE_EVICTION=lru`. Cleanup is deterministic
+least-recently-used over cache artifacts under `TTS_CACHE_DIR` and refuses repo-local cache roots.
+Cache keys remain stable for identical normalized requests and rates.
+
+Runtime logs and operator receipt files use `TTS_LOG_DIR`. The log root must be outside the repo in
+operator deployments, or a test temporary directory in CI. CI must not require a real `/Volumes`
+mount or model files.
+
 ## UI Boundary
 
 The Companion UI dev server proxies TTS calls through same-origin routes. Browser clients do not
@@ -90,3 +109,8 @@ need direct access to the runtime API port.
 Read-back buttons may request planning and synthesis only after a human action. The UI must not
 autoplay on page load and must not route read-back through mutation endpoints such as note save,
 Panel confirmation, or workspace update.
+
+The read-back UI inspects the `SpeechPlan` before synthesis and renders normalized readable text,
+segment locale, provider, voice, cache status, and warnings. It surfaces uncertain mixed-language
+plans, skipped code blocks, and missing provider/model warnings before playback. Browser/system
+speech synthesis remains outside the default path.
