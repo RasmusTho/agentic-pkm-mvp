@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -10,14 +11,16 @@ from app.tts.providers import resolve_voice
 
 
 def _writable(path: Path) -> bool:
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe = path / ".tts-write-probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
-    except OSError:
+    """Return True if *path* already exists and appears writable.
+
+    This function is observational: it never creates directories or files.
+    A non-existent path is reported as not writable; a caller that needs the
+    directory to exist must create it explicitly before invoking the status
+    endpoint.
+    """
+    if not path.exists():
         return False
-    return True
+    return path.is_dir() and os.access(path, os.W_OK)
 
 
 def _path_status(path: Path) -> dict[str, Any]:
