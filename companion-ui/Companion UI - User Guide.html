@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Companion UI — User Guide</title>
+  <!--
+    Companion UI User Guide — static standalone reference page.
+    Content assembled from:
+      - docs/COMPANION_UI_PRODUCT_SPEC.md  (product modes)
+      - companion-ui/docs/COMPANION_UI_STATE_MAP.md  (surface inventory)
+    PROTOTYPE / STAGING — stub data — not production.
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ---- Design tokens (inlined so the guide is fully standalone) ---- */
+    :root {
+      --bg-base:       #070b12;
+      --bg-surface:    #0c1220;
+      --bg-raised:     #111a2e;
+      --bg-overlay:    #162038;
+      --fg-1:          #dce8f0;
+      --fg-2:          #7a9ab8;
+      --fg-3:          #3d5570;
+      --border:        #152030;
+      --border-strong: #1e3050;
+      --accent:        #d4a843;
+      --cyan:          #00d4e8;
+      --vault:         #39e87d;
+      --amber:         #f09030;
+      --destructive:   #ff3d3d;
+      --font-display:  'EB Garamond', Georgia, serif;
+      --font-ui:       'Space Grotesk', system-ui, sans-serif;
+      --font-mono:     'JetBrains Mono', 'Fira Code', monospace;
+      --text-xs:       0.6875rem;
+      --text-sm:       0.8125rem;
+      --text-base:     0.9375rem;
+      --text-lg:       1.1875rem;
+      --text-xl:       1.5rem;
+      --text-2xl:      2rem;
+      --tracking-wide: 0.04em;
+      --tracking-wider:0.08em;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
+      background: var(--bg-base);
+      color: var(--fg-1);
+      line-height: 1.6;
+      padding: 0 0 80px;
+    }
+
+    /* ---- Top bar ---- */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 32px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-strong);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .top-bar-title {
+      font-family: var(--font-display);
+      font-size: var(--text-lg);
+      color: var(--fg-1);
+      font-weight: 400;
+    }
+    .proto-badge {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: var(--tracking-wide);
+      color: var(--amber);
+      border: 1px solid var(--amber);
+      border-radius: 3px;
+      padding: 2px 7px;
+      text-transform: uppercase;
+    }
+    .nav-links {
+      margin-left: auto;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+    .nav-link {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: var(--tracking-wide);
+      color: var(--fg-3);
+      text-decoration: none;
+    }
+    .nav-link:hover { color: var(--fg-2); }
+
+    /* ---- Page content ---- */
+    .page-content {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 48px 32px 0;
+    }
+
+    /* ---- Page header ---- */
+    .page-header {
+      margin-bottom: 48px;
+    }
+    .page-header h1 {
+      font-family: var(--font-display);
+      font-size: var(--text-2xl);
+      font-weight: 500;
+      color: var(--fg-1);
+      margin-bottom: 12px;
+    }
+    .page-header p {
+      font-size: var(--text-sm);
+      color: var(--fg-2);
+      max-width: 640px;
+      line-height: 1.6;
+    }
+
+    /* ---- Section ---- */
+    .guide-section {
+      margin-bottom: 48px;
+    }
+    .guide-section h2 {
+      font-family: var(--font-display);
+      font-size: var(--text-xl);
+      font-weight: 500;
+      color: var(--fg-1);
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-strong);
+    }
+    .section-meta {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      letter-spacing: var(--tracking-wide);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+    }
+    .guide-section p {
+      color: var(--fg-2);
+      font-size: var(--text-sm);
+      line-height: 1.7;
+      margin-bottom: 12px;
+      max-width: 720px;
+    }
+    .guide-section p strong {
+      color: var(--fg-1);
+      font-weight: 500;
+    }
+
+    /* ---- Mode cards ---- */
+    .mode-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+    .mode-card {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      padding: 20px;
+    }
+    .mode-card-header {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .mode-name {
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
+      font-weight: 600;
+      color: var(--fg-1);
+    }
+    .mode-tag {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      letter-spacing: var(--tracking-wide);
+      text-transform: uppercase;
+    }
+    .mode-question {
+      font-style: italic;
+      font-family: var(--font-display);
+      font-size: var(--text-sm);
+      color: var(--cyan);
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+    .mode-desc {
+      font-size: var(--text-sm);
+      color: var(--fg-2);
+      line-height: 1.65;
+      margin-bottom: 8px;
+    }
+    .mode-surfaces {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      letter-spacing: var(--tracking-wide);
+      margin-top: 12px;
+    }
+    .mode-caveat {
+      margin-top: 10px;
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      border-left: 2px solid var(--border-strong);
+      padding-left: 10px;
+      line-height: 1.55;
+    }
+
+    /* ---- Surfaces table ---- */
+    .surfaces-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      font-size: var(--text-sm);
+    }
+    .surfaces-table th {
+      text-align: left;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: var(--tracking-wide);
+      text-transform: uppercase;
+      color: var(--fg-3);
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-strong);
+    }
+    .surfaces-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      color: var(--fg-2);
+    }
+    .surfaces-table td:first-child {
+      font-weight: 500;
+      color: var(--fg-1);
+    }
+    .surfaces-table tr:last-child td {
+      border-bottom: none;
+    }
+    .status-badge {
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      letter-spacing: var(--tracking-wide);
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 3px;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .status-shipped {
+      color: var(--vault);
+      border-color: var(--vault);
+    }
+    .status-target {
+      color: var(--amber);
+      border-color: var(--amber);
+    }
+
+    /* ---- Prototype pages section ---- */
+    .proto-pages-list {
+      list-style: none;
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .proto-pages-list li {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      padding: 14px 18px;
+    }
+    .proto-pages-list a {
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
+      font-weight: 500;
+      color: var(--cyan);
+      text-decoration: none;
+    }
+    .proto-pages-list a:hover { text-decoration: underline; }
+    .proto-page-desc {
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      margin-top: 4px;
+      font-family: var(--font-mono);
+      letter-spacing: var(--tracking-wide);
+    }
+
+    /* ---- Principles list ---- */
+    .principles-list {
+      list-style: none;
+      margin-top: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .principles-list li {
+      font-size: var(--text-sm);
+      color: var(--fg-2);
+      padding-left: 16px;
+      position: relative;
+      line-height: 1.6;
+    }
+    .principles-list li::before {
+      content: '—';
+      position: absolute;
+      left: 0;
+      color: var(--fg-3);
+    }
+
+    /* ---- Authority section ---- */
+    .authority-row {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    .authority-col {
+      flex: 1;
+      min-width: 240px;
+    }
+    .authority-col h4 {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: var(--tracking-wider);
+      text-transform: uppercase;
+      color: var(--fg-3);
+      margin-bottom: 10px;
+    }
+    .authority-col ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .authority-col li {
+      font-size: var(--text-sm);
+      color: var(--fg-2);
+      padding-left: 14px;
+      position: relative;
+    }
+    .authority-col li::before {
+      content: '\00b7';
+      position: absolute;
+      left: 0;
+      color: var(--fg-3);
+    }
+
+    /* ---- Footer ---- */
+    .guide-footer {
+      margin-top: 64px;
+      border-top: 1px solid var(--border);
+      padding: 20px 0 0;
+    }
+    .guide-footer p {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-3);
+      letter-spacing: var(--tracking-wide);
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ================================================================
+     TOP BAR
+     ================================================================ -->
+<header class="top-bar">
+  <span class="top-bar-title">Companion UI</span>
+  <span class="proto-badge">Prototype — stub data — not production</span>
+  <nav class="nav-links" aria-label="Prototype pages">
+    <a class="nav-link" href="companion-app/canvas_suggestion_flow.html">Canvas Suggestion Flow &#8599;</a>
+    <a class="nav-link" href="companion-app/converse_layout.html">Converse Layout &#8599;</a>
+    <a class="nav-link" href="companion-app/panel_visual_shell.html">Panel Visual Shell &#8599;</a>
+  </nav>
+</header>
+
+<!-- ================================================================
+     PAGE CONTENT
+     ================================================================ -->
+<main class="page-content">
+
+  <!-- ---- Page header ---- -->
+  <div class="page-header">
+    <h1>User Guide</h1>
+    <p>
+      Companion UI organizes Yggdrasil&#8217;s cognitive prosthesis functions into four user-facing modes:
+      <strong>Find</strong>, <strong>Reorient</strong>, <strong>Resurface</strong>, and <strong>Act</strong>.
+      These modes are product affordances over existing authority and contract boundaries.
+      This guide assembles content from the canonical source docs &#8212;
+      <code>docs/COMPANION_UI_PRODUCT_SPEC.md</code> and
+      <code>companion-ui/docs/COMPANION_UI_STATE_MAP.md</code>.
+    </p>
+  </div>
+
+  <!-- ================================================================
+       PRODUCT MODES
+       ================================================================ -->
+  <section class="guide-section" aria-labelledby="modes-heading">
+    <h2 id="modes-heading">Product Modes</h2>
+    <p class="section-meta">Source: docs/COMPANION_UI_PRODUCT_SPEC.md &#8212; Mode Model</p>
+    <p>
+      Each mode reduces a specific cognitive burden and routes to the appropriate
+      authority surface (Panel / Chat / Automation). Modes do not replace authority sources.
+    </p>
+
+    <div class="mode-grid">
+
+      <!-- ── 1. Find ─────────────────────────────────────────────── -->
+      <div class="mode-card" data-mode="find">
+        <div class="mode-card-header">
+          <span class="mode-name">Find</span>
+          <span class="mode-tag">Mode 1</span>
+        </div>
+        <p class="mode-question">&#8220;Where is the thing I need, and what is the best source to cite?&#8221;</p>
+        <p class="mode-desc">
+          Reduces manual recall, repeated search, and uncertainty about source quality.
+          Each answer exposes source citations and an inspectable retrieval basis.
+        </p>
+        <p class="mode-desc">
+          <strong>Authority limits:</strong> Find can present and summarize; it cannot promote
+          retrieved material into durable knowledge without an explicit governed flow.
+        </p>
+        <div class="mode-surfaces">Primary surfaces: Chat &#183; Panel</div>
+        <p class="mode-caveat">
+          Current-state caveat: retrieval and related diagnostics are partially shipped;
+          exact UX assembly varies by current runtime surface and flags.
+        </p>
+      </div>
+
+      <!-- ── 2. Reorient ────────────────────────────────────────── -->
+      <div class="mode-card" data-mode="reorient">
+        <div class="mode-card-header">
+          <span class="mode-name">Reorient</span>
+          <span class="mode-tag">Mode 2</span>
+        </div>
+        <p class="mode-question">&#8220;What was I doing, what changed, and what should I do next?&#8221;</p>
+        <p class="mode-desc">
+          Reduces interruption-recovery overhead and the cost of reloading situational context
+          from scratch. The orientation bundle separates current frame, recent deltas, open loops,
+          and confidence labels.
+        </p>
+        <p class="mode-desc">
+          <strong>Authority limits:</strong> Reorient can synthesize and propose; it does not
+          execute actions on its own.
+        </p>
+        <div class="mode-surfaces">Primary surfaces: Chat-first &#183; Panel (handoff)</div>
+        <p class="mode-caveat">
+          Current-state caveat: bounded orientation runtime seams exist, but full target-state
+          orientation UX assembly is not yet baseline.
+        </p>
+      </div>
+
+      <!-- ── 3. Resurface ───────────────────────────────────────── -->
+      <div class="mode-card" data-mode="resurface">
+        <div class="mode-card-header">
+          <span class="mode-name">Resurface</span>
+          <span class="mode-tag">Mode 3</span>
+        </div>
+        <p class="mode-question">&#8220;What quietly important thing should return to attention now?&#8221;</p>
+        <p class="mode-desc">
+          Reduces missed follow-up, forgotten relevance, and re-orientation effort after attention
+          drift. The baseline posture is pull/snapshot/read-only; ambient refresh is bounded
+          foreground refresh only.
+        </p>
+        <p class="mode-desc">
+          <strong>Authority limits:</strong> Resurface can suggest; it must not escalate to
+          urgent-task semantics unless explicitly promoted. Resurfacing presence must not become
+          approval, urgency, memory promotion, or write authority.
+        </p>
+        <div class="mode-surfaces">Primary surfaces: Companion orientation/resurface areas across Chat/Panel</div>
+        <p class="mode-caveat">
+          Current-state caveat: minimal resurfacing runtime seams exist; full product-surface
+          suggestion orchestration and durable dismiss/snooze/pin remain target-state.
+        </p>
+      </div>
+
+      <!-- ── 4. Act ─────────────────────────────────────────────── -->
+      <div class="mode-card" data-mode="act">
+        <div class="mode-card-header">
+          <span class="mode-name">Act</span>
+          <span class="mode-tag">Mode 4</span>
+        </div>
+        <p class="mode-question">&#8220;How do I turn intent into a governed, completed change?&#8221;</p>
+        <p class="mode-desc">
+          Reduces coordination overhead between deciding, executing, and documenting outcomes.
+          The action flow preserves <code>intent &#8594; propose &#8594; decide &#8594; execute &#8594; receipt</code>
+          and produces inspectable receipts.
+        </p>
+        <p class="mode-desc">
+          <strong>Authority limits:</strong> Act must not bypass write guards; must distinguish
+          propose, stage, apply, and log.
+        </p>
+        <div class="mode-surfaces">Primary surfaces: Panel &#183; Chat (proposal/clarification) &#183; Automation</div>
+        <p class="mode-caveat">
+          Current-state caveat: parts of this flow are shipped across Panel/runtime contracts;
+          broader unified Companion Act UX remains target-state.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ================================================================
+       SURFACES
+       ================================================================ -->
+  <section class="guide-section" aria-labelledby="surfaces-heading">
+    <h2 id="surfaces-heading">Surfaces</h2>
+    <p class="section-meta">Source: companion-ui/docs/COMPANION_UI_STATE_MAP.md &#8212; Current-state surface map</p>
+    <p>
+      Each surface is tagged with its current status. <strong>shipped/dev-staging</strong> means
+      present on <code>main</code> and exercised in the dev/staging Companion shell &#8212; not a claim
+      of production hardening or packaging. <strong>target-state</strong> means described in
+      product/spec docs but not yet implemented as a Companion UI surface.
+    </p>
+
+    <table class="surfaces-table" aria-label="Companion UI surface inventory">
+      <thead>
+        <tr>
+          <th>Surface</th>
+          <th>Status</th>
+          <th>Mode(s)</th>
+          <th>Authority posture</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Workspace orientation (re-entry, nothing open)</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Reorient</td>
+          <td>Read-only; may emit <code>mutation_intents</code>, never applies</td>
+        </tr>
+        <tr>
+          <td>Active note workspace (single-shell, renderer, body edit)</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Find, Reorient, Act</td>
+          <td>UI-local rendering; body edit is governed handoff via <code>active_note_body_update</code> + WriteGuard</td>
+        </tr>
+        <tr>
+          <td>Vault Browser (browse, outline, artifact inspector)</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Find, Reorient</td>
+          <td>Read-only; <code>queue_review</code> is governed handoff</td>
+        </tr>
+        <tr>
+          <td>Panel / agent rail</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Act</td>
+          <td>Governed handoff (propose &#8594; decide &#8594; execute &#8594; receipt)</td>
+        </tr>
+        <tr>
+          <td>Receipts / provenance</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Act, Reorient</td>
+          <td>Read-only display; receipts must not be invented by the UI</td>
+        </tr>
+        <tr>
+          <td>Operational loop (inspect &#8594; queue &#8594; confirm &#8594; receipt)</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Find, Act, Reorient</td>
+          <td>Derived, read-only loop projection; UI is never durable authority</td>
+        </tr>
+        <tr>
+          <td>Memory candidate boundary (orientation seam)</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Reorient</td>
+          <td>Read-only awareness + intent emission only; never hidden authority</td>
+        </tr>
+        <tr>
+          <td>Agent-memory posture in Vault Browser inspector</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Find, Reorient</td>
+          <td>Read-only projection; server-declared</td>
+        </tr>
+        <tr>
+          <td>Ambient foreground orientation refresh</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging (default-off)</span></td>
+          <td>Reorient</td>
+          <td>Read-only; non-notification</td>
+        </tr>
+        <tr>
+          <td>Resurface read-side candidates</td>
+          <td><span class="status-badge status-shipped">shipped/dev-staging</span></td>
+          <td>Resurface</td>
+          <td>Read-only suggestion display; no persistence or urgency escalation</td>
+        </tr>
+        <tr>
+          <td>Resurface persistence/orchestration (dismiss/snooze/pin)</td>
+          <td><span class="status-badge status-target">target-state</span></td>
+          <td>Resurface</td>
+          <td>Future governed persistence/orchestration; must remain low-pressure</td>
+        </tr>
+        <tr>
+          <td>Act flow visual states (unified propose/stage/apply UX)</td>
+          <td><span class="status-badge status-target">target-state</span></td>
+          <td>Act</td>
+          <td>Governed handoff; must not blur stage/apply</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 style="font-family: var(--font-ui); font-size: var(--text-base); font-weight: 600; color: var(--fg-2); margin-top: 32px; margin-bottom: 16px;">Prototype Pages</h3>
+    <p style="font-size: var(--text-sm); color: var(--fg-2); margin-bottom: 4px;">
+      The following prototype pages render surface states with stub data.
+      No runtime calls, no vault writes.
+    </p>
+
+    <ul class="proto-pages-list">
+      <li>
+        <a href="companion-app/canvas_suggestion_flow.html">Canvas Suggestion Flow &#8599;</a>
+        <p class="proto-page-desc">
+          Staged body-edit and governance proposals. Covers body lane, governance lane,
+          blocked state, thinking state, and idle. State machine per &#167;3 of the design handoff.
+        </p>
+      </li>
+      <li>
+        <a href="companion-app/converse_layout.html">Converse Layout &#8599;</a>
+        <p class="proto-page-desc">
+          Converse shell with margin rail, session drawer, and portrait bottom sheet.
+          Demonstrates rail collapse, suggestion card, and composer states.
+        </p>
+      </li>
+      <li>
+        <a href="companion-app/panel_visual_shell.html">Panel Visual Shell &#8599;</a>
+        <p class="proto-page-desc">
+          All 8 Panel states rendered in a grid: idle, running, proposals-staged,
+          confirming, executing, receipt-displayed, no-match, blocked. Affordance buttons
+          are visual slots only &#8212; no runtime wiring.
+        </p>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ================================================================
+       COMPANION UI PRINCIPLES
+       ================================================================ -->
+  <section class="guide-section" aria-labelledby="principles-heading">
+    <h2 id="principles-heading">Principles</h2>
+    <p class="section-meta">Source: docs/COMPANION_UI_PRODUCT_SPEC.md &#8212; Companion UI Principles</p>
+
+    <ul class="principles-list">
+      <li>Context must be inspectable.</li>
+      <li>Suggestions must be dismissible.</li>
+      <li>Writes must be staged before applied unless explicitly authorized by contract.</li>
+      <li>Chat is not source of truth.</li>
+      <li>Agent memory is not hidden authority.</li>
+      <li>Human-readable artifacts remain primary.</li>
+      <li>Cognitive-load support is central: reduce decoding, parsing, spelling, review, and resumption friction without simplifying away the human&#8217;s reasoning task.</li>
+      <li>Review surfaces should be verifiability-first: source and consequences stay reachable before an agent projection becomes a decision.</li>
+      <li>The UI should reveal enough system state to support trust without exposing unnecessary runtime machinery.</li>
+    </ul>
+  </section>
+
+  <!-- ================================================================
+       AUTHORITY AND SAFETY
+       ================================================================ -->
+  <section class="guide-section" aria-labelledby="authority-heading">
+    <h2 id="authority-heading">Authority and Safety</h2>
+    <p class="section-meta">Source: docs/COMPANION_UI_PRODUCT_SPEC.md &#8212; Authority And Safety</p>
+
+    <div class="authority-row">
+      <div class="authority-col">
+        <h4>Companion UI may</h4>
+        <ul>
+          <li>Present suggestions</li>
+          <li>Host human decisions</li>
+          <li>Display runtime state</li>
+        </ul>
+      </div>
+      <div class="authority-col">
+        <h4>Companion UI must not</h4>
+        <ul>
+          <li>Become a source of authority itself</li>
+          <li>Bypass contracts, write guards, or human decisions</li>
+          <li>Treat memory, chat output, or UI state as authoritative by default</li>
+        </ul>
+      </div>
+      <div class="authority-col">
+        <h4>Authority comes from</h4>
+        <ul>
+          <li>Contracts</li>
+          <li>Events and receipts</li>
+          <li>Write guards</li>
+          <li>Explicit human decisions</li>
+          <li>Owner docs</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       FOOTER
+       ================================================================ -->
+  <footer class="guide-footer">
+    <p>
+      PROTOTYPE &#8212; STUB DATA &#8212; NOT PRODUCTION &#183; Content assembled from
+      <code>docs/COMPANION_UI_PRODUCT_SPEC.md</code> and
+      <code>companion-ui/docs/COMPANION_UI_STATE_MAP.md</code>. No new product strategy invented.
+      Runtime truth lives in <code>docs/STATUS.md</code> and the owner contracts.
+    </p>
+  </footer>
+
+</main>
+</body>
+</html>
