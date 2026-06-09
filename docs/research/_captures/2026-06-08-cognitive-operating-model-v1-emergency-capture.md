@@ -1,3 +1,4 @@
+State: Supporting research capture — non-authoritative. Claims require explicit owner-doc promotion before affecting runtime truth.
 ---
 doc_type: capture
 authority: supporting
