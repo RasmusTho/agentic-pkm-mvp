@@ -4038,6 +4038,23 @@ def _render_panel_proposal_rows(
             f"{prov_agent}&nbsp;&middot;&nbsp;{prov_ts}&nbsp;&middot;&nbsp;confidence&nbsp;{prov_conf}"
             f"</div>"
         )
+        # Server-declared proposal-scoped origin attribution (CHAT-PANEL-HANDOFF-02).
+        # Surfaced only when the runtime declared it; the UI never infers it.
+        proposal_origin = proposal.get("proposal_origin")
+        origin_html = ""
+        if proposal_origin:
+            origin_label = (
+                "canvas co-authoring"
+                if proposal_origin == "canvas_coauthoring"
+                else str(proposal_origin)
+            )
+            origin_html = (
+                '<div class="panel-proposal-origin" '
+                'data-testid="workspace-panel-proposal-origin" '
+                f'data-proposal-origin="{_e(str(proposal_origin))}">'
+                f"origin:&nbsp;{_e(origin_label)}"
+                "</div>"
+            )
         buttons = "".join(
             (
                 f'<button type="button" class="panel-proposal-action {_ACTION_CSS[label]}" '
@@ -4071,6 +4088,7 @@ def _render_panel_proposal_rows(
           data-artifact-id="{artifact_id}">
           <div class="panel-section-title">{_e(proposal.get("description", ""))}</div>
           {provenance_html if proposal_available else ""}
+          {origin_html}
           <div class="panel-proposal-meta">
             <span data-testid="workspace-panel-proposal-id">{proposal_id}</span>
             <span data-testid="workspace-panel-artifact-id">{artifact_id}</span>
