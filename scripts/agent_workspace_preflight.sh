@@ -5,6 +5,7 @@ CWD="$(pwd)"
 EXPECTED_BRANCH=""
 EXPECTED_WORKTREE=""
 BASE_BRANCH="main"
+ALLOW_DIRTY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,6 +25,10 @@ while [[ $# -gt 0 ]]; do
       BASE_BRANCH="$2"
       shift 2
       ;;
+    --allow-dirty)
+      ALLOW_DIRTY=1
+      shift
+      ;;
     *)
       echo "Unknown arg: $1" >&2
       exit 2
@@ -42,6 +47,9 @@ if [[ -n "$EXPECTED_WORKTREE" ]]; then
 fi
 if [[ -n "$BASE_BRANCH" ]]; then
   ARGS+=(--base-branch "$BASE_BRANCH")
+fi
+if [[ "$ALLOW_DIRTY" -eq 1 ]]; then
+  ARGS+=(--allow-dirty)
 fi
 
 python3 scripts/git_hygiene_preflight.py "${ARGS[@]}"

@@ -61,7 +61,8 @@ when active work begins, move the governing Issue/Project state to `In Progress`
 Execution discipline:
 
 - When a task clearly matches a repo-local workflow skill, load that skill before workflow-boundary actions in that lane.
-- Publication actions (branch creation, commit creation, push, PR creation/update) route through `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary.
+- Publication actions (branch creation, commit creation, push, PR creation/update) route through `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary. This applies to every lane — implementation, feature-breakdown, docs-authoring, and governance — not only `issue-to-code`.
+- The publication boundary enforces the branch-truth gate before commit and before push via `scripts/agent_workspace_preflight.sh --allow-dirty` (branch + worktree drift detection; dirty tree is expected at publish time). In a heavily parallel multi-worktree setup, prefer a dedicated worktree so a concurrent agent switching the shared root worktree's branch cannot land a commit on the wrong branch.
 - Do not perform ad hoc publication flow first and retroactively map it to a skill; route through the matching skill before executing boundary actions.
 
 Workflow state model:

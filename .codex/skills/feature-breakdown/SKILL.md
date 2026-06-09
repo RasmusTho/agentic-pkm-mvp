@@ -265,6 +265,24 @@ Recommended habit:
 - Use `verification-and-closure` to verify task delivery, then validate the parent capability and decide whether owner-doc promotion is warranted.
 
 
+## Publication discipline
+
+This lane writes specification directories and creates issues in the shared repo. When you commit and push those spec docs, route the branch / commit / push / PR actions through `.codex/skills/publish-pr/SKILL.md` — do not run an ad hoc commit/push from this skill. `publish-pr` owns the branch-truth gate.
+
+Branch-truth gate (mandatory, same as `publish-pr` and `issue-to-code`) [branch-truth-gate]:
+
+- Prefer a dedicated worktree (`git worktree add`) for the breakdown work. In a heavily parallel multi-worktree setup a concurrent agent can switch the shared root worktree's branch mid-session, which silently lands your spec commit on the wrong branch.
+- Capture `EXPECTED_BRANCH` and `EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"` when you create/switch the branch.
+- Before commit and again before push, run the hardened preflight (dirty tree is expected at publish time):
+
+  ```bash
+  scripts/agent_workspace_preflight.sh \
+    --expected-branch "$EXPECTED_BRANCH" \
+    --expected-worktree "$EXPECTED_WORKTREE" \
+    --allow-dirty
+  # Non-zero exit => workspace drifted. STOP, switch to the correct worktree, do not commit/push.
+  ```
+
 ## Capturing learning
 
 **Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.

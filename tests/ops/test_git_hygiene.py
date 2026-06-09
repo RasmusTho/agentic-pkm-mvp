@@ -38,6 +38,57 @@ def test_preflight_reports_dirty_tree_and_in_progress_operation(
     assert report["checks"]["worktree_mismatch"] is True
 
 
+def test_preflight_allow_dirty_tolerates_dirty_tree_but_not_drift(
+    tmp_path, monkeypatch
+) -> None:
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["status", "--porcelain"]:
+            return " M .codex/skills/publish-pr/SKILL.md"
+        if args == ["branch", "--show-current"]:
+            return "governance-work"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["rev-parse", "--git-dir"]:
+            return str(git_dir)
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
+
+    # At the publish boundary the tree is intentionally dirty; with --allow-dirty
+    # that is not a failure as long as branch and worktree match.
+    ok_report = git_hygiene.preflight_report(
+        tmp_path,
+        expected_branch="governance-work",
+        expected_worktree=str(tmp_path),
+        allow_dirty=True,
+    )
+    assert ok_report["ok"] is True
+    assert ok_report["checks"]["dirty_tree"] is True
+    assert ok_report["checks"]["dirty_tree_enforced"] is False
+
+    # Branch drift still fails even with --allow-dirty.
+    drift_report = git_hygiene.preflight_report(
+        tmp_path,
+        expected_branch="some-other-branch",
+        expected_worktree=str(tmp_path),
+        allow_dirty=True,
+    )
+    assert drift_report["ok"] is False
+    assert drift_report["checks"]["branch_mismatch"] is True
+
+    # Without --allow-dirty the dirty tree fails as before.
+    strict_report = git_hygiene.preflight_report(
+        tmp_path,
+        expected_branch="governance-work",
+        expected_worktree=str(tmp_path),
+    )
+    assert strict_report["ok"] is False
+    assert strict_report["checks"]["dirty_tree_enforced"] is True
+
+
 def test_preflight_reports_active_lease_conflict(tmp_path, monkeypatch) -> None:
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
