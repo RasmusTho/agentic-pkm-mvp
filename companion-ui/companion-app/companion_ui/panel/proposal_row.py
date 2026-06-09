@@ -72,6 +72,12 @@ class ProposalRow:
     evidence: ProposalEvidence
     available_affordances: set[str] = field(default_factory=lambda: set(PROPOSAL_AFFORDANCES))
     status: str = "staged"
+    # Server-declared proposal-scoped origin attribution (e.g.
+    # "canvas_coauthoring" when this proposal was produced by a governance-bearing
+    # canvas co-authoring intent). Distinct from the vault-note/frontmatter
+    # origin; surfaced for attribution only. None when the server did not declare
+    # one — the UI never infers it.
+    proposal_origin: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.proposal_id:
@@ -103,6 +109,7 @@ class ProposalRow:
             "description": self.description,
             "evidence": self.evidence.as_dict(),
             "status": self.status,
+            "proposal_origin": self.proposal_origin,
             "affordances": {
                 "confirm": self.can_confirm(),
                 "correct": self.can_correct(),

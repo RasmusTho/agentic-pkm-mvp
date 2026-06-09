@@ -20,8 +20,9 @@ This module does NOT:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 # Layout region identifiers (data-testid anchors for rendering layers).
@@ -56,12 +57,24 @@ class CanvasCoAuthorRegion:
     composes a body locally — ``render_applied_edit`` stores verbatim what the
     server already applied, and a governance-bearing response (HTTP 409) is
     surfaced as routed-to-Panel rather than as an applied edit.
+
+    On the governance-bearing path (CHAT-PANEL-HANDOFF-01/02) the server returns
+    a structured handoff reference in the 409 body
+    (``status="routed_to_panel"``, ``intent_id``, ``action_type``). The region
+    stores that server-provided reference verbatim and exposes a "view in Panel"
+    affordance keyed to ``intent_id`` so the user can correlate the canvas
+    intent with the staged Panel proposal. It never synthesizes a proposal or
+    infers governance locally — correlation is by server-declared fields only.
     """
 
     enabled: bool = False
     applied_body: Optional[str] = field(default=None)
     change_summary: Optional[str] = field(default=None)
     is_panel_routed: bool = field(default=False)
+    # Server-provided handoff reference captured from the governance-bearing
+    # 409 body. Both remain None until a structured handoff response arrives.
+    handoff_intent_id: Optional[str] = field(default=None)
+    handoff_action_type: Optional[str] = field(default=None)
 
     @property
     def has_intent_input(self) -> bool:
@@ -78,11 +91,34 @@ class CanvasCoAuthorRegion:
             return []
         return ["canvas-intent-input", "canvas-undo"]
 
+    @property
+    def view_in_panel_affordance(self) -> Optional[dict[str, str]]:
+        """A "view in Panel" affordance keyed to the server-provided intent_id.
+
+        Present only when a handoff reference exists (i.e. after a structured
+        governance-bearing 409). Returns ``None`` otherwise — the UI never
+        fabricates a reference. The ``intent_id`` correlates with the staged
+        Panel proposal's ``proposal_id``/``proposal_origin`` on the rail.
+        """
+        if not self.handoff_intent_id:
+            return None
+        affordance = {"intent_id": self.handoff_intent_id}
+        if self.handoff_action_type:
+            affordance["action_type"] = self.handoff_action_type
+        return affordance
+
+    @property
+    def has_view_in_panel_affordance(self) -> bool:
+        return self.view_in_panel_affordance is not None
+
     def render_applied_edit(self, *, applied_body: str, change_summary: str) -> None:
         """Store a server-applied edit for rendering (verbatim, no composition)."""
         self.applied_body = applied_body
         self.change_summary = change_summary
         self.is_panel_routed = False
+        # An applied edit supersedes any prior panel-routed handoff reference.
+        self.handoff_intent_id = None
+        self.handoff_action_type = None
 
     def handle_coauthor_error(self, error: "object") -> None:
         """Surface a governance-bearing (HTTP 409) response as routed-to-Panel.
@@ -90,12 +126,55 @@ class CanvasCoAuthorRegion:
         A 409 means the runtime classified the intent as governance-bearing and
         routed it through the gated pipeline; it is not an applied edit, so any
         previously rendered edit state is cleared.
+
+        When the 409 body carries the structured handoff reference returned by
+        CHAT-PANEL-HANDOFF-01 (``intent_id``/``action_type``), the region stores
+        those server-provided fields so it can expose a "view in Panel"
+        affordance keyed to the staged Panel proposal. The reference is parsed
+        from the server response only; nothing is inferred locally.
         """
         status_code = getattr(error, "status_code", None)
-        if status_code == 409:
-            self.is_panel_routed = True
-            self.applied_body = None
-            self.change_summary = None
+        if status_code != 409:
+            return
+        self.is_panel_routed = True
+        self.applied_body = None
+        self.change_summary = None
+        intent_id, action_type = _parse_handoff_reference(
+            getattr(error, "detail", None)
+        )
+        self.handoff_intent_id = intent_id
+        self.handoff_action_type = action_type
+
+
+def _parse_handoff_reference(detail: Any) -> tuple[Optional[str], Optional[str]]:
+    """Extract ``(intent_id, action_type)`` from a structured 409 body.
+
+    The runtime returns the handoff reference as a JSON object in the response
+    body (carried verbatim on ``WorkspaceClientHTTPError.detail``):
+
+        {"status": "routed_to_panel", "intent_id": "...",
+         "action_type": "...", "detail": "..."}
+
+    Only correlates when the server declares ``status == "routed_to_panel"``;
+    legacy/opaque 409 strings degrade to ``(None, None)`` so the region still
+    renders routed-to-Panel without fabricating a reference.
+    """
+    if not isinstance(detail, str) or not detail.strip():
+        return (None, None)
+    try:
+        parsed = json.loads(detail)
+    except (ValueError, TypeError):
+        return (None, None)
+    if not isinstance(parsed, dict):
+        return (None, None)
+    if parsed.get("status") != "routed_to_panel":
+        return (None, None)
+    intent_id = parsed.get("intent_id")
+    action_type = parsed.get("action_type")
+    return (
+        intent_id if isinstance(intent_id, str) and intent_id else None,
+        action_type if isinstance(action_type, str) and action_type else None,
+    )
 
 
 @dataclass

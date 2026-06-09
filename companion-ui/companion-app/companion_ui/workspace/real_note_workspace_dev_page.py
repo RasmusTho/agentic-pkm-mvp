@@ -1019,6 +1019,11 @@ def _proposal_rows_from_panel(
             cognition_route=evidence_raw.get("cognition_route", ""),
         )
         affordances = _proposal_affordance_set(raw.get("affordances"))
+        # Server-declared proposal-scoped origin attribution (e.g.
+        # "canvas_coauthoring" from CHAT-PANEL-HANDOFF-01). Surfaced for
+        # attribution only; the UI never infers it and leaves it None when the
+        # server did not declare one.
+        proposal_origin = raw.get("proposal_origin")
         row = ProposalRow(
             proposal_id=raw.get("proposal_id", ""),
             artifact_id=raw.get("artifact_id") or artifact_id,
@@ -1026,6 +1031,7 @@ def _proposal_rows_from_panel(
             evidence=evidence,
             available_affordances=affordances,
             status=raw.get("status", "staged"),
+            proposal_origin=str(proposal_origin) if proposal_origin else None,
         )
         rows.append(row.as_render_dict())
     return rows
