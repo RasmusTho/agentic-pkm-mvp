@@ -377,7 +377,13 @@ class RealNoteWorkspaceDevPage:
         )
         if content_hash:
             self._last_content_hash_by_note[resolved_note_path] = content_hash
-        shell = RealNoteWorkspaceShell(payload=payload, agent_rail_state=None)
+        shell = RealNoteWorkspaceShell(
+            payload=payload,
+            agent_rail_state=None,
+            # Mirror the server-declared canvas guard so the co-authoring region
+            # is reachable when the runtime enables it. The UI never infers this.
+            canvas_enabled=bool(guards.get("canvas_enabled", True)),
+        )
         panel_count = int(panel.get("proposal_count") or 0)
         panel_state = panel.get("state") or "idle"
         panel_message = _panel_message(panel)

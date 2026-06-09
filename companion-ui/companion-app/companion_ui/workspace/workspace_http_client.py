@@ -4,7 +4,9 @@ Concrete adapter implementing the HttpClient protocol consumed by
 WorkspaceConfirmSession. Uses httpx to call:
   GET  /api/companion/workspace
   POST /api/canvas/sessions
+  POST /api/canvas/sessions/{id}/coauthor
   POST /api/panel/confirm
+  DELETE /api/canvas/sessions/{id}/edits/last
   DELETE /api/canvas/sessions/{id}
 
 The base URL is configurable so the same client works against dev,
@@ -109,3 +111,40 @@ class WorkspaceHttpClient:
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
+
+    # ------------------------------------------------------------------
+    # Canvas co-authoring (#1717)
+    # ------------------------------------------------------------------
+
+    def coauthor(
+        self,
+        session_id: str,
+        intent: str,
+        change_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Request a server-generated co-authoring edit for ``session_id``.
+
+        Posts the user's intent to ``POST /api/canvas/sessions/{id}/coauthor``.
+        The server generates and applies the new body, then returns the
+        applied body and its change summary. The client composes no body
+        itself; it only forwards the intent.
+
+        Raises WorkspaceClientHTTPError on a non-2xx response. A 409 signals a
+        governance-bearing mutation that the server routed to the Panel rather
+        than applying in place; the caller renders it as routed-to-Panel.
+        """
+        payload: dict[str, Any] = {"intent": intent}
+        if change_summary is not None:
+            payload["change_summary"] = change_summary
+        return self.post(
+            f"/api/canvas/sessions/{session_id}/coauthor",
+            json=payload,
+        )
+
+    def undo_last_edit(self, session_id: str) -> dict[str, Any]:
+        """Undo the last co-authoring body edit for ``session_id``.
+
+        Calls ``DELETE /api/canvas/sessions/{id}/edits/last``. The server
+        restores the prior body; the client performs no vault write itself.
+        """
+        return self.delete(f"/api/canvas/sessions/{session_id}/edits/last")
