@@ -119,7 +119,8 @@ A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB
 - the effective DSN resolves to another channel (e.g. a prod overlay whose omitted DSN is won by a `tmp/runtime.env` layer carrying `app_test`), or
 - a layer that would win exists but cannot be read, or
 - a **required** layer is missing at preflight time (compose would refuse to start; the preflight does not silently assume absence), or
-- a layer's path expression cannot be resolved, making the effective binding unverifiable.
+- a layer's path expression cannot be resolved, making the effective binding unverifiable, or
+- the winning entry for a channel-critical key is a bare `KEY` line (no `=`): compose treats it as unset/host-environment passthrough at `compose up` time, so the effective binding is unverifiable at preflight time (a later layer that redefines the key still supersedes it).
 
 A `required: false` layer that is absent at preflight time contributes nothing, exactly as compose treats it; the preflight verifies the layering **as it stands at preflight time** — creating or editing env-file layers after the preflight and before stack start bypasses the guard. When no base compose file sits next to the overlay, the base layering is modeled as the single committed defaults file, preserving the #1655 contract.
 

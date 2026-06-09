@@ -649,6 +649,69 @@ def test_omitted_dsn_with_correct_channel_later_layer_passes(tmp_path: Path) -> 
     )
 
 
+def test_bare_key_unset_in_winning_layer_fails_closed(tmp_path: Path) -> None:
+    """A bare ``KEY`` line (no ``=``) in the winning layer fails closed.
+
+    Compose treats a bare key in an env_file as unset/host-passthrough and
+    later files win, so the prod defaults are NOT the effective binding even
+    though they textually define the DSNs. The resolver must treat the bare
+    key as the winning (unverifiable) binding, not keep the earlier value.
+    """
+    _write_base_defaults(tmp_path)  # prod DSNs
+    _write_base_compose(tmp_path)
+    layer = tmp_path / "tmp" / "runtime.env"
+    layer.parent.mkdir(parents=True, exist_ok=True)
+    layer.write_text("DATABASE_URL\nDB_DSN\n", encoding="utf-8")
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when the winning env_file layer unsets "
+        "DATABASE_URL / DB_DSN via bare-key lines, but it passed."
+    )
+    assert "bare key" in result.summary()
+    assert "runtime.env" in result.summary()
+
+
+def test_bare_key_superseded_by_later_definition_resolves(tmp_path: Path) -> None:
+    """A later layer that redefines the key supersedes an earlier bare-key unset."""
+    _write_base_defaults(tmp_path)  # prod DSNs
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./unset.env
+              - ./final.env
+          worker:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./unset.env
+              - ./final.env
+          watcher:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./unset.env
+              - ./final.env
+        """,
+    )
+    (tmp_path / "unset.env").write_text("DATABASE_URL\nDB_DSN\n", encoding="utf-8")
+    (tmp_path / "final.env").write_text(
+        f"DATABASE_URL={PROD_DSN}\nDB_DSN={PROD_DSN}\n", encoding="utf-8"
+    )
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert result.ok, (
+        "Expected preflight to PASS when a later layer redefines the key after "
+        f"a bare-key unset, but got:\n{result.summary()}"
+    )
+
+
 def test_later_env_file_layer_wins_over_defaults(tmp_path: Path) -> None:
     """Declaration order matters: the later layer overrides earlier defaults.
 

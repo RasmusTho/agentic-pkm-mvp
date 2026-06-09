@@ -170,25 +170,36 @@ def _load_compose(path: Path) -> dict[str, Any]:
     return yaml.load(path.read_text(encoding="utf-8"), Loader=loader) or {}
 
 
-def _parse_env_file_text(text: str) -> dict[str, str]:
-    """Parse KEY=VALUE lines (comments and blanks ignored) from an env file."""
-    values: dict[str, str] = {}
+def _parse_env_file_text(text: str) -> dict[str, str | None]:
+    """Parse env-file lines (comments and blanks ignored).
+
+    ``KEY=VALUE`` defines the key. A bare ``KEY`` line (no ``=``) is compose's
+    unset/passthrough form: the variable is removed from earlier layers (or
+    resolved from the host environment at ``compose up`` time). It is parsed
+    as ``None`` so chain resolution can treat it as a *winning* unset binding
+    rather than silently keeping an earlier layer's value.
+    """
+    values: dict[str, str | None] = {}
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         key, sep, value = line.partition("=")
+        key = key.strip()
         if sep:
-            values[key.strip()] = value.strip()
+            values[key] = value.strip()
+        elif key:
+            values[key] = None
     return values
 
 
 def _load_dotenv(compose_dir: Path) -> dict[str, str]:
     """Load ``.env`` next to the compose files (compose interpolation defaults)."""
     try:
-        return _parse_env_file_text((compose_dir / ".env").read_text(encoding="utf-8"))
+        parsed = _parse_env_file_text((compose_dir / ".env").read_text(encoding="utf-8"))
     except OSError:
         return {}
+    return {key: value for key, value in parsed.items() if value is not None}
 
 
 def _make_var_lookup(
@@ -323,7 +334,11 @@ def _resolve_key_through_chain(
       compose treats it;
     - a layer that exists but cannot be read is unverifiable *unless a later
       readable layer defines the key* — in that case the later layer wins
-      regardless of the unreadable layer's contents.
+      regardless of the unreadable layer's contents;
+    - a bare ``KEY`` line (no ``=``) in the winning layer unsets the binding
+      or passes the host environment through at ``compose up`` time — for a
+      channel-critical key that is unverifiable at preflight time and fails
+      closed (a later layer that redefines the key still supersedes it).
     """
     value: str | None = None
     source: str | None = None
@@ -365,6 +380,15 @@ def _resolve_key_through_chain(
             pending_error = None  # later definition supersedes unreadable layers
     if pending_error is not None:
         return _ChainResolution(error=pending_error)
+    if source is not None and value is None:
+        return _ChainResolution(
+            error=(
+                f"env_file layer {source!r} unsets {key} (bare key, no '='): "
+                "compose drops the binding or passes the host environment "
+                "through at compose-up time — effective binding unverifiable "
+                "at preflight time"
+            )
+        )
     return _ChainResolution(value=value, source=source)
 
 
