@@ -595,11 +595,21 @@ def janitor_apply(
     for remote in plan["candidates"]["remote_branches"]:
         apply_git(["push", "origin", "--delete", remote["branch"]], {"artifact": "remote_branch", "action": "delete", **remote})
     for remote in plan["candidates"]["remote_branches_requiring_rescue"]:
+        errors_before_rescue = len(errors)
         apply_git(
             ["update-ref", remote["rescue_ref"], f"origin/{remote['branch']}"],
             {"artifact": "remote_branch", "action": "create_rescue_ref", **remote},
         )
-        if not errors or errors[-1].get("action") != "create_rescue_ref" or errors[-1].get("branch") != remote["branch"]:
+        rescue_created = len(errors) == errors_before_rescue
+        rescue_pushed = False
+        if rescue_created:
+            errors_before_push = len(errors)
+            apply_git(
+                ["push", "origin", f"{remote['rescue_ref']}:{remote['rescue_ref']}"],
+                {"artifact": "remote_branch", "action": "push_rescue_ref", **remote},
+            )
+            rescue_pushed = len(errors) == errors_before_push
+        if rescue_created and rescue_pushed:
             apply_git(["push", "origin", "--delete", remote["branch"]], {"artifact": "remote_branch", "action": "delete_after_rescue", **remote})
     for stash in plan["candidates"]["old_stashes"]:
         apply_git(["stash", "drop", stash["ref"]], {"artifact": "stash", "action": "drop", **stash})

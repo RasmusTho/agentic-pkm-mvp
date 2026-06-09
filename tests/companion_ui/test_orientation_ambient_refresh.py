@@ -197,3 +197,38 @@ def test_ambient_refresh_has_no_write_or_action_execution_path() -> None:
     assert "resurface.dismiss" not in html
     assert "resurface.snooze" not in html
     assert "resurface.pin" not in html
+
+
+def test_orientation_vault_entry_includes_browser_control_handlers() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_orientation_payload(),
+        vault_browser={
+            "notes": [
+                {
+                    "note_path": "Notes/resume.md",
+                    "title": "Resume plan",
+                    "kind": "source",
+                    "zone": "work",
+                    "review_state": "draft",
+                    "trust": "human",
+                }
+            ],
+            "query": "",
+            "total_notes": 1,
+            "filtered_notes": 1,
+            "read_only": True,
+            "identity_available": True,
+            "vault_identity": {
+                "vault_name": "vault-test",
+                "channel": "test",
+                "provenance": "test",
+            },
+        },
+    )
+
+    assert 'onclick="vaultBrowserToggleSelection(event, this)"' in html
+    assert 'onclick="vbToggleFilter(this)"' in html
+    assert "function vaultBrowserToggleSelection(event, control)" in html
+    assert "function vbToggleFilter(el)" in html
+    assert "method: 'POST'" not in html
