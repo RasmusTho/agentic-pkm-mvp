@@ -16,7 +16,7 @@ related_docs:
 
 State: Active specification with bounded implementation shipped behind `CANVAS_ENABLED`. Session logs, in-place body editing, governance-routing, and API/CLI session lifecycle landed via PRs #605/#618/#619/#626; owner-doc promotion now records the surface as materially supported while hybrid Panel/Chat behavior remains future work.
 Owner: v6.0 architecture owner
-Last reviewed: 2026-04-30
+Last reviewed: 2026-06-10
 
 # Canvas Chat Surface
 
@@ -195,3 +195,22 @@ Phase 4 acceptance (validated on the parent feature issue — **delivered**):
 - [x] A degraded/unavailable classifier falls through to the existing behavior (no regression, no fabricated routing); the body-frontmatter backstop remains.
 - [x] The gated-execution invariant and Panel-as-primary-command-surface posture hold; Core Runtime defaults unchanged.
 - [x] The UAT runbook §4 "Known limitation" note is replaced with a deterministic natural-language routing walkthrough.
+
+### Carried governance intent in routed proposal payloads (#1772)
+
+Routed governance handoffs no longer stage an empty proposal payload. Both routing paths on
+`/coauthor` thread the original natural-language request into the staged Panel proposal
+(`PanelActionMapping.params` on the proposal's action, and quoted in the proposal's human-facing
+instruction), so Panel review shows what the human actually asked for:
+
+- **Intent-classifier path** — payload carries `original_request`, `routed_via: "intent_classifier"`,
+  `intent_class`, `classified_action_type`, and the classifier rationale when one was produced.
+- **Defense-in-depth backstop path** (`GovernanceBearingMutationError` branches) — no classified
+  fields exist, so the payload carries `original_request` and
+  `routed_via: "body_frontmatter_backstop"` only; backstop payloads never fabricate classifier
+  fields.
+
+Authority is unchanged: the carried payload is proposal-class context for human review/execution.
+Nothing auto-executes from intent text — WriteGuard and the explicit `POST /api/panel/confirm`
+confirmation path are untouched, and the explicit `/governance` endpoint continues to pass the
+caller-supplied payload through unchanged.

@@ -27,7 +27,11 @@ from app.services.artifact_identity import resolve_note_artifact_identity
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError, _split_frontmatter
 from app.chat.coauthoring_cognition import CoAuthoringCognition, CoAuthoringUnavailableError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
-from app.chat.intent_classifier import IntentClass, IntentClassifierCognition
+from app.chat.intent_classifier import (
+    IntentClass,
+    IntentClassification,
+    IntentClassifierCognition,
+)
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.config.paths import resolve_vault_root
 from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
@@ -325,10 +329,45 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
     return EditResponse(session_id=session_id, ok=True)
 
 
+def _governance_intent_payload(
+    original_request: str,
+    classification: IntentClassification | None,
+) -> dict[str, Any]:
+    """Build the proposal payload carrying the original governance intent (#1772).
+
+    The payload is proposal-class context for human review/execution in the
+    gated Panel pipeline — it never authorizes auto-execution. Every routed
+    handoff carries at least the original natural-language request text:
+
+    - ``intent_classifier`` path: adds the classified fields
+      (``intent_class``, ``classified_action_type``, and the classifier
+      rationale when one was produced).
+    - ``body_frontmatter_backstop`` path (the defense-in-depth
+      ``GovernanceBearingMutationError`` branches): no classified fields exist
+      — the classifier labeled the intent co-authoring or was degraded — so
+      only the original request text and the routing marker are supplied.
+      Backstop payloads never fabricate classifier fields.
+    """
+    payload: dict[str, Any] = {"original_request": original_request.strip()}
+    if classification is None:
+        payload["routed_via"] = "body_frontmatter_backstop"
+        return payload
+    payload["routed_via"] = "intent_classifier"
+    payload["intent_class"] = classification.intent_class.value
+    if classification.action_type is not None:
+        payload["classified_action_type"] = classification.action_type.value
+    if classification.rationale:
+        payload["classifier_rationale"] = classification.rationale
+    return payload
+
+
 def _route_governance_bearing(
     session: SessionLog,
     vault_root: Path,
     action_type: GovernanceActionType = GovernanceActionType.FRONTMATTER_UPDATE,
+    *,
+    original_request: str,
+    classification: IntentClassification | None = None,
 ) -> GovernanceHandoffRef:
     """Route a governance-bearing co-authoring generation to the Panel pipeline.
 
@@ -341,6 +380,13 @@ def _route_governance_bearing(
     giving the correct ``GovernanceActionType`` to the Panel pipeline. When called
     from the defense-in-depth ``except GovernanceBearingMutationError`` branches
     the default ``FRONTMATTER_UPDATE`` is kept as the conservative backstop.
+
+    ``original_request`` (the user's natural-language intent) and the
+    ``classification`` (when the intent classifier routed) are threaded into the
+    staged proposal payload via :func:`_governance_intent_payload` so Panel
+    review shows what the human actually asked for. This is proposal-class
+    context only — execution authority is unchanged and stays behind the
+    explicit Panel confirmation path.
 
     Returns a :class:`GovernanceHandoffRef` carrying the staged Panel
     ``intent_id`` and ``action_type`` so the caller can surface a structured
@@ -369,7 +415,11 @@ def _route_governance_bearing(
         note_path=safe_note_path,
     )
     gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
-    pending = gov.request_governance_action(session, action_type, {})
+    pending = gov.request_governance_action(
+        session,
+        action_type,
+        _governance_intent_payload(original_request, classification),
+    )
     return GovernanceHandoffRef(
         intent_id=pending.intent_id,
         action_type=pending.action_type.value,
@@ -407,7 +457,15 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
         # generate a body; route straight to the gated Panel pipeline with the
         # classified action_type. The note is never touched.
         action_type = classification.action_type or GovernanceActionType.FRONTMATTER_UPDATE
-        return _handoff_response(_route_governance_bearing(session, vault_root, action_type))
+        return _handoff_response(
+            _route_governance_bearing(
+                session,
+                vault_root,
+                action_type,
+                original_request=req.intent,
+                classification=classification,
+            )
+        )
 
     if classification.classified and classification.intent_class is IntentClass.EXPLORATORY:
         # Exploratory intent is read-only: no generation, no write, note unchanged.
@@ -430,8 +488,12 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
         # Defense in depth: generation produced a frontmatter/governance-bearing
         # body (the intent-path classifier is the primary gate; this backstop
         # fires when a CO_AUTHORING-classified or degraded generation slips
-        # frontmatter through). Route with the default FRONTMATTER_UPDATE.
-        return _handoff_response(_route_governance_bearing(session, vault_root))
+        # frontmatter through). Route with the default FRONTMATTER_UPDATE; the
+        # payload carries at least the original request text (no classified
+        # fields exist on this path).
+        return _handoff_response(
+            _route_governance_bearing(session, vault_root, original_request=req.intent)
+        )
     except CoAuthoringUnavailableError as exc:
         # No edit-capable provider produced a usable body (mock/degraded
         # backend or failed run). Leave the note unchanged; do not write
@@ -448,8 +510,11 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
         writer.apply_edit(session, generated.body, change_summary)
     except GovernanceBearingMutationError:
         # Defense in depth: the writer caught a governance-bearing body the
-        # cognition let through. Route with default FRONTMATTER_UPDATE.
-        return _handoff_response(_route_governance_bearing(session, vault_root))
+        # cognition let through. Route with default FRONTMATTER_UPDATE; the
+        # payload carries at least the original request text.
+        return _handoff_response(
+            _route_governance_bearing(session, vault_root, original_request=req.intent)
+        )
 
     body_after = _note_body(session.note_path)
     _edit_history.setdefault(session_id, []).append(
