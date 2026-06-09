@@ -208,6 +208,43 @@ def test_tts_runtime_status_reports_provider_availability_without_models(
     assert providers["en-GB"]["voice_id"] == "bf_emma"
 
 
+def test_tts_runtime_status_does_not_create_missing_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_dir = tmp_path / "missing-models"
+    cache_dir = tmp_path / "missing-cache"
+    log_dir = tmp_path / "missing-logs"
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_LOCAL_ONLY", "true")
+    monkeypatch.setenv("TTS_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("TTS_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("TTS_LOG_DIR", str(log_dir))
+    monkeypatch.setenv("TTS_ALLOW_BROWSER_FALLBACK", "false")
+    monkeypatch.setenv("TTS_ALLOW_CLOUD_FALLBACK", "false")
+
+    resp = TestClient(app).get("/api/companion/tts/status")
+
+    assert resp.status_code == 200
+    assert not model_dir.exists()
+    assert not cache_dir.exists()
+    assert not (cache_dir / "audio").exists()
+    assert not (cache_dir / "plans").exists()
+    assert not log_dir.exists()
+    assert sorted(path.name for path in tmp_path.iterdir()) == []
+
+    paths = resp.json()["paths"]
+    assert paths["model_dir"]["exists"] is False
+    assert paths["cache_dir"]["exists"] is False
+    assert paths["audio_cache_dir"]["exists"] is False
+    assert paths["plan_cache_dir"]["exists"] is False
+    assert paths["log_dir"]["exists"] is False
+    # Missing paths under a writable parent still report as writable
+    # without the endpoint creating directories or probe files.
+    assert paths["cache_dir"]["writable"] is True
+    assert paths["cache_dir"]["outside_repo"] is True
+
+
 def test_tts_synthesize_reuses_cache_after_lru_cleanup(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

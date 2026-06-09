@@ -5,7 +5,7 @@ Owner: Companion UI / runtime integration
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code + local runtime setup
-Last reviewed: 2026-06-08
+Last reviewed: 2026-06-09
 Last verified against: `app/tts/**`, `tests/tts/test_tts_planning.py`, `tests/tts/test_tts_cache.py`, `tests/api/test_companion_tts_api.py`, `tests/companion_ui/test_tts_readback.py`
 
 # Local-First TTS Contract
@@ -43,6 +43,11 @@ whether those paths are outside the repo, provider/model availability for Piper 
 `en-US` / `en-GB`, cache size/eviction policy, path writability, and the Mac mini operator receipt
 path. The receipt path records runtime path/config evidence only; generated audio remains in the
 cache and must not be written to the repo.
+
+The status endpoint is strictly read-only: it never creates model/cache/log directories or probe
+files to answer a request. Path writability is observational — for a missing path it reports
+whether the nearest existing ancestor directory is writable; directories are only created by
+write-side flows (plan persistence, synthesis, logging).
 
 ## Required Local Environment
 

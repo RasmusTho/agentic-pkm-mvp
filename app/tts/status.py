@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -10,14 +11,23 @@ from app.tts.providers import resolve_voice
 
 
 def _writable(path: Path) -> bool:
+    """Report whether ``path`` appears writable without mutating the filesystem.
+
+    The status endpoint is a read surface: it must not create directories or
+    probe files just to answer the request. For a missing path this walks up
+    to the nearest existing ancestor and reports whether that ancestor is
+    writable (i.e. the path could be created later by a write-side flow).
+    """
     try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe = path / ".tts-write-probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
+        probe = path.resolve()
+        while not probe.exists():
+            parent = probe.parent
+            if parent == probe:
+                return False
+            probe = parent
+        return os.access(probe, os.W_OK)
     except OSError:
         return False
-    return True
 
 
 def _path_status(path: Path) -> dict[str, Any]:
