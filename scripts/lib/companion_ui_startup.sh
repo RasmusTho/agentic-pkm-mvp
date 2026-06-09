@@ -255,7 +255,10 @@ cui_start_ui() {
   mkdir -p "${root}/tmp"
   py="$(cui_python_bin)" || cui_die "no usable python interpreter found for Companion UI server"
 
-  if [ "${CUI_BIND_LAN:-1}" = "0" ]; then
+  if [ -n "${HOST:-}" ]; then
+    host="${HOST}"
+    cui_log "binding UI to ${host} (HOST explicitly set)"
+  elif [ "${CUI_BIND_LAN:-1}" = "0" ]; then
     host="127.0.0.1"
     cui_log "binding UI to 127.0.0.1 (loopback-only explicitly requested)"
   else
