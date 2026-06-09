@@ -1,14 +1,21 @@
-"""Read-only real-note workspace shell (#1064).
+"""Real-note workspace shell with a server-gated Canvas co-authoring region.
 
 Renders an actual vault note/artifact payload as received from the
 workspace aggregate artifact block. Note body is the primary surface;
 a reserved secondary slot holds Panel/agent state without requiring Panel data.
 
+The base note view stays read-only. A distinct Canvas co-authoring region
+(#1717, CANVAS_CHAT_SURFACE/SURFACE_CANVAS_IN_COMPANION_UI) becomes reachable
+only when the server-declared ``canvas_enabled`` guard is true; otherwise it
+renders an inert disabled state with no mutation affordance. Server declares,
+UI renders: this module composes no body locally and never writes the vault —
+it only stores and renders bodies the server already applied.
+
 This module does NOT:
 - read or write vault files directly
-- call runtime APIs or Panel confirmation
-- render Canvas body-edit controls or bounded suggestion flow
-- implement mutation controls of any kind
+- call runtime APIs (the HTTP client owns transport; this is the render model)
+- compose a note body locally or stage a local edit
+- render mutation affordances when ``canvas_enabled`` is false
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from typing import Optional
 REGION_NOTE_BODY = "workspace-note-body"       # primary surface
 REGION_NOTE_HEADER = "workspace-note-header"   # title / path / identity strip
 REGION_AGENT_RAIL = "workspace-agent-rail"     # secondary slot: Panel / agent state
+REGION_CANVAS_COAUTHOR = "workspace-canvas-coauthor"  # server-gated co-authoring
 
 
 @dataclass
@@ -39,6 +47,58 @@ class ArtifactNotePayload:
 
 
 @dataclass
+class CanvasCoAuthorRegion:
+    """Render model for the server-gated Canvas co-authoring region.
+
+    The region is reachable only when the server declares ``canvas_enabled``.
+    When disabled it exposes no intent input, no undo affordance, and no
+    mutation affordances at all. Server declares, UI renders: this model never
+    composes a body locally — ``render_applied_edit`` stores verbatim what the
+    server already applied, and a governance-bearing response (HTTP 409) is
+    surfaced as routed-to-Panel rather than as an applied edit.
+    """
+
+    enabled: bool = False
+    applied_body: Optional[str] = field(default=None)
+    change_summary: Optional[str] = field(default=None)
+    is_panel_routed: bool = field(default=False)
+
+    @property
+    def has_intent_input(self) -> bool:
+        return self.enabled
+
+    @property
+    def has_undo_affordance(self) -> bool:
+        return self.enabled
+
+    @property
+    def mutation_affordances(self) -> list[str]:
+        """Affordance ids exposed by this region; empty unless enabled."""
+        if not self.enabled:
+            return []
+        return ["canvas-intent-input", "canvas-undo"]
+
+    def render_applied_edit(self, *, applied_body: str, change_summary: str) -> None:
+        """Store a server-applied edit for rendering (verbatim, no composition)."""
+        self.applied_body = applied_body
+        self.change_summary = change_summary
+        self.is_panel_routed = False
+
+    def handle_coauthor_error(self, error: "object") -> None:
+        """Surface a governance-bearing (HTTP 409) response as routed-to-Panel.
+
+        A 409 means the runtime classified the intent as governance-bearing and
+        routed it through the gated pipeline; it is not an applied edit, so any
+        previously rendered edit state is cleared.
+        """
+        status_code = getattr(error, "status_code", None)
+        if status_code == 409:
+            self.is_panel_routed = True
+            self.applied_body = None
+            self.change_summary = None
+
+
+@dataclass
 class RealNoteWorkspaceShell:
     """Model contract for the read-only real-note workspace shell.
 
@@ -54,10 +114,14 @@ class RealNoteWorkspaceShell:
     payload: ArtifactNotePayload
     # Optional Panel/agent state to display in the secondary rail slot.
     agent_rail_state: Optional[str] = field(default=None)
+    # Server-declared guard for the Canvas co-authoring region. The UI never
+    # infers this locally; it mirrors guards.canvas_enabled from the runtime.
+    canvas_enabled: bool = field(default=False)
 
     def __post_init__(self) -> None:
         if not self.payload.artifact_id:
             raise ValueError("artifact_id is required in workspace shell payload")
+        self._canvas_region = CanvasCoAuthorRegion(enabled=self.canvas_enabled)
 
     # ------------------------------------------------------------------
     # Layout / region contract
@@ -65,16 +129,36 @@ class RealNoteWorkspaceShell:
 
     @property
     def regions(self) -> dict[str, str]:
-        return {
+        layout = {
             REGION_NOTE_BODY:   "primary",
             REGION_NOTE_HEADER: "header",
             REGION_AGENT_RAIL:  "secondary",
         }
+        # The co-authoring region only takes layout space when the server
+        # declares it enabled; otherwise it renders as an inert disabled state
+        # and is not part of the active layout.
+        if self.canvas_enabled:
+            layout[REGION_CANVAS_COAUTHOR] = "canvas"
+        return layout
 
     def region_role(self, region: str) -> str:
         if region not in self.regions:
             raise KeyError(f"Unknown workspace layout region: {region!r}")
         return self.regions[region]
+
+    # ------------------------------------------------------------------
+    # Canvas co-authoring region (server-gated)
+    # ------------------------------------------------------------------
+
+    @property
+    def canvas_region(self) -> CanvasCoAuthorRegion:
+        """Server-gated Canvas co-authoring render model.
+
+        Always present as a render model; ``enabled`` reflects the
+        server-declared ``canvas_enabled`` guard. When disabled it exposes no
+        mutation affordances.
+        """
+        return self._canvas_region
 
     # ------------------------------------------------------------------
     # Identity / content accessors
