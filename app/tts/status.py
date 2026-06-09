@@ -15,8 +15,10 @@ def _writable(path: Path) -> bool:
 
     The status endpoint is a read surface: it must not create directories or
     probe files just to answer the request. For a missing path this walks up
-    to the nearest existing ancestor and reports whether that ancestor is
-    writable (i.e. the path could be created later by a write-side flow).
+    to the nearest existing ancestor and reports whether that ancestor is a
+    directory the process can create entries in (i.e. the path could be
+    created later by a write-side flow). A nearest existing node that is a
+    regular file blocks creation, so it reports not writable.
     """
     try:
         probe = path.resolve()
@@ -25,7 +27,7 @@ def _writable(path: Path) -> bool:
             if parent == probe:
                 return False
             probe = parent
-        return os.access(probe, os.W_OK)
+        return probe.is_dir() and os.access(probe, os.W_OK | os.X_OK)
     except OSError:
         return False
 

@@ -245,6 +245,33 @@ def test_tts_runtime_status_does_not_create_missing_paths(
     assert paths["cache_dir"]["outside_repo"] is True
 
 
+def test_tts_runtime_status_reports_file_blocked_path_not_writable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    cache_dir = blocker / "cache"
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_LOCAL_ONLY", "true")
+    monkeypatch.setenv("TTS_MODEL_DIR", str(tmp_path / "missing-models"))
+    monkeypatch.setenv("TTS_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("TTS_LOG_DIR", str(tmp_path / "missing-logs"))
+    monkeypatch.setenv("TTS_ALLOW_BROWSER_FALLBACK", "false")
+    monkeypatch.setenv("TTS_ALLOW_CLOUD_FALLBACK", "false")
+
+    resp = TestClient(app).get("/api/companion/tts/status")
+
+    assert resp.status_code == 200
+    # The nearest existing node is a regular file, so write-side mkdir flows
+    # would fail with NotADirectoryError; the path must not report writable.
+    paths = resp.json()["paths"]
+    assert paths["cache_dir"]["exists"] is False
+    assert paths["cache_dir"]["writable"] is False
+    # And the status read must not have touched the blocking file.
+    assert blocker.read_text(encoding="utf-8") == "not a directory"
+
+
 def test_tts_synthesize_reuses_cache_after_lru_cleanup(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
