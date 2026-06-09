@@ -38,6 +38,19 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 - Keep current-state docs honest. Do not write future-state intent as shipped reality.
 - If the task starts affecting implementation or delivered behavior, stop using this lane and switch back to the normal Issue-first implementation workflow.
 
+## Publication discipline
+
+- Route branch / commit / push / PR actions through `.codex/skills/publish-pr/SKILL.md` — do not run an ad hoc commit/push from this lane. `publish-pr` owns the branch-truth gate.
+- Branch-truth gate (mandatory) [branch-truth-gate]: prefer a dedicated worktree, and before commit and before push run the hardened preflight so a concurrent agent switching the shared root worktree's branch cannot land your docs commit on the wrong branch:
+
+  ```bash
+  scripts/agent_workspace_preflight.sh \
+    --expected-branch "$EXPECTED_BRANCH" \
+    --expected-worktree "$EXPECTED_WORKTREE" \
+    --allow-dirty
+  # Non-zero exit => workspace drifted. STOP, switch to the correct worktree, do not commit/push.
+  ```
+
 ## Output posture
 
 - Treat this skill as a routing guide, not a second policy surface.

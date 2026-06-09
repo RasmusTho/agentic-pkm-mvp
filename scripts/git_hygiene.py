@@ -164,6 +164,7 @@ def preflight_report(
     active_leases: list[dict[str, Any]] | None = None,
     resource_ids: set[str] | None = None,
     execution_id: str | None = None,
+    allow_dirty: bool = False,
     now: float | None = None,
 ) -> dict[str, Any]:
     active_leases = active_leases or []
@@ -177,6 +178,7 @@ def preflight_report(
 
     checks = {
         "dirty_tree": bool(status),
+        "dirty_tree_enforced": not allow_dirty,
         "in_progress_operations": operations,
         "branch": branch,
         "branch_mismatch": bool(expected_branch and branch != expected_branch),
@@ -188,7 +190,7 @@ def preflight_report(
         "lease_conflicts": conflicts,
     }
     ok = not (
-        checks["dirty_tree"]
+        (checks["dirty_tree"] and not allow_dirty)
         or checks["in_progress_operations"]
         or checks["branch_mismatch"]
         or checks["worktree_mismatch"]
@@ -629,6 +631,12 @@ def main(argv: list[str] | None = None) -> int:
     preflight.add_argument("--base-branch")
     preflight.add_argument("--resource-id", action="append", default=[])
     preflight.add_argument("--execution-id")
+    preflight.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Do not fail on a dirty working tree (use at the publish boundary, "
+        "where uncommitted work is expected; branch/worktree drift still fails)",
+    )
 
     janitor = subparsers.add_parser("janitor")
     janitor.add_argument("--stale-after-days", type=int, default=14)
@@ -649,6 +657,7 @@ def main(argv: list[str] | None = None) -> int:
             active_leases=leases,
             resource_ids=set(args.resource_id),
             execution_id=args.execution_id,
+            allow_dirty=args.allow_dirty,
         )
         _print_json(report)
         return 0 if report["ok"] else 1
