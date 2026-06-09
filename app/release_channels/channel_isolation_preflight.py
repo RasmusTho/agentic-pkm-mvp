@@ -51,6 +51,16 @@ CHANNEL_SPECS: dict[str, dict[str, Any]] = {
 #: Services inside a compose overlay that carry channel env vars.
 CHANNEL_SERVICES = ("api", "worker", "watcher")
 
+#: DSN that channel-critical services inherit from the base compose env_file
+#: (``config/runtime.defaults.env``) when an overlay omits DATABASE_URL/DB_DSN.
+#: Compose layering applies the base env_file *under* the overlay, so an omitted
+#: key resolves to this value. It targets the prod ``app`` database, so omitting
+#: the key is only a cross-channel leak for channels whose binding this fallback
+#: does NOT already satisfy (e.g. ``test``, which requires ``app_test``). For the
+#: prod channel the fallback is correct, so omission there is valid and must not
+#: be flagged. Keep this in sync with ``config/runtime.defaults.env``.
+_BASE_ENVFILE_DSN_FALLBACK = "postgresql+psycopg://app:app@db:5432/app"
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -227,18 +237,32 @@ def _check_db_dsn(
         dsn = env.get(key)
 
         if dsn is None:
-            # Key is absent from the overlay.  Fail closed: if this service is
-            # present in the overlay (has any env keys), the omitted DSN can
-            # resolve to the wrong channel via the base compose env_file.
+            # Key is absent from the overlay. The effective value after compose
+            # layering falls back to the base env_file default. Fail closed only
+            # when that fallback would land on the WRONG channel — i.e. it does
+            # not satisfy this channel's required fragment, or it matches this
+            # channel's banned fragments. This is what makes a test overlay that
+            # silently inherits the prod 'app' DSN a violation, while leaving a
+            # valid prod overlay (which intentionally inherits 'app') passing.
             if db_fragment:
-                result.violations.append(
-                    BindingViolation(
-                        service=svc_name,
-                        field=key,
-                        expected=f"DSN containing {db_fragment!r} (key must be explicit in overlay)",
-                        actual=None,
-                    )
+                banned_pattern = spec.get("db_name_fragment_banned")
+                fallback_is_wrong_channel = (
+                    db_fragment not in _BASE_ENVFILE_DSN_FALLBACK
+                    or bool(banned_pattern and banned_pattern.search(_BASE_ENVFILE_DSN_FALLBACK))
                 )
+                if fallback_is_wrong_channel:
+                    result.violations.append(
+                        BindingViolation(
+                            service=svc_name,
+                            field=key,
+                            expected=(
+                                f"DSN containing {db_fragment!r} (key must be explicit in "
+                                f"overlay; base env_file falls back to "
+                                f"{_BASE_ENVFILE_DSN_FALLBACK!r}, the wrong channel)"
+                            ),
+                            actual=None,
+                        )
+                    )
             continue
 
         if db_fragment and db_fragment not in dsn:

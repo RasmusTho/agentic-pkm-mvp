@@ -37,6 +37,7 @@ from app.release_channels.channel_isolation_preflight import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
+PROD_COMPOSE = REPO_ROOT / "docker-compose.prod.yml"
 
 
 def _write_compose(tmp_path: Path, content: str) -> Path:
@@ -614,4 +615,49 @@ def test_correctly_declared_test_dsn_still_passes(tmp_path: Path) -> None:
     assert result.ok, (
         "Expected PASS for a correctly declared test-channel overlay, "
         f"but got violations:\n{result.summary()}"
+    )
+
+
+def test_omitted_dsn_in_prod_overlay_is_accepted(tmp_path: Path) -> None:
+    """A prod overlay that omits DATABASE_URL / DB_DSN must PASS the preflight.
+
+    Regression guard (PR #1761 Codex P2): the fail-closed omitted-key rule must
+    only fire when the base env_file fallback lands on the WRONG channel. For the
+    prod channel the base default already targets the 'app' database, so a prod
+    overlay that intentionally inherits the DSN (declaring only, e.g.,
+    API_HEALTHCHECK_URL) is valid and must not be rejected.
+    """
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: prod
+              API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "prod")
+
+    assert result.ok, (
+        "Expected PASS for a prod overlay that omits DSN keys — the base "
+        "env_file fallback ('app') is the correct prod DB, so omission is not a "
+        "cross-channel leak.  Got:\n" + result.summary()
+    )
+
+
+def test_real_prod_compose_passes_preflight() -> None:
+    """The committed docker-compose.prod.yml must pass the prod channel preflight.
+
+    Companion regression guard to test_real_test_compose_passes_preflight: the
+    canonical prod overlay overrides only API_HEALTHCHECK_URL and inherits the
+    'app' DSN from config/runtime.defaults.env, which is correct for prod. The
+    fail-closed omitted-key rule must not regress this valid overlay.
+    """
+    result = check_compose_channel_isolation(PROD_COMPOSE, "prod")
+
+    assert result.ok, (
+        "docker-compose.prod.yml does not satisfy the prod-channel isolation "
+        f"preflight.\n\n{result.summary()}"
     )
