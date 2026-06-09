@@ -61,11 +61,18 @@ python -m app.cli health status --json     # expect state running/catch_up, writ
 
 **Companion UI dev shell (port 8111):**
 
+The `companion_ui` package lives under `companion-ui/companion-app/` (it is **not** part of the repo
+root package set in `pyproject.toml`), so run the module from that directory — otherwise
+`python -m companion_ui.workspace.serve_dev_page` fails with `ModuleNotFoundError`:
+
 ```bash
+cd companion-ui/companion-app
 COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=127.0.0.1 PORT=8111 \
-  .venv/bin/python -m companion_ui.workspace.serve_dev_page
+  python -m companion_ui.workspace.serve_dev_page
 # open http://127.0.0.1:8111/
 ```
+
+(Equivalently, from the repo root, prefix with `PYTHONPATH=companion-ui/companion-app`.)
 
 Confirm the banner prints `DEV/STAGING ONLY` and `Runtime API: http://127.0.0.1:18001`.
 
@@ -90,11 +97,28 @@ region is inert when the flag is off.
 
 ## 4) Live UAT — Phase 3 governance handoff loop
 
-1. With `CANVAS_ENABLED=1`, enter a **governance-bearing** intent (e.g. "promote this note to
-   evergreen" / a frontmatter/maturity change).
-   - Expect: `POST /coauthor` returns **HTTP 409** with body
-     `{ "status":"routed_to_panel", "intent_id":"…", "action_type":"…" }`. The note body is **not**
-     changed.
+> **Trigger note (deterministic).** The `/coauthor` path only routes to Panel when the *generated
+> body* contains a frontmatter block (`GovernanceBearingMutationError`). The co-authoring prompt
+> deliberately tells the provider **not** to emit frontmatter, so a natural intent like "promote this
+> note to evergreen" is **not** a reliable live trigger — a compliant provider will usually return an
+> ordinary body edit. The `/coauthor` governance branch is covered deterministically by the automated
+> tests (`tests/api/test_canvas_governance_handoff.py`). For the **live** Phase 3 walkthrough, trigger
+> the handoff explicitly through the governance endpoint, which stages the same `GovernanceRouter`
+> path deterministically. (See the "known limitation" note at the end of this section.)
+
+1. With an active session (`POST /api/canvas/sessions` → note the `session_id`) and `CANVAS_ENABLED=1`,
+   stage a governance-bearing action explicitly:
+
+   ```bash
+   curl -s -X POST "http://127.0.0.1:18001/api/canvas/sessions/<session_id>/governance" \
+     -H 'Content-Type: application/json' \
+     -d '{"action_type":"maturity_transition","payload":{"to":"evergreen"}}'
+   # -> 200 {"intent_id":"…","session_id":"…","artifact_id":"…",
+   #         "action_type":"maturity_transition","status":"routed_to_panel"}
+   ```
+
+   The note body is **not** changed; execution stays in the gated Panel pipeline. (In the UI, the
+   equivalent canvas-region affordance is wired to the same path.) Note the returned `intent_id`.
 2. Confirm the canvas region shows a read-only **"view in Panel"** affordance
    (`data-testid="workspace-canvas-view-in-panel"`, `data-intent-id` = the returned `intent_id`).
 3. In the **Panel rail**, confirm the matching proposal appears with the server-declared canvas-origin
@@ -108,6 +132,14 @@ region is inert when the flag is off.
 Pass criteria: a governance-bearing intent never mutates the note directly, is navigable from the
 canvas region to a canvas-origin Panel proposal, confirms through the gated path, and its outcome is
 reflected back read-only.
+
+> **Known limitation (capability, not runbook).** Via `/coauthor`, "governance-bearing" is currently
+> detected by whether the *generated body* contains a frontmatter block — not by classifying the
+> *intent* semantically. Because the co-authoring prompt instructs the provider to avoid frontmatter,
+> a semantically governance-bearing intent (e.g. promote maturity) will often produce an ordinary body
+> edit instead of routing to Panel. The explicit `/governance` path above is the deterministic route.
+> Closing this gap (intent-level governance classification on the `/coauthor` path) is a candidate
+> follow-up; raise a bounded issue before relying on natural-language governance routing in the UI.
 
 ## 5) Negative / safety checks
 
