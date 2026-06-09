@@ -203,7 +203,7 @@ def test_orientation_vault_entry_includes_browser_control_handlers() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         orientation=_orientation_payload(),
-        vault_browser={
+        orientation_vault_browser={
             "notes": [
                 {
                     "note_path": "Notes/resume.md",
