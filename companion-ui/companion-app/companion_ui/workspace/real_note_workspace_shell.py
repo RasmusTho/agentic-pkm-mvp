@@ -65,6 +65,14 @@ class CanvasCoAuthorRegion:
     affordance keyed to ``intent_id`` so the user can correlate the canvas
     intent with the staged Panel proposal. It never synthesizes a proposal or
     infers governance locally — correlation is by server-declared fields only.
+
+    Once the staged Panel proposal executes (CHAT-PANEL-HANDOFF-03) and a durable
+    receipt exists, ``reflect_receipt`` mirrors that server-declared receipt
+    posture (outcome, receipt id/visibility) back into the canvas region keyed by
+    ``handoff_intent_id`` — read-only. The region invents no receipt and infers
+    no success: if the server projection holds no matching receipt it surfaces a
+    pending posture exactly as declared, and a server-declared blocked posture is
+    reflected verbatim rather than read as success.
     """
 
     enabled: bool = False
@@ -75,6 +83,10 @@ class CanvasCoAuthorRegion:
     # 409 body. Both remain None until a structured handoff response arrives.
     handoff_intent_id: Optional[str] = field(default=None)
     handoff_action_type: Optional[str] = field(default=None)
+    # Server-declared receipt posture reflected back into the canvas region,
+    # correlated by ``handoff_intent_id``. None until ``reflect_receipt`` runs
+    # against a canvas-originated proposal.
+    reflected_receipt: Optional[dict[str, Optional[str]]] = field(default=None)
 
     @property
     def has_intent_input(self) -> bool:
@@ -111,14 +123,82 @@ class CanvasCoAuthorRegion:
     def has_view_in_panel_affordance(self) -> bool:
         return self.view_in_panel_affordance is not None
 
+    @property
+    def has_reflected_receipt(self) -> bool:
+        """True only when a durable, server-declared receipt is reflected.
+
+        A pending or blocked posture is NOT a visible durable receipt; the UI
+        must not read either as success.
+        """
+        return (
+            self.reflected_receipt is not None
+            and self.reflected_receipt.get("state") == "receipt_visible"
+        )
+
+    def reflect_receipt(
+        self,
+        *,
+        receipt_projection: dict[str, dict[str, Any]],
+        proposal_origin: Optional[str],
+    ) -> None:
+        """Reflect the server-declared receipt posture into the canvas region.
+
+        Closes the hybrid loop (CHAT-PANEL-HANDOFF-03): once the canvas-originated
+        Panel proposal executes and a durable receipt exists, mirror that receipt
+        posture back into the originating context — read-only, server-declared.
+
+        Correlation is strictly by the server-provided ``handoff_intent_id``
+        captured from the governance-bearing 409. ``receipt_projection`` is the
+        existing receipt-visibility projection (``panel.receipts`` /
+        ``receipt_visibility`` from ``app/panel/confirmation.py``) keyed by
+        ``intent_id``. Reflection only applies to a canvas-originated proposal
+        (``proposal_origin == "canvas_coauthoring"``); other origins are left
+        untouched. Nothing is invented:
+
+        - no ``handoff_intent_id`` (no server reference) -> no reflection.
+        - non-canvas ``proposal_origin`` -> no reflection.
+        - intent_id present but no matching receipt in the projection -> a
+          ``pending`` posture (correlated, but no durable receipt yet).
+        - matching receipt with a non-blocked visibility -> ``receipt_visible``.
+        - matching receipt the server declares blocked -> ``blocked`` posture
+          (reflected verbatim, never read as success).
+        """
+        if not self.handoff_intent_id or proposal_origin != "canvas_coauthoring":
+            self.reflected_receipt = None
+            return
+
+        record = receipt_projection.get(self.handoff_intent_id)
+        if not isinstance(record, dict):
+            # Correlated by intent_id but the server holds no durable receipt yet.
+            self.reflected_receipt = _pending_receipt_posture(self.handoff_intent_id)
+            return
+
+        outcome = record.get("outcome")
+        receipt_id = record.get("receipt_id") or None
+        visibility = record.get("receipt_visibility") or None
+        state = _receipt_state_for(visibility=visibility, outcome=outcome)
+        self.reflected_receipt = {
+            "intent_id": self.handoff_intent_id,
+            "outcome": outcome if isinstance(outcome, str) and outcome else None,
+            "receipt_id": receipt_id if isinstance(receipt_id, str) else None,
+            "receipt_visibility": (
+                visibility if isinstance(visibility, str) else None
+            ),
+            "state": state,
+            "affordance_status": "read-only",
+            "authority_role": "server_declared",
+        }
+
     def render_applied_edit(self, *, applied_body: str, change_summary: str) -> None:
         """Store a server-applied edit for rendering (verbatim, no composition)."""
         self.applied_body = applied_body
         self.change_summary = change_summary
         self.is_panel_routed = False
-        # An applied edit supersedes any prior panel-routed handoff reference.
+        # An applied edit supersedes any prior panel-routed handoff reference
+        # and its reflected receipt posture.
         self.handoff_intent_id = None
         self.handoff_action_type = None
+        self.reflected_receipt = None
 
     def handle_coauthor_error(self, error: "object") -> None:
         """Surface a governance-bearing (HTTP 409) response as routed-to-Panel.
@@ -175,6 +255,40 @@ def _parse_handoff_reference(detail: Any) -> tuple[Optional[str], Optional[str]]
         intent_id if isinstance(intent_id, str) and intent_id else None,
         action_type if isinstance(action_type, str) and action_type else None,
     )
+
+
+def _pending_receipt_posture(intent_id: str) -> dict[str, Optional[str]]:
+    """A pending posture: correlated by intent_id, but no durable receipt yet.
+
+    Invents nothing — outcome/receipt fields stay ``None`` until the server
+    projection carries a durable receipt for this ``intent_id``.
+    """
+    return {
+        "intent_id": intent_id,
+        "outcome": None,
+        "receipt_id": None,
+        "receipt_visibility": None,
+        "state": "pending",
+        "affordance_status": "read-only",
+        "authority_role": "server_declared",
+    }
+
+
+def _receipt_state_for(*, visibility: Optional[Any], outcome: Optional[Any]) -> str:
+    """Derive the reflected-receipt state from server-declared fields only.
+
+    Mirrors the receipt-visibility semantics of ``app/panel/confirmation.py``:
+    a ``blocked_no_durable_receipt`` / ``none_*`` visibility (or a ``blocked``/
+    ``rejected`` outcome) is reflected as a non-durable posture, never inferred
+    as success. Anything the server marks durable surfaces as ``receipt_visible``.
+    """
+    vis = visibility if isinstance(visibility, str) else ""
+    out = outcome if isinstance(outcome, str) else ""
+    if vis.startswith("blocked") or out in ("blocked", "rejected"):
+        return "blocked"
+    if vis.startswith("none") or out in ("", "none"):
+        return "pending"
+    return "receipt_visible"
 
 
 @dataclass
