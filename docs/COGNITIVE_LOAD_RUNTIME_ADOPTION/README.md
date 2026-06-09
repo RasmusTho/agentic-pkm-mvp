@@ -11,8 +11,9 @@ related_docs:
   - companion-ui/docs/WORKSPACE_STATE_CONTRACT.md
 ---
 
-State: Filed specification for open parent feature issue #1638. Runtime/UI children #1679, #1680,
-and #1681 are delivered; #1682 is the remaining final owner-doc and parent-closure issue.
+State: Delivered. Runtime/UI children #1679, #1680, and #1681 are delivered (PR #1689) and the final
+owner-doc promotion and parent-closure issue #1682 is delivered. Parent feature issue #1638 is closed
+after final validation. This directory is retained as the delivered specification of record.
 
 # Cognitive Load Runtime Adoption Specification
 
@@ -34,7 +35,10 @@ The boundary is:
 - final validation and owner-doc promotion for #1638.
 
 Source Understanding Mode remains a separate parent feature (#1646). Its source-primary and
-non-authoritative posture informs this specification, but #1647 is not a child issue under #1638.
+non-authoritative posture informs this specification, but #1646/#1647 are **not** child issues or
+blockers of #1638. They are a distinct Source Understanding parent path and were never a precondition
+for closing this capability; #1638 closed on its own delivered child evidence (#1679/#1680/#1681) plus
+this owner-doc promotion (#1682).
 
 ## Task List
 
@@ -46,13 +50,13 @@ non-authoritative posture informs this specification, but #1647 is not a child i
    [#1681](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1681), delivered.
 4. [PROMOTE_COGNITIVE_LOAD_OWNER_DOCS.md](PROMOTE_COGNITIVE_LOAD_OWNER_DOCS.md) - final closure and
    owner-doc promotion issue [#1682](https://github.com/RasmusTho/agentic-pkm-mvp/issues/1682),
-   ready after the three runtime/UI children delivered.
+   delivered after the three runtime/UI children; closed #1638.
 
 ## Flat Execution Order
 
 1. Delivered: #1679.
 2. Delivered: scarce resurfacing cards (#1680) and text correction proposals (#1681).
-3. Remaining: deliver owner-doc promotion (#1682) and close #1638 only after final validation.
+3. Delivered: owner-doc promotion (#1682); #1638 closed after final validation.
 
 ## Capability-Level Acceptance Criteria
 
@@ -89,4 +93,5 @@ acceptance criteria and verification approach.
 - #1679 - source-preserving summary fixtures, delivered by PR #1689.
 - #1680 - scarce resurfacing cards, delivered by PR #1689.
 - #1681 - text correction proposals, delivered by PR #1689.
-- #1682 - owner-doc promotion and parent closure, remaining final closure issue.
+- #1682 - owner-doc promotion and parent closure, delivered; closed #1638.
+- #1646/#1647 - Source Understanding Mode, a separate parent path; never a #1638 child or blocker.
