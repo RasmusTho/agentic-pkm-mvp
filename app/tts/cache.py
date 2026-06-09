@@ -8,6 +8,10 @@ from typing import Any
 from app.tts.config import TTSConfig
 
 
+class TTSUnsafeCacheRootError(ValueError):
+    """Raised when runtime TTS would write cache files inside the repository."""
+
+
 def cache_key_for(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -69,9 +73,9 @@ def _cache_files(config: TTSConfig) -> list[Path]:
     return files
 
 
-def _assert_safe_cache_root(config: TTSConfig) -> None:
+def assert_safe_cache_root(config: TTSConfig) -> None:
     if is_path_inside(config.cache_dir, repo_root()):
-        raise ValueError(f"TTS cache root is repo-local and unsafe for cleanup: {config.cache_dir}")
+        raise TTSUnsafeCacheRootError(f"TTS cache root is repo-local and unsafe for runtime writes: {config.cache_dir}")
 
 
 def cache_status(config: TTSConfig) -> dict[str, Any]:
@@ -90,7 +94,7 @@ def cache_status(config: TTSConfig) -> dict[str, Any]:
 
 
 def enforce_cache_limit(config: TTSConfig) -> dict[str, Any]:
-    _assert_safe_cache_root(config)
+    assert_safe_cache_root(config)
     if config.cache_eviction != "lru":
         result = cache_status(config)
         result["evicted_count"] = 0

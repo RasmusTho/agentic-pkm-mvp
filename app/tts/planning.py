@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.tts.cache import audio_path, cache_key_for, ensure_cache_dirs, is_path_inside, repo_root, write_plan
+from app.tts.cache import (
+    assert_safe_cache_root,
+    audio_path,
+    cache_key_for,
+    ensure_cache_dirs,
+    is_path_inside,
+    repo_root,
+    write_plan,
+)
 from app.tts.config import TTSConfig
 from app.tts.language import detect_language, segment_by_language
 from app.tts.normalization import normalize_tts_text, tts_normalization_warnings
@@ -32,6 +40,7 @@ def build_tts_plan(
     language: str | None = None,
     rate: float = 1.0,
 ) -> dict[str, Any]:
+    assert_safe_cache_root(config)
     normalized_text = normalize_tts_text(text)
     if not normalized_text:
         raise TTSNormalizedTextEmptyError("text is empty after TTS normalization")

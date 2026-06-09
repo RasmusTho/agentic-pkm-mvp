@@ -184,7 +184,15 @@ def test_readback_fetches_plan_before_synthesis() -> None:
     synthesize_index = script.index("postJson('/api/companion/tts/synthesize'")
     assert plan_index < synthesize_index
     assert "renderSpeechPlan(plan)" in script
-    assert "if (plan.mixed_language)" in script
+    assert "if (!plan.cached && plan.mixed_language)" in script
+
+
+def test_readback_preserves_cached_playback_when_provider_unavailable() -> None:
+    html = _html()
+    script = _readback_script(html)
+
+    assert "if (!plan.cached && plan.mixed_language)" in script
+    assert "if (!plan.cached && plan.provider_available === false)" in script
 
 
 def test_readback_plan_inspection_surfaces_segment_metadata() -> None:

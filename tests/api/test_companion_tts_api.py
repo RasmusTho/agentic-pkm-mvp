@@ -126,6 +126,24 @@ def test_synthesize_refuses_missing_local_provider(
     assert "piper command" in detail["reason"]
 
 
+def test_tts_plan_refuses_repo_local_cache_before_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_cache = Path.cwd() / "tmp" / "unsafe-tts-cache"
+    plan_path = repo_cache / "plans"
+    monkeypatch.setenv("TTS_ENABLED", "true")
+    monkeypatch.setenv("TTS_LOCAL_ONLY", "true")
+    monkeypatch.setenv("TTS_CACHE_DIR", str(repo_cache))
+    monkeypatch.setenv("TTS_LOG_DIR", str(Path.cwd().parent / "tts-test-logs"))
+    monkeypatch.setenv("TTS_PIPER_COMMAND", "/bin/echo")
+
+    resp = TestClient(app).post("/api/companion/tts/plan", json={"text": "Hej världen."})
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "tts_unsafe_cache_root"
+    assert not plan_path.exists()
+
+
 def test_synthesize_returns_structured_unavailable_on_provider_failure(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

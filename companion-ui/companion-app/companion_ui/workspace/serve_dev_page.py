@@ -1045,10 +1045,10 @@ def _note_readback_script() -> str:
       postJson('/api/companion/tts/plan', {text: normalized, rate: rate()})
         .then(function (plan) {
           renderSpeechPlan(plan);
-          if (plan.mixed_language) {
+          if (!plan.cached && plan.mixed_language) {
             throw new Error('Local TTS stopped: uncertain mixed-language text.');
           }
-          if (plan.provider_available === false) {
+          if (!plan.cached && plan.provider_available === false) {
             throw new Error(plan.provider_reason || 'Local TTS provider/model unavailable.');
           }
           status('Synthesizing local audio.', 'synthesizing');

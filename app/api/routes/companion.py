@@ -48,7 +48,7 @@ from app.panel.confirmation import StagedProposal
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
-from app.tts.cache import audio_path
+from app.tts.cache import TTSUnsafeCacheRootError, audio_path
 from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
@@ -2412,6 +2412,11 @@ def plan_companion_tts(req: CompanionTTSRequest) -> CompanionTTSPlanResponse:
             status_code=422,
             detail={"error": "tts_text_empty_after_normalization", "message": str(exc)},
         ) from exc
+    except TTSUnsafeCacheRootError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "tts_unsafe_cache_root", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=413,
@@ -2434,6 +2439,11 @@ def synthesize_companion_tts(req: CompanionTTSRequest) -> CompanionTTSSynthesize
         raise HTTPException(
             status_code=422,
             detail={"error": "tts_text_empty_after_normalization", "message": str(exc)},
+        ) from exc
+    except TTSUnsafeCacheRootError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "tts_unsafe_cache_root", "message": str(exc)},
         ) from exc
     except ValueError as exc:
         raise HTTPException(
