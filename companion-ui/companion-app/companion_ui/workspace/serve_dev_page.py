@@ -5210,6 +5210,7 @@ def _render_orientation_index_html(
   {vault_browser_script}
   {ambient_script}
   {_render_help_drawer()}
+  {_render_operator_drawer()}
 </body>
 </html>"""
 
@@ -5323,6 +5324,427 @@ def _orientation_ambient_refresh_script() -> str:
     });
     window.addEventListener('focus', refreshWhenStale);
     schedule(shell.dataset.staleAfter);
+  }());
+  </script>"""
+
+
+# --- Operator diagnostics overlay ------------------------------------------
+# The Operator diagnostics overlay folds the legacy app/web dashboard
+# (Status / Health / Settings validation / Recent events / Ask) into the
+# Companion UI shell as an Operator-badged slide-over drawer, modeled on the
+# existing Help drawer. It is NOT a daily-use surface; it is operator-only.
+#
+# Architecture contract (from issue #1758):
+#   - Document-first / overlay-first: dims but does not dismiss the workspace;
+#     closing returns the user exactly where they were.
+#   - Server declares, UI renders: no vault reads, no local data composition.
+#     The overlay renders only runtime-declared payloads proxied through the
+#     companion server (same-origin model).
+#   - No hidden semantic state: degraded/unreachable states render explicitly
+#     (amber/alert), never a silent blank or stale panel.
+#   - No dev/prod feature split: wired into both profiles.
+#   - Pure render: render_operator_overlay_html is a pure function over payloads.
+#
+# Proxy endpoints added to do_GET / do_POST:
+#   GET  /api/operator/status            -> COMPANION_API_BASE_URL /api/status
+#   GET  /api/operator/health            -> COMPANION_API_BASE_URL /api/health
+#   GET  /api/operator/settings/validate -> COMPANION_API_BASE_URL /api/settings/validate
+#   GET  /api/operator/events/tail       -> COMPANION_API_BASE_URL /api/events/tail
+#   POST /api/operator/ask               -> COMPANION_API_BASE_URL /api/ask
+#
+# The /api/operator/* prefix keeps operator routes clearly namespaced and
+# distinct from /api/companion/* (workspace) routes.
+#
+# How to extend:
+#   * Edit overlay layout/content -> render_operator_overlay_html.
+#   * Change the toggle control -> _render_operator_toggle.
+
+
+def render_operator_overlay_html(
+    *,
+    status_payload: dict | None = None,
+    health_payload: dict | None = None,
+    settings_payload: dict | None = None,
+    events_payload: dict | None = None,
+    status_error: str = "",
+    health_error: str = "",
+    settings_error: str = "",
+    events_error: str = "",
+) -> str:
+    """Render the Operator diagnostics overlay as a standalone HTML fragment.
+
+    Pure function over payload dicts — no network calls, no file I/O.
+    All user-supplied values are HTML-escaped before output.
+
+    Used both for unit-testing (fixture payloads) and for static-HTML UAT
+    capture (per reference_companion_ui_local_uat).  The overlay is embedded
+    inside the shell by _render_operator_drawer(); this function produces the
+    *inner* content of the drawer (suitable for iframe or direct embed).
+    """
+
+    def _e(v: object) -> str:
+        return _html.escape(str(v) if v is not None else "")
+
+    def _pill(ok: object, *, ok_label: str = "ok", fail_label: str = "fail") -> str:
+        if ok is True:
+            return f'<span class="op-pill op-pill-ok">{ok_label}</span>'
+        if ok is False:
+            return f'<span class="op-pill op-pill-warn">{fail_label}</span>'
+        return '<span class="op-pill">unknown</span>'
+
+    def _degraded_banner(msg: str) -> str:
+        return (
+            '<div class="op-banner-degraded" '
+            'data-testid="operator-degraded-banner" '
+            f'data-state="degraded">{_e(msg)}</div>'
+        ) if msg else ""
+
+    # --- Status panel ---
+    if status_error:
+        status_html = _degraded_banner(status_error)
+    elif status_payload is not None:
+        sot_v = _e(status_payload.get("sot_version", "N/A"))
+        ts = _e(status_payload.get("timestamp", "N/A"))
+        stores = status_payload.get("stores") or []
+        ingestion = status_payload.get("ingestion") or {}
+        ask_s = status_payload.get("ask") or {}
+        store_rows = "".join(
+            f"<tr>"
+            f"<td>{_e(s.get('name', ''))}</td>"
+            f"<td>{_e(s.get('object_count', 0))}</td>"
+            f"<td>{_e(s.get('last_ingest_at', 'N/A'))}</td>"
+            f"<td>{_e(s.get('last_error_at', 'N/A'))}</td>"
+            f"</tr>"
+            for s in stores
+        ) or '<tr><td colspan="4" class="op-muted">No stores reported.</td></tr>'
+        status_html = (
+            f'<div class="op-stat-row"><span>SoT version</span><span>{sot_v}</span></div>'
+            f'<div class="op-stat-row"><span>Timestamp</span><span>{ts}</span></div>'
+            f'<div class="op-stat-row"><span>Ingestion last run</span>'
+            f'<span>{_e(ingestion.get("last_run_at", "N/A"))}</span></div>'
+            f'<div class="op-stat-row"><span>Ingestion result</span>'
+            f'<span>{_pill(ingestion.get("last_run_ok"))}</span></div>'
+            f'<div class="op-stat-row"><span>ASK queries (24h)</span>'
+            f'<span>{_e(ask_s.get("total_queries_24h", 0))}</span></div>'
+            f'<div class="op-stat-row"><span>ASK avg latency</span>'
+            f'<span>{_e(ask_s.get("avg_latency_ms_24h", "N/A"))}</span></div>'
+            f'<table class="op-table"><thead>'
+            f'<tr><th>Store</th><th>Objects</th><th>Last ingest</th><th>Last error</th></tr>'
+            f'</thead><tbody>{store_rows}</tbody></table>'
+        )
+    else:
+        status_html = '<div class="op-muted" data-testid="operator-status-empty">No data.</div>'
+
+    # --- Health panel ---
+    if health_error:
+        health_html = _degraded_banner(health_error)
+    elif health_payload is not None:
+        ok = health_payload.get("ok")
+        checks = health_payload.get("checks") or {}
+        check_rows = "".join(
+            f"<tr><td>{_e(name)}</td>"
+            f"<td>{_pill(detail.get('ok') if isinstance(detail, dict) else None)} "
+            f"{_e(detail.get('detail', '') if isinstance(detail, dict) else '')}</td></tr>"
+            for name, detail in checks.items()
+        ) or '<tr><td colspan="2" class="op-muted">No checks reported.</td></tr>'
+        health_html = (
+            f'<div class="op-stat-row"><span>Overall</span><span>{_pill(ok)}</span></div>'
+            f'<table class="op-table"><thead>'
+            f'<tr><th>Check</th><th>Result</th></tr>'
+            f'</thead><tbody>{check_rows}</tbody></table>'
+        )
+    else:
+        health_html = '<div class="op-muted" data-testid="operator-health-empty">No data.</div>'
+
+    # --- Settings validation panel ---
+    if settings_error:
+        settings_html = _degraded_banner(settings_error)
+    elif settings_payload is not None:
+        ok = settings_payload.get("ok")
+        issues = settings_payload.get("issues") or []
+        issues_text = "\n".join(
+            f"{_e(i.get('code', ''))}: {_e(i.get('message', ''))}" for i in issues
+        ) or "No issues."
+        settings_html = (
+            f'<div class="op-stat-row"><span>Status</span><span>{_pill(ok)}</span></div>'
+            f'<pre class="op-pre">{issues_text}</pre>'
+        )
+    else:
+        settings_html = (
+            '<div class="op-muted" data-testid="operator-settings-empty">No data.</div>'
+        )
+
+    # --- Recent events panel ---
+    if events_error:
+        events_html = _degraded_banner(events_error)
+    elif events_payload is not None:
+        events = events_payload.get("events") or []
+        event_rows = "".join(
+            f"<tr>"
+            f"<td>{_e(ev.get('timestamp', ''))}</td>"
+            f"<td>{_e(ev.get('event_type', ''))}</td>"
+            f"<td>{_e(str(ev.get('trace_id', ''))[:12])}</td>"
+            f"</tr>"
+            for ev in events[:50]
+        ) or '<tr><td colspan="3" class="op-muted">No events.</td></tr>'
+        events_html = (
+            f'<table class="op-table"><thead>'
+            f'<tr><th>Timestamp</th><th>Event</th><th>Trace</th></tr>'
+            f'</thead><tbody>{event_rows}</tbody></table>'
+        )
+    else:
+        events_html = '<div class="op-muted" data-testid="operator-events-empty">No data.</div>'
+
+    return f"""<style>
+  .op-panels{{display:flex;flex-direction:column;gap:16px;padding:0}}
+  .op-panel{{background:var(--bg-raised,#111a2e);border:1px solid var(--border,#152030);
+    border-radius:6px;padding:16px}}
+  .op-panel-header{{display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:10px}}
+  .op-panel-title{{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1,#dce8f0)}}
+  .op-badge{{font:500 11px/1 'JetBrains Mono',monospace;
+    color:var(--amber,#f09030);background:var(--amber-muted,#1a0e02);
+    border:1px solid var(--amber-dim,#805010);border-radius:999px;
+    padding:2px 8px;letter-spacing:.06em;text-transform:uppercase}}
+  .op-stat-row{{display:flex;justify-content:space-between;gap:10px;
+    margin:6px 0;font-size:13px;color:var(--fg-1,#dce8f0)}}
+  .op-stat-row span:first-child{{color:var(--fg-2,#7a9ab8)}}
+  .op-table{{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}}
+  .op-table th,.op-table td{{text-align:left;padding:6px 8px;
+    border-bottom:1px solid var(--border,#152030)}}
+  .op-table th{{color:var(--fg-3,#3d5570);font-weight:600}}
+  .op-muted{{color:var(--fg-3,#3d5570);font-size:13px}}
+  .op-pre{{font:400 12px/1.5 'JetBrains Mono',monospace;color:var(--fg-2,#7a9ab8);
+    background:var(--bg-base,#070b12);border-radius:4px;padding:8px;
+    margin:6px 0 0;overflow-x:auto;white-space:pre-wrap}}
+  .op-pill{{display:inline-flex;align-items:center;padding:2px 8px;
+    border-radius:999px;font-size:11px;font-weight:600}}
+  .op-pill-ok{{background:var(--vault,#39e87d);color:#041a10}}
+  .op-pill-warn{{background:var(--amber,#f09030);color:#1a0e02}}
+  .op-banner-degraded{{background:var(--amber-muted,#1a0e02);
+    border:1px solid var(--amber-dim,#805010);border-radius:4px;
+    color:var(--amber,#f09030);font-size:13px;padding:8px 12px;margin:4px 0}}
+  .op-ask-input{{width:100%;background:var(--bg-base,#070b12);
+    border:1px solid var(--border-strong,#1e3050);color:var(--fg-1,#dce8f0);
+    border-radius:6px;padding:8px 12px;font-size:13px;resize:vertical;
+    min-height:72px;box-sizing:border-box}}
+  .op-ask-input:focus{{outline:1px solid var(--border-focus,#00d4e8)}}
+  .op-ask-btn{{margin-top:8px;background:var(--cyan,#00d4e8);color:#001e28;
+    border:none;border-radius:6px;padding:8px 14px;font-size:13px;
+    font-weight:600;cursor:pointer}}
+  .op-ask-btn:disabled{{opacity:.6;cursor:not-allowed}}
+  .op-ask-answer{{background:var(--bg-base,#070b12);
+    border:1px solid var(--border,#152030);border-radius:6px;
+    padding:10px 12px;min-height:48px;white-space:pre-wrap;font-size:13px;
+    color:var(--fg-1,#dce8f0);margin-top:10px}}
+</style>
+<div class="op-panels" data-testid="operator-overlay-panels">
+  <div class="op-panel" data-testid="operator-panel-status">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Status</span>
+      <span class="op-badge" data-testid="operator-badge">Operator</span>
+    </div>
+    {status_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-health">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Health</span>
+    </div>
+    {health_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-settings">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Settings validation</span>
+    </div>
+    {settings_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-events">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Recent events</span>
+    </div>
+    {events_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-ask">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Ask</span>
+    </div>
+    <textarea class="op-ask-input" id="operator-ask-input"
+      data-testid="operator-ask-input"
+      placeholder="Ask the agent something..."></textarea><br>
+    <button class="op-ask-btn" id="operator-ask-btn"
+      data-testid="operator-ask-btn" type="button">Ask</button>
+    <div class="op-ask-answer" id="operator-ask-answer"
+      data-testid="operator-ask-answer">N/A</div>
+  </div>
+</div>
+<script>
+(function() {{
+  var btn = document.getElementById('operator-ask-btn');
+  var inp = document.getElementById('operator-ask-input');
+  var ans = document.getElementById('operator-ask-answer');
+  if (!btn || !inp || !ans) {{ return; }}
+  btn.addEventListener('click', function() {{
+    var q = inp.value.trim();
+    if (!q) {{ return; }}
+    btn.disabled = true;
+    ans.textContent = 'Asking…';
+    fetch('/api/operator/ask', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{question: q}})
+    }}).then(function(r) {{
+      return r.json().then(function(d) {{
+        ans.textContent = d.answer || d.error || JSON.stringify(d);
+        btn.disabled = false;
+      }});
+    }}).catch(function(e) {{
+      ans.textContent = 'Error: ' + e;
+      btn.disabled = false;
+    }});
+  }});
+}}());
+</script>"""
+
+
+def _render_operator_toggle() -> str:
+    """Fixed-position control that opens the in-shell Operator diagnostics drawer.
+
+    Operator-badged and positioned above the Help toggle. Deliberately uses
+    amber accent (operator color per help_guide.html badge legend) to signal
+    it is not a daily-use surface.
+    """
+    return (
+        '<button type="button" class="operator-toggle" '
+        'data-testid="workspace-operator-toggle" aria-haspopup="dialog" '
+        'aria-controls="workspace-operator-drawer" aria-expanded="false" '
+        'title="Operator diagnostics" onclick="companionOperator.open()">'
+        '<span aria-hidden="true">⚠</span> Operator</button>'
+    )
+
+
+def _render_operator_drawer() -> str:
+    """Server-declared in-shell Operator diagnostics drawer.
+
+    A slide-over panel that embeds operator diagnostics fetched same-origin
+    from /operator. The toggle script only changes visibility; panel content
+    is loaded lazily on first open by fetching /operator.
+
+    The drawer dims but does not dismiss the workspace: closing returns the
+    user exactly where they were (identical contract to the Help drawer).
+    """
+    return """
+  <style>
+    .operator-toggle{position:fixed;bottom:60px;right:18px;z-index:999;
+      display:inline-flex;align-items:center;gap:6px;
+      padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;
+      color:var(--amber);background:var(--amber-muted);
+      border:1px solid var(--amber-dim);border-radius:999px;
+      cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+    .operator-toggle:hover{border-color:var(--amber)}
+    .operator-drawer-backdrop{position:fixed;inset:0;
+      background:rgba(7,11,18,.72);opacity:0;pointer-events:none;
+      transition:opacity .18s ease;z-index:1000}
+    .operator-drawer{position:fixed;top:0;right:0;height:100vh;
+      width:min(640px,94vw);transform:translateX(100%);
+      transition:transform .22s cubic-bezier(.4,0,.2,1);
+      background:var(--bg-surface);
+      border-left:1px solid var(--border-strong);
+      box-shadow:-8px 0 32px rgba(0,0,0,.5);z-index:1001;
+      display:flex;flex-direction:column}
+    .operator-drawer-host[data-open="true"] .operator-drawer{transform:translateX(0)}
+    .operator-drawer-host[data-open="true"] .operator-drawer-backdrop{
+      opacity:1;pointer-events:auto}
+    .operator-drawer-head{display:flex;align-items:center;gap:10px;
+      padding:12px 16px;border-bottom:1px solid var(--border);
+      background:var(--bg-raised)}
+    .operator-drawer-title{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1)}
+    .operator-drawer-badge{font:500 11px/1 'JetBrains Mono',monospace;
+      color:var(--amber);background:var(--amber-muted);
+      border:1px solid var(--amber-dim);border-radius:999px;
+      padding:2px 8px;letter-spacing:.06em;text-transform:uppercase}
+    .operator-drawer-close{margin-left:auto;background:none;
+      border:1px solid var(--border);color:var(--fg-2);border-radius:6px;
+      width:30px;height:30px;cursor:pointer;font-size:18px;line-height:1}
+    .operator-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
+    .operator-drawer-body{flex:1;overflow-y:auto;padding:16px;background:var(--bg-surface)}
+    .operator-drawer-loading{color:var(--fg-3);font-size:13px;padding:12px 0}
+  </style>
+  """ + _render_operator_toggle() + """
+  <div class="operator-drawer-host" id="workspace-operator-host"
+       data-testid="workspace-operator-host" data-open="false"
+       data-authority-role="server_declared">
+    <div class="operator-drawer-backdrop" data-testid="workspace-operator-backdrop"
+         onclick="companionOperator.close()"></div>
+    <aside class="operator-drawer" id="workspace-operator-drawer"
+           data-testid="workspace-operator-drawer" role="dialog" aria-modal="true"
+           aria-label="Operator diagnostics">
+      <div class="operator-drawer-head">
+        <span class="operator-drawer-title">Operator diagnostics</span>
+        <span class="operator-drawer-badge"
+              data-testid="workspace-operator-badge">Operator</span>
+        <button type="button" class="operator-drawer-close"
+                data-testid="workspace-operator-close"
+                aria-label="Close operator panel"
+                onclick="companionOperator.close()">&times;</button>
+      </div>
+      <div class="operator-drawer-body" id="workspace-operator-body"
+           data-testid="workspace-operator-body">
+        <div class="operator-drawer-loading"
+             data-testid="workspace-operator-loading">Loading…</div>
+      </div>
+    </aside>
+  </div>
+  <script>
+  (function() {
+    var host   = document.getElementById('workspace-operator-host');
+    var body   = document.getElementById('workspace-operator-body');
+    var toggle = document.querySelector('[data-testid="workspace-operator-toggle"]');
+    if (!host || !body) { return; }
+    var loaded = false;
+    function setExpanded(state) {
+      if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
+    }
+    function loadContent() {
+      if (loaded) { return; }
+      loaded = true;
+      fetch('/operator', {method: 'GET'})
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+          body.innerHTML = html;
+          // Execute inline scripts inside the loaded fragment.
+          Array.prototype.slice.call(body.querySelectorAll('script')).forEach(function(s) {
+            var ns = document.createElement('script');
+            ns.textContent = s.textContent;
+            s.parentNode.replaceChild(ns, s);
+          });
+        })
+        .catch(function(err) {
+          body.innerHTML = '<div class="op-banner-degraded"'
+            + ' data-testid="operator-degraded-banner" data-state="degraded">'
+            + 'Operator panel unavailable: ' + String(err) + '</div>';
+        });
+    }
+    window.companionOperator = {
+      open: function() {
+        loadContent();
+        host.setAttribute('data-open', 'true');
+        setExpanded(true);
+      },
+      close: function() {
+        host.setAttribute('data-open', 'false');
+        setExpanded(false);
+        if (toggle) { try { toggle.focus(); } catch (e) {} }
+      },
+      toggle: function() {
+        if (host.getAttribute('data-open') === 'true') { this.close(); }
+        else { this.open(); }
+      }
+    };
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
+        window.companionOperator.close();
+      }
+    });
   }());
   </script>"""
 
@@ -8784,6 +9206,7 @@ def render_index_html(
   {_note_editor_script()}
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
+  {_render_operator_drawer()}
 </body>
 </html>"""
 
@@ -9018,6 +9441,83 @@ def make_handler(
             if parsed.path.startswith("/api/companion/tts/audio/"):
                 self._proxy_audio(parsed.path)
                 return
+            # --- Operator diagnostics proxy (same-origin, issue #1758) ---
+            # Browser calls /api/operator/* same-origin; this server proxies
+            # to COMPANION_API_BASE_URL /api/* so browsers never need the
+            # runtime port directly (LOCAL_ACCESS_MODEL.md).
+            if parsed.path == "/operator":
+                # Serve the operator overlay HTML fragment (lazy-loaded by drawer).
+                # Proxy all four read endpoints first; degrade gracefully on error.
+                def _op_get(runtime_path: str, params: dict | None = None) -> tuple[dict | None, str]:
+                    try:
+                        return self._client.get(runtime_path, params=params or {}), ""
+                    except WorkspaceClientError as exc:
+                        return None, str(exc)
+
+                status_payload, status_error = _op_get("/api/status")
+                health_payload, health_error = _op_get("/api/health")
+                settings_payload, settings_error = _op_get("/api/settings/validate")
+                events_qp = parse_qs(parsed.query)
+                events_params: dict = {}
+                if events_qp.get("limit"):
+                    events_params["limit"] = events_qp["limit"][0]
+                if events_qp.get("event_prefix"):
+                    events_params["event_prefix"] = events_qp["event_prefix"][0]
+                events_payload, events_error = _op_get("/api/events/tail", events_params)
+                body = render_operator_overlay_html(
+                    status_payload=status_payload,
+                    health_payload=health_payload,
+                    settings_payload=settings_payload,
+                    events_payload=events_payload,
+                    status_error=status_error,
+                    health_error=health_error,
+                    settings_error=settings_error,
+                    events_error=events_error,
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if parsed.path == "/api/operator/status":
+                try:
+                    data = self._client.get("/api/status", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/operator/health":
+                try:
+                    data = self._client.get("/api/health", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/operator/settings/validate":
+                try:
+                    data = self._client.get("/api/settings/validate", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/operator/events/tail":
+                qp = parse_qs(parsed.query)
+                tail_params: dict = {}
+                if qp.get("limit"):
+                    tail_params["limit"] = qp["limit"][0]
+                if qp.get("event_prefix"):
+                    tail_params["event_prefix"] = qp["event_prefix"][0]
+                try:
+                    data = self._client.get("/api/events/tail", params=tail_params)
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
@@ -9039,6 +9539,7 @@ def make_handler(
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
                 "/api/panel/checkbox-projection",
+                "/api/operator/ask",  # operator diagnostics Ask (#1758)
             }
         )
 
@@ -9057,6 +9558,12 @@ def make_handler(
                 return True
             return any(pattern.fullmatch(path) for pattern in self._POST_PROXY_PATTERNS)
 
+        # Operator POST paths that rewrite to a different runtime path.
+        # key = companion-UI path, value = runtime API path.
+        _POST_PATH_REWRITES: dict[str, str] = {
+            "/api/operator/ask": "/api/ask",
+        }
+
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             if not self._post_path_allowed(parsed.path):
@@ -9072,8 +9579,9 @@ def make_handler(
             except json.JSONDecodeError:
                 self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
                 return
+            runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             try:
-                data = self._client.post(parsed.path, json=payload)
+                data = self._client.post(runtime_path, json=payload)
             except WorkspaceClientError as exc:
                 self._proxy_error(exc)
                 return
