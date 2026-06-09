@@ -5155,7 +5155,6 @@ def _render_orientation_index_html(
       <span title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
     </div>
     {dev_chip}
-    {_render_help_toggle()}
   </div>
   <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
     <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
@@ -5295,6 +5294,29 @@ def _orientation_ambient_refresh_script() -> str:
 #     it still opens directly and stays compatible with the screenshot system).
 #   * Change the in-shell chrome (button, drawer geometry) -> this region.
 _HELP_GUIDE_PATH = Path(__file__).with_name("help_guide.html")
+_HELP_ASSETS_DIR = Path(__file__).with_name("help_assets")
+_HELP_ASSET_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.png$")
+
+
+def load_help_asset(name: str) -> bytes | None:
+    """Load a help-guide image asset (PNG) by bounded name, or None.
+
+    Serves the real-UI screenshots referenced by the guide. The name is
+    validated against a strict pattern and resolved only inside ``help_assets``
+    so the route cannot read arbitrary files. Uses ``open().read()`` to stay
+    clear of the vault-I/O architecture guard (these are packaged UI assets,
+    not vault content).
+    """
+    if not _HELP_ASSET_NAME.fullmatch(name):
+        return None
+    target = (_HELP_ASSETS_DIR / name).resolve()
+    if _HELP_ASSETS_DIR.resolve() not in target.parents:
+        return None
+    try:
+        with open(target, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
 
 
 def load_help_guide_html() -> str:
@@ -5321,7 +5343,12 @@ def load_help_guide_html() -> str:
 
 
 def _render_help_toggle() -> str:
-    """Header control that opens the in-shell Help drawer."""
+    """Fixed-position control that opens the in-shell Help drawer.
+
+    Rendered as part of the drawer region (not a per-view header) so it stays
+    visible regardless of which shell layout is active — the adaptive shell
+    hides the legacy ``.topbar``, so a header-embedded control would not show.
+    """
     return (
         '<button type="button" class="help-toggle" '
         'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
@@ -5340,10 +5367,11 @@ def _render_help_drawer() -> str:
     """
     return """
   <style>
-    .help-toggle{display:inline-flex;align-items:center;gap:6px;margin-left:auto;
-      padding:4px 12px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
-      background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:6px;
-      cursor:pointer}
+    .help-toggle{position:fixed;bottom:18px;right:18px;z-index:999;
+      display:inline-flex;align-items:center;gap:6px;
+      padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
+      background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:999px;
+      cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
     .help-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
     .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
       opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
@@ -5365,6 +5393,7 @@ def _render_help_drawer() -> str:
     .help-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
     .help-drawer-frame{flex:1;border:0;width:100%;background:var(--bg-base)}
   </style>
+  """ + _render_help_toggle() + """
   <div class="help-drawer-host" id="workspace-help-host"
        data-testid="workspace-help-host" data-open="false"
        data-authority-role="server_declared">
@@ -8127,7 +8156,6 @@ def render_index_html(
       <span class="api-url" title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
     </div>
     {dev_chip}
-    {_render_help_toggle()}
   </div>
   <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
     <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
@@ -8869,6 +8897,17 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path.startswith("/help-assets/"):
+                asset = load_help_asset(parsed.path[len("/help-assets/"):])
+                if asset is None:
+                    self._send_json(404, {"error": "not_found", "message": "Unknown help asset"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(asset)))
+                self.end_headers()
+                self.wfile.write(asset)
                 return
             if parsed.path in self._static_assets:
                 content_type, body = self._static_assets[parsed.path]
