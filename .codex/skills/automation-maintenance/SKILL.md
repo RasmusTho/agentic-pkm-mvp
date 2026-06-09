@@ -54,6 +54,39 @@ specific justified exception. The redirect workspace
 - If durable follow-up is needed, create or update a GitHub Issue with the automation id, current
   cwd, intended cwd, and blocker. Do not treat local automation state as repo truth.
 
+## BuilderOps CLI dependency setup
+
+BuilderOps CLI commands require `click`, `pydantic`, and `sqlite3`.  Host Python
+interpreters (e.g. `/opt/homebrew/bin/python3`) typically lack these packages.
+
+**Supported invocation path for automation worktrees:**
+
+```bash
+# Option 1 — wrapper script (recommended; resolves venv automatically):
+scripts/builderops_cli.sh builderops list --type LearningSignal --json
+scripts/builderops_cli.sh builderops create-learning-signal \
+  --summary "..." --content "..." --signal-type workflow \
+  --source-ref github_issue:#1234 --json
+
+# Option 2 — explicit venv python from the repo root or a worktree:
+.venv/bin/python3 -m app.builderops builderops list --type LearningSignal --json
+.venv/bin/python3 -m app.cli builderops list --type LearningSignal --json
+```
+
+`scripts/builderops_cli.sh` walks upward from the script directory to find the
+nearest `.venv/bin/python3` and then runs `python3 -m app.builderops`.  It works
+from the repo root and from any git worktree under `.claude/worktrees/`.
+
+**One-time venv setup** (if no `.venv` exists yet):
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e .
+```
+
+Do not require agents to install deps globally or bypass the venv.  Do not fall
+back to `docs/learning-log.md` as a substitute for BuilderOps CLI unavailability;
+fix the Python interpreter instead.
+
 ## BuilderOps adoption checks
 
 When maintaining repo automations, also inspect whether recurring prompts route BuilderOps material
