@@ -136,6 +136,19 @@ def test_served_page_renders_view_in_panel_affordance_on_409() -> None:
     assert "503" in html
 
 
+def test_served_page_exploratory_response_is_not_rendered_as_applied() -> None:
+    """An exploratory intent (200 with status='exploratory_no_edit', no
+    applied_body) must NOT be rendered as an applied edit: the JS branches on
+    the exploratory marker before the generic ok→renderApplied path and shows
+    a calm read-only notice instead."""
+    html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=True)]))
+
+    # JS handles the exploratory marker before treating ok responses as applied.
+    assert "exploratory_no_edit" in html
+    assert html.index("exploratory_no_edit") < html.index("renderApplied(res.data)")
+    assert "read-only" in html
+
+
 def test_served_page_canvas_coauthor_absent_when_disabled() -> None:
     """When CANVAS_ENABLED is unset (guards.canvas_enabled false): no intent
     input, no co-author control, and no /coauthor call/affordance."""

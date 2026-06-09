@@ -1327,6 +1327,11 @@ def _canvas_coauthor_script(canvas_enabled: bool) -> str:
             showNotice('Co-authoring provider is unavailable right now. Nothing was changed.');
             return;
           }
+          if (res.ok && res.data && res.data.status === 'exploratory_no_edit') {
+            // Read-only exploratory intent: no edit was generated or applied.
+            showNotice('Exploratory intent — read-only; the note was not changed.');
+            return;
+          }
           if (res.ok) {
             renderApplied(res.data);
             return;
