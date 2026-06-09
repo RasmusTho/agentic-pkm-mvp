@@ -1,4 +1,4 @@
-State: covers the Agentic Canvas Co-Authoring (Phase 2: #1716/#1717) and Chat→Panel Governance Handoff (Phase 3: #1726/#1727/#1728) capabilities, plus the live served-page co-authoring wiring (#1733). Dev/staging only, gated behind `CANVAS_ENABLED`.
+State: covers the Agentic Canvas Co-Authoring (Phase 2: #1716/#1717) and Chat→Panel Governance Handoff (Phase 3: #1726/#1727/#1728) capabilities, plus the live served-page co-authoring wiring (#1733), intent-level governance routing (Phase 4: #1743/#1744), and the carried governance intent in routed proposal payloads (#1772). Dev/staging only, gated behind `CANVAS_ENABLED`.
 
 # UAT — Agentic Canvas Co-Authoring & Chat→Panel Handoff
 
@@ -19,6 +19,8 @@ Scope: test/runbook only. No new feature work. This loop is **Agentic Lab**: opt
 | 3 | Canvas region view-in-Panel affordance + Panel rail canvas-origin attribution | #1727 / PR #1732 |
 | 3 | Executed receipt reflected into the originating context | #1728 / PR #1734 |
 | 3 | Live served-page `/coauthor` wiring (intent input, co-author control, 409 affordance) | #1733 / PR #1736 |
+| 4 | Intent-level governance classification + routing on `/coauthor` (classified `action_type` before generation) | #1743 / PR #1747, #1744 / PR #1754 |
+| 4 | Original governance intent carried into routed Panel proposal payloads | #1772 |
 
 ## Preconditions
 
@@ -120,6 +122,14 @@ unchanged. The explicit `/governance` endpoint remains available as a determinis
    The classifier labels the intent `GOVERNANCE_BEARING / maturity_transition` before body
    generation. The note body is **not** changed. Note the returned `intent_id`.
 
+   The staged Panel proposal carries the original request (#1772): its action params include
+   `original_request: "promote this note to evergreen"`, `routed_via: "intent_classifier"`,
+   `intent_class: "governance_bearing"`, and `classified_action_type: "maturity_transition"`,
+   and the proposal instruction quotes the request text
+   (`canvas governance: maturity_transition — "promote this note to evergreen"`). Reviewing the
+   proposal therefore shows what was actually asked — confirming it still routes through the
+   gated Panel flow; nothing auto-executes from the carried text.
+
 2. Alternatively, trigger deterministically via the explicit governance endpoint (unchanged from
    Phase 3):
 
@@ -148,7 +158,10 @@ the gated path, and its outcome is reflected back read-only.
 **Degraded-classifier fallback:** if the reasoning provider is unavailable, the classifier returns
 `classified=False` (conservative default: `CO_AUTHORING`) and the path falls through to the
 generate-and-apply loop unchanged. The body-frontmatter backstop remains as defense-in-depth for
-any governance-bearing generation that slips through on the degraded path.
+any governance-bearing generation that slips through on the degraded path. A backstop-routed
+proposal still carries the original request text in its payload
+(`original_request` + `routed_via: "body_frontmatter_backstop"`); since no trusted classification
+exists on that path, no classifier fields are fabricated.
 
 ## 5) Negative / safety checks
 
