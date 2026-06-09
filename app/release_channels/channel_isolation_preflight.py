@@ -1,4 +1,4 @@
-"""Channel-isolation preflight guard (Issues #1627, #1655).
+"""Channel-isolation preflight guard (Issues #1627, #1655, #1769).
 
 Fail-closed check that a compose overlay's effective env bindings
 (PKM_ENVIRONMENT, DATABASE_URL / DB_DSN, vault) match the *intended* channel
@@ -9,7 +9,7 @@ Policy authority: docs/RELEASE_CHANNELS/README.md §Invariants.
 
 Design constraints:
 - Read-only: this module NEVER mutates operator files.
-- No Docker, no network: parses compose YAML plus the base env_file only.
+- No Docker, no network: parses compose YAML plus env_file chain only.
 - Covers both committed and working-tree compose drift.
 - Must cover all services that carry channel env vars (api, worker, watcher).
 
@@ -21,9 +21,29 @@ compose layering silently falls back to those base defaults. The preflight
 therefore resolves the *effective* binding (overlay value, else base default)
 and fails closed when it lands on another channel, or when the base defaults
 cannot be read at all.
+
+env_file-chain resolution (Issue #1769): compose allows multiple ``env_file``
+entries per service, with later entries winning over earlier ones.  The base
+services declare a second env_file ``${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}``
+after ``config/runtime.defaults.env``.  If that second layer supplies a wrong-channel
+DSN the preflight would previously have missed it because it only consulted
+``config/runtime.defaults.env``.  The fix resolves DSN keys through the full
+per-service ``env_file`` chain from both the base compose file and the overlay,
+in declaration order (later files win), using the same ``${VAR:-default}``
+interpolation that compose applies to env_file path expressions.
+
+Missing-env-file posture: compose treats a missing non-optional env_file as a
+hard error. This preflight mirrors that posture: if a referenced env_file
+entry is marked ``required: true`` (or ``required`` is omitted, defaulting to
+true) and the file does not exist or cannot be read, the preflight fails closed
+for every DSN key that would have been resolved from that file onward.  Only
+entries explicitly marked ``required: false`` are silently skipped when absent.
+An env_file that *exists* but cannot be read (e.g. permission denied) always
+fails closed regardless of the ``required`` flag.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -188,6 +208,122 @@ def _service_env(service_dict: dict[str, Any]) -> dict[str, str | None]:
 
 
 # ---------------------------------------------------------------------------
+# env_file chain resolution (Issue #1769)
+# ---------------------------------------------------------------------------
+
+_ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def _interpolate_env_path(expr: str) -> str:
+    """Interpolate ``${VAR:-default}`` and ``${VAR}`` in an env_file path expression.
+
+    Uses ``os.environ`` for lookups, matching what compose does when resolving
+    env_file paths.  Only the ``:-`` (default-if-unset-or-empty) and plain
+    ``${VAR}`` forms are handled — these cover all patterns observed in the
+    compose files in this repo.
+    """
+    def _replace(m: "re.Match[str]") -> str:
+        spec_inner = m.group(1)
+        if ":-" in spec_inner:
+            var, _, default = spec_inner.partition(":-")
+            val = os.environ.get(var.strip(), "").strip()
+            return val if val else default
+        else:
+            return os.environ.get(spec_inner.strip(), "")
+
+    return _ENV_VAR_RE.sub(_replace, expr)
+
+
+def _parse_env_file(text: str) -> dict[str, str]:
+    """Parse a docker-style KEY=VALUE env file, skipping comments and blanks."""
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep:
+            result[key.strip()] = value.strip()
+    return result
+
+
+def _parse_env_file_entries(
+    service_dict: dict[str, Any],
+) -> list[tuple[str, bool]]:
+    """Return the ordered list of ``(path_expr, required)`` from a service's ``env_file`` block.
+
+    Handles both the short-form (plain string list) and long-form (mapping with
+    ``path`` / ``required`` keys) that compose v2/v3 supports.
+    """
+    raw = service_dict.get("env_file")
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    entries: list[tuple[str, bool]] = []
+    for item in raw:
+        if isinstance(item, str):
+            entries.append((item, True))
+        elif isinstance(item, dict):
+            path_expr = str(item.get("path", ""))
+            required = bool(item.get("required", True))
+            if path_expr:
+                entries.append((path_expr, required))
+    return entries
+
+
+# Sentinel: chain resolution failed in a way that must fail closed.
+class _EnvFileChainError(Exception):
+    """Raised when an env_file in the resolution chain blocks safe verification."""
+    def __init__(self, path_expr: str, reason: str) -> None:
+        self.path_expr = path_expr
+        self.reason = reason
+        super().__init__(f"env_file {path_expr!r}: {reason}")
+
+
+def _resolve_env_file_chain(
+    service_dict: dict[str, Any],
+    compose_dir: Path,
+) -> dict[str, str]:
+    """Resolve the effective KEY=VALUE mapping from a service's env_file list.
+
+    Processes entries in declaration order; later files win.  Interpolates
+    ``${VAR:-default}`` path expressions.
+
+    Raises :class:`_EnvFileChainError` when a required env_file is missing or
+    any env_file (required or not) exists but cannot be read.
+    """
+    merged: dict[str, str] = {}
+    for path_expr, required in _parse_env_file_entries(service_dict):
+        resolved_str = _interpolate_env_path(path_expr)
+        path = Path(resolved_str)
+        if not path.is_absolute():
+            path = compose_dir / path
+
+        if not path.exists():
+            if required:
+                raise _EnvFileChainError(
+                    path_expr,
+                    f"file does not exist and required=true (resolved: {path})",
+                )
+            # required=false and absent → silently skip, compose does the same
+            continue
+
+        # File exists — must be readable regardless of required flag
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise _EnvFileChainError(
+                path_expr,
+                f"file exists but cannot be read (resolved: {path}): {exc}",
+            ) from exc
+
+        merged.update(_parse_env_file(text))
+
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # Core preflight logic
 # ---------------------------------------------------------------------------
 
@@ -195,15 +331,31 @@ def check_compose_channel_isolation(
     compose_path: Path,
     channel: str,
     base_defaults_path: Path | None = None,
+    base_compose_path: Path | None = None,
 ) -> PreflightResult:
     """Check that *compose_path* overlay binds correctly for *channel*.
 
     Reads the overlay YAML from disk (working-tree copy) so uncommitted drift
-    is caught immediately. DSN bindings are checked against the *effective*
+    is caught immediately.  DSN bindings are checked against the *effective*
     value after compose layering: the overlay value when declared, else the
-    base default from ``config/runtime.defaults.env`` (or
-    *base_defaults_path*). Omitted bindings whose fallback resolves to another
-    channel — or cannot be resolved at all — are violations (Issue #1655).
+    effective value from the full per-service env_file chain (Issue #1769).
+
+    The env_file chain is resolved from the merged compose model: first the
+    base compose file (``docker-compose.yaml`` next to *compose_path*, or
+    *base_compose_path* when given), then the overlay's per-service env_file
+    entries.  Later entries win.  ``${VAR:-default}`` path expressions are
+    interpolated against ``os.environ``.
+
+    Missing-env-file posture:
+    - A referenced env_file with ``required: true`` (the default) that does not
+      exist is treated as a hard error → fail closed.
+    - A referenced env_file with ``required: false`` that does not exist is
+      silently skipped (matches compose behaviour).
+    - An env_file that exists but cannot be read always fails closed.
+
+    *base_defaults_path* is kept for backward compatibility; when supplied it
+    overrides the first env_file entry for each service (the base defaults
+    file).  Prefer *base_compose_path* for new callers.
 
     Returns a :class:`PreflightResult`; call ``.ok`` to test pass/fail.
     Raises ``ValueError`` if *channel* is unknown.
@@ -214,9 +366,28 @@ def check_compose_channel_isolation(
         )
 
     spec = CHANNEL_SPECS[channel]
+    compose_dir = compose_path.resolve().parent
     compose_data = _load_compose(compose_path)
     services = compose_data.get("services") or {}
-    base_defaults = _load_base_env_defaults(compose_path, base_defaults_path)
+
+    # Load the base compose (docker-compose.yaml) to get its per-service
+    # env_file declarations, which are the first layers in the chain.
+    if base_compose_path is not None:
+        base_compose_data = _load_compose(base_compose_path)
+        base_compose_dir = base_compose_path.resolve().parent
+        has_base_compose = True
+    else:
+        default_base = compose_dir / "docker-compose.yaml"
+        if default_base.exists():
+            base_compose_data = _load_compose(default_base)
+            base_compose_dir = compose_dir
+            has_base_compose = True
+        else:
+            base_compose_data = {}
+            base_compose_dir = compose_dir
+            has_base_compose = False
+
+    base_services = base_compose_data.get("services") or {}
 
     result = PreflightResult(channel=channel, compose_path=str(compose_path))
 
@@ -227,8 +398,47 @@ def check_compose_channel_isolation(
         svc = services.get(svc_name) or {}
         env = _service_env(svc)
 
+        # Build the merged env_file chain for this service:
+        # base service env_files come first, then overlay service env_files.
+        base_svc = base_services.get(svc_name) or {}
+
+        base_entries = _parse_env_file_entries(base_svc)
+        overlay_entries = _parse_env_file_entries(svc)
+
+        # If the caller supplied a legacy base_defaults_path override, substitute
+        # it for the first base entry (which is always config/runtime.defaults.env).
+        # This preserves backward compatibility with tests that supply this param.
+        if base_defaults_path is not None:
+            if base_entries:
+                base_entries = [(str(base_defaults_path), base_entries[0][1])] + base_entries[1:]
+            else:
+                # No base compose entries at all — inject the override as the
+                # sole base layer (mirrors the pre-#1769 fallback behaviour).
+                base_entries = [(str(base_defaults_path), True)]
+
+        # When no base compose YAML is present and no base_defaults_path override
+        # was given, fall back to the canonical base-defaults file path so that
+        # tests which write only config/runtime.defaults.env still resolve DSNs.
+        if not has_base_compose and base_defaults_path is None and not base_entries:
+            default_env_path = compose_dir / BASE_ENV_DEFAULTS_REL
+            base_entries = [(str(default_env_path), True)]
+
+        # Reconstruct a synthetic service dict carrying the merged env_file list
+        # so _resolve_env_file_chain can process it uniformly.
+        combined_entries = base_entries + overlay_entries
+        merged_svc_for_chain: dict[str, Any] = {
+            "env_file": [{"path": p, "required": r} for p, r in combined_entries]
+        }
+
         _check_pkm_environment(result, svc_name, env, spec)
-        _check_db_dsn(result, svc_name, env, spec, base_defaults)
+        _check_db_dsn_with_chain(
+            result,
+            svc_name,
+            env,
+            spec,
+            merged_svc_for_chain,
+            base_compose_dir,
+        )
 
     return result
 
@@ -270,24 +480,40 @@ def _dsn_violation(dsn: str, spec: dict[str, Any]) -> str | None:
     return None
 
 
-def _check_db_dsn(
+def _check_db_dsn_with_chain(
     result: PreflightResult,
     svc_name: str,
     env: dict[str, str | None],
     spec: dict[str, Any],
-    base_defaults: dict[str, str] | None,
+    merged_svc_for_chain: dict[str, Any],
+    compose_dir: Path,
 ) -> None:
     """Validate effective DATABASE_URL / DB_DSN bindings match the channel.
 
-    The effective binding is the overlay value when declared, else the base
-    compose env_file default. Fail closed (Issue #1655): an omitted binding is
-    a violation when its fallback resolves to another channel, and also when
-    the base defaults cannot be read — an unverifiable binding is never safe.
+    The effective binding is resolved in priority order:
+    1. The overlay ``environment`` block (direct binding — highest priority).
+    2. The full per-service env_file chain from the merged compose model
+       (base + overlay env_files, in declaration order, later files winning).
+
+    Fail closed (Issues #1655, #1769): an omitted binding is a violation when
+    its effective value resolves to another channel, and also when the chain
+    cannot be read at all — an unverifiable binding is never safe.
     """
     db_fragment = spec.get("db_name_fragment")
+
+    # Attempt to resolve the env_file chain once per service.  Cache the
+    # result or the error so we do not re-raise per key.
+    chain_result: dict[str, str] | None = None
+    chain_error: _EnvFileChainError | None = None
+    try:
+        chain_result = _resolve_env_file_chain(merged_svc_for_chain, compose_dir)
+    except _EnvFileChainError as exc:
+        chain_error = exc
+
     for key in CHANNEL_CRITICAL_DSN_KEYS:
         dsn = env.get(key)
         if dsn is not None:
+            # Direct overlay binding — check it immediately.
             expected_on_violation = _dsn_violation(dsn, spec)
             if expected_on_violation:
                 result.violations.append(
@@ -300,39 +526,40 @@ def _check_db_dsn(
                 )
             continue
 
-        # Key omitted from the overlay (or whole service absent): compose
-        # layering falls back to the base env_file default.
-        if base_defaults is None:
-            result.violations.append(
-                BindingViolation(
-                    service=svc_name,
-                    field=key,
-                    expected=(
-                        f"DSN containing {db_fragment!r} declared in the overlay, "
-                        "or a resolvable channel-correct base default"
-                    ),
-                    actual=(
-                        "omitted from overlay; base defaults "
-                        f"({BASE_ENV_DEFAULTS_REL}) unreadable — effective "
-                        "binding unverifiable"
-                    ),
-                )
-            )
-            continue
-
-        fallback = base_defaults.get(key)
-        if fallback is None:
-            # No overlay value and no base default: the service would start
-            # without this binding at all. Treat as unverifiable — fail closed.
+        # Key omitted from the overlay environment block: resolve through the
+        # env_file chain.
+        if chain_error is not None:
             result.violations.append(
                 BindingViolation(
                     service=svc_name,
                     field=key,
                     expected=(
                         f"DSN containing {db_fragment!r} declared in the overlay "
-                        "or via base defaults"
+                        "or via a readable env_file chain"
                     ),
-                    actual="omitted from overlay and absent from base defaults",
+                    actual=(
+                        f"omitted from overlay; env_file chain unresolvable "
+                        f"({chain_error.path_expr}: {chain_error.reason}) — "
+                        "effective binding unverifiable"
+                    ),
+                )
+            )
+            continue
+
+        # chain_result is valid (possibly empty dict if no env_files present)
+        assert chain_result is not None
+        fallback = chain_result.get(key)
+        if fallback is None:
+            # Not in any env_file either: unverifiable — fail closed.
+            result.violations.append(
+                BindingViolation(
+                    service=svc_name,
+                    field=key,
+                    expected=(
+                        f"DSN containing {db_fragment!r} declared in the overlay "
+                        "or via env_file chain"
+                    ),
+                    actual="omitted from overlay and absent from all env_file layers",
                 )
             )
             continue
@@ -345,7 +572,8 @@ def _check_db_dsn(
                     field=key,
                     expected=f"{expected_on_violation} (explicit in the overlay)",
                     actual=(
-                        f"omitted from overlay; falls back to base default {fallback!r}"
+                        f"omitted from overlay; effective value from env_file chain: "
+                        f"{fallback!r}"
                     ),
                 )
             )

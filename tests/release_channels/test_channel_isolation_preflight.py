@@ -1,4 +1,4 @@
-"""Channel-isolation preflight tests (Issues #1627, #1655).
+"""Channel-isolation preflight tests (Issues #1627, #1655, #1769).
 
 Verifies that the preflight guard fail-closes when a compose overlay's
 effective env bindings do not match the intended channel, and passes when they
@@ -10,6 +10,13 @@ the effective binding falls back to the base compose `env_file`
 (`config/runtime.defaults.env`, which carries prod `app` DSNs). The preflight
 must resolve that effective binding and fail closed when it lands on another
 channel — or when it cannot be resolved at all.
+
+Issue #1769 extends the contract to the full per-service env_file chain: compose
+allows multiple `env_file` entries per service, later files winning.  The base
+services include `${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}` after the
+defaults file.  A wrong-channel DSN in a later layer must be caught.  The
+preflight resolves DSN keys through the full chain and fails closed when a
+required env_file is missing or any env_file cannot be read.
 
 All tests are static (no Docker, no network, no running services) — they parse
 compose YAML in-process or use in-memory YAML fixtures.
@@ -708,3 +715,295 @@ def test_ui_doctor_surfaces_compose_mismatch(tmp_path: Path) -> None:
     # Non-zero exit behavior: result.ok is False, so callers must use non-zero exit.
     # The CLI entry point maps this to exit code 1.
     assert result.ok is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #1769 — full env_file chain resolution
+# ---------------------------------------------------------------------------
+# Helpers for these tests: write a minimal base docker-compose.yaml that
+# mirrors the real base compose structure (services with multi-layer env_file),
+# plus a synthetic second env_file that represents the runtime layer.
+
+def _write_base_compose(
+    tmp_path: Path,
+    second_env_file: str = "./tmp/runtime.env",
+    required: bool = False,
+) -> Path:
+    """Write a minimal docker-compose.yaml mirroring real base compose structure.
+
+    Each app service (api, worker, watcher) gets:
+    - ``config/runtime.defaults.env`` as the first env_file (always required)
+    - a second env_file at *second_env_file* with the given *required* flag.
+    """
+    required_str = "true" if required else "false"
+    content = textwrap.dedent(f"""\
+        services:
+          db:
+            env_file:
+              - ./config/runtime.defaults.env
+          api:
+            env_file:
+              - ./config/runtime.defaults.env
+              - path: {second_env_file}
+                required: {required_str}
+          worker:
+            env_file:
+              - ./config/runtime.defaults.env
+              - path: {second_env_file}
+                required: {required_str}
+          watcher:
+            env_file:
+              - ./config/runtime.defaults.env
+              - path: {second_env_file}
+                required: {required_str}
+    """)
+    p = tmp_path / "docker-compose.yaml"
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+def _write_runtime_env(tmp_path: Path, content: str) -> Path:
+    """Write a runtime env file in ``tmp_path/tmp/runtime.env``."""
+    runtime_dir = tmp_path / "tmp"
+    runtime_dir.mkdir(exist_ok=True)
+    p = runtime_dir / "runtime.env"
+    p.write_text(textwrap.dedent(content), encoding="utf-8")
+    return p
+
+
+def test_layered_env_file_wrong_channel_dsn_fails(tmp_path: Path) -> None:
+    """AC1(#1769): omitted DSN key whose winning env_file layer supplies a
+    wrong-channel DSN must fail the preflight.
+
+    Scenario: base compose has a second env_file layer (./tmp/runtime.env, optional)
+    that carries DATABASE_URL pointing at app_test. The overlay declares only
+    PKM_ENVIRONMENT=prod but omits DATABASE_URL/DB_DSN.  Compose resolves the
+    DSNs from the second layer, which is wrong for the prod channel.
+    """
+    _write_base_defaults(tmp_path)  # first layer: prod DSNs
+    _write_base_compose(tmp_path, second_env_file="./tmp/runtime.env", required=False)
+    # Second layer wins → test DSNs in a prod-intended stack
+    _write_runtime_env(
+        tmp_path,
+        """\
+        DATABASE_URL=postgresql+psycopg://app:app@db:5432/app_test
+        DB_DSN=postgresql+psycopg://app:app@db:5432/app_test
+        """,
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: prod
+          worker:
+            environment:
+              PKM_ENVIRONMENT: prod
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: prod
+        """,
+    )
+
+    result = check_compose_channel_isolation(
+        compose_path,
+        "prod",
+        base_compose_path=tmp_path / "docker-compose.yaml",
+    )
+
+    assert not result.ok, (
+        "Expected FAIL when a later env_file layer supplies a test-channel DSN "
+        f"for a prod-intended stack, but got PASS.\n{result.summary()}"
+    )
+    dsn_violations = [v for v in result.violations if v.field in ("DATABASE_URL", "DB_DSN")]
+    assert dsn_violations, (
+        f"Expected DSN violations from the layered env_file, got: {result.violations}"
+    )
+    # Violation message must reference the wrong-channel value that was found
+    summary = result.summary()
+    assert "app_test" in summary, "Summary must name the wrong DSN fragment found"
+
+
+def test_layered_env_file_correct_channel_dsn_passes(tmp_path: Path) -> None:
+    """AC2(#1769): omitted DSN key whose winning env_file layer supplies the
+    intended-channel DSN must pass.
+
+    Scenario: second layer carries prod-correct DSNs; overlay declares only
+    PKM_ENVIRONMENT.  Effective DSN is channel-correct → PASS.
+    """
+    _write_base_defaults(tmp_path)  # first layer: prod DSNs (already correct)
+    _write_base_compose(tmp_path, second_env_file="./tmp/runtime.env", required=False)
+    # Second layer also carries prod DSNs — still channel-correct
+    _write_runtime_env(
+        tmp_path,
+        """\
+        DATABASE_URL=postgresql+psycopg://app:app@db:5432/app
+        DB_DSN=postgresql+psycopg://app:app@db:5432/app
+        """,
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: prod
+          worker:
+            environment:
+              PKM_ENVIRONMENT: prod
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: prod
+        """,
+    )
+
+    result = check_compose_channel_isolation(
+        compose_path,
+        "prod",
+        base_compose_path=tmp_path / "docker-compose.yaml",
+    )
+
+    assert result.ok, (
+        "Expected PASS when the winning env_file layer supplies the correct "
+        f"channel DSN, but got violations:\n{result.summary()}"
+    )
+
+
+def test_unreadable_winning_env_file_layer_fails_closed(tmp_path: Path) -> None:
+    """AC3(#1769): an env_file that exists but cannot be read must fail closed.
+
+    The preflight must never silently skip an unreadable file — it cannot
+    verify what the effective binding would be, so it must reject.
+    """
+    _write_base_defaults(tmp_path)
+    _write_base_compose(tmp_path, second_env_file="./tmp/runtime.env", required=False)
+    runtime_env = _write_runtime_env(
+        tmp_path,
+        "DATABASE_URL=postgresql+psycopg://app:app@db:5432/app\n",
+    )
+    # Make the file unreadable
+    runtime_env.chmod(0o000)
+
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: prod
+          worker:
+            environment:
+              PKM_ENVIRONMENT: prod
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: prod
+        """,
+    )
+
+    try:
+        result = check_compose_channel_isolation(
+            compose_path,
+            "prod",
+            base_compose_path=tmp_path / "docker-compose.yaml",
+        )
+
+        assert not result.ok, (
+            "Expected FAIL when a referenced env_file exists but cannot be "
+            f"read, but got PASS.\n{result.summary()}"
+        )
+        summary = result.summary()
+        # Summary must tell the operator which file was unreadable
+        assert "runtime.env" in summary, (
+            f"Summary must name the unreadable file; got:\n{summary}"
+        )
+        assert "unresolvable" in summary.lower() or "cannot be read" in summary.lower(), (
+            f"Summary must state the file could not be read; got:\n{summary}"
+        )
+    finally:
+        # Restore permissions so pytest cleanup can remove the temp dir
+        runtime_env.chmod(0o644)
+
+
+def test_required_missing_env_file_layer_fails_closed(tmp_path: Path) -> None:
+    """Missing required env_file layer fails closed (posture per docs/RELEASE_CHANNELS/README.md).
+
+    When a referenced env_file is marked ``required: true`` (the default) and
+    does not exist, the preflight cannot verify what value compose would use, so
+    it must fail closed for all keys that would have been resolved from that
+    layer onward.
+    """
+    _write_base_defaults(tmp_path)
+    # required=True for the second layer — but we do NOT write it
+    _write_base_compose(tmp_path, second_env_file="./tmp/runtime.env", required=True)
+    # Do NOT create tmp/runtime.env — it is absent but required
+
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: prod
+          worker:
+            environment:
+              PKM_ENVIRONMENT: prod
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: prod
+        """,
+    )
+
+    result = check_compose_channel_isolation(
+        compose_path,
+        "prod",
+        base_compose_path=tmp_path / "docker-compose.yaml",
+    )
+
+    assert not result.ok, (
+        "Expected FAIL when a required env_file is missing, but got PASS.\n"
+        f"{result.summary()}"
+    )
+    summary = result.summary()
+    assert "runtime.env" in summary, (
+        f"Summary must name the missing required env_file; got:\n{summary}"
+    )
+
+
+def test_optional_missing_env_file_layer_uses_earlier_layer(tmp_path: Path) -> None:
+    """Missing optional env_file layer is silently skipped; earlier layer wins.
+
+    When a referenced env_file is ``required: false`` and does not exist,
+    compose skips it.  The preflight must mirror this: the effective DSN comes
+    from the first layer (base defaults) which is channel-correct → PASS.
+    """
+    _write_base_defaults(tmp_path)  # first layer: prod DSNs (channel-correct)
+    _write_base_compose(tmp_path, second_env_file="./tmp/runtime.env", required=False)
+    # Do NOT create tmp/runtime.env — it is absent and optional
+
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: prod
+          worker:
+            environment:
+              PKM_ENVIRONMENT: prod
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: prod
+        """,
+    )
+
+    result = check_compose_channel_isolation(
+        compose_path,
+        "prod",
+        base_compose_path=tmp_path / "docker-compose.yaml",
+    )
+
+    assert result.ok, (
+        "Expected PASS when an optional env_file is absent and the first layer "
+        f"supplies a channel-correct DSN, but got violations:\n{result.summary()}"
+    )

@@ -108,16 +108,24 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
 
-### Compose/env binding invariant (Issues #1627, #1655)
+### Compose/env binding invariant (Issues #1627, #1655, #1769)
 
 A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB_DSN` to values that match the **intended channel** — not another channel. A test stack whose compose declares `PKM_ENVIRONMENT=prod` would direct all writes at prod resources despite running under the test project namespace; this is a channel-isolation breach.
 
 **Omitted bindings are violations (Issue #1655).** The base compose file feeds every app service (`api`, `worker`, `watcher`) from `config/runtime.defaults.env`, which carries the prod `app` DSNs. If a channel's overlay omits `DATABASE_URL` / `DB_DSN` for a channel-critical service — by dropping the keys or the entire service block — compose layering silently falls back to those base defaults. The preflight therefore checks the **effective** binding (overlay value, else base default) and fail-closes when:
 
 - the effective DSN resolves to another channel (e.g. a test overlay whose omitted DSN falls back to the prod `app` DB), or
-- the base defaults file cannot be read, making the effective binding unverifiable.
+- the env_file chain cannot be fully resolved, making the effective binding unverifiable.
 
 Omission is only acceptable when the fallback already binds the intended channel (e.g. `docker-compose.prod.yml` relies on the prod base defaults). This is channel-aware resolution of one shared rule, not a per-channel behavior split.
+
+**env_file-chain resolution (Issue #1769).** Compose allows multiple `env_file` entries per service; later entries win over earlier ones. The base services declare a second layer (`${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}`) after `config/runtime.defaults.env`. The preflight resolves omitted DSN keys through the **full per-service env_file chain** from both the base compose file and the overlay, in declaration order with later files winning. `${VAR:-default}` path expressions are interpolated against `os.environ` the same way compose does.
+
+**Missing-env-file posture.** The preflight mirrors compose's own behaviour:
+
+- A referenced env_file with `required: true` (the default when `required` is omitted) that does not exist is treated as an error — the preflight fails closed for all keys that would have been resolved from that layer onward. Compose would refuse to start the stack; the preflight refuses to pass it.
+- A referenced env_file with `required: false` that does not exist is silently skipped, matching compose's behaviour. The preflight uses the value from the previous layer in the chain.
+- A referenced env_file that **exists** but **cannot be read** (e.g. permission denied) always fails closed regardless of the `required` flag. The file's presence is enough to make its content the winning value; an unreadable winning file leaves the effective binding unverifiable.
 
 **Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
 
