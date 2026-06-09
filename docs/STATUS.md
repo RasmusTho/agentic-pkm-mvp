@@ -213,6 +213,20 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   #1717 (PR #1723), spec docs PR #1719. Core Runtime defaults and the read-only Chat scaffold are
   unchanged. A live operator browser demo of the open→intent→applied-edit→undo loop remains the
   optional end-to-end confirmation; in-process and CI (`companion-ui-browser-runtime`) validation passed.
+- Chat→Panel Governance Handoff (Phase 3, dev/staging, `CANVAS_ENABLED`) is now shipped: a
+  governance-bearing co-authoring intent is navigable end to end instead of dead-ending in the UI.
+  The `/coauthor` governance-bearing path returns a structured `GovernanceHandoffRef` (HTTP 409 body:
+  `status=routed_to_panel`, `intent_id`, `action_type`) and stages the Panel proposal with a
+  proposal-scoped `StagedProposal.proposal_origin="canvas_coauthoring"` (distinct from vault-note
+  `NoteRef.origin`). The Companion UI canvas region captures the handoff reference and exposes a
+  read-only "view in Panel" affordance keyed to `intent_id`; the Panel rail (model + served HTML)
+  surfaces the server-declared canvas-origin attribution; confirmation routes through the existing
+  `POST /api/panel/confirm`; and the executed receipt is reflected back into the originating context
+  (read-only, server-declared, correlated strictly by `intent_id`, never invented). Delivery:
+  capability spec `docs/CANVAS_CHAT_SURFACE/` Phase 3; parent #1725, tasks #1726 (PR #1731), #1727
+  (PR #1732), #1728 (PR #1734), spec docs PR #1729. Wiring the served dev page to actually invoke
+  `/coauthor` in the live JS (not done since Phase 2) is tracked as bounded follow-up #1733. Panel
+  remains the primary command surface; receipts stay server-owned; Core Runtime defaults unchanged.
 - Panel confirmation is now a bounded shipped runtime path: `POST /api/panel/confirm` confirms
   explicit panel actions through the governed confirmation path, preserves blocked/rejected receipts,
   and the runtime/client surface now includes `GET /api/artifacts/note` plus the companion-app
