@@ -26,7 +26,7 @@ A user co-authoring a note states a governance-bearing intent ("promote to everg
 ## What This Task Does
 
 - Extend the canvas co-authoring region (`CanvasCoAuthorRegion` in `real_note_workspace_shell.py`) so its panel-routed state carries the handoff reference (`intent_id`, `action_type`) returned by CHAT-PANEL-HANDOFF-01, plus a "view in Panel" affordance keyed to that `intent_id`.
-- In the Panel rail rendering (`real_note_workspace_dev_page.py` proposal rows), surface the `origin="canvas_coauthoring"` attribution on the matching proposal so the user sees it came from their canvas intent.
+- In the Panel rail rendering (`real_note_workspace_dev_page.py` proposal rows), surface the the proposal-scoped `origin="canvas_coauthoring"` (the dedicated proposal field from CHAT-PANEL-HANDOFF-01, not the vault-note/frontmatter `origin`) attribution on the matching proposal so the user sees it came from their canvas intent.
 - Reuse the existing confirm path (`confirm_panel_proposal` / `POST /api/panel/confirm`); this task adds correlation and attribution, not a new execution path.
 - Server declares, UI renders: the UI correlates by the server-provided `intent_id`/`origin`; it must not synthesize proposals, infer governance, or execute locally.
 
@@ -51,7 +51,7 @@ This is the visible half of the hybrid handoff. Without it the authority split e
   Verify: `tests/companion_ui/test_chat_to_panel_handoff.py::test_region_stores_handoff_reference`
 - [ ] The canvas region exposes a "view in Panel" affordance only when a handoff reference is present.
   Verify: `tests/companion_ui/test_chat_to_panel_handoff.py::test_region_view_in_panel_affordance_present_with_reference`
-- [ ] The Panel rail renders the matching proposal with its server-declared `origin="canvas_coauthoring"` attribution.
+- [ ] The Panel rail renders the matching proposal with its server-declared the proposal-scoped `origin="canvas_coauthoring"` (the dedicated proposal field from CHAT-PANEL-HANDOFF-01, not the vault-note/frontmatter `origin`) attribution.
   Verify: `tests/companion_ui/test_chat_to_panel_handoff.py::test_panel_rail_shows_canvas_origin`
 - [ ] Confirmation routes through the existing `POST /api/panel/confirm` path; no new execution path is introduced.
   Verify: `tests/companion_ui/test_chat_to_panel_handoff.py::test_confirm_uses_existing_panel_path`

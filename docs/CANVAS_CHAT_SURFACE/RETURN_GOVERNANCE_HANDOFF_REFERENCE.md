@@ -27,7 +27,7 @@ The Chat→Panel handoff is dead-ended in the API. `GovernanceRouter.request_gov
 
 - Change `_route_governance_bearing` (and the `POST /api/canvas/sessions/{id}/governance` path) to capture the `PendingAction` and return a structured **governance handoff reference**: `intent_id`, `action_type`, and a `status` of `routed_to_panel`. The note remains unmutated.
 - For the `/coauthor` governance-bearing case, replace the opaque 409 string with a 409 (or 200 handoff) response whose JSON body carries the handoff reference, so the UI can correlate and link to the Panel proposal. Keep a stable, typed response model (e.g. `GovernanceHandoffRef`).
-- Mark the staged Panel proposal with `origin = "canvas_coauthoring"` (the companion workspace aggregate already carries an `origin` field, currently `None`) so the proposal is attributable to its canvas source when surfaced.
+- Mark the staged Panel proposal with a **proposal-scoped** origin of `canvas_coauthoring` so it is attributable to its canvas source when surfaced. **Do not reuse the artifact/frontmatter `origin` field** exposed by the companion workspace aggregate (that field is vault-note metadata in `_ARTIFACT_OPTIONAL_FIELDS`, not proposal metadata, and `StagedProposal` / `_proposal_rows_from_panel` carry no origin today). Add a dedicated proposal-origin field on `StagedProposal` (and surface it on the proposal row), or map it onto an existing proposal-event field such as `PanelIntentEvent.payload`'s handoff metadata — but keep it distinct from note origin so Panel attribution never overwrites artifact origin.
 - Record the same `intent_id` in the `.chats/` session log (already done by `GovernanceRouter`); this task makes the reference visible to the caller, not just the log.
 
 This stays within `HYBRID_CHAT_INTEGRATION_SCHEMA.md` Allowed Crossings: it exchanges a reference between the canvas session and the governed-execution boundary; it does not let Chat mutate governance state directly.
@@ -45,7 +45,8 @@ POST /api/canvas/sessions/{id}/coauthor
   "action_type": "maturity_transition",
   "detail": "Governance-bearing — routed to the gated pipeline; body unchanged."
 }
-# A Panel proposal now exists with origin="canvas_coauthoring", intent_id=intent-abc123
+# A Panel proposal now exists with a proposal-scoped origin="canvas_coauthoring",
+# intent_id=intent-abc123 (distinct from any vault-note/frontmatter origin)
 ```
 
 ## Why This Matters
@@ -56,7 +57,7 @@ Without a returned reference the UI can only show a generic "routed to Panel" fl
 
 - [ ] A governance-bearing co-authoring intent returns a structured handoff reference containing `intent_id`, `action_type`, and `status="routed_to_panel"`.
   Verify: `tests/api/test_canvas_coauthor_api.py::test_governance_bearing_returns_handoff_reference`
-- [ ] The staged Panel proposal is marked `origin="canvas_coauthoring"`.
+- [ ] The staged Panel proposal carries a proposal-scoped origin of `canvas_coauthoring` (a dedicated proposal field, not the vault-note/frontmatter `origin`).
   Verify: `tests/api/test_canvas_governance_handoff.py::test_staged_proposal_marked_canvas_origin`
 - [ ] The note body is left unchanged on the governance-bearing path.
   Verify: `tests/api/test_canvas_coauthor_api.py::test_coauthor_governance_bearing_is_routed_not_applied`
