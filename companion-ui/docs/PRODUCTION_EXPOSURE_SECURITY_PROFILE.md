@@ -22,17 +22,17 @@ This profile defines how to reason about Companion UI exposure before production
 It records posture and review inputs only. It does not implement auth, TLS, CORS, CSRF, renderer
 changes, deployment automation, or runtime behavior.
 
-The current system is personal/local-first. Localhost personal use remains a lower-risk default.
-LAN, Tailscale, and public-internet scenarios are treated as explicit exposure choices, not assumed
-current hostile internet deployment.
+The current system is personal/local-first but normally runs as a trusted-device server. LAN and
+Tailscale are the default operator access posture, while public-internet scenarios remain
+unsupported unless a separate hardening contract accepts them.
 
 ## Exposure posture
 
 | Exposure mode | Current support posture | Auth/session assumption | CSRF/CORS posture | Review level | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Localhost loopback | Supported dev/staging default when bound to `127.0.0.1`. | No auth required for loopback-only personal use. | Keep CORS restrictive; mutating routes use explicit non-GET methods. | Level 1 for read-only changes, Level 2 for mutation/rendering changes. | Threat model is mainly local process/browser-origin mistakes and accidental data exposure. |
-| LAN | Opt-in operator action, not production hardening. | Network trust alone is not production-grade auth. Token/session auth should precede supported non-loopback use. | Arbitrary origins must not be allowed for mutation-capable routes; cookie auth would require CSRF protection. | Level 2 minimum. | Treat as trusted-device personal/staging only. |
-| Tailscale | Preferred over open LAN for personal multi-device access, still opt-in. | Tailnet membership is not a substitute for application auth once mutation-capable flows mature. | Same as LAN; be explicit about browser origin and session behavior. | Level 2 minimum. | Lower exposure than public internet, but not equivalent to loopback. |
+| Localhost loopback | Supported opt-out when bound to `127.0.0.1`. | No auth required for loopback-only personal use. | Keep CORS restrictive; mutating routes use explicit non-GET methods. | Level 1 for read-only changes, Level 2 for mutation/rendering changes. | Threat model is mainly local process/browser-origin mistakes and accidental data exposure. |
+| LAN | Default trusted-device server posture, not production hardening. | Network trust alone is not production-grade auth. Token/session auth should precede broader supported non-loopback use. | Arbitrary origins must not be allowed for mutation-capable routes; cookie auth would require CSRF protection. | Level 2 minimum. | Treat as trusted-device personal/staging only. |
+| Tailscale | Preferred over open LAN for personal multi-device access. | Tailnet membership is not a substitute for application auth once mutation-capable flows mature. | Same as LAN; be explicit about browser origin and session behavior. | Level 2 minimum. | Lower exposure than public internet, but not equivalent to loopback. |
 | Public internet | Unsupported. | Requires separate accepted auth, TLS, reverse-proxy, token/session, CORS/CSRF, rate-limit, and operational contract before support. | Must be designed before exposure; no default permissive posture. | Level 3 or higher before support. | Do not expose current Companion UI/API publicly as a supported mode. |
 
 ## Auth token and API key posture

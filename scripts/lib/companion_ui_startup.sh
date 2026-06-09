@@ -21,7 +21,7 @@
 #   CUI_SERVE_MODULE            companion_ui.workspace.serve_dev_page | serve_production_page
 #
 # Optional behaviour flags (default safe):
-#   CUI_BIND_LAN=1              bind the UI to 0.0.0.0 for LAN/Tailscale UAT (default: 127.0.0.1)
+#   CUI_BIND_LAN=0              bind the UI to 127.0.0.1 only (default: 0.0.0.0)
 #   CUI_TARGET_NOTE=<rel-path>  optional note path to verify via /api/companion/workspace
 #   CUI_WATCHER_AUTO_EXEC       passthrough to start_full_system.sh (prod wrapper sets 0 by default)
 #   CUI_DB_LABEL                expected channel DB name to report (e.g. app_dev/app_test/app)
@@ -255,11 +255,15 @@ cui_start_ui() {
   mkdir -p "${root}/tmp"
   py="$(cui_python_bin)" || cui_die "no usable python interpreter found for Companion UI server"
 
-  if [ "${CUI_BIND_LAN:-0}" = "1" ]; then
-    host="0.0.0.0"
-    cui_log "binding UI to 0.0.0.0 (LAN/Tailscale UAT explicitly requested)"
-  else
+  if [ -n "${HOST:-}" ]; then
+    host="${HOST}"
+    cui_log "binding UI to ${host} (HOST explicitly set)"
+  elif [ "${CUI_BIND_LAN:-1}" = "0" ]; then
     host="127.0.0.1"
+    cui_log "binding UI to 127.0.0.1 (loopback-only explicitly requested)"
+  else
+    host="0.0.0.0"
+    cui_log "binding UI to 0.0.0.0 (server/LAN default)"
   fi
 
   cui_free_ui_port
@@ -320,11 +324,11 @@ cui_print_summary() {
   echo "  channel     : PKM_ENVIRONMENT=${CUI_CHANNEL}  project=${CUI_COMPOSE_PROJECT}  db=${CUI_DB_LABEL:-derived}"
   echo "  runtime API : http://127.0.0.1:${CUI_API_PORT}/healthz"
   echo "  UI (local)  : http://127.0.0.1:${CUI_UI_PORT}/${query}"
-  if [ "${CUI_BIND_LAN:-0}" = "1" ]; then
+  if [ "${CUI_BIND_LAN:-1}" != "0" ]; then
     [ -n "${lan}" ] && echo "  UI (LAN)    : http://${lan}:${CUI_UI_PORT}/${query}"
     [ -n "${ts}" ]  && echo "  UI (Tailscale): http://${ts}:${CUI_UI_PORT}/${query}"
   else
-    echo "  UI bind     : 127.0.0.1 only (set CUI_BIND_LAN=1 for LAN/Tailscale UAT)"
+    echo "  UI bind     : 127.0.0.1 only (CUI_BIND_LAN=0)"
   fi
   echo "  API log     : ${CUI_API_LOG_PATH:-see scripts/start_full_system.sh output / tmp/}"
   echo "  UI log      : ${CUI_UI_LOG_PATH:-tmp/companion-ui-${CUI_CHANNEL}.log}"

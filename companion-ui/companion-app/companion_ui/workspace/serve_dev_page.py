@@ -9,7 +9,7 @@ for active artifacts). Does not read vault files directly.
 Vault binding is determined by the runtime environment, not by this server.
 
 Environment variables:
-    HOST                   Bind address         (default: 127.0.0.1)
+    HOST                   Bind address         (default: 0.0.0.0)
     PORT                   Bind port            (default: 8111)
     COMPANION_API_BASE_URL Runtime API base URL (default: http://127.0.0.1:18001)
 
@@ -23,14 +23,14 @@ Companion UI dev server port map:
     test → 8112
     prod → 8113
 
-Local dev:
-    cd companion-ui/companion-app
-    COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=127.0.0.1 PORT=8111 \\
-        python -m companion_ui.workspace.serve_dev_page
-
-LAN/Tailscale (explicit operator action required — not the default):
+Default server/LAN bind:
     cd companion-ui/companion-app
     COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=0.0.0.0 PORT=8111 \\
+        python -m companion_ui.workspace.serve_dev_page
+
+Loopback-only opt-out:
+    cd companion-ui/companion-app
+    COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=127.0.0.1 PORT=8111 \\
         python -m companion_ui.workspace.serve_dev_page
 
 Browser requests use same-origin Companion UI routes; the dev server calls
@@ -72,7 +72,7 @@ from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientHTTPError,
 )
 
-_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
@@ -88,7 +88,7 @@ def load_config() -> dict:
     """Load server configuration from environment variables.
 
     Returns a dict with keys: host, port, api_base_url.
-    Defaults: HOST=127.0.0.1, PORT=8111, COMPANION_API_BASE_URL=http://127.0.0.1:18001.
+    Defaults: HOST=0.0.0.0, PORT=8111, COMPANION_API_BASE_URL=http://127.0.0.1:18001.
     """
     return {
         "host": os.environ.get("HOST", _DEFAULT_HOST),

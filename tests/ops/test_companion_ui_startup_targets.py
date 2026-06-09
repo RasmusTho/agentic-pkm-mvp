@@ -104,6 +104,17 @@ def test_shared_library_doctor_is_read_only() -> None:
     )
 
 
+def test_shared_library_honors_explicit_host_before_bind_default() -> None:
+    """The documented HOST loopback opt-out must work through channel launchers."""
+    text = SHARED_LIB.read_text(encoding="utf-8")
+    assert 'if [ -n "${HOST:-}" ]; then' in text
+    assert 'host="${HOST}"' in text
+    assert 'elif [ "${CUI_BIND_LAN:-1}" = "0" ]; then' in text
+    assert text.index('if [ -n "${HOST:-}" ]; then') < text.index(
+        'elif [ "${CUI_BIND_LAN:-1}" = "0" ]; then'
+    )
+
+
 # ── dev / Niflheim (#1358) ────────────────────────────────────────────────────
 
 

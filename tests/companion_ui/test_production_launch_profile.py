@@ -13,11 +13,11 @@ def test_production_port(monkeypatch) -> None:
     assert load_config()["port"] == 8113
 
 
-def test_production_default_host_is_local_only(monkeypatch) -> None:
+def test_production_default_host_is_server_bind(monkeypatch) -> None:
     monkeypatch.delenv("HOST", raising=False)
     from companion_ui.workspace.serve_production_page import load_config
 
-    assert load_config()["host"] == "127.0.0.1"
+    assert load_config()["host"] == "0.0.0.0"
 
 
 def test_production_default_api_points_at_prod_runtime(monkeypatch) -> None:
@@ -56,7 +56,7 @@ def test_production_safety_warning_is_explicit() -> None:
     from companion_ui.workspace.serve_production_page import _PRODUCTION_SAFETY_WARNING
 
     warning = _PRODUCTION_SAFETY_WARNING.lower()
-    assert "local-only" in warning
+    assert "server/lan bind default" in warning
     assert "public internet exposure is not supported" in warning
     assert "auth" in warning
     assert "tls" in warning
@@ -120,7 +120,7 @@ def test_production_launch_safety_doc_covers_operator_requirements() -> None:
     assert "python -m companion_ui.workspace.serve_production_page" in doc
     assert "Runtime API | 18001 | 18002 | 18000" in doc
     assert "Companion UI | 8111 | 8112 | 8113" in doc
-    assert "HOST=127.0.0.1" in doc
+    assert "HOST=0.0.0.0" in doc
     assert "Tailscale" in doc
     assert "Do not expose this profile to the public internet." in doc
     assert "curl -fsS http://127.0.0.1:18000/health" in doc
@@ -135,7 +135,7 @@ def test_production_launch_docs_cover_tailscale_warning() -> None:
         encoding="utf-8"
     )
 
-    assert "HOST=0.0.0.0" in doc
+    assert "HOST=127.0.0.1" in doc
     assert "Tailscale" in doc
     assert "trusted personal networks or trusted tailnets" in doc
     assert "Do not expose this profile to the public internet." in doc

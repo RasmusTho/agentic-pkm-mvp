@@ -218,6 +218,9 @@ Companion docs:
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
+- Companion UI channel launchers (`make dev-ui`, `make test-ui`, `make prod-ui`) bind the browser
+  UI to `0.0.0.0` by default for trusted-device server use. Set `CUI_BIND_LAN=0` when a
+  loopback-only UI bind is required. Public internet exposure remains unsupported.
 
 Detailed startup, local topology, and recovery procedures live in `docs/INFRASTRUCTURE.md`.
 Task-specific operator walkthroughs live in `docs/runbooks/`.

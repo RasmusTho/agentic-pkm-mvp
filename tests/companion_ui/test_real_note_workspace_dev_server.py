@@ -2,7 +2,7 @@
 
 Verifies:
 - Module exists and can be imported.
-- Default config uses HOST=127.0.0.1, PORT=8111, COMPANION_API_BASE_URL=http://127.0.0.1:18001.
+- Default config uses HOST=0.0.0.0, PORT=8111, COMPANION_API_BASE_URL=http://127.0.0.1:18001.
 - Env overrides for host/port/API base URL are respected.
 - render_index_html produces dev/staging marker.
 - render_index_html includes configured API base URL.
@@ -183,7 +183,7 @@ class TestLoadConfig:
         monkeypatch.delenv("HOST", raising=False)
         from companion_ui.workspace.serve_dev_page import load_config
 
-        assert load_config()["host"] == "127.0.0.1"
+        assert load_config()["host"] == "0.0.0.0"
 
     def test_default_port(self, monkeypatch) -> None:
         monkeypatch.delenv("PORT", raising=False)
@@ -667,10 +667,10 @@ class TestDevServerBoundaries:
                         )
         assert not string_violations, f"Named vault found in code string: {string_violations}"
 
-    def test_default_bind_is_local_only(self) -> None:
+    def test_default_bind_is_server_lan(self) -> None:
         from companion_ui.workspace.serve_dev_page import _DEFAULT_HOST
 
-        assert _DEFAULT_HOST == "127.0.0.1"
+        assert _DEFAULT_HOST == "0.0.0.0"
 
     def test_default_port_is_8111(self) -> None:
         from companion_ui.workspace.serve_dev_page import _DEFAULT_PORT
