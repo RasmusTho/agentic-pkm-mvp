@@ -28,7 +28,7 @@ This is the human flow described in `docs/HUMAN-FLOWS.md` §8: "I want to think 
 
 ## What This Capability Does Not Build
 
-- A UI or editor library. Hosting location (Obsidian, standalone, web) is deferred.
+- A general-purpose UI or editor library, and no production hosting decision (Obsidian, standalone, web). **Scope note:** Phase 1 (the four tasks below) builds no UI. Phase 2 ("Agentic Canvas Co-Authoring", further below) narrows this exclusion: it adds a *bounded* Companion UI co-authoring surface in the dev/staging shell — not a general editor library and not a production hosting decision, both of which remain deferred.
 - Workspace mode (multi-note sessions across related notes).
 - Hybrid Panel/Chat integration. That is a separate downstream capability.
 - Retention policy enforcement. Retention window duration is a policy decision deferred to a later slice.
@@ -93,3 +93,33 @@ Implementation task issues (in execution order):
 | CO_AUTHOR_NOTE_BODY | #599 | `closed` |
 | GATE_GOVERNANCE_BEARING_MUTATIONS | #600 | `closed` |
 | EXPOSE_CANVAS_SESSION_API | #601 | `closed` |
+
+## Phase 2 — Agentic Canvas Co-Authoring
+
+Phase 1 (above) built the session lifecycle, the body-writer path, the governance gate, and the
+session API. It did **not** build the agent: `CanvasWriter.apply_edit` still requires a
+caller-supplied `new_body`, and `read_only_cognition.py` is execution-denied and unwired. So
+co-authoring with an agent editing in place is not yet reachable. Phase 2 closes that gap as a
+bounded vertical slice and is **Agentic Lab** (opt-in, gated behind `CANVAS_ENABLED`; it does not
+change Core Runtime defaults).
+
+| Order | Task File | Issue | What It Builds | Parallelizable |
+|-------|-----------|-------|----------------|----------------|
+| 1 | [GENERATE_COAUTHORING_EDIT.md](GENERATE_COAUTHORING_EDIT.md) | #1716 (`agent:ready`) | Write-capable co-authoring cognition + `POST /coauthor` applying generated body via CanvasWriter | — |
+| 2 | [SURFACE_CANVAS_IN_COMPANION_UI.md](SURFACE_CANVAS_IN_COMPANION_UI.md) | #1717 (`agent:blocked` on #1716) | Canvas surface in the Companion UI shell: intent input, applied-edit render, undo, session lifecycle | depends on 1 |
+
+```
+GENERATE_COAUTHORING_EDIT
+        ↓
+SURFACE_CANVAS_IN_COMPANION_UI
+```
+
+Phase 2 acceptance (validated on the parent feature issue):
+
+- [ ] A user intent during an active session produces an agent-generated body edit applied in place.
+- [ ] Frontmatter/cross-note generations route through the gated pipeline, never applied as co-authoring.
+- [ ] The Companion UI shell makes the loop reachable (intent → applied edit → undo) behind `CANVAS_ENABLED`.
+- [ ] Core Runtime defaults and the read-only Chat scaffold are unchanged.
+- [ ] `docs/STATUS.md` records the Phase 2 delivery receipt once accepted.
+
+Phase 2 parent feature issue: **#1715** — live validation hub; closes only after the dev-shell demo passes and the `docs/STATUS.md` Companion UI claim is promoted.
