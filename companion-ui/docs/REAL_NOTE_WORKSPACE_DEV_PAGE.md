@@ -110,10 +110,10 @@ make dev-ui-doctor     # read-only diagnostic (no services started, no vault wri
   SSH/Colima/Docker process — and starts the dev page;
 - prints the final UAT URL(s) and the API/UI log paths.
 
-LAN/Tailscale UAT is opt-in and explicit:
+LAN/Tailscale/server bind is the default:
 
 ```bash
-CUI_BIND_LAN=1 make dev-ui                     # bind UI to 0.0.0.0
+CUI_BIND_LAN=0 make dev-ui                     # opt out to 127.0.0.1 only
 CUI_TARGET_NOTE="Some Note.md" make dev-ui     # also verify a note via the API
 ```
 
@@ -170,11 +170,11 @@ The manual environment-variable invocations below remain valid for ad hoc use.
 | `test`      | `8112`                    |
 | `prod`      | `8113`                    |
 
-### Local-only startup (default)
+### Server/LAN startup (default)
 
 ```bash
 cd companion-ui/companion-app
-COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=127.0.0.1 PORT=8111 \
+COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=0.0.0.0 PORT=8111 \
   python -m companion_ui.workspace.serve_dev_page
 ```
 
@@ -184,18 +184,17 @@ Then open:
 http://127.0.0.1:8111/?note_path=<valid-dev-note-path>
 ```
 
-### Explicit LAN/Tailscale startup
+### Loopback-only startup
 
-Only use this when intentionally enabling LAN or Tailscale access.
-`HOST=0.0.0.0` must be explicit. Do not expose publicly.
+Use this when intentionally limiting access to the server machine.
 
 ```bash
 cd companion-ui/companion-app
-COMPANION_API_BASE_URL=http://<host-lan-or-tailnet-ip>:18001 HOST=0.0.0.0 PORT=8111 \
+COMPANION_API_BASE_URL=http://127.0.0.1:18001 HOST=127.0.0.1 PORT=8111 \
   python -m companion_ui.workspace.serve_dev_page
 ```
 
-Then from a trusted device on the same LAN or Tailnet:
+For trusted devices on the same LAN or Tailnet, use the default server bind and open:
 
 ```
 http://<host-lan-or-tailnet-ip>:8111/?note_path=<valid-dev-note-path>
@@ -243,7 +242,7 @@ proxying, public internet exposure, or direct vault access.
 
 ```bash
 cd companion-ui/companion-app
-COMPANION_API_BASE_URL=http://127.0.0.1:18000 HOST=127.0.0.1 PORT=8113 \
+COMPANION_API_BASE_URL=http://127.0.0.1:18000 HOST=0.0.0.0 PORT=8113 \
   python -m companion_ui.workspace.serve_production_page
 ```
 
@@ -311,7 +310,7 @@ targets. The runtime owns environment and vault binding.
    ```bash
    cd companion-ui/companion-app
    COMPANION_API_BASE_URL=http://127.0.0.1:<api-port> PORT=<ui-port> \
-     HOST=127.0.0.1 python -m companion_ui.workspace.serve_dev_page
+     HOST=0.0.0.0 python -m companion_ui.workspace.serve_dev_page
    ```
 
 5. **Set the UI API base URL to the matching runtime API port.**
@@ -356,7 +355,7 @@ targets. The runtime owns environment and vault binding.
    ipconfig getifaddr en1   # Ethernet
    ```
 
-2. Start the dev page with explicit `HOST=0.0.0.0` and a specific port:
+2. Start the dev page with default `HOST=0.0.0.0` and a specific port:
    ```bash
    COMPANION_API_BASE_URL=http://<mac-mini-lan-ip>:18001 \
      HOST=0.0.0.0 PORT=8111 python -m companion_ui.workspace.serve_dev_page
@@ -374,7 +373,7 @@ targets. The runtime owns environment and vault binding.
    tailscale ip -4
    ```
 
-2. Start the dev page with explicit `HOST=0.0.0.0`:
+2. Start the dev page with default `HOST=0.0.0.0`:
    ```bash
    COMPANION_API_BASE_URL=http://<mac-mini-tailnet-ip>:18001 \
      HOST=0.0.0.0 PORT=8111 python -m companion_ui.workspace.serve_dev_page
@@ -387,8 +386,8 @@ targets. The runtime owns environment and vault binding.
 
 ### Warnings
 
-- **LAN/Tailscale bind must be explicit.** Setting `HOST=0.0.0.0` is a
-  deliberate choice; the default is `127.0.0.1` (local only).
+- **LAN/Tailscale/server bind is the default.** Set `HOST=127.0.0.1` or
+  `CUI_BIND_LAN=0` only when loopback-only access is required.
 - **Do not expose the dev page or runtime API to the public internet.**
 - **Work-computer access** from a work network may require additional approval,
   VPN policy, reverse proxy, or TLS hardening depending on workplace network
@@ -407,10 +406,10 @@ The following safety rules apply unconditionally to the dev/staging page:
 - **Confirm/reject/writeback testing against any real environment vault must be
   explicitly operator-gated** and use a disposable test note. It is not part of
   this PR's scope.
-- **Do not expose dev/staging UI or runtime API publicly.** LAN/Tailscale
-  binding must be explicit.
-- **Default bind should remain local-only** (`127.0.0.1`) unless the operator
-  explicitly sets `HOST=0.0.0.0`.
+- **Do not expose dev/staging UI or runtime API publicly.** Server/LAN binding is for trusted
+  personal networks or trusted tailnets only.
+- **Loopback-only bind is an explicit opt-out** (`127.0.0.1`) when the operator does not want
+  server/LAN access.
 - **Work-computer access is deferred** unless already safely reachable through
   the operator's approved Tailscale/network setup.
 - **Do not silently fall back to a default vault path** if the runtime API

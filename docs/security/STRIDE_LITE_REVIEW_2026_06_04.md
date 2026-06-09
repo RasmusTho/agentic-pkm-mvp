@@ -32,11 +32,11 @@ high adversarial exposure, does not implement mitigations, and does not create f
 
 | ID | Surface | STRIDE category | Finding | Classification | Current controls | Gap / follow-up candidate |
 | --- | --- | --- | --- | --- | --- | --- |
-| F1 | Runtime API | Spoofing / EoP | Loopback routes have no route-specific auth; non-loopback exposure would let any reachable client call mutation routes. | Plausible future networked/multi-user risk | Localhost default, public unsupported, feature flags/WriteGuard on some routes. | Define auth/rate-limit implementation only if non-loopback support is accepted. |
-| F2 | Runtime API | Information Disclosure | Read and diagnostic routes can expose vault body, paths, outbox events, status, or settings posture. | Realistic current personal-use risk | Path validation, health redaction, loopback default. | Keep diagnostic routes loopback-only; review before LAN/Tailscale exposure. |
+| F1 | Runtime API | Spoofing / EoP | Loopback routes have no route-specific auth; non-loopback exposure would let any reachable client call mutation routes. | Plausible future networked/multi-user risk | Trusted-device server default, public unsupported, feature flags/WriteGuard on some routes. | Define auth/rate-limit implementation only if non-loopback support is accepted. |
+| F2 | Runtime API | Information Disclosure | Read and diagnostic routes can expose vault body, paths, outbox events, status, or settings posture. | Realistic current personal-use risk | Path validation, health redaction, trusted-device server default. | Keep diagnostic routes loopback-only; review before LAN/Tailscale exposure. |
 | F3 | Governance/write | Repudiation | Not all body writes produce governance receipts because human/body co-authoring uses provenance, not Panel receipts. | Architectural invariant | Session logs, content hashes, WriteGuard/data-safety checks, explicit lane distinction. | Preserve wording so governance-bearing receipts are not incorrectly required for body co-authoring. |
 | F4 | Governance/write | Tampering / EoP | `may_write`, UI confirmation, context-bundle flags, or model output could be mistaken as write authorization. | Study-only adversarial scenario | Security invariants, bundle consumers rejecting `may_write=true` for read-only frames, WriteGuard/policy lanes. | Include in future attack-path exercises. |
-| F5 | Companion UI | Spoofing / CSRF | LAN/Tailscale or future cookie/session use could let another browser origin trigger mutation-capable routes. | Plausible future networked/multi-user risk | Loopback default, public unsupported, explicit non-loopback review posture. | Token/session/CORS/CSRF implementation issue only if exposure support is approved. |
+| F5 | Companion UI | Spoofing / CSRF | LAN/Tailscale or future cookie/session use could let another browser origin trigger mutation-capable routes. | Plausible future networked/multi-user risk | trusted-device server default, public unsupported, explicit non-loopback review posture. | Token/session/CORS/CSRF implementation issue only if exposure support is approved. |
 | F6 | Companion UI | Information Disclosure | Renderer and workspace responses expose note text to the browser by design; unsafe rendering could widen exposure. | Realistic current personal-use risk | Runtime API boundary, renderer read-only contract, no direct vault access. | Keep plugin/code execution out of renderer; review sanitizer/asset behavior before broader exposure. |
 | F7 | Tool/MCP | Tampering / EoP | Remote descriptors or tool outputs could influence downstream decisions if treated as authoritative. | Plausible future networked/multi-user risk | Local registry default, flags/allowlists for real execution, unsupported remote tools filtered. | Add remote MCP admission/version/provenance contract before supported remote use. |
 | F8 | Tool/MCP | DoS | Real or remote tools without explicit timeout/call budgets can exhaust local resources. | Plausible future networked/multi-user risk | Optional per-tool timeout, max calls, plan timeout. | Require explicit timeout/call-budget posture for high-risk real tools. |
@@ -49,15 +49,15 @@ high adversarial exposure, does not implement mitigations, and does not create f
 
 - Review level: Level 2
 - Boundary: Runtime API boundary
-- Current exposure assumption: localhost default; LAN/Tailscale only by explicit operator binding; public unsupported.
+- Current exposure assumption: trusted-device server default; loopback opt-out; public unsupported.
 - Existing controls: route path validation on vault reads/writes, feature flags on Canvas/workspace update paths, WriteGuard on selected write paths, health redaction, route-level limits on several list/tail routes.
 
 | STRIDE category | Finding / not applicable | Notes |
 | --- | --- | --- |
-| Spoofing | Future risk: no route-specific auth under non-loopback exposure. | Current loopback personal use is proportionate; non-loopback support needs auth posture. |
+| Spoofing | Future risk: no route-specific auth under non-loopback exposure. | Current trusted-device personal server use is proportionate; non-loopback support needs auth posture. |
 | Tampering | Mutation routes exist for ingest, Panel confirm, Canvas/workspace/body save, BuilderOps writes. | Controls differ by lane; matrix records each route. |
 | Repudiation | Some routes emit traces, receipts, or session provenance; simple reads do not. | Body co-authoring should not be misclassified as missing governance receipts. |
-| Information Disclosure | Vault note reads, workspace aggregate, event tail, debug panel, settings/status routes expose sensitive local data if reachable. | Main current risk is accidental exposure beyond loopback. |
+| Information Disclosure | Vault note reads, workspace aggregate, event tail, debug panel, settings/status routes expose sensitive local data if reachable. | Main current risk is accidental exposure beyond trusted-device server access. |
 | Denial of Service | List/search/provider routes can consume local resources. | Several routes have limits; no global rate-limit contract. |
 | Elevation of Privilege | API reachability could grant mutation capability under wrong exposure. | Exposure profile and route matrix are prerequisite controls. |
 

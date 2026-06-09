@@ -21,7 +21,7 @@ from companion_ui.workspace.serve_dev_page import (
 _PRODUCTION_PORT = 8113
 _PRODUCTION_API_BASE_URL = "http://127.0.0.1:18000"
 _PRODUCTION_SAFETY_WARNING = (
-    "Local-only default. Public internet exposure is not supported; "
+    "Server/LAN bind default. Public internet exposure is not supported; "
     "this profile does not provide auth, TLS, or a reverse proxy."
 )
 _PRODUCTION_STATIC_ASSETS = {

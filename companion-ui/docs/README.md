@@ -6,8 +6,8 @@ Foundational documents for cognitive interaction architecture.
 
 ## Product architecture and hosting
 - `COMPANION_UI_TARGET_ARCHITECTURE.md` — owner doc for Companion UI target architecture: local-first web app served by Yggdrasil, localhost/LAN/Tailscale access model, runtime API as the only vault access path, vault-boundary rules, current shipped state, browser dev server as the next slice, long-term options (PWA, desktop wrapper), non-goals. Governing issue: #1102.
-- `LOCAL_ACCESS_MODEL.md` — local access posture for Companion UI: localhost default, LAN/Tailscale opt-in, token/session auth option, CSRF posture, dev/production separation, public internet non-goal.
-- `MLP_PRODUCTION_LAUNCH_SAFETY.md` — minimal Companion UI MLP production launch safety runbook: command, port map, localhost default, LAN/Tailscale opt-in, no-public-exposure warning, readiness checks, stop/rollback, and known limitations. Governing issue: #1188.
+- `LOCAL_ACCESS_MODEL.md` — local access posture for Companion UI: trusted-device server bind default, loopback opt-out, token/session auth option, CSRF posture, dev/production separation, public internet non-goal.
+- `MLP_PRODUCTION_LAUNCH_SAFETY.md` — minimal Companion UI MLP production launch safety runbook: command, port map, server/LAN default, loopback opt-out, no-public-exposure warning, readiness checks, stop/rollback, and known limitations. Governing issue: #1188.
 
 ## Core set
 - `SYSTEM_OVERVIEW.md`
