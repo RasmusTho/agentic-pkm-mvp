@@ -5156,7 +5156,6 @@ def _render_orientation_index_html(
       <span title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
     </div>
     {dev_chip}
-    {_render_help_toggle()}
   </div>
   <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
     <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
@@ -5343,6 +5342,45 @@ def _orientation_ambient_refresh_script() -> str:
 #     it still opens directly and stays compatible with the screenshot system).
 #   * Change the in-shell chrome (button, drawer geometry) -> this region.
 _HELP_GUIDE_PATH = Path(__file__).with_name("help_guide.html")
+_HELP_ASSETS_DIR = Path(__file__).with_name("help_assets")
+_HELP_ASSET_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.png$")
+_HELP_ASSET_CACHE: dict[str, bytes] | None = None
+
+
+def _help_asset_cache() -> dict[str, bytes]:
+    """Preload packaged help-guide PNGs into an in-memory name->bytes map.
+
+    Paths come only from a filesystem enumeration of ``help_assets`` (never from
+    request input), so the request path is a pure dict lookup with no path
+    expression — a request name can never reach the filesystem. ``open().read()``
+    is used (these are packaged UI assets, not vault content) to stay clear of
+    the vault-I/O architecture guard.
+    """
+    global _HELP_ASSET_CACHE
+    if _HELP_ASSET_CACHE is None:
+        cache: dict[str, bytes] = {}
+        try:
+            entries = sorted(_HELP_ASSETS_DIR.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            if entry.suffix == ".png" and _HELP_ASSET_NAME.fullmatch(entry.name) and entry.is_file():
+                try:
+                    with open(entry, "rb") as fh:
+                        cache[entry.name] = fh.read()
+                except OSError:
+                    continue
+        _HELP_ASSET_CACHE = cache
+    return _HELP_ASSET_CACHE
+
+
+def load_help_asset(name: str) -> bytes | None:
+    """Return a help-guide image asset (PNG) by exact name, or None.
+
+    Pure lookup into the preloaded asset map: the request-supplied ``name`` is
+    only ever used as a dict key, so it cannot influence a filesystem path.
+    """
+    return _help_asset_cache().get(name)
 
 
 def load_help_guide_html() -> str:
@@ -5369,7 +5407,12 @@ def load_help_guide_html() -> str:
 
 
 def _render_help_toggle() -> str:
-    """Header control that opens the in-shell Help drawer."""
+    """Fixed-position control that opens the in-shell Help drawer.
+
+    Rendered as part of the drawer region (not a per-view header) so it stays
+    visible regardless of which shell layout is active — the adaptive shell
+    hides the legacy ``.topbar``, so a header-embedded control would not show.
+    """
     return (
         '<button type="button" class="help-toggle" '
         'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
@@ -5388,10 +5431,11 @@ def _render_help_drawer() -> str:
     """
     return """
   <style>
-    .help-toggle{display:inline-flex;align-items:center;gap:6px;margin-left:auto;
-      padding:4px 12px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
-      background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:6px;
-      cursor:pointer}
+    .help-toggle{position:fixed;bottom:18px;right:18px;z-index:999;
+      display:inline-flex;align-items:center;gap:6px;
+      padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
+      background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:999px;
+      cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
     .help-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
     .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
       opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
@@ -5413,6 +5457,7 @@ def _render_help_drawer() -> str:
     .help-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
     .help-drawer-frame{flex:1;border:0;width:100%;background:var(--bg-base)}
   </style>
+  """ + _render_help_toggle() + """
   <div class="help-drawer-host" id="workspace-help-host"
        data-testid="workspace-help-host" data-open="false"
        data-authority-role="server_declared">
@@ -8175,7 +8220,6 @@ def render_index_html(
       <span class="api-url" title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
     </div>
     {dev_chip}
-    {_render_help_toggle()}
   </div>
   <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
     <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
@@ -8917,6 +8961,17 @@ def make_handler(
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path.startswith("/help-assets/"):
+                asset = load_help_asset(parsed.path[len("/help-assets/"):])
+                if asset is None:
+                    self._send_json(404, {"error": "not_found", "message": "Unknown help asset"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(asset)))
+                self.end_headers()
+                self.wfile.write(asset)
                 return
             if parsed.path in self._static_assets:
                 content_type, body = self._static_assets[parsed.path]

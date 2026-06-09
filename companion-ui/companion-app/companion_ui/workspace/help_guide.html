@@ -1,4 +1,34 @@
 <!doctype html>
+<!--
+  Companion UI · User Guide
+  ========================================================================
+  Purpose: the in-shell help/user manual for the Companion UI. Served at
+  /help by companion_ui/workspace/serve_dev_page.py and shown as a slide-over
+  drawer inside the shell (Help control, bottom-right). Edit this single,
+  self-contained file to change help content.
+
+  Conventions (for the next agent editing this file):
+   - Status badges: mark a capability `available` ONLY when it is shipped in the
+     dev/staging shell. Use `upcoming` for planned work and `operator` for
+     developer-only controls. Shipped truth is owned by docs/STATUS.md and
+     companion-ui/docs/COMPANION_UI_STATE_MAP.md — verify before changing a badge.
+   - Annotated figures: real UI only. Use the `.shot` / `.shot-callout` /
+     `.shot-legend` component. Images are served from /help-assets/<name>.png
+     and live in companion_ui/workspace/help_assets/. The page must still read
+     if an image 404s (the frame just shows empty).
+   - Append a line to the §12 changelog for every change.
+
+  Screenshot capture recipe (real-UI figures, fixtures, no live vault):
+   1. Render shell states to standalone HTML with the pure renderers
+      (render_index_html / orientation) driven by fixture payloads — see the
+      RealNoteWorkspaceDevPage browser tests under tests/companion_ui/*_browser.py
+      for payload shapes.
+   2. Serve the render dir (python -m http.server) and capture each page with
+      Playwright + system Chrome at 1440x900, device_scale_factor=2.
+   3. Save PNGs to companion_ui/workspace/help_assets/<name>.png and reference
+      them from a `.shot` figure here.
+  ========================================================================
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -487,6 +517,36 @@ td code { font-size: 0.9em; }
   margin: var(--space-10) 0;
 }
 
+/* ============================================================
+   Annotated screenshots · status badges · changelog
+   (real-UI figure system — see maintenance comment at end of file)
+   ============================================================ */
+.shot { margin: 30px 0; }
+.shot-frame { position: relative; border: 1px solid var(--border-strong); border-radius: 10px;
+  overflow: hidden; background: var(--bg-base); box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+.shot-frame img { display: block; width: 100%; height: auto; }
+.shot-callout { position: absolute; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--cyan); color: #04141a; font: 600 14px/26px 'Space Grotesk', sans-serif;
+  text-align: center; border: 2px solid var(--bg-base); box-shadow: var(--cyan-glow);
+  transform: translate(-50%, -50%); }
+.shot-legend { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 7px; }
+.shot-legend li { display: flex; gap: 11px; align-items: baseline; color: var(--fg-2); font-size: 14px; }
+.shot-legend .n { flex: none; width: 21px; height: 21px; border-radius: 50%; background: var(--cyan-muted);
+  color: var(--cyan); border: 1px solid var(--cyan-dim); font: 600 12px/21px 'Space Grotesk', sans-serif;
+  text-align: center; }
+.shot-cap { color: var(--fg-3); font-size: 12.5px; margin-top: 9px; font-family: 'JetBrains Mono', monospace; }
+.badge { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 2px 10px;
+  border-radius: 999px; font: 600 10.5px/1.6 'Space Grotesk', sans-serif; letter-spacing: .05em;
+  text-transform: uppercase; }
+.badge.available { color: var(--vault); background: var(--vault-muted); border: 1px solid var(--vault-dim); }
+.badge.upcoming  { color: var(--amber); background: var(--amber-muted); border: 1px solid var(--amber-dim); }
+.badge.operator  { color: var(--fg-2);  background: var(--bg-overlay);  border: 1px solid var(--border-strong); }
+.badge-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 16px 0 0; padding: 0; list-style: none;
+  color: var(--fg-2); font-size: 13.5px; }
+.changelog-list { margin: 10px 0 0; padding-left: 18px; }
+.changelog-list li { color: var(--fg-2); font-size: 14px; margin: 4px 0; }
+.changelog-list code { color: var(--fg-3); font-size: 12.5px; }
+
 /* ---- Responsive ---- */
 @media (max-width: 860px) {
   .page { grid-template-columns: 1fr; gap: var(--space-8); padding: var(--space-8) var(--space-5) var(--space-12); }
@@ -517,6 +577,7 @@ td code { font-size: 0.9em; }
     <li><a href="#keys"><span class="n">09</span>Keyboard shortcuts</a></li>
     <li><a href="#signals"><span class="n">10</span>UI state signals</a></li>
     <li><a href="#boundaries"><span class="n">11</span>Authority boundaries</a></li>
+    <li><a href="#maintaining"><span class="n">12</span>Maintaining this guide</a></li>
   </ol>
 </nav>
 
@@ -557,6 +618,21 @@ td code { font-size: 0.9em; }
     keeping the document itself the undisputed cognitive anchor.
   </p>
 
+  <figure class="shot" id="shot-help-drawer">
+    <div class="shot-frame">
+      <img src="/help-assets/help-drawer.png" alt="This guide open as an in-shell Help drawer over the workspace." />
+      <span class="shot-callout" style="left:79%;top:3.5%">1</span>
+      <span class="shot-callout" style="left:71%;top:23%">2</span>
+      <span class="shot-callout" style="left:30%;top:46%">3</span>
+    </div>
+    <ol class="shot-legend">
+      <li><span class="n">1</span><span><strong>In-shell Help</strong> — this guide opens as a drawer over your workspace. You never leave the page; it is served at <code>/help</code>.</span></li>
+      <li><span class="n">2</span><span><strong>Jump to any section</strong> — the contents mirror this guide.</span></li>
+      <li><span class="n">3</span><span><strong>Your work stays put</strong> — the workspace dims behind the drawer but is not dismissed. Close returns you exactly where you were.</span></li>
+    </ol>
+    <figcaption class="shot-cap">Real Companion UI · the Help drawer (this document) open over a note.</figcaption>
+  </figure>
+
   <p>
     Three principles govern every surface in the UI:
   </p>
@@ -576,13 +652,23 @@ td code { font-size: 0.9em; }
       degraded condition.
     </p>
   </div>
+
+  <p style="margin-top:var(--space-6)">
+    Throughout this guide, each capability carries a status badge so you can tell shipped
+    behavior from planned work at a glance:
+  </p>
+  <ul class="badge-legend">
+    <li><span class="badge available">Available</span> shipped in the dev/staging shell today</li>
+    <li><span class="badge upcoming">Upcoming</span> planned; not built yet</li>
+    <li><span class="badge operator">Operator</span> developer/operator control, not daily use</li>
+  </ul>
 </section>
 
 <!-- ================================================================
      02 LAYOUT OVERVIEW
      ================================================================ -->
 <section id="layout">
-  <span class="eyebrow"><span class="num">02</span>Layout overview</span>
+  <span class="eyebrow"><span class="num">02</span>Layout overview</span> <span class="badge available">Available</span>
   <h2 class="section-title">Three columns, each with a distinct job.</h2>
 
   <p>
@@ -590,6 +676,25 @@ td code { font-size: 0.9em; }
     structurally separate: they serve different cognitive jobs and must not collapse
     into each other.
   </p>
+
+  <figure class="shot" id="shot-shell-overview">
+    <div class="shot-frame">
+      <img src="/help-assets/shell-overview.png" alt="The Companion UI shell with a note open: outline rail, note body, and companion rail." />
+      <span class="shot-callout" style="left:27%;top:4%">1</span>
+      <span class="shot-callout" style="left:9%;top:22%">2</span>
+      <span class="shot-callout" style="left:38%;top:46%">3</span>
+      <span class="shot-callout" style="left:88%;top:20%">4</span>
+      <span class="shot-callout" style="left:94.5%;top:95%">5</span>
+    </div>
+    <ol class="shot-legend">
+      <li><span class="n">1</span><span><strong>Runtime safety strip</strong> — vault identity, channel, and health. Always tells you which vault you are pointed at.</span></li>
+      <li><span class="n">2</span><span><strong>Outline rail</strong> — heading navigation for the active note; switches to Browse / Context.</span></li>
+      <li><span class="n">3</span><span><strong>Note body</strong> — the note itself, rendered in place. The primary surface; everything else is subordinate.</span></li>
+      <li><span class="n">4</span><span><strong>Companion rail</strong> — Canvas session, Panel proposals, receipts, and re-entry.</span></li>
+      <li><span class="n">5</span><span><strong>Help</strong> — opens this guide as an in-shell drawer from anywhere.</span></li>
+    </ol>
+    <figcaption class="shot-cap">Real Companion UI · dev shell, fixture note.</figcaption>
+  </figure>
 
   <div class="layout-diagram" role="img" aria-label="Three-column shell diagram">
     <div class="layout-col">
@@ -656,7 +761,7 @@ td code { font-size: 0.9em; }
      03 READING A NOTE
      ================================================================ -->
 <section id="reading">
-  <span class="eyebrow"><span class="num">03</span>Reading a note</span>
+  <span class="eyebrow"><span class="num">03</span>Reading a note</span> <span class="badge available">Available</span>
   <h2 class="section-title">The note opens through the runtime — the UI never reads the vault directly.</h2>
 
   <p>
@@ -699,7 +804,7 @@ td code { font-size: 0.9em; }
      04 CANVAS — BODY EDITING
      ================================================================ -->
 <section id="canvas">
-  <span class="eyebrow"><span class="num">04</span>Canvas — body editing</span>
+  <span class="eyebrow"><span class="num">04</span>Canvas — body editing</span> <span class="badge available">Available</span>
   <h2 class="section-title">Direct in-place note-body co-authoring, undo-capable and receipt-bearing.</h2>
 
   <p>
@@ -778,7 +883,7 @@ td code { font-size: 0.9em; }
      05 CANVAS SUGGESTION FLOW
      ================================================================ -->
 <section id="suggestions">
-  <span class="eyebrow"><span class="num">05</span>Canvas suggestion flow</span>
+  <span class="eyebrow"><span class="num">05</span>Canvas suggestion flow</span> <span class="badge available">Available</span>
   <h2 class="section-title">Two kinds of suggestion: body edits and governance proposals.</h2>
 
   <p>
@@ -856,7 +961,7 @@ td code { font-size: 0.9em; }
      06 PANEL — PROPOSALS
      ================================================================ -->
 <section id="panel">
-  <span class="eyebrow"><span class="num">06</span>Panel — proposals</span>
+  <span class="eyebrow"><span class="num">06</span>Panel — proposals</span> <span class="badge available">Available</span>
   <h2 class="section-title">Artifact-local intent. You recognize and confirm; the runtime executes.</h2>
 
   <p>
@@ -871,6 +976,19 @@ td code { font-size: 0.9em; }
     commanded it. You review the proposal, read the evidence, and decide to confirm, correct,
     or reject.
   </p>
+
+  <figure class="shot" id="shot-panel-proposal">
+    <div class="shot-frame">
+      <img src="/help-assets/panel-proposal.png" alt="A note open with a Panel proposal pending in the companion rail." />
+      <span class="shot-callout" style="left:90%;top:4%">1</span>
+      <span class="shot-callout" style="left:84%;top:90%">2</span>
+    </div>
+    <ol class="shot-legend">
+      <li><span class="n">1</span><span><strong>Panel proposal ready</strong> — the rail flags a pending proposal scoped to the open note. Nothing is applied yet.</span></li>
+      <li><span class="n">2</span><span><strong>Governance suggestion staged</strong> — review the proposal and its evidence, then confirm to execute through the governed path. A receipt follows; the composer stays locked until you decide.</span></li>
+    </ol>
+    <figcaption class="shot-cap">Real Companion UI · dev shell, proposal staged for review.</figcaption>
+  </figure>
 
   <h3 class="sub">Reading a Panel proposal</h3>
   <p>
@@ -930,7 +1048,7 @@ td code { font-size: 0.9em; }
      07 REORIENT
      ================================================================ -->
 <section id="reorient">
-  <span class="eyebrow"><span class="num">07</span>Reorient</span>
+  <span class="eyebrow"><span class="num">07</span>Reorient</span> <span class="badge available">Available</span>
   <h2 class="section-title">Re-enter your context after time away — read-only, advisory, no execution.</h2>
 
   <p>
@@ -938,6 +1056,25 @@ td code { font-size: 0.9em; }
     visited recently, or when a session has been interrupted. It summarises where work
     left off using bounded evidence from the session log and vault history.
   </p>
+
+  <figure class="shot" id="shot-reorient">
+    <div class="shot-frame">
+      <img src="/help-assets/reorient-reentry.png" alt="The re-entry orientation view with leave point, open loops, notable changes, governance, and a resurface card." />
+      <span class="shot-callout" style="left:19%;top:30%">1</span>
+      <span class="shot-callout" style="left:19%;top:58%">2</span>
+      <span class="shot-callout" style="left:19%;top:88%">3</span>
+      <span class="shot-callout" style="left:78%;top:32%">4</span>
+      <span class="shot-callout" style="left:78%;top:76%">5</span>
+    </div>
+    <ol class="shot-legend">
+      <li><span class="n">1</span><span><strong>Leave point</strong> — the note and moment you were last working in.</span></li>
+      <li><span class="n">2</span><span><strong>Open loops</strong> — unresolved threads, each carrying its own provenance label.</span></li>
+      <li><span class="n">3</span><span><strong>Notable changes</strong> — what moved in the vault since you left.</span></li>
+      <li><span class="n">4</span><span><strong>Governance</strong> — pending proposals and receipt counts at a glance.</span></li>
+      <li><span class="n">5</span><span><strong>Resurface</strong> — a scarce “why now” card with its signal. Advisory, never urgent.</span></li>
+    </ol>
+    <figcaption class="shot-cap">Real Companion UI · re-entry orientation view (opened with no active note).</figcaption>
+  </figure>
 
   <h3 class="sub">What Reorient shows</h3>
   <ul>
@@ -968,7 +1105,7 @@ td code { font-size: 0.9em; }
      08 RESURFACE & FIND
      ================================================================ -->
 <section id="resurface">
-  <span class="eyebrow"><span class="num">08</span>Resurface &amp; Find</span>
+  <span class="eyebrow"><span class="num">08</span>Resurface &amp; Find</span> <span class="badge available">Available</span>
   <h2 class="section-title">Low-pressure candidates and search — both bounded by what the runtime can provide.</h2>
 
   <h3 class="sub">Resurface</h3>
@@ -982,6 +1119,11 @@ td code { font-size: 0.9em; }
     do not carry Apply buttons. If a candidate looks useful, you can copy a reference
     into the Converse input and ask the agent to act on it — that action then travels
     through the normal Canvas or Panel flow.
+  </p>
+  <p>
+    <span class="badge upcoming">Upcoming</span> Durable resurfacing controls — dismiss,
+    snooze, pin, and a persistent tray — are not built yet. For now a candidate is a
+    read-only nudge that lasts the session.
   </p>
 
   <div class="callout warn">
@@ -1011,7 +1153,7 @@ td code { font-size: 0.9em; }
      09 KEYBOARD SHORTCUTS
      ================================================================ -->
 <section id="keys">
-  <span class="eyebrow"><span class="num">09</span>Keyboard shortcuts</span>
+  <span class="eyebrow"><span class="num">09</span>Keyboard shortcuts</span> <span class="badge available">Available</span>
   <h2 class="section-title">Shortcuts are active only when a suggestion is staged and awaiting your action.</h2>
 
   <p>
@@ -1078,7 +1220,7 @@ td code { font-size: 0.9em; }
      10 UI STATE SIGNALS
      ================================================================ -->
 <section id="signals">
-  <span class="eyebrow"><span class="num">10</span>UI state signals</span>
+  <span class="eyebrow"><span class="num">10</span>UI state signals</span> <span class="badge available">Available</span>
   <h2 class="section-title">What the UI shows when things are not normal.</h2>
 
   <p>
@@ -1178,10 +1320,56 @@ td code { font-size: 0.9em; }
   </div>
 </section>
 
+<!-- ================================================================
+     12 MAINTAINING THIS GUIDE
+     ================================================================ -->
+<section id="maintaining">
+  <span class="eyebrow"><span class="num">12</span>Maintaining this guide</span>
+  <h2 class="section-title">How this page stays true — for whoever (or whatever) edits it next.</h2>
+
+  <p>
+    This guide is served in-shell at <code>/help</code> and is meant to be extended over time.
+    Document a capability as <span class="badge available">Available</span> only when it is
+    shipped in the dev/staging shell; mark planned work <span class="badge upcoming">Upcoming</span>
+    and developer-only controls <span class="badge operator">Operator</span>. Shipped truth is
+    owned by <code>docs/STATUS.md</code> and
+    <code>companion-ui/docs/COMPANION_UI_STATE_MAP.md</code> — verify against those before changing
+    a badge.
+  </p>
+
+  <h3 class="sub">Add or update a feature</h3>
+  <ol>
+    <li>Find the right section (or add one) and describe the behavior in plain language.</li>
+    <li>Set its status badge from shipped reality, not intent.</li>
+    <li>If it has a UI surface, add an annotated figure (see below).</li>
+    <li>Add a changelog line.</li>
+  </ol>
+
+  <h3 class="sub">Add or replace a screenshot</h3>
+  <ol>
+    <li>Re-render the shell state and capture it — the capture recipe lives in the source
+      comment at the top of this file (<code>render → serve → Playwright</code>).</li>
+    <li>Save the PNG to <code>companion_ui/workspace/help_assets/&lt;name&gt;.png</code>.</li>
+    <li>Reference it with <code>&lt;img src="/help-assets/&lt;name&gt;.png"&gt;</code> inside a
+      <code>.shot</code> figure.</li>
+    <li>Position numbered <code>.shot-callout</code> markers (percent <code>left</code>/<code>top</code>)
+      over the regions and write the matching legend.</li>
+    <li>Add a changelog line.</li>
+  </ol>
+
+  <h3 class="sub">Changelog</h3>
+  <ul class="changelog-list">
+    <li><code>2026-06-09</code> — Added the in-shell Help drawer, real-UI annotated screenshots
+      (shell anatomy, Panel proposal, re-entry, Help drawer), status badges, and this maintenance
+      section. Fixed the Help control so it is visible in the adaptive shell.</li>
+    <li><code>2026-06-09</code> — Initial Companion UI user guide authored.</li>
+  </ul>
+</section>
+
 <hr class="rule" />
 
 <p style="font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); letter-spacing: var(--tracking-wide); text-transform: uppercase; margin-bottom: 0; max-width: none;">
-  Yggdrasil · Companion UI · User Guide · companion-ui/Companion UI - User Guide.html
+  Yggdrasil · Companion UI · User Guide · served in-shell at /help · companion_ui/workspace/help_guide.html
 </p>
 
 </main>
