@@ -166,6 +166,29 @@ def test_test_compose_watcher_state_dir_overrides_parent_env() -> None:
     assert watcher_env["WATCHER_STATE_PATH"] == "/app/tmp-test/watcher_state.json"
 
 
+def test_test_compose_runtime_artifact_paths_are_shared_by_api_worker_watcher() -> None:
+    """API, worker, and watcher must agree on pkm-test runtime artifacts.
+
+    Verify: PR #1713 review-thread residual — health/status reads API env, so
+    the API service must not inherit base /app/tmp heartbeat paths while the
+    watcher writes /app/tmp-test.
+    """
+    test_overlay = _load_compose(TEST_COMPOSE)
+    services = test_overlay["services"] or {}
+    expected = {
+        "WATCHER_STATE_DIR": "tmp-test",
+        "WATCHER_STOP_FILE": "/app/tmp-test/WATCHER_STOP",
+        "INDEX_OUTBOX_PATH": "/app/tmp-test/index-outbox.jsonl",
+        "WATCHER_HEARTBEAT_PATH": "/app/tmp-test/watcher_heartbeat.json",
+        "WORKER_HEARTBEAT_PATH": "/app/tmp-test/worker_heartbeat.json",
+        "WATCHER_STATE_PATH": "/app/tmp-test/watcher_state.json",
+    }
+
+    for service_name in ("api", "worker", "watcher"):
+        env = _compose_env((services or {})[service_name])
+        assert {key: env.get(key) for key in expected} == expected
+
+
 def test_make_test_up_starts_watcher_without_restart_loop() -> None:
     """The watcher service command must be importable under the test-overlay env.
 

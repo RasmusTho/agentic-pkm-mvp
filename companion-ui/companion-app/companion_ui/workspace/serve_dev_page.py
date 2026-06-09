@@ -4838,6 +4838,7 @@ def _render_orientation_index_html(
         vault_browser,
         error=vault_browser_error,
     )
+    vault_browser_script = _orientation_vault_browser_script() if vault_entry_html else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5207,10 +5208,57 @@ def _render_orientation_index_html(
       {vault_entry_html}
     </div>
   </main>
+  {vault_browser_script}
   {ambient_script}
   {_render_help_drawer()}
 </body>
 </html>"""
+
+
+def _orientation_vault_browser_script() -> str:
+    return """
+  <script>
+  function vaultBrowserSelectionControls() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('[data-testid="workspace-vault-browser-selection-toggle"]')
+    );
+  }
+
+  function vaultBrowserUpdateSelectionSummary() {
+    var controls = vaultBrowserSelectionControls();
+    var selected = controls.filter(function(control) { return control.checked; });
+    var summary = document.querySelector('[data-testid="workspace-vault-browser-selection-summary"]');
+    if (!summary) return;
+    summary.dataset.selectedCount = String(selected.length);
+    summary.textContent = selected.length === 1 ? '1 selected' : selected.length + ' selected';
+  }
+
+  function vaultBrowserToggleSelection(event, control) {
+    if (event) { event.stopPropagation(); }
+    if (!control) return;
+    var row = control.closest('[data-testid="workspace-vault-browser-note-row"]');
+    var selected = !!control.checked;
+    control.dataset.selected = selected ? 'true' : 'false';
+    if (row) {
+      row.dataset.selected = selected ? 'true' : 'false';
+    }
+    vaultBrowserUpdateSelectionSummary();
+  }
+
+  document.addEventListener('DOMContentLoaded', vaultBrowserUpdateSelectionSummary);
+
+  function vbToggleFilter(el) {
+    var key = el.dataset.key;
+    var val = el.dataset.value;
+    var url = new URL(window.location.href);
+    var params = url.searchParams;
+    var existing = params.getAll(key);
+    params.delete(key);
+    if (existing.indexOf(val) === -1) { params.append(key, val); }
+    existing.filter(function(v) { return v !== val; }).forEach(function(v) { params.append(key, v); });
+    window.location.href = url.toString();
+  }
+  </script>"""
 
 
 def _orientation_ambient_refresh_script() -> str:
