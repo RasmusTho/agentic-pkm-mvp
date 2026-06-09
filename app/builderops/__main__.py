@@ -2,7 +2,9 @@
 
 Allows running BuilderOps commands from any automation worktree without
 importing the broader ``app.cli`` dependency chain (which requires yaml,
-pydantic, watchfiles, and other optional packages).
+pydantic, watchfiles, httpx, and other optional packages). The command
+implementation lives in :mod:`app.builderops.cli`, so importing it here does
+NOT trigger ``app.cli``'s package initializer.
 
 Usage::
 
@@ -21,7 +23,7 @@ from __future__ import annotations
 
 import click
 
-from app.cli.builderops import builderops as builderops_cli
+from app.builderops.cli import builderops as builderops_cli
 
 
 @click.group(help="BuilderOps Vault CLI (standalone entry point).")

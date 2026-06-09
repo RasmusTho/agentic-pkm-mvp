@@ -183,3 +183,36 @@ def test_app_config_package_import_does_not_require_yaml(tmp_path: Path) -> None
             "app/config/__init__.py still eagerly imports from agent.py which requires yaml. "
             f"stderr: {result.stderr}"
         )
+
+
+def test_standalone_entry_does_not_import_app_cli(tmp_path: Path) -> None:
+    """The standalone entry point must NOT import the app.cli package.
+
+    Regression guard for PR #1768 Codex P1: app/cli/__init__.py eagerly imports
+    httpx/watchfiles and other runtime-only deps, so if the standalone entry
+    pulls in app.cli it fails with ModuleNotFoundError before any BuilderOps
+    command can run — defeating the automation-worktree fix. The command
+    implementation now lives in app.builderops.cli, so importing the standalone
+    entry must leave 'app.cli' absent from sys.modules.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import app.builderops.__main__ as m; import sys; "
+            "assert 'app.cli' not in sys.modules, "
+            "'standalone entry imported app.cli: ' + repr(sorted(k for k in sys.modules if k.startswith('app.cli'))); "
+            "print('ok')",
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            "PYTHONPATH": ":".join(sys.path),
+            "HOME": str(tmp_path),
+        },
+    )
+    assert result.returncode == 0, (
+        "Standalone BuilderOps entry point imported app.cli (pulls heavy runtime "
+        f"deps).\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "ok" in result.stdout
