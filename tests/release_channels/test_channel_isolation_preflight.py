@@ -1,4 +1,4 @@
-"""Channel-isolation preflight tests (Issues #1627, #1655).
+"""Channel-isolation preflight tests (Issues #1627, #1655, #1769).
 
 Verifies that the preflight guard fail-closes when a compose overlay's
 effective env bindings do not match the intended channel, and passes when they
@@ -10,6 +10,12 @@ the effective binding falls back to the base compose `env_file`
 (`config/runtime.defaults.env`, which carries prod `app` DSNs). The preflight
 must resolve that effective binding and fail closed when it lands on another
 channel — or when it cannot be resolved at all.
+
+Issue #1769 extends the resolution to the full per-service `env_file` chain of
+the merged compose model (base + overlay): layers are read in declaration
+order, later files win, `${VAR:-default}` path expressions are interpolated
+the way compose does, and a layer that could win but cannot be verified
+(unreadable, missing-but-required, unresolvable path expression) fails closed.
 
 All tests are static (no Docker, no network, no running services) — they parse
 compose YAML in-process or use in-memory YAML fixtures.
@@ -542,6 +548,383 @@ def test_prod_compose_with_omitted_dsn_and_prod_base_default_passes(
     assert result.ok, (
         "Expected prod preflight to PASS when omitted DSNs resolve to prod "
         f"base defaults, but got violations:\n{result.summary()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layered env_file chains (Issue #1769)
+# ---------------------------------------------------------------------------
+
+TEST_DSN = "postgresql+psycopg://app:app@db:5432/app_test"
+PROD_DSN = "postgresql+psycopg://app:app@db:5432/app"
+
+#: Mirrors the shipped docker-compose.yaml shape: every app service layers an
+#: interpolated runtime env file (written by scripts/export_runtime_env.sh,
+#: which includes DATABASE_URL / DB_DSN) after the committed defaults file.
+BASE_COMPOSE_WITH_RUNTIME_LAYER = """\
+services:
+  api:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+  worker:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+  watcher:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+"""
+
+#: Mirrors docker-compose.prod.yml: the overlay omits DATABASE_URL / DB_DSN
+#: entirely and relies on the env_file chain for its effective DSN bindings.
+PROD_LIKE_OVERLAY = """\
+services:
+  api:
+    environment:
+      API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+"""
+
+
+def _write_base_compose(
+    tmp_path: Path, content: str = BASE_COMPOSE_WITH_RUNTIME_LAYER
+) -> Path:
+    """Write a synthetic base compose file (docker-compose.yaml) to tmp_path."""
+    p = tmp_path / "docker-compose.yaml"
+    p.write_text(textwrap.dedent(content), encoding="utf-8")
+    return p
+
+
+def _write_env_layer(tmp_path: Path, dsn: str, rel: str = "tmp/runtime.env") -> Path:
+    """Write a later env_file layer carrying DATABASE_URL / DB_DSN."""
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"DATABASE_URL={dsn}\nDB_DSN={dsn}\n", encoding="utf-8")
+    return p
+
+
+def test_omitted_dsn_with_wrong_channel_later_layer_fails(tmp_path: Path) -> None:
+    """AC1 (#1769): a wrong-channel DSN in a later env_file layer fails closed.
+
+    The base defaults carry the prod DSNs, but a second env_file layer
+    (tmp/runtime.env) carries app_test DSNs. Compose layering makes the later
+    file win, so the effective binding of the prod-like overlay crosses into
+    the test channel — the preflight must reject it.
+    """
+    _write_base_defaults(tmp_path)  # prod DSNs
+    _write_base_compose(tmp_path)
+    _write_env_layer(tmp_path, TEST_DSN)
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when a later env_file layer supplies a "
+        "test-channel DSN for an omitted key on the prod channel, but it passed."
+    )
+    violating = {(v.service, v.field) for v in result.violations}
+    for svc in ("api", "worker", "watcher"):
+        assert (svc, "DATABASE_URL") in violating
+        assert (svc, "DB_DSN") in violating
+    # The operator must see which layer the wrong value came from.
+    assert "runtime.env" in result.summary()
+
+
+def test_omitted_dsn_with_correct_channel_later_layer_passes(tmp_path: Path) -> None:
+    """AC2 (#1769): a correct-channel DSN in the winning layer passes."""
+    _write_base_defaults(tmp_path)
+    _write_base_compose(tmp_path)
+    _write_env_layer(tmp_path, PROD_DSN)
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert result.ok, (
+        "Expected preflight to PASS when the winning env_file layer carries "
+        f"the intended-channel DSN, but got:\n{result.summary()}"
+    )
+
+
+def test_bare_key_unset_in_winning_layer_fails_closed(tmp_path: Path) -> None:
+    """A bare ``KEY`` line (no ``=``) in the winning layer fails closed.
+
+    Compose treats a bare key in an env_file as unset/host-passthrough and
+    later files win, so the prod defaults are NOT the effective binding even
+    though they textually define the DSNs. The resolver must treat the bare
+    key as the winning (unverifiable) binding, not keep the earlier value.
+    """
+    _write_base_defaults(tmp_path)  # prod DSNs
+    _write_base_compose(tmp_path)
+    layer = tmp_path / "tmp" / "runtime.env"
+    layer.parent.mkdir(parents=True, exist_ok=True)
+    layer.write_text("DATABASE_URL\nDB_DSN\n", encoding="utf-8")
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when the winning env_file layer unsets "
+        "DATABASE_URL / DB_DSN via bare-key lines, but it passed."
+    )
+    assert "bare key" in result.summary()
+    assert "runtime.env" in result.summary()
+
+
+def test_bare_key_superseded_by_later_definition_resolves(tmp_path: Path) -> None:
+    """A later layer that redefines the key supersedes an earlier bare-key unset."""
+    _write_base_defaults(tmp_path)  # prod DSNs
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./unset.env
+              - ./final.env
+          worker:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./unset.env
+              - ./final.env
+          watcher:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./unset.env
+              - ./final.env
+        """,
+    )
+    (tmp_path / "unset.env").write_text("DATABASE_URL\nDB_DSN\n", encoding="utf-8")
+    (tmp_path / "final.env").write_text(
+        f"DATABASE_URL={PROD_DSN}\nDB_DSN={PROD_DSN}\n", encoding="utf-8"
+    )
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert result.ok, (
+        "Expected preflight to PASS when a later layer redefines the key after "
+        f"a bare-key unset, but got:\n{result.summary()}"
+    )
+
+
+def test_later_env_file_layer_wins_over_defaults(tmp_path: Path) -> None:
+    """Declaration order matters: the later layer overrides earlier defaults.
+
+    Here the defaults file carries a wrong-channel (test) DSN, but the later
+    runtime layer corrects it back to prod. The effective binding is the later
+    value, so the prod preflight must pass — proving later-wins resolution
+    rather than first-match or defaults-only resolution.
+    """
+    _write_base_defaults(tmp_path, f"DATABASE_URL={TEST_DSN}\nDB_DSN={TEST_DSN}\n")
+    _write_base_compose(tmp_path)
+    _write_env_layer(tmp_path, PROD_DSN)
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert result.ok, (
+        "Expected the later env_file layer to win over the defaults layer, "
+        f"but got:\n{result.summary()}"
+    )
+
+
+def test_env_file_path_interpolation_honors_environment_variable(
+    tmp_path: Path,
+) -> None:
+    """`${VAR:-default}` resolves from the invoking environment when set.
+
+    RUNTIME_ENV_FILE points the second layer at an alternate file carrying a
+    wrong-channel DSN; the default path does not exist. The preflight must
+    follow the interpolated path, not the literal default.
+    """
+    _write_base_defaults(tmp_path)
+    _write_base_compose(tmp_path)
+    _write_env_layer(tmp_path, TEST_DSN, rel="custom/alt.env")
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(
+        compose_path,
+        "prod",
+        environ={"RUNTIME_ENV_FILE": "./custom/alt.env"},
+    )
+
+    assert not result.ok, (
+        "Expected preflight to FAIL via the interpolated env_file path, "
+        "but it passed."
+    )
+    assert "alt.env" in result.summary()
+
+
+def test_dotenv_file_supplies_interpolation_default(tmp_path: Path) -> None:
+    """Compose also interpolates from `.env` in the project directory."""
+    _write_base_defaults(tmp_path)
+    _write_base_compose(tmp_path)
+    _write_env_layer(tmp_path, TEST_DSN, rel="custom/alt.env")
+    (tmp_path / ".env").write_text(
+        "RUNTIME_ENV_FILE=./custom/alt.env\n", encoding="utf-8"
+    )
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when .env points the winning layer at a "
+        "wrong-channel DSN file, but it passed."
+    )
+    assert "alt.env" in result.summary()
+
+
+def test_unreadable_winning_env_file_layer_fails_closed(tmp_path: Path) -> None:
+    """AC3 (#1769): a winning layer that exists but cannot be read fails closed.
+
+    The layer path exists but is not readable as an env file (a directory —
+    portable stand-in for a permission failure). The preflight cannot prove
+    the effective binding, so it must reject and name the layer.
+    """
+    _write_base_defaults(tmp_path)
+    _write_base_compose(tmp_path)
+    (tmp_path / "tmp" / "runtime.env").mkdir(parents=True)  # exists, unreadable
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected fail-closed rejection for an unreadable winning env_file "
+        "layer, but the preflight passed."
+    )
+    summary = result.summary()
+    assert "runtime.env" in summary
+    violating = {(v.service, v.field) for v in result.violations}
+    assert ("api", "DATABASE_URL") in violating
+
+
+def test_missing_required_env_file_layer_fails_closed(tmp_path: Path) -> None:
+    """A required env_file layer absent at preflight time fails closed.
+
+    Compose refuses to start a service whose required env_file is missing, and
+    the preflight cannot verify what the file would have contained — it must
+    not silently assume absence.
+    """
+    _write_base_defaults(tmp_path)
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./config/runtime.local.env
+        """,
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            environment:
+              API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected fail-closed rejection for a missing required env_file "
+        "layer, but the preflight passed."
+    )
+    assert "runtime.local.env" in result.summary()
+
+
+def test_missing_optional_env_file_layer_is_skipped(tmp_path: Path) -> None:
+    """A `required: false` layer absent at preflight time contributes nothing.
+
+    This matches compose semantics (missing optional env_file is skipped); the
+    effective binding resolves from the remaining layers — here the prod
+    defaults — so the prod channel passes.
+    """
+    _write_base_defaults(tmp_path)
+    _write_base_compose(tmp_path)  # optional runtime layer not written
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert result.ok, (
+        "Expected preflight to PASS when the optional runtime layer is absent "
+        f"and defaults bind the intended channel, but got:\n{result.summary()}"
+    )
+
+
+def test_unsupported_env_file_path_expression_fails_closed(tmp_path: Path) -> None:
+    """Path expressions the preflight cannot interpolate fail closed."""
+    _write_base_defaults(tmp_path)
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            env_file:
+              - ./config/runtime.defaults.env
+              - path: ${RUNTIME_ENV_FILE:?must be set}
+                required: false
+        """,
+    )
+    compose_path = _write_compose(tmp_path, PROD_LIKE_OVERLAY)
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected fail-closed rejection for an unresolvable env_file path "
+        "expression, but the preflight passed."
+    )
+
+
+def test_real_prod_compose_fails_when_runtime_layer_carries_test_dsn(
+    tmp_path: Path,
+) -> None:
+    """The real merged model (docker-compose.yaml + prod overlay) is resolved.
+
+    Pointing WATCHER_RUNTIME_ENV_FILE at a layer carrying app_test DSNs must
+    fail the prod preflight: this is exactly the escape found in the codex
+    review of PR #1766.
+    """
+    layer = _write_env_layer(tmp_path, TEST_DSN, rel="runtime.env")
+
+    result = check_compose_channel_isolation(
+        PROD_COMPOSE,
+        "prod",
+        environ={"WATCHER_RUNTIME_ENV_FILE": str(layer)},
+    )
+
+    assert not result.ok, (
+        "Expected the real prod compose to FAIL when the runtime env layer "
+        "carries a test-channel DSN, but it passed."
+    )
+    violating = {(v.service, v.field) for v in result.violations}
+    for svc in ("api", "worker", "watcher"):
+        assert (svc, "DATABASE_URL") in violating
+        assert (svc, "DB_DSN") in violating
+
+
+def test_real_prod_compose_passes_when_runtime_layer_carries_prod_dsn(
+    tmp_path: Path,
+) -> None:
+    """Companion: a prod-channel runtime layer keeps the real prod compose green."""
+    layer = _write_env_layer(tmp_path, PROD_DSN, rel="runtime.env")
+
+    result = check_compose_channel_isolation(
+        PROD_COMPOSE,
+        "prod",
+        environ={"WATCHER_RUNTIME_ENV_FILE": str(layer)},
+    )
+
+    assert result.ok, (
+        "Expected the real prod compose to PASS with a prod-channel runtime "
+        f"layer, but got:\n{result.summary()}"
     )
 
 
