@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from app.api.routes.artifacts import _content_hash
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError, _split_frontmatter
-from app.chat.coauthoring_cognition import CoAuthoringCognition
+from app.chat.coauthoring_cognition import CoAuthoringCognition, CoAuthoringUnavailableError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.config.paths import resolve_vault_root
@@ -330,6 +330,11 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse:
         # Generation produced a frontmatter/governance-bearing body: do not
         # apply in place; route through the gated pipeline (raises 409).
         _route_governance_bearing(session, vault_root)
+    except CoAuthoringUnavailableError as exc:
+        # No edit-capable provider produced a usable body (mock/degraded
+        # backend or failed run). Leave the note unchanged; do not write
+        # diagnostic text into the body.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     change_summary = req.change_summary or f"co-authored: {req.intent.strip()}"
     body_before = current_body

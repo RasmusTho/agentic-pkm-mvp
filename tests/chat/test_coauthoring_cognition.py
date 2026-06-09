@@ -15,7 +15,10 @@ import inspect
 import pytest
 
 from app.chat.canvas_writer import GovernanceBearingMutationError
-from app.chat.coauthoring_cognition import CoAuthoringCognition
+from app.chat.coauthoring_cognition import (
+    CoAuthoringCognition,
+    CoAuthoringUnavailableError,
+)
 from app.chat.read_only_cognition import ReadOnlyChatCognition
 from app.reasoning.models import ReasoningMode, ReasoningRun
 
@@ -100,6 +103,18 @@ def test_generated_body_with_frontmatter_is_rejected() -> None:
     with pytest.raises(GovernanceBearingMutationError):
         cognition.generate_body(
             intent="rewrite the note and change its type",
+            current_body="# Hello\n\nOriginal body.\n",
+        )
+
+
+def test_mock_generation_is_rejected_not_applied() -> None:
+    # A mock/degraded backend returns a diagnostic string, not an edit.
+    facade = _StubFacade("MOCK_ASK_ANSWER: rewrite the note | context: ...")
+    cognition = CoAuthoringCognition(facade_factory=lambda: facade)
+
+    with pytest.raises(CoAuthoringUnavailableError):
+        cognition.generate_body(
+            intent="rewrite the note",
             current_body="# Hello\n\nOriginal body.\n",
         )
 

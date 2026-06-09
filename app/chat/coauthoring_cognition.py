@@ -33,14 +33,32 @@ from typing import Any, Callable
 from app.chat.canvas_writer import GovernanceBearingMutationError, _body_contains_frontmatter
 from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
 
+# Sentinel prefixes emitted by the mock/degraded reasoning backend. When the
+# facade is not backed by an edit-capable provider, ``answer`` returns a
+# diagnostic string (e.g. ``MOCK_ASK_ANSWER: ...``) rather than an edited note
+# body. Applying that text would corrupt the note, so it must be rejected.
+_DEGRADED_GENERATION_PREFIXES = ("MOCK_ASK_ANSWER:", "MOCK_")
+
+
+class CoAuthoringUnavailableError(Exception):
+    """Raised when no edit-capable provider produced a usable body revision.
+
+    Distinct from ``GovernanceBearingMutationError``: nothing about the
+    generation is governance-bearing; the generation simply cannot be trusted
+    as a real edit (mock/degraded backend, or an empty/failed run). Callers
+    should surface this as a transient unavailability and leave the note
+    unchanged rather than writing diagnostic text into the body.
+    """
+
 
 @dataclass(frozen=True)
 class CoAuthoredBody:
     """Result of a co-authoring generation.
 
     ``body`` is body-only text safe to hand to ``CanvasWriter.apply_edit``.
-    ``generated`` records whether the facade produced the body (``True``) or
-    a deterministic fallback was used.
+    ``generated`` is ``True`` for a successfully produced revision; a
+    cognition that cannot produce a usable edit raises
+    ``CoAuthoringUnavailableError`` instead of returning a degraded result.
     """
 
     body: str
@@ -83,11 +101,22 @@ class CoAuthoringCognition:
         run = facade.answer(question, context=context, trace_id=trace_id)
 
         body = _extract_body(run)
-        generated = body is not None
         if body is None:
-            # Deterministic fallback: keep the current body unchanged rather
-            # than fabricating content when generation is unavailable.
-            body = current_body
+            # Failed/empty run: no usable edit. Do not fabricate or write back
+            # the unchanged body silently; surface unavailability instead.
+            raise CoAuthoringUnavailableError(
+                "Co-authoring generation produced no usable body — the "
+                "reasoning provider returned a failed or empty result."
+            )
+
+        # Guard: a mock/degraded backend returns a diagnostic string, not a
+        # real edit. Applying it would corrupt the note, so reject it.
+        if _is_degraded_generation(body):
+            raise CoAuthoringUnavailableError(
+                "Co-authoring requires an edit-capable LLM provider; the "
+                "active reasoning backend returned a mock/diagnostic response "
+                "instead of an edited note body."
+            )
 
         # Body-only invariant: a generation containing frontmatter is
         # governance-bearing and must not be applied as co-authoring.
@@ -98,7 +127,7 @@ class CoAuthoringCognition:
                 "through GovernanceRouter, not the in-place co-authoring path."
             )
 
-        return CoAuthoredBody(body=body, generated=generated, trace_id=trace_id)
+        return CoAuthoredBody(body=body, generated=True, trace_id=trace_id)
 
 
 def _build_question(intent: str) -> str:
@@ -118,6 +147,12 @@ def _build_context(current_body: str, retrieval_context: str | None) -> str:
     return "\n\n".join(parts)
 
 
+def _is_degraded_generation(body: str) -> bool:
+    """Return True if ``body`` is a mock/diagnostic response, not a real edit."""
+    stripped = body.lstrip()
+    return any(stripped.startswith(prefix) for prefix in _DEGRADED_GENERATION_PREFIXES)
+
+
 def _extract_body(run: Any) -> str | None:
     """Pull body text from a ReasoningRun result, or ``None`` on failure."""
     if getattr(run, "status", None) != "ok":
@@ -134,4 +169,4 @@ def _extract_body(run: Any) -> str | None:
     return None
 
 
-__all__ = ["CoAuthoredBody", "CoAuthoringCognition"]
+__all__ = ["CoAuthoredBody", "CoAuthoringCognition", "CoAuthoringUnavailableError"]

@@ -139,6 +139,22 @@ def test_coauthor_governance_bearing_is_routed_not_applied(monkeypatch, vault: P
     assert (vault / "note.md").read_text(encoding="utf-8") == original
 
 
+def test_coauthor_mock_generation_is_not_applied(monkeypatch, vault: Path) -> None:
+    # A mock/degraded backend response must not be written into the note.
+    generated = "MOCK_ASK_ANSWER: expand the decision section | context: ..."
+    client = _make_client(monkeypatch, vault, generated)
+    session_id = _open_session(client)
+    original = (vault / "note.md").read_text(encoding="utf-8")
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "expand the decision section"},
+    )
+
+    assert resp.status_code == 503, resp.text
+    assert (vault / "note.md").read_text(encoding="utf-8") == original
+
+
 def test_coauthor_requires_canvas_enabled(monkeypatch, vault: Path) -> None:
     monkeypatch.setenv("CANVAS_ENABLED", "0")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
