@@ -138,7 +138,9 @@ follow-up remains: wiring the served dev page to invoke `/coauthor` in live JS (
 | 2 | [SURFACE_CHAT_TO_PANEL_HANDOFF.md](SURFACE_CHAT_TO_PANEL_HANDOFF.md) | #1727 (PR #1732) | Canvas region links to the staged proposal; Panel rail shows canvas origin; confirm via existing flow | `closed` |
 | 3 | [REFLECT_HANDOFF_RECEIPT.md](REFLECT_HANDOFF_RECEIPT.md) | #1728 (PR #1734) | Executed receipt reflected back into the canvas/originating context (read-only, server-declared) | `closed` |
 
-Follow-up: #1733 — wire the live `serve_dev_page` co-authoring flow to call `/coauthor` and render the handoff affordance (`agent:ready`).
+Follow-up: #1733 — wire the live `serve_dev_page` co-authoring flow to call `/coauthor` and render the handoff affordance (delivered, PR #1736).
+
+Live operator UAT script for the full Phase 2 + Phase 3 loop: `docs/runbooks/UAT_CANVAS_COAUTHORING.md`.
 
 ```
 RETURN_GOVERNANCE_HANDOFF_REFERENCE
