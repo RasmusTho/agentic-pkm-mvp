@@ -114,12 +114,46 @@ GENERATE_COAUTHORING_EDIT
 SURFACE_CANVAS_IN_COMPANION_UI
 ```
 
-Phase 2 acceptance (validated on the parent feature issue):
+Phase 2 acceptance (validated on parent feature issue #1715 — **delivered**, closed 2026-06-09):
 
-- [ ] A user intent during an active session produces an agent-generated body edit applied in place.
-- [ ] Frontmatter/cross-note generations route through the gated pipeline, never applied as co-authoring.
-- [ ] The Companion UI shell makes the loop reachable (intent → applied edit → undo) behind `CANVAS_ENABLED`.
-- [ ] Core Runtime defaults and the read-only Chat scaffold are unchanged.
-- [ ] `docs/STATUS.md` records the Phase 2 delivery receipt once accepted.
+- [x] A user intent during an active session produces an agent-generated body edit applied in place.
+- [x] Frontmatter/cross-note generations route through the gated pipeline, never applied as co-authoring.
+- [x] The Companion UI shell makes the loop reachable (intent → applied edit → undo) behind `CANVAS_ENABLED`.
+- [x] Core Runtime defaults and the read-only Chat scaffold are unchanged.
+- [x] `docs/STATUS.md` records the Phase 2 delivery receipt (PR #1724).
+
+## Phase 3 — Chat→Panel Governance Handoff
+
+Phase 2 made co-authoring reachable and routes governance-bearing generations to the Panel
+pipeline server-side — but the handoff is **dead-ended in the UI**. `_route_governance_bearing`
+stages a Panel intent via `GovernanceRouter` and then discards the `intent_id`, raising an opaque
+409; the canvas region shows only a generic "routed to Panel" flag with no link to the proposal or
+its receipt. Phase 3 makes the crossing navigable end to end, per
+`docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md` (still Agentic Lab,
+gated behind `CANVAS_ENABLED`; Panel stays the primary command surface; receipts stay server-owned).
+
+| Order | Task File | Issue | What It Builds | Parallelizable |
+|-------|-----------|-------|----------------|----------------|
+| 1 | [RETURN_GOVERNANCE_HANDOFF_REFERENCE.md](RETURN_GOVERNANCE_HANDOFF_REFERENCE.md) | #1726 (`agent:ready`) | API returns a structured handoff reference (`intent_id`/`action_type`/`status`); staged proposal marked `origin="canvas_coauthoring"` | — |
+| 2 | [SURFACE_CHAT_TO_PANEL_HANDOFF.md](SURFACE_CHAT_TO_PANEL_HANDOFF.md) | #1727 (`agent:blocked` on #1726) | Canvas region links to the staged proposal; Panel rail shows canvas origin; confirm via existing flow | depends on 1 |
+| 3 | [REFLECT_HANDOFF_RECEIPT.md](REFLECT_HANDOFF_RECEIPT.md) | #1728 (`agent:blocked` on #1727) | Executed receipt reflected back into the canvas/originating context (read-only, server-declared) | depends on 2 |
+
+```
+RETURN_GOVERNANCE_HANDOFF_REFERENCE
+        ↓
+SURFACE_CHAT_TO_PANEL_HANDOFF
+        ↓
+REFLECT_HANDOFF_RECEIPT
+```
+
+Phase 3 parent feature issue: **#1725** — live validation hub; closes only after the dev-shell demo passes and the `docs/STATUS.md` claim is promoted.
+
+Phase 3 acceptance (validated on the Phase 3 parent feature issue):
+
+- [ ] A governance-bearing co-authoring intent returns a handoff reference correlating it to a Panel proposal.
+- [ ] The Companion UI links the canvas intent to the canvas-originated Panel proposal and confirms via the existing Panel flow.
+- [ ] The executed receipt is reflected back into the originating context, read-only and server-declared.
+- [ ] Panel remains the primary command surface; the gated-execution invariant and "receipts not invented" hold.
+- [ ] `docs/STATUS.md` records the Phase 3 delivery receipt once accepted.
 
 Phase 2 parent feature issue: **#1715** — live validation hub; closes only after the dev-shell demo passes and the `docs/STATUS.md` Companion UI claim is promoted.
