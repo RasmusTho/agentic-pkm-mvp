@@ -1,0 +1,1190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Companion UI · User Guide</title>
+<style>
+/* ============================================================
+   Yggdrasil Design System — Colors & Type (embedded)
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&display=swap');
+@import url('https://fonts.bunny.net/css?family=jetbrains-mono:400,500&display=swap');
+
+:root {
+  --bg-base:       #070b12;
+  --bg-surface:    #0c1220;
+  --bg-raised:     #111a2e;
+  --bg-overlay:    #162038;
+  --fg-1:          #dce8f0;
+  --fg-2:          #7a9ab8;
+  --fg-3:          #3d5570;
+  --border:        #152030;
+  --border-strong: #1e3050;
+  --border-focus:  #00d4e8;
+  --accent:        #d4a843;
+  --accent-dim:    #80621a;
+  --accent-muted:  #2a1e06;
+  --cyan:          #00d4e8;
+  --cyan-dim:      #007a8a;
+  --cyan-muted:    #001e28;
+  --cyan-glow:     0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5);
+  --vault:         #39e87d;
+  --vault-dim:     #1a7840;
+  --vault-muted:   #041a10;
+  --agent:         #4a9eff;
+  --agent-dim:     #1e5a9a;
+  --agent-muted:   #051228;
+  --amber:         #f09030;
+  --amber-dim:     #805010;
+  --amber-muted:   #1a0e02;
+  --destructive:   #ff3d3d;
+  --font-display:  'EB Garamond', Georgia, serif;
+  --font-ui:       'Space Grotesk', system-ui, sans-serif;
+  --font-mono:     'JetBrains Mono', 'Fira Code', monospace;
+  --text-xs:    0.6875rem;
+  --text-sm:    0.8125rem;
+  --text-base:  0.9375rem;
+  --text-md:    1.0625rem;
+  --text-lg:    1.1875rem;
+  --text-xl:    1.5rem;
+  --text-2xl:   2rem;
+  --text-3xl:   2.75rem;
+  --leading-tight:  1.25;
+  --leading-snug:   1.4;
+  --leading-normal: 1.55;
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0em;
+  --tracking-wide:   0.04em;
+  --tracking-wider:  0.08em;
+  --space-1:  4px;  --space-2:  8px;  --space-3:  12px; --space-4:  16px;
+  --space-5:  20px; --space-6:  24px; --space-8:  32px; --space-10: 40px;
+  --space-12: 48px; --space-16: 64px;
+  --radius-sm: 2px; --radius-md: 4px; --radius-lg: 6px;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-base: 150ms;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--bg-base);
+  background-image:
+    linear-gradient(rgba(0,212,232,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,212,232,0.018) 1px, transparent 1px);
+  background-size: 48px 48px;
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+
+/* ============================================================
+   PAGE LAYOUT
+   ============================================================ */
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-8) var(--space-16);
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--space-12);
+}
+
+/* ---- Sidebar TOC ---- */
+.toc {
+  position: sticky;
+  top: var(--space-8);
+  align-self: start;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding-left: var(--space-4);
+}
+.toc-mark {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--cyan);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+.toc-sub {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  margin-bottom: var(--space-5);
+}
+.toc-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  margin: var(--space-5) 0 var(--space-3);
+  display: block;
+}
+.toc ol { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.toc a {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  line-height: 1.4;
+  padding: 2px 0;
+  transition: color var(--duration-base) var(--ease);
+}
+.toc a:hover { color: var(--cyan); }
+.toc a .n {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  min-width: 20px;
+}
+
+/* ---- Main content ---- */
+.doc { min-width: 0; }
+
+/* ---- Cover ---- */
+.cover {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-10);
+  margin-bottom: var(--space-10);
+}
+.kicker {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--cyan);
+  margin-bottom: var(--space-4);
+}
+.doc-title {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-1);
+  margin-bottom: var(--space-5);
+}
+.lede {
+  font-size: var(--text-md);
+  color: var(--fg-2);
+  line-height: var(--leading-snug);
+  max-width: 68ch;
+  margin-bottom: var(--space-6);
+}
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-8);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+.meta-row b { color: var(--fg-2); font-weight: var(--weight-medium); margin-right: 4px; }
+
+/* ---- Sections ---- */
+section {
+  margin-bottom: var(--space-12);
+  scroll-margin-top: var(--space-6);
+}
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  margin-bottom: var(--space-3);
+}
+.eyebrow .num { color: var(--cyan); }
+.section-title {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-tight);
+  color: var(--fg-1);
+  margin-bottom: var(--space-5);
+}
+h3.sub {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--fg-1);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  margin: var(--space-8) 0 var(--space-3);
+}
+p {
+  color: var(--fg-1);
+  margin-bottom: var(--space-4);
+  max-width: 72ch;
+  line-height: var(--leading-normal);
+}
+ul, ol {
+  margin: 0 0 var(--space-5) var(--space-6);
+  max-width: 70ch;
+}
+li { margin-bottom: 6px; line-height: 1.55; color: var(--fg-1); }
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.35em;
+  color: var(--fg-1);
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--fg-1); text-decoration: underline; }
+
+/* ---- Callouts ---- */
+.callout {
+  border-left: 2px solid var(--cyan);
+  background: rgba(0,212,232,0.04);
+  padding: var(--space-4) var(--space-5);
+  margin: var(--space-5) 0;
+  max-width: 72ch;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.callout.tip { border-left-color: var(--vault); background: rgba(57,232,125,0.04); }
+.callout.warn { border-left-color: var(--amber); background: rgba(240,144,48,0.05); }
+.callout.note { border-left-color: var(--accent); background: rgba(212,168,67,0.04); }
+.callout .callout-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--cyan);
+  margin-bottom: var(--space-2);
+}
+.callout.tip .callout-label { color: var(--vault); }
+.callout.warn .callout-label { color: var(--amber); }
+.callout.note .callout-label { color: var(--accent); }
+.callout p { margin-bottom: 0; max-width: none; }
+.callout p + p { margin-top: var(--space-3); }
+
+/* ---- Tables ---- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  margin: var(--space-4) 0 var(--space-6);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+th, td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--fg-2);
+  background: var(--bg-raised);
+  font-weight: var(--weight-medium);
+  border-bottom: 1px solid var(--border-strong);
+}
+tr:last-child td { border-bottom: none; }
+td code { font-size: 0.9em; }
+
+/* ---- Keyboard chips ---- */
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-1);
+  box-shadow: 0 1px 0 var(--border-strong);
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.key.accent { border-color: rgba(212,168,67,0.4); color: var(--accent); }
+.key.cyan   { border-color: rgba(0,212,232,0.4); color: var(--cyan); }
+
+/* ---- Chips / tags ---- */
+.chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--fg-2);
+}
+.chip.canvas  { color: var(--cyan); border-color: rgba(0,212,232,0.35); background: var(--cyan-muted); }
+.chip.panel   { color: var(--accent); border-color: rgba(212,168,67,0.35); background: var(--accent-muted); }
+.chip.vault   { color: var(--vault); border-color: rgba(57,232,125,0.35); background: var(--vault-muted); }
+.chip.agent   { color: var(--agent); border-color: rgba(74,158,255,0.35); background: var(--agent-muted); }
+.chip.amber   { color: var(--amber); border-color: rgba(240,144,48,0.35); background: var(--amber-muted); }
+
+/* ---- Layout diagram ---- */
+.layout-diagram {
+  display: grid;
+  grid-template-columns: 180px 1fr 200px;
+  gap: 2px;
+  background: var(--border);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin: var(--space-5) 0 var(--space-6);
+  max-width: 640px;
+}
+.layout-col {
+  background: var(--bg-surface);
+  padding: var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 220px;
+}
+.layout-col.primary { background: var(--bg-base); }
+.layout-col-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-2);
+}
+.layout-col-label.c-cyan  { color: var(--cyan); }
+.layout-col-label.c-gold  { color: var(--accent); }
+.layout-col-label.c-vault { color: var(--vault); }
+.layout-item {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  line-height: 1.4;
+}
+.layout-item.active {
+  color: var(--fg-1);
+  border-color: var(--border-strong);
+  background: var(--bg-overlay);
+}
+
+/* ---- Flow steps ---- */
+.flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-4) 0 var(--space-6);
+  max-width: 620px;
+}
+.flow-step {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: var(--space-3);
+  align-items: start;
+  position: relative;
+}
+.flow-step + .flow-step::before {
+  content: '';
+  position: absolute;
+  top: -var(--space-1);
+  left: 14px;
+  width: 1px;
+  height: var(--space-2);
+  background: var(--border-strong);
+}
+.step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--cyan);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.step-body { padding-top: 4px; }
+.step-title {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  color: var(--fg-1);
+  margin-bottom: 3px;
+}
+.step-desc {
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+  line-height: 1.45;
+  max-width: 58ch;
+}
+
+/* ---- State cards ---- */
+.state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0 var(--space-6);
+}
+.state-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+.state-card-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  color: var(--fg-2);
+  margin-bottom: var(--space-2);
+  text-transform: uppercase;
+}
+.state-card-desc {
+  font-size: var(--text-sm);
+  color: var(--fg-1);
+  line-height: 1.4;
+}
+.state-card.idle   { border-top: 2px solid var(--border-strong); }
+.state-card.think  { border-top: 2px solid var(--amber); }
+.state-card.staged { border-top: 2px solid var(--cyan); }
+.state-card.active { border-top: 2px solid var(--vault); }
+.state-card.done   { border-top: 2px solid var(--vault); }
+.state-card.block  { border-top: 2px solid var(--destructive); }
+
+/* ---- Section divider ---- */
+.rule {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: var(--space-10) 0;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 860px) {
+  .page { grid-template-columns: 1fr; gap: var(--space-8); padding: var(--space-8) var(--space-5) var(--space-12); }
+  .toc { position: static; max-height: none; border-left: none; border-top: 1px solid var(--border); padding: var(--space-4) 0 0; }
+  .layout-diagram { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ================================================================
+     SIDEBAR TOC
+     ================================================================ -->
+<nav class="toc" aria-label="Page contents">
+  <div class="toc-mark">Yggdrasil</div>
+  <div class="toc-sub">Companion UI</div>
+  <span class="toc-label">User Guide</span>
+  <ol>
+    <li><a href="#intro"><span class="n">01</span>What is Companion UI</a></li>
+    <li><a href="#layout"><span class="n">02</span>Layout overview</a></li>
+    <li><a href="#reading"><span class="n">03</span>Reading a note</a></li>
+    <li><a href="#canvas"><span class="n">04</span>Canvas — body editing</a></li>
+    <li><a href="#suggestions"><span class="n">05</span>Canvas suggestion flow</a></li>
+    <li><a href="#panel"><span class="n">06</span>Panel — proposals</a></li>
+    <li><a href="#reorient"><span class="n">07</span>Reorient</a></li>
+    <li><a href="#resurface"><span class="n">08</span>Resurface &amp; Find</a></li>
+    <li><a href="#keys"><span class="n">09</span>Keyboard shortcuts</a></li>
+    <li><a href="#signals"><span class="n">10</span>UI state signals</a></li>
+    <li><a href="#boundaries"><span class="n">11</span>Authority boundaries</a></li>
+  </ol>
+</nav>
+
+<!-- ================================================================
+     MAIN DOCUMENT
+     ================================================================ -->
+<main class="doc">
+
+<!-- ---- COVER ---- -->
+<header class="cover" id="top">
+  <span class="kicker">Yggdrasil · Companion UI · User Guide</span>
+  <h1 class="doc-title">A calm shell for thinking with your notes.</h1>
+  <p class="lede">
+    Companion UI is a local-first browser interface that puts your active note at the centre.
+    It gives you access to an AI that can co-author the note body, surface agent proposals
+    for review, and help you re-enter context after time away — without ever writing to the
+    vault except through an auditable, receipt-bearing execution path.
+  </p>
+  <div class="meta-row">
+    <span><b>Surface</b>Browser · localhost / LAN / Tailscale</span>
+    <span><b>Vault access</b>Runtime API only — no direct file reads/writes</span>
+    <span><b>AI posture</b>Advisory and accountable — human decides</span>
+  </div>
+</header>
+
+<!-- ================================================================
+     01 WHAT IS COMPANION UI
+     ================================================================ -->
+<section id="intro">
+  <span class="eyebrow"><span class="num">01</span>What is Companion UI</span>
+  <h2 class="section-title">A cognitive prosthesis, not a productivity dashboard.</h2>
+
+  <p>
+    Companion UI is a browser-accessible workspace served by the Yggdrasil host process.
+    It does not replace Obsidian. Your vault remains the canonical home for every durable
+    knowledge artifact. Companion UI augments how you <em>interact</em> with that vault —
+    adding agent-assisted editing, governed proposal review, and session continuity — while
+    keeping the document itself the undisputed cognitive anchor.
+  </p>
+
+  <p>
+    Three principles govern every surface in the UI:
+  </p>
+
+  <ul>
+    <li><strong>Document-first.</strong> The active note is always the primary visual element. Everything else is subordinate chrome.</li>
+    <li><strong>Overlay-first.</strong> Agent contributions appear as reviewable overlays, not as hard navigation or page-replacing views.</li>
+    <li><strong>Human decides.</strong> The AI surfaces intent and suggestions; the human confirms, corrects, or rejects before anything is written.</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="callout-label">Design principle</span>
+    <p>
+      Hidden semantic state is prohibited. Every status the system holds — write-guard status,
+      canvas enabled/disabled, session recovery state, proposal classification — must be visible
+      in the UI when relevant. The system must not look "fine" while hiding a blocked or
+      degraded condition.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================
+     02 LAYOUT OVERVIEW
+     ================================================================ -->
+<section id="layout">
+  <span class="eyebrow"><span class="num">02</span>Layout overview</span>
+  <h2 class="section-title">Three columns, each with a distinct job.</h2>
+
+  <p>
+    The Companion UI shell uses a three-column layout on desktop. The columns are
+    structurally separate: they serve different cognitive jobs and must not collapse
+    into each other.
+  </p>
+
+  <div class="layout-diagram" role="img" aria-label="Three-column shell diagram">
+    <div class="layout-col">
+      <div class="layout-col-label c-cyan">Outline</div>
+      <div class="layout-item">H1 · Introduction</div>
+      <div class="layout-item">H2 · Background</div>
+      <div class="layout-item">H2 · Design decisions</div>
+      <div class="layout-item">H3 · Option A</div>
+      <div class="layout-item">H3 · Option B</div>
+      <div class="layout-item">H2 · Next steps</div>
+    </div>
+    <div class="layout-col primary">
+      <div class="layout-col-label c-vault">Note body · primary surface</div>
+      <div class="layout-item active">Projects/Q2-arch.md</div>
+      <div class="layout-item active" style="min-height:80px; opacity:0.7;">Note content renders here at full width. This is the cognitive anchor — everything else is subordinate to this pane.</div>
+    </div>
+    <div class="layout-col">
+      <div class="layout-col-label c-gold">Companion rail</div>
+      <div class="layout-item">Reorient</div>
+      <div class="layout-item">Canvas session</div>
+      <div class="layout-item">Panel proposals</div>
+      <div class="layout-item">Receipts</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Column</th>
+        <th>Job</th>
+        <th>When to use</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="chip cyan">Outline</span></td>
+        <td>Heading navigation for the active note. Clicking a heading jumps to that section.</td>
+        <td>Navigating long notes; orientation after re-entry.</td>
+      </tr>
+      <tr>
+        <td><span class="chip vault">Note body</span></td>
+        <td>The note itself, rendered in place. Primary cognitive anchor. Never replaced by a dashboard view.</td>
+        <td>Always visible. Everything else is subordinate to this column.</td>
+      </tr>
+      <tr>
+        <td><span class="chip panel">Companion rail</span></td>
+        <td>Reorient card, Canvas editing session, Panel proposals, receipts, and session-recovery notices.</td>
+        <td>Agent interactions: body edits, proposal review, re-entry, receipts.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout tip">
+    <span class="callout-label">Narrow viewport</span>
+    <p>
+      On small screens the companion rail drops to a bottom sheet. The note body remains
+      the primary element above it. The outline rail collapses; a menu button reveals it
+      on demand.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================
+     03 READING A NOTE
+     ================================================================ -->
+<section id="reading">
+  <span class="eyebrow"><span class="num">03</span>Reading a note</span>
+  <h2 class="section-title">The note opens through the runtime — the UI never reads the vault directly.</h2>
+
+  <p>
+    When you navigate to a note, the runtime resolves the active artifact and returns its
+    identity, path, content hash, and capability flags. The UI renders what the runtime
+    declares; it never selects or reads vault files itself.
+  </p>
+
+  <h3 class="sub">Artifact identity strip</h3>
+  <p>
+    Below the note title you will see a thin identity strip containing:
+  </p>
+  <ul>
+    <li><strong>Note path</strong> — the vault-relative path (<code>Projects/Q2-arch.md</code>).</li>
+    <li><strong>Content hash</strong> — a short hash of the current note body, used for conflict detection and Canvas edit guards.</li>
+    <li><strong>Session reference</strong> — the current Canvas session ID, if a session is active.</li>
+    <li><strong>Environment label</strong> — the runtime environment (<code>local-dev</code>, <code>staging</code>, etc.).</li>
+  </ul>
+
+  <h3 class="sub">WriteGuard and Canvas status</h3>
+  <p>
+    The top of the companion rail shows a compact status strip. Two flags are always visible:
+  </p>
+  <ul>
+    <li><strong>WriteGuard</strong> — whether the runtime allows vault writes. If write-guard is <code>blocked</code>, Canvas editing and Panel confirmations are disabled until the guard clears.</li>
+    <li><strong>Canvas</strong> — whether the Canvas edit surface is enabled for this environment. Disabled when <code>CANVAS_ENABLED=0</code> on the server.</li>
+  </ul>
+
+  <div class="callout warn">
+    <span class="callout-label">Degraded state</span>
+    <p>
+      If the runtime is unreachable, or if the workspace payload cannot be loaded,
+      the UI shows a full-width alert. It does not silently fall through to a blank
+      or stale note view. The status strip turns amber and describes the condition.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================
+     04 CANVAS — BODY EDITING
+     ================================================================ -->
+<section id="canvas">
+  <span class="eyebrow"><span class="num">04</span>Canvas — body editing</span>
+  <h2 class="section-title">Direct in-place note-body co-authoring, undo-capable and receipt-bearing.</h2>
+
+  <p>
+    Canvas is the co-authoring surface for the active note body. It is separate from the
+    Panel (which handles governed proposals) and from the Converse/Chat surface
+    (which is a canvas-like conversational input). Canvas edits go directly to the
+    note body through the runtime writer; each edit is logged in the session provenance trail.
+  </p>
+
+  <h3 class="sub">Starting a Canvas session</h3>
+  <p>
+    A Canvas session opens automatically when you first submit a body-edit intent in the
+    Converse input, or when the server stages a body-edit suggestion for review. The session
+    is identified by a short ID shown in the identity strip and in the companion rail header.
+  </p>
+
+  <div class="callout">
+    <span class="callout-label">Session scope</span>
+    <p>
+      Each Canvas session is bound to the note that was active when the session opened.
+      Navigating to a different note closes the current session and opens a new one.
+    </p>
+  </div>
+
+  <h3 class="sub">Applying and undoing edits</h3>
+
+  <div class="flow-steps">
+    <div class="flow-step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <div class="step-title">Propose</div>
+        <div class="step-desc">Type your editing intent in the Converse input. The agent processes the request and stages a preview of the proposed change.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <div class="step-title">Preview</div>
+        <div class="step-desc">The staged suggestion appears in the companion rail with a diff or preview of the proposed body change.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <div class="step-title">Apply</div>
+        <div class="step-desc">Press <span class="key accent">A</span> or click Apply. The runtime writes the change via the CanvasWriter. The note body updates in the document pane.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <div class="step-title">Undo (if needed)</div>
+        <div class="step-desc">After applying, an Undo option remains available in the companion rail. Pressing it sends the prior body to the CanvasWriter, restoring the note to its pre-edit state. Undo is available only for the most recent edit.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <div class="step-title">Session log</div>
+        <div class="step-desc">Every applied edit is recorded in a session log. The ProvenanceFooter in the companion rail shows the log path. This is an intent trail, not the artifact — the note is the artifact.</div>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="sub">Session recovery</h3>
+  <p>
+    If a Canvas session is interrupted — browser closed, network drop, hash mismatch —
+    the next time the same note opens the UI detects the conflict and shows a recovery
+    card in the companion rail. You must acknowledge the recovery state before Canvas
+    editing can resume. The acknowledgement is a UI-local action; it does not write to
+    the vault.
+  </p>
+</section>
+
+<!-- ================================================================
+     05 CANVAS SUGGESTION FLOW
+     ================================================================ -->
+<section id="suggestions">
+  <span class="eyebrow"><span class="num">05</span>Canvas suggestion flow</span>
+  <h2 class="section-title">Two kinds of suggestion: body edits and governance proposals.</h2>
+
+  <p>
+    When the agent produces a suggestion it is always pre-classified by the server before
+    the UI renders it. The UI never reclassifies a suggestion. Classification determines
+    which actions are available to you.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Classification</th>
+        <th>What it means</th>
+        <th>Actions available</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="chip canvas">body</span></td>
+        <td>A proposed change to the note body text. No governance side-effects; can be applied directly via the CanvasWriter.</td>
+        <td>Apply (<span class="key">A</span>), Discard (<span class="key">D</span>), Inspect (<span class="key">I</span>), Dismiss rail (<span class="key">E</span>)</td>
+      </tr>
+      <tr>
+        <td><span class="chip panel">governance</span></td>
+        <td>A proposal that touches governed artifact state — lifecycle moves, tag changes, cross-note operations. Must travel through the Panel pipeline before execution.</td>
+        <td>Queue (<span class="key">Q</span>), Discard (<span class="key">D</span>), Inspect (<span class="key">I</span>), Dismiss rail (<span class="key">E</span>)</td>
+      </tr>
+      <tr>
+        <td><span class="chip amber">blocked</span></td>
+        <td>Canvas is disabled on the server (<code>CANVAS_ENABLED=0</code>) or WriteGuard is blocking writes. No mutation actions available.</td>
+        <td>Inspect (<span class="key">I</span>), Dismiss rail (<span class="key">E</span>)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-label">Hard invariant</span>
+    <p>
+      A governance-classified suggestion never has an Apply button. Applying a body edit
+      never creates a Panel governance receipt. The two pipelines do not cross.
+    </p>
+  </div>
+
+  <h3 class="sub">Rail states</h3>
+
+  <div class="state-grid">
+    <div class="state-card idle">
+      <div class="state-card-name">idle</div>
+      <div class="state-card-desc">No active suggestion. Converse composer is enabled and has keyboard focus.</div>
+    </div>
+    <div class="state-card think">
+      <div class="state-card-name">thinking</div>
+      <div class="state-card-desc">Agent is processing a request. Composer is disabled. A spinner indicates progress.</div>
+    </div>
+    <div class="state-card staged">
+      <div class="state-card-name">staged body / staged governance</div>
+      <div class="state-card-desc">A suggestion is awaiting your decision. Keyboard shortcuts are active. Composer is disabled until you act.</div>
+    </div>
+    <div class="state-card active">
+      <div class="state-card-name">apply pending / governance pending</div>
+      <div class="state-card-desc">A write or governance queue call is in flight. UI is locked; do not navigate away.</div>
+    </div>
+    <div class="state-card done">
+      <div class="state-card-name">applied / discarded</div>
+      <div class="state-card-desc">Terminal presentation state. Outcome is shown with a receipt pill. Rail returns to idle after acknowledgement.</div>
+    </div>
+    <div class="state-card block">
+      <div class="state-card-name">blocked</div>
+      <div class="state-card-desc">Canvas is unavailable. Mutation actions are removed. The block reason is displayed.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     06 PANEL — PROPOSALS
+     ================================================================ -->
+<section id="panel">
+  <span class="eyebrow"><span class="num">06</span>Panel — proposals</span>
+  <h2 class="section-title">Artifact-local intent. You recognize and confirm; the runtime executes.</h2>
+
+  <p>
+    Panel is the governed proposal surface for the active artifact. It is separate from Canvas
+    (which edits the note body) and separate from any global inbox view (Companion UI does not
+    have one). Panel proposals are bounded to the note currently open.
+  </p>
+
+  <p>
+    The agent may surface what it believes you likely want to do with this specific artifact —
+    a lifecycle move, a tagging decision, a follow-up action — before you have explicitly
+    commanded it. You review the proposal, read the evidence, and decide to confirm, correct,
+    or reject.
+  </p>
+
+  <h3 class="sub">Reading a Panel proposal</h3>
+  <p>
+    Each proposal row in the companion rail shows:
+  </p>
+  <ul>
+    <li><strong>Proposal label</strong> — what the agent is proposing in plain language.</li>
+    <li><strong>Evidence</strong> — the source references or reasoning the agent used, shown as collapsed evidence links you can expand.</li>
+    <li><strong>Trust state</strong> — whether the proposal came from a reviewed agent path or is provisional.</li>
+    <li><strong>Authority flags</strong> — the governance class of the proposed action (e.g., lifecycle move, classification, cross-note).</li>
+  </ul>
+
+  <h3 class="sub">Confirming a proposal</h3>
+
+  <div class="flow-steps">
+    <div class="flow-step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <div class="step-title">Review</div>
+        <div class="step-desc">Read the proposal and the evidence. Expand evidence links if you need to trace the reasoning back to source material.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <div class="step-title">Correct or confirm</div>
+        <div class="step-desc">You can edit the proposal text before confirming. The corrected intent replaces the original. Your correction is part of the receipt.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <div class="step-title">Confirm</div>
+        <div class="step-desc">Clicking Confirm routes the intent into the governed execution path: policy check → WriteGuard → idempotency guard → deterministic writer → receipt.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <div class="step-title">Receipt</div>
+        <div class="step-desc">A receipt pill appears showing the outcome (confirmed, blocked, or error). Receipts persist in the companion rail for the duration of the session. The outcome is never hidden after the action completes.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="callout-label">No silent execution</span>
+    <p>
+      Panel never auto-executes a proposal. LLM output from Panel cognition is always in
+      the proposal or clarification class; it is never promoted to governed-execution
+      authority without explicit human confirmation.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================
+     07 REORIENT
+     ================================================================ -->
+<section id="reorient">
+  <span class="eyebrow"><span class="num">07</span>Reorient</span>
+  <h2 class="section-title">Re-enter your context after time away — read-only, advisory, no execution.</h2>
+
+  <p>
+    The Reorient card appears in the companion rail when you open a note you have not
+    visited recently, or when a session has been interrupted. It summarises where work
+    left off using bounded evidence from the session log and vault history.
+  </p>
+
+  <h3 class="sub">What Reorient shows</h3>
+  <ul>
+    <li>A short plain-language summary of the last meaningful activity on this note.</li>
+    <li>Evidence links to the session log turns or vault artifacts that ground the summary.</li>
+    <li>Any open Canvas or Panel state from the prior session, if recovery is needed.</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="callout-label">Advisory only</span>
+    <p>
+      Reorient never executes actions on your behalf. It is a read-side recovery surface.
+      Nothing in the Reorient card has write authority. If you see a suggestion that looks
+      like a proposal, it will route through Canvas or Panel, not execute directly from
+      the Reorient card.
+    </p>
+  </div>
+
+  <h3 class="sub">Dismissing Reorient</h3>
+  <p>
+    You can dismiss the Reorient card at any time by clicking the dismiss control in its
+    header. The card does not reappear during the same session unless a new recovery
+    condition is detected.
+  </p>
+</section>
+
+<!-- ================================================================
+     08 RESURFACE & FIND
+     ================================================================ -->
+<section id="resurface">
+  <span class="eyebrow"><span class="num">08</span>Resurface &amp; Find</span>
+  <h2 class="section-title">Low-pressure candidates and search — both bounded by what the runtime can provide.</h2>
+
+  <h3 class="sub">Resurface</h3>
+  <p>
+    Resurface shows read-only memory candidates and related note fragments that may be
+    relevant to the active artifact. It is intentionally low-pressure: the UI must not
+    imply urgency unless the runtime explicitly signals urgency in its payload.
+  </p>
+  <p>
+    Resurface candidates are presented as expandable pills in the companion rail. They
+    do not carry Apply buttons. If a candidate looks useful, you can copy a reference
+    into the Converse input and ask the agent to act on it — that action then travels
+    through the normal Canvas or Panel flow.
+  </p>
+
+  <div class="callout warn">
+    <span class="callout-label">Memory is not semantic authority</span>
+    <p>
+      Unreviewed memory candidates shown in the Resurface rail are provisional. They are
+      not promoted to semantic authority until you explicitly confirm or promote them
+      through the governed path. The UI labels each candidate with its provenance and
+      review status.
+    </p>
+  </div>
+
+  <h3 class="sub">Find</h3>
+  <p>
+    Find is a note-search surface available from the top bar. In the current MLP it may
+    show a <em>candidate</em> or <em>unavailable</em> state if the backend search index
+    is not ready. The UI will say so explicitly rather than returning empty results.
+  </p>
+  <ul>
+    <li>Find results link to notes, not inline-insert text.</li>
+    <li>Opening a result replaces the active note in the document pane.</li>
+    <li>Find does not support full retrieval of all vault content; it queries the index the runtime exposes.</li>
+  </ul>
+</section>
+
+<!-- ================================================================
+     09 KEYBOARD SHORTCUTS
+     ================================================================ -->
+<section id="keys">
+  <span class="eyebrow"><span class="num">09</span>Keyboard shortcuts</span>
+  <h2 class="section-title">Shortcuts are active only when a suggestion is staged and awaiting your action.</h2>
+
+  <p>
+    Global keyboard shortcuts are minimal. Context-scoped shortcuts activate when the
+    companion rail has a staged suggestion — the shortcuts are shown in the suggestion
+    card so you do not need to memorise them.
+  </p>
+
+  <h3 class="sub">Suggestion rail shortcuts</h3>
+  <p>
+    These shortcuts are active only when <code>data-suggestion-state</code> is
+    <code>staged-body</code> or <code>staged-gov</code>, and only when no text input
+    is focused elsewhere.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Key</th>
+        <th>Action</th>
+        <th>Available when</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="key accent">A</span></td>
+        <td><strong>Apply body suggestion</strong> — writes the staged body edit via the CanvasWriter.</td>
+        <td>Body suggestion staged · Canvas enabled · not blocked</td>
+      </tr>
+      <tr>
+        <td><span class="key accent">Q</span></td>
+        <td><strong>Queue governance suggestion</strong> — routes the staged governance intent through the GovernanceRouter; returns a receipt pill.</td>
+        <td>Governance suggestion staged · not blocked</td>
+      </tr>
+      <tr>
+        <td><span class="key">D</span></td>
+        <td><strong>Discard suggestion</strong> — removes the staged suggestion without any write. Composer returns to focus.</td>
+        <td>Any staged state · not blocked · not terminal</td>
+      </tr>
+      <tr>
+        <td><span class="key">I</span></td>
+        <td><strong>Inspect</strong> — expands the suggestion card to show full diff, provenance, and evidence. No mutation.</td>
+        <td>Any staged state · blocked · terminal</td>
+      </tr>
+      <tr>
+        <td><span class="key">E</span></td>
+        <td><strong>Dismiss rail / edit</strong> — collapses the suggestion card and returns composer focus so you can refine your request.</td>
+        <td>Any staged state · blocked · terminal</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout tip">
+    <span class="callout-label">Tip</span>
+    <p>
+      In <em>blocked</em> and <em>terminal</em> (applied/discarded) states only <span class="key">I</span>
+      and <span class="key">E</span> are active. Apply and Queue are removed to prevent accidental
+      mutation when the path is not open.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================
+     10 UI STATE SIGNALS
+     ================================================================ -->
+<section id="signals">
+  <span class="eyebrow"><span class="num">10</span>UI state signals</span>
+  <h2 class="section-title">What the UI shows when things are not normal.</h2>
+
+  <p>
+    Companion UI is designed to speak its null and degraded states explicitly.
+    Below is a reference for the signals you may encounter.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Signal</th>
+        <th>What it means</th>
+        <th>Action needed</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="chip amber">WRITEGUARD · BLOCKED</span></td>
+        <td>The runtime write guard is active. Canvas edits and Panel confirmations cannot proceed.</td>
+        <td>Check runtime health. The guard clears server-side when the blocking condition resolves.</td>
+      </tr>
+      <tr>
+        <td><span class="chip amber">CANVAS disabled</span></td>
+        <td><code>CANVAS_ENABLED=0</code> is set on the server. The Canvas edit surface is not available in this environment.</td>
+        <td>Use the environment where Canvas is enabled, or wait for a server flag change.</td>
+      </tr>
+      <tr>
+        <td><span class="chip canvas">Session recovery needed</span></td>
+        <td>A Canvas session was interrupted — hash mismatch, browser close, or network drop. The current note body may differ from session state.</td>
+        <td>Read the recovery card and acknowledge it. Canvas editing resumes after acknowledgement.</td>
+      </tr>
+      <tr>
+        <td><span class="chip">Identity unresolved</span></td>
+        <td>The runtime could not confirm artifact identity for the active note. The note path or ID is provisional.</td>
+        <td>The UI shows the unresolved state in the identity strip. Do not apply edits while identity is unresolved.</td>
+      </tr>
+      <tr>
+        <td><span class="chip">Find unavailable</span></td>
+        <td>The search index is not ready or the runtime does not expose a search endpoint for the current environment.</td>
+        <td>The UI labels this state rather than showing empty results. No action needed unless search is required.</td>
+      </tr>
+      <tr>
+        <td><span class="chip amber">Runtime unreachable</span></td>
+        <td>The Yggdrasil host process cannot be reached. The UI cannot load the workspace payload.</td>
+        <td>Check that the host process is running (<code>make alpha-up</code> or equivalent). Refresh when service is restored.</td>
+      </tr>
+      <tr>
+        <td><span class="chip canvas">No active Panel proposal</span></td>
+        <td>The Panel rail is idle — the agent has not surfaced a proposal for the current artifact.</td>
+        <td>Normal idle state. No action needed.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================================================================
+     11 AUTHORITY BOUNDARIES
+     ================================================================ -->
+<section id="boundaries">
+  <span class="eyebrow"><span class="num">11</span>Authority boundaries</span>
+  <h2 class="section-title">What the UI can and cannot do — by design, not by limitation.</h2>
+
+  <p>
+    These boundaries are intentional. They preserve the governance invariants that make the
+    system trustworthy. They apply unconditionally; no feature request or configuration change
+    can override them without an explicit owner-doc change.
+  </p>
+
+  <h3 class="sub">The UI cannot and will not</h3>
+  <ul>
+    <li><strong>Read vault files directly.</strong> All content comes through the runtime API.</li>
+    <li><strong>Write vault files directly.</strong> All writes route through the governed execution path: policy → WriteGuard → idempotency → deterministic writer → receipt.</li>
+    <li><strong>Choose or configure which vault is active.</strong> Vault binding is a runtime decision. The UI renders what the runtime declares.</li>
+    <li><strong>Reclassify server-declared proposals.</strong> If the server says a suggestion is <code>governance</code>, the UI renders it as governance. The UI never upgrades or downgrades proposal class.</li>
+    <li><strong>Execute Panel proposals without your confirmation.</strong> LLM output is always in the proposal class; you confirm before anything enters the execution path.</li>
+    <li><strong>Persist runtime state to the vault silently.</strong> Session logs are provenance trails. Durable vault writes are receipt-bearing and visible.</li>
+    <li><strong>Operate as a second Obsidian.</strong> The vault is canonical. Companion UI is a client surface for that vault.</li>
+  </ul>
+
+  <h3 class="sub">The UI is explicitly authorised to</h3>
+  <ul>
+    <li>Render the active note body from the runtime-provided payload.</li>
+    <li>Display runtime-declared state: WriteGuard status, Canvas enabled flag, session recovery state, artifact identity, content hash.</li>
+    <li>Co-author the note body via the Canvas session flow, with your apply confirmation at every step.</li>
+    <li>Surface agent proposals in the Panel rail and route your confirmation into the governed pipeline.</li>
+    <li>Show read-only session provenance, Reorient summaries, and Resurface candidates.</li>
+    <li>Display receipts for all completed actions, including block reasons.</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="callout-label">Authority hierarchy</span>
+    <p>
+      Runtime declares class, posture, and authority. The UI renders what the server declares.
+      The UI never re-declares. If a runtime response and a UI element appear to conflict,
+      the runtime response is authoritative.
+    </p>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<p style="font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); letter-spacing: var(--tracking-wide); text-transform: uppercase; margin-bottom: 0; max-width: none;">
+  Yggdrasil · Companion UI · User Guide · companion-ui/Companion UI - User Guide.html
+</p>
+
+</main>
+</div><!-- .page -->
+</body>
+</html>
