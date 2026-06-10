@@ -126,6 +126,11 @@ A `required: false` layer that is absent at preflight time contributes nothing, 
 
 Omission is only acceptable when the chain-resolved value already binds the intended channel (e.g. `docker-compose.prod.yml` relies on the prod base defaults and a prod-channel runtime layer). This is channel-aware resolution of one shared rule, not a per-channel behavior split.
 
+Explicit overlay DSNs do not suppress structural `env_file` chain validation. Even when
+`DATABASE_URL` and `DB_DSN` are declared with channel-correct values, the preflight still
+fail-closes on declared required layers that are missing, unreadable, or have unresolvable path
+expressions, because Compose must still resolve and load the service's `env_file` chain safely.
+
 **Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
 
 - by `scripts/test/test_ui_doctor.sh` (and therefore `make test-ui-doctor`) before any Docker or network check;

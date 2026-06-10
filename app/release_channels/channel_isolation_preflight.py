@@ -392,6 +392,45 @@ def _resolve_key_through_chain(
     return _ChainResolution(value=value, source=source)
 
 
+def _env_file_chain_error(
+    chain: list[EnvFileLayer],
+    compose_dir: Path,
+    lookup: Callable[[str], str | None],
+) -> str | None:
+    """Return structural env_file chain errors that make a service unverifiable.
+
+    Explicit ``environment`` DSNs override env_file values, but Compose still
+    has to resolve and load the declared env_file chain for the service. Missing
+    required layers, unreadable layers, and unresolvable path expressions are
+    therefore fail-closed even when channel-critical DSNs are explicit.
+    """
+    for layer in chain:
+        resolved_expr = _interpolate_env_file_path(layer.path_expr, lookup)
+        if resolved_expr is None:
+            return (
+                f"env_file path expression {layer.path_expr!r} cannot be "
+                "resolved by the preflight — env_file chain unverifiable"
+            )
+        path = Path(resolved_expr)
+        if not path.is_absolute():
+            path = compose_dir / path
+        if not path.exists():
+            if layer.required:
+                return (
+                    f"required env_file layer {str(path)!r} is missing — "
+                    "compose would refuse to start; env_file chain unverifiable"
+                )
+            continue
+        try:
+            path.read_text(encoding="utf-8")
+        except OSError:
+            return (
+                f"env_file layer {str(path)!r} exists but cannot be read — "
+                "env_file chain unverifiable"
+            )
+    return None
+
+
 def _service_env(service_dict: dict[str, Any]) -> dict[str, str | None]:
     """Return the environment mapping for a single compose service dict."""
     raw = service_dict.get("environment") or {}
@@ -469,14 +508,26 @@ def check_compose_channel_isolation(
         # !override` would replace the base chain in compose; the tag is not
         # modeled here, so base layers are still checked — the stricter,
         # fail-closed direction.
+        overlay_layers = _service_env_file_layers(svc)
         if base_services is None:
             chain = [EnvFileLayer(path_expr=str(BASE_ENV_DEFAULTS_REL))]
+            check_explicit_chain_errors = bool(overlay_layers)
         else:
             chain = _service_env_file_layers(base_services.get(svc_name) or {})
-        chain = chain + _service_env_file_layers(svc)
+            check_explicit_chain_errors = bool(chain or overlay_layers)
+        chain = chain + overlay_layers
 
         _check_pkm_environment(result, svc_name, env, spec)
-        _check_db_dsn(result, svc_name, env, spec, chain, compose_dir, lookup)
+        _check_db_dsn(
+            result,
+            svc_name,
+            env,
+            spec,
+            chain,
+            compose_dir,
+            lookup,
+            check_explicit_chain_errors=check_explicit_chain_errors,
+        )
 
     return result
 
@@ -526,6 +577,8 @@ def _check_db_dsn(
     chain: list[EnvFileLayer],
     compose_dir: Path,
     lookup: Callable[[str], str | None],
+    *,
+    check_explicit_chain_errors: bool,
 ) -> None:
     """Validate effective DATABASE_URL / DB_DSN bindings match the channel.
 
@@ -536,6 +589,11 @@ def _check_db_dsn(
     when the chain cannot be verified — an unverifiable binding is never safe.
     """
     db_fragment = spec.get("db_name_fragment")
+    chain_error = (
+        _env_file_chain_error(chain, compose_dir, lookup)
+        if check_explicit_chain_errors
+        else None
+    )
     for key in CHANNEL_CRITICAL_DSN_KEYS:
         dsn = env.get(key)
         if dsn is not None:
@@ -547,6 +605,18 @@ def _check_db_dsn(
                         field=key,
                         expected=expected_on_violation,
                         actual=dsn,
+                    )
+                )
+            if chain_error is not None:
+                result.violations.append(
+                    BindingViolation(
+                        service=svc_name,
+                        field=key,
+                        expected=(
+                            f"DSN containing {db_fragment!r} declared with a "
+                            "verifiable env_file chain"
+                        ),
+                        actual=f"explicit DSN present; {chain_error}",
                     )
                 )
             continue
