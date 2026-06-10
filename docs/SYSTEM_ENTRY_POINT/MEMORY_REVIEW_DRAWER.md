@@ -4,9 +4,9 @@ description: Review-queue read and decision endpoints over the existing memory-c
 task_id: SEP-09
 source_anchor: companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md :: Surface composition (NORMATIVE table)
 parent_capability: system-entry-point
-prerequisites: [SEP-03]
-depends_on: [UNIFIED_TOPBAR_AND_OVERLAY_HOST.md]
-can_parallelize_with: [REENTRY_ORIENTATION_TREATMENT.md, CAPTURE_TO_VAULT_INBOX.md]
+prerequisites: []
+depends_on: []
+can_parallelize_with: [REENTRY_ORIENTATION_TREATMENT.md, UNIFIED_TOPBAR_AND_OVERLAY_HOST.md, CAPTURE_TO_VAULT_INBOX.md]
 ---
 
 # Memory Review Drawer
@@ -17,7 +17,7 @@ Close the loop the orientation seam opened: orientation emits reference-only `Me
 
 ## What This Task Does
 
-This task specification maps to **two GitHub issues** (grandchildren), in order:
+This task specification maps to **two GitHub issues** (grandchildren) with a **split dependency profile** — the file-level frontmatter lists no prerequisites because they differ per issue: issue (a) has none and may start immediately after the spec merges; issue (b) requires SEP-03 (overlay host) and issue (a).
 
 **(a) Runtime: review-queue read + decision endpoints.** A bounded read endpoint over the existing `agent_memory.review_queue` (candidate list with why-now reason, provenance `source_ref`, and authority posture — no raw candidate bodies beyond what the review boundary already admits), plus governed decision paths for the three review outcomes required by `docs/AGENT_MEMORY/ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md`: **accept** (promotes through the existing governed machinery per ADR-0009), **reject** (durable review decision with accountable review semantics — produces a receipt per ADR-0009, never a promotion), and **revise** (sends the candidate back for revision — durable review outcome with receipt). **Defer** is the only non-terminal action: queue bookkeeping that leaves the candidate pending, with no semantic transition and no receipt. The runtime half has **no UI dependency** and may start in parallel with SEP-02/SEP-03.
 
@@ -75,4 +75,4 @@ Without a governed review surface, pending candidates either rot (the seam emits
 
 ## Related GitHub Issues
 
-Create **two** issues: `[SystemEntryPoint] memory-review-endpoints: queue read + governed accept` (runtime; no UI dependency) and `[SystemEntryPoint] memory-review-drawer: right-drawer review UI` (depends on the endpoints issue and SEP-03).
+Create **two** issues: `[SystemEntryPoint] memory-review-endpoints: queue read + governed review outcomes (accept/reject/revise)` (runtime; no UI dependency) and `[SystemEntryPoint] memory-review-drawer: right-drawer review UI` (depends on the endpoints issue and SEP-03).

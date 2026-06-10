@@ -22,6 +22,7 @@ Implements the `orienting` treatments per re-entry shape on the existing orienta
 - **Four fixed questions card** (`data-region="reentry-card"`) for `full_mist` and `long_mist`: "What was I doing / Where did momentum stop / What remains unresolved / What changed since" — shapes fixed, unresolved shown as **counts with an inspect affordance** (routes to the memory review drawer when SEP-09 lands; until then, to the existing orientation sections), trajectory state pill from server-declared `data-traj-state`.
 - **Long mist** adds the **delta strip** (`data-region="delta-strip"`, from `notable_changes`) and the right-margin **whisper column** (suppressed in narrow mode, collapsing into the card).
 - **Soft mist** renders **no card**: residual ambient cues only — caret-echo cue at the leave point plus a single peripheral "where you stopped" line, per spec §Resolved Q5.
+- **Thread fade (90s–15m)** renders no card and no peripheral line: the conversation/rail pane fades a fraction and the trajectory stays implicit, per the `CONTINUITY_AND_DECAY.md` ladder row normalized in the spec's state-enum table.
 - **Cold / first contact**: no overlay; the existing calm empty/cold copy with Browse-the-vault and System-map affordances.
 - **Degraded banner** (amber, names the missing source from `meta.degraded_reasons`); **stale leave point** renders the card with a qualified, guard-held resume affordance per `BLOCKED_AND_STALE_STATE_SPEC.md`.
 - **Residual ambient layer** after resume: caret echo at the stop point and marginalia dots persist into `shell_active`; dismissal never erases unresolved tension.
@@ -52,6 +53,8 @@ Re-entry is the product's core anti-dashboard claim. A re-entry that enumerates,
   Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_long_mist_adds_delta_strip_and_whisper_column`
 - [ ] `soft_mist` renders no re-entry card — residual ambient cues only.
   Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_soft_mist_renders_no_card`
+- [ ] `thread_fade` renders no card and no peripheral line; only the fractional rail fade distinguishes it from the active state.
+  Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_thread_fade_renders_no_card_and_no_peripheral_line`
 - [ ] Cold start and first contact render no re-entry overlay (asserted at this surface in addition to SEP-01).
   Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_and_first_contact_render_no_overlay`
 - [ ] A degraded snapshot renders the amber banner naming the missing source while the resolved slices still render.

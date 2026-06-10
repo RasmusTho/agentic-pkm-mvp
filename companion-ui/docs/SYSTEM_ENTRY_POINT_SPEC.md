@@ -63,6 +63,7 @@ The entry point is a small explicit state machine wrapping the existing renderer
 | Shape | Gap | Treatment (see §Resolved Q5) |
 |---|---|---|
 | `no_mist` | < 90s | active state; no overlay |
+| `thread_fade` | 90s – 15m | conversation/rail pane fades a fraction; no card; trajectory implicit |
 | `soft_mist` | 15m – 2h | residual ambient cues only; no re-entry card |
 | `full_mist` | 2h – 3d | the four fixed re-entry questions; canonical re-entry |
 | `long_mist` | 3d – 14d | full mist + delta strip + whisper column |
@@ -107,7 +108,7 @@ Attributes follow the shipped renderer conventions (`data-testid` for test hooks
 | Normalized attribute | On | Purpose | Prototype attribute (renamed from) |
 |---|---|---|---|
 | `data-entry-state="boot\|no_vault\|cold_start\|orienting\|shell_active"` | shell root | The resolved entry-point state. Server-declared. | (new; prototype used `data-screen-label`) |
-| `data-reentry-shape="no_mist\|soft_mist\|full_mist\|long_mist"` | shell root, when `orienting` | Re-entry shape per the latency ladder. | (implicit in prototype scenarios) |
+| `data-reentry-shape="no_mist\|thread_fade\|soft_mist\|full_mist\|long_mist"` | shell root, when `orienting` | Re-entry shape per the latency ladder. | (implicit in prototype scenarios) |
 | `data-degraded="true"` | shell root | Degraded cross-flag (partial snapshot). | (prototype `degraded` toggle) |
 | `data-stale="true"` | shell root | Stale cross-flag (leave-point not current). | (prototype scenario) |
 | `data-region="reentry-card"` | re-entry card | The orientation re-entry surface. | same |
@@ -129,7 +130,7 @@ Display preferences keep the shipped `data-testid="display-pref-*"` conventions 
 
 ## Intent vocabulary (NORMATIVE)
 
-Each `data-intent` declares its surface, effect, and whether it routes through the governed pipeline. Implementations must not emit intents not declared here; adding one requires amending this spec.
+Each `data-intent` declares its surface, effect, and whether it routes through the governed pipeline. This table governs the **entry/shell-composition vocabulary** — the intents the entry point and the surfaces this spec introduces emit. Shipped per-surface intents owned by their own contracts (for example `find.panelHandoff`, `resurface.dismiss`, `governance.queue`, `blocked.acknowledge` in the shipped workspace) remain governed by those owner contracts and are unaffected by this table. Implementations must not emit **new entry/shell-composition intents** not declared here; adding one requires amending this spec. Per-surface vocabularies evolve under their own owner contracts.
 
 | Intent | Surface | Effect | Routes through pipeline? |
 |---|---|---|---|
@@ -204,7 +205,7 @@ Each resolution below settles a `resolve-in-normalized-spec` question from the p
 The system map is an **always-available overlay**, reachable from the topbar in every state and offered as a calm affordance in `cold_start` and `no_vault`. It is **pull-based and never shown unbidden** — no first-run auto-display, no periodic surfacing. It is a renderer/router index (Projection): each node shows the surface's mode (`docs/COMPANION_UI_PRODUCT_SPEC.md` Find/Reorient/Resurface/Act), how it is reached, and how it returns; clicking routes to the surface. It re-classifies nothing.
 
 ### Q5 — Re-entry shapes and display budget
-Re-entry shapes follow the `CONTINUITY_AND_DECAY.md` latency ladder exactly (table above). Within any orienting moment the UI shows a **scarce displayed subset — counts, not enumerations** ("3 open loops · 1 staged", with a deliberate inspect/expand affordance), per `ATTENTION_MODEL.md` and the orientation contract's cognitive-load display budget.
+Re-entry shapes follow the `CONTINUITY_AND_DECAY.md` latency ladder exactly (table above), including the **thread-fade interval (90s–15m)**: the conversation/rail pane fades a fraction, no card is shown, and the trajectory stays implicit. Within any orienting moment the UI shows a **scarce displayed subset — counts, not enumerations** ("3 open loops · 1 staged", with a deliberate inspect/expand affordance), per `ATTENTION_MODEL.md` and the orientation contract's cognitive-load display budget.
 
 - **Default `items_per_orientation_moment` = 3 visible items per collection** (`open_loops`, `notable_changes`, `resurface.candidates`), matching the shipped resurfacing-card default (#1680). Deliberate expansion may reveal more, **never above the server caps** (8/8/5 per `WORKSPACE_ORIENTATION_CONTRACT.md §Bounded Collections`); the UI must not widen collections or enforce larger local caps.
 - **Soft mist (15m–2h) is minimal: residual ambient cues only — no re-entry card.** The latency ladder's one-line "where you stopped" sentence is normalized to a **peripheral one-line cue** (caret echo at the stop point plus the single sentence at the margin), consistent with the ladder's "no metadata" rule and the invariant that **no card ever centers on the document**. No four-questions card, no delta strip, no whisper column at this gap.

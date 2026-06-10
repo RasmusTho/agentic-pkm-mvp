@@ -4,9 +4,9 @@ description: Governed capture endpoint (policy → validation → writer, inbox 
 task_id: SEP-08
 source_anchor: companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md :: Resolved Q17
 parent_capability: system-entry-point
-prerequisites: [SEP-03]
-depends_on: [UNIFIED_TOPBAR_AND_OVERLAY_HOST.md]
-can_parallelize_with: [REENTRY_ORIENTATION_TREATMENT.md, MEMORY_REVIEW_DRAWER.md]
+prerequisites: []
+depends_on: []
+can_parallelize_with: [REENTRY_ORIENTATION_TREATMENT.md, UNIFIED_TOPBAR_AND_OVERLAY_HOST.md, MEMORY_REVIEW_DRAWER.md]
 ---
 
 # Capture to Vault Inbox
@@ -17,7 +17,7 @@ Friction-free intake of "things I need to take care of" as a **commitment to fut
 
 ## What This Task Does
 
-This task specification maps to **two GitHub issues** (grandchildren), in order:
+This task specification maps to **two GitHub issues** (grandchildren) with a **split dependency profile** — the file-level frontmatter lists no prerequisites because they differ per issue: issue (a) has none and may start immediately after the spec merges; issue (b) requires SEP-03 (overlay host) and issue (a).
 
 **(a) Runtime: governed capture endpoint.** A bounded capture write path through the governed pipeline (policy → validation → deterministic writer) that appends a capture to the vault inbox note convention. The backend today has only a generic ingest queue; this slice defines the bounded capture action on top of the existing governed machinery. The endpoint shape (new bounded action vs. deterministic append vs. ingest-queue reuse) is this issue's decision — the spec's invariants are normative: no due dates, no app task states, governed write only, runtime-produced acknowledgement. The runtime half has **no UI dependency** and may start in parallel with SEP-02/SEP-03.
 
