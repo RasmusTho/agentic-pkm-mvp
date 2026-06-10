@@ -56,7 +56,7 @@ This preflight is **fail-closed**: if stable is not an ancestor of the candidate
 ## What this skill does
 
 1. Reads the promotion plan at the path provided by the operator (output of `prepare-promotion`).
-2. Validates the plan: all seven required sections present, all operator acknowledgment checkboxes ticked. Abort if validation fails.
+2. Validates the plan: every required section from the promotion plan contract present, all operator acknowledgment checkboxes ticked. Abort if validation fails.
 3. **Ancestry preflight**: runs `git merge-base --is-ancestor origin/stable <candidate-sha>`. Aborts with reconciliation-PR instruction if it fails.
 4. Records the current `stable` ref as `stable-prev` (pointer file in `ops/promotions/`) before moving anything.
 5. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass and operator to merge. Records the merged PR URL in the promotion receipt.
@@ -75,6 +75,8 @@ This preflight is **fail-closed**: if stable is not an ancestor of the candidate
 - `origin/stable` resolves to the current prod commit.
 
 ## Operator steps
+
+The `execute-promotion ...` and `verify-promotion` commands below are skill invocations, not installed shell binaries — they name the skills' entry contracts and arguments.
 
 ```
 # After reviewing and ticking all checkboxes in the plan:

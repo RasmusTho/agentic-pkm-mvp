@@ -341,33 +341,22 @@ When continuing through anchor drift:
 
     For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
 
-    ```bash
-    EXPECTED_BRANCH="<PR head branch name>"
-    ACTUAL_BRANCH=$(git branch --show-current)
+    `publish-pr` owns the hardened gate. Run the workspace preflight documented at `.codex/skills/publish-pr/SKILL.md :: Branch-Truth Gate — Pre-Commit`:
 
-    if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
-      echo "BRANCH-TRUTH GATE FAILED (pre-commit): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
-      echo "Switch to the correct worktree before committing."
-      exit 1
-    fi
+    ```bash
+    scripts/agent_workspace_preflight.sh \
+      --expected-branch "$EXPECTED_BRANCH" \
+      --expected-worktree "$EXPECTED_WORKTREE" \
+      --allow-dirty
     ```
 
-    Branch name must match. Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
+    Fallback when the preflight script cannot run: assert the branch name directly (`git branch --show-current` must equal the PR head branch). Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
 
 15b. **Branch-Truth Gate — Phase 2: Pre-Push (mandatory before `git push`)** [branch-truth-gate]
 
-    ```bash
-    EXPECTED_BRANCH="<PR head branch name>"
-    ACTUAL_BRANCH=$(git branch --show-current)
+    Re-run the same `publish-pr` gate before pushing (`.codex/skills/publish-pr/SKILL.md :: Branch-Truth Gate — Pre-Push`), with the same branch-name fallback when the script cannot run.
 
-    if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
-      echo "BRANCH-TRUTH GATE FAILED (pre-push): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
-      exit 1
-    fi
-    echo "Branch-truth gate passed — pushing to origin/$EXPECTED_BRANCH"
-    ```
-
-    If branch name fails at pre-push: stop, switch to the correct worktree, and re-run both phases.
+    If the gate fails at pre-push: stop, switch to the correct worktree, relocate the commit if needed, and re-run both phases.
 
 16. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.

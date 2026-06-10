@@ -9,10 +9,12 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
 ## Workflow map
 
 Hot path:
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> issue-to-code fast claim -> Publish PR -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
+`Docs -> Issue -> Project -> Agent -> issue-to-code fast claim -> Publish PR -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
 
 Conditional / maintenance path:
 `Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
+
+This file owns the canonical workflow chain. Skills reference this chain instead of redefining it; if a skill's inline chain disagrees with this file, this file wins. Issue maintenance is part of the conditional path, not the hot path.
 
 ## BuilderOps Vault routing
 
@@ -68,6 +70,10 @@ Do not rely on a human remembering where BuilderOps material belongs.
   - docs-only authoritative authoring lane
 - `docs-to-issue`
   - convert active docs into bounded backlog Issues
+- `feature-breakdown`
+  - break one docs-defined capability into a specification directory plus a parent feature issue and bounded child slice issues
+- `bug-to-issue`
+  - create a compliant GitHub Issue when a bug is discovered during analysis, testing, review, or runtime observation
 - `temporal-doc-governance`
   - audit and refresh time-sensitive current-state docs
 - `automation-maintenance`
@@ -144,7 +150,10 @@ lease check, then keep the rest of execution local and deterministic.
   surface is available.
 - `publish-pr` and lane-aware workflows may consult lane or branch/worktree reservations when they
   share an active PR or workspace.
-- `git-hygiene-preflight` is the read-only hot-path check for dirty tree, in-progress git
-  operations, branch/worktree mismatch, and relevant lease conflicts.
-- `git-hygiene-janitor` is a cold-path, report-first cleanup helper. It must respect active leases
-  and must not perform destructive cleanup automatically in v1.
+- `scripts/agent_workspace_preflight.sh` (with the report entrypoint
+  `scripts/git_hygiene_preflight.py`) is the read-only hot-path check for dirty tree, in-progress
+  git operations, branch/worktree mismatch, and relevant lease conflicts. This is a script, not a
+  skill.
+- `scripts/git_hygiene_janitor.py` (a report-first entrypoint to `scripts/git_hygiene.py`) is the
+  cold-path cleanup helper. It must respect active leases and must not perform destructive cleanup
+  automatically in v1. This is a script, not a skill.

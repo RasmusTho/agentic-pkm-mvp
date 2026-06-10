@@ -51,6 +51,8 @@ Per `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`:
 
 ## Operator steps
 
+The `prepare-promotion ...` command below is a skill invocation, not an installed shell binary — it names this skill's entry contract and arguments.
+
 ```
 # From the prod checkout (not the dev checkout — separate worktree per DEFINE_CONCURRENCY_RULE)
 prepare-promotion [--target <sha-or-ref>]
