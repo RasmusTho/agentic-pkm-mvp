@@ -88,9 +88,16 @@ jobs:
               pull_number: context.payload.pull_request.number,
             });
             const body = pullRequest.body || "";
-            // BuilderOps routing is mandatory delivery traceability for all PRs.
+            // BuilderOps routing is mandatory delivery traceability for Tier 2+ PRs.
             // It records the BuilderOps objects/projections/receipts created, or an explicit "none" reason.
-            const builderOpsRoutingMatch = body.match(/## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|## BuilderOps Routing[\s\S]*/i);
+            // Tier 1 (docs/development/GOVERNANCE_PROPORTIONALITY.md): PRs declaring the
+            // docs-authoring or governance lane may omit the section entirely when nothing
+            // was routed — absence means "none". A present-but-unfilled section still fails.
+            const tier1LanePattern = /^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b/im;
+            const isTier1Lane = tier1LanePattern.test(body);
+            // Anchored to line start so an inline mention of the section name in prose
+            // (e.g. a change list describing this very check) is not mistaken for the section.
+            const builderOpsRoutingMatch = body.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
@@ -104,8 +111,10 @@ jobs:
               Boolean(builderOpsRoutingSection) &&
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*(.*?)\s*(?:\n|$)/i) &&
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)/i);
-            if (!hasBuilderOpsRouting) {
-              core.setFailed("PR body must include `## BuilderOps Routing` with concrete `Records/projections/receipts:` and `Reason:` lines.");
+            const builderOpsRoutingSatisfied =
+              hasBuilderOpsRouting || (isTier1Lane && !builderOpsRoutingSection);
+            if (!builderOpsRoutingSatisfied) {
+              core.setFailed("PR body must include `## BuilderOps Routing` with concrete `Records/projections/receipts:` and `Reason:` lines. Tier 1 docs-authoring/governance-lane PRs may omit the section entirely when nothing was routed (absence = none); an unfilled template section is still rejected.");
               return;
             }
             const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;

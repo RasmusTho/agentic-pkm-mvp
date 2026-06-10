@@ -253,23 +253,15 @@ Do not mark an issue ready if any `Verify:` target is missing, unresolvable, ski
 
 ## Output Format
 
-1. Loaded Skill Inventory
-2. Epic / Issue Set Summary
-3. Current Ready Pickup Pool
-4. Issues Made Ready For Pickup
-5. Issues Not Made Ready
-6. Readiness Table
-7. Dependency And Pickup Order
-8. Parallelization Plan
-9. Parallel Claim Rationale
-10. Verification Ledger
-11. Owner Doc And Source Anchor Map
-12. Issues Needing Maintenance Or Breakdown
-13. Recommended Execution Plan
-14. Delivery Progress Ledger
-15. Delivered Issues And PRs
-16. Remaining Blockers / Non-Executable Items
-17. Stop Conditions Before Continuing
+Lead with the human summary, then include a section only when it has content — omit empty sections instead of reporting "none". Scale depth to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`.
+
+1. Summary For The Human (2–4 sentences: what was done, what remains, what needs a decision)
+2. Readiness Table (issue-set state, classifications, ready pool, issues made ready or left unready)
+3. Pickup Order And Parallelization (dependency order, batch plan, parallel claim rationale)
+4. Verification Ledger
+5. Delivered Issues And Receipts (PRs merged, lifecycle mutations, delivery progress)
+6. Blockers And Non-Executable Items (reason and next action per item, stop conditions)
+7. Maintenance And Follow-Ups (issues needing maintenance or breakdown, owner-doc and source-anchor notes)
 
 Receipts for mutations must name the issue number, labels, Project Status, command family used, and verification result.
 

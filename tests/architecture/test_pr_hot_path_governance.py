@@ -79,8 +79,10 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
 
     for fragment in (
         "const directRepairSectionMatch = body.match(/## Direct Repair",
-        "const builderOpsRoutingMatch = body.match(/## BuilderOps Routing",
+        "const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing",
         "const hasBuilderOpsRouting =",
+        "const tier1LanePattern =",
+        "const builderOpsRoutingSatisfied =",
         "PR body must include `## BuilderOps Routing`",
         "const isDirectRepair =",
         "if (isDirectRepair) {",
@@ -94,7 +96,7 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
     assert text.index("const directRepairSectionMatch = body.match(/## Direct Repair") < text.index(
         "const docsAuthoringPattern ="
     )
-    assert text.index("const builderOpsRoutingMatch = body.match(/## BuilderOps Routing") < text.index(
+    assert text.index("const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing") < text.index(
         "const issueLinkPattern ="
     )
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
@@ -126,7 +128,7 @@ _DIRECT_REPAIR_REGEX = _re.compile(
     _re.IGNORECASE,
 )
 _BUILDEROPS_ROUTING_REGEX = _re.compile(
-    r"## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|## BuilderOps Routing[\s\S]*",
+    r"(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*",
     _re.IGNORECASE,
 )
 _BUILDEROPS_ROUTING_FIELDS = [
@@ -158,6 +160,25 @@ def _has_builderops_routing(body: str) -> bool:
         if not value or _re.fullmatch(r"<.*>", value):
             return False
     return True
+
+
+_TIER1_LANE_REGEX = _re.compile(
+    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
+    _re.IGNORECASE | _re.MULTILINE,
+)
+
+
+def _builderops_routing_satisfied(body: str) -> bool:
+    """Python port of the JavaScript `builderOpsRoutingSatisfied` logic.
+
+    Tier 1 lane PRs (docs/development/GOVERNANCE_PROPORTIONALITY.md) may omit the
+    BuilderOps Routing section entirely — absence means "none". A present but
+    unfilled section is still rejected at every tier.
+    """
+    if _has_builderops_routing(body):
+        return True
+    section_present = bool(_BUILDEROPS_ROUTING_REGEX.search(body))
+    return _TIER1_LANE_REGEX.search(body) is not None and not section_present
 
 
 _VALID_DIRECT_REPAIR_FIELDS = (
@@ -224,6 +245,49 @@ def test_builderops_routing_required_fields() -> None:
         "- Reason: <why no BuilderOps material was created, or what was routed>"
     )
     assert not _has_builderops_routing(template_placeholders), "Expected unchanged template placeholders to be rejected"
+
+
+def test_tier1_lane_pr_may_omit_builderops_routing() -> None:
+    """Proportionality Tier 1: docs/governance lane PRs pass without the section (absence = none)."""
+    governance_body = "- [x] Governance lane\n\n## Summary\nSkill text fix."
+    assert _builderops_routing_satisfied(governance_body), "Expected governance-lane PR without section to pass"
+
+    docs_body = "- [x] Docs authoring lane\n\n## Summary\nDocs clarification."
+    assert _builderops_routing_satisfied(docs_body), "Expected docs-lane PR without section to pass"
+
+
+def test_tier1_lane_pr_with_unfilled_section_still_rejected() -> None:
+    """A present-but-placeholder BuilderOps Routing section fails even on Tier 1."""
+    body = (
+        "- [x] Governance lane\n\n"
+        '## BuilderOps Routing\n'
+        '- Records/projections/receipts: <ids or "none">\n'
+        "- Reason: <why no BuilderOps material was created, or what was routed>"
+    )
+    assert not _builderops_routing_satisfied(body), "Expected unfilled section to be rejected on Tier 1"
+
+
+def test_inline_section_name_mention_is_not_mistaken_for_the_section() -> None:
+    """An inline prose mention of `## BuilderOps Routing` before the real section must not
+    shadow it (regression: PR #1813 body described this very check and tripped the
+    unanchored first-occurrence match)."""
+    body = (
+        "Fixes #123\n\n"
+        "## Changes\n"
+        "2. CI: `## BuilderOps Routing` remains required for Tier 2+.\n\n"
+        f"{_VALID_BUILDEROPS_ROUTING}\n\n"
+        "---"
+    )
+    assert _has_builderops_routing(body), "Expected the real section to be found despite inline mention"
+
+
+def test_non_tier1_pr_still_requires_builderops_routing() -> None:
+    """Tier 2+ (no lane checkbox) keeps the unconditional requirement."""
+    body = "Fixes #123\n\n## Summary\nImplementation change."
+    assert not _builderops_routing_satisfied(body), "Expected implementation PR without section to be rejected"
+
+    valid_body = f"Fixes #123\n\n{_VALID_BUILDEROPS_ROUTING}"
+    assert _builderops_routing_satisfied(valid_body), "Expected concrete section to satisfy at any tier"
 
 
 def test_direct_repair_rejected_when_fields_incomplete() -> None:

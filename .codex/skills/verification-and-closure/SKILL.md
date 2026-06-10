@@ -53,9 +53,11 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - Verify owner-doc writeback if shipped behavior or contracts changed and acceptance is complete
 - Verify roadmap or plan wording was cleaned up if the item is now delivered
 - Verify no duplicate `planned` and `shipped` statements remain active at once
-- Verify the PR body includes a BuilderOps routing outcome, and that unresolved learning, docs
-  freshness, roadmap execution, promotion, projection, or receipt material is represented by a
-  BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
+- Verify the BuilderOps routing outcome per tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`):
+  Tier 2+ PR bodies must carry the routing outcome; on Tier 1 (docs/governance lane) PRs a missing
+  `## BuilderOps Routing` section means `none` and does not block merge. At every tier, unresolved
+  learning, docs freshness, roadmap execution, promotion, projection, or receipt material must be
+  represented by a BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
 - Verify project lifecycle state still makes sense
 - Verify closed terminal PR cards do not remain blank in the Project
 - Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
@@ -145,8 +147,10 @@ Before merging or writing the delivery receipt, resolve BuilderOps routing:
 - `BuilderOpsReceipt` exists or is cited when the work processed BuilderOps records, generated
   projections, promoted material, superseded material, or discarded material.
 
-If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. Do not use
-`docs/learning-log.md` as the primary closure surface.
+If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. On Tier 1
+PRs (`docs/development/GOVERNANCE_PROPORTIONALITY.md`), an absent `## BuilderOps Routing` section is
+read as `none` — do not block closure on its absence. Do not use `docs/learning-log.md` as the
+primary closure surface.
 
 ## Parent Issue Closure
 
@@ -191,15 +195,21 @@ Do not leave state updates as recommendations when you can execute them directly
 
 ## Output Format
 
-### 1. Delivery Verdict
+Lead with the human summary; include later sections only when they have content, scaled to the tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`). For Tier 1, the summary plus the delivery receipt line is enough.
+
+### 1. Summary For The Human
+
+2–4 sentences: what was verified and merged, what remains, what needs a decision.
+
+### 2. Delivery Verdict
 
 AC-by-AC resolution: state whether each `Verify:` target resolves green and why.
 
-### 2. State Changes Executed
+### 3. State Changes Executed
 
 List every lifecycle mutation that ran.
 Include the delivery receipt line.
 
-### 3. Follow-up Issues
+### 4. Follow-up Issues
 
 If work is partial, do not merge. Create bounded follow-up Issue(s) using the exact task-contract shape.

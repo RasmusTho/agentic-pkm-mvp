@@ -44,9 +44,11 @@ Do not rely on a human remembering where BuilderOps material belongs.
 2. **Divergence checkpoint:** whenever a plan, issue, doc, or skill turns out to be wrong while work
    is active, invoke `capture-learning` immediately and create a `LearningSignal` instead of saving
    the observation for a later human memory pass.
-3. **Publication checkpoint:** every PR body must state the BuilderOps routing outcome: records
-   created, projections or receipts updated, or `none` with a short reason. A missing routing outcome
-   is missing delivery traceability.
+3. **Publication checkpoint:** Tier 2+ PR bodies must state the BuilderOps routing outcome: records
+   created, projections or receipts updated, or `none` with a short reason. Tier 1 PRs
+   (docs-authoring or governance lane, per `docs/development/GOVERNANCE_PROPORTIONALITY.md`) may omit
+   the section entirely when nothing was routed — absence means `none`; a present but unfilled
+   section is still a contract violation.
 4. **Closure checkpoint:** before merge or delivery receipt, unresolved adoption, retro, freshness,
    roadmap, or promotion observations must be represented by a BuilderOps record, a bounded GitHub
    Issue with `Verify:` targets, or an explicit `none` reason.
