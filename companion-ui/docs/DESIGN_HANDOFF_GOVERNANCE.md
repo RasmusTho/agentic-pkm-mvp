@@ -5,8 +5,8 @@ Owner: Companion UI / interaction model
 Temporal class: stable
 Review cadence: event-driven
 Source of truth: authoritative for the handoff chain
-Last reviewed: 2026-05-15
-Last verified against: companion-ui/design_handoff/, companion-ui/prompts/claude-design/README.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, companion-ui/design_handoff/2026-05-14-claude-design-package/README.md, companion-ui/design_handoff/2026-05-14-handoff-governance-pack/, issue #901
+Last reviewed: 2026-06-10
+Last verified against: companion-ui/design_handoff/, companion-ui/prompts/claude-design/README.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, companion-ui/design_handoff/2026-05-14-claude-design-package/README.md, companion-ui/design_handoff/2026-05-14-handoff-governance-pack/, companion-ui/design_handoff/2026-06-09-system-entry-point/, issue #901
 
 # Design Handoff Governance
 
@@ -120,6 +120,7 @@ Packages already archived in `companion-ui/design_handoff/`:
 | `2026-05-14-vault-action-layer` | 2026-05-14 | A | #910 |
 | `2026-05-14-claude-design-package` | 2026-05-14 | A (index only) | #901 (governance), others per package |
 | `2026-05-15-panel-interaction` | 2026-05-15 | A (accepted as design intent — #994) | #977, #978, #981, #994 |
+| `2026-06-09-system-entry-point` | 2026-06-09 | B (PROMOTE — normalized spec authoring unblocked) | — |
 
 Pre-governance packages (`2026-05-03`, `2026-05-08`) do not require retroactive maturity-checklist completion. They remain valid exploration archives.
 
@@ -165,6 +166,7 @@ Reviews conducted by Codex agent under issue #956 on 2026-05-17.
 | `2026-05-14-context-bundle-inspector` | Codex / #956 | 2026-05-17 | **PROMOTE** | All 7 checklist items pass. 6 open questions triaged (1 deferred, 5 to normalized spec). Owner-docs `CONTEXT_BUNDLE_CONTRACT.md` and `INTERACTION_SURFACES_AND_AUTHORITY/` shipped. Implementation issue #894 blocked — does not gate design promotion. |
 | `2026-05-14-memory-candidate-review` | Codex / #956 | 2026-05-17 | **PROMOTE** | All 7 checklist items pass. 7 open questions triaged (5 deferred, 2 to normalized spec). Owner-doc `AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` shipped. Implementation issue #900 blocked — does not gate design promotion. |
 | `2026-05-14-vault-action-layer` | Codex / #956 | 2026-05-17 | **PROMOTE** | All 7 checklist items pass. 7 open questions triaged (1 deferred, 6 to normalized spec). Q1 and Q4 (provisional blockers in package) do not block: both have coherent design positions the normalized spec should confirm. Primary owner-doc `VAULT_ACTION_LAYER_CONTRACT.md` is proposed/not yet authored — expected; authoring it is the normalized-spec output. |
+| `2026-06-09-system-entry-point` | Claude Code / handoff intake 2026-06-10 | 2026-06-10 | **PROMOTE** | All 7 checklist items pass. README declares "Visual / interaction guidance only" authority and Crossing target B; authority-boundaries.md present and distinguishes guidance/spec/contract/runtime; implementation-contracts.md lists state enum, transitions, data attributes, and intent vocabulary; open-questions.md triages Q1–Q20 (Q1–Q3 resolved; Q15–Q16 are resolve-before-promotion but scoped to the context-lane/place-band placeholders only and do not gate the package); state gallery covers every declared state incl. edge states; only shipped runtime behavior cited is `GET /api/companion/orientation` per `WORKSPACE_ORIENTATION_CONTRACT.md`. |
 
 ### Handoff archive update
 
