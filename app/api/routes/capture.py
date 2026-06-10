@@ -25,7 +25,7 @@ The action rides the existing governed machinery — no parallel write path:
   Panel confirmation service). The payload is metadata-only; the captured
   text itself is durable in the vault, not duplicated into event logs.
 
-Inbox note convention (reused from existing repo conventions):
+Capture-note convention (reused from existing repo conventions):
 
 - the inbox directory resolves via ``app.vault.paths.get_vault_inbox_dir_rel``
   (env ``VAULT_INBOX_DIR_REL`` → ``system-settings.yaml paths.inbox_dir_rel``
@@ -199,7 +199,7 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
             },
         ) from exc
 
-    # Inbox note convention — resolution failures are explicit, the text is
+    # Capture-note convention — resolution failures are explicit, the text is
     # never silently dropped.
     vault_root = resolve_vault_root()
     try:
