@@ -67,6 +67,12 @@ from companion_ui.workspace.entry_state import (
     entry_state_attributes,
     resolve_entry_state,
 )
+from companion_ui.workspace.overlay_host import (
+    DEFAULT_POSTURE_EMPHASIS,
+    coarse_vault_posture,
+    overlay_host_markup,
+    overlay_host_script,
+)
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
@@ -462,6 +468,15 @@ def _render_workspace_header_strip(
     # §5.2 — Browse Vault routes to the canonical left-pane browse surface, not
     # the modal overlay (which is a narrow responsive fallback only).
     browse_target = "#vault-browser-left-pane"
+    # #1785 (SEP-03) — unified-topbar consolidation over the shipped header:
+    # anchor pill (current note identity), posture pill (local posture
+    # emphasis, rendering only — the switch overlay has not shipped), surface
+    # icons for shipped surfaces only, and the coarse vault-status dot.
+    anchor_note_path = str(fields.get("note_path") or "")
+    anchor_title = str(fields.get("title") or anchor_note_path or "No note open")
+    coarse_posture = coarse_vault_posture(
+        vault_state=vault_state, primary_posture=posture
+    )
     telemetry_rows = [
         ("workspace-runtime-channel", "runtime_environment_label", "runtime", runtime_environment),
         ("workspace-runtime-channel-api", "runtime_api_base_url_label", "channel", runtime_channel),
@@ -554,9 +569,11 @@ def _render_workspace_header_strip(
         <div class="workspace-header-row" data-testid="workspace-header-row">
           <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
           <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}">
-            <span class="workspace-vault-dot" aria-hidden="true"></span>
+            <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
             <span>{vault_name} · vault {vault_state}</span>
           </a>
+          <span class="workspace-anchor-pill" data-testid="workspace-anchor-pill" data-region="document-anchor" data-anchor-note-path="{_e(anchor_note_path)}" title="Document anchor">{_e(anchor_title)}</span>
+          <span class="workspace-posture-pill" data-testid="workspace-posture-pill" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" data-authority="local-ui" title="Posture emphasis (local rendering only)">{DEFAULT_POSTURE_EMPHASIS}</span>
           <details class="workspace-runtime-status" data-testid="workspace-runtime-status">
             <summary
               class="workspace-runtime-pill"
@@ -574,6 +591,10 @@ def _render_workspace_header_strip(
           </details>
           <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
           <span class="workspace-header-spacer" aria-hidden="true"></span>
+          <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-help" data-surface="help" title="Help" aria-label="Open help" onclick="companionHelp.open()">?</button>
+          </nav>
           <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
             <kbd>/</kbd><span>⌘K</span>
           </button>
@@ -6506,6 +6527,59 @@ def render_index_html(
     .workspace-vault-chip[data-state="unreachable"] {{
       color: var(--destructive);
     }}
+    .workspace-anchor-pill {{
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--fg-2);
+      display: inline-flex;
+      flex-shrink: 1;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      line-height: 1;
+      max-width: 220px;
+      min-width: 0;
+      overflow: hidden;
+      padding: 3px 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .workspace-posture-pill {{
+      align-items: center;
+      color: var(--fg-3);
+      display: inline-flex;
+      flex-shrink: 0;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      line-height: 1;
+      text-transform: uppercase;
+    }}
+    .workspace-surface-icons {{
+      align-items: center;
+      display: inline-flex;
+      flex-shrink: 0;
+      gap: 6px;
+    }}
+    .workspace-surface-icon {{
+      align-items: center;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: pointer;
+      display: inline-flex;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      height: 22px;
+      justify-content: center;
+      line-height: 1;
+      width: 24px;
+    }}
+    .workspace-surface-icon:hover {{
+      border-color: var(--border-strong);
+      color: var(--fg-1);
+    }}
     .workspace-runtime-status {{
       flex-shrink: 0;
       position: relative;
@@ -8290,6 +8364,27 @@ def render_index_html(
     }}
     .body-edit-status.ok {{ color: var(--cyan); }}
     .body-edit-status.error {{ color: var(--destructive); }}
+    /* Shared overlay host (#1785, SEP-03) — the single overlay layer later
+       surfaces mount on. The scrim sits below host occupants that bring
+       their own full-screen chrome (e.g. the vault modal at z-index 1000). */
+    .overlay-host-scrim {{
+      background: rgba(7, 11, 18, 0.55);
+      display: none;
+      inset: 0;
+      position: fixed;
+      z-index: 900;
+    }}
+    .overlay-host-scrim[data-active="true"] {{
+      display: block;
+    }}
+    .overlay-host-mount {{
+      display: none;
+      inset: 0;
+      pointer-events: none;
+      position: fixed;
+      z-index: 950;
+    }}
+
     /* Vault note browser overlay */
     .vault-browser-overlay {{
       display: none;
@@ -8696,7 +8791,7 @@ def render_index_html(
     }}
   </style>
 </head>
-<body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
+<body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -8751,6 +8846,7 @@ def render_index_html(
            data-testid="vault-browser-status"></div>
     </div>
   </div>
+  {overlay_host_markup(anchor_note_path=note_path)}
 
   {note_outline_script()}
 
@@ -8861,11 +8957,12 @@ def render_index_html(
       if (e.target === overlay) vaultBrowser.close();
     }});
 
-    document.addEventListener('keydown', function(e) {{
-      if (e.key === 'Escape') vaultBrowser.close();
-    }});
+    // Esc handling for this modal is owned by the shared overlay host
+    // (#1785, SEP-03): the narrow-mode vault browser is a host occupant and
+    // the host dismisses the topmost overlay back to the document anchor.
   }})();
   </script>
+  {overlay_host_script()}
 
   <script>
   (function() {{
