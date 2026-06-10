@@ -128,6 +128,7 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
             "error": str(exc),
         }
 
+    head_contains_remote: bool | None = None
     if local_sha == remote_sha:
         status = "current"
     else:
@@ -135,10 +136,22 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
         remote_ancestor = _is_ancestor(cwd, remote_ref, base_branch)
         if local_ancestor and not remote_ancestor:
             status = "behind"
+            # A stale local base ref cannot be fast-forwarded from a dedicated
+            # worktree while the base branch is checked out elsewhere. What the
+            # publication boundary actually requires is that HEAD already
+            # contains the remote head, so a stale local ref alone is advisory.
+            head_contains_remote = _is_ancestor(cwd, remote_ref, "HEAD")
         elif remote_ancestor and not local_ancestor:
             status = "ahead"
         else:
             status = "diverged"
+
+    if status == "current":
+        mismatch = False
+    elif status == "behind":
+        mismatch = not head_contains_remote
+    else:
+        mismatch = True
 
     return {
         "base_branch": base_branch,
@@ -146,7 +159,8 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
         "local_sha": local_sha,
         "remote_sha": remote_sha,
         "status": status,
-        "mismatch": status != "current",
+        "head_contains_remote": head_contains_remote,
+        "mismatch": mismatch,
     }
 
 

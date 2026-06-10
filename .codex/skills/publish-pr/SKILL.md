@@ -97,7 +97,9 @@ Do not use `git add -A` or `git add .`—stage only intended files.
 
 **Worktree policy (doctrinal):** For multi-agent parallel work, a dedicated worktree (via `git worktree add`) is strongly preferred for the full lane lifecycle — from initial edits through every push. Do NOT commit to an active PR from the shared root worktree when other agents may be operating in it. This is prevention by construction; the gate below is detection.
 
-**Workspace preflight (scriptable, preferred):** Run the hardened workspace preflight before committing. It is the same check `issue-to-code` runs at issue pickup, and it detects branch drift, worktree drift, in-progress git operations, base-branch drift, and lease conflicts in one call. At the publish boundary the tree is intentionally dirty, so pass `--allow-dirty` — branch and worktree drift still fail the gate:
+**Workspace preflight (scriptable, preferred):** Run the hardened workspace preflight before committing. It is the same check `issue-to-code` runs at issue pickup, and it detects branch drift, worktree drift, in-progress git operations, base-branch drift, and lease conflicts in one call. At the publish boundary the tree is intentionally dirty, so pass `--allow-dirty` — branch and worktree drift still fail the gate.
+
+Base-branch semantics: the gate asserts the publication HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` is reported (`status: "behind"`) but does not fail — in the doctrinal worktree flow `main` is checked out in the root worktree and cannot be fast-forwarded from here. A diverged or unresolvable base ref, or a HEAD that does not contain `origin/main`, still fails; fix it by fetching and rebasing onto `origin/main`, never by bypassing with `--base-branch ""`.
 
 ```bash
 # EXPECTED_BRANCH and EXPECTED_WORKTREE were captured in Step 2.
