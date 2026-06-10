@@ -38,8 +38,10 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.
    - Add `agent:ready` only if the scope is bounded, testable, and unblocked.
    - Otherwise add `agent:needs-human` or `agent:blocked`.
-5. Do not touch GitHub Project Status unless explicitly requested.
-6. Output receipt: issue number, labels set, and whether it was created or updated.
+5. Project:
+   - Add the new Issue to Project `Agent Delivery Control Plane`.
+   - Set Status to match the agent-state label: `agent:ready` → `Ready`; otherwise (`agent:blocked`, `agent:needs-human`) → `Backlog`.
+6. Output receipt: issue number, labels set, Project Status set, and whether it was created or updated.
 
 ## Heuristics for `agent:ready`
 
@@ -57,4 +59,4 @@ Force `agent:needs-human` when:
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.

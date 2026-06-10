@@ -32,7 +32,7 @@ You must detect:
 - issues missing required contract sections
 - open implementation Issues missing a truthful agent-state label
 - stale `agent:ready` labels on work that is blocked or already done
-- open non-draft PR work that is not projected to `Review`
+- open non-draft PR work with review requested that is not projected to `Review`
 - merged PR cards that remain non-terminal (`In Progress`/`Review`) after merge
 - fixes that were validated on a branch but are not yet present on `origin/main`
 - active work that still presents as `Ready`
@@ -90,14 +90,14 @@ For each drift case, recommend one concrete corrective action only:
 - GitHub remains the canonical backlog-state surface.
 - Treat Project `Status` as the primary lifecycle signal.
 - Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
-- For PR cards, treat open non-draft as `Review` and open draft as `In Progress`.
+- For PR cards, follow the lifecycle truth matrix in `.codex/skills/issue-maintenance-change-control/SKILL.md :: Lifecycle truth matrix` as the single source: open draft → `In Progress`; open non-draft with review requested → `Review`; open non-draft without review requested → `In Progress`.
 - Prefer one repair action per drift class when the same correction repeats across multiple items; do not churn the board with separate micro-fixes when a batched audit can close the gap.
 - If full-project scan is slow or blocked by API latency, run a targeted audit for open issues, open PRs, recently merged PRs, and recently closed-unmerged PRs, then report that fallback explicitly.
 
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 
