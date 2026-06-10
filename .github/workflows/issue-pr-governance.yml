@@ -95,7 +95,9 @@ jobs:
             // was routed — absence means "none". A present-but-unfilled section still fails.
             const tier1LanePattern = /^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b/im;
             const isTier1Lane = tier1LanePattern.test(body);
-            const builderOpsRoutingMatch = body.match(/## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|## BuilderOps Routing[\s\S]*/i);
+            // Anchored to line start so an inline mention of the section name in prose
+            // (e.g. a change list describing this very check) is not mistaken for the section.
+            const builderOpsRoutingMatch = body.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
