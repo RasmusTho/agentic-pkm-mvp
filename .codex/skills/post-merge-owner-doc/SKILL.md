@@ -81,7 +81,7 @@ work with `Verify:` targets.
 ## Routing
 
 - You write owner-doc PRs through `docs-authoring`. You do not write code.
-- You file follow-up issues following the repo issue contract (`## Context`, `## Scope`, `## Source Anchors`, `## Constraints`, `## Acceptance Criteria`, `## Out of Scope`, `## Suggested Validation`, `## Source Docs`), with `Verify:` markers on every AC.
+- You file follow-up issues following the canonical issue contract (`.codex/skills/_shared/ISSUE_CONTRACT.md`), with `Verify:` markers on every AC.
 - You do not add `agent:needs-human`. Follow-up issues are `agent:ready` when the wording is bounded; otherwise they stay `Backlog` with no agent label and wait for the user's next pass.
 
 ## Backfill mode

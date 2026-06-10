@@ -48,43 +48,17 @@ If a matching closed issue or merged PR exists: the repair may already be delive
 
 Every issue created by this skill must use the same contract as `docs-to-issue`:
 
-**Title:** `<type>: <short bounded outcome>`
+Use the canonical contract shape from `.codex/skills/_shared/ISSUE_CONTRACT.md` — title shape, exact section list, and the `Verify:` marker rule — with these learning-specific requirements:
 
-**Required sections (in order):**
-
-- `## Context` - background from the LearningSignal, PromotionIntent, historical learning-log compatibility entry, or observed divergence; link the source record, entry, or PR
-- `## Scope` - what changes, what files/artifacts are touched
-- `## Source Anchors` - the named upstream artifact(s) that absorb the fix; use the most local actionable item
-- `## Constraints` - what must not change; what approaches are excluded
-- `## Acceptance Criteria` - checkboxes with `Verify:` markers (see below)
-- `## Out of Scope` - what this issue deliberately excludes
-- `## Suggested Validation` - commands that execute the `Verify:` targets
-- `## Source Docs` - paths to referenced docs
-- `## Applies learning (optional)` - link to the BuilderOps LearningSignal/receipt, historical learning-log entry, or retro marker that produced this issue
-
-**Every AC must carry a `Verify:` line:**
-- Behavioral AC -> test pointer: `Verify: \`tests/<path>::<test_name>\``
-- Non-behavioral AC -> doc/artifact writeback: `Verify: doc writeback at \`<path> :: <anchor>\``
+- `## Context` links the source record: `BuilderOps LearningSignal <id>`, `BuilderOps PromotionIntent <id>`, `docs/learning-log.md :: YYYY-MM-DD entry`, or `PR #N`.
+- `## Source Anchors` names the upstream artifact(s) that absorb the fix; use the most local actionable item.
+- `## Applies learning` is filled for learning issues (not left blank): link the BuilderOps LearningSignal/receipt, historical learning-log entry, or retro marker that produced this issue.
 
 If an AC cannot carry a resolvable `Verify:` target, refine or split before marking `agent:ready`.
 
 ## Allowed labels (canonical only)
 
-Only these delivery-control-plane labels are allowed. Governance-lane learning issues may additionally use `lane:governance` because that label drives the governance Project filter and relaxed verification routing:
-
-| Label | When |
-|-------|------|
-| `type:task` | default for maintenance repairs |
-| `type:bug` | confirmed runtime defect |
-| `type:refactor` | code structure change with no behavior change |
-| `prio:high` | blocks other work or has active regression |
-| `prio:med` | normal maintenance priority |
-| `prio:low` | nice-to-have, no urgency |
-| `agent:ready` | bounded, testable, unblocked - safe for agent execution |
-| `agent:blocked` | dependency unresolved, including parent validation hubs waiting on child slices |
-| `agent:needs-human` | requires a named human decision, tradeoff, missing input, or authority question before work can proceed |
-
-Governance-lane learning issues are the exception to the delivery-control-plane-only rule: when the item belongs in the governance lane, add `lane:governance` in addition to the canonical delivery label set so Project filtering and verification routing stay aligned with `AGENTS.md` and `docs/development/DELIVERY_FEEDBACK_LOOP.md`.
+Use the canonical taxonomy from `.codex/skills/_shared/LABEL_TAXONOMY.md`, including its governance-lane exception: governance-lane learning issues add `lane:governance` in addition to the canonical delivery label set so Project filtering and verification routing stay aligned with `AGENTS.md` and `docs/development/DELIVERY_FEEDBACK_LOOP.md`.
 
 ## Creating the issue
 
@@ -123,36 +97,7 @@ gh issue create \
 
 Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and no dependency blocks execution.
 
-**Issue body template (all cases):**
-```
-## Context
-<1-2 sentences from the LearningSignal, PromotionIntent, historical learning-log compatibility entry, or observed divergence. Link the source: `BuilderOps LearningSignal <id>`, `BuilderOps PromotionIntent <id>`, `docs/learning-log.md :: YYYY-MM-DD entry`, or `PR #N`>
-
-## Scope
-<What changes. Name files and artifacts.>
-
-## Source Anchors
-- `<path> :: <section or anchor>`
-
-## Constraints
-- <what must not change>
-
-## Acceptance Criteria
-- [ ] <bounded outcome>
-  - Verify: `<test pointer or doc writeback>`
-
-## Out of Scope
-- <what this issue deliberately excludes>
-
-## Suggested Validation
-- <commands that execute the Verify: targets>
-
-## Source Docs
-- `<path>`
-
-## Applies learning (optional)
-Applies learning from `BuilderOps LearningSignal <id>`, `BuilderOps PromotionIntent <id>`, or `docs/learning-log.md :: YYYY-MM-DD - <compatibility entry title>`.
-```
+**Issue body (all cases):** use the body template from `.codex/skills/_shared/ISSUE_CONTRACT.md`, with the learning-specific requirements above (`## Context` links the source record; `## Applies learning` filled, e.g. `Applies learning from \`BuilderOps LearningSignal <id>\``).
 
 After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
 

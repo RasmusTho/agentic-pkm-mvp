@@ -151,14 +151,7 @@ For each candidate issue, inspect:
 - Project Status
 - priority
 - linked PRs
-- `Context`
-- `Scope`
-- `Source Anchors`
-- `Constraints`
-- `Acceptance Criteria`
-- `Out of Scope`
-- `Suggested Validation`
-- `Source Docs`
+- every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`)
 
 Classify each candidate as exactly one:
 

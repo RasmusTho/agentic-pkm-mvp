@@ -90,7 +90,7 @@ For each drift case, recommend one concrete corrective action only:
 - GitHub remains the canonical backlog-state surface.
 - Treat Project `Status` as the primary lifecycle signal.
 - Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
-- For PR cards, follow the lifecycle truth matrix in `.codex/skills/issue-maintenance-change-control/SKILL.md :: Lifecycle truth matrix` as the single source: open draft → `In Progress`; open non-draft with review requested → `Review`; open non-draft without review requested → `In Progress`.
+- For PR cards, follow the canonical lifecycle truth matrix (`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`) as the single source: open draft → `In Progress`; open non-draft with review requested → `Review`; open non-draft without review requested → `In Progress`.
 - Prefer one repair action per drift class when the same correction repeats across multiple items; do not churn the board with separate micro-fixes when a batched audit can close the gap.
 - If full-project scan is slow or blocked by API latency, run a targeted audit for open issues, open PRs, recently merged PRs, and recently closed-unmerged PRs, then report that fallback explicitly.
 
