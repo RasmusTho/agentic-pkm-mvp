@@ -296,11 +296,14 @@ Use exact task-contract sections for any updated or new Issue:
 
 ## Output format
 
-1. Issue State Assessment
-2. Required Corrections
-3. Updated / Replacement Issue Contracts
-4. Project / Label Changes
-5. Receipts
+Lead with the human summary; include later sections only when they have content (`docs/development/GOVERNANCE_PROPORTIONALITY.md`).
+
+1. Summary For The Human (2–4 sentences: what was corrected, what remains, what needs a decision)
+2. Issue State Assessment
+3. Required Corrections
+4. Updated / Replacement Issue Contracts
+5. Project / Label Changes
+6. Receipts
 
 ## Output expectations
 

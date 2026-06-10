@@ -81,6 +81,8 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
         "const directRepairSectionMatch = body.match(/## Direct Repair",
         "const builderOpsRoutingMatch = body.match(/## BuilderOps Routing",
         "const hasBuilderOpsRouting =",
+        "const tier1LanePattern =",
+        "const builderOpsRoutingSatisfied =",
         "PR body must include `## BuilderOps Routing`",
         "const isDirectRepair =",
         "if (isDirectRepair) {",
@@ -160,6 +162,25 @@ def _has_builderops_routing(body: str) -> bool:
     return True
 
 
+_TIER1_LANE_REGEX = _re.compile(
+    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
+    _re.IGNORECASE | _re.MULTILINE,
+)
+
+
+def _builderops_routing_satisfied(body: str) -> bool:
+    """Python port of the JavaScript `builderOpsRoutingSatisfied` logic.
+
+    Tier 1 lane PRs (docs/development/GOVERNANCE_PROPORTIONALITY.md) may omit the
+    BuilderOps Routing section entirely — absence means "none". A present but
+    unfilled section is still rejected at every tier.
+    """
+    if _has_builderops_routing(body):
+        return True
+    section_present = bool(_BUILDEROPS_ROUTING_REGEX.search(body))
+    return _TIER1_LANE_REGEX.search(body) is not None and not section_present
+
+
 _VALID_DIRECT_REPAIR_FIELDS = (
     "Type: governance\nReason: bounded fix\nValidation: git diff --check\nIssue required: no"
 )
@@ -224,6 +245,35 @@ def test_builderops_routing_required_fields() -> None:
         "- Reason: <why no BuilderOps material was created, or what was routed>"
     )
     assert not _has_builderops_routing(template_placeholders), "Expected unchanged template placeholders to be rejected"
+
+
+def test_tier1_lane_pr_may_omit_builderops_routing() -> None:
+    """Proportionality Tier 1: docs/governance lane PRs pass without the section (absence = none)."""
+    governance_body = "- [x] Governance lane\n\n## Summary\nSkill text fix."
+    assert _builderops_routing_satisfied(governance_body), "Expected governance-lane PR without section to pass"
+
+    docs_body = "- [x] Docs authoring lane\n\n## Summary\nDocs clarification."
+    assert _builderops_routing_satisfied(docs_body), "Expected docs-lane PR without section to pass"
+
+
+def test_tier1_lane_pr_with_unfilled_section_still_rejected() -> None:
+    """A present-but-placeholder BuilderOps Routing section fails even on Tier 1."""
+    body = (
+        "- [x] Governance lane\n\n"
+        '## BuilderOps Routing\n'
+        '- Records/projections/receipts: <ids or "none">\n'
+        "- Reason: <why no BuilderOps material was created, or what was routed>"
+    )
+    assert not _builderops_routing_satisfied(body), "Expected unfilled section to be rejected on Tier 1"
+
+
+def test_non_tier1_pr_still_requires_builderops_routing() -> None:
+    """Tier 2+ (no lane checkbox) keeps the unconditional requirement."""
+    body = "Fixes #123\n\n## Summary\nImplementation change."
+    assert not _builderops_routing_satisfied(body), "Expected implementation PR without section to be rejected"
+
+    valid_body = f"Fixes #123\n\n{_VALID_BUILDEROPS_ROUTING}"
+    assert _builderops_routing_satisfied(valid_body), "Expected concrete section to satisfy at any tier"
 
 
 def test_direct_repair_rejected_when_fields_incomplete() -> None:

@@ -40,8 +40,11 @@ turn validated local changes into a truthful branch, commit, pushed head, and PR
 - Do not publish unrelated local changes.
 - For implementation lane PRs, the body must include `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
 - For docs-authoring or governance lane PRs, leave the linked Issue blank unless a governing Issue actually exists.
-- Every PR body must include a `## BuilderOps Routing` section that names relevant BuilderOps
-  records/projections/receipts or states `none` with a short reason.
+- PR-body machinery scales with risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`:
+  - Tier 2+ PR bodies must include a `## BuilderOps Routing` section that names relevant BuilderOps
+    records/projections/receipts or states `none` with a short reason.
+  - Tier 1 PRs (docs-authoring or governance lane) may omit the section entirely when nothing was
+    routed — absence means `none`. If the section is present, it must be filled in.
 - Default to opening an open PR.
 - Use `--draft` only with an explicit reason that the PR is not yet ready for review or still needs integration/repair.
 - Publication does not move work to `Done`.
@@ -269,8 +272,11 @@ Pre-push PR-body contract gate:
   - governance lane: `- [x] Governance lane`
   - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
-- Verify the body includes `## BuilderOps Routing`. If no BuilderOps object was created, the
-  section must still explain why the work did not produce operational BuilderOps material.
+- Verify BuilderOps Routing per tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`):
+  - Tier 2+: the body must include `## BuilderOps Routing`. If no BuilderOps object was created,
+    the section must still explain why the work did not produce operational BuilderOps material.
+  - Tier 1 (docs/governance lane): the section may be omitted when nothing was routed — absence
+    means `none`. Never leave the section present but unfilled.
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
 
@@ -310,7 +316,10 @@ Governance lane:
 
 ## Output format
 
-1. Publication Inputs
-2. Branch and Commit Created
-3. PR Created or Updated
-4. Handoff Target
+Lead with the human summary; scale the rest to the tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`). For Tier 1, the summary plus a receipt line (branch, commit, PR link) is enough.
+
+1. Summary For The Human (2–4 sentences: what was published, what remains, what needs a decision)
+2. Publication Inputs
+3. Branch and Commit Created
+4. PR Created or Updated
+5. Handoff Target

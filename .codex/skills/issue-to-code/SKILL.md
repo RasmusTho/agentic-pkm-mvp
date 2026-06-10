@@ -279,6 +279,7 @@ Only move to Review when the PR is the **explicit review handoff artifact** (nor
 - Preserve architecture boundaries and event/outbox compatibility where relevant.
 - Update docs in the same change if behavior, contracts, or architecture change.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
+- Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery.
 - For any PR that changes files under `app/` or `tests/`, run the repo-standard lint gate, currently `ruff check app tests`, before merge and include the lint output or explicit tooling limitation in the PR body.
 - Keep docs-only validation lightweight: docs-only PRs should run appropriate docs/governance checks, not the full code/test smoke by default.
 - Do not collapse parent feature validation and owner-doc promotion into one slice PR by default.
@@ -385,15 +386,18 @@ Before handing off to `publish-pr`, confirm:
 
 ## Output format
 
-1. Selected Issue and Selection Rationale
-2. Lifecycle Actions Taken
-3. Source Authority Used
-4. Implementation Summary
-5. Files and Surfaces Changed
-6. Validation Run
-7. PR Publication Handoff
-8. Doc Writeback Performed
-9. Risks / Follow-ups
+Lead with the human summary; include later sections only when they have content, scaled to the tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`). For Tier 1, the summary plus a receipt line is enough.
+
+1. Summary For The Human (2–4 sentences: what was done, what remains, what needs a decision)
+2. Selected Issue and Selection Rationale
+3. Lifecycle Actions Taken
+4. Source Authority Used
+5. Implementation Summary
+6. Files and Surfaces Changed
+7. Validation Run
+8. PR Publication Handoff
+9. Doc Writeback Performed
+10. Risks / Follow-ups
 
 If blocked, do not guess. Report the blocker only if one of these is true:
 
