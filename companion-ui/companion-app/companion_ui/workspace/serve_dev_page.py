@@ -62,6 +62,11 @@ from companion_ui.renderer import (
     render_vault_markdown,
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
+from companion_ui.workspace.entry_state import (
+    EntryStateResolution,
+    entry_state_attributes,
+    resolve_entry_state,
+)
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
@@ -4402,8 +4407,20 @@ def _error_detail(error: str) -> dict:
     return detail if isinstance(detail, dict) else {}
 
 
-def _render_error_section(error: str) -> str:
-    """Render a visible error state using Yggdrasil destructive tokens."""
+def _render_error_section(error: str, *, entry_state: str = "") -> str:
+    """Render a visible error state using Yggdrasil destructive tokens.
+
+    When the resolved entry state is ``no_vault`` (#1783) the error state
+    carries the declared ``entry.retry`` affordance: a plain read-only link
+    back to ``/`` that re-requests orientation. No snapshot content is
+    fabricated.
+    """
+    retry_html = (
+        '\n    <a class="error-retry" href="/" data-intent="entry.retry"'
+        ' data-testid="workspace-entry-retry">Retry</a>'
+        if entry_state == "no_vault"
+        else ""
+    )
     detail = _error_detail(error)
     error_kind = str(detail.get("error") or "")
     if error_kind == "note_not_found":
@@ -4430,7 +4447,7 @@ def _render_error_section(error: str) -> str:
   <div class="error-state" data-testid="workspace-error-state" data-error-kind="{'runtime-unavailable' if runtime_unavailable else 'api-error'}">
     <span class="error-label">{runtime_label}</span>
     {runtime_marker}
-    <span class="error-message"><code>{_e(error)}</code></span>
+    <span class="error-message"><code>{_e(error)}</code></span>{retry_html}
   </div>"""
 
 
@@ -4808,7 +4825,10 @@ def _render_orientation_index_html(
     production_profile: bool = False,
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
+    entry_resolution: Optional[EntryStateResolution] = None,
 ) -> str:
+    if entry_resolution is None:
+        entry_resolution = resolve_entry_state(orientation=orientation)
     scope = _orientation_dict(orientation.get("scope"))
     meta = _orientation_dict(orientation.get("meta"))
     guards = _orientation_dict(orientation.get("guards"))
@@ -4842,6 +4862,12 @@ def _render_orientation_index_html(
         if ambient_refresh_enabled and stale_after and not degraded
         else "Manual refresh"
     )
+    # In the no_vault entry state the manual refresh link is the declared
+    # entry.retry affordance (SYSTEM_ENTRY_POINT_SPEC.md §Intent vocabulary);
+    # it re-requests orientation read-only and returns the client to `boot`.
+    retry_intent_attr = (
+        ' data-intent="entry.retry"' if entry_resolution.state == "no_vault" else ""
+    )
     refresh_html = f"""
         <section class="orientation-refresh"
           data-testid="workspace-orientation-ambient-refresh"
@@ -4849,7 +4875,7 @@ def _render_orientation_index_html(
           data-refresh-state="{_e(refresh_state)}"
           data-read-only="true">
           <span>{_e(refresh_copy)}</span>
-          <a href="/" data-testid="workspace-orientation-manual-refresh">Refresh</a>
+          <a href="/"{retry_intent_attr} data-testid="workspace-orientation-manual-refresh">Refresh</a>
         </section>"""
     ambient_script = _orientation_ambient_refresh_script() if ambient_refresh_enabled else ""
     vault_entry_html = _render_orientation_vault_entry(
@@ -5167,7 +5193,7 @@ def _render_orientation_index_html(
     }}
   </style>
 </head>
-<body data-diagnostics="{'true' if diagnostics else 'false'}">
+<body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -5964,6 +5990,7 @@ def render_index_html(
     fields: Optional[dict] = None,
     error: str = "",
     orientation: Optional[dict] = None,
+    orientation_error: str = "",
     orientation_vault_browser: Optional[dict] = None,
     orientation_vault_browser_error: str = "",
     production_profile: bool = False,
@@ -5979,7 +6006,18 @@ def render_index_html(
     Yggdrasil design tokens and the workspace region contract from
     real_note_workspace_shell.py. Canvas body-edit and Panel execution
     are not implemented; the agent rail is a placeholder.
+
+    Entry-state resolution (#1783) wraps — does not replace — the
+    orientation/workspace branch below: the resolved state is declared on the
+    shell root (`<body data-entry-state=…>`) and the UI never re-derives it.
     """
+    entry_resolution = resolve_entry_state(
+        note_path=note_path,
+        note_loaded=fields is not None,
+        error=error,
+        orientation=orientation,
+        orientation_error=orientation_error,
+    )
     if orientation is not None and fields is None and not error:
         return _render_orientation_index_html(
             api_base_url=api_base_url,
@@ -5990,11 +6028,12 @@ def render_index_html(
             production_profile=production_profile,
             diagnostics=diagnostics,
             ambient_refresh_enabled=ambient_refresh_enabled,
+            entry_resolution=entry_resolution,
         )
 
     content_section = ""
     if error:
-        content_section = _render_error_section(error)
+        content_section = _render_error_section(error, entry_state=entry_resolution.state)
     elif fields is not None:
         content_section = _render_note_section(fields)
     # Live co-authoring wiring is gated by the server-declared canvas flag,
@@ -8657,7 +8696,7 @@ def render_index_html(
     }}
   </style>
 </head>
-<body data-diagnostics="{'true' if diagnostics else 'false'}">
+<body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -9307,6 +9346,7 @@ def handle_get(
         fields=fields,
         error=error,
         orientation=orientation,
+        orientation_error=orientation_error,
         orientation_vault_browser=orientation_vault_browser,
         orientation_vault_browser_error=orientation_vault_browser_error,
         production_profile=production_profile,
