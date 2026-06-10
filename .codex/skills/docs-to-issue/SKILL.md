@@ -74,42 +74,9 @@ For every candidate doc item, determine exactly one state:
 - Prefer the most local actionable source item.
 - Do not rely on unmerged inline doc edits as the primary backlog signal.
 
-Each new Issue must use this exact contract shape:
+Each new Issue must use the canonical contract shape from `.codex/skills/_shared/ISSUE_CONTRACT.md`: the title shape, the exact section list (including `## Applies learning (optional)`), and the `Verify:` marker rule, with labels only from `.codex/skills/_shared/LABEL_TAXONOMY.md`.
 
-Title:
-`<type>: <short bounded outcome>`
-
-Allowed labels only:
-
-- `type:task`
-- `type:bug`
-- `type:refactor`
-- `prio:high`
-- `prio:med`
-- `prio:low`
-- `agent:ready`
-- `agent:blocked`
-- `agent:needs-human`
-
-Issue body must contain exactly these sections:
-
-- `## Context`
-- `## Scope`
-- `## Source Anchors`
-- `## Constraints`
-- `## Acceptance Criteria`
-- `## Out of Scope`
-- `## Suggested Validation`
-- `## Source Docs`
-- `## Applies learning (optional)` — leave blank unless this slice was shaped by a prior retrospective outcome; when filled, link to the retro entry or PR that informed the slice shape
-
-`Acceptance Criteria` must be verifiable:
-
-- Every AC checkbox carries a `Verify:` line that names its verification target.
-- Behavioral AC → test pointer: `Verify: \`tests/<path>::<test_name>\``. The test may be new (to be written by the builder); it must be concrete enough to resolve after implementation.
-- Non-behavioral AC → explicit target: doc writeback path plus anchor, roadmap diff, or runtime receipt (e.g. `Verify: doc writeback at \`docs/CONCEPTS/DOMAIN.md :: ingest-boundary\``).
-- If an AC cannot carry a resolvable `Verify:` target, the AC is not crisp enough. Refine the AC, split the Issue, or route the docs item through `feature-breakdown` before marking it `agent:ready`.
-- `Suggested Validation` lists the commands that execute the declared `Verify:` targets; it does not replace them.
+Skill-specific rule: if an AC cannot carry a resolvable `Verify:` target, the AC is not crisp enough — refine the AC, split the Issue, or route the docs item through `feature-breakdown` before marking it `agent:ready`.
 
 `Source Anchors` rules:
 

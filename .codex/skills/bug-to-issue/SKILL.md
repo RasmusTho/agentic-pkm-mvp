@@ -18,15 +18,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
 2. Check for existing issue:
    - Search open issues for the same symptom/title. If a matching issue exists, comment with new evidence instead of creating a duplicate.
 3. Create or update Issue body:
-   - Always use the required contract sections:
-     - `## Context`
-     - `## Scope`
-     - `## Source Anchors`
-     - `## Constraints`
-     - `## Acceptance Criteria`
-     - `## Out of Scope`
-     - `## Suggested Validation`
-     - `## Source Docs`
+   - Always use the canonical contract sections from `.codex/skills/_shared/ISSUE_CONTRACT.md`.
    - Include exact repro steps and observed/expected results when available.
    - Do not create a micro-issue for routine repair, reconciliation, or bookkeeping churn; route those signals to the maintenance skills instead.
    - Acceptance Criteria must carry `Verify:` markers:

@@ -58,6 +58,13 @@ Do not rely on a human remembering where BuilderOps material belongs.
 
 ## Skill routing
 
+Shared contracts: `.codex/skills/_shared/` holds the canonical contract files that skills reference
+instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + `Verify:` rule),
+`LABEL_TAXONOMY.md` (canonical labels + `lane:governance` exception), `LIFECYCLE_TRUTH_MATRIX.md`
+(required Project Status per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
+and `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations). A reference like
+`_shared/<FILE>.md :: <section>` resolves there. `_shared/` is not a skill directory.
+
 - `agentic-pkm`
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
 - `issue-to-code`

@@ -63,22 +63,7 @@ You operate between:
 
 ### Lifecycle truth matrix
 
-Project Status must match content state. Every other cell is drift and must be corrected. This matrix is the source of truth for all Project reconciliation — it covers both Issues and PRs.
-
-| Content | Content state | Required Project Status |
-|---------|---------------|-------------------------|
-| Issue | CLOSED | `Done` |
-| Issue | OPEN + `agent:ready` | `Ready` |
-| Issue | OPEN + `agent:blocked` | `Backlog` |
-| Issue | OPEN + `agent:needs-human` | `Backlog` |
-| PR | MERGED | `Done` |
-| PR | CLOSED (unmerged) | `Done` |
-| PR | OPEN + Draft | `In Progress` |
-| PR | OPEN + non-draft + review requested | `Review` |
-| PR | OPEN + non-draft, no review requested | `In Progress` |
-| Any | Present but no Project entry | Add to Project, apply row above |
-
-`Review` is the explicit review-handoff state, not a synonym for "a non-draft PR exists". Since `publish-pr` defaults to opening non-draft PRs, an open non-draft PR without a requested review is still active implementation and belongs in `In Progress`.
+The canonical matrix lives at `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` — Project Status must match content state for both Issues and PRs; every other cell is drift and must be corrected. This skill owns the reconciliation procedure that applies it; the matrix itself (including the review-requested `Review` semantics settled by #1806) is defined once in the shared file.
 
 ### Drift patterns that must be flagged explicitly
 
@@ -127,16 +112,7 @@ If any of the above is ambiguous, do not code. Keep the Issue `agent:needs-human
 - move Project status to `Backlog`, `Ready`, `In Progress`, `Review`, or `Done`
 - resolve closed terminal PR cards to `Done`
 - remove stale labels that contradict lifecycle reality
-- relabel with:
-  - `type:task`
-  - `type:bug`
-  - `type:refactor`
-  - `prio:high`
-  - `prio:med`
-  - `prio:low`
-  - `agent:ready`
-  - `agent:blocked`
-  - `agent:needs-human`
+- relabel with the canonical taxonomy from `.codex/skills/_shared/LABEL_TAXONOMY.md` only
 
 When closing stale or duplicate open issues:
 
@@ -158,12 +134,7 @@ If an Issue is closed (already delivered):
    gh issue edit #<N> --remove-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human
    ```
 
-2. **Set Project Status to Done:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$DONE_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+2. **Set Project Status to Done:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Done` option ID.
 
 3. **Verify:**
    ```bash
@@ -202,12 +173,7 @@ If an open implementation Issue is malformed, stale, or no longer safely executa
    gh issue edit #<N> --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked
    ```
 
-2. **Set Project Status to Backlog (non-active):**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$BACKLOG_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+2. **Set Project Status to Backlog (non-active):** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Backlog` option ID.
 
 3. **Post comment with required action**
 
@@ -278,16 +244,7 @@ Child slice issues may become `agent:ready` only when their executable contract 
 
 ## Required Issue contract shape
 
-Use exact task-contract sections for any updated or new Issue:
-
-- `## Context`
-- `## Scope`
-- `## Source Anchors`
-- `## Constraints`
-- `## Acceptance Criteria`
-- `## Out of Scope`
-- `## Suggested Validation`
-- `## Source Docs`
+Use the canonical task-contract sections from `.codex/skills/_shared/ISSUE_CONTRACT.md` for any updated or new Issue (including the `## Applies learning (optional)` rule defined there).
 
 
 ## Capturing learning
@@ -384,18 +341,7 @@ Use this when the user asks for a maintenance run across everything not done.
      - Keep or set `agent:needs-human` for boundary moves without explicit direction or module paths.
      - Keep or set `agent:blocked` when external dependencies are stated.
    
-   - **Execute Project state reconciliation** for each open issue only after labels are corrected:
-     ```bash
-     # agent:ready -> Status=Ready
-     gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-       -f fieldId="$STATUS_FIELD_ID" -f optionId="$READY_OPTION_ID" \
-       -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-     
-     # agent:blocked or agent:needs-human -> Status=Backlog
-     gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-       -f fieldId="$STATUS_FIELD_ID" -f optionId="$BACKLOG_OPTION_ID" \
-       -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-     ```
+   - **Execute Project state reconciliation** for each open issue only after labels are corrected: run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` — `agent:ready` → `Ready` option ID; `agent:blocked` or `agent:needs-human` → `Backlog` option ID.
      - If the issue is missing from the Project or missing `Status`, add/reconcile it during the same run
 5. **Execute Deduplication:**
    - If duplicate issues have the same scope/contract:
@@ -412,12 +358,7 @@ Use this when the user asks for a maintenance run across everything not done.
    - The pre-flight audit (step 2) should have surfaced these, but enumerate them explicitly here to prevent silent skips.
    - Terminal work is: merged PRs, closed PRs (unmerged), closed Issues.
    - Any of the above sitting in `In Progress`, `Review`, `Backlog`, `Ready`, or with no Status is drift.
-   - Set each to `Done`:
-     ```bash
-     gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-       -f fieldId="$STATUS_FIELD_ID" -f optionId="$DONE_OPTION_ID" \
-       -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-     ```
+   - Set each to `Done`: run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Done` option ID.
    - Do not limit this step to "blank" cards. Stale `In Progress` / `Review` on merged or closed items is as common as missing status and is equally drift.
 
 7. **Reconcile open PR Project status** against the lifecycle truth matrix:

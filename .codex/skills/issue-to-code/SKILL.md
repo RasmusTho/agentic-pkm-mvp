@@ -77,16 +77,7 @@ If no BuilderOps record is needed, record `BuilderOps routing: none` with the re
 handoff. Never append to `docs/learning-log.md` except as an explicit compatibility fallback when a
 BuilderOps write is unavailable.
 
-Treat these Issue sections as binding for the governing slice issue:
-
-- `Context`
-- `Scope`
-- `Source Anchors`
-- `Constraints`
-- `Acceptance Criteria`
-- `Out of Scope`
-- `Suggested Validation`
-- `Source Docs`
+Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`) as binding for the governing slice issue.
 
 ## GitHub and Project rules
 
@@ -99,25 +90,9 @@ Treat these Issue sections as binding for the governing slice issue:
 - Treat `Ready -> In Progress` plus removal of `agent:ready` as the fast claim/lease handshake.
 - Keep that claim minimal and compatible with multi-agent environments: one active lease per Issue, with the label/status transition as the shared signal.
 
-Allowed labels:
+Allowed labels: the canonical taxonomy in `.codex/skills/_shared/LABEL_TAXONOMY.md`.
 
-- `type:task`
-- `type:bug`
-- `type:refactor`
-- `prio:high`
-- `prio:med`
-- `prio:low`
-- `agent:ready`
-- `agent:blocked`
-- `agent:needs-human`
-
-Allowed Project statuses:
-
-- `Backlog`
-- `Ready`
-- `In Progress`
-- `Review`
-- `Done`
+Allowed Project statuses: per `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` (`Backlog`, `Ready`, `In Progress`, `Review`, `Done`).
 
 ## Issue selection rule before implementation
 
@@ -172,22 +147,14 @@ python -m app.dispatcher status --json
 
 #### GitHub-Based Claim (Fallback or Non-Dispatcher Flow)
 
-1. **Ensure Issue is in Project** (if missing, add it first):
-   ```bash
-   gh api graphql -f query='query { repository(owner:"OWNER", name:"REPO") { issue(number:N) { projectItems(first:1) { nodes { id } } } } }'
-   ```
+1. **Ensure Issue is in Project** (if missing, add it first): run the resolve-item query from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`; an empty `projectItems` list means add-to-Project first.
 
 2. **Fast-claim the Issue via mandatory preflight wrapper:**
    ```bash
    scripts/issue_pickup_claim.sh --issue <N>
    ```
 
-3. **Set Issue Project Status to In Progress:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$IN_PROGRESS_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+3. **Set Issue Project Status to In Progress:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `In Progress` option ID.
 
 4. **Verify:**
    ```bash
@@ -203,12 +170,7 @@ If work becomes blocked before or during implementation:
    gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready
    ```
 
-2. **Set Issue Project Status to Backlog:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$BACKLOG_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+2. **Set Issue Project Status to Backlog:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Backlog` option ID.
 
 3. **Add a blocking comment to the Issue with explicit reason**
 
@@ -237,19 +199,9 @@ When you open a draft PR or continue implementing after opening a PR:
 
 Only move to Review when the PR is the **explicit review handoff artifact** (normally after review is requested):
 
-1. **Move Issue Project Status to Review:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$REVIEW_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+1. **Move Issue Project Status to Review:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Review` option ID.
 
-2. **Move PR Project Status to Review:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$PR_ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$REVIEW_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+2. **Move PR Project Status to Review:** run the same mutation against the PR's project item ID.
 
 3. **Verify both Issue and PR:**
    ```bash
@@ -342,22 +294,11 @@ When continuing through anchor drift:
 
     For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
 
-    `publish-pr` owns the hardened gate. Run the workspace preflight documented at `.codex/skills/publish-pr/SKILL.md :: Branch-Truth Gate — Pre-Commit`:
-
-    ```bash
-    scripts/agent_workspace_preflight.sh \
-      --expected-branch "$EXPECTED_BRANCH" \
-      --expected-worktree "$EXPECTED_WORKTREE" \
-      --allow-dirty
-    ```
-
-    Fallback when the preflight script cannot run: assert the branch name directly (`git branch --show-current` must equal the PR head branch). Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
+    Run the canonical gate from `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` (pre-commit, `--allow-dirty`), using the branch-name fallback documented there when the preflight script cannot run.
 
 15b. **Branch-Truth Gate — Phase 2: Pre-Push (mandatory before `git push`)** [branch-truth-gate]
 
-    Re-run the same `publish-pr` gate before pushing (`.codex/skills/publish-pr/SKILL.md :: Branch-Truth Gate — Pre-Push`), with the same branch-name fallback when the script cannot run.
-
-    If the gate fails at pre-push: stop, switch to the correct worktree, relocate the commit if needed, and re-run both phases.
+    Re-run the same gate before pushing (`.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure`, pre-push). If the gate fails at pre-push: stop, switch to the correct worktree, relocate the commit if needed, and re-run both phases.
 
 16. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.

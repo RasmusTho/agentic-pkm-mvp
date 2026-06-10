@@ -98,35 +98,17 @@ Do not use `git add -A` or `git add .`—stage only intended files.
 
 ### Branch-Truth Gate — Pre-Commit (mandatory before Step 4) [branch-truth-gate]
 
-**Worktree policy (doctrinal):** For multi-agent parallel work, a dedicated worktree (via `git worktree add`) is strongly preferred for the full lane lifecycle — from initial edits through every push. Do NOT commit to an active PR from the shared root worktree when other agents may be operating in it. This is prevention by construction; the gate below is detection.
-
-**Workspace preflight (scriptable, preferred):** Run the hardened workspace preflight before committing. It is the same check `issue-to-code` runs at issue pickup, and it detects branch drift, worktree drift, in-progress git operations, base-branch drift, and lease conflicts in one call. At the publish boundary the tree is intentionally dirty, so pass `--allow-dirty` — branch and worktree drift still fail the gate.
-
-Base-branch semantics: the gate asserts the publication HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` is reported (`status: "behind"`) but does not fail — in the doctrinal worktree flow `main` is checked out in the root worktree and cannot be fast-forwarded from here. A diverged or unresolvable base ref, or a HEAD that does not contain `origin/main`, still fails; fix it by fetching and rebasing onto `origin/main`, never by bypassing with `--base-branch ""`.
+The canonical gate (worktree doctrine, hardened preflight, and the no-script branch-name fallback) is defined once at `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure`. Run the pre-commit phase now with `--allow-dirty` — `EXPECTED_BRANCH` and `EXPECTED_WORKTREE` were captured in Step 2:
 
 ```bash
-# EXPECTED_BRANCH and EXPECTED_WORKTREE were captured in Step 2.
 scripts/agent_workspace_preflight.sh \
   --expected-branch "$EXPECTED_BRANCH" \
   --expected-worktree "$EXPECTED_WORKTREE" \
   --allow-dirty
-# Non-zero exit => the workspace drifted (a concurrent agent likely switched the
-# shared root worktree). STOP. Do not commit. Switch to the correct worktree and
-# re-run the gate. Do not "fix" it by editing EXPECTED_BRANCH to match reality.
+# Non-zero exit => the workspace drifted. STOP. Do not commit. See the shared gate file.
 ```
 
-**Branch-name fallback (no python/script available):** If the preflight script cannot run, assert the branch name directly:
-
-```bash
-ACTUAL_BRANCH=$(git branch --show-current)
-if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
-  echo "BRANCH-TRUTH GATE FAILED (pre-commit): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
-  echo "Switch to the correct worktree before committing."
-  exit 1
-fi
-```
-
-Branch name must match. Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push. The fallback catches branch drift but, unlike the preflight, does not verify worktree isolation.
+Publication-boundary base-branch semantics (specific to this skill): the gate asserts the publication HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` is reported (`status: "behind"`) but does not fail — in the doctrinal worktree flow `main` is checked out in the root worktree and cannot be fast-forwarded from here. A diverged or unresolvable base ref, or a HEAD that does not contain `origin/main`, still fails; fix it by fetching and rebasing onto `origin/main`, never by bypassing with `--base-branch ""`.
 
 ### Step 4: Create Commit
 
@@ -149,29 +131,7 @@ Commit message must:
 
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
 
-Re-run the same workspace preflight before pushing — the commit you just made could be on the wrong branch if the workspace drifted between the pre-commit gate and now:
-
-```bash
-scripts/agent_workspace_preflight.sh \
-  --expected-branch "$EXPECTED_BRANCH" \
-  --expected-worktree "$EXPECTED_WORKTREE" \
-  --allow-dirty
-# Non-zero exit => STOP, do not push. Relocate the commit to the correct branch
-# (e.g. cherry-pick onto $EXPECTED_BRANCH and reset the drifted branch) before pushing.
-```
-
-Branch-name fallback (no python/script available):
-
-```bash
-ACTUAL_BRANCH=$(git branch --show-current)
-if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
-  echo "BRANCH-TRUTH GATE FAILED (pre-push): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
-  exit 1
-fi
-echo "Branch-truth gate passed — pushing to origin/$EXPECTED_BRANCH"
-```
-
-If the gate fails at pre-push: stop, switch to the correct worktree, relocate the commit, and re-run both gates.
+Re-run the pre-push phase of `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` (same preflight command as above, same fallback) — the commit you just made could be on the wrong branch if the workspace drifted between the gates. If the gate fails at pre-push: stop, do not push, relocate the commit to the correct branch (e.g. cherry-pick onto `$EXPECTED_BRANCH` and reset the drifted branch), and re-run both gates.
 
 ### Step 5: Push Branch
 
