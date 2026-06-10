@@ -61,6 +61,7 @@ Practical rule:
 
 - Docs-only changes:
   - run any repo docs validation command if one exists
+  - when `.codex/skills/**` changed, run `python3 scripts/lint_skills_consistency.py` (exit 0, zero output = clean)
   - otherwise run lightweight repo checks that are still appropriate
 - Code-affecting changes:
   - `ruff check app tests`
@@ -115,6 +116,7 @@ Docs-authoring rules:
 
 - a governing GitHub Issue is not required
 - the PR must be explicitly classified as docs authoring
+- the skills consistency lint runs on every PR in the smoke gate (`python3 scripts/lint_skills_consistency.py`, stdlib-only); run it locally when touching `.codex/skills/**` — the pytest wrapper is `tests/governance/test_skills_consistency_lint.py`
 - docs authoring does not automatically create backlog work or Project state
 - use `docs-to-issue` later when the authored docs are ready to become bounded implementation tasks
 - use `feature-breakdown` later when one docs-defined feature should become one parent feature issue plus child slices
