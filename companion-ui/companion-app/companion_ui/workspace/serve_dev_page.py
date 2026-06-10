@@ -4618,13 +4618,45 @@ def _render_orientation_leave_point(leave_point: object) -> str:
         </section>"""
 
 
-def _render_orientation_open_loops(open_loops: object) -> str:
-    rows: list[str] = []
-    for item in _orientation_list(open_loops):
-        loop = _orientation_dict(item)
-        rows.append(
-            f"""
-            <article class="orientation-item" data-testid="workspace-orientation-open-loop"
+# Default visible items per collection in one orientation moment (SEP-02;
+# SYSTEM_ENTRY_POINT_SPEC.md §Resolved Q5: scarce displayed subset, matching
+# the shipped resurfacing-card default #1680). Deliberate expansion may reveal
+# more, never above the server caps (WORKSPACE_ORIENTATION_CONTRACT.md
+# §Bounded Collections: 8/8/5).
+_ORIENTATION_DISPLAY_BUDGET = 3
+
+
+def _orientation_int(value: object, fallback: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _orientation_capped_items(
+    items: object, *, meta: object | None, cap_key: str
+) -> tuple[list[dict], int]:
+    """Server-capped collection items plus the declared cap.
+
+    The UI never widens a collection past the server-declared cap; items
+    beyond the cap are not rendered at all (the cap is a transport ceiling).
+    """
+    caps = _orientation_dict(_orientation_dict(meta).get("caps"))
+    server_cap = _orientation_int(caps.get(cap_key))
+    collected = [_orientation_dict(item) for item in _orientation_list(items)]
+    capped = collected[:server_cap] if server_cap else collected
+    return capped, server_cap
+
+
+def _render_orientation_open_loops(open_loops: object, *, meta: object | None = None) -> str:
+    capped, server_cap = _orientation_capped_items(
+        open_loops, meta=meta, cap_key="open_loops"
+    )
+
+    def _row(loop: dict, *, testid: str, visible_default: bool) -> str:
+        return f"""
+            <article class="orientation-item" data-testid="{testid}"
+              data-visible-by-default="{str(visible_default).lower()}"
               data-loop-status="{_e(_orientation_str(loop.get("status"), "unknown"))}"
               data-handoff-hint="{_e(_orientation_str(loop.get("handoff_hint"), "none"))}">
               <div class="orientation-item-main">
@@ -4637,27 +4669,57 @@ def _render_orientation_open_loops(open_loops: object) -> str:
               </div>
               {_orientation_provenance(loop, testid="workspace-orientation-open-loop-provenance")}
             </article>"""
+
+    visible = capped[: _ORIENTATION_DISPLAY_BUDGET]
+    overflow = capped[_ORIENTATION_DISPLAY_BUDGET :]
+    rows = [
+        _row(loop, testid="workspace-orientation-open-loop", visible_default=True)
+        for loop in visible
+    ]
+    overflow_html = ""
+    if overflow:
+        overflow_rows = "".join(
+            _row(
+                loop,
+                testid="workspace-orientation-open-loop-overflow",
+                visible_default=False,
+            )
+            for loop in overflow
         )
+        overflow_html = f"""
+          <details class="orientation-budget-expand"
+            data-testid="workspace-orientation-open-loops-expand"
+            data-server-cap="{server_cap or len(capped)}"
+            data-overflow-count="{len(overflow)}">
+            <summary>Show {len(overflow)} more open loop(s)</summary>
+            {overflow_rows}
+          </details>"""
     body = "".join(rows) if rows else '<p class="orientation-empty">No open loops declared.</p>'
     return f"""
-        <section class="orientation-section" data-testid="workspace-orientation-open-loops">
+        <section class="orientation-section" id="workspace-orientation-open-loops"
+          data-testid="workspace-orientation-open-loops"
+          data-display-default-budget="{_ORIENTATION_DISPLAY_BUDGET}"
+          data-display-overflow-count="{len(overflow)}">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Open loops</div>
-            <span class="orientation-count">{len(rows)}</span>
+            <span class="orientation-count">{len(capped)}</span>
           </div>
           {body}
+          {overflow_html}
         </section>"""
 
 
-def _render_orientation_notable_changes(changes: object) -> str:
-    rows: list[str] = []
-    for item in _orientation_list(changes):
-        change = _orientation_dict(item)
+def _render_orientation_notable_changes(changes: object, *, meta: object | None = None) -> str:
+    capped, server_cap = _orientation_capped_items(
+        changes, meta=meta, cap_key="notable_changes"
+    )
+
+    def _row(change: dict, *, testid: str, visible_default: bool) -> str:
         summary = _orientation_str(change.get("summary"))
         changed_at = _orientation_str(change.get("changed_at"), "time unknown")
-        rows.append(
-            f"""
-            <article class="orientation-item" data-testid="workspace-orientation-notable-change">
+        return f"""
+            <article class="orientation-item" data-testid="{testid}"
+              data-visible-by-default="{str(visible_default).lower()}">
               <div class="orientation-item-main">
                 <h3>{_e(_orientation_str(change.get("label"), "Notable change"))}</h3>
                 <p>{_e(summary)}</p>
@@ -4666,15 +4728,43 @@ def _render_orientation_notable_changes(changes: object) -> str:
               <div class="orientation-meta-row">Changed: {_e(changed_at)}</div>
               {_orientation_provenance(change, testid="workspace-orientation-notable-change-provenance")}
             </article>"""
+
+    visible = capped[: _ORIENTATION_DISPLAY_BUDGET]
+    overflow = capped[_ORIENTATION_DISPLAY_BUDGET :]
+    rows = [
+        _row(change, testid="workspace-orientation-notable-change", visible_default=True)
+        for change in visible
+    ]
+    overflow_html = ""
+    if overflow:
+        overflow_rows = "".join(
+            _row(
+                change,
+                testid="workspace-orientation-notable-change-overflow",
+                visible_default=False,
+            )
+            for change in overflow
         )
+        overflow_html = f"""
+          <details class="orientation-budget-expand"
+            data-testid="workspace-orientation-notable-changes-expand"
+            data-server-cap="{server_cap or len(capped)}"
+            data-overflow-count="{len(overflow)}">
+            <summary>Show {len(overflow)} more notable change(s)</summary>
+            {overflow_rows}
+          </details>"""
     body = "".join(rows) if rows else '<p class="orientation-empty">No notable changes declared.</p>'
     return f"""
-        <section class="orientation-section" data-testid="workspace-orientation-notable-changes">
+        <section class="orientation-section" id="workspace-orientation-notable-changes"
+          data-testid="workspace-orientation-notable-changes"
+          data-display-default-budget="{_ORIENTATION_DISPLAY_BUDGET}"
+          data-display-overflow-count="{len(overflow)}">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Notable changes</div>
-            <span class="orientation-count">{len(rows)}</span>
+            <span class="orientation-count">{len(capped)}</span>
           </div>
           {body}
+          {overflow_html}
         </section>"""
 
 
@@ -4688,7 +4778,7 @@ def _render_orientation_resurface(
     meta_payload = _orientation_dict(meta)
     caps = _orientation_dict(meta_payload.get("caps"))
     server_cap = int(caps.get("resurface_candidates") or 0)
-    default_budget = 3
+    default_budget = _ORIENTATION_DISPLAY_BUDGET
     reasons = degraded_reasons or []
     posture = "degraded" if reasons else "read-only"
     reason_html = "".join(
@@ -4785,6 +4875,293 @@ def _render_orientation_governance(governance: object) -> str:
         </section>"""
 
 
+# --------------------------------------------------------------------------
+# Re-entry treatments per latency-ladder shape (#1784, SEP-02).
+#
+# The shape arrives from SEP-01's server-side resolution (entry_state.py);
+# nothing here recomputes the gap. Treatments per
+# SYSTEM_ENTRY_POINT_SPEC.md §Resolved Q5 / §Resolved Q9 and
+# docs/SYSTEM_ENTRY_POINT/REENTRY_ORIENTATION_TREATMENT.md:
+#
+# - full_mist / long_mist → four-fixed-questions card (data-region=
+#   "reentry-card"), counts not enumerations, server-declared traj-state pill;
+# - long_mist → + delta strip (data-region="delta-strip") and right-margin
+#   whisper column (suppressed narrow, collapsing into the card);
+# - soft_mist → no card; caret-echo cue + one peripheral "where you stopped"
+#   line only;
+# - thread_fade → no card, no line; fractional rail fade only;
+# - no_mist / cold_start / no_vault → no re-entry overlay of any kind.
+# --------------------------------------------------------------------------
+
+# Leave-point statuses presented as guard-held qualified resume (spec Q9).
+_REENTRY_STALE_CAUSES: dict[str, str] = {
+    "stale": "Source changed since this was captured.",
+    "degraded": "Source resolution degraded since this was captured.",
+    "artifact_missing": "The artifact this leave point referenced is missing.",
+}
+
+# Fraction the conversation/rail pane keeps during thread fade (90s–15m):
+# the pane fades a fraction; the trajectory stays implicit.
+_REENTRY_RAIL_FADE = "0.85"
+
+
+def _reentry_caret_echo() -> str:
+    """Caret-echo cue at the momentum stop point (residual ambient layer)."""
+    return (
+        '<span class="reentry-caret-echo" data-testid="reentry-caret-echo"'
+        ' aria-hidden="true"></span>'
+    )
+
+
+def _reentry_counts(orientation: dict) -> dict[str, int]:
+    """Server-capped counts for counts-not-enumerations rendering."""
+    meta = orientation.get("meta")
+    loops, _ = _orientation_capped_items(
+        orientation.get("open_loops"), meta=meta, cap_key="open_loops"
+    )
+    changes, _ = _orientation_capped_items(
+        orientation.get("notable_changes"), meta=meta, cap_key="notable_changes"
+    )
+    resurface, _ = _orientation_capped_items(
+        _orientation_dict(orientation.get("resurface")).get("candidates"),
+        meta=meta,
+        cap_key="resurface_candidates",
+    )
+    governance = _orientation_dict(orientation.get("governance"))
+    return {
+        "open_loops": len(loops),
+        "notable_changes": len(changes),
+        "resurface_candidates": len(resurface),
+        "staged": _orientation_int(governance.get("pending_proposal_count")),
+    }
+
+
+def _reentry_leave_label(leave: dict) -> str:
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    return _orientation_str(
+        leave.get("label") or artifact.get("title"), "Derived leave point"
+    )
+
+
+def _reentry_traj_state(leave: dict) -> str:
+    """Server-declared trajectory state for the re-entry card pill.
+
+    Rendered as supplied when the payload declares one; otherwise the server
+    render derives it from the same declared signals as the shape: the card
+    renders only for full/long-mist gaps (2h–14d), which the
+    CONTINUITY_AND_DECAY.md trajectory table classifies as dormant. Never
+    re-derived client-side.
+    """
+    declared = _orientation_str(
+        leave.get("trajectory_state") or leave.get("traj_state")
+    )
+    if declared in ("warm", "dormant"):
+        return declared
+    return "dormant"
+
+
+def _reentry_resume_affordance(leave: dict, *, stale: bool) -> str:
+    """Resume affordance; guard-held and qualified when the leave point is stale.
+
+    Per BLOCKED_AND_STALE_STATE_SPEC.md the guard-held state names the cause,
+    states that nothing was mutated, and offers a path forward — never a
+    generic error, and never a silent resume into a missing artifact.
+    """
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
+    href = "/workspace?note_path=" + quote(note_path, safe="") if note_path else ""
+    status = _orientation_str(leave.get("status"))
+
+    if not stale:
+        if not href:
+            return ""
+        return (
+            f'<a class="reentry-resume" data-testid="reentry-resume" '
+            f'data-intent="entry.resume" href="{_e(href)}">Resume — jump to caret</a>'
+        )
+
+    cause = _REENTRY_STALE_CAUSES.get(status, _REENTRY_STALE_CAUSES["stale"])
+    if status == "artifact_missing" or not href:
+        # Never silently resume into a missing artifact: the path forward
+        # re-enters through the Vault Browser instead.
+        forward = (
+            '<a class="reentry-resume-forward" data-testid="reentry-resume-reenter" '
+            'data-intent="vault.open" href="#workspace-orientation-vault-entry">'
+            "Re-enter through the vault</a>"
+        )
+    else:
+        forward = (
+            f'<a class="reentry-resume-forward" data-testid="reentry-resume" '
+            f'data-intent="entry.resume" data-resume-qualified="true" '
+            f'href="{_e(href)}">Open the current artifact state</a>'
+        )
+    return f"""
+            <div class="reentry-resume-guard" data-testid="reentry-resume-guard"
+              data-guard-held="true" data-guard-cause="{_e(status or "stale")}">
+              <span class="reentry-guard-copy">{_e(cause)} Nothing was mutated.</span>
+              {forward}
+            </div>"""
+
+
+def _render_reentry_delta_strip(orientation: dict) -> str:
+    """Long-mist delta strip from notable_changes (display budget 3)."""
+    capped, server_cap = _orientation_capped_items(
+        orientation.get("notable_changes"),
+        meta=orientation.get("meta"),
+        cap_key="notable_changes",
+    )
+    visible = capped[: _ORIENTATION_DISPLAY_BUDGET]
+    remaining = len(capped) - len(visible)
+    items = "".join(
+        f'<span class="reentry-delta-item" data-testid="reentry-delta-item">'
+        f'<span class="reentry-delta-dot" aria-hidden="true"></span>'
+        f"{_e(_orientation_str(change.get('label'), 'Notable change'))}</span>"
+        for change in visible
+    )
+    more = (
+        f'<span class="reentry-delta-more" data-testid="reentry-delta-more">'
+        f'+{remaining} more under <a href="#workspace-orientation-notable-changes">'
+        f"notable changes</a></span>"
+        if remaining
+        else ""
+    )
+    return (
+        f'<div class="reentry-delta-strip" data-region="delta-strip" '
+        f'data-testid="reentry-delta-strip" '
+        f'data-display-default-budget="{_ORIENTATION_DISPLAY_BUDGET}" '
+        f'data-server-cap="{server_cap or len(capped)}">{items}{more}</div>'
+    )
+
+
+def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
+    """The four fixed re-entry questions (full_mist / long_mist).
+
+    Shapes fixed per CONTINUITY_AND_DECAY.md §The Four Re-entry Questions;
+    unresolved and changed render as counts with a deliberate inspect
+    affordance, never enumerations (spec §Resolved Q5). The inspect affordance
+    routes to the existing orientation sections until the memory review drawer
+    (SEP-09) lands.
+    """
+    leave = _orientation_dict(orientation.get("leave_point"))
+    counts = _reentry_counts(orientation)
+    traj_state = _reentry_traj_state(leave)
+    delta_strip = _render_reentry_delta_strip(orientation) if shape == "long_mist" else ""
+    if _orientation_str(leave.get("status")) == "artifact_missing":
+        # Never a silent path into a missing artifact, not even from the
+        # stop-point line — the guard-held affordance owns the way forward.
+        artifact = _orientation_dict(leave.get("artifact_ref"))
+        artifact_link = (
+            f'<span class="orientation-artifact-link orientation-artifact-link--empty" '
+            f'data-testid="reentry-stop-link">'
+            f"{_e(_orientation_str(artifact.get('title'), 'Artifact'))}</span>"
+        )
+    else:
+        artifact_link = _orientation_artifact_link(
+            leave.get("artifact_ref"), testid="reentry-stop-link"
+        )
+    return f"""
+    <section class="reentry-card" data-region="reentry-card" data-testid="reentry-card"
+      data-traj-state="{_e(traj_state)}" data-reentry-treatment="{_e(shape)}"
+      data-read-only="true">
+      <div class="reentry-head">
+        <span class="orientation-section-kicker">Re-entry</span>
+        <span class="reentry-traj-pill" data-testid="reentry-traj-pill">{_e(traj_state)}</span>
+      </div>
+      <ol class="reentry-questions">
+        <li class="reentry-q" data-reentry-question="doing">
+          <span class="reentry-q-label">What was I doing</span>
+          <span class="reentry-q-body">{_e(_reentry_leave_label(leave))}</span>
+        </li>
+        <li class="reentry-q" data-reentry-question="stopped">
+          <span class="reentry-q-label">Where did momentum stop</span>
+          <span class="reentry-q-body">{artifact_link}{_reentry_caret_echo()}</span>
+        </li>
+        <li class="reentry-q" data-reentry-question="unresolved">
+          <span class="reentry-q-label">What remains unresolved</span>
+          <span class="reentry-q-body" data-testid="reentry-unresolved-counts">
+            {counts["open_loops"]} open loops · {counts["staged"]} staged
+            <a class="reentry-inspect" data-testid="reentry-inspect"
+              href="#workspace-orientation-open-loops">inspect</a>
+          </span>
+        </li>
+        <li class="reentry-q" data-reentry-question="changed">
+          <span class="reentry-q-label">What changed since</span>
+          <span class="reentry-q-body" data-testid="reentry-changed-count">
+            {counts["notable_changes"]} changes while you were away
+          </span>
+        </li>
+      </ol>
+      {delta_strip}
+      <div class="reentry-actions">
+        {_reentry_resume_affordance(leave, stale=stale)}
+        <button class="reentry-dismiss" type="button" data-testid="reentry-dismiss"
+          data-intent="entry.dismiss" data-unresolved-tension="preserved"
+          onclick="this.closest('[data-region=reentry-card]').remove()">Start fresh</button>
+      </div>
+    </section>"""
+
+
+def _render_reentry_whisper_column(orientation: dict) -> str:
+    """Right-margin whisper column (long_mist): four named items.
+
+    Suppressed in narrow mode by the page stylesheet — the card carries the
+    same four answers, so the column collapses into the card.
+    """
+    leave = _orientation_dict(orientation.get("leave_point"))
+    counts = _reentry_counts(orientation)
+    return f"""
+  <aside class="reentry-whisper-col" data-region="whisper-column"
+    data-testid="reentry-whisper-column" data-narrow-mode="suppressed"
+    aria-hidden="true">
+    <div class="reentry-whisper" data-whisper-item="doing">
+      <span class="reentry-whisper-label">doing</span>
+      <span class="reentry-whisper-text">{_e(_reentry_leave_label(leave))}</span>
+    </div>
+    <div class="reentry-whisper" data-whisper-item="unresolved">
+      <span class="reentry-whisper-label">unresolved</span>
+      <span class="reentry-whisper-text">{counts["open_loops"]} open loops · {counts["staged"]} staged</span>
+    </div>
+    <div class="reentry-whisper" data-whisper-item="changed">
+      <span class="reentry-whisper-label">changed</span>
+      <span class="reentry-whisper-text">{counts["notable_changes"]} deltas since you left</span>
+    </div>
+    <div class="reentry-whisper" data-whisper-item="resurfaced">
+      <span class="reentry-whisper-label">resurfaced</span>
+      <span class="reentry-whisper-text">{counts["resurface_candidates"]} why-now candidates</span>
+    </div>
+  </aside>"""
+
+
+def _render_reentry_peripheral_line(orientation: dict) -> str:
+    """Soft-mist residual cue: one peripheral "where you stopped" line.
+
+    Per spec §Resolved Q5 the latency ladder's one-line sentence is a
+    peripheral cue — no card, no metadata, never centered on the document.
+    """
+    leave = _orientation_dict(orientation.get("leave_point"))
+    status = _orientation_str(leave.get("status"))
+    label = _reentry_leave_label(leave)
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
+    if status == "present" and note_path:
+        href = "/workspace?note_path=" + quote(note_path, safe="")
+        target = (
+            f'<a class="orientation-artifact-link" '
+            f'data-testid="reentry-peripheral-stop-link" '
+            f'data-intent="entry.resume" data-note-path="{_e(note_path)}" '
+            f'href="{_e(href)}">{_e(label)}</a>'
+        )
+    else:
+        # A non-current leave point never gets a silent link into a moved or
+        # missing artifact from the ambient cue.
+        target = _e(label)
+    return (
+        f'<p class="reentry-peripheral-line" data-region="reentry-peripheral-line" '
+        f'data-testid="reentry-peripheral-line">Where you stopped: '
+        f"{target}{_reentry_caret_echo()}</p>"
+    )
+
+
 def _render_orientation_vault_entry(
     vault_browser: Optional[dict],
     *,
@@ -4823,6 +5200,7 @@ def _render_orientation_vault_entry(
     )
     return f"""
         <section class="orientation-section orientation-vault-entry"
+          id="workspace-orientation-vault-entry"
           data-testid="workspace-orientation-vault-entry"
           data-read-only="true">
           <div class="orientation-section-header">
@@ -4865,17 +5243,52 @@ def _render_orientation_index_html(
     reason_html = "".join(
         f'<span class="orientation-reason">{_e(reason)}</span>' for reason in reasons
     )
+    # Degraded is an amber banner naming the missing source(s); the rest of
+    # the surface stays calm and the resolved slices still render
+    # (SYSTEM_ENTRY_POINT_SPEC.md §Entry-point state model, cross-flags).
+    missing_source_html = (
+        f"""
+          <span class="orientation-degraded-source"
+            data-testid="workspace-orientation-degraded-source">
+            Missing source: {_e(" · ".join(reasons))}
+          </span>"""
+        if reasons
+        else ""
+    )
     degraded_html = (
         f"""
         <section class="orientation-degraded" data-testid="workspace-orientation-degraded"
+          data-tone="amber"
           data-runtime-posture="{_e(runtime_posture)}">
           <strong>Partial orientation</strong>
           <span>Runtime posture: {_e(runtime_posture)}</span>
+          {missing_source_html}
           <div>{reason_html}</div>
         </section>"""
         if degraded
         else ""
     )
+    # Latency-ladder re-entry treatment (#1784, SEP-02). The shape is the
+    # server-resolved SEP-01 attribute; no client-side gap computation.
+    shape = entry_resolution.reentry_shape if entry_resolution.state == "orienting" else None
+    reentry_overlay_html = ""
+    whisper_html = ""
+    rail_fade_attr = ""
+    rail_fade_class = ""
+    if shape in ("full_mist", "long_mist"):
+        reentry_overlay_html = _render_reentry_card(
+            orientation, shape=shape, stale=entry_resolution.stale
+        )
+        if shape == "long_mist":
+            whisper_html = _render_reentry_whisper_column(orientation)
+    elif shape == "soft_mist":
+        reentry_overlay_html = _render_reentry_peripheral_line(orientation)
+    elif shape == "thread_fade":
+        # No card, no peripheral line: the rail pane fades a fraction and the
+        # trajectory stays implicit.
+        rail_fade_attr = f' data-rail-fade="{_REENTRY_RAIL_FADE}"'
+        rail_fade_class = " orientation-shell--rail-faded"
+    # no_mist, cold_start, and no_vault render no re-entry overlay of any kind.
     refresh_mode = "foreground_pull" if ambient_refresh_enabled else "manual"
     refresh_state = "degraded" if degraded else ("scheduled" if ambient_refresh_enabled and stale_after else "manual_refresh")
     refresh_copy = (
@@ -4922,6 +5335,7 @@ def _render_orientation_index_html(
       --border-strong: #1e3050;
       --accent: #d4a843;
       --cyan: #00d4e8;
+      --amber: #f09030;
       --destructive: #ff3d3d;
       --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -5182,16 +5596,20 @@ def _render_orientation_index_html(
       font-size: 11px;
       margin-top: 2px;
     }}
+    /* Degraded is a calm amber banner naming the missing source — never an
+       alarm and never the destructive token (spec cross-flag treatment;
+       BLOCKED_AND_STALE_STATE_SPEC.md visual contract). */
     .orientation-degraded {{
-      background: rgba(255,61,61,0.08);
-      border: 1px solid rgba(255,61,61,0.35);
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
       border-radius: 8px;
       color: var(--fg-1);
       display: grid;
       gap: 8px;
       padding: 12px 16px;
     }}
-    .orientation-degraded strong {{ color: var(--destructive); }}
+    .orientation-degraded strong {{ color: var(--amber); }}
+    .orientation-degraded-source {{ color: var(--fg-2); font-family: var(--font-mono); font-size: 12px; }}
     .orientation-refresh {{
       align-items: center;
       background: var(--bg-surface);
@@ -5207,10 +5625,134 @@ def _render_orientation_index_html(
     }}
     .orientation-refresh a {{ color: var(--cyan); text-decoration: none; }}
     .orientation-refresh a:hover {{ text-decoration: underline; }}
+    .orientation-budget-expand summary {{
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }}
+    /* ---- Re-entry treatments per latency-ladder shape (#1784, SEP-02) ---- */
+    .reentry-card {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-left: 2px solid var(--accent);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }}
+    .reentry-head {{ align-items: center; display: flex; gap: 12px; justify-content: space-between; }}
+    .reentry-traj-pill {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 2px 10px;
+      text-transform: uppercase;
+    }}
+    .reentry-questions {{ display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }}
+    .reentry-q {{ display: grid; gap: 2px; }}
+    .reentry-q-label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .reentry-q-body {{ color: var(--fg-1); }}
+    .reentry-inspect {{
+      color: var(--cyan);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      margin-left: 6px;
+      text-decoration: none;
+    }}
+    .reentry-inspect:hover {{ text-decoration: underline; }}
+    .reentry-caret-echo {{
+      animation: reentry-breathe 1.6s ease-in-out infinite;
+      background: var(--accent);
+      display: inline-block;
+      height: 1.1em;
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      width: 2px;
+    }}
+    @keyframes reentry-breathe {{ 0%, 100% {{ opacity: 0.25; }} 50% {{ opacity: 0.8; }} }}
+    @media (prefers-reduced-motion: reduce) {{
+      .reentry-caret-echo {{ animation: none; opacity: 0.6; }}
+    }}
+    .reentry-actions {{ align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }}
+    .reentry-resume {{
+      background: var(--bg-raised);
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      color: var(--accent);
+      padding: 6px 12px;
+      text-decoration: none;
+    }}
+    .reentry-dismiss {{
+      background: transparent;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--fg-2);
+      cursor: pointer;
+      font: inherit;
+      padding: 6px 12px;
+    }}
+    /* Guard-held qualified resume — amber/staged token, never destructive. */
+    .reentry-resume-guard {{
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
+      border-radius: 6px;
+      display: grid;
+      gap: 6px;
+      padding: 10px 12px;
+    }}
+    .reentry-guard-copy {{ color: var(--fg-1); font-size: 14px; }}
+    .reentry-resume-forward {{ color: var(--cyan); text-decoration: none; }}
+    .reentry-resume-forward:hover {{ text-decoration: underline; }}
+    .reentry-delta-strip {{
+      border-top: 1px dashed var(--border-strong);
+      display: grid;
+      gap: 6px;
+      padding-top: 10px;
+    }}
+    .reentry-delta-item {{ align-items: center; color: var(--fg-2); display: flex; font-size: 14px; gap: 8px; }}
+    .reentry-delta-dot {{ background: var(--cyan); border-radius: 50%; flex: none; height: 6px; width: 6px; }}
+    .reentry-delta-more {{ color: var(--fg-3); font-family: var(--font-mono); font-size: 12px; }}
+    .reentry-delta-more a {{ color: var(--cyan); text-decoration: none; }}
+    .reentry-peripheral-line {{ color: var(--fg-3); font-size: 13px; margin: 0; text-align: right; }}
+    .reentry-whisper-col {{
+      display: grid;
+      gap: 14px;
+      pointer-events: none;
+      position: fixed;
+      right: 18px;
+      top: 25vh;
+      width: 180px;
+    }}
+    .reentry-whisper {{ display: grid; gap: 2px; }}
+    .reentry-whisper-label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .reentry-whisper-text {{ color: var(--fg-2); font-size: 13px; }}
+    /* Thread fade (90s–15m): the rail pane fades a fraction; no card, no
+       line — the trajectory stays implicit. */
+    .orientation-shell--rail-faded .orientation-column--rail {{ opacity: {_REENTRY_RAIL_FADE}; }}
     @media (max-width: 860px) {{
       .orientation-grid {{ grid-template-columns: 1fr; }}
       .orientation-governance-grid {{ grid-template-columns: 1fr; }}
       .orientation-shell {{ padding: 16px; }}
+      /* Narrow mode: the whisper column is suppressed and collapses into the
+         card, which carries the same four answers. */
+      .reentry-whisper-col {{ display: none; }}
     }}
   </style>
 </head>
@@ -5233,7 +5775,7 @@ def _render_orientation_index_html(
       </form>
     </div>
   </details>
-  <main class="orientation-shell" data-testid="workspace-reentry-orientation"
+  <main class="orientation-shell{rail_fade_class}" data-testid="workspace-reentry-orientation"
     data-read-only="true"
     data-contract-version="{_e(_orientation_str(meta.get("contract_version"), "unknown"))}"
     data-freshness="{_e(freshness)}"
@@ -5241,7 +5783,7 @@ def _render_orientation_index_html(
     data-stale-after="{_e(stale_after)}"
     data-trace-id="{_e(trace_id)}"
     data-degraded="{str(degraded).lower()}"
-    data-ambient-refresh="{'enabled' if ambient_refresh_enabled else 'disabled'}">
+    data-ambient-refresh="{'enabled' if ambient_refresh_enabled else 'disabled'}"{rail_fade_attr}>
     <header class="orientation-header">
       <div class="orientation-eyebrow">Workspace orientation</div>
       <h1 class="orientation-heading">Re-entry snapshot</h1>
@@ -5255,13 +5797,15 @@ def _render_orientation_index_html(
     </header>
     {refresh_html}
     {degraded_html}
+    {reentry_overlay_html}
+    {whisper_html}
     <div class="orientation-grid">
       <div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"))}
-        {_render_orientation_open_loops(orientation.get("open_loops"))}
-        {_render_orientation_notable_changes(orientation.get("notable_changes"))}
+        {_render_orientation_open_loops(orientation.get("open_loops"), meta=meta)}
+        {_render_orientation_notable_changes(orientation.get("notable_changes"), meta=meta)}
       </div>
-      <div class="orientation-column">
+      <div class="orientation-column orientation-column--rail">
         {_render_orientation_governance(orientation.get("governance"))}
         {_render_orientation_resurface(
             orientation.get("resurface"),
@@ -6061,6 +6605,22 @@ def render_index_html(
     # matching _render_note_section's guard derivation. With no fields (error /
     # orientation) the canvas surface is absent, so the script is not emitted.
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True)) if fields is not None else False
+    # Residual ambient layer (#1784, SEP-02): after entry.resume the document
+    # anchor opens in shell_active with the caret echo and marginalia dots
+    # persisting (CONTINUITY_AND_DECAY.md §Ambient Persistence After Re-entry).
+    # Dismissal never erases unresolved tension. Styles are inline so this
+    # region stays self-contained next to the document column.
+    residual_ambient_html = ""
+    if entry_resolution.state == "shell_active" and fields is not None:
+        residual_ambient_html = """
+  <aside class="reentry-ambient" data-region="reentry-ambient" data-testid="reentry-ambient"
+    data-unresolved-tension="preserved" aria-hidden="true"
+    style="position:fixed;left:12px;bottom:20px;z-index:4;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none;">
+    <span data-testid="reentry-caret-echo" style="display:block;width:2px;height:14px;background:var(--accent);opacity:0.6;"></span>
+    <span data-testid="reentry-marginalia-dot" style="display:block;width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:0.45;"></span>
+    <span data-testid="reentry-marginalia-dot" style="display:block;width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:0.30;"></span>
+    <span data-testid="reentry-marginalia-dot" style="display:block;width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:0.18;"></span>
+  </aside>"""
     title_suffix = "PROD" if production_profile else "DEV"
     dev_chip = "" if production_profile else '<span class="dev-chip">DEV / not production</span>'
     production_static_link = (
@@ -8821,6 +9381,7 @@ def render_index_html(
     </div>
   </details>
   {content_section}
+  {residual_ambient_html}
 
   <!-- Vault note browser overlay — narrow responsive fallback only (§5.3).
        On desktop, Browse Vault focuses the canonical left-pane browse surface
