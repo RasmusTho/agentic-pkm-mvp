@@ -120,7 +120,7 @@ Packages already archived in `companion-ui/design_handoff/`:
 | `2026-05-14-vault-action-layer` | 2026-05-14 | A | #910 |
 | `2026-05-14-claude-design-package` | 2026-05-14 | A (index only) | #901 (governance), others per package |
 | `2026-05-15-panel-interaction` | 2026-05-15 | A (accepted as design intent — #994) | #977, #978, #981, #994 |
-| `2026-06-09-system-entry-point` | 2026-06-09 | B (PROMOTE — normalized spec authoring unblocked; promotion scope excludes the context lane / place band, which remain at Crossing A pending Q15–Q16) | — |
+| `2026-06-09-system-entry-point` | 2026-06-09 | B+ (normalized spec: `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`; promotion scope excludes the context lane / place band, which remain at Crossing A pending Q15–Q16) | — |
 
 Pre-governance packages (`2026-05-03`, `2026-05-08`) do not require retroactive maturity-checklist completion. They remain valid exploration archives.
 

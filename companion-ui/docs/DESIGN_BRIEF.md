@@ -7,6 +7,9 @@ A user-facing module for a personal agentic PKM system. The system already exist
 This brief is preserved as a source artifact from earlier exploration. Where it says "modes," the current canonical term in this workspace is **cognitive postures**.
 Terms such as `trajectory`, `payload`, `gravity`, or `temperature` in newer docs are architectural vocabulary only when explicitly defined there; otherwise treat them as exploratory language, not binding interaction requirements.
 
+## Status note (2026-06-10)
+The v0 guidance below not to extract a multi-surface shell is now satisfied: the second-UI-bound-surface precondition is met (`COMPANION_UI_STATE_MAP.md` lists multiple shipped/dev-staging surfaces — orientation, active-note workspace, Vault Browser, Panel). Shell composition is now governed by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`. The v0 scope text is retained unedited as the historical source artifact.
+
 ## Who uses it
 One user: a senior software architect who lives in the vault daily across iPhone, iPad, and Mac. Thinks at system level. Uses the vault for capture, synthesis, decision tracking, and long-running thought. Already fluent with Obsidian, markdown, and agent tooling. Not a consumer; not a novice.
 
