@@ -840,6 +840,66 @@ def test_missing_required_env_file_layer_fails_closed(tmp_path: Path) -> None:
     assert "runtime.local.env" in result.summary()
 
 
+def test_required_env_file_chain_error_fails_even_with_explicit_dsns(
+    tmp_path: Path,
+) -> None:
+    """An explicit DSN does not make an unverifiable env_file chain safe."""
+    _write_base_defaults(tmp_path)
+    _write_base_compose(
+        tmp_path,
+        """\
+        services:
+          api:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./config/runtime.local.env
+          worker:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./config/runtime.local.env
+          watcher:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./config/runtime.local.env
+        """,
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        f"""\
+        services:
+          api:
+            environment:
+              PKM_ENVIRONMENT: prod
+              DATABASE_URL: {PROD_DSN}
+              DB_DSN: {PROD_DSN}
+          worker:
+            environment:
+              PKM_ENVIRONMENT: prod
+              DATABASE_URL: {PROD_DSN}
+              DB_DSN: {PROD_DSN}
+          watcher:
+            environment:
+              PKM_ENVIRONMENT: prod
+              DATABASE_URL: {PROD_DSN}
+              DB_DSN: {PROD_DSN}
+        """,
+    )
+
+    result = check_compose_channel_isolation(compose_path, "prod", environ={})
+
+    assert not result.ok, (
+        "Expected preflight to FAIL when explicit DSNs are present but the "
+        "service env_file chain has a missing required layer."
+    )
+    summary = result.summary()
+    assert "runtime.local.env" in summary
+    assert "explicit DSN present" in summary
+    violating = {(v.service, v.field) for v in result.violations}
+    for svc in ("api", "worker", "watcher"):
+        assert (svc, "DATABASE_URL") in violating
+        assert (svc, "DB_DSN") in violating
+
+
 def test_missing_optional_env_file_layer_is_skipped(tmp_path: Path) -> None:
     """A `required: false` layer absent at preflight time contributes nothing.
 
