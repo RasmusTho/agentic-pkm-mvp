@@ -133,7 +133,7 @@ Brief summary of bounded outcome
 
 Optional detailed explanation of why this change is needed.
 
-Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
+Co-Authored-By: <agent identity> <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -142,6 +142,7 @@ Commit message must:
 - Start with imperative verb (Fix, Add, Update, Rebuild, etc.)
 - Summarize the bounded outcome, not the mechanical changes
 - Be truthful about scope
+- Replace `<agent identity>` in the `Co-Authored-By` trailer with the actual agent identity producing the commit; do not copy a hardcoded model name from this template
 
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
 

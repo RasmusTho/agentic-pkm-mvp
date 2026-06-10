@@ -71,6 +71,8 @@ Rolling back therefore follows the same governed-PR path as a promotion:
 
 ## Operator steps
 
+The `rollback-promotion ...` and `verify-promotion` commands below are skill invocations, not installed shell binaries — they name the skills' entry contracts and arguments.
+
 ```
 rollback-promotion --plan ops/promotions/YYYY-MM-DD-<short-sha>.md
 

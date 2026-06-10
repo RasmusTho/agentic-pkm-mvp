@@ -36,6 +36,8 @@ Read `docs/HEALTH.md` before running — it owns the health contract that this s
 
 ## Operator steps
 
+The `verify-promotion ...` command below is a skill invocation, not an installed shell binary — it names this skill's entry contract and arguments.
+
 ```
 verify-promotion [--plan ops/promotions/YYYY-MM-DD-<short-sha>.md]
 ```
@@ -56,7 +58,7 @@ Any single failure is a FAIL. FAIL after `execute-promotion` → call `rollback-
 ## Key constraints
 
 - Never interpret partial health as acceptable. Report FAIL and route to rollback.
-- Never mark PASS without checking all seven items above.
+- Never mark PASS without checking every check in steps 1-7 of "What this skill does" and every condition under "What PASS means".
 - Always append the receipt to the plan file if one is provided — this is the capability-level validation evidence.
 
 ## Authority order for decisions
