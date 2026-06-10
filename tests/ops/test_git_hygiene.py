@@ -135,10 +135,7 @@ def test_preflight_reports_active_lease_conflict(tmp_path, monkeypatch) -> None:
     ]
 
 
-def test_preflight_reports_base_branch_behind_origin(tmp_path, monkeypatch) -> None:
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-
+def _fake_base_branch_run_git(tmp_path, git_dir):
     def fake_run_git(args: list[str], _cwd: Path) -> str:
         if args == ["status", "--porcelain"]:
             return ""
@@ -154,18 +151,35 @@ def test_preflight_reports_base_branch_behind_origin(tmp_path, monkeypatch) -> N
             return "origin-main-sha"
         raise AssertionError(f"unexpected git command: {args}")
 
+    return fake_run_git
+
+
+def _fake_merge_base_run(ancestor_pairs: set[tuple[str, str]]):
     def fake_run(args, **kwargs):
         assert args[:3] == ["git", "merge-base", "--is-ancestor"]
         ancestor, descendant = args[3], args[4]
-        return_code = 0 if (ancestor, descendant) == ("main", "origin/main") else 1
+        return_code = 0 if (ancestor, descendant) in ancestor_pairs else 1
 
         class Result:
             returncode = return_code
 
         return Result()
 
-    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
-    monkeypatch.setattr(git_hygiene.subprocess, "run", fake_run)
+    return fake_run
+
+
+def test_preflight_fails_base_branch_behind_when_head_lacks_remote(
+    tmp_path, monkeypatch
+) -> None:
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _fake_base_branch_run_git(tmp_path, git_dir))
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _fake_merge_base_run({("main", "origin/main")}),
+    )
 
     report = git_hygiene.preflight_report(tmp_path, base_branch="main")
 
@@ -176,6 +190,63 @@ def test_preflight_reports_base_branch_behind_origin(tmp_path, monkeypatch) -> N
         "local_sha": "local-main-sha",
         "remote_sha": "origin-main-sha",
         "status": "behind",
+        "head_contains_remote": False,
+        "mismatch": True,
+    }
+
+
+def test_preflight_accepts_stale_local_base_when_head_contains_remote(
+    tmp_path, monkeypatch
+) -> None:
+    # Doctrinal worktree flow: the branch was cut from the current origin/main,
+    # but the local main ref is checked out in the root worktree and cannot be
+    # fast-forwarded from here. The stale local ref must not fail the gate.
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _fake_base_branch_run_git(tmp_path, git_dir))
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _fake_merge_base_run({("main", "origin/main"), ("origin/main", "HEAD")}),
+    )
+
+    report = git_hygiene.preflight_report(tmp_path, base_branch="main")
+
+    assert report["ok"] is True
+    assert report["checks"]["base_branch"] == {
+        "base_branch": "main",
+        "remote_ref": "origin/main",
+        "local_sha": "local-main-sha",
+        "remote_sha": "origin-main-sha",
+        "status": "behind",
+        "head_contains_remote": True,
+        "mismatch": False,
+    }
+
+
+def test_preflight_diverged_base_branch_still_fails(tmp_path, monkeypatch) -> None:
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _fake_base_branch_run_git(tmp_path, git_dir))
+    # HEAD containing origin/main does not rescue a diverged local base ref.
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _fake_merge_base_run({("origin/main", "HEAD")}),
+    )
+
+    report = git_hygiene.preflight_report(tmp_path, base_branch="main")
+
+    assert report["ok"] is False
+    assert report["checks"]["base_branch"] == {
+        "base_branch": "main",
+        "remote_ref": "origin/main",
+        "local_sha": "local-main-sha",
+        "remote_sha": "origin-main-sha",
+        "status": "diverged",
+        "head_contains_remote": None,
         "mismatch": True,
     }
 

@@ -242,6 +242,7 @@ Enforcement surfaces:
 - Preflight at the publication boundary (pre-commit and pre-push, every lane):
   - `scripts/agent_workspace_preflight.sh --expected-branch "$EXPECTED_BRANCH" --expected-worktree "$EXPECTED_WORKTREE" --allow-dirty`
   - The branch-truth gate lives in `publish-pr` and applies to implementation, feature-breakdown, docs-authoring, and governance lanes — not only `issue-to-code`. `--allow-dirty` tolerates the intentionally dirty tree at publish time while still failing on branch or worktree drift, so a concurrent agent switching the shared root worktree's branch cannot land a commit on the wrong branch.
+  - The base-branch check asserts what matters at the publication boundary: HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` (`status: "behind"`) is advisory, because `main` stays checked out in the root worktree and cannot be fast-forwarded from a dedicated worktree. A diverged or unresolvable base ref, or a HEAD without `origin/main`, still fails the gate.
 - Safe cleanup report:
   - `scripts/agent_workspace_cleanup.sh --report`
 - Safe cleanup apply (clean tree required):
