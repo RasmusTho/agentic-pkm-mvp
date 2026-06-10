@@ -13,7 +13,7 @@ related_docs:
   - docs/CANVAS_CHAT_SURFACE/README.md
 ---
 
-State: Filed specification. GitHub issues are created AFTER the spec PR merges; no parent feature issue exists yet (see PARENT_FEATURE_ISSUE.md for the pre-filing draft).
+State: Filed specification with a live issue tree. The parent feature issue is #1782 (validation hub, `agent:blocked`); all child issues (#1783–#1795) and the parked Q15–Q16 decision issue (#1796) were filed 2026-06-10. GitHub is the authoritative backlog surface; see §Relationship to GitHub Issues for the per-task map (PARENT_FEATURE_ISSUE.md keeps the filing record).
 
 # System Entry Point Specification
 
@@ -77,20 +77,34 @@ The boundary explicitly **composes** shipped surfaces; it does not rebuild them.
 
 ## Verification Path
 
-Task-level verification follows each task file's `How to Verify (Pre-Merge)` section; every AC names its test or receipt target inline. Parent-level verification lives on the GitHub parent feature issue (once filed) as child delivery receipts.
+Task-level verification follows each task file's `How to Verify (Pre-Merge)` section; every AC names its test or receipt target inline. Parent-level verification lives on the GitHub parent feature issue (#1782) as child delivery receipts.
 
 ## Validation / Acceptance Path
 
-The parent feature issue (filed after the spec PR merges; draft in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)) is the live validation hub. Each child PR posts a short validation receipt to the parent before the next dependent child is picked up. Owner-doc promotion (updating `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` shipped-vs-new statuses and `docs/STATUS.md`) happens via the final child (SEP-11) or its parent-closure handoff, not per-slice.
+The parent feature issue (#1782; pre-filing draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)) is the live validation hub. Each child PR posts a short validation receipt to the parent before the next dependent child is picked up. Owner-doc promotion (updating `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` shipped-vs-new statuses and `docs/STATUS.md`) happens via the final child (SEP-11) or its parent-closure handoff, not per-slice.
 
 ## Relationship to GitHub Issues
 
-**No GitHub issues exist yet for this capability.** Issues are created after the spec PR merges, in dependency order, per `.codex/skills/feature-breakdown/SKILL.md`:
+The issue tree was filed 2026-06-10 per `.codex/skills/feature-breakdown/SKILL.md`. SEP-08 and SEP-09 each map to two issues (runtime endpoint + UI surface), per their task files' split-dependency notes. GitHub is the authoritative backlog state; the table below is the filing record.
 
-- One parent feature issue from `PARENT_FEATURE_ISSUE.md` (starts `Backlog` + `agent:blocked`).
-- One issue per task file, except SEP-08 and SEP-09 which may each map to two issues (runtime endpoint, then UI surface).
-- One gated decision issue for the parked context lane / place band (below), labeled `agent:needs-human`.
+| Task spec | Issue | Initial pickup state |
+|---|---|---|
+| Parent feature issue (validation hub) | #1782 | `Backlog` + `agent:blocked` (not a pickup issue) |
+| SEP-01 [ENTRY_STATE_MACHINE.md](ENTRY_STATE_MACHINE.md) | #1783 | `Ready` + `agent:ready`, prio:high |
+| SEP-02 [REENTRY_ORIENTATION_TREATMENT.md](REENTRY_ORIENTATION_TREATMENT.md) | #1784 | `agent:blocked` by #1783 |
+| SEP-03 [UNIFIED_TOPBAR_AND_OVERLAY_HOST.md](UNIFIED_TOPBAR_AND_OVERLAY_HOST.md) | #1785 | `agent:blocked` by #1783, prio:high |
+| SEP-04 [PANEL_COMMAND_PALETTE.md](PANEL_COMMAND_PALETTE.md) | #1786 | `agent:blocked` by #1785 |
+| SEP-05 [SYSTEM_MAP_OVERLAY.md](SYSTEM_MAP_OVERLAY.md) | #1787 | `agent:blocked` by #1785 |
+| SEP-06 [GUIDANCE_LAYER.md](GUIDANCE_LAYER.md) | #1788 | `agent:blocked` by #1785 |
+| SEP-07 [SETTINGS_DRAWER.md](SETTINGS_DRAWER.md) | #1789 | `agent:blocked` by #1785 |
+| SEP-08a [CAPTURE_TO_VAULT_INBOX.md](CAPTURE_TO_VAULT_INBOX.md) (runtime endpoint) | #1790 | `Ready` + `agent:ready` (no prerequisites) |
+| SEP-08b [CAPTURE_TO_VAULT_INBOX.md](CAPTURE_TO_VAULT_INBOX.md) (capture modal UI) | #1791 | `agent:blocked` by #1790 + #1785 |
+| SEP-09a [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (runtime endpoints) | #1792 | `Ready` + `agent:ready` (no prerequisites) |
+| SEP-09b [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (review drawer UI) | #1793 | `agent:blocked` by #1792 + #1785 |
+| SEP-10 [RECEIPTS_HISTORY_SURFACE.md](RECEIPTS_HISTORY_SURFACE.md) | #1794 | `agent:blocked` by #1785 |
+| SEP-11 [STATE_GALLERY_VALIDATION.md](STATE_GALLERY_VALIDATION.md) | #1795 | `agent:blocked` by all prior; parent-closure handoff |
+| Parked context lane / place band decision (Q15–Q16) | #1796 | `agent:needs-human`, prio:low (decision issue, not implementation) |
 
 ## Parked
 
-The **context lane (time)** and **place band** from the design package are explicitly parked pending Q15–Q16 (no owner doc grounds a calendar or location source; see `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md §Resolved questions`). No task in this directory implements them, and the reserved intents `context.open` / `location.enable` must not be emitted. One gated backlog issue (`agent:needs-human`) will be created to hold the Q15–Q16 decisions; it is not an implementation task and must not be made `agent:ready` until a human resolves the source and privacy posture.
+The **context lane (time)** and **place band** from the design package are explicitly parked pending Q15–Q16 (no owner doc grounds a calendar or location source; see `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md §Resolved questions`). No task in this directory implements them, and the reserved intents `context.open` / `location.enable` must not be emitted. The gated backlog issue holding the Q15–Q16 decisions is filed as #1796 (`agent:needs-human`); it is not an implementation task and must not be made `agent:ready` until a human resolves the source and privacy posture.
