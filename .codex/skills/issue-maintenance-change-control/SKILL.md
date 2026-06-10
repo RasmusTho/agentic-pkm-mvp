@@ -74,8 +74,11 @@ Project Status must match content state. Every other cell is drift and must be c
 | PR | MERGED | `Done` |
 | PR | CLOSED (unmerged) | `Done` |
 | PR | OPEN + Draft | `In Progress` |
-| PR | OPEN + non-draft | `Review` |
+| PR | OPEN + non-draft + review requested | `Review` |
+| PR | OPEN + non-draft, no review requested | `In Progress` |
 | Any | Present but no Project entry | Add to Project, apply row above |
+
+`Review` is the explicit review-handoff state, not a synonym for "a non-draft PR exists". Since `publish-pr` defaults to opening non-draft PRs, an open non-draft PR without a requested review is still active implementation and belongs in `In Progress`.
 
 ### Drift patterns that must be flagged explicitly
 
@@ -85,7 +88,7 @@ These are the high-frequency drift patterns that are easy to miss. A maintenance
 - **Closed Issues stuck in `Review` or `In Progress`** — the Issue is Done; non-terminal status on closed Issues is drift, not a pending handoff.
 - **Open `agent:ready` Issues not in `Ready`** — the queue is lying about what is pickable. The `agent:ready ↔ Status=Ready` binding is a post-condition, not just a declarative rule.
 - **PRs with no Project Status (blank / not in Project)** — the board cannot reflect lifecycle if the PR isn't represented at all. Open and closed PRs both need Project entries.
-- **Open non-draft PRs stuck in `In Progress`** — this violates the shipped projection model where non-draft PRs default to `Review`.
+- **Open non-draft PRs with review requested stuck in `In Progress`** — the review handoff happened but the board still shows active implementation. Without an explicit review request, `In Progress` is the correct status for an open non-draft PR (see the lifecycle truth matrix).
 
 ## Change-control checklist (Core Runtime <-> Agentic Lab)
 
@@ -289,7 +292,7 @@ Use exact task-contract sections for any updated or new Issue:
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 
