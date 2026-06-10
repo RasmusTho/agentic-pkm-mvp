@@ -1,10 +1,10 @@
-State: Pre-filing draft. No GitHub issue exists yet for this capability; this draft is filed as the parent feature issue AFTER the spec PR merges, then this header is updated with the live issue number and lifecycle state.
+State: Filed. The parent feature issue exists as **#1782** (`[SystemEntryPoint] feature: unified shell + system entry point (validation hub)`), filed 2026-06-10 after the spec PR (#1777) merged. **The GitHub issue is now the authoritative backlog/validation surface**; this file is the archived pre-filing draft plus the filing record. Validation receipts, acceptance progress, and lifecycle state live on #1782, not here.
 
-# Parent Feature Issue (draft): System Entry Point and Unified Shell
+# Parent Feature Issue: System Entry Point and Unified Shell
 
-Proposed title: `[Feature] System entry point: entry-state machine, unified shell composition, and subordinate surfaces`
+Filed as: #1782 — `[SystemEntryPoint] feature: unified shell + system entry point (validation hub)`
 
-Proposed initial state: `Status=Backlog`, label `agent:blocked` (validation hub, not a direct pickup issue).
+Initial state as filed: `Status=Backlog`, label `agent:blocked` (validation hub, not a direct pickup issue). Child issues: #1783–#1795; parked Q15–Q16 decision issue: #1796 (`agent:needs-human`). See `README.md §Relationship to GitHub Issues` for the per-task issue map.
 
 ---
 
