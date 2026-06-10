@@ -19,17 +19,17 @@ Close the loop the orientation seam opened: orientation emits reference-only `Me
 
 This task specification maps to **two GitHub issues** (grandchildren), in order:
 
-**(a) Runtime: review-queue read + decision endpoints.** A bounded read endpoint over the existing `agent_memory.review_queue` (candidate list with why-now reason, provenance `source_ref`, and authority posture — no raw candidate bodies beyond what the review boundary already admits), plus a governed **accept** decision path that promotes a candidate through the existing governed machinery per ADR-0009 and the agent-memory contract. Defer and reject are review-queue actions that do not perform durable semantic promotion. The runtime half has **no UI dependency** and may start in parallel with SEP-02/SEP-03.
+**(a) Runtime: review-queue read + decision endpoints.** A bounded read endpoint over the existing `agent_memory.review_queue` (candidate list with why-now reason, provenance `source_ref`, and authority posture — no raw candidate bodies beyond what the review boundary already admits), plus governed decision paths for the three review outcomes required by `docs/AGENT_MEMORY/ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md`: **accept** (promotes through the existing governed machinery per ADR-0009), **reject** (durable review decision with accountable review semantics — produces a receipt per ADR-0009, never a promotion), and **revise** (sends the candidate back for revision — durable review outcome with receipt). **Defer** is the only non-terminal action: queue bookkeeping that leaves the candidate pending, with no semantic transition and no receipt. The runtime half has **no UI dependency** and may start in parallel with SEP-02/SEP-03.
 
-**(b) UI: right-drawer review surface.** Mounted on the overlay host (`memory.open`), reached from the topbar and from the re-entry card's unresolved-inspect affordance. Renders: the "Unreviewed memory is not semantic authority" callout, the pending candidates with why-now and provenance, and three actions — **Accept (governed)**, **Defer**, **Reject**. Accept routes through the (a) decision endpoint and surfaces the runtime outcome; the UI never auto-promotes, never treats a candidate as memory truth, and never classifies candidate-worthiness locally.
+**(b) UI: right-drawer review surface.** Mounted on the overlay host (`memory.open`), reached from the topbar and from the re-entry card's unresolved-inspect affordance. Renders: the "Unreviewed memory is not semantic authority" callout, the pending candidates with why-now and provenance, and four actions — **Accept (governed)**, **Reject (governed)**, **Revise (governed)**, **Defer (non-terminal)**. Accept/Reject/Revise route through the (a) decision endpoints and surface the runtime outcome and receipt; the UI never auto-promotes, never treats a candidate as memory truth, and never classifies candidate-worthiness locally.
 
 ## Concretely
 
 ```text
 orientation: memory.pending_candidate_count = 2 → re-entry inspect → memory.open
 drawer: candidate + why_now + source_ref + authority tag
-Accept → governed decision → outcome rendered from runtime response
-Defer / Reject → queue action; no durable semantic promotion; no invented receipt
+Accept / Reject / Revise → governed review decision → runtime outcome + receipt rendered
+Defer → non-terminal queue bookkeeping; candidate stays pending; no receipt
 ```
 
 ## Why This Matters
@@ -42,10 +42,12 @@ Without a governed review surface, pending candidates either rot (the seam emits
   Verify: `tests/api/test_memory_review_queue_api.py::test_review_queue_read_is_bounded_and_provenance_bearing`
 - [ ] Accept routes through the governed decision path and the promotion outcome comes from the runtime, per ADR-0009.
   Verify: `tests/api/test_memory_review_queue_api.py::test_accept_is_governed_decision`
-- [ ] Defer and reject perform review-queue actions only — no durable semantic promotion, no invented receipt.
-  Verify: `tests/api/test_memory_review_queue_api.py::test_defer_and_reject_do_not_promote`
-- [ ] The drawer renders candidates with the not-semantic-authority callout and the three actions; Accept surfaces the runtime outcome.
-  Verify: `tests/companion_ui/test_memory_review_drawer.py::test_drawer_renders_candidates_and_governed_accept`
+- [ ] Reject and revise are durable review outcomes through the governed review boundary: each produces a runtime receipt with accountable review semantics and neither promotes the candidate (ADR-0009; `docs/AGENT_MEMORY/ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md` promote/reject/revise rule).
+  Verify: `tests/api/test_memory_review_queue_api.py::test_reject_and_revise_are_receipted_review_outcomes_not_promotions`
+- [ ] Defer is non-terminal: the candidate remains pending, no semantic transition occurs, and no receipt is produced or invented.
+  Verify: `tests/api/test_memory_review_queue_api.py::test_defer_is_non_terminal_and_unreceipted`
+- [ ] The drawer renders candidates with the not-semantic-authority callout and the four actions; Accept/Reject/Revise surface the runtime outcome and receipt.
+  Verify: `tests/companion_ui/test_memory_review_drawer.py::test_drawer_renders_candidates_and_governed_review_outcomes`
 - [ ] The UI never classifies candidate-worthiness locally and never renders a candidate as accepted memory before the runtime says so.
   Verify: `tests/companion_ui/test_memory_review_drawer.py::test_no_local_classification_or_premature_promotion`
 - [ ] The drawer is reachable from the re-entry inspect affordance and dismisses to the anchor.

@@ -146,8 +146,10 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | `suggestion.discard` | document | drop staged proposal (UI-local) | no |
 | `source.peek` | document / rail | open provenance popover (read-only) | no |
 | `memory.open` | shell / re-entry inspect | open memory candidate review drawer | no (read + intent) |
-| `memory.accept` | memory review | promote candidate | **yes — governed decision (ADR-0009 boundary)** |
-| `memory.defer` / `memory.reject` | memory review | review-queue action, no durable promotion | no governed write through this surface |
+| `memory.accept` | memory review | promote candidate | **yes — governed decision (ADR-0009 boundary); receipt** |
+| `memory.reject` | memory review | reject candidate with accountable review semantics — a durable review outcome, never a promotion | **yes — governed review boundary (ADR-0009); receipt** |
+| `memory.revise` | memory review | send candidate back for revision (review outcome per `docs/AGENT_MEMORY/ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md`) | **yes — governed review boundary; receipt** |
+| `memory.defer` | memory review | non-terminal queue bookkeeping; candidate stays pending; no semantic transition | no (no receipt — nothing durable decided) |
 | `posture.open` / `posture.set` | shell | shift local posture emphasis (carry-forward preserved) | no |
 | `map.open` | shell / entry | open system map overlay | no |
 | `rail.open` / `rail.close` | shell | toggle chat rail slot | no |
@@ -183,7 +185,7 @@ The unified shell is the shipped adaptive workspace plus the overlay host. Each 
 | ⌘K Panel command palette | same authority as Panel rail — a **presentation**, not new authority | command overlay (`cmd.open`) | dismisses to anchor | **new** | `PANEL_COMPANION_UI_CONTRACT.md` + this spec |
 | Chat rail slot | canvas (proposes; cannot commit to vault) | margin rail slot (bottom sheet when narrow) | dismisses to anchor | slot defined here; occupant owned by the canvas-chat lane (#1716+); canvas co-authoring shipped | `docs/CANVAS_CHAT_SURFACE/README.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md` |
 | Canvas suggestion blocks | Proposal → body-edit lane (no receipt) | staged block inside the document | stays on anchor | shipped | `CANVAS_SUGGESTION_FLOW.md` |
-| Memory candidate review drawer | Proposal (candidate); accept is governed | right drawer overlay (`memory.open`) | dismisses to anchor | seam shipped (count + intents); **new**: review endpoints + drawer UI | ADR-0009, `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` |
+| Memory candidate review drawer | Proposal (candidate); accept/reject/revise are governed, receipt-bearing review outcomes (§Design-vs-owner-doc correction) | right drawer overlay (`memory.open`) | dismisses to anchor | seam shipped (count + intents); **new**: review endpoints + drawer UI | ADR-0009, `docs/AGENT_MEMORY/ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md`, `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` |
 | Source peek | Projection (read-only provenance) | anchored popover (`source.peek`) | dismisses to anchor | shipped (provenance lines); popover presentation normalized here | `TEMPORAL_PROVENANCE.md`, `OVERLAY_GRAMMAR.md` |
 | Posture emphasis switch | Local UI (never overrides server-declared cognitive mode) | centered overlay (`posture.open`) | anchor preserved with carry-forward set | **new** | `POSTURE_TRANSITIONS.md` + §Resolved Q6 |
 | System map overlay | Projection (index; renderer/router only) | topbar + cold-start affordance (`map.open`) | dismisses to anchor; nodes route to surfaces | **new** | this spec §Resolved Q4 |
@@ -239,6 +241,9 @@ Settings preferences are Local UI state stored in the **`WORKSPACE_STATE_CONTRAC
 ### Q15 / Q16 — Context lane and place band: parked
 The context lane (time) and the place band are **out-of-scope placeholders**. No owner doc grounds a calendar or location source, and the package marks them resolve-before-promotion *for those surfaces only*. They are **explicitly parked**: this spec defines nothing about them beyond this parking note, and the reserved intents (`context.open`, `location.enable`) must not be implemented. A gated backlog issue (`agent:needs-human`) will track the open decisions; see `docs/SYSTEM_ENTRY_POINT/README.md §Parked`.
 
+### Design-vs-owner-doc correction — memory review outcomes
+The package's implementation contract proposed `memory.defer` / `memory.reject` as UI-local review-queue actions. The owner docs win: `docs/AGENT_MEMORY/ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md` requires **promote, reject, and revise as separate review outcomes**, and ADR-0009 requires a receipt for "rejecting memory with accountable review semantics". This spec therefore treats `memory.reject` and `memory.revise` as durable, receipt-bearing review decisions through the governed review boundary; only `memory.defer` (non-terminal "decide later" bookkeeping, no semantic transition) stays receipt-free. Raised by Codex review on PR #1776; resolved in the owner docs' favor.
+
 ### Deferred to implementation issues (unchanged from the package)
 Q10 (ambient foreground refresh opt-in, gated on `COMPANION_ORIENTATION_AMBIENT_REFRESH` per ADR-0011), Q11 (bottom-sheet snap points), Q12 (command-palette input grammar), Q13 (off-palette Panel staging-shell migration), Q14 (fuller keyboard map), Q20 (read-back eligibility scope).
 
@@ -249,7 +254,7 @@ A validating implementation renders the package's state gallery against **fixtur
 - every declared entry-point transition, and rejection of undeclared transitions;
 - no UI-derived posture / class / authority anywhere — all classification server-declared;
 - `cold_start` (first contact and >14d) and `no_vault` show **no** re-entry overlay;
-- governed intents (`vault.queue`, `panel.confirm`, `memory.accept`, `capture.save`) route through the pipeline and surface receipts; body edits (`suggestion.apply`) produce **no** governance receipt — the governed-vs-body-edit receipt asymmetry is asserted, not assumed;
+- governed intents (`vault.queue`, `panel.confirm`, `memory.accept`, `memory.reject`, `memory.revise`, `capture.save`) route through the pipeline and surface receipts; body edits (`suggestion.apply`) and non-terminal `memory.defer` produce **no** governance receipt — the governed-vs-body-edit receipt asymmetry is asserted, not assumed;
 - blocked and stale present as guard-held states per `BLOCKED_AND_STALE_STATE_SPEC.md`, never generic errors;
 - the display budget caps visible items at or below the server caps, with the default scarce subset of §Resolved Q5;
 - `prefers-reduced-motion` is respected and every end-state is fully visible without animation;
