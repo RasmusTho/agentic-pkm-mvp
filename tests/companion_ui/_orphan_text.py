@@ -184,6 +184,13 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         "help-drawer-title",
         "help-drawer-sub",
         "help-drawer-close",
+        # Capture modal (#1791, SEP-08b)
+        "capture-modal-title",
+        "capture-modal-close",
+        "capture-save",
+        "capture-status",
+        "capture-session-text",
+        "capture-session-state",
     }
 )
 

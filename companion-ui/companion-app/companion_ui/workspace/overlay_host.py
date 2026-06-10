@@ -50,10 +50,11 @@ DECLARED_OVERLAYS: tuple[str, ...] = (
 
 # Overlays with a shipped occupant that actually mounts on the host today.
 # #1785 scope: the narrow-mode vault-browser modal is treated as an
-# overlay-host occupant for the dismiss rule. Later SEP tasks (palette #1786,
-# map #1787, settings #1789, capture UI #1791, memory drawer #1793, receipts
+# overlay-host occupant for the dismiss rule. The ⌘N capture modal (#1791,
+# ``capture_modal.py``) is the second shipped occupant. Later SEP tasks
+# (palette #1786, map #1787, settings #1789, memory drawer #1793, receipts
 # #1794) extend this tuple when their surfaces land.
-SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = ("vault",)
+SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = ("vault", "capture")
 
 # Keyboard map (spec §Keyboard map) — exactly ⌘K / ⌘N / Esc; fuller model
 # deferred to package Q14.
@@ -302,8 +303,8 @@ def overlay_host_script() -> str:
     };
     // Keyboard map (SYSTEM_ENTRY_POINT_SPEC.md §Keyboard map):
     //   meta+k -> cmd.open, meta+n -> capture.open, escape -> overlay.dismiss.
-    // cmd.open / capture.open are reserved and wired here; they stay inert
-    // until their overlay surfaces ship (no dead affordances).
+    // cmd.open stays inert until the palette surface ships (no dead
+    // affordances); capture.open mounts the shipped capture occupant (#1791).
     document.addEventListener('keydown', function(e) {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
         var k = String(e.key || '').toLowerCase();
