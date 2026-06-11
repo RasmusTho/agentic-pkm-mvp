@@ -74,8 +74,10 @@ scripts/builderops_cli.sh builderops create-learning-signal \
 ```
 
 `scripts/builderops_cli.sh` walks upward from the script directory to find the
-nearest `.venv/bin/python3` and then runs `python3 -m app.builderops`.  It works
-from the repo root and from any git worktree under `.claude/worktrees/`.
+nearest `.venv/bin/python3`; when a Codex app worktree lives outside the
+canonical checkout tree, it also uses git worktree metadata to locate the
+canonical checkout venv. It then runs `python3 -m app.builderops`.  It works
+from the repo root and from git worktrees under `$CODEX_HOME/worktrees/`.
 
 **One-time venv setup** (if no `.venv` exists yet):
 
