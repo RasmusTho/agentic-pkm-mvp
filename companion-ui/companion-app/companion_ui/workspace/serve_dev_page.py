@@ -654,6 +654,17 @@ def _render_note_not_found(note_path: str) -> str:
     )
 
 
+def _render_note_body_empty_state(note_path: str) -> str:
+    safe_path = _e(note_path)
+    return (
+        '<div class="note-body-empty" data-testid="workspace-note-body-empty" '
+        'data-empty-reason="artifact-body-empty">'
+        "<h2>No note body loaded</h2>"
+        f"<p>The runtime returned an empty body for <code>{safe_path}</code>.</p>"
+        "</div>"
+    )
+
+
 def _render_body_edit_panel(update_flow_available: bool, note_path: str, raw_body: str = "") -> str:
     if not update_flow_available:
         # Direct human editing is always available via the note's own Read/Edit
@@ -1513,6 +1524,11 @@ def _render_note_section(fields: dict) -> str:
         content_hash=content_hash,
     )
     body = rendered_body.html
+    body_empty_state_html = (
+        _render_note_body_empty_state(raw_note_path)
+        if not raw_body.strip() and not bool(fields.get("note_not_found", False))
+        else ""
+    )
     # Frontmatter-stripped source for the direct human editor (the save endpoint
     # preserves frontmatter and rejects a frontmatter block in the body).
     editor_body = str(getattr(rendered_body.document, "body_markdown", "") or "")
@@ -1564,7 +1580,8 @@ def _render_note_section(fields: dict) -> str:
     if identity_state_raw.startswith("unresolved"):
         identity_caution_html = (
             '<div class="identity-caution" data-testid="workspace-artifact-identity-caution">'
-            "Artifact identity unresolved; runtime may block governed actions until identity is resolved."
+            "<span>Identity unresolved</span>"
+            "<small>Governed actions may be blocked until resolved.</small>"
             "</div>"
         )
     companion_html = (
@@ -1907,40 +1924,43 @@ def _render_note_section(fields: dict) -> str:
               data-testid="workspace-note-body-readonly-why">Why?</a>
           </div>
           {read_only_pill_html}
-          <div class="tts-readback-controls"
+          <details class="tts-readback-controls"
             data-testid="tts-readback-controls"
             data-authority="read-only-projection"
             data-source-scope="source-and-proposal">
-            <label class="tts-rate-control">
-              <span>Rate</span>
-              <select data-testid="tts-rate" aria-label="Read-back rate">
-                <option value="0.85">0.85</option>
-                <option value="1" selected>1.0</option>
-                <option value="1.15">1.15</option>
-                <option value="1.3">1.3</option>
-              </select>
-            </label>
-            <button type="button" data-testid="tts-read-full-note"
-              data-tts-action="read-full-note" data-tts-requires-speech="true"
-              onclick="noteReadback.readFullNote()">Read note</button>
-            <button type="button" data-testid="tts-read-selection"
-              data-tts-action="read-selection" data-tts-requires-speech="true"
-              onclick="noteReadback.readSelection()">Selection</button>
-            <button type="button" data-testid="tts-read-proposal"
-              data-tts-action="read-proposal" data-tts-requires-speech="true"
-              onclick="noteReadback.readProposal()">Proposal</button>
-            <button type="button" data-testid="tts-pause"
-              data-tts-action="pause" data-tts-requires-speech="true"
-              onclick="noteReadback.pause()">Pause</button>
-            <button type="button" data-testid="tts-resume"
-              data-tts-action="resume" data-tts-requires-speech="true"
-              onclick="noteReadback.resume()">Resume</button>
-            <button type="button" data-testid="tts-stop"
-              data-tts-action="stop" data-tts-requires-speech="true"
-              onclick="noteReadback.stop()">Stop</button>
-            <span class="tts-readback-status" data-testid="tts-readback-status"
-              data-state="idle" aria-live="polite">Read-back idle.</span>
-          </div>
+            <summary class="tts-readback-summary">Read aloud</summary>
+            <div class="tts-readback-panel">
+              <label class="tts-rate-control">
+                <span>Rate</span>
+                <select data-testid="tts-rate" aria-label="Read-back rate">
+                  <option value="0.85">0.85</option>
+                  <option value="1" selected>1.0</option>
+                  <option value="1.15">1.15</option>
+                  <option value="1.3">1.3</option>
+                </select>
+              </label>
+              <button type="button" data-testid="tts-read-full-note"
+                data-tts-action="read-full-note" data-tts-requires-speech="true"
+                onclick="noteReadback.readFullNote()">Read note</button>
+              <button type="button" data-testid="tts-read-selection"
+                data-tts-action="read-selection" data-tts-requires-speech="true"
+                onclick="noteReadback.readSelection()">Selection</button>
+              <button type="button" data-testid="tts-read-proposal"
+                data-tts-action="read-proposal" data-tts-requires-speech="true"
+                onclick="noteReadback.readProposal()">Proposal</button>
+              <button type="button" data-testid="tts-pause"
+                data-tts-action="pause" data-tts-requires-speech="true"
+                onclick="noteReadback.pause()">Pause</button>
+              <button type="button" data-testid="tts-resume"
+                data-tts-action="resume" data-tts-requires-speech="true"
+                onclick="noteReadback.resume()">Resume</button>
+              <button type="button" data-testid="tts-stop"
+                data-tts-action="stop" data-tts-requires-speech="true"
+                onclick="noteReadback.stop()">Stop</button>
+              <span class="tts-readback-status" data-testid="tts-readback-status"
+                data-state="idle" aria-live="polite">Read-back idle.</span>
+            </div>
+          </details>
           <div class="tts-plan-inspection"
             data-testid="tts-plan-inspection"
             data-authority="read-only-projection"
@@ -2010,7 +2030,7 @@ def _render_note_section(fields: dict) -> str:
             {text_correction_proposals_html}
           </div>
           <div class="note-body-content" data-testid="workspace-note-rendered"
-            data-content-hash="{content_hash}">{body}</div>
+            data-content-hash="{content_hash}">{body_empty_state_html}{body}</div>
           <textarea class="note-source-editor" id="note-source-editor"
             data-testid="workspace-note-source-editor"
             spellcheck="true" autocapitalize="sentences" autocorrect="off"
@@ -2978,10 +2998,12 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     health_badge = ""
     if not frontmatter_valid or missing_fields:
         missing_label = ", ".join(missing_fields) if missing_fields else "invalid"
+        health_label = "metadata" if missing_fields else "invalid"
         health_badge = (
             f'<span class="note-badge note-badge--health note-badge--health-invalid" '
             f'data-testid="workspace-vault-browser-note-health" '
-            f'data-missing-fields="{_e(missing_label)}">missing: {_e(missing_label)}</span>'
+            f'data-missing-fields="{_e(missing_label)}" '
+            f'title="Missing required fields: {_e(missing_label)}">{health_label}</span>'
         )
     badges_html = kind_badge + review_badge + trust_badge + health_badge
 
@@ -6325,14 +6347,21 @@ def render_index_html(
       font-size: var(--text-xs);
     }}
     .identity-caution {{
+      align-items: baseline;
       background: rgba(212,168,67,0.08);
       border: 1px solid rgba(212,168,67,0.35);
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-sm);
       color: var(--accent);
+      display: inline-flex;
+      gap: 8px;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
-      margin-top: 10px;
-      padding: 8px 10px;
+      margin-top: 6px;
+      padding: 4px 7px;
+    }}
+    .identity-caution small {{
+      color: var(--fg-3);
+      font-size: var(--text-xs);
     }}
     .prov-label {{
       letter-spacing: 0.06em;
@@ -6422,14 +6451,56 @@ def render_index_html(
       overflow-y: auto;
       padding: 24px 24px 96px;
     }}
+    .note-body-empty {{
+      background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--fg-2);
+      margin: 20px auto;
+      max-width: var(--display-reading-width, 68ch);
+      padding: 18px 22px;
+    }}
+    .note-body-empty h2 {{
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: var(--text-lg);
+      font-weight: 600;
+      margin: 0 0 8px;
+    }}
+    .note-body-empty p {{
+      margin: 0;
+    }}
     .tts-readback-controls {{
+      margin: 0 auto 8px;
+      max-width: var(--display-reading-width, 68ch);
+      padding: 0 32px;
+    }}
+    .tts-readback-summary {{
+      color: var(--fg-3);
+      cursor: pointer;
+      display: inline-flex;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      list-style: none;
+      padding: 2px 0;
+    }}
+    .tts-readback-summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .tts-readback-summary::before {{
+      color: var(--fg-3);
+      content: "▸";
+      margin-right: 5px;
+    }}
+    .tts-readback-controls[open] .tts-readback-summary::before {{
+      content: "▾";
+    }}
+    .tts-readback-panel {{
       align-items: center;
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin: 0 auto 10px;
-      max-width: var(--display-reading-width, 68ch);
-      padding: 0 32px;
+      padding-top: 6px;
     }}
     .tts-readback-controls button,
     .note-edit-readback {{
