@@ -172,13 +172,19 @@ def _builderops_routing_satisfied(body: str) -> bool:
     """Python port of the JavaScript `builderOpsRoutingSatisfied` logic.
 
     Tier 1 lane PRs (docs/development/GOVERNANCE_PROPORTIONALITY.md) may omit the
-    BuilderOps Routing section entirely — absence means "none". A present but
-    unfilled section is still rejected at every tier.
+    BuilderOps Routing section entirely only when they are not issue-backed —
+    absence means "none". A present but unfilled section is still rejected at
+    every tier, and issue-backed PRs use the higher Tier 2+ requirement.
     """
     if _has_builderops_routing(body):
         return True
     section_present = bool(_BUILDEROPS_ROUTING_REGEX.search(body))
-    return _TIER1_LANE_REGEX.search(body) is not None and not section_present
+    has_issue_link = _re.search(r"(Fixes|Closes|Resolves)\s+#\d+", body, _re.IGNORECASE)
+    return (
+        _TIER1_LANE_REGEX.search(body) is not None
+        and has_issue_link is None
+        and not section_present
+    )
 
 
 _VALID_DIRECT_REPAIR_FIELDS = (
@@ -288,6 +294,13 @@ def test_non_tier1_pr_still_requires_builderops_routing() -> None:
 
     valid_body = f"Fixes #123\n\n{_VALID_BUILDEROPS_ROUTING}"
     assert _builderops_routing_satisfied(valid_body), "Expected concrete section to satisfy at any tier"
+
+
+def test_issue_backed_tier1_lane_pr_still_requires_builderops_routing() -> None:
+    body = "Fixes #123\n\n- [x] Governance lane\n\n## Summary\nImplementation change."
+    assert not _builderops_routing_satisfied(body), (
+        "Expected issue-backed PR with stale Tier 1 checkbox to require BuilderOps routing"
+    )
 
 
 def test_direct_repair_rejected_when_fields_incomplete() -> None:

@@ -99,6 +99,8 @@ jobs:
             // (e.g. a change list describing this very check) is not mistaken for the section.
             const builderOpsRoutingMatch = body.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
+            const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
+            const hasIssueLink = issueLinkPattern.test(body);
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
               if (!match) {
@@ -112,13 +114,12 @@ jobs:
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*(.*?)\s*(?:\n|$)/i) &&
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)/i);
             const builderOpsRoutingSatisfied =
-              hasBuilderOpsRouting || (isTier1Lane && !builderOpsRoutingSection);
+              hasBuilderOpsRouting || (isTier1Lane && !hasIssueLink && !builderOpsRoutingSection);
             if (!builderOpsRoutingSatisfied) {
               core.setFailed("PR body must include `## BuilderOps Routing` with concrete `Records/projections/receipts:` and `Reason:` lines. Tier 1 docs-authoring/governance-lane PRs may omit the section entirely when nothing was routed (absence = none); an unfilled template section is still rejected.");
               return;
             }
-            const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
-            if (issueLinkPattern.test(body)) {
+            if (hasIssueLink) {
               return;
             }
             // Regex handles Direct Repair block in any position:
