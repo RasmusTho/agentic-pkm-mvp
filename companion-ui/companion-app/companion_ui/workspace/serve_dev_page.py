@@ -522,7 +522,9 @@ def _render_workspace_header_strip(
     # emphasis, rendering only — the switch overlay has not shipped), surface
     # icons for shipped surfaces only, and the coarse vault-status dot.
     anchor_note_path = str(fields.get("note_path") or "")
-    anchor_title = str(fields.get("title") or anchor_note_path or "No note open")
+    anchor_title = _plain_workspace_heading_text(
+        str(fields.get("title") or anchor_note_path or "No note open")
+    )
     coarse_posture = coarse_vault_posture(
         vault_state=vault_state, primary_posture=posture
     )
@@ -1582,6 +1584,17 @@ def _coerce_vault_link_index(value: object) -> dict[str, list[str]]:
     return index
 
 
+def _plain_workspace_heading_text(text: str) -> str:
+    text = text.strip(" #\t")
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"(\*\*|__)(.+?)\1", r"\2", text)
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", text)
+    text = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _render_note_section(fields: dict) -> str:
     """Render the workspace shell from render_fields() output.
 
@@ -1589,7 +1602,7 @@ def _render_note_section(fields: dict) -> str:
     match the region constants in real_note_workspace_shell.py for future
     Canvas/Panel integration.
     """
-    title = _e(fields.get("title", ""))
+    title = _e(_plain_workspace_heading_text(str(fields.get("title", "") or "")))
     raw_note_path = str(fields.get("note_path", "") or "")
     note_path_val = _e(raw_note_path)
     artifact_id = _e(fields.get("artifact_id", ""))
@@ -7222,8 +7235,8 @@ def render_index_html(
     }}
     .workspace-anchor-pill {{
       align-items: center;
-      border: 1px solid var(--border);
-      border-radius: 999px;
+      border: 0;
+      border-radius: var(--radius-sm);
       color: var(--fg-2);
       display: inline-flex;
       flex-shrink: 1;
@@ -7233,7 +7246,7 @@ def render_index_html(
       max-width: 220px;
       min-width: 0;
       overflow: hidden;
-      padding: 3px 10px;
+      padding: 2px 6px;
       text-overflow: ellipsis;
       white-space: nowrap;
     }}
@@ -7354,10 +7367,15 @@ def render_index_html(
     }}
     .workspace-quick-open {{
       cursor: default;
+      opacity: 0.46;
+      padding: 0 6px;
+    }}
+    .workspace-quick-open span {{
+      display: none;
     }}
     .workspace-quick-open kbd {{
       background: transparent;
-      color: var(--fg-2);
+      color: var(--fg-3);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
@@ -8441,7 +8459,7 @@ def render_index_html(
       width: 280px;
       flex-shrink: 0;
       background: var(--bg-surface);
-      border-left: 1px solid var(--au-proposal);
+      border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
       display: flex;
       flex-direction: column;
       overflow: hidden;

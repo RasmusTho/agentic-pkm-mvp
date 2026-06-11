@@ -153,6 +153,31 @@ class TestNoteHeader:
         assert header_match, "workspace-note-header region not found"
         assert "Deep Work Session" in header_match.group()
 
+    def test_markdown_title_syntax_does_not_leak_into_chrome(self) -> None:
+        html = _html_with_note(
+            title="0. **Executive summary**",
+            body="# 0. **Executive summary**\n\nBody with **bold** text.",
+        )
+        header_match = re.search(
+            r'data-testid="workspace-note-header".*?</header>',
+            html,
+            re.DOTALL,
+        )
+        assert header_match, "workspace-note-header region not found"
+        header = header_match.group()
+        anchor_match = re.search(
+            r'data-testid="workspace-anchor-pill".*?</span>',
+            html,
+            re.DOTALL,
+        )
+        assert anchor_match, "workspace-anchor-pill not found"
+
+        assert "0. Executive summary" in header
+        assert "0. Executive summary" in anchor_match.group()
+        assert "**Executive summary**" not in header
+        assert "**Executive summary**" not in anchor_match.group()
+        assert "<strong>bold</strong>" in html
+
     def test_note_path_in_provenance(self) -> None:
         html = _html_with_note(note_path="Projects/Alpha.md")
         # Path is in the breadcrumb's data-note-path attribute (§7.3 / #1337)
