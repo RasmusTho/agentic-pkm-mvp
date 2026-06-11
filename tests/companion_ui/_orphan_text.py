@@ -119,6 +119,9 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-left-panel-mode-context",
         # Dev controls disclosure (#1361)
         "workspace-dev-controls-toggle",
+        # Memory candidate review drawer (#1793, SEP-09b) — overlay-host
+        # occupant; all drawer text lives inside this container.
+        "memory-review-drawer",
     }
 )
 

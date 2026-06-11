@@ -371,8 +371,9 @@ def test_undeclared_overlays_rejected() -> None:
 
     # Declared-but-unshipped overlays do not mount (inert), and do not raise:
     # the host never invents a surface for them. (`capture` left this set when
-    # the capture modal shipped, #1791; `cmd` when the palette shipped, #1786.)
-    for declared_unshipped in ("memory", "settings", "map"):
+    # the capture modal shipped, #1791; `cmd` when the palette shipped, #1786;
+    # `memory` when the review drawer shipped, #1793.)
+    for declared_unshipped in ("settings", "map"):
         assert declared_unshipped in DECLARED_OVERLAYS
         assert declared_unshipped not in SHIPPED_OVERLAY_OCCUPANTS
         assert mount(_state(), declared_unshipped) == _state()
@@ -447,10 +448,12 @@ def test_narrow_mode_preserves_critical_affordances() -> None:
     assert 'data-browser-role="responsive-fallback"' in html
 
     # The narrow-mode vault modal is registered as a host occupant, so the
-    # dismiss rule (Esc / scrim → anchor) is enforced by the host.
+    # dismiss rule (Esc / scrim → anchor) is enforced by the host. The memory
+    # review drawer (#1793) registers the same way.
     script = _host_script(html)
     assert "register('vault'" in script
     assert "vault" in SHIPPED_OVERLAY_OCCUPANTS
+    assert "memory" in SHIPPED_OVERLAY_OCCUPANTS
 
     # Exactly one Esc owner for host occupants: the vault browser script no
     # longer carries its own Escape listener.
