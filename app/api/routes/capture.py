@@ -118,6 +118,24 @@ def _compose_entry(text: str, captured_at: str) -> str:
     return "\n".join([first, *continuation]) + "\n"
 
 
+def _compose_append_entry(
+    note_rel: str, text: str, captured_at: str, *, vault_root: Path
+) -> str:
+    entry = _compose_entry(text, captured_at)
+    note_path = (vault_root / note_rel).resolve()
+    root = vault_root.resolve()
+    try:
+        note_path.relative_to(root)
+    except ValueError:
+        return entry
+    if not note_path.exists():
+        return entry
+    existing = note_path.read_text(encoding="utf-8")
+    if existing and not existing.endswith("\n"):
+        return "\n" + entry
+    return entry
+
+
 def _resolve_outbox_path() -> Path:
     env_path = os.getenv("INDEX_OUTBOX_PATH")
     if env_path:
@@ -222,7 +240,9 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
         datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     )
     receipt = append_note_relative(
-        note_rel, _compose_entry(text, captured_at), vault_root=vault_root
+        note_rel,
+        _compose_append_entry(note_rel, text, captured_at, vault_root=vault_root),
+        vault_root=vault_root,
     )
 
     # Event pipeline — record the applied append (metadata only).
