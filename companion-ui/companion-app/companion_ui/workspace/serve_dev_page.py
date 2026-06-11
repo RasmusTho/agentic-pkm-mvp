@@ -105,6 +105,10 @@ from companion_ui.workspace.settings_drawer import (
     settings_drawer_markup,
     settings_drawer_script,
 )
+from companion_ui.workspace.system_map_overlay import (
+    system_map_overlay_markup,
+    system_map_overlay_script,
+)
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
@@ -621,6 +625,7 @@ def _render_workspace_header_strip(
           <span class="workspace-header-spacer" aria-hidden="true"></span>
           <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-map" data-surface="map" data-intent="map.open" title="System map" aria-label="Open system map" onclick="overlayHost.mount('map')">❖</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-memory" data-surface="memory" data-intent="memory.open" title="Memory candidate review" aria-label="Open memory candidate review drawer" onclick="overlayHost.mount('memory')">&#9670;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-receipts" data-surface="receipts" data-intent="receipts.open" title="Receipts history" aria-label="Open read-only receipts history" onclick="overlayHost.mount('receipts')">&#9776;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-settings" data-surface="settings" data-intent="settings.open" title="Settings" aria-label="Open settings drawer" onclick="overlayHost.mount('settings')">&#9881;</button>
@@ -4425,11 +4430,17 @@ def _render_error_section(error: str, *, entry_state: str = "") -> str:
     When the resolved entry state is ``no_vault`` (#1783) the error state
     carries the declared ``entry.retry`` affordance: a plain read-only link
     back to ``/`` that re-requests orientation. No snapshot content is
-    fabricated.
+    fabricated. Beside retry, the calm system-map affordance (#1787, SEP-05;
+    spec §Resolved Q4) keeps the whole legible even when the runtime is
+    unreachable — pull-based, opened only by this explicit `map.open`.
     """
     retry_html = (
         '\n    <a class="error-retry" href="/" data-intent="entry.retry"'
         ' data-testid="workspace-entry-retry">Retry</a>'
+        '\n    <button type="button" class="error-map-affordance"'
+        ' data-testid="workspace-entry-map-affordance" data-intent="map.open"'
+        ' aria-label="Open the system map"'
+        " onclick=\"overlayHost.mount('map')\">System map</button>"
         if entry_state == "no_vault"
         else ""
     )
@@ -5293,22 +5304,19 @@ def _render_orientation_index_html(
     whisper_html = ""
     rail_fade_attr = ""
     rail_fade_class = ""
-    memory_review_overlay_html = ""
+    memory_drawer_markup_html = ""
+    memory_drawer_script_html = ""
     if shape in ("full_mist", "long_mist"):
         reentry_overlay_html = _render_reentry_card(
             orientation, shape=shape, stale=entry_resolution.stale
         )
         # The re-entry card's unresolved-inspect affordance emits
-        # `memory.open` (#1793, SEP-09b), so the overlay-host substrate and
-        # the memory review drawer ship with the card — pull-based, no dead
-        # affordance on shapes without the card. Dismiss returns to the
-        # orientation substrate untouched (no route reset, no data loss).
-        memory_review_overlay_html = (
-            overlay_host_markup(anchor_note_path="")
-            + memory_review_drawer_markup()
-            + overlay_host_script()
-            + memory_review_drawer_script()
-        )
+        # `memory.open` (#1793, SEP-09b), so the memory review drawer ships
+        # with the card — pull-based, no dead affordance on shapes without
+        # the card. Dismiss returns to the orientation substrate untouched
+        # (no route reset, no data loss).
+        memory_drawer_markup_html = memory_review_drawer_markup()
+        memory_drawer_script_html = memory_review_drawer_script()
         if shape == "long_mist":
             whisper_html = _render_reentry_whisper_column(orientation)
     elif shape == "soft_mist":
@@ -5340,6 +5348,10 @@ def _render_orientation_index_html(
           data-read-only="true">
           <span>{_e(refresh_copy)}</span>
           <a href="/"{retry_intent_attr} data-testid="workspace-orientation-manual-refresh">Refresh</a>
+          <button type="button" class="orientation-map-affordance"
+            data-testid="workspace-orientation-map-affordance" data-intent="map.open"
+            aria-label="Open the system map"
+            onclick="overlayHost.mount('map')">System map</button>
         </section>"""
     ambient_script = _orientation_ambient_refresh_script() if ambient_refresh_enabled else ""
     vault_entry_html = _render_orientation_vault_entry(
@@ -5347,6 +5359,20 @@ def _render_orientation_index_html(
         error=vault_browser_error,
     )
     vault_browser_script = _orientation_vault_browser_script() if vault_entry_html else ""
+    # The system map overlay (#1787, SEP-05) is reachable from every entry
+    # state (spec §Resolved Q4): the calm affordance above is the only opener
+    # — pull-based, never unbidden. The overlay-host substrate therefore
+    # ships on every orientation render; only the vault route truthfully
+    # exists on the entry surfaces (the declared cold_start → shell_active
+    # path), so the map offers exactly that one.
+    overlay_host_overlays_html = (
+        overlay_host_markup(anchor_note_path="")
+        + memory_drawer_markup_html
+        + system_map_overlay_markup(available_routes=("vault",))
+        + overlay_host_script()
+        + memory_drawer_script_html
+        + system_map_overlay_script()
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5849,7 +5875,7 @@ def _render_orientation_index_html(
   {vault_browser_script}
   {ambient_script}
   {_entry_dismiss_script()}
-  {memory_review_overlay_html}
+  {overlay_host_overlays_html}
   {_render_help_drawer()}
   {_render_operator_drawer()}
 </body>
@@ -6659,6 +6685,25 @@ def render_index_html(
         '<link rel="stylesheet" href="/static/companion-workspace.css">'
         if production_profile
         else ""
+    )
+    # System map overlay (#1787, SEP-05; spec §Resolved Q4): pull-based —
+    # opened only by explicit `map.open` affordances (the topbar icon on the
+    # shell; the calm affordance on the no_vault error page). On the active
+    # workspace shell every routable surface is live; on the error page only
+    # the Vault Browser truthfully remains reachable.
+    map_available_routes: tuple[str, ...] = (
+        (
+            "anchor",
+            "vault",
+            "panel",
+            "palette",
+            "memory",
+            "capture",
+            "receipts",
+            "settings",
+        )
+        if fields is not None
+        else ("vault",)
     )
 
     return f"""<!DOCTYPE html>
@@ -9445,6 +9490,7 @@ def render_index_html(
   {memory_review_drawer_markup()}
   {receipts_history_modal_markup()}
   {settings_drawer_markup(fields)}
+  {system_map_overlay_markup(available_routes=map_available_routes)}
 
   {note_outline_script()}
 
@@ -9565,6 +9611,7 @@ def render_index_html(
   {panel_palette_script()}
   {memory_review_drawer_script()}
   {receipts_history_script()}
+  {system_map_overlay_script()}
 
   <script>
   (function() {{

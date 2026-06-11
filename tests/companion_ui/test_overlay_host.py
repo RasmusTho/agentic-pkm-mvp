@@ -303,14 +303,16 @@ def test_keyboard_map_routes_declared_intents() -> None:
     assert "'capture'" in script and "capture.open" in script
     assert "Escape" in script and "overlay.dismiss" in script
 
-    # No dead affordances: no rendered control advertises the unshipped
-    # palette. The capture surface's shell route is ⌘N (spec §Keyboard map);
-    # its topbar/map affordances belong to later SEP slices, so no rendered
-    # control advertises capture.open in this slice either.
-    assert 'data-intent="cmd.open"' not in html
-    # capture surface. (The palette shipped via #1786; it opens through the
-    # host's ⌘K wiring rather than a rendered cmd.open control.)
-    assert 'data-intent="capture.open"' not in html
+    # No dead affordances: the palette and capture surfaces open through the
+    # host's ⌘K/⌘N wiring. Since the system map shipped (#1787, SEP-05) the
+    # only rendered controls advertising cmd.open / capture.open are the
+    # map's routing nodes — live host routes to shipped surfaces, never dead
+    # chrome.
+    for intent in ("cmd.open", "capture.open"):
+        for tag in re.findall(rf'<[a-z]+[^>]*data-intent="{intent}"[^>]*>', html):
+            assert 'data-testid="system-map-node"' in tag, (
+                f"only a live system-map routing node may advertise {intent}: {tag}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +375,9 @@ def test_undeclared_overlays_rejected() -> None:
     # the host never invents a surface for them. (`capture` left this set when
     # the capture modal shipped, #1791; `cmd` when the palette shipped, #1786;
     # `memory` when the review drawer shipped, #1793; `settings` when the
-    # settings drawer shipped, #1789.)
-    for declared_unshipped in ("map",):
+    # settings drawer shipped, #1789; `map` when the system map overlay
+    # shipped, #1787.)
+    for declared_unshipped in ("peek", "posture"):
         assert declared_unshipped in DECLARED_OVERLAYS
         assert declared_unshipped not in SHIPPED_OVERLAY_OCCUPANTS
         assert mount(_state(), declared_unshipped) == _state()
