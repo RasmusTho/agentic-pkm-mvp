@@ -130,6 +130,10 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         # badge is a shell chip outside the drawer.
         "settings-drawer",
         "settings-local-only-badge",
+        # System map overlay (#1787, SEP-05) — overlay-host occupant; all
+        # map text (center node, surface nodes, parked note) lives inside
+        # this container.
+        "system-map-overlay",
     }
 )
 

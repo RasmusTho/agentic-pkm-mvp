@@ -54,9 +54,9 @@ DECLARED_OVERLAYS: tuple[str, ...] = (
 # ``capture_modal.py``), the ⌘K Panel command palette (#1786, SEP-04,
 # ``panel_palette.py``), the memory candidate review drawer (#1793,
 # SEP-09b, ``memory_review_drawer.py``), the read-only receipts history
-# modal (#1794, SEP-10, ``receipts_history.py``), and the Settings drawer
-# (#1789, SEP-07, ``settings_drawer.py``) are shipped occupants. The map
-# (#1787) extends this tuple when its surface lands.
+# modal (#1794, SEP-10, ``receipts_history.py``), the Settings drawer
+# (#1789, SEP-07, ``settings_drawer.py``), and the system map overlay
+# (#1787, SEP-05, ``system_map_overlay.py``) are shipped occupants.
 SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = (
     "vault",
     "capture",
@@ -64,6 +64,7 @@ SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = (
     "memory",
     "receipts",
     "settings",
+    "map",
 )
 
 # Keyboard map (spec §Keyboard map) — exactly ⌘K / ⌘N / Esc; fuller model
@@ -98,9 +99,11 @@ DEFAULT_POSTURE_EMPHASIS: str = "recovery"
 # — the review drawer is reached from the topbar and from the re-entry
 # card's unresolved-inspect affordance; `receipts` added by #1794 — the
 # read-only history modal is reached from the topbar; `settings` added by
-# #1789 — the Settings drawer is reached from the topbar, `settings.open`)
-# and the subset whose surfaces have shipped. No dead affordances: icons for
-# unshipped surfaces are absent until their task ships.
+# #1789 — the Settings drawer is reached from the topbar, `settings.open`;
+# `map` added by #1787 — the pull-based system map overlay is reached from
+# the topbar in every entry state, `map.open`) and the subset whose surfaces
+# have shipped. No dead affordances: icons for unshipped surfaces are absent
+# until their task ships.
 TOPBAR_SURFACES: tuple[str, ...] = (
     "vault",
     "command",
@@ -111,7 +114,14 @@ TOPBAR_SURFACES: tuple[str, ...] = (
     "receipts",
     "help",
 )
-SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = ("vault", "memory", "receipts", "settings", "help")
+SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = (
+    "vault",
+    "map",
+    "memory",
+    "receipts",
+    "settings",
+    "help",
+)
 
 # Coarse derived postures the vault-status dot may render. Detailed health
 # stays with /api/status (runtime popover); the dot never exposes slices.
