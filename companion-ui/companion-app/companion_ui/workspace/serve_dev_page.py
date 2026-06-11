@@ -1151,10 +1151,12 @@ def _note_editor_script() -> str:
         var ta = document.getElementById('note-source-editor');
         if (!ta) { return; }
         var content = el('.note-body-content');
+        var bar = el('[data-testid="workspace-note-edit-bar"]');
         var actions = el('[data-testid="workspace-note-edit-actions"]');
         var toggle = el('.note-edit-toggle');
         if (content) { content.hidden = true; }
         ta.hidden = false;
+        if (bar) { bar.open = true; }
         if (actions) { actions.hidden = false; }
         if (toggle) { toggle.hidden = true; }
         setStatus('', '');
@@ -1163,10 +1165,12 @@ def _note_editor_script() -> str:
       cancel: function () {
         var ta = document.getElementById('note-source-editor');
         var content = el('.note-body-content');
+        var bar = el('[data-testid="workspace-note-edit-bar"]');
         var actions = el('[data-testid="workspace-note-edit-actions"]');
         var toggle = el('.note-edit-toggle');
         if (ta) { ta.hidden = true; ta.value = ta.defaultValue; }
         if (content) { content.hidden = false; }
+        if (bar) { bar.open = false; }
         if (actions) { actions.hidden = true; }
         if (toggle) { toggle.hidden = false; }
         setStatus('', '');
@@ -2020,10 +2024,12 @@ def _render_note_section(fields: dict) -> str:
               <span>Focus mode</span>
             </label>
           </form>
-          <div class="note-edit-bar" data-testid="workspace-note-edit-bar">
-            <button type="button" class="note-edit-toggle"
+          <details class="note-edit-bar" data-testid="workspace-note-edit-bar">
+            <summary class="note-edit-summary">
+              <button type="button" class="note-edit-toggle"
               data-testid="workspace-note-edit-toggle"
               onclick="noteEditor.start()">&#9998;&#160;Edit</button>
+            </summary>
             <div class="note-edit-actions" data-testid="workspace-note-edit-actions" hidden>
               <button type="button" class="note-edit-readback"
                 data-testid="workspace-note-edit-read-draft"
@@ -2039,7 +2045,7 @@ def _render_note_section(fields: dict) -> str:
                 aria-live="polite"></span>
             </div>
             {text_correction_proposals_html}
-          </div>
+          </details>
           <div class="note-body-content" data-testid="workspace-note-rendered"
             data-content-hash="{content_hash}">{body_empty_state_html}{body}</div>
           <textarea class="note-source-editor" id="note-source-editor"
@@ -6609,22 +6615,30 @@ def render_index_html(
     }}
     /* ---- Direct human note editor (Read <-> Edit) ---- */
     .note-edit-bar {{
-      display: flex;
-      align-items: center;
-      gap: 10px;
       max-width: 68ch;
-      margin: 0 auto 8px;
+      margin: 0 auto 10px;
       padding: 0 32px;
+    }}
+    .note-edit-summary {{
+      display: inline-flex;
+      list-style: none;
+    }}
+    .note-edit-summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .note-edit-bar[open] .note-edit-summary {{
+      margin-bottom: 8px;
     }}
     .note-edit-toggle, .note-edit-save, .note-edit-cancel {{
       background: var(--bg-raised);
       border: 1px solid var(--border-strong);
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-sm);
       color: var(--fg-1);
       cursor: pointer;
       font-family: var(--font-ui);
-      font-size: var(--text-sm);
-      padding: 4px 12px;
+      font-size: var(--text-xs);
+      min-height: 26px;
+      padding: 2px 8px;
     }}
     .note-edit-toggle:hover, .note-edit-save:hover, .note-edit-cancel:hover {{
       border-color: var(--accent);
