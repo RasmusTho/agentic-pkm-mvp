@@ -191,6 +191,12 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         "capture-status",
         "capture-session-text",
         "capture-session-state",
+        # ⌘K Panel command palette (#1786, SEP-04)
+        "palette-not-chat",
+        "palette-empty",
+        "palette-proposal-row",
+        "palette-blocked",
+        "palette-receipt",
     }
 )
 
