@@ -5088,6 +5088,13 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
         artifact_link = _orientation_artifact_link(
             leave.get("artifact_ref"), testid="reentry-stop-link"
         )
+    inspect_intent = "memory.open" if counts["memory_candidates"] > 0 else "open_loops.inspect"
+    inspect_onclick = (
+        "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
+        if counts["memory_candidates"] > 0
+        else ""
+    )
+    inspect_onclick_attr = f' onclick="{inspect_onclick}"' if inspect_onclick else ""
     return f"""
     <section class="reentry-card" data-region="reentry-card" data-testid="reentry-card"
       data-traj-state="{_e(traj_state)}" data-reentry-treatment="{_e(shape)}"
@@ -5111,9 +5118,9 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
             {counts["open_loops"]} open loops · {counts["staged"]} staged
             · {counts["memory_candidates"]} memory candidates
             <a class="reentry-inspect" data-testid="reentry-inspect"
-              data-intent="memory.open"
+              data-intent="{inspect_intent}"
               href="#workspace-orientation-open-loops"
-              onclick="if (window.overlayHost) {{ overlayHost.mount('memory'); return false; }}">inspect</a>
+              {inspect_onclick_attr}>inspect</a>
           </span>
         </li>
         <li class="reentry-q" data-reentry-question="changed">
