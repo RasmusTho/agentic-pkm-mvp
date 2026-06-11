@@ -251,13 +251,13 @@ def test_palette_confirm_routes_through_panel_confirm() -> None:
         # vocabulary: `panel.confirm` — surface "Panel (rail or palette)").
         assert _attr(tag, "data-intent") == "panel.confirm"
 
-    # No palette-local execution: the palette controller performs no I/O and
-    # declares no alternate endpoint — Panel transport stays with the rail's
-    # declared flow.
+    # Palette actions execute the same governed Panel confirm transport.
     script = _palette_script(html)
-    for forbidden in ("fetch(", "XMLHttpRequest", "/api/", "form.submit",
-                      "location.href", "location.assign"):
-        assert forbidden not in script, f"palette controller must not use {forbidden}"
+    assert "fetch(path" in script
+    assert "method: 'POST'" in script
+    assert "proposal_id: btn.getAttribute('data-proposal-id')" in script
+    assert "artifact_id: btn.getAttribute('data-artifact-id')" in script
+    assert "action: btn.getAttribute('data-panel-action')" in script
 
     # The runtime receipt surfaces exactly as the rail surfaces it: same
     # server-declared receipt fields, rendered only when declared.
@@ -386,8 +386,9 @@ def test_palette_is_not_a_chat_surface() -> None:
 
     # The controller never generates or sends free text anywhere.
     script = _palette_script(html)
-    for forbidden in ("rail.send", "/api/canvas", "coauthor", "fetch("):
+    for forbidden in ("rail.send", "/api/canvas", "coauthor"):
         assert forbidden not in script
+    assert "/api/panel/confirm" in script
 
 
 # ---------------------------------------------------------------------------
