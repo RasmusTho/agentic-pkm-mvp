@@ -285,12 +285,12 @@ def test_keyboard_map_routes_declared_intents() -> None:
 
     # ⌘K / ⌘N route to their declared overlay targets...
     assert INTENT_OVERLAY_TARGETS == {"cmd.open": "cmd", "capture.open": "capture"}
-    # ...and are inert while those surfaces have not shipped (no-op, no error,
-    # no invented surface).
+    # ...cmd.open is inert while the palette has not shipped (no-op, no error,
+    # no invented surface); capture.open mounts its shipped occupant (#1791).
     assert "cmd" not in SHIPPED_OVERLAY_OCCUPANTS
-    assert "capture" not in SHIPPED_OVERLAY_OCCUPANTS
+    assert "capture" in SHIPPED_OVERLAY_OCCUPANTS
     assert apply_intent(_state(), "cmd.open") == _state()
-    assert apply_intent(_state(), "capture.open") == _state()
+    assert apply_intent(_state(), "capture.open").stack == ("capture",)
 
     # Undeclared intents are rejected, not silently absorbed.
     with pytest.raises(ValueError):
@@ -304,7 +304,9 @@ def test_keyboard_map_routes_declared_intents() -> None:
     assert "Escape" in script and "overlay.dismiss" in script
 
     # No dead affordances: no rendered control advertises the unshipped
-    # palette/capture surfaces.
+    # palette. The capture surface's shell route is ⌘N (spec §Keyboard map);
+    # its topbar/map affordances belong to later SEP slices, so no rendered
+    # control advertises capture.open in this slice either.
     assert 'data-intent="cmd.open"' not in html
     assert 'data-intent="capture.open"' not in html
 
@@ -367,7 +369,7 @@ def test_undeclared_overlays_rejected() -> None:
 
     # Declared-but-unshipped overlays do not mount (inert), and do not raise:
     # the host never invents a surface for them.
-    for declared_unshipped in ("cmd", "memory", "settings", "capture", "map"):
+    for declared_unshipped in ("cmd", "memory", "settings", "map"):
         assert declared_unshipped in DECLARED_OVERLAYS
         assert declared_unshipped not in SHIPPED_OVERLAY_OCCUPANTS
         assert mount(_state(), declared_unshipped) == _state()
@@ -445,7 +447,7 @@ def test_narrow_mode_preserves_critical_affordances() -> None:
     # dismiss rule (Esc / scrim → anchor) is enforced by the host.
     script = _host_script(html)
     assert "register('vault'" in script
-    assert tuple(SHIPPED_OVERLAY_OCCUPANTS) == ("vault",)
+    assert "vault" in SHIPPED_OVERLAY_OCCUPANTS
 
     # Exactly one Esc owner for host occupants: the vault browser script no
     # longer carries its own Escape listener.

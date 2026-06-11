@@ -62,6 +62,10 @@ from companion_ui.renderer import (
     render_vault_markdown,
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
+from companion_ui.workspace.capture_modal import (
+    capture_modal_markup,
+    capture_modal_script,
+)
 from companion_ui.workspace.entry_state import (
     EntryStateResolution,
     entry_state_attributes,
@@ -9408,6 +9412,7 @@ def render_index_html(
     </div>
   </div>
   {overlay_host_markup(anchor_note_path=note_path)}
+  {capture_modal_markup()}
 
   {note_outline_script()}
 
@@ -9524,6 +9529,7 @@ def render_index_html(
   }})();
   </script>
   {overlay_host_script()}
+  {capture_modal_script()}
 
   <script>
   (function() {{
