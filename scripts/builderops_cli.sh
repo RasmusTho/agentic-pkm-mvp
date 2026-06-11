@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # scripts/builderops_cli.sh — BuilderOps CLI wrapper for automation worktrees.
 #
-# Resolves the repo-supported Python interpreter (.venv/bin/python3 when
-# available, otherwise python3) and runs:
+# Resolves the repo-supported Python interpreter (.venv/bin/python3) and runs:
 #
 #   python3 -m app.builderops builderops <args...>
 #
@@ -31,8 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Locate the repo venv.  The .venv is created in the main repo checkout; git
-# worktrees that live under .claude/worktrees/ do not have their own .venv.
-# Walk upward from APP_ROOT until we find a directory containing .venv/.
+# worktrees usually do not have their own .venv.
 _find_venv() {
     local dir="$1"
     while [ "$dir" != "/" ]; do
@@ -45,14 +43,29 @@ _find_venv() {
     return 1
 }
 
+_find_git_common_venv() {
+    local common_dir
+    common_dir="$(git -C "$APP_ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 1
+    if [ -n "$common_dir" ] && [ "${common_dir#/}" = "$common_dir" ]; then
+        common_dir="$(cd "$APP_ROOT/$common_dir" && pwd)"
+    fi
+
+    local canonical_root
+    canonical_root="$(dirname "$common_dir")"
+    if [ -x "$canonical_root/.venv/bin/python3" ]; then
+        echo "$canonical_root/.venv/bin/python3"
+        return 0
+    fi
+    return 1
+}
+
 # Prefer the repo venv to guarantee click, pydantic, and all BuilderOps deps.
-PYTHON="$(_find_venv "$APP_ROOT" 2>/dev/null)" || true
+PYTHON="$(_find_venv "$APP_ROOT" 2>/dev/null || _find_git_common_venv 2>/dev/null)" || true
 if [ -z "$PYTHON" ]; then
-    PYTHON="$(command -v python3 2>/dev/null)" || true
-fi
-if [ -z "$PYTHON" ]; then
-    echo "ERROR: no usable python3 found." >&2
-    echo "Set up the repo venv first:  python3 -m venv .venv && .venv/bin/pip install -e ." >&2
+    echo "ERROR: BuilderOps CLI requires the repo virtualenv, but no usable .venv/bin/python3 was found." >&2
+    echo "Run from the canonical checkout, or create the canonical repo venv first:" >&2
+    echo "  cd /Users/rasmusthornberg/code/agentic-pkm-mvp && python3 -m venv .venv && .venv/bin/pip install -e ." >&2
+    echo "Codex app worktrees should share that canonical checkout venv through git worktree metadata." >&2
     exit 1
 fi
 

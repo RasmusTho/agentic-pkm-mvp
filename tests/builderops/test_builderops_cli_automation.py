@@ -10,6 +10,7 @@ These tests verify that:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,9 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_standalone_root
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BUILDEROPS_WRAPPER = REPO_ROOT / "scripts" / "builderops_cli.sh"
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +33,11 @@ def _run_standalone(args: list[str]):
 
 def _json(output: str):
     return json.loads(output)
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content)
+    path.chmod(0o755)
 
 
 def test_standalone_list_returns_json(tmp_path: Path) -> None:
@@ -216,3 +225,104 @@ def test_standalone_entry_does_not_import_app_cli(tmp_path: Path) -> None:
         f"deps).\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "ok" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# AC #1819: wrapper resolves canonical venv for Codex app worktrees
+# ---------------------------------------------------------------------------
+
+def test_builderops_wrapper_finds_canonical_venv_from_codex_worktree(tmp_path: Path) -> None:
+    """The wrapper uses git worktree metadata to find the canonical checkout venv."""
+    canonical_root = tmp_path / "code" / "agentic-pkm-mvp"
+    canonical_python = canonical_root / ".venv" / "bin" / "python3"
+    fakebin = tmp_path / "bin"
+    worktree_root = tmp_path / ".codex" / "worktrees" / "7c2f" / "agentic-pkm-mvp"
+    invocation_cwd = tmp_path / "invocation.cwd"
+    invocation_args = tmp_path / "invocation.args"
+
+    (canonical_root / ".git").mkdir(parents=True)
+    canonical_python.parent.mkdir(parents=True)
+    fakebin.mkdir()
+    (worktree_root / "scripts").mkdir(parents=True)
+    (worktree_root / "app").mkdir()
+    (worktree_root / "scripts" / "builderops_cli.sh").write_text(BUILDEROPS_WRAPPER.read_text())
+    (worktree_root / "scripts" / "builderops_cli.sh").chmod(0o755)
+
+    _write_executable(
+        canonical_python,
+        f"""#!/usr/bin/env bash
+printf '%s\\n' "$PWD" > {invocation_cwd}
+printf '%s\\n' "$@" > {invocation_args}
+""",
+    )
+    _write_executable(
+        fakebin / "git",
+        f"""#!/usr/bin/env bash
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ] && [ "$4" = "--git-common-dir" ]; then
+  printf '%s\\n' {canonical_root / ".git"}
+  exit 0
+fi
+exit 1
+""",
+    )
+
+    result = subprocess.run(
+        [
+            str(worktree_root / "scripts" / "builderops_cli.sh"),
+            "builderops",
+            "list",
+            "--type",
+            "LearningSignal",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{fakebin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert invocation_cwd.read_text().strip() == str(worktree_root)
+    assert invocation_args.read_text().splitlines() == [
+        "-m",
+        "app.builderops",
+        "builderops",
+        "list",
+        "--type",
+        "LearningSignal",
+        "--json",
+    ]
+
+
+def test_builderops_wrapper_missing_venv_message(tmp_path: Path) -> None:
+    """Missing repo venvs fail with an actionable message instead of host Python fallback."""
+    canonical_root = tmp_path / "code" / "agentic-pkm-mvp"
+    fakebin = tmp_path / "bin"
+    worktree_root = tmp_path / ".codex" / "worktrees" / "7c2f" / "agentic-pkm-mvp"
+
+    (canonical_root / ".git").mkdir(parents=True)
+    fakebin.mkdir()
+    (worktree_root / "scripts").mkdir(parents=True)
+    (worktree_root / "scripts" / "builderops_cli.sh").write_text(BUILDEROPS_WRAPPER.read_text())
+    (worktree_root / "scripts" / "builderops_cli.sh").chmod(0o755)
+    _write_executable(
+        fakebin / "git",
+        f"""#!/usr/bin/env bash
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ] && [ "$4" = "--git-common-dir" ]; then
+  printf '%s\\n' {canonical_root / ".git"}
+  exit 0
+fi
+exit 1
+""",
+    )
+
+    result = subprocess.run(
+        [str(worktree_root / "scripts" / "builderops_cli.sh"), "builderops", "list", "--json"],
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{fakebin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 1
+    assert "requires the repo virtualenv" in result.stderr
+    assert "cd /Users/rasmusthornberg/code/agentic-pkm-mvp" in result.stderr
+    assert "Host Python" not in result.stderr
