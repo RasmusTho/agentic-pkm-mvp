@@ -93,6 +93,14 @@ from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
 )
+from companion_ui.workspace.receipts_history import (
+    RECEIPTS_HISTORY_FRAGMENT_ROUTE,
+    RECEIPTS_PROJECTION_ENDPOINT,
+    receipts_history_fragment,
+    receipts_history_modal_markup,
+    receipts_history_script,
+    receipts_history_unavailable_fragment,
+)
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
@@ -610,6 +618,7 @@ def _render_workspace_header_strip(
           <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-memory" data-surface="memory" data-intent="memory.open" title="Memory candidate review" aria-label="Open memory candidate review drawer" onclick="overlayHost.mount('memory')">&#9670;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-receipts" data-surface="receipts" data-intent="receipts.open" title="Receipts history" aria-label="Open read-only receipts history" onclick="overlayHost.mount('receipts')">&#9776;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-help" data-surface="help" title="Help" aria-label="Open help" onclick="companionHelp.open()">?</button>
           </nav>
           <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
@@ -9447,6 +9456,7 @@ def render_index_html(
   {capture_modal_markup()}
   {panel_palette_markup(fields)}
   {memory_review_drawer_markup()}
+  {receipts_history_modal_markup()}
 
   {note_outline_script()}
 
@@ -9566,6 +9576,7 @@ def render_index_html(
   {capture_modal_script()}
   {panel_palette_script()}
   {memory_review_drawer_script()}
+  {receipts_history_script()}
 
   <script>
   (function() {{
@@ -10214,6 +10225,24 @@ def make_handler(
                     fragment = memory_review_unavailable_fragment(str(exc))
                 else:
                     fragment = memory_review_queue_fragment(data)
+                body = fragment.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if parsed.path == RECEIPTS_HISTORY_FRAGMENT_ROUTE:
+                # Receipts history fragment (#1794, SEP-10): server-rendered
+                # read-only from the existing vault-browser receipts
+                # projection. An unreachable runtime renders a calm
+                # unavailable state — receipts are never invented by the UI.
+                try:
+                    data = self._client.get(RECEIPTS_PROJECTION_ENDPOINT, params={})
+                except WorkspaceClientError as exc:
+                    fragment = receipts_history_unavailable_fragment(str(exc))
+                else:
+                    fragment = receipts_history_fragment(data)
                 body = fragment.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
