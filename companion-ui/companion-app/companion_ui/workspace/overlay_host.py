@@ -51,11 +51,12 @@ DECLARED_OVERLAYS: tuple[str, ...] = (
 # Overlays with a shipped occupant that actually mounts on the host today.
 # #1785 scope: the narrow-mode vault-browser modal is treated as an
 # overlay-host occupant for the dismiss rule. The ⌘N capture modal (#1791,
-# ``capture_modal.py``) and the ⌘K Panel command palette (#1786, SEP-04,
-# ``panel_palette.py``) are shipped occupants. Later SEP tasks (map #1787,
-# settings #1789, memory drawer #1793, receipts #1794) extend this tuple
-# when their surfaces land.
-SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = ("vault", "capture", "cmd")
+# ``capture_modal.py``), the ⌘K Panel command palette (#1786, SEP-04,
+# ``panel_palette.py``), and the memory candidate review drawer (#1793,
+# SEP-09b, ``memory_review_drawer.py``) are shipped occupants. Later SEP
+# tasks (map #1787, settings #1789, receipts #1794) extend this tuple when
+# their surfaces land.
+SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = ("vault", "capture", "cmd", "memory")
 
 # Keyboard map (spec §Keyboard map) — exactly ⌘K / ⌘N / Esc; fuller model
 # deferred to package Q14.
@@ -85,19 +86,22 @@ POSTURE_EMPHASES: tuple[str, ...] = (
 )
 DEFAULT_POSTURE_EMPHASIS: str = "recovery"
 
-# Topbar surface-icon vocabulary (issue #1785 scope) and the subset whose
-# surfaces have shipped. No dead affordances: icons for unshipped surfaces
-# are absent until their task ships.
+# Topbar surface-icon vocabulary (issue #1785 scope; `memory` added by #1793
+# — the review drawer is reached from the topbar and from the re-entry
+# card's unresolved-inspect affordance) and the subset whose surfaces have
+# shipped. No dead affordances: icons for unshipped surfaces are absent
+# until their task ships.
 TOPBAR_SURFACES: tuple[str, ...] = (
     "vault",
     "command",
     "map",
     "settings",
     "capture",
+    "memory",
     "receipts",
     "help",
 )
-SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = ("vault", "help")
+SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = ("vault", "memory", "help")
 
 # Coarse derived postures the vault-status dot may render. Detailed health
 # stays with /api/status (runtime popover); the dot never exposes slices.

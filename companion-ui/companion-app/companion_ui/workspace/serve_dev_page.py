@@ -71,6 +71,14 @@ from companion_ui.workspace.entry_state import (
     entry_state_attributes,
     resolve_entry_state,
 )
+from companion_ui.workspace.memory_review_drawer import (
+    MEMORY_REVIEW_FRAGMENT_ROUTE,
+    MEMORY_REVIEW_QUEUE_ENDPOINT,
+    memory_review_drawer_markup,
+    memory_review_drawer_script,
+    memory_review_queue_fragment,
+    memory_review_unavailable_fragment,
+)
 from companion_ui.workspace.overlay_host import (
     DEFAULT_POSTURE_EMPHASIS,
     coarse_vault_posture,
@@ -601,6 +609,7 @@ def _render_workspace_header_strip(
           <span class="workspace-header-spacer" aria-hidden="true"></span>
           <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-memory" data-surface="memory" data-intent="memory.open" title="Memory candidate review" aria-label="Open memory candidate review drawer" onclick="overlayHost.mount('memory')">&#9670;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-help" data-surface="help" title="Help" aria-label="Open help" onclick="companionHelp.open()">?</button>
           </nav>
           <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
@@ -4936,11 +4945,13 @@ def _reentry_counts(orientation: dict) -> dict[str, int]:
         cap_key="resurface_candidates",
     )
     governance = _orientation_dict(orientation.get("governance"))
+    memory = _orientation_dict(orientation.get("memory"))
     return {
         "open_loops": len(loops),
         "notable_changes": len(changes),
         "resurface_candidates": len(resurface),
         "staged": _orientation_int(governance.get("pending_proposal_count")),
+        "memory_candidates": _orientation_int(memory.get("pending_candidate_count")),
     }
 
 
@@ -5047,8 +5058,9 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
     Shapes fixed per CONTINUITY_AND_DECAY.md §The Four Re-entry Questions;
     unresolved and changed render as counts with a deliberate inspect
     affordance, never enumerations (spec §Resolved Q5). The inspect affordance
-    routes to the existing orientation sections until the memory review drawer
-    (SEP-09) lands.
+    emits ``memory.open`` and mounts the memory candidate review drawer on the
+    overlay host (#1793, SEP-09b); without JS it gracefully falls back to the
+    open-loops orientation section.
     """
     leave = _orientation_dict(orientation.get("leave_point"))
     counts = _reentry_counts(orientation)
@@ -5088,8 +5100,11 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
           <span class="reentry-q-label">What remains unresolved</span>
           <span class="reentry-q-body" data-testid="reentry-unresolved-counts">
             {counts["open_loops"]} open loops · {counts["staged"]} staged
+            · {counts["memory_candidates"]} memory candidates
             <a class="reentry-inspect" data-testid="reentry-inspect"
-              href="#workspace-orientation-open-loops">inspect</a>
+              data-intent="memory.open"
+              href="#workspace-orientation-open-loops"
+              onclick="if (window.overlayHost) {{ overlayHost.mount('memory'); return false; }}">inspect</a>
           </span>
         </li>
         <li class="reentry-q" data-reentry-question="changed">
@@ -5283,9 +5298,21 @@ def _render_orientation_index_html(
     whisper_html = ""
     rail_fade_attr = ""
     rail_fade_class = ""
+    memory_review_overlay_html = ""
     if shape in ("full_mist", "long_mist"):
         reentry_overlay_html = _render_reentry_card(
             orientation, shape=shape, stale=entry_resolution.stale
+        )
+        # The re-entry card's unresolved-inspect affordance emits
+        # `memory.open` (#1793, SEP-09b), so the overlay-host substrate and
+        # the memory review drawer ship with the card — pull-based, no dead
+        # affordance on shapes without the card. Dismiss returns to the
+        # orientation substrate untouched (no route reset, no data loss).
+        memory_review_overlay_html = (
+            overlay_host_markup(anchor_note_path="")
+            + memory_review_drawer_markup()
+            + overlay_host_script()
+            + memory_review_drawer_script()
         )
         if shape == "long_mist":
             whisper_html = _render_reentry_whisper_column(orientation)
@@ -5826,6 +5853,7 @@ def _render_orientation_index_html(
   </main>
   {vault_browser_script}
   {ambient_script}
+  {memory_review_overlay_html}
   {_render_help_drawer()}
   {_render_operator_drawer()}
 </body>
@@ -9418,6 +9446,7 @@ def render_index_html(
   {overlay_host_markup(anchor_note_path=note_path)}
   {capture_modal_markup()}
   {panel_palette_markup(fields)}
+  {memory_review_drawer_markup()}
 
   {note_outline_script()}
 
@@ -9536,6 +9565,7 @@ def render_index_html(
   {overlay_host_script()}
   {capture_modal_script()}
   {panel_palette_script()}
+  {memory_review_drawer_script()}
 
   <script>
   (function() {{
@@ -10173,6 +10203,24 @@ def make_handler(
             if parsed.path.startswith("/api/companion/tts/audio/"):
                 self._proxy_audio(parsed.path)
                 return
+            if parsed.path == MEMORY_REVIEW_FRAGMENT_ROUTE:
+                # Memory review drawer queue fragment (#1793, SEP-09b):
+                # server-rendered from the #1792 read endpoint (the /operator
+                # overlay precedent). An unreachable runtime renders a calm
+                # unavailable state — never invented candidates.
+                try:
+                    data = self._client.get(MEMORY_REVIEW_QUEUE_ENDPOINT, params={})
+                except WorkspaceClientError as exc:
+                    fragment = memory_review_unavailable_fragment(str(exc))
+                else:
+                    fragment = memory_review_queue_fragment(data)
+                body = fragment.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             # --- Operator diagnostics proxy (same-origin, issue #1758) ---
             # Browser calls /api/operator/* same-origin; this server proxies
             # to COMPANION_API_BASE_URL /api/* so browsers never need the
@@ -10283,6 +10331,11 @@ def make_handler(
         # the provider-unavailable notice — server declares, UI renders.
         _POST_PROXY_PATTERNS = (
             re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
+            # Governed memory review decisions (#1793 -> #1792 endpoints).
+            # Runtime refusals (409, e.g. the accept dry-run) are forwarded
+            # verbatim by _proxy_error so the drawer renders calm with the
+            # candidate still pending.
+            re.compile(r"^/api/companion/memory/review-queue/[^/]+/decision$"),
         )
 
         def _post_path_allowed(self, path: str) -> bool:
