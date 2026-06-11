@@ -246,7 +246,8 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
     if args.storage_profile == "memory":
         os.environ.setdefault("STORE_BACKEND", "memory")
     if args.model_profile == "mock":
-        os.environ.setdefault("LLM_PROVIDER", "mock")
+        os.environ["LLM_PROVIDER"] = "mock"
+        os.environ["LLM_FORCE_PROVIDER"] = "mock"
         os.environ["EMBED_PROFILE"] = "deterministic"
         os.environ.setdefault(
             "LLM_MOCK_RESPONSE",
