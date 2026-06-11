@@ -21,6 +21,8 @@ app-owned task (`companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` §Resolved Q17,
 
 from __future__ import annotations
 
+import io
+import json
 import re
 from typing import Any
 
@@ -48,7 +50,7 @@ from companion_ui.workspace.overlay_host import (
     keyboard_intent,
     mount,
 )
-from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.serve_dev_page import make_handler, render_index_html
 
 # ---------------------------------------------------------------------------
 # Fixtures (mirror the proven workspace fixture in test_overlay_host)
@@ -155,6 +157,39 @@ def _ack(**overrides: Any) -> CaptureAck:
     return CaptureAck(**base)
 
 
+class _ProxyClient:
+    def __init__(self, *, post_result: dict[str, Any] | None = None) -> None:
+        self.post_result = post_result if post_result is not None else {"ok": True}
+        self.post_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        self.post_calls.append((url, json))
+        return self.post_result
+
+
+class _CapturingPostHandler:
+    """Drive make_handler().do_POST without binding a socket."""
+
+    def __init__(self, handler_cls: type, path: str, body: dict[str, Any]) -> None:
+        raw = json.dumps(body).encode("utf-8")
+        self._instance = handler_cls.__new__(handler_cls)
+        self._instance.path = path
+        self._instance.rfile = io.BytesIO(raw)
+        self._instance.wfile = io.BytesIO()
+        self._instance.headers = {"Content-Length": str(len(raw))}
+        self.status_code: int | None = None
+        self.payload: dict[str, Any] | None = None
+
+        def _send_json(status_code: int, payload: dict[str, Any]) -> None:
+            self.status_code = status_code
+            self.payload = payload
+
+        self._instance._send_json = _send_json  # type: ignore[method-assign]
+
+    def run_post(self) -> None:
+        self._instance.do_POST()
+
+
 # ---------------------------------------------------------------------------
 # AC1: ⌘N opens the modal; a successful capture appears in the session list
 # as written, with the runtime acknowledgement reference
@@ -229,6 +264,67 @@ def test_capture_save_shows_written_state_from_runtime_ack() -> None:
         assert forbidden not in lowered, (
             f"capture surface must not carry task affordance {forbidden!r}"
         )
+
+
+def test_capture_modal_posts_through_companion_capture_proxy() -> None:
+    client = _ProxyClient(
+        post_result={
+            "note_path": "00-intake/inbox.md",
+            "operation": "append",
+            "adapter": "filesystem",
+            "captured_at": "2026-06-10T08:00:00Z",
+            "trace_id": "trace-cap-1",
+        }
+    )
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+    driver = _CapturingPostHandler(
+        handler_cls,
+        "/api/companion/capture",
+        {"text": "book dentist appointment"},
+    )
+
+    driver.run_post()
+
+    assert client.post_calls == [
+        ("/api/companion/capture", {"text": "book dentist appointment"})
+    ]
+    assert driver.status_code == 200
+    assert driver.payload == {
+        "note_path": "00-intake/inbox.md",
+        "operation": "append",
+        "adapter": "filesystem",
+        "captured_at": "2026-06-10T08:00:00Z",
+        "trace_id": "trace-cap-1",
+    }
+
+
+def test_capture_modal_success_path_records_written_result() -> None:
+    state = edit_draft(CaptureSessionState(), "book dentist appointment")
+
+    after = submit_draft(state, ack=_ack(trace_id="trace-cap-written"))
+
+    assert len(after.captures) == 1
+    assert after.captures[0].state == WRITTEN
+    assert after.captures[0].ack is not None
+    assert after.captures[0].ack.trace_id == "trace-cap-written"
+    assert after.draft == ""
+
+
+def test_capture_proxy_allows_companion_capture_path() -> None:
+    client = _ProxyClient()
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+    driver = _CapturingPostHandler(
+        handler_cls,
+        "/api/companion/capture",
+        {"text": "proxy reaches runtime"},
+    )
+
+    driver.run_post()
+
+    assert driver.status_code == 200
+    assert client.post_calls == [
+        ("/api/companion/capture", {"text": "proxy reaches runtime"})
+    ]
 
 
 # ---------------------------------------------------------------------------

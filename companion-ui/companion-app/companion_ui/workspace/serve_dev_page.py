@@ -10344,6 +10344,7 @@ def make_handler(
         _POST_PROXY_PATHS = frozenset(
             {
                 "/api/companion/workspace/body",
+                "/api/companion/capture",
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
