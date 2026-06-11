@@ -109,6 +109,38 @@ def test_lint_detects_frontmatter_defects(tmp_path: Path) -> None:
     assert any("description is empty" in e for e in errors), errors
 
 
+def test_multiline_frontmatter_description_fails(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        "---\n"
+        "name: alpha-skill\n"
+        "description: |\n"
+        "  First line is not the whole description.\n"
+        "  Second line must not be accepted silently.\n"
+        "---\n\n"
+        "# alpha-skill\n",
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    assert any("description must be a non-empty single line" in e for e in errors), errors
+
+
+def test_valid_single_line_frontmatter_description_passes(tmp_path: Path) -> None:
+    assert run_lint(_seed_tree(tmp_path)) == []
+
+
+def test_missing_skills_readme_reports_lint_error(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    (root / ".codex" / "skills" / "README.md").unlink()
+
+    errors = run_lint(root)
+
+    assert errors == [".codex/skills/README.md: missing"]
+
+
 def test_lint_detects_retired_phrase(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
