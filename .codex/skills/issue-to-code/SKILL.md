@@ -294,7 +294,18 @@ When continuing through anchor drift:
 
     For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
 
-    Run the canonical gate from `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` (pre-commit, `--allow-dirty`), using the branch-name fallback documented there when the preflight script cannot run.
+    Capture the expected branch and worktree before invoking the canonical gate, then run `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` (pre-commit, `--allow-dirty`):
+
+    ```bash
+    EXPECTED_BRANCH="$(git branch --show-current)"
+    EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"
+    scripts/agent_workspace_preflight.sh \
+      --expected-branch "$EXPECTED_BRANCH" \
+      --expected-worktree "$EXPECTED_WORKTREE" \
+      --allow-dirty
+    ```
+
+    If the preflight script cannot run, use the branch-name fallback documented in the shared gate with the captured `EXPECTED_BRANCH`. Do not continue with empty expected values; empty values skip the branch/worktree drift checks.
 
 15b. **Branch-Truth Gate — Phase 2: Pre-Push (mandatory before `git push`)** [branch-truth-gate]
 
