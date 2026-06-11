@@ -119,6 +119,10 @@ def check_skill_frontmatter(skills_root: Path) -> list[str]:
         description = fields.get("description", "")
         if not description:
             errors.append(f"{rel}: frontmatter description is empty or missing")
+        elif description in {"|", ">"} or description.startswith(("|-", ">-")):
+            errors.append(
+                f"{rel}: frontmatter description must be a non-empty single line"
+            )
     return errors
 
 
@@ -134,7 +138,8 @@ def check_skill_references(skills_root: Path) -> list[str]:
         else set()
     )
     known = skill_names | shared_names | KNOWN_NON_SKILL_TERMS
-    files = [skills_root / "README.md"] + [
+    readme = skills_root / "README.md"
+    files = ([readme] if readme.is_file() else []) + [
         d / "SKILL.md" for d in _skill_dirs(skills_root) if (d / "SKILL.md").is_file()
     ]
     for path in files:
