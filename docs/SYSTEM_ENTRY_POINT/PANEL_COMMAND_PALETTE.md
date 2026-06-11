@@ -71,4 +71,4 @@ If the palette grew its own confirm path or proposal source it would become a fo
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] panel-command-palette: ⌘K presentation of Panel proposals`. Depends on SEP-03.
+Filed as **#1786** (`[SystemEntryPoint] panel-command-palette: ⌘K presentation of Panel proposals`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

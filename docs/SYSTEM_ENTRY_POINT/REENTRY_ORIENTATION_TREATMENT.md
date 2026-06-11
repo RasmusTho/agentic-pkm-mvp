@@ -89,4 +89,4 @@ Re-entry is the product's core anti-dashboard claim. A re-entry that enumerates,
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] reentry-orientation-treatment: latency-ladder re-entry shapes`. Depends on the SEP-01 issue.
+Filed as **#1784** (`[SystemEntryPoint] reentry-orientation-treatment: latency-ladder re-entry shapes`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

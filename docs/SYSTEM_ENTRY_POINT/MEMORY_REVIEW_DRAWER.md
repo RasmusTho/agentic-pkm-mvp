@@ -75,4 +75,4 @@ Without a governed review surface, pending candidates either rot (the seam emits
 
 ## Related GitHub Issues
 
-Create **two** issues: `[SystemEntryPoint] memory-review-endpoints: queue read + governed review outcomes (accept/reject/revise)` (runtime; no UI dependency) and `[SystemEntryPoint] memory-review-drawer: right-drawer review UI` (depends on the endpoints issue and SEP-03).
+Filed as **#1792** (`[SystemEntryPoint] memory-review-endpoints: queue read + governed review outcomes (accept/reject/revise)`) and **#1793** (`[SystemEntryPoint] memory-review-drawer: right-drawer review UI`). Do not create duplicate issues; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

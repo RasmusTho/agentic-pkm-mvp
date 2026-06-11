@@ -68,4 +68,4 @@ The companion's knowledge is spread across many surfaces; without a legible inde
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] system-map-overlay: pull-based surface index`. Depends on SEP-03.
+Filed as **#1787** (`[SystemEntryPoint] system-map-overlay: pull-based surface index`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

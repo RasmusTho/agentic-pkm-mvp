@@ -66,4 +66,4 @@ The product is built for one expert who lives here daily; permanent explanatory 
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] guidance-layer: opt-in explanatory callouts`. Depends on SEP-03; best scheduled after most overlays exist so callouts cover the real set.
+Filed as **#1788** (`[SystemEntryPoint] guidance-layer: opt-in explanatory callouts`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

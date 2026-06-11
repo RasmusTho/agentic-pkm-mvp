@@ -78,4 +78,4 @@ Each child proves its slice; nothing else proves the composition. The gallery ha
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] state-gallery-validation: fixture-driven composition proof + parent closure`. Final child; blocked on all other SEP issues.
+Filed as **#1795** (`[SystemEntryPoint] state-gallery-validation: fixture-driven composition proof + parent closure`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

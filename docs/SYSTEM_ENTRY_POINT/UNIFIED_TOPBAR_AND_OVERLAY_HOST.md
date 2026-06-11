@@ -72,4 +72,4 @@ Without a shared host, each overlay re-implements dismissal and routing, and rou
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] unified-topbar-overlay-host: shared overlay substrate + keyboard map`. Depends on SEP-01; blocks SEP-04/05/06/07/10 and the UI halves of SEP-08/09.
+Filed as **#1785** (`[SystemEntryPoint] unified-topbar-overlay-host: shared overlay substrate + keyboard map`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

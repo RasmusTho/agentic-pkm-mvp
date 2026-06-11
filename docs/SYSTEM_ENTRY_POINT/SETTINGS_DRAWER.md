@@ -75,4 +75,4 @@ Preferences are the easiest place for authority creep: one preference write that
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] settings-drawer: Local UI preference drawer`. Depends on SEP-03. Reference delivered #1675 (display preferences UI) and contract issues #1641/#1643 in Context; do not duplicate them.
+Filed as **#1789** (`[SystemEntryPoint] settings-drawer: Local UI preference drawer`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies. Reference delivered #1675 (display preferences UI) and contract issues #1641/#1643 in Context; do not duplicate them.
