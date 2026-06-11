@@ -199,6 +199,13 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         "help-drawer-title",
         "help-drawer-sub",
         "help-drawer-close",
+        # In-shell Operator diagnostics drawer
+        "operator-toggle",
+        "operator-drawer-head",
+        "operator-drawer-title",
+        "operator-drawer-badge",
+        "operator-drawer-close",
+        "operator-drawer-loading",
         # Capture modal (#1791, SEP-08b)
         "capture-modal-title",
         "capture-modal-close",

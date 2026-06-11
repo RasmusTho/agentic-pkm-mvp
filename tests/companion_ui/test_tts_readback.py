@@ -87,9 +87,11 @@ def _readback_script(html: str) -> str:
 def test_tts_readback_controls_render() -> None:
     html = _html()
 
+    assert '<details class="tts-readback-controls"' in html
     assert 'data-testid="tts-readback-controls"' in html
     assert 'data-authority="read-only-projection"' in html
     assert 'data-source-scope="source-and-proposal"' in html
+    assert '<summary class="tts-readback-summary">Read aloud</summary>' in html
     assert 'data-testid="tts-rate"' in html
     assert 'data-testid="tts-read-full-note"' in html
     assert 'data-testid="tts-read-selection"' in html
@@ -102,6 +104,14 @@ def test_tts_readback_controls_render() -> None:
     draft_index = html.index('data-testid="workspace-note-edit-read-draft"')
     save_index = html.index('data-testid="workspace-note-edit-save"')
     assert draft_index < save_index
+
+
+def test_tts_readback_controls_collapsed_by_default() -> None:
+    html = _html()
+
+    start = html.index('<details class="tts-readback-controls"')
+    opening_tag = html[start:html.index(">", start)]
+    assert " open" not in opening_tag
 
 
 def test_tts_readback_uses_local_server_tts_not_browser_speech() -> None:

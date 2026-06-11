@@ -216,7 +216,8 @@ def test_artifact_identity_states_render_from_workspace_payload() -> None:
     assert 'data-identity-state="unresolved_missing_uuid"' in html
     assert 'data-identity-source="missing"' in html
     assert 'data-testid="workspace-artifact-identity-caution"' in html
-    assert "Artifact identity unresolved" in html
+    assert "Identity unresolved" in html
+    assert "Governed actions may be blocked until resolved." in html
 
 
 def test_writeguard_blocked_marks_mutating_affordances_blocked() -> None:

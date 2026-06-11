@@ -197,6 +197,30 @@ class TestLoadConfig:
 
         assert load_config()["api_base_url"] == "http://127.0.0.1:18001"
 
+    def test_default_api_timeout(self, monkeypatch) -> None:
+        monkeypatch.delenv("COMPANION_API_TIMEOUT_SECONDS", raising=False)
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 2.0
+
+    def test_api_timeout_override(self, monkeypatch) -> None:
+        monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", "0.5")
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 0.5
+
+    def test_api_timeout_invalid_value_uses_default(self, monkeypatch) -> None:
+        monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", "not-a-number")
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 2.0
+
+    def test_api_timeout_has_minimum_floor(self, monkeypatch) -> None:
+        monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", "0.01")
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 0.25
+
     def test_host_override(self, monkeypatch) -> None:
         monkeypatch.setenv("HOST", "0.0.0.0")
         from companion_ui.workspace.serve_dev_page import load_config
@@ -226,6 +250,7 @@ class TestLoadConfig:
             "host": "0.0.0.0",
             "port": 8113,
             "api_base_url": "http://127.0.0.1:18000",
+            "api_timeout_seconds": 2.0,
         }
 
 
