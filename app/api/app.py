@@ -108,6 +108,11 @@ try:
 except ImportError:
     source_understanding_router = None
 
+try:
+    from app.api.routes.capture import router as capture_router
+except ImportError:
+    capture_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -219,6 +224,8 @@ def _create_app() -> FastAPI:
         application.include_router(resurfacing_router, prefix="/api")
     if source_understanding_router is not None:
         application.include_router(source_understanding_router, prefix="/api")
+    if capture_router is not None:
+        application.include_router(capture_router, prefix="/api")
     return application
 
 

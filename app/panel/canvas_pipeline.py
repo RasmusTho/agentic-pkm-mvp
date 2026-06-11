@@ -42,6 +42,21 @@ class CanvasPanelPipeline:
         self._artifact_id = artifact_id
         self._note_path = note_path
 
+    @staticmethod
+    def _instruction(action_type: str, payload: dict[str, Any]) -> str:
+        """Human-facing proposal instruction for Panel review.
+
+        When the payload carries the original natural-language request (#1772),
+        surface it alongside the coarse action type so reviewing the proposal
+        shows what the human actually asked for. Falls back to the generic form
+        when no request text was carried (e.g. explicit ``/governance`` calls
+        with caller-supplied payloads).
+        """
+        original_request = payload.get("original_request")
+        if isinstance(original_request, str) and original_request.strip():
+            return f'canvas governance: {action_type} — "{original_request.strip()}"'
+        return f"canvas governance: {action_type}"
+
     def submit_intent(
         self,
         action_type: str,
@@ -59,7 +74,7 @@ class CanvasPanelPipeline:
                 ),
                 panel=PanelInfo(
                     panel_id=proposal_id,
-                    instruction=f"canvas governance: {action_type}",
+                    instruction=self._instruction(action_type, payload),
                 ),
                 actions=[
                     PanelIntentAction(

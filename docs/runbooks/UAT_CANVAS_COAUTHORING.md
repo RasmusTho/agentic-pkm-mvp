@@ -1,4 +1,4 @@
-State: covers the Agentic Canvas Co-Authoring (Phase 2: #1716/#1717) and Chat→Panel Governance Handoff (Phase 3: #1726/#1727/#1728) capabilities, plus the live served-page co-authoring wiring (#1733). Dev/staging only, gated behind `CANVAS_ENABLED`.
+State: covers the Agentic Canvas Co-Authoring (Phase 2: #1716/#1717) and Chat→Panel Governance Handoff (Phase 3: #1726/#1727/#1728) capabilities, plus the live served-page co-authoring wiring (#1733), intent-level governance routing (Phase 4: #1743/#1744), and the carried governance intent in routed proposal payloads (#1772). Dev/staging only, gated behind `CANVAS_ENABLED`.
 
 # UAT — Agentic Canvas Co-Authoring & Chat→Panel Handoff
 
@@ -19,6 +19,8 @@ Scope: test/runbook only. No new feature work. This loop is **Agentic Lab**: opt
 | 3 | Canvas region view-in-Panel affordance + Panel rail canvas-origin attribution | #1727 / PR #1732 |
 | 3 | Executed receipt reflected into the originating context | #1728 / PR #1734 |
 | 3 | Live served-page `/coauthor` wiring (intent input, co-author control, 409 affordance) | #1733 / PR #1736 |
+| 4 | Intent-level governance classification + routing on `/coauthor` (classified `action_type` before generation) | #1743 / PR #1747, #1744 / PR #1754 |
+| 4 | Original governance intent carried into routed Panel proposal payloads | #1772 |
 
 ## Preconditions
 
@@ -95,19 +97,41 @@ Confirm the banner prints `DEV/STAGING ONLY` and `Runtime API: http://127.0.0.1:
 Pass criteria: the body changes in place from a natural-language intent, undo restores it, and the
 region is inert when the flag is off.
 
-## 4) Live UAT — Phase 3 governance handoff loop
+## 4) Live UAT — Phase 3 + Phase 4 governance handoff loop
 
-> **Trigger note (deterministic).** The `/coauthor` path only routes to Panel when the *generated
-> body* contains a frontmatter block (`GovernanceBearingMutationError`). The co-authoring prompt
-> deliberately tells the provider **not** to emit frontmatter, so a natural intent like "promote this
-> note to evergreen" is **not** a reliable live trigger — a compliant provider will usually return an
-> ordinary body edit. The `/coauthor` governance branch is covered deterministically by the automated
-> tests (`tests/api/test_canvas_governance_handoff.py`). For the **live** Phase 3 walkthrough, trigger
-> the handoff explicitly through the governance endpoint, which stages the same `GovernanceRouter`
-> path deterministically. (See the "known limitation" note at the end of this section.)
+**Phase 4 (intent-level routing) shipped in PR #1754 / issue #1744.** The `/coauthor` path now
+classifies the *intent* with an LLM-backed cognition (`IntentClassifierCognition`) before any body
+is generated. A governance-bearing natural-language intent (e.g. "promote this note to evergreen")
+routes to Panel *before* generation, carrying the classified `action_type`, and leaves the note
+unchanged. The explicit `/governance` endpoint remains available as a deterministic alternative.
+
+**Deterministic natural-language routing walkthrough:**
 
 1. With an active session (`POST /api/canvas/sessions` → note the `session_id`) and `CANVAS_ENABLED=1`,
-   stage a governance-bearing action explicitly:
+   submit a governance-bearing intent via `/coauthor`:
+
+   ```bash
+   curl -s -X POST "http://127.0.0.1:18001/api/canvas/sessions/<session_id>/coauthor" \
+     -H 'Content-Type: application/json' \
+     -d '{"intent":"promote this note to evergreen"}'
+   # -> 409 {"status":"routed_to_panel","intent_id":"…",
+   #         "action_type":"maturity_transition",
+   #         "detail":"Governance-bearing — routed to the gated Panel pipeline; note body left unchanged."}
+   ```
+
+   The classifier labels the intent `GOVERNANCE_BEARING / maturity_transition` before body
+   generation. The note body is **not** changed. Note the returned `intent_id`.
+
+   The staged Panel proposal carries the original request (#1772): its action params include
+   `original_request: "promote this note to evergreen"`, `routed_via: "intent_classifier"`,
+   `intent_class: "governance_bearing"`, and `classified_action_type: "maturity_transition"`,
+   and the proposal instruction quotes the request text
+   (`canvas governance: maturity_transition — "promote this note to evergreen"`). Reviewing the
+   proposal therefore shows what was actually asked — confirming it still routes through the
+   gated Panel flow; nothing auto-executes from the carried text.
+
+2. Alternatively, trigger deterministically via the explicit governance endpoint (unchanged from
+   Phase 3):
 
    ```bash
    curl -s -X POST "http://127.0.0.1:18001/api/canvas/sessions/<session_id>/governance" \
@@ -117,29 +141,27 @@ region is inert when the flag is off.
    #         "action_type":"maturity_transition","status":"routed_to_panel"}
    ```
 
-   The note body is **not** changed; execution stays in the gated Panel pipeline. (In the UI, the
-   equivalent canvas-region affordance is wired to the same path.) Note the returned `intent_id`.
-2. Confirm the canvas region shows a read-only **"view in Panel"** affordance
+3. Confirm the canvas region shows a read-only **"view in Panel"** affordance
    (`data-testid="workspace-canvas-view-in-panel"`, `data-intent-id` = the returned `intent_id`).
-3. In the **Panel rail**, confirm the matching proposal appears with the server-declared canvas-origin
+4. In the **Panel rail**, confirm the matching proposal appears with the server-declared canvas-origin
    attribution (`data-testid="workspace-panel-proposal-origin"`, `data-proposal-origin="canvas_coauthoring"`),
    correlated by `proposal_id == intent_id`.
-4. Decide/confirm the proposal through the existing Panel flow (`POST /api/panel/confirm`).
-5. After execution, confirm the **receipt reflects back** into the canvas/originating context
+5. Decide/confirm the proposal through the existing Panel flow (`POST /api/panel/confirm`).
+6. After execution, confirm the **receipt reflects back** into the canvas/originating context
    (read-only, server-declared, keyed by `intent_id`). With no durable receipt yet, expect a
    pending/blocked posture — never an invented receipt.
 
-Pass criteria: a governance-bearing intent never mutates the note directly, is navigable from the
-canvas region to a canvas-origin Panel proposal, confirms through the gated path, and its outcome is
-reflected back read-only.
+Pass criteria: a governance-bearing intent (natural-language or explicit) never mutates the note
+directly, is navigable from the canvas region to a canvas-origin Panel proposal, confirms through
+the gated path, and its outcome is reflected back read-only.
 
-> **Known limitation (capability, not runbook).** Via `/coauthor`, "governance-bearing" is currently
-> detected by whether the *generated body* contains a frontmatter block — not by classifying the
-> *intent* semantically. Because the co-authoring prompt instructs the provider to avoid frontmatter,
-> a semantically governance-bearing intent (e.g. promote maturity) will often produce an ordinary body
-> edit instead of routing to Panel. The explicit `/governance` path above is the deterministic route.
-> Closing this gap (intent-level governance classification on the `/coauthor` path) is a candidate
-> follow-up; raise a bounded issue before relying on natural-language governance routing in the UI.
+**Degraded-classifier fallback:** if the reasoning provider is unavailable, the classifier returns
+`classified=False` (conservative default: `CO_AUTHORING`) and the path falls through to the
+generate-and-apply loop unchanged. The body-frontmatter backstop remains as defense-in-depth for
+any governance-bearing generation that slips through on the degraded path. A backstop-routed
+proposal still carries the original request text in its payload
+(`original_request` + `routed_via: "body_frontmatter_backstop"`); since no trusted classification
+exists on that path, no classifier fields are fabricated.
 
 ## 5) Negative / safety checks
 

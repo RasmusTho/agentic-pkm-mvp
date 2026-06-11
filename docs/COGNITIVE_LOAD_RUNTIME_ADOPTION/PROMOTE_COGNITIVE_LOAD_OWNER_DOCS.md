@@ -46,17 +46,17 @@ close only when owner docs and backlog state match shipped reality.
 
 ## Acceptance Criteria
 
-- [ ] #1638 has validation receipts for #1679, scarce resurfacing cards, and correction proposals.
+- [x] #1638 has validation receipts for #1679, scarce resurfacing cards, and correction proposals.
   Verify: parent issue receipt on `https://github.com/RasmusTho/agentic-pkm-mvp/issues/1638`.
-- [ ] Owner docs distinguish shipped runtime/UI support from target-state cognitive-load work.
+- [x] Owner docs distinguish shipped runtime/UI support from target-state cognitive-load work.
   Verify: doc writeback at `docs/STATUS.md :: cognitive-load` or an explicit no-change receipt if
   current-state docs already remain truthful.
-- [ ] #1646/#1647 are recorded as a separate Source Understanding path and not a #1638 blocker.
+- [x] #1646/#1647 are recorded as a separate Source Understanding path and not a #1638 blocker.
   Verify: doc writeback at `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/README.md :: Capability Boundary`
   and parent issue receipt on #1638.
-- [ ] This spec directory records delivered state and linked child issue numbers.
+- [x] This spec directory records delivered state and linked child issue numbers.
   Verify: doc writeback at `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/README.md :: Relationship to GitHub Issues`.
-- [ ] #1638 is closed only after all parent acceptance conditions are satisfied.
+- [x] #1638 is closed only after all parent acceptance conditions are satisfied.
   Verify: closed GitHub Issue #1638 with final validation receipt.
 
 ## How to Verify (Pre-Merge)

@@ -62,9 +62,58 @@ from companion_ui.renderer import (
     render_vault_markdown,
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
+from companion_ui.workspace.capture_modal import (
+    capture_modal_markup,
+    capture_modal_script,
+)
+from companion_ui.workspace.entry_state import (
+    EntryStateResolution,
+    entry_state_attributes,
+    resolve_entry_state,
+)
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_layer_script,
+    guidance_layer_style,
+    guidance_toggle_markup,
+)
+from companion_ui.workspace.memory_review_drawer import (
+    MEMORY_REVIEW_FRAGMENT_ROUTE,
+    MEMORY_REVIEW_QUEUE_ENDPOINT,
+    memory_review_drawer_markup,
+    memory_review_drawer_script,
+    memory_review_queue_fragment,
+    memory_review_unavailable_fragment,
+)
+from companion_ui.workspace.overlay_host import (
+    DEFAULT_POSTURE_EMPHASIS,
+    coarse_vault_posture,
+    overlay_host_markup,
+    overlay_host_script,
+)
+from companion_ui.workspace.panel_palette import (
+    panel_palette_markup,
+    panel_palette_script,
+)
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
+)
+from companion_ui.workspace.receipts_history import (
+    RECEIPTS_HISTORY_FRAGMENT_ROUTE,
+    RECEIPTS_PROJECTION_ENDPOINT,
+    receipts_history_fragment,
+    receipts_history_modal_markup,
+    receipts_history_script,
+    receipts_history_unavailable_fragment,
+)
+from companion_ui.workspace.settings_drawer import (
+    settings_drawer_markup,
+    settings_drawer_script,
+)
+from companion_ui.workspace.system_map_overlay import (
+    system_map_overlay_markup,
+    system_map_overlay_script,
 )
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 from companion_ui.workspace.workspace_http_client import (
@@ -468,6 +517,15 @@ def _render_workspace_header_strip(
     # §5.2 — Browse Vault routes to the canonical left-pane browse surface, not
     # the modal overlay (which is a narrow responsive fallback only).
     browse_target = "#vault-browser-left-pane"
+    # #1785 (SEP-03) — unified-topbar consolidation over the shipped header:
+    # anchor pill (current note identity), posture pill (local posture
+    # emphasis, rendering only — the switch overlay has not shipped), surface
+    # icons for shipped surfaces only, and the coarse vault-status dot.
+    anchor_note_path = str(fields.get("note_path") or "")
+    anchor_title = str(fields.get("title") or anchor_note_path or "No note open")
+    coarse_posture = coarse_vault_posture(
+        vault_state=vault_state, primary_posture=posture
+    )
     telemetry_rows = [
         ("workspace-runtime-channel", "runtime_environment_label", "runtime", runtime_environment),
         ("workspace-runtime-channel-api", "runtime_api_base_url_label", "channel", runtime_channel),
@@ -560,9 +618,11 @@ def _render_workspace_header_strip(
         <div class="workspace-header-row" data-testid="workspace-header-row">
           <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
           <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}">
-            <span class="workspace-vault-dot" aria-hidden="true"></span>
+            <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
             <span>{vault_name} · vault {vault_state}</span>
           </a>
+          <span class="workspace-anchor-pill" data-testid="workspace-anchor-pill" data-region="document-anchor" data-anchor-note-path="{_e(anchor_note_path)}" title="Document anchor">{_e(anchor_title)}</span>
+          <span class="workspace-posture-pill" data-testid="workspace-posture-pill" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" data-authority="local-ui" title="Posture emphasis (local rendering only)">{DEFAULT_POSTURE_EMPHASIS}</span>
           <details class="workspace-runtime-status" data-testid="workspace-runtime-status">
             <summary
               class="workspace-runtime-pill"
@@ -580,13 +640,25 @@ def _render_workspace_header_strip(
           </details>
           <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
           <span class="workspace-header-spacer" aria-hidden="true"></span>
+          <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-map" data-surface="map" data-intent="map.open" title="System map" aria-label="Open system map" onclick="overlayHost.mount('map')">❖</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-memory" data-surface="memory" data-intent="memory.open" title="Memory candidate review" aria-label="Open memory candidate review drawer" onclick="overlayHost.mount('memory')">&#9670;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-receipts" data-surface="receipts" data-intent="receipts.open" title="Receipts history" aria-label="Open read-only receipts history" onclick="overlayHost.mount('receipts')">&#9776;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-settings" data-surface="settings" data-intent="settings.open" title="Settings" aria-label="Open settings drawer" onclick="overlayHost.mount('settings')">&#9881;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-help" data-surface="help" title="Help" aria-label="Open help" onclick="companionHelp.open()">?</button>
+            {guidance_toggle_markup('topbar')}
+          </nav>
           <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
             <kbd>/</kbd><span>⌘K</span>
           </button>
           <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>
           {dev_ribbon}
         </div>
-      </header>"""
+      </header>
+      <!-- Guidance layer (#1788, SEP-06): the shell callout — explanation
+           only, hidden unless the shell root carries data-guidance="on". -->
+      {guidance_callout_markup('shell')}"""
 
 
 def _render_rail_empty_state(
@@ -1323,6 +1395,20 @@ def _canvas_coauthor_script(canvas_enabled: bool) -> str:
       if (result) result.setAttribute('data-result-state', 'routed_to_panel');
     }
 
+    function renderExploratory(data) {
+      // Exploratory 200 (status='exploratory_no_edit'): read-only, non-mutating.
+      // Must NOT render an applied edit — the note body is unchanged and there is
+      // no applied_body/change_summary to show. Surface the server-declared
+      // detail as a non-mutating notice instead.
+      if (result) result.setAttribute('data-result-state', 'exploratory_no_edit');
+      if (notice) {
+        notice.hidden = false;
+        notice.setAttribute('data-notice-state', 'exploratory_no_edit');
+        notice.textContent = (data && data.detail)
+          || 'Exploratory intent — read-only response; note body left unchanged.';
+      }
+    }
+
     submit.addEventListener('click', function() {
       if (submit.getAttribute('data-submitting') === 'true') return;
       var intent = intentInput ? intentInput.value : '';
@@ -1351,6 +1437,10 @@ def _canvas_coauthor_script(canvas_enabled: bool) -> str:
           }
           if (res.status === 503) {
             showNotice('Co-authoring provider is unavailable right now. Nothing was changed.');
+            return;
+          }
+          if (res.ok && res.data && res.data.status === 'exploratory_no_edit') {
+            renderExploratory(res.data);
             return;
           }
           if (res.ok) {
@@ -1981,49 +2071,9 @@ def _render_note_section(fields: dict) -> str:
             data-authority="read-only-projection"
             aria-live="polite"
             hidden></div>
-          <form class="display-preferences"
-            data-testid="display-preferences"
-            data-storage-scope="browser-local"
-            data-authority="render-only">
-            <label class="display-preference-control">
-              <span>Font size</span>
-              <select data-testid="display-pref-font-size"
-                name="font-size"
-                aria-label="Font size">
-                <option value="15px">15</option>
-                <option value="16px">16</option>
-                <option value="18px">18</option>
-                <option value="20px">20</option>
-              </select>
-            </label>
-            <label class="display-preference-control">
-              <span>Line height</span>
-              <select data-testid="display-pref-line-height"
-                name="line-height"
-                aria-label="Line height">
-                <option value="1.45">1.45</option>
-                <option value="1.65">1.65</option>
-                <option value="1.85">1.85</option>
-                <option value="2">2.0</option>
-              </select>
-            </label>
-            <label class="display-preference-control">
-              <span>Reading width</span>
-              <select data-testid="display-pref-reading-width"
-                name="reading-width"
-                aria-label="Reading width">
-                <option value="56ch">56ch</option>
-                <option value="68ch">68ch</option>
-                <option value="78ch">78ch</option>
-              </select>
-            </label>
-            <label class="display-preference-toggle">
-              <input type="checkbox"
-                data-testid="display-pref-focus-mode"
-                name="focus-mode">
-              <span>Focus mode</span>
-            </label>
-          </form>
+          <!-- The shipped #1675 display-preference controls moved into the
+               Settings drawer (#1789, SEP-07) — presentation consolidation
+               only; their storage/apply mechanism below is unchanged. -->
           <details class="note-edit-bar" data-testid="workspace-note-edit-bar">
             <summary class="note-edit-summary">
               <button type="button" class="note-edit-toggle"
@@ -4423,8 +4473,26 @@ def _error_detail(error: str) -> dict:
     return detail if isinstance(detail, dict) else {}
 
 
-def _render_error_section(error: str) -> str:
-    """Render a visible error state using Yggdrasil destructive tokens."""
+def _render_error_section(error: str, *, entry_state: str = "") -> str:
+    """Render a visible error state using Yggdrasil destructive tokens.
+
+    When the resolved entry state is ``no_vault`` (#1783) the error state
+    carries the declared ``entry.retry`` affordance: a plain read-only link
+    back to ``/`` that re-requests orientation. No snapshot content is
+    fabricated. Beside retry, the calm system-map affordance (#1787, SEP-05;
+    spec §Resolved Q4) keeps the whole legible even when the runtime is
+    unreachable — pull-based, opened only by this explicit `map.open`.
+    """
+    retry_html = (
+        '\n    <a class="error-retry" href="/" data-intent="entry.retry"'
+        ' data-testid="workspace-entry-retry">Retry</a>'
+        '\n    <button type="button" class="error-map-affordance"'
+        ' data-testid="workspace-entry-map-affordance" data-intent="map.open"'
+        ' aria-label="Open the system map"'
+        " onclick=\"overlayHost.mount('map')\">System map</button>"
+        if entry_state == "no_vault"
+        else ""
+    )
     detail = _error_detail(error)
     error_kind = str(detail.get("error") or "")
     if error_kind == "note_not_found":
@@ -4451,7 +4519,7 @@ def _render_error_section(error: str) -> str:
   <div class="error-state" data-testid="workspace-error-state" data-error-kind="{'runtime-unavailable' if runtime_unavailable else 'api-error'}">
     <span class="error-label">{runtime_label}</span>
     {runtime_marker}
-    <span class="error-message"><code>{_e(error)}</code></span>
+    <span class="error-message"><code>{_e(error)}</code></span>{retry_html}
   </div>"""
 
 
@@ -4601,13 +4669,45 @@ def _render_orientation_leave_point(leave_point: object) -> str:
         </section>"""
 
 
-def _render_orientation_open_loops(open_loops: object) -> str:
-    rows: list[str] = []
-    for item in _orientation_list(open_loops):
-        loop = _orientation_dict(item)
-        rows.append(
-            f"""
-            <article class="orientation-item" data-testid="workspace-orientation-open-loop"
+# Default visible items per collection in one orientation moment (SEP-02;
+# SYSTEM_ENTRY_POINT_SPEC.md §Resolved Q5: scarce displayed subset, matching
+# the shipped resurfacing-card default #1680). Deliberate expansion may reveal
+# more, never above the server caps (WORKSPACE_ORIENTATION_CONTRACT.md
+# §Bounded Collections: 8/8/5).
+_ORIENTATION_DISPLAY_BUDGET = 3
+
+
+def _orientation_int(value: object, fallback: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _orientation_capped_items(
+    items: object, *, meta: object | None, cap_key: str
+) -> tuple[list[dict], int]:
+    """Server-capped collection items plus the declared cap.
+
+    The UI never widens a collection past the server-declared cap; items
+    beyond the cap are not rendered at all (the cap is a transport ceiling).
+    """
+    caps = _orientation_dict(_orientation_dict(meta).get("caps"))
+    server_cap = _orientation_int(caps.get(cap_key))
+    collected = [_orientation_dict(item) for item in _orientation_list(items)]
+    capped = collected[:server_cap] if server_cap else collected
+    return capped, server_cap
+
+
+def _render_orientation_open_loops(open_loops: object, *, meta: object | None = None) -> str:
+    capped, server_cap = _orientation_capped_items(
+        open_loops, meta=meta, cap_key="open_loops"
+    )
+
+    def _row(loop: dict, *, testid: str, visible_default: bool) -> str:
+        return f"""
+            <article class="orientation-item" data-testid="{testid}"
+              data-visible-by-default="{str(visible_default).lower()}"
               data-loop-status="{_e(_orientation_str(loop.get("status"), "unknown"))}"
               data-handoff-hint="{_e(_orientation_str(loop.get("handoff_hint"), "none"))}">
               <div class="orientation-item-main">
@@ -4620,27 +4720,57 @@ def _render_orientation_open_loops(open_loops: object) -> str:
               </div>
               {_orientation_provenance(loop, testid="workspace-orientation-open-loop-provenance")}
             </article>"""
+
+    visible = capped[: _ORIENTATION_DISPLAY_BUDGET]
+    overflow = capped[_ORIENTATION_DISPLAY_BUDGET :]
+    rows = [
+        _row(loop, testid="workspace-orientation-open-loop", visible_default=True)
+        for loop in visible
+    ]
+    overflow_html = ""
+    if overflow:
+        overflow_rows = "".join(
+            _row(
+                loop,
+                testid="workspace-orientation-open-loop-overflow",
+                visible_default=False,
+            )
+            for loop in overflow
         )
+        overflow_html = f"""
+          <details class="orientation-budget-expand"
+            data-testid="workspace-orientation-open-loops-expand"
+            data-server-cap="{server_cap or len(capped)}"
+            data-overflow-count="{len(overflow)}">
+            <summary>Show {len(overflow)} more open loop(s)</summary>
+            {overflow_rows}
+          </details>"""
     body = "".join(rows) if rows else '<p class="orientation-empty">No open loops declared.</p>'
     return f"""
-        <section class="orientation-section" data-testid="workspace-orientation-open-loops">
+        <section class="orientation-section" id="workspace-orientation-open-loops"
+          data-testid="workspace-orientation-open-loops"
+          data-display-default-budget="{_ORIENTATION_DISPLAY_BUDGET}"
+          data-display-overflow-count="{len(overflow)}">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Open loops</div>
-            <span class="orientation-count">{len(rows)}</span>
+            <span class="orientation-count">{len(capped)}</span>
           </div>
           {body}
+          {overflow_html}
         </section>"""
 
 
-def _render_orientation_notable_changes(changes: object) -> str:
-    rows: list[str] = []
-    for item in _orientation_list(changes):
-        change = _orientation_dict(item)
+def _render_orientation_notable_changes(changes: object, *, meta: object | None = None) -> str:
+    capped, server_cap = _orientation_capped_items(
+        changes, meta=meta, cap_key="notable_changes"
+    )
+
+    def _row(change: dict, *, testid: str, visible_default: bool) -> str:
         summary = _orientation_str(change.get("summary"))
         changed_at = _orientation_str(change.get("changed_at"), "time unknown")
-        rows.append(
-            f"""
-            <article class="orientation-item" data-testid="workspace-orientation-notable-change">
+        return f"""
+            <article class="orientation-item" data-testid="{testid}"
+              data-visible-by-default="{str(visible_default).lower()}">
               <div class="orientation-item-main">
                 <h3>{_e(_orientation_str(change.get("label"), "Notable change"))}</h3>
                 <p>{_e(summary)}</p>
@@ -4649,15 +4779,43 @@ def _render_orientation_notable_changes(changes: object) -> str:
               <div class="orientation-meta-row">Changed: {_e(changed_at)}</div>
               {_orientation_provenance(change, testid="workspace-orientation-notable-change-provenance")}
             </article>"""
+
+    visible = capped[: _ORIENTATION_DISPLAY_BUDGET]
+    overflow = capped[_ORIENTATION_DISPLAY_BUDGET :]
+    rows = [
+        _row(change, testid="workspace-orientation-notable-change", visible_default=True)
+        for change in visible
+    ]
+    overflow_html = ""
+    if overflow:
+        overflow_rows = "".join(
+            _row(
+                change,
+                testid="workspace-orientation-notable-change-overflow",
+                visible_default=False,
+            )
+            for change in overflow
         )
+        overflow_html = f"""
+          <details class="orientation-budget-expand"
+            data-testid="workspace-orientation-notable-changes-expand"
+            data-server-cap="{server_cap or len(capped)}"
+            data-overflow-count="{len(overflow)}">
+            <summary>Show {len(overflow)} more notable change(s)</summary>
+            {overflow_rows}
+          </details>"""
     body = "".join(rows) if rows else '<p class="orientation-empty">No notable changes declared.</p>'
     return f"""
-        <section class="orientation-section" data-testid="workspace-orientation-notable-changes">
+        <section class="orientation-section" id="workspace-orientation-notable-changes"
+          data-testid="workspace-orientation-notable-changes"
+          data-display-default-budget="{_ORIENTATION_DISPLAY_BUDGET}"
+          data-display-overflow-count="{len(overflow)}">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Notable changes</div>
-            <span class="orientation-count">{len(rows)}</span>
+            <span class="orientation-count">{len(capped)}</span>
           </div>
           {body}
+          {overflow_html}
         </section>"""
 
 
@@ -4671,7 +4829,7 @@ def _render_orientation_resurface(
     meta_payload = _orientation_dict(meta)
     caps = _orientation_dict(meta_payload.get("caps"))
     server_cap = int(caps.get("resurface_candidates") or 0)
-    default_budget = 3
+    default_budget = _ORIENTATION_DISPLAY_BUDGET
     reasons = degraded_reasons or []
     posture = "degraded" if reasons else "read-only"
     reason_html = "".join(
@@ -4768,6 +4926,322 @@ def _render_orientation_governance(governance: object) -> str:
         </section>"""
 
 
+# --------------------------------------------------------------------------
+# Re-entry treatments per latency-ladder shape (#1784, SEP-02).
+#
+# The shape arrives from SEP-01's server-side resolution (entry_state.py);
+# nothing here recomputes the gap. Treatments per
+# SYSTEM_ENTRY_POINT_SPEC.md §Resolved Q5 / §Resolved Q9 and
+# docs/SYSTEM_ENTRY_POINT/REENTRY_ORIENTATION_TREATMENT.md:
+#
+# - full_mist / long_mist → four-fixed-questions card (data-region=
+#   "reentry-card"), counts not enumerations, server-declared traj-state pill;
+# - long_mist → + delta strip (data-region="delta-strip") and right-margin
+#   whisper column (suppressed narrow, collapsing into the card);
+# - soft_mist → no card; caret-echo cue + one peripheral "where you stopped"
+#   line only;
+# - thread_fade → no card, no line; fractional rail fade only;
+# - no_mist / cold_start / no_vault → no re-entry overlay of any kind.
+# --------------------------------------------------------------------------
+
+# Leave-point statuses presented as guard-held qualified resume (spec Q9).
+_REENTRY_STALE_CAUSES: dict[str, str] = {
+    "stale": "Source changed since this was captured.",
+    "degraded": "Source resolution degraded since this was captured.",
+    "artifact_missing": "The artifact this leave point referenced is missing.",
+}
+
+# Fraction the conversation/rail pane keeps during thread fade (90s–15m):
+# the pane fades a fraction; the trajectory stays implicit.
+_REENTRY_RAIL_FADE = "0.85"
+
+
+def _reentry_caret_echo() -> str:
+    """Caret-echo cue at the momentum stop point (residual ambient layer)."""
+    return (
+        '<span class="reentry-caret-echo" data-testid="reentry-caret-echo"'
+        ' aria-hidden="true"></span>'
+    )
+
+
+def _reentry_counts(orientation: dict) -> dict[str, int]:
+    """Server-capped counts for counts-not-enumerations rendering."""
+    meta = orientation.get("meta")
+    loops, _ = _orientation_capped_items(
+        orientation.get("open_loops"), meta=meta, cap_key="open_loops"
+    )
+    changes, _ = _orientation_capped_items(
+        orientation.get("notable_changes"), meta=meta, cap_key="notable_changes"
+    )
+    resurface, _ = _orientation_capped_items(
+        _orientation_dict(orientation.get("resurface")).get("candidates"),
+        meta=meta,
+        cap_key="resurface_candidates",
+    )
+    governance = _orientation_dict(orientation.get("governance"))
+    memory = _orientation_dict(orientation.get("memory"))
+    return {
+        "open_loops": len(loops),
+        "notable_changes": len(changes),
+        "resurface_candidates": len(resurface),
+        "staged": _orientation_int(governance.get("pending_proposal_count")),
+        "memory_candidates": _orientation_int(memory.get("pending_candidate_count")),
+    }
+
+
+def _reentry_leave_label(leave: dict) -> str:
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    return _orientation_str(
+        leave.get("label") or artifact.get("title"), "Derived leave point"
+    )
+
+
+def _reentry_traj_state(leave: dict) -> str:
+    """Server-declared trajectory state for the re-entry card pill.
+
+    Rendered as supplied when the payload declares one; otherwise the server
+    render derives it from the same declared signals as the shape: the card
+    renders only for full/long-mist gaps (2h–14d), which the
+    CONTINUITY_AND_DECAY.md trajectory table classifies as dormant. Never
+    re-derived client-side.
+    """
+    declared = _orientation_str(
+        leave.get("trajectory_state") or leave.get("traj_state")
+    )
+    if declared in ("warm", "dormant"):
+        return declared
+    return "dormant"
+
+
+def _reentry_resume_affordance(leave: dict, *, stale: bool) -> str:
+    """Resume affordance; guard-held and qualified when the leave point is stale.
+
+    Per BLOCKED_AND_STALE_STATE_SPEC.md the guard-held state names the cause,
+    states that nothing was mutated, and offers a path forward — never a
+    generic error, and never a silent resume into a missing artifact.
+    """
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
+    href = "/workspace?note_path=" + quote(note_path, safe="") if note_path else ""
+    status = _orientation_str(leave.get("status"))
+
+    if not stale:
+        if not href:
+            return ""
+        return (
+            f'<a class="reentry-resume" data-testid="reentry-resume" '
+            f'data-intent="entry.resume" href="{_e(href)}">Resume — jump to caret</a>'
+        )
+
+    cause = _REENTRY_STALE_CAUSES.get(status, _REENTRY_STALE_CAUSES["stale"])
+    if status == "artifact_missing" or not href:
+        # Never silently resume into a missing artifact: the path forward
+        # re-enters through the Vault Browser instead.
+        forward = (
+            '<a class="reentry-resume-forward" data-testid="reentry-resume-reenter" '
+            'data-intent="vault.open" href="#workspace-orientation-vault-entry">'
+            "Re-enter through the vault</a>"
+        )
+    else:
+        forward = (
+            f'<a class="reentry-resume-forward" data-testid="reentry-resume" '
+            f'data-intent="entry.resume" data-resume-qualified="true" '
+            f'href="{_e(href)}">Open the current artifact state</a>'
+        )
+    return f"""
+            <div class="reentry-resume-guard" data-testid="reentry-resume-guard"
+              data-guard-held="true" data-guard-cause="{_e(status or "stale")}">
+              <span class="reentry-guard-copy">{_e(cause)} Nothing was mutated.</span>
+              {forward}
+            </div>"""
+
+
+def _render_reentry_delta_strip(orientation: dict) -> str:
+    """Long-mist delta strip from notable_changes (display budget 3)."""
+    capped, server_cap = _orientation_capped_items(
+        orientation.get("notable_changes"),
+        meta=orientation.get("meta"),
+        cap_key="notable_changes",
+    )
+    visible = capped[: _ORIENTATION_DISPLAY_BUDGET]
+    remaining = len(capped) - len(visible)
+    items = "".join(
+        f'<span class="reentry-delta-item" data-testid="reentry-delta-item">'
+        f'<span class="reentry-delta-dot" aria-hidden="true"></span>'
+        f"{_e(_orientation_str(change.get('label'), 'Notable change'))}</span>"
+        for change in visible
+    )
+    more = (
+        f'<span class="reentry-delta-more" data-testid="reentry-delta-more">'
+        f'+{remaining} more under <a href="#workspace-orientation-notable-changes">'
+        f"notable changes</a></span>"
+        if remaining
+        else ""
+    )
+    return (
+        f'<div class="reentry-delta-strip" data-region="delta-strip" '
+        f'data-testid="reentry-delta-strip" '
+        f'data-display-default-budget="{_ORIENTATION_DISPLAY_BUDGET}" '
+        f'data-server-cap="{server_cap or len(capped)}">{items}{more}</div>'
+    )
+
+
+def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
+    """The four fixed re-entry questions (full_mist / long_mist).
+
+    Shapes fixed per CONTINUITY_AND_DECAY.md §The Four Re-entry Questions;
+    unresolved and changed render as counts with a deliberate inspect
+    affordance, never enumerations (spec §Resolved Q5). The inspect affordance
+    emits ``memory.open`` and mounts the memory candidate review drawer on the
+    overlay host (#1793, SEP-09b); without JS it gracefully falls back to the
+    open-loops orientation section.
+    """
+    leave = _orientation_dict(orientation.get("leave_point"))
+    counts = _reentry_counts(orientation)
+    traj_state = _reentry_traj_state(leave)
+    delta_strip = _render_reentry_delta_strip(orientation) if shape == "long_mist" else ""
+    if _orientation_str(leave.get("status")) == "artifact_missing":
+        # Never a silent path into a missing artifact, not even from the
+        # stop-point line — the guard-held affordance owns the way forward.
+        artifact = _orientation_dict(leave.get("artifact_ref"))
+        artifact_link = (
+            f'<span class="orientation-artifact-link orientation-artifact-link--empty" '
+            f'data-testid="reentry-stop-link">'
+            f"{_e(_orientation_str(artifact.get('title'), 'Artifact'))}</span>"
+        )
+    else:
+        artifact_link = _orientation_artifact_link(
+            leave.get("artifact_ref"), testid="reentry-stop-link"
+        )
+    inspect_intent = "memory.open" if counts["memory_candidates"] > 0 else "open_loops.inspect"
+    inspect_onclick = (
+        "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
+        if counts["memory_candidates"] > 0
+        else ""
+    )
+    inspect_onclick_attr = f' onclick="{inspect_onclick}"' if inspect_onclick else ""
+    return f"""
+    <section class="reentry-card" data-region="reentry-card" data-testid="reentry-card"
+      data-traj-state="{_e(traj_state)}" data-reentry-treatment="{_e(shape)}"
+      data-read-only="true">
+      <div class="reentry-head">
+        <span class="orientation-section-kicker">Re-entry</span>
+        <span class="reentry-traj-pill" data-testid="reentry-traj-pill">{_e(traj_state)}</span>
+        {guidance_toggle_markup('reentry')}
+      </div>
+      {guidance_callout_markup('reentry')}
+      <ol class="reentry-questions">
+        <li class="reentry-q" data-reentry-question="doing">
+          <span class="reentry-q-label">What was I doing</span>
+          <span class="reentry-q-body">{_e(_reentry_leave_label(leave))}</span>
+        </li>
+        <li class="reentry-q" data-reentry-question="stopped">
+          <span class="reentry-q-label">Where did momentum stop</span>
+          <span class="reentry-q-body">{artifact_link}{_reentry_caret_echo()}</span>
+        </li>
+        <li class="reentry-q" data-reentry-question="unresolved">
+          <span class="reentry-q-label">What remains unresolved</span>
+          <span class="reentry-q-body" data-testid="reentry-unresolved-counts">
+            {counts["open_loops"]} open loops · {counts["staged"]} staged
+            · {counts["memory_candidates"]} memory candidates
+            <a class="reentry-inspect" data-testid="reentry-inspect"
+              data-intent="{inspect_intent}"
+              href="#workspace-orientation-open-loops"
+              {inspect_onclick_attr}>inspect</a>
+          </span>
+        </li>
+        <li class="reentry-q" data-reentry-question="changed">
+          <span class="reentry-q-label">What changed since</span>
+          <span class="reentry-q-body" data-testid="reentry-changed-count">
+            {counts["notable_changes"]} changes while you were away
+          </span>
+        </li>
+      </ol>
+      {delta_strip}
+      <div class="reentry-actions">
+        {_reentry_resume_affordance(leave, stale=stale)}
+        <button class="reentry-dismiss" type="button" data-testid="reentry-dismiss"
+          data-intent="entry.dismiss" data-unresolved-tension="preserved"
+          onclick="entryDismiss(this)">Start fresh</button>
+      </div>
+    </section>"""
+
+
+def _entry_dismiss_script() -> str:
+    return """
+  <script>
+  function entryDismiss(control) {
+    var card = control && control.closest('[data-region=reentry-card]');
+    if (card) { card.remove(); }
+    if (document.body) {
+      document.body.dataset.entryState = 'shell_active';
+      document.body.setAttribute('data-entry-state', 'shell_active');
+    }
+  }
+  </script>"""
+
+
+def _render_reentry_whisper_column(orientation: dict) -> str:
+    """Right-margin whisper column (long_mist): four named items.
+
+    Suppressed in narrow mode by the page stylesheet — the card carries the
+    same four answers, so the column collapses into the card.
+    """
+    leave = _orientation_dict(orientation.get("leave_point"))
+    counts = _reentry_counts(orientation)
+    return f"""
+  <aside class="reentry-whisper-col" data-region="whisper-column"
+    data-testid="reentry-whisper-column" data-narrow-mode="suppressed"
+    aria-hidden="true">
+    <div class="reentry-whisper" data-whisper-item="doing">
+      <span class="reentry-whisper-label">doing</span>
+      <span class="reentry-whisper-text">{_e(_reentry_leave_label(leave))}</span>
+    </div>
+    <div class="reentry-whisper" data-whisper-item="unresolved">
+      <span class="reentry-whisper-label">unresolved</span>
+      <span class="reentry-whisper-text">{counts["open_loops"]} open loops · {counts["staged"]} staged</span>
+    </div>
+    <div class="reentry-whisper" data-whisper-item="changed">
+      <span class="reentry-whisper-label">changed</span>
+      <span class="reentry-whisper-text">{counts["notable_changes"]} deltas since you left</span>
+    </div>
+    <div class="reentry-whisper" data-whisper-item="resurfaced">
+      <span class="reentry-whisper-label">resurfaced</span>
+      <span class="reentry-whisper-text">{counts["resurface_candidates"]} why-now candidates</span>
+    </div>
+  </aside>"""
+
+
+def _render_reentry_peripheral_line(orientation: dict) -> str:
+    """Soft-mist residual cue: one peripheral "where you stopped" line.
+
+    Per spec §Resolved Q5 the latency ladder's one-line sentence is a
+    peripheral cue — no card, no metadata, never centered on the document.
+    """
+    leave = _orientation_dict(orientation.get("leave_point"))
+    status = _orientation_str(leave.get("status"))
+    label = _reentry_leave_label(leave)
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
+    if status == "present" and note_path:
+        href = "/workspace?note_path=" + quote(note_path, safe="")
+        target = (
+            f'<a class="orientation-artifact-link" '
+            f'data-testid="reentry-peripheral-stop-link" '
+            f'data-intent="entry.resume" data-note-path="{_e(note_path)}" '
+            f'href="{_e(href)}">{_e(label)}</a>'
+        )
+    else:
+        # A non-current leave point never gets a silent link into a moved or
+        # missing artifact from the ambient cue.
+        target = _e(label)
+    return (
+        f'<p class="reentry-peripheral-line" data-region="reentry-peripheral-line" '
+        f'data-testid="reentry-peripheral-line">Where you stopped: '
+        f"{target}{_reentry_caret_echo()}</p>"
+    )
+
+
 def _render_orientation_vault_entry(
     vault_browser: Optional[dict],
     *,
@@ -4806,6 +5280,7 @@ def _render_orientation_vault_entry(
     )
     return f"""
         <section class="orientation-section orientation-vault-entry"
+          id="workspace-orientation-vault-entry"
           data-testid="workspace-orientation-vault-entry"
           data-read-only="true">
           <div class="orientation-section-header">
@@ -4829,7 +5304,10 @@ def _render_orientation_index_html(
     production_profile: bool = False,
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
+    entry_resolution: Optional[EntryStateResolution] = None,
 ) -> str:
+    if entry_resolution is None:
+        entry_resolution = resolve_entry_state(orientation=orientation)
     scope = _orientation_dict(orientation.get("scope"))
     meta = _orientation_dict(orientation.get("meta"))
     guards = _orientation_dict(orientation.get("guards"))
@@ -4845,23 +5323,73 @@ def _render_orientation_index_html(
     reason_html = "".join(
         f'<span class="orientation-reason">{_e(reason)}</span>' for reason in reasons
     )
+    # Degraded is an amber banner naming the missing source(s); the rest of
+    # the surface stays calm and the resolved slices still render
+    # (SYSTEM_ENTRY_POINT_SPEC.md §Entry-point state model, cross-flags).
+    missing_source_html = (
+        f"""
+          <span class="orientation-degraded-source"
+            data-testid="workspace-orientation-degraded-source">
+            Missing source: {_e(" · ".join(reasons))}
+          </span>"""
+        if reasons
+        else ""
+    )
     degraded_html = (
         f"""
         <section class="orientation-degraded" data-testid="workspace-orientation-degraded"
+          data-tone="amber"
           data-runtime-posture="{_e(runtime_posture)}">
           <strong>Partial orientation</strong>
           <span>Runtime posture: {_e(runtime_posture)}</span>
+          {missing_source_html}
           <div>{reason_html}</div>
         </section>"""
         if degraded
         else ""
     )
+    # Latency-ladder re-entry treatment (#1784, SEP-02). The shape is the
+    # server-resolved SEP-01 attribute; no client-side gap computation.
+    shape = entry_resolution.reentry_shape if entry_resolution.state == "orienting" else None
+    reentry_overlay_html = ""
+    whisper_html = ""
+    rail_fade_attr = ""
+    rail_fade_class = ""
+    memory_drawer_markup_html = ""
+    memory_drawer_script_html = ""
+    if shape in ("full_mist", "long_mist"):
+        reentry_overlay_html = _render_reentry_card(
+            orientation, shape=shape, stale=entry_resolution.stale
+        )
+        # The re-entry card's unresolved-inspect affordance emits
+        # `memory.open` (#1793, SEP-09b), so the memory review drawer ships
+        # with the card — pull-based, no dead affordance on shapes without
+        # the card. Dismiss returns to the orientation substrate untouched
+        # (no route reset, no data loss).
+        memory_drawer_markup_html = memory_review_drawer_markup()
+        memory_drawer_script_html = memory_review_drawer_script()
+        if shape == "long_mist":
+            whisper_html = _render_reentry_whisper_column(orientation)
+    elif shape == "soft_mist":
+        reentry_overlay_html = _render_reentry_peripheral_line(orientation)
+    elif shape == "thread_fade":
+        # No card, no peripheral line: the rail pane fades a fraction and the
+        # trajectory stays implicit.
+        rail_fade_attr = f' data-rail-fade="{_REENTRY_RAIL_FADE}"'
+        rail_fade_class = " orientation-shell--rail-faded"
+    # no_mist, cold_start, and no_vault render no re-entry overlay of any kind.
     refresh_mode = "foreground_pull" if ambient_refresh_enabled else "manual"
     refresh_state = "degraded" if degraded else ("scheduled" if ambient_refresh_enabled and stale_after else "manual_refresh")
     refresh_copy = (
         "Foreground refresh scheduled from server freshness metadata."
         if ambient_refresh_enabled and stale_after and not degraded
         else "Manual refresh"
+    )
+    # In the no_vault entry state the manual refresh link is the declared
+    # entry.retry affordance (SYSTEM_ENTRY_POINT_SPEC.md §Intent vocabulary);
+    # it re-requests orientation read-only and returns the client to `boot`.
+    retry_intent_attr = (
+        ' data-intent="entry.retry"' if entry_resolution.state == "no_vault" else ""
     )
     refresh_html = f"""
         <section class="orientation-refresh"
@@ -4870,7 +5398,11 @@ def _render_orientation_index_html(
           data-refresh-state="{_e(refresh_state)}"
           data-read-only="true">
           <span>{_e(refresh_copy)}</span>
-          <a href="/" data-testid="workspace-orientation-manual-refresh">Refresh</a>
+          <a href="/"{retry_intent_attr} data-testid="workspace-orientation-manual-refresh">Refresh</a>
+          <button type="button" class="orientation-map-affordance"
+            data-testid="workspace-orientation-map-affordance" data-intent="map.open"
+            aria-label="Open the system map"
+            onclick="overlayHost.mount('map')">System map</button>
         </section>"""
     ambient_script = _orientation_ambient_refresh_script() if ambient_refresh_enabled else ""
     vault_entry_html = _render_orientation_vault_entry(
@@ -4878,6 +5410,25 @@ def _render_orientation_index_html(
         error=vault_browser_error,
     )
     vault_browser_script = _orientation_vault_browser_script() if vault_entry_html else ""
+    # The system map overlay (#1787, SEP-05) is reachable from every entry
+    # state (spec §Resolved Q4): the calm affordance above is the only opener
+    # — pull-based, never unbidden. The overlay-host substrate therefore
+    # ships on every orientation render; only the vault route truthfully
+    # exists on the entry surfaces (the declared cold_start → shell_active
+    # path), so the map offers exactly that one.
+    overlay_host_overlays_html = (
+        overlay_host_markup(anchor_note_path="")
+        + memory_drawer_markup_html
+        + system_map_overlay_markup(available_routes=("vault",))
+        + overlay_host_script()
+        + memory_drawer_script_html
+        + system_map_overlay_script()
+        # Guidance layer (#1788, SEP-06): the re-entry card and the map head
+        # carry the ⓘ affordance on the entry surfaces, so the visibility
+        # gate and the UI-local toggle controller ship with the substrate.
+        + guidance_layer_style()
+        + guidance_layer_script()
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4896,6 +5447,7 @@ def _render_orientation_index_html(
       --border-strong: #1e3050;
       --accent: #d4a843;
       --cyan: #00d4e8;
+      --amber: #f09030;
       --destructive: #ff3d3d;
       --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -5156,16 +5708,20 @@ def _render_orientation_index_html(
       font-size: 11px;
       margin-top: 2px;
     }}
+    /* Degraded is a calm amber banner naming the missing source — never an
+       alarm and never the destructive token (spec cross-flag treatment;
+       BLOCKED_AND_STALE_STATE_SPEC.md visual contract). */
     .orientation-degraded {{
-      background: rgba(255,61,61,0.08);
-      border: 1px solid rgba(255,61,61,0.35);
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
       border-radius: 8px;
       color: var(--fg-1);
       display: grid;
       gap: 8px;
       padding: 12px 16px;
     }}
-    .orientation-degraded strong {{ color: var(--destructive); }}
+    .orientation-degraded strong {{ color: var(--amber); }}
+    .orientation-degraded-source {{ color: var(--fg-2); font-family: var(--font-mono); font-size: 12px; }}
     .orientation-refresh {{
       align-items: center;
       background: var(--bg-surface);
@@ -5181,14 +5737,138 @@ def _render_orientation_index_html(
     }}
     .orientation-refresh a {{ color: var(--cyan); text-decoration: none; }}
     .orientation-refresh a:hover {{ text-decoration: underline; }}
+    .orientation-budget-expand summary {{
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }}
+    /* ---- Re-entry treatments per latency-ladder shape (#1784, SEP-02) ---- */
+    .reentry-card {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-left: 2px solid var(--accent);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }}
+    .reentry-head {{ align-items: center; display: flex; gap: 12px; justify-content: space-between; }}
+    .reentry-traj-pill {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 2px 10px;
+      text-transform: uppercase;
+    }}
+    .reentry-questions {{ display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }}
+    .reentry-q {{ display: grid; gap: 2px; }}
+    .reentry-q-label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .reentry-q-body {{ color: var(--fg-1); }}
+    .reentry-inspect {{
+      color: var(--cyan);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      margin-left: 6px;
+      text-decoration: none;
+    }}
+    .reentry-inspect:hover {{ text-decoration: underline; }}
+    .reentry-caret-echo {{
+      animation: reentry-breathe 1.6s ease-in-out infinite;
+      background: var(--accent);
+      display: inline-block;
+      height: 1.1em;
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      width: 2px;
+    }}
+    @keyframes reentry-breathe {{ 0%, 100% {{ opacity: 0.25; }} 50% {{ opacity: 0.8; }} }}
+    @media (prefers-reduced-motion: reduce) {{
+      .reentry-caret-echo {{ animation: none; opacity: 0.6; }}
+    }}
+    .reentry-actions {{ align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }}
+    .reentry-resume {{
+      background: var(--bg-raised);
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      color: var(--accent);
+      padding: 6px 12px;
+      text-decoration: none;
+    }}
+    .reentry-dismiss {{
+      background: transparent;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--fg-2);
+      cursor: pointer;
+      font: inherit;
+      padding: 6px 12px;
+    }}
+    /* Guard-held qualified resume — amber/staged token, never destructive. */
+    .reentry-resume-guard {{
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
+      border-radius: 6px;
+      display: grid;
+      gap: 6px;
+      padding: 10px 12px;
+    }}
+    .reentry-guard-copy {{ color: var(--fg-1); font-size: 14px; }}
+    .reentry-resume-forward {{ color: var(--cyan); text-decoration: none; }}
+    .reentry-resume-forward:hover {{ text-decoration: underline; }}
+    .reentry-delta-strip {{
+      border-top: 1px dashed var(--border-strong);
+      display: grid;
+      gap: 6px;
+      padding-top: 10px;
+    }}
+    .reentry-delta-item {{ align-items: center; color: var(--fg-2); display: flex; font-size: 14px; gap: 8px; }}
+    .reentry-delta-dot {{ background: var(--cyan); border-radius: 50%; flex: none; height: 6px; width: 6px; }}
+    .reentry-delta-more {{ color: var(--fg-3); font-family: var(--font-mono); font-size: 12px; }}
+    .reentry-delta-more a {{ color: var(--cyan); text-decoration: none; }}
+    .reentry-peripheral-line {{ color: var(--fg-3); font-size: 13px; margin: 0; text-align: right; }}
+    .reentry-whisper-col {{
+      display: grid;
+      gap: 14px;
+      pointer-events: none;
+      position: fixed;
+      right: 18px;
+      top: 25vh;
+      width: 180px;
+    }}
+    .reentry-whisper {{ display: grid; gap: 2px; }}
+    .reentry-whisper-label {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .reentry-whisper-text {{ color: var(--fg-2); font-size: 13px; }}
+    /* Thread fade (90s–15m): the rail pane fades a fraction; no card, no
+       line — the trajectory stays implicit. */
+    .orientation-shell--rail-faded .orientation-column--rail {{ opacity: {_REENTRY_RAIL_FADE}; }}
     @media (max-width: 860px) {{
       .orientation-grid {{ grid-template-columns: 1fr; }}
       .orientation-governance-grid {{ grid-template-columns: 1fr; }}
       .orientation-shell {{ padding: 16px; }}
+      /* Narrow mode: the whisper column is suppressed and collapses into the
+         card, which carries the same four answers. */
+      .reentry-whisper-col {{ display: none; }}
     }}
   </style>
 </head>
-<body data-diagnostics="{'true' if diagnostics else 'false'}">
+<body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -5207,7 +5887,7 @@ def _render_orientation_index_html(
       </form>
     </div>
   </details>
-  <main class="orientation-shell" data-testid="workspace-reentry-orientation"
+  <main class="orientation-shell{rail_fade_class}" data-testid="workspace-reentry-orientation"
     data-read-only="true"
     data-contract-version="{_e(_orientation_str(meta.get("contract_version"), "unknown"))}"
     data-freshness="{_e(freshness)}"
@@ -5215,7 +5895,7 @@ def _render_orientation_index_html(
     data-stale-after="{_e(stale_after)}"
     data-trace-id="{_e(trace_id)}"
     data-degraded="{str(degraded).lower()}"
-    data-ambient-refresh="{'enabled' if ambient_refresh_enabled else 'disabled'}">
+    data-ambient-refresh="{'enabled' if ambient_refresh_enabled else 'disabled'}"{rail_fade_attr}>
     <header class="orientation-header">
       <div class="orientation-eyebrow">Workspace orientation</div>
       <h1 class="orientation-heading">Re-entry snapshot</h1>
@@ -5229,13 +5909,15 @@ def _render_orientation_index_html(
     </header>
     {refresh_html}
     {degraded_html}
+    {reentry_overlay_html}
+    {whisper_html}
     <div class="orientation-grid">
       <div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"))}
-        {_render_orientation_open_loops(orientation.get("open_loops"))}
-        {_render_orientation_notable_changes(orientation.get("notable_changes"))}
+        {_render_orientation_open_loops(orientation.get("open_loops"), meta=meta)}
+        {_render_orientation_notable_changes(orientation.get("notable_changes"), meta=meta)}
       </div>
-      <div class="orientation-column">
+      <div class="orientation-column orientation-column--rail">
         {_render_orientation_governance(orientation.get("governance"))}
         {_render_orientation_resurface(
             orientation.get("resurface"),
@@ -5248,7 +5930,10 @@ def _render_orientation_index_html(
   </main>
   {vault_browser_script}
   {ambient_script}
+  {_entry_dismiss_script()}
+  {overlay_host_overlays_html}
   {_render_help_drawer()}
+  {_render_operator_drawer()}
 </body>
 </html>"""
 
@@ -5362,6 +6047,431 @@ def _orientation_ambient_refresh_script() -> str:
     });
     window.addEventListener('focus', refreshWhenStale);
     schedule(shell.dataset.staleAfter);
+  }());
+  </script>"""
+
+
+# --- Operator diagnostics overlay ------------------------------------------
+# The Operator diagnostics overlay folds the legacy app/web dashboard
+# (Status / Health / Settings validation / Recent events / Ask) into the
+# Companion UI shell as an Operator-badged slide-over drawer, modeled on the
+# existing Help drawer. It is NOT a daily-use surface; it is operator-only.
+#
+# Architecture contract (from issue #1758):
+#   - Document-first / overlay-first: dims but does not dismiss the workspace;
+#     closing returns the user exactly where they were.
+#   - Server declares, UI renders: no vault reads, no local data composition.
+#     The overlay renders only runtime-declared payloads proxied through the
+#     companion server (same-origin model).
+#   - No hidden semantic state: degraded/unreachable states render explicitly
+#     (amber/alert), never a silent blank or stale panel.
+#   - No dev/prod feature split: wired into both profiles.
+#   - Pure render: render_operator_overlay_html is a pure function over payloads.
+#
+# Proxy endpoints added to do_GET / do_POST:
+#   GET  /api/operator/status            -> COMPANION_API_BASE_URL /api/status
+#   GET  /api/operator/health            -> COMPANION_API_BASE_URL /api/health
+#   GET  /api/operator/settings/validate -> COMPANION_API_BASE_URL /api/settings/validate
+#   GET  /api/operator/events/tail       -> COMPANION_API_BASE_URL /api/events/tail
+#   POST /api/operator/ask               -> COMPANION_API_BASE_URL /api/ask
+#
+# The /api/operator/* prefix keeps operator routes clearly namespaced and
+# distinct from /api/companion/* (workspace) routes.
+#
+# How to extend:
+#   * Edit overlay layout/content -> render_operator_overlay_html.
+#   * Change the toggle control -> _render_operator_toggle.
+
+
+def render_operator_overlay_html(
+    *,
+    status_payload: dict | None = None,
+    health_payload: dict | None = None,
+    settings_payload: dict | None = None,
+    events_payload: dict | None = None,
+    status_error: str = "",
+    health_error: str = "",
+    settings_error: str = "",
+    events_error: str = "",
+) -> str:
+    """Render the Operator diagnostics overlay as a standalone HTML fragment.
+
+    Pure function over payload dicts — no network calls, no file I/O.
+    All user-supplied values are HTML-escaped before output.
+
+    Used both for unit-testing (fixture payloads) and for static-HTML UAT
+    capture (per reference_companion_ui_local_uat).  The overlay is embedded
+    inside the shell by _render_operator_drawer(); this function produces the
+    *inner* content of the drawer (suitable for iframe or direct embed).
+    """
+
+    def _e(v: object) -> str:
+        return _html.escape(str(v) if v is not None else "")
+
+    def _pill(ok: object, *, ok_label: str = "ok", fail_label: str = "fail") -> str:
+        if ok is True:
+            return f'<span class="op-pill op-pill-ok">{ok_label}</span>'
+        if ok is False:
+            return f'<span class="op-pill op-pill-warn">{fail_label}</span>'
+        return '<span class="op-pill">unknown</span>'
+
+    def _degraded_banner(msg: str) -> str:
+        return (
+            '<div class="op-banner-degraded" '
+            'data-testid="operator-degraded-banner" '
+            f'data-state="degraded">{_e(msg)}</div>'
+        ) if msg else ""
+
+    # --- Status panel ---
+    if status_error:
+        status_html = _degraded_banner(status_error)
+    elif status_payload is not None:
+        sot_v = _e(status_payload.get("sot_version", "N/A"))
+        ts = _e(status_payload.get("timestamp", "N/A"))
+        stores = status_payload.get("stores") or []
+        ingestion = status_payload.get("ingestion") or {}
+        ask_s = status_payload.get("ask") or {}
+        store_rows = "".join(
+            f"<tr>"
+            f"<td>{_e(s.get('name', ''))}</td>"
+            f"<td>{_e(s.get('object_count', 0))}</td>"
+            f"<td>{_e(s.get('last_ingest_at', 'N/A'))}</td>"
+            f"<td>{_e(s.get('last_error_at', 'N/A'))}</td>"
+            f"</tr>"
+            for s in stores
+        ) or '<tr><td colspan="4" class="op-muted">No stores reported.</td></tr>'
+        status_html = (
+            f'<div class="op-stat-row"><span>SoT version</span><span>{sot_v}</span></div>'
+            f'<div class="op-stat-row"><span>Timestamp</span><span>{ts}</span></div>'
+            f'<div class="op-stat-row"><span>Ingestion last run</span>'
+            f'<span>{_e(ingestion.get("last_run_at", "N/A"))}</span></div>'
+            f'<div class="op-stat-row"><span>Ingestion result</span>'
+            f'<span>{_pill(ingestion.get("last_run_ok"))}</span></div>'
+            f'<div class="op-stat-row"><span>ASK queries (24h)</span>'
+            f'<span>{_e(ask_s.get("total_queries_24h", 0))}</span></div>'
+            f'<div class="op-stat-row"><span>ASK avg latency</span>'
+            f'<span>{_e(ask_s.get("avg_latency_ms_24h", "N/A"))}</span></div>'
+            f'<table class="op-table"><thead>'
+            f'<tr><th>Store</th><th>Objects</th><th>Last ingest</th><th>Last error</th></tr>'
+            f'</thead><tbody>{store_rows}</tbody></table>'
+        )
+    else:
+        status_html = '<div class="op-muted" data-testid="operator-status-empty">No data.</div>'
+
+    # --- Health panel ---
+    if health_error:
+        health_html = _degraded_banner(health_error)
+    elif health_payload is not None:
+        ok = health_payload.get("ok")
+        checks = health_payload.get("checks") or {}
+        check_rows = "".join(
+            f"<tr><td>{_e(name)}</td>"
+            f"<td>{_pill(detail.get('ok') if isinstance(detail, dict) else None)} "
+            f"{_e(detail.get('detail', '') if isinstance(detail, dict) else '')}</td></tr>"
+            for name, detail in checks.items()
+        ) or '<tr><td colspan="2" class="op-muted">No checks reported.</td></tr>'
+        health_html = (
+            f'<div class="op-stat-row"><span>Overall</span><span>{_pill(ok)}</span></div>'
+            f'<table class="op-table"><thead>'
+            f'<tr><th>Check</th><th>Result</th></tr>'
+            f'</thead><tbody>{check_rows}</tbody></table>'
+        )
+    else:
+        health_html = '<div class="op-muted" data-testid="operator-health-empty">No data.</div>'
+
+    # --- Settings validation panel ---
+    if settings_error:
+        settings_html = _degraded_banner(settings_error)
+    elif settings_payload is not None:
+        ok = settings_payload.get("ok")
+        issues = settings_payload.get("issues") or []
+        issues_text = "\n".join(
+            f"{_e(i.get('code', ''))}: {_e(i.get('message', ''))}" for i in issues
+        ) or "No issues."
+        settings_html = (
+            f'<div class="op-stat-row"><span>Status</span><span>{_pill(ok)}</span></div>'
+            f'<pre class="op-pre">{issues_text}</pre>'
+        )
+    else:
+        settings_html = (
+            '<div class="op-muted" data-testid="operator-settings-empty">No data.</div>'
+        )
+
+    # --- Recent events panel ---
+    if events_error:
+        events_html = _degraded_banner(events_error)
+    elif events_payload is not None:
+        events = events_payload.get("events") or []
+        # The events-tail JSONL shape is not uniform: the common record uses
+        # `event`, some use `event_type`, and the outbox uses `topic`. Fall back
+        # across all three (matching the legacy dashboard) so a populated tail
+        # never renders a blank Event column.
+        event_rows = "".join(
+            f"<tr>"
+            f"<td>{_e(ev.get('timestamp', ''))}</td>"
+            f"<td>{_e(ev.get('event') or ev.get('event_type') or ev.get('topic') or '')}</td>"
+            f"<td>{_e(str(ev.get('trace_id', ''))[:12])}</td>"
+            f"</tr>"
+            for ev in events[:50]
+        ) or '<tr><td colspan="3" class="op-muted">No events.</td></tr>'
+        events_html = (
+            f'<table class="op-table"><thead>'
+            f'<tr><th>Timestamp</th><th>Event</th><th>Trace</th></tr>'
+            f'</thead><tbody>{event_rows}</tbody></table>'
+        )
+    else:
+        events_html = '<div class="op-muted" data-testid="operator-events-empty">No data.</div>'
+
+    return f"""<style>
+  .op-panels{{display:flex;flex-direction:column;gap:16px;padding:0}}
+  .op-panel{{background:var(--bg-raised,#111a2e);border:1px solid var(--border,#152030);
+    border-radius:6px;padding:16px}}
+  .op-panel-header{{display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:10px}}
+  .op-panel-title{{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1,#dce8f0)}}
+  .op-badge{{font:500 11px/1 'JetBrains Mono',monospace;
+    color:var(--amber,#f09030);background:var(--amber-muted,#1a0e02);
+    border:1px solid var(--amber-dim,#805010);border-radius:999px;
+    padding:2px 8px;letter-spacing:.06em;text-transform:uppercase}}
+  .op-stat-row{{display:flex;justify-content:space-between;gap:10px;
+    margin:6px 0;font-size:13px;color:var(--fg-1,#dce8f0)}}
+  .op-stat-row span:first-child{{color:var(--fg-2,#7a9ab8)}}
+  .op-table{{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}}
+  .op-table th,.op-table td{{text-align:left;padding:6px 8px;
+    border-bottom:1px solid var(--border,#152030)}}
+  .op-table th{{color:var(--fg-3,#3d5570);font-weight:600}}
+  .op-muted{{color:var(--fg-3,#3d5570);font-size:13px}}
+  .op-pre{{font:400 12px/1.5 'JetBrains Mono',monospace;color:var(--fg-2,#7a9ab8);
+    background:var(--bg-base,#070b12);border-radius:4px;padding:8px;
+    margin:6px 0 0;overflow-x:auto;white-space:pre-wrap}}
+  .op-pill{{display:inline-flex;align-items:center;padding:2px 8px;
+    border-radius:999px;font-size:11px;font-weight:600}}
+  .op-pill-ok{{background:var(--vault,#39e87d);color:#041a10}}
+  .op-pill-warn{{background:var(--amber,#f09030);color:#1a0e02}}
+  .op-banner-degraded{{background:var(--amber-muted,#1a0e02);
+    border:1px solid var(--amber-dim,#805010);border-radius:4px;
+    color:var(--amber,#f09030);font-size:13px;padding:8px 12px;margin:4px 0}}
+  .op-ask-input{{width:100%;background:var(--bg-base,#070b12);
+    border:1px solid var(--border-strong,#1e3050);color:var(--fg-1,#dce8f0);
+    border-radius:6px;padding:8px 12px;font-size:13px;resize:vertical;
+    min-height:72px;box-sizing:border-box}}
+  .op-ask-input:focus{{outline:1px solid var(--border-focus,#00d4e8)}}
+  .op-ask-btn{{margin-top:8px;background:var(--cyan,#00d4e8);color:#001e28;
+    border:none;border-radius:6px;padding:8px 14px;font-size:13px;
+    font-weight:600;cursor:pointer}}
+  .op-ask-btn:disabled{{opacity:.6;cursor:not-allowed}}
+  .op-ask-answer{{background:var(--bg-base,#070b12);
+    border:1px solid var(--border,#152030);border-radius:6px;
+    padding:10px 12px;min-height:48px;white-space:pre-wrap;font-size:13px;
+    color:var(--fg-1,#dce8f0);margin-top:10px}}
+</style>
+<div class="op-panels" data-testid="operator-overlay-panels">
+  <div class="op-panel" data-testid="operator-panel-status">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Status</span>
+      <span class="op-badge" data-testid="operator-badge">Operator</span>
+    </div>
+    {status_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-health">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Health</span>
+    </div>
+    {health_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-settings">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Settings validation</span>
+    </div>
+    {settings_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-events">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Recent events</span>
+    </div>
+    {events_html}
+  </div>
+  <div class="op-panel" data-testid="operator-panel-ask">
+    <div class="op-panel-header">
+      <span class="op-panel-title">Ask</span>
+    </div>
+    <textarea class="op-ask-input" id="operator-ask-input"
+      data-testid="operator-ask-input"
+      placeholder="Ask the agent something..."></textarea><br>
+    <button class="op-ask-btn" id="operator-ask-btn"
+      data-testid="operator-ask-btn" type="button">Ask</button>
+    <div class="op-ask-answer" id="operator-ask-answer"
+      data-testid="operator-ask-answer">N/A</div>
+  </div>
+</div>
+<script>
+(function() {{
+  var btn = document.getElementById('operator-ask-btn');
+  var inp = document.getElementById('operator-ask-input');
+  var ans = document.getElementById('operator-ask-answer');
+  if (!btn || !inp || !ans) {{ return; }}
+  btn.addEventListener('click', function() {{
+    var q = inp.value.trim();
+    if (!q) {{ return; }}
+    btn.disabled = true;
+    ans.textContent = 'Asking…';
+    fetch('/api/operator/ask', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{question: q}})
+    }}).then(function(r) {{
+      return r.json().then(function(d) {{
+        ans.textContent = d.answer || d.error || JSON.stringify(d);
+        btn.disabled = false;
+      }});
+    }}).catch(function(e) {{
+      ans.textContent = 'Error: ' + e;
+      btn.disabled = false;
+    }});
+  }});
+}}());
+</script>"""
+
+
+def _render_operator_toggle() -> str:
+    """Fixed-position control that opens the in-shell Operator diagnostics drawer.
+
+    Operator-badged and positioned above the Help toggle. Deliberately uses
+    amber accent (operator color per help_guide.html badge legend) to signal
+    it is not a daily-use surface.
+    """
+    return (
+        '<button type="button" class="operator-toggle" '
+        'data-testid="workspace-operator-toggle" aria-haspopup="dialog" '
+        'aria-controls="workspace-operator-drawer" aria-expanded="false" '
+        'title="Operator diagnostics" onclick="companionOperator.open()">'
+        '<span aria-hidden="true">⚠</span> Operator</button>'
+    )
+
+
+def _render_operator_drawer() -> str:
+    """Server-declared in-shell Operator diagnostics drawer.
+
+    A slide-over panel that embeds operator diagnostics fetched same-origin
+    from /operator. The toggle script only changes visibility; panel content
+    is loaded lazily on first open by fetching /operator.
+
+    The drawer dims but does not dismiss the workspace: closing returns the
+    user exactly where they were (identical contract to the Help drawer).
+    """
+    return """
+  <style>
+    .operator-toggle{position:fixed;bottom:60px;right:18px;z-index:999;
+      display:inline-flex;align-items:center;gap:6px;
+      padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;
+      color:var(--amber);background:var(--amber-muted);
+      border:1px solid var(--amber-dim);border-radius:999px;
+      cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+    .operator-toggle:hover{border-color:var(--amber)}
+    .operator-drawer-backdrop{position:fixed;inset:0;
+      background:rgba(7,11,18,.72);opacity:0;pointer-events:none;
+      transition:opacity .18s ease;z-index:1000}
+    .operator-drawer{position:fixed;top:0;right:0;height:100vh;
+      width:min(640px,94vw);transform:translateX(100%);
+      transition:transform .22s cubic-bezier(.4,0,.2,1);
+      background:var(--bg-surface);
+      border-left:1px solid var(--border-strong);
+      box-shadow:-8px 0 32px rgba(0,0,0,.5);z-index:1001;
+      display:flex;flex-direction:column}
+    .operator-drawer-host[data-open="true"] .operator-drawer{transform:translateX(0)}
+    .operator-drawer-host[data-open="true"] .operator-drawer-backdrop{
+      opacity:1;pointer-events:auto}
+    .operator-drawer-head{display:flex;align-items:center;gap:10px;
+      padding:12px 16px;border-bottom:1px solid var(--border);
+      background:var(--bg-raised)}
+    .operator-drawer-title{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1)}
+    .operator-drawer-badge{font:500 11px/1 'JetBrains Mono',monospace;
+      color:var(--amber);background:var(--amber-muted);
+      border:1px solid var(--amber-dim);border-radius:999px;
+      padding:2px 8px;letter-spacing:.06em;text-transform:uppercase}
+    .operator-drawer-close{margin-left:auto;background:none;
+      border:1px solid var(--border);color:var(--fg-2);border-radius:6px;
+      width:30px;height:30px;cursor:pointer;font-size:18px;line-height:1}
+    .operator-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
+    .operator-drawer-body{flex:1;overflow-y:auto;padding:16px;background:var(--bg-surface)}
+    .operator-drawer-loading{color:var(--fg-3);font-size:13px;padding:12px 0}
+  </style>
+  """ + _render_operator_toggle() + """
+  <div class="operator-drawer-host" id="workspace-operator-host"
+       data-testid="workspace-operator-host" data-open="false"
+       data-authority-role="server_declared">
+    <div class="operator-drawer-backdrop" data-testid="workspace-operator-backdrop"
+         onclick="companionOperator.close()"></div>
+    <aside class="operator-drawer" id="workspace-operator-drawer"
+           data-testid="workspace-operator-drawer" role="dialog" aria-modal="true"
+           aria-label="Operator diagnostics">
+      <div class="operator-drawer-head">
+        <span class="operator-drawer-title">Operator diagnostics</span>
+        <span class="operator-drawer-badge"
+              data-testid="workspace-operator-badge">Operator</span>
+        <button type="button" class="operator-drawer-close"
+                data-testid="workspace-operator-close"
+                aria-label="Close operator panel"
+                onclick="companionOperator.close()">&times;</button>
+      </div>
+      <div class="operator-drawer-body" id="workspace-operator-body"
+           data-testid="workspace-operator-body">
+        <div class="operator-drawer-loading"
+             data-testid="workspace-operator-loading">Loading…</div>
+      </div>
+    </aside>
+  </div>
+  <script>
+  (function() {
+    var host   = document.getElementById('workspace-operator-host');
+    var body   = document.getElementById('workspace-operator-body');
+    var toggle = document.querySelector('[data-testid="workspace-operator-toggle"]');
+    if (!host || !body) { return; }
+    var loaded = false;
+    function setExpanded(state) {
+      if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
+    }
+    function loadContent() {
+      if (loaded) { return; }
+      loaded = true;
+      fetch('/operator', {method: 'GET'})
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+          body.innerHTML = html;
+          // Execute inline scripts inside the loaded fragment.
+          Array.prototype.slice.call(body.querySelectorAll('script')).forEach(function(s) {
+            var ns = document.createElement('script');
+            ns.textContent = s.textContent;
+            s.parentNode.replaceChild(ns, s);
+          });
+        })
+        .catch(function(err) {
+          body.innerHTML = '<div class="op-banner-degraded"'
+            + ' data-testid="operator-degraded-banner" data-state="degraded">'
+            + 'Operator panel unavailable: ' + String(err) + '</div>';
+        });
+    }
+    window.companionOperator = {
+      open: function() {
+        loadContent();
+        host.setAttribute('data-open', 'true');
+        setExpanded(true);
+      },
+      close: function() {
+        host.setAttribute('data-open', 'false');
+        setExpanded(false);
+        if (toggle) { try { toggle.focus(); } catch (e) {} }
+      },
+      toggle: function() {
+        if (host.getAttribute('data-open') === 'true') { this.close(); }
+        else { this.open(); }
+      }
+    };
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
+        window.companionOperator.close();
+      }
+    });
   }());
   </script>"""
 
@@ -5559,6 +6669,7 @@ def render_index_html(
     fields: Optional[dict] = None,
     error: str = "",
     orientation: Optional[dict] = None,
+    orientation_error: str = "",
     orientation_vault_browser: Optional[dict] = None,
     orientation_vault_browser_error: str = "",
     production_profile: bool = False,
@@ -5574,7 +6685,18 @@ def render_index_html(
     Yggdrasil design tokens and the workspace region contract from
     real_note_workspace_shell.py. Canvas body-edit and Panel execution
     are not implemented; the agent rail is a placeholder.
+
+    Entry-state resolution (#1783) wraps — does not replace — the
+    orientation/workspace branch below: the resolved state is declared on the
+    shell root (`<body data-entry-state=…>`) and the UI never re-derives it.
     """
+    entry_resolution = resolve_entry_state(
+        note_path=note_path,
+        note_loaded=fields is not None,
+        error=error,
+        orientation=orientation,
+        orientation_error=orientation_error,
+    )
     if orientation is not None and fields is None and not error:
         return _render_orientation_index_html(
             api_base_url=api_base_url,
@@ -5585,23 +6707,59 @@ def render_index_html(
             production_profile=production_profile,
             diagnostics=diagnostics,
             ambient_refresh_enabled=ambient_refresh_enabled,
+            entry_resolution=entry_resolution,
         )
 
     content_section = ""
     if error:
-        content_section = _render_error_section(error)
+        content_section = _render_error_section(error, entry_state=entry_resolution.state)
     elif fields is not None:
         content_section = _render_note_section(fields)
     # Live co-authoring wiring is gated by the server-declared canvas flag,
     # matching _render_note_section's guard derivation. With no fields (error /
     # orientation) the canvas surface is absent, so the script is not emitted.
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True)) if fields is not None else False
+    # Residual ambient layer (#1784, SEP-02): after entry.resume the document
+    # anchor opens in shell_active with the caret echo and marginalia dots
+    # persisting (CONTINUITY_AND_DECAY.md §Ambient Persistence After Re-entry).
+    # Dismissal never erases unresolved tension. Styles are inline so this
+    # region stays self-contained next to the document column.
+    residual_ambient_html = ""
+    if entry_resolution.state == "shell_active" and fields is not None:
+        residual_ambient_html = """
+  <aside class="reentry-ambient" data-region="reentry-ambient" data-testid="reentry-ambient"
+    data-unresolved-tension="preserved" aria-hidden="true"
+    style="position:fixed;left:12px;bottom:20px;z-index:4;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none;">
+    <span data-testid="reentry-caret-echo" style="display:block;width:2px;height:14px;background:var(--accent);opacity:0.6;"></span>
+    <span data-testid="reentry-marginalia-dot" style="display:block;width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:0.45;"></span>
+    <span data-testid="reentry-marginalia-dot" style="display:block;width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:0.30;"></span>
+    <span data-testid="reentry-marginalia-dot" style="display:block;width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:0.18;"></span>
+  </aside>"""
     title_suffix = "PROD" if production_profile else "DEV"
     dev_chip = "" if production_profile else '<span class="dev-chip">DEV / not production</span>'
     production_static_link = (
         '<link rel="stylesheet" href="/static/companion-workspace.css">'
         if production_profile
         else ""
+    )
+    # System map overlay (#1787, SEP-05; spec §Resolved Q4): pull-based —
+    # opened only by explicit `map.open` affordances (the topbar icon on the
+    # shell; the calm affordance on the no_vault error page). On the active
+    # workspace shell every routable surface is live; on the error page only
+    # the Vault Browser truthfully remains reachable.
+    map_available_routes: tuple[str, ...] = (
+        (
+            "anchor",
+            "vault",
+            "panel",
+            "palette",
+            "memory",
+            "capture",
+            "receipts",
+            "settings",
+        )
+        if fields is not None
+        else ("vault",)
     )
 
     return f"""<!DOCTYPE html>
@@ -6061,6 +7219,59 @@ def render_index_html(
     }}
     .workspace-vault-chip[data-state="unreachable"] {{
       color: var(--destructive);
+    }}
+    .workspace-anchor-pill {{
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--fg-2);
+      display: inline-flex;
+      flex-shrink: 1;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      line-height: 1;
+      max-width: 220px;
+      min-width: 0;
+      overflow: hidden;
+      padding: 3px 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .workspace-posture-pill {{
+      align-items: center;
+      color: var(--fg-3);
+      display: inline-flex;
+      flex-shrink: 0;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.06em;
+      line-height: 1;
+      text-transform: uppercase;
+    }}
+    .workspace-surface-icons {{
+      align-items: center;
+      display: inline-flex;
+      flex-shrink: 0;
+      gap: 6px;
+    }}
+    .workspace-surface-icon {{
+      align-items: center;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-2);
+      cursor: pointer;
+      display: inline-flex;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      height: 22px;
+      justify-content: center;
+      line-height: 1;
+      width: 24px;
+    }}
+    .workspace-surface-icon:hover {{
+      border-color: var(--border-strong);
+      color: var(--fg-1);
     }}
     .workspace-runtime-status {{
       flex-shrink: 0;
@@ -7903,6 +9114,27 @@ def render_index_html(
     }}
     .body-edit-status.ok {{ color: var(--cyan); }}
     .body-edit-status.error {{ color: var(--destructive); }}
+    /* Shared overlay host (#1785, SEP-03) — the single overlay layer later
+       surfaces mount on. The scrim sits below host occupants that bring
+       their own full-screen chrome (e.g. the vault modal at z-index 1000). */
+    .overlay-host-scrim {{
+      background: rgba(7, 11, 18, 0.55);
+      display: none;
+      inset: 0;
+      position: fixed;
+      z-index: 900;
+    }}
+    .overlay-host-scrim[data-active="true"] {{
+      display: block;
+    }}
+    .overlay-host-mount {{
+      display: none;
+      inset: 0;
+      pointer-events: none;
+      position: fixed;
+      z-index: 950;
+    }}
+
     /* Vault note browser overlay */
     .vault-browser-overlay {{
       display: none;
@@ -8309,7 +9541,7 @@ def render_index_html(
     }}
   </style>
 </head>
-<body data-diagnostics="{'true' if diagnostics else 'false'}">
+<body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -8339,6 +9571,7 @@ def render_index_html(
     </div>
   </details>
   {content_section}
+  {residual_ambient_html}
 
   <!-- Vault note browser overlay — narrow responsive fallback only (§5.3).
        On desktop, Browse Vault focuses the canonical left-pane browse surface
@@ -8351,9 +9584,11 @@ def render_index_html(
         <span class="vault-browser-title">Browse vault</span>
         <span class="vault-browser-identity" id="vault-browser-identity"
               data-testid="vault-browser-identity"></span>
+        {guidance_toggle_markup('vault')}
         <button class="vault-browser-close" onclick="vaultBrowser.close()"
                 data-testid="vault-browser-close" aria-label="Close">&times;</button>
       </div>
+      {guidance_callout_markup('vault')}
       <input type="text" class="vault-browser-search" id="vault-browser-search"
              data-testid="vault-browser-search"
              placeholder="Search by title or path…"
@@ -8364,6 +9599,14 @@ def render_index_html(
            data-testid="vault-browser-status"></div>
     </div>
   </div>
+  {overlay_host_markup(anchor_note_path=note_path)}
+  {capture_modal_markup()}
+  {panel_palette_markup(fields)}
+  {memory_review_drawer_markup()}
+  {receipts_history_modal_markup()}
+  {settings_drawer_markup(fields)}
+  {system_map_overlay_markup(available_routes=map_available_routes)}
+  {guidance_layer_style()}
 
   {note_outline_script()}
 
@@ -8474,11 +9717,18 @@ def render_index_html(
       if (e.target === overlay) vaultBrowser.close();
     }});
 
-    document.addEventListener('keydown', function(e) {{
-      if (e.key === 'Escape') vaultBrowser.close();
-    }});
+    // Esc handling for this modal is owned by the shared overlay host
+    // (#1785, SEP-03): the narrow-mode vault browser is a host occupant and
+    // the host dismisses the topmost overlay back to the document anchor.
   }})();
   </script>
+  {overlay_host_script()}
+  {capture_modal_script()}
+  {panel_palette_script()}
+  {memory_review_drawer_script()}
+  {receipts_history_script()}
+  {system_map_overlay_script()}
+  {guidance_layer_script()}
 
   <script>
   (function() {{
@@ -8878,8 +10128,10 @@ def render_index_html(
   {_display_preferences_script()}
   {_note_readback_script()}
   {_note_editor_script()}
+  {settings_drawer_script()}
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
+  {_render_operator_drawer()}
 </body>
 </html>"""
 
@@ -8958,6 +10210,7 @@ def handle_get(
         fields=fields,
         error=error,
         orientation=orientation,
+        orientation_error=orientation_error,
         orientation_vault_browser=orientation_vault_browser,
         orientation_vault_browser_error=orientation_vault_browser_error,
         production_profile=production_profile,
@@ -9114,6 +10367,119 @@ def make_handler(
             if parsed.path.startswith("/api/companion/tts/audio/"):
                 self._proxy_audio(parsed.path)
                 return
+            if parsed.path == MEMORY_REVIEW_FRAGMENT_ROUTE:
+                # Memory review drawer queue fragment (#1793, SEP-09b):
+                # server-rendered from the #1792 read endpoint (the /operator
+                # overlay precedent). An unreachable runtime renders a calm
+                # unavailable state — never invented candidates.
+                try:
+                    data = self._client.get(MEMORY_REVIEW_QUEUE_ENDPOINT, params={})
+                except WorkspaceClientError as exc:
+                    fragment = memory_review_unavailable_fragment(str(exc))
+                else:
+                    fragment = memory_review_queue_fragment(data)
+                body = fragment.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if parsed.path == RECEIPTS_HISTORY_FRAGMENT_ROUTE:
+                # Receipts history fragment (#1794, SEP-10): server-rendered
+                # read-only from the existing vault-browser receipts
+                # projection. An unreachable runtime renders a calm
+                # unavailable state — receipts are never invented by the UI.
+                try:
+                    data = self._client.get(RECEIPTS_PROJECTION_ENDPOINT, params={})
+                except WorkspaceClientError as exc:
+                    fragment = receipts_history_unavailable_fragment(str(exc))
+                else:
+                    fragment = receipts_history_fragment(data)
+                body = fragment.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            # --- Operator diagnostics proxy (same-origin, issue #1758) ---
+            # Browser calls /api/operator/* same-origin; this server proxies
+            # to COMPANION_API_BASE_URL /api/* so browsers never need the
+            # runtime port directly (LOCAL_ACCESS_MODEL.md).
+            if parsed.path == "/operator":
+                # Serve the operator overlay HTML fragment (lazy-loaded by drawer).
+                # Proxy all four read endpoints first; degrade gracefully on error.
+                def _op_get(runtime_path: str, params: dict | None = None) -> tuple[dict | None, str]:
+                    try:
+                        return self._client.get(runtime_path, params=params or {}), ""
+                    except WorkspaceClientError as exc:
+                        return None, str(exc)
+
+                status_payload, status_error = _op_get("/api/status")
+                health_payload, health_error = _op_get("/api/health")
+                settings_payload, settings_error = _op_get("/api/settings/validate")
+                events_qp = parse_qs(parsed.query)
+                events_params: dict = {}
+                if events_qp.get("limit"):
+                    events_params["limit"] = events_qp["limit"][0]
+                if events_qp.get("event_prefix"):
+                    events_params["event_prefix"] = events_qp["event_prefix"][0]
+                events_payload, events_error = _op_get("/api/events/tail", events_params)
+                body = render_operator_overlay_html(
+                    status_payload=status_payload,
+                    health_payload=health_payload,
+                    settings_payload=settings_payload,
+                    events_payload=events_payload,
+                    status_error=status_error,
+                    health_error=health_error,
+                    settings_error=settings_error,
+                    events_error=events_error,
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if parsed.path == "/api/operator/status":
+                try:
+                    data = self._client.get("/api/status", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/operator/health":
+                try:
+                    data = self._client.get("/api/health", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/operator/settings/validate":
+                try:
+                    data = self._client.get("/api/settings/validate", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/operator/events/tail":
+                qp = parse_qs(parsed.query)
+                tail_params: dict = {}
+                if qp.get("limit"):
+                    tail_params["limit"] = qp["limit"][0]
+                if qp.get("event_prefix"):
+                    tail_params["event_prefix"] = qp["event_prefix"][0]
+                try:
+                    data = self._client.get("/api/events/tail", params=tail_params)
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
@@ -9131,10 +10497,12 @@ def make_handler(
         _POST_PROXY_PATHS = frozenset(
             {
                 "/api/companion/workspace/body",
+                "/api/companion/capture",
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
                 "/api/panel/checkbox-projection",
+                "/api/operator/ask",  # operator diagnostics Ask (#1758)
             }
         )
 
@@ -9146,12 +10514,23 @@ def make_handler(
         # the provider-unavailable notice — server declares, UI renders.
         _POST_PROXY_PATTERNS = (
             re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
+            # Governed memory review decisions (#1793 -> #1792 endpoints).
+            # Runtime refusals (409, e.g. the accept dry-run) are forwarded
+            # verbatim by _proxy_error so the drawer renders calm with the
+            # candidate still pending.
+            re.compile(r"^/api/companion/memory/review-queue/[^/]+/decision$"),
         )
 
         def _post_path_allowed(self, path: str) -> bool:
             if path in self._POST_PROXY_PATHS:
                 return True
             return any(pattern.fullmatch(path) for pattern in self._POST_PROXY_PATTERNS)
+
+        # Operator POST paths that rewrite to a different runtime path.
+        # key = companion-UI path, value = runtime API path.
+        _POST_PATH_REWRITES: dict[str, str] = {
+            "/api/operator/ask": "/api/ask",
+        }
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
@@ -9168,8 +10547,9 @@ def make_handler(
             except json.JSONDecodeError:
                 self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
                 return
+            runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             try:
-                data = self._client.post(parsed.path, json=payload)
+                data = self._client.post(runtime_path, json=payload)
             except WorkspaceClientError as exc:
                 self._proxy_error(exc)
                 return

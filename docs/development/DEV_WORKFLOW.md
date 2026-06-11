@@ -61,6 +61,7 @@ Practical rule:
 
 - Docs-only changes:
   - run any repo docs validation command if one exists
+  - when `.codex/skills/**` changed, run `python3 scripts/lint_skills_consistency.py` (exit 0, zero output = clean)
   - otherwise run lightweight repo checks that are still appropriate
 - Code-affecting changes:
   - `ruff check app tests`
@@ -115,6 +116,7 @@ Docs-authoring rules:
 
 - a governing GitHub Issue is not required
 - the PR must be explicitly classified as docs authoring
+- the skills consistency lint runs on every PR in the smoke gate (`python3 scripts/lint_skills_consistency.py`, stdlib-only); run it locally when touching `.codex/skills/**` — the pytest wrapper is `tests/governance/test_skills_consistency_lint.py`
 - docs authoring does not automatically create backlog work or Project state
 - use `docs-to-issue` later when the authored docs are ready to become bounded implementation tasks
 - use `feature-breakdown` later when one docs-defined feature should become one parent feature issue plus child slices
@@ -242,6 +244,7 @@ Enforcement surfaces:
 - Preflight at the publication boundary (pre-commit and pre-push, every lane):
   - `scripts/agent_workspace_preflight.sh --expected-branch "$EXPECTED_BRANCH" --expected-worktree "$EXPECTED_WORKTREE" --allow-dirty`
   - The branch-truth gate lives in `publish-pr` and applies to implementation, feature-breakdown, docs-authoring, and governance lanes — not only `issue-to-code`. `--allow-dirty` tolerates the intentionally dirty tree at publish time while still failing on branch or worktree drift, so a concurrent agent switching the shared root worktree's branch cannot land a commit on the wrong branch.
+  - The base-branch check asserts what matters at the publication boundary: HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` (`status: "behind"`) is advisory, because `main` stays checked out in the root worktree and cannot be fast-forwarded from a dedicated worktree. A diverged or unresolvable base ref, or a HEAD without `origin/main`, still fails the gate.
 - Safe cleanup report:
   - `scripts/agent_workspace_cleanup.sh --report`
 - Safe cleanup apply (clean tree required):

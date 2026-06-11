@@ -136,6 +136,25 @@ def test_served_page_renders_view_in_panel_affordance_on_409() -> None:
     assert "503" in html
 
 
+def test_served_page_renders_exploratory_without_applying() -> None:
+    """An exploratory 200 (status='exploratory_no_edit') must render as a
+    read-only, non-mutating notice and must NOT fall through to the applied-edit
+    render path (which would mark the result 'applied' with an empty body).
+
+    Regression guard for PR #1764 Codex P2: the served client previously treated
+    any non-409/non-503 2xx as an applied edit, so the new exploratory response
+    would be misrendered as an applied edit with empty body/summary.
+    """
+    html = _render_canvas(_FakeClient([_workspace_payload(can_edit_body=True)]))
+
+    # The client branches on the exploratory status BEFORE the generic res.ok
+    # applied-edit path, and renders a distinct non-mutating result state.
+    assert "exploratory_no_edit" in html
+    # The exploratory branch is guarded on the server-declared status, not on
+    # HTTP-ok alone, so it cannot be reached by an ordinary applied edit.
+    assert "res.data.status === 'exploratory_no_edit'" in html
+
+
 def test_served_page_canvas_coauthor_absent_when_disabled() -> None:
     """When CANVAS_ENABLED is unset (guards.canvas_enabled false): no intent
     input, no co-author control, and no /coauthor call/affordance."""

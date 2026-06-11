@@ -39,8 +39,8 @@ Required fields:
 Status meanings:
 - `Backlog`: tracked work that is not yet ready for agent execution or has been moved out of active execution
 - `Ready`: bounded, testable, unblocked work that is eligible for pickup and labeled `agent:ready`
-- `In Progress`: active implementation issue state; on PR items this means draft/rework phase
-- `Review`: PR/project-item review/integration gate and default state for normal open PRs
+- `In Progress`: active implementation issue state; on PR items this covers draft PRs and open non-draft PRs without a requested review
+- `Review`: explicit review-handoff state for PR/project items, entered when review is requested — not a default for open PRs (see the lifecycle truth matrix in `.codex/skills/issue-maintenance-change-control/SKILL.md`)
 - `Done`: merged or otherwise fully delivered work; the Issue is closed and no `agent:*` labels remain
 
 Agent-label meanings:

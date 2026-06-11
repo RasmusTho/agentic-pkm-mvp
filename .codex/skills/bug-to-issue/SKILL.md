@@ -18,15 +18,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
 2. Check for existing issue:
    - Search open issues for the same symptom/title. If a matching issue exists, comment with new evidence instead of creating a duplicate.
 3. Create or update Issue body:
-   - Always use the required contract sections:
-     - `## Context`
-     - `## Scope`
-     - `## Source Anchors`
-     - `## Constraints`
-     - `## Acceptance Criteria`
-     - `## Out of Scope`
-     - `## Suggested Validation`
-     - `## Source Docs`
+   - Always use the canonical contract sections from `.codex/skills/_shared/ISSUE_CONTRACT.md`.
    - Include exact repro steps and observed/expected results when available.
    - Do not create a micro-issue for routine repair, reconciliation, or bookkeeping churn; route those signals to the maintenance skills instead.
    - Acceptance Criteria must carry `Verify:` markers:
@@ -38,8 +30,10 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.
    - Add `agent:ready` only if the scope is bounded, testable, and unblocked.
    - Otherwise add `agent:needs-human` or `agent:blocked`.
-5. Do not touch GitHub Project Status unless explicitly requested.
-6. Output receipt: issue number, labels set, and whether it was created or updated.
+5. Project:
+   - Add the new Issue to Project `Agent Delivery Control Plane`.
+   - Set Status to match the agent-state label: `agent:ready` → `Ready`; otherwise (`agent:blocked`, `agent:needs-human`) → `Backlog`.
+6. Output receipt: issue number, labels set, Project Status set, and whether it was created or updated.
 
 ## Heuristics for `agent:ready`
 
@@ -57,4 +51,4 @@ Force `agent:needs-human` when:
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.

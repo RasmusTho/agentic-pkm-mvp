@@ -9,10 +9,12 @@ These skills are workflow helpers, not replacements for the canonical builder-ag
 ## Workflow map
 
 Hot path:
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> issue-to-code fast claim -> Publish PR -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
+`Docs -> Issue -> Project -> Agent -> issue-to-code fast claim -> Publish PR -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
 
 Conditional / maintenance path:
 `Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
+
+This file owns the canonical workflow chain. Skills reference this chain instead of redefining it; if a skill's inline chain disagrees with this file, this file wins. Issue maintenance is part of the conditional path, not the hot path.
 
 ## BuilderOps Vault routing
 
@@ -42,9 +44,11 @@ Do not rely on a human remembering where BuilderOps material belongs.
 2. **Divergence checkpoint:** whenever a plan, issue, doc, or skill turns out to be wrong while work
    is active, invoke `capture-learning` immediately and create a `LearningSignal` instead of saving
    the observation for a later human memory pass.
-3. **Publication checkpoint:** every PR body must state the BuilderOps routing outcome: records
-   created, projections or receipts updated, or `none` with a short reason. A missing routing outcome
-   is missing delivery traceability.
+3. **Publication checkpoint:** Tier 2+ PR bodies must state the BuilderOps routing outcome: records
+   created, projections or receipts updated, or `none` with a short reason. Tier 1 PRs
+   (docs-authoring or governance lane, per `docs/development/GOVERNANCE_PROPORTIONALITY.md`) may omit
+   the section entirely when nothing was routed — absence means `none`; a present but unfilled
+   section is still a contract violation.
 4. **Closure checkpoint:** before merge or delivery receipt, unresolved adoption, retro, freshness,
    roadmap, or promotion observations must be represented by a BuilderOps record, a bounded GitHub
    Issue with `Verify:` targets, or an explicit `none` reason.
@@ -53,6 +57,13 @@ Do not rely on a human remembering where BuilderOps material belongs.
    is historical/fallback only; generated projections are readable views only.
 
 ## Skill routing
+
+Shared contracts: `.codex/skills/_shared/` holds the canonical contract files that skills reference
+instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + `Verify:` rule),
+`LABEL_TAXONOMY.md` (canonical labels + `lane:governance` exception), `LIFECYCLE_TRUTH_MATRIX.md`
+(required Project Status per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
+and `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations). A reference like
+`_shared/<FILE>.md :: <section>` resolves there. `_shared/` is not a skill directory.
 
 - `agentic-pkm`
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
@@ -68,6 +79,10 @@ Do not rely on a human remembering where BuilderOps material belongs.
   - docs-only authoritative authoring lane
 - `docs-to-issue`
   - convert active docs into bounded backlog Issues
+- `feature-breakdown`
+  - break one docs-defined capability into a specification directory plus a parent feature issue and bounded child slice issues
+- `bug-to-issue`
+  - create a compliant GitHub Issue when a bug is discovered during analysis, testing, review, or runtime observation
 - `temporal-doc-governance`
   - audit and refresh time-sensitive current-state docs
 - `automation-maintenance`
@@ -144,7 +159,10 @@ lease check, then keep the rest of execution local and deterministic.
   surface is available.
 - `publish-pr` and lane-aware workflows may consult lane or branch/worktree reservations when they
   share an active PR or workspace.
-- `git-hygiene-preflight` is the read-only hot-path check for dirty tree, in-progress git
-  operations, branch/worktree mismatch, and relevant lease conflicts.
-- `git-hygiene-janitor` is a cold-path, report-first cleanup helper. It must respect active leases
-  and must not perform destructive cleanup automatically in v1.
+- `scripts/agent_workspace_preflight.sh` (with the report entrypoint
+  `scripts/git_hygiene_preflight.py`) is the read-only hot-path check for dirty tree, in-progress
+  git operations, branch/worktree mismatch, and relevant lease conflicts. This is a script, not a
+  skill.
+- `scripts/git_hygiene_janitor.py` (a report-first entrypoint to `scripts/git_hygiene.py`) is the
+  cold-path cleanup helper. It must respect active leases and must not perform destructive cleanup
+  automatically in v1. This is a script, not a skill.

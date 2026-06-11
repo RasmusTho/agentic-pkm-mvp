@@ -119,6 +119,21 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-left-panel-mode-context",
         # Dev controls disclosure (#1361)
         "workspace-dev-controls-toggle",
+        # Memory candidate review drawer (#1793, SEP-09b) — overlay-host
+        # occupant; all drawer text lives inside this container.
+        "memory-review-drawer",
+        # Receipts history modal (#1794, SEP-10) — overlay-host occupant;
+        # all modal text lives inside this container.
+        "receipts-history-modal",
+        # Settings drawer (#1789, SEP-07) — overlay-host occupant; all
+        # drawer text lives inside this container. The local-only render
+        # badge is a shell chip outside the drawer.
+        "settings-drawer",
+        "settings-local-only-badge",
+        # System map overlay (#1787, SEP-05) — overlay-host occupant; all
+        # map text (center node, surface nodes, parked note) lives inside
+        # this container.
+        "system-map-overlay",
     }
 )
 
@@ -184,6 +199,31 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         "help-drawer-title",
         "help-drawer-sub",
         "help-drawer-close",
+        # In-shell Operator diagnostics drawer
+        "operator-toggle",
+        "operator-drawer-head",
+        "operator-drawer-title",
+        "operator-drawer-badge",
+        "operator-drawer-close",
+        "operator-drawer-loading",
+        # Capture modal (#1791, SEP-08b)
+        "capture-modal-title",
+        "capture-modal-close",
+        "capture-save",
+        "capture-status",
+        "capture-session-text",
+        "capture-session-state",
+        # ⌘K Panel command palette (#1786, SEP-04)
+        "palette-not-chat",
+        "palette-empty",
+        "palette-proposal-row",
+        "palette-blocked",
+        "palette-receipt",
+        "palette-title",
+        # Guidance layer (#1788, SEP-06) — opt-in explanatory callouts plus
+        # the ⓘ toggle affordance (topbar, overlay heads, re-entry card)
+        "guidance-callout",
+        "guidance-toggle",
     }
 )
 

@@ -77,16 +77,7 @@ If no BuilderOps record is needed, record `BuilderOps routing: none` with the re
 handoff. Never append to `docs/learning-log.md` except as an explicit compatibility fallback when a
 BuilderOps write is unavailable.
 
-Treat these Issue sections as binding for the governing slice issue:
-
-- `Context`
-- `Scope`
-- `Source Anchors`
-- `Constraints`
-- `Acceptance Criteria`
-- `Out of Scope`
-- `Suggested Validation`
-- `Source Docs`
+Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`) as binding for the governing slice issue.
 
 ## GitHub and Project rules
 
@@ -99,25 +90,9 @@ Treat these Issue sections as binding for the governing slice issue:
 - Treat `Ready -> In Progress` plus removal of `agent:ready` as the fast claim/lease handshake.
 - Keep that claim minimal and compatible with multi-agent environments: one active lease per Issue, with the label/status transition as the shared signal.
 
-Allowed labels:
+Allowed labels: the canonical taxonomy in `.codex/skills/_shared/LABEL_TAXONOMY.md`.
 
-- `type:task`
-- `type:bug`
-- `type:refactor`
-- `prio:high`
-- `prio:med`
-- `prio:low`
-- `agent:ready`
-- `agent:blocked`
-- `agent:needs-human`
-
-Allowed Project statuses:
-
-- `Backlog`
-- `Ready`
-- `In Progress`
-- `Review`
-- `Done`
+Allowed Project statuses: per `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` (`Backlog`, `Ready`, `In Progress`, `Review`, `Done`).
 
 ## Issue selection rule before implementation
 
@@ -172,22 +147,14 @@ python -m app.dispatcher status --json
 
 #### GitHub-Based Claim (Fallback or Non-Dispatcher Flow)
 
-1. **Ensure Issue is in Project** (if missing, add it first):
-   ```bash
-   gh api graphql -f query='query { repository(owner:"OWNER", name:"REPO") { issue(number:N) { projectItems(first:1) { nodes { id } } } } }'
-   ```
+1. **Ensure Issue is in Project** (if missing, add it first): run the resolve-item query from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`; an empty `projectItems` list means add-to-Project first.
 
 2. **Fast-claim the Issue via mandatory preflight wrapper:**
    ```bash
    scripts/issue_pickup_claim.sh --issue <N>
    ```
 
-3. **Set Issue Project Status to In Progress:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$IN_PROGRESS_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+3. **Set Issue Project Status to In Progress:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `In Progress` option ID.
 
 4. **Verify:**
    ```bash
@@ -203,12 +170,7 @@ If work becomes blocked before or during implementation:
    gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready
    ```
 
-2. **Set Issue Project Status to Backlog:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$BACKLOG_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+2. **Set Issue Project Status to Backlog:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Backlog` option ID.
 
 3. **Add a blocking comment to the Issue with explicit reason**
 
@@ -237,19 +199,9 @@ When you open a draft PR or continue implementing after opening a PR:
 
 Only move to Review when the PR is the **explicit review handoff artifact** (normally after review is requested):
 
-1. **Move Issue Project Status to Review:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$REVIEW_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+1. **Move Issue Project Status to Review:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Review` option ID.
 
-2. **Move PR Project Status to Review:**
-   ```bash
-   gh api graphql -f projectId="$PROJECT_ID" -f itemId="$PR_ITEM_ID" \
-     -f fieldId="$STATUS_FIELD_ID" -f optionId="$REVIEW_OPTION_ID" \
-     -f query='mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!) { updateProjectV2ItemFieldValue(input:{projectId:$projectId itemId:$itemId fieldId:$fieldId value:{singleSelectOptionId:$optionId}}) { projectV2Item { id } } }'
-   ```
+2. **Move PR Project Status to Review:** run the same mutation against the PR's project item ID.
 
 3. **Verify both Issue and PR:**
    ```bash
@@ -279,6 +231,7 @@ Only move to Review when the PR is the **explicit review handoff artifact** (nor
 - Preserve architecture boundaries and event/outbox compatibility where relevant.
 - Update docs in the same change if behavior, contracts, or architecture change.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
+- Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery.
 - For any PR that changes files under `app/` or `tests/`, run the repo-standard lint gate, currently `ruff check app tests`, before merge and include the lint output or explicit tooling limitation in the PR body.
 - Keep docs-only validation lightweight: docs-only PRs should run appropriate docs/governance checks, not the full code/test smoke by default.
 - Do not collapse parent feature validation and owner-doc promotion into one slice PR by default.
@@ -341,33 +294,22 @@ When continuing through anchor drift:
 
     For multi-agent parallel work, a dedicated per-issue worktree (via `git worktree add`) is mandatory for the full issue lifecycle — from initial implementation through every review-fix push. Do NOT commit to an active PR from the shared root worktree.
 
-    ```bash
-    EXPECTED_BRANCH="<PR head branch name>"
-    ACTUAL_BRANCH=$(git branch --show-current)
+    Capture the expected branch and worktree before invoking the canonical gate, then run `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` (pre-commit, `--allow-dirty`):
 
-    if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
-      echo "BRANCH-TRUTH GATE FAILED (pre-commit): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
-      echo "Switch to the correct worktree before committing."
-      exit 1
-    fi
+    ```bash
+    EXPECTED_BRANCH="$(git branch --show-current)"
+    EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"
+    scripts/agent_workspace_preflight.sh \
+      --expected-branch "$EXPECTED_BRANCH" \
+      --expected-worktree "$EXPECTED_WORKTREE" \
+      --allow-dirty
     ```
 
-    Branch name must match. Do not check the remote PR head SHA here — a new local commit will advance HEAD past the remote ref before push.
+    If the preflight script cannot run, use the branch-name fallback documented in the shared gate with the captured `EXPECTED_BRANCH`. Do not continue with empty expected values; empty values skip the branch/worktree drift checks.
 
 15b. **Branch-Truth Gate — Phase 2: Pre-Push (mandatory before `git push`)** [branch-truth-gate]
 
-    ```bash
-    EXPECTED_BRANCH="<PR head branch name>"
-    ACTUAL_BRANCH=$(git branch --show-current)
-
-    if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
-      echo "BRANCH-TRUTH GATE FAILED (pre-push): on $ACTUAL_BRANCH (expected $EXPECTED_BRANCH)"
-      exit 1
-    fi
-    echo "Branch-truth gate passed — pushing to origin/$EXPECTED_BRANCH"
-    ```
-
-    If branch name fails at pre-push: stop, switch to the correct worktree, and re-run both phases.
+    Re-run the same gate before pushing (`.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure`, pre-push). If the gate fails at pre-push: stop, switch to the correct worktree, relocate the commit if needed, and re-run both phases.
 
 16. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.
@@ -392,19 +334,22 @@ Before handing off to `publish-pr`, confirm:
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 
-1. Selected Issue and Selection Rationale
-2. Lifecycle Actions Taken
-3. Source Authority Used
-4. Implementation Summary
-5. Files and Surfaces Changed
-6. Validation Run
-7. PR Publication Handoff
-8. Doc Writeback Performed
-9. Risks / Follow-ups
+Lead with the human summary; include later sections only when they have content, scaled to the tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`). For Tier 1, the summary plus a receipt line is enough.
+
+1. Summary For The Human (2–4 sentences: what was done, what remains, what needs a decision)
+2. Selected Issue and Selection Rationale
+3. Lifecycle Actions Taken
+4. Source Authority Used
+5. Implementation Summary
+6. Files and Surfaces Changed
+7. Validation Run
+8. PR Publication Handoff
+9. Doc Writeback Performed
+10. Risks / Follow-ups
 
 If blocked, do not guess. Report the blocker only if one of these is true:
 

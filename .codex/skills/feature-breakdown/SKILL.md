@@ -192,16 +192,7 @@ Trigger this skill when any of the following are true:
 
 ## Parent feature issue requirements
 
-The parent feature issue must satisfy the repo issue contract and contain these required sections:
-
-- `## Context`
-- `## Scope`
-- `## Source Anchors`
-- `## Constraints`
-- `## Acceptance Criteria`
-- `## Out of Scope`
-- `## Suggested Validation`
-- `## Source Docs`
+The parent feature issue must satisfy the canonical issue contract (`.codex/skills/_shared/ISSUE_CONTRACT.md` — section list and `Verify:` marker rule).
 
 Add these extra sections for feature issues:
 
@@ -221,16 +212,7 @@ Feature issue guidance:
 
 ## GitHub issue requirements for implementation tasks
 
-Each GitHub issue created from a task specification must use the standard repo contract shape:
-
-- `## Context`
-- `## Scope`
-- `## Source Anchors`
-- `## Constraints`
-- `## Acceptance Criteria`
-- `## Out of Scope`
-- `## Suggested Validation`
-- `## Source Docs`
+Each GitHub issue created from a task specification must use the canonical contract shape from `.codex/skills/_shared/ISSUE_CONTRACT.md`.
 
 Issue guidance:
 
@@ -269,23 +251,11 @@ Recommended habit:
 
 This lane writes specification directories and creates issues in the shared repo. When you commit and push those spec docs, route the branch / commit / push / PR actions through `.codex/skills/publish-pr/SKILL.md` — do not run an ad hoc commit/push from this skill. `publish-pr` owns the branch-truth gate.
 
-Branch-truth gate (mandatory, same as `publish-pr` and `issue-to-code`) [branch-truth-gate]:
-
-- Prefer a dedicated worktree (`git worktree add`) for the breakdown work. In a heavily parallel multi-worktree setup a concurrent agent can switch the shared root worktree's branch mid-session, which silently lands your spec commit on the wrong branch.
-- Capture `EXPECTED_BRANCH` and `EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"` when you create/switch the branch.
-- Before commit and again before push, run the hardened preflight (dirty tree is expected at publish time):
-
-  ```bash
-  scripts/agent_workspace_preflight.sh \
-    --expected-branch "$EXPECTED_BRANCH" \
-    --expected-worktree "$EXPECTED_WORKTREE" \
-    --allow-dirty
-  # Non-zero exit => workspace drifted. STOP, switch to the correct worktree, do not commit/push.
-  ```
+Branch-truth gate (mandatory, same canonical gate as every lane) [branch-truth-gate]: run `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` — dedicated worktree preferred, capture `EXPECTED_BRANCH`/`EXPECTED_WORKTREE` at branch creation, hardened preflight with `--allow-dirty` before commit and again before push.
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 

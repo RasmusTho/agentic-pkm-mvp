@@ -108,9 +108,28 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
 
-### Compose/env binding invariant (Issue #1627)
+### Compose/env binding invariant (Issues #1627, #1655, #1769)
 
 A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB_DSN` to values that match the **intended channel** — not another channel. A test stack whose compose declares `PKM_ENVIRONMENT=prod` would direct all writes at prod resources despite running under the test project namespace; this is a channel-isolation breach.
+
+**Omitted bindings are violations (Issue #1655).** The base compose file feeds every app service (`api`, `worker`, `watcher`) from an `env_file` chain whose first layer is `config/runtime.defaults.env` (prod `app` DSNs). If a channel's overlay omits `DATABASE_URL` / `DB_DSN` for a channel-critical service — by dropping the keys or the entire service block — compose layering silently resolves the binding from that chain. The preflight therefore checks the **effective** binding and fail-closes when it lands on another channel or cannot be verified.
+
+**Resolution follows the full env_file chain (Issue #1769).** Compose services may declare multiple `env_file` entries and **later files win**: the base services layer `${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}` (written by `scripts/export_runtime_env.sh`, carrying `DATABASE_URL` / `DB_DSN`) *after* the defaults file, so the defaults alone are not the effective binding. For omitted DSN keys, the preflight resolves the per-service `env_file` chain of the merged compose model (base `docker-compose.yaml` + overlay, overlay entries appended) in declaration order, interpolating `${VAR:-default}` path expressions the way compose does (invoking environment first, then `.env` in the compose directory). It fail-closes when:
+
+- the effective DSN resolves to another channel (e.g. a prod overlay whose omitted DSN is won by a `tmp/runtime.env` layer carrying `app_test`), or
+- a layer that would win exists but cannot be read, or
+- a **required** layer is missing at preflight time (compose would refuse to start; the preflight does not silently assume absence), or
+- a layer's path expression cannot be resolved, making the effective binding unverifiable, or
+- the winning entry for a channel-critical key is a bare `KEY` line (no `=`): compose treats it as unset/host-environment passthrough at `compose up` time, so the effective binding is unverifiable at preflight time (a later layer that redefines the key still supersedes it).
+
+A `required: false` layer that is absent at preflight time contributes nothing, exactly as compose treats it; the preflight verifies the layering **as it stands at preflight time** — creating or editing env-file layers after the preflight and before stack start bypasses the guard. When no base compose file sits next to the overlay, the base layering is modeled as the single committed defaults file, preserving the #1655 contract.
+
+Omission is only acceptable when the chain-resolved value already binds the intended channel (e.g. `docker-compose.prod.yml` relies on the prod base defaults and a prod-channel runtime layer). This is channel-aware resolution of one shared rule, not a per-channel behavior split.
+
+Explicit overlay DSNs do not suppress structural `env_file` chain validation. Even when
+`DATABASE_URL` and `DB_DSN` are declared with channel-correct values, the preflight still
+fail-closes on declared required layers that are missing, unreadable, or have unresolvable path
+expressions, because Compose must still resolve and load the service's `env_file` chain safely.
 
 **Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
 

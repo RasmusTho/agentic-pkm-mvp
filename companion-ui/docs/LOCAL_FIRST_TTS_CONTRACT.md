@@ -38,11 +38,13 @@ available.
 The audio route serves only cache-key-addressed WAV files from `TTS_CACHE_DIR`. It does not expose
 absolute filesystem paths.
 
-The status endpoint reports active local-only/fallback policy, configured model/cache/log paths,
-whether those paths are outside the repo, provider/model availability for Piper `sv-SE` and Kokoro
-`en-US` / `en-GB`, cache size/eviction policy, path writability, and the Mac mini operator receipt
-path. The receipt path records runtime path/config evidence only; generated audio remains in the
-cache and must not be written to the repo.
+The status endpoint is observational only. It reports active local-only/fallback policy, configured
+model/cache/log paths, whether those paths exist and are outside the repo, whether already-existing
+paths appear writable, provider/model availability for Piper `sv-SE` and Kokoro `en-US` / `en-GB`,
+cache size/eviction policy, and the Mac mini operator receipt path. It never creates directories or
+probe files; a path that does not yet exist is reported as non-writable. The receipt path records
+runtime path/config evidence only; generated audio remains in the cache and must not be written to
+the repo.
 
 ## Required Local Environment
 
