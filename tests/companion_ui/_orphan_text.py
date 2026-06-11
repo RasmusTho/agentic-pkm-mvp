@@ -125,6 +125,11 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         # Receipts history modal (#1794, SEP-10) — overlay-host occupant;
         # all modal text lives inside this container.
         "receipts-history-modal",
+        # Settings drawer (#1789, SEP-07) — overlay-host occupant; all
+        # drawer text lives inside this container. The local-only render
+        # badge is a shell chip outside the drawer.
+        "settings-drawer",
+        "settings-local-only-badge",
     }
 )
 

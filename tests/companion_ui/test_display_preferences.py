@@ -59,8 +59,12 @@ def _html(**field_overrides: object) -> str:
 
 
 def _display_preferences_script(html: str) -> str:
+    # Slice exactly the shipped display-preference script: from its storage
+    # key to the end of its own <script> block. (The previous end marker,
+    # `window.noteEditor`, leaked the unrelated read-back script into the
+    # slice once it gained network calls.)
     start = html.index("companion.displayPreferences.v1")
-    end = html.index("window.noteEditor", start)
+    end = html.index("</script>", start)
     return html[start:end]
 
 

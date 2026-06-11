@@ -101,6 +101,10 @@ from companion_ui.workspace.receipts_history import (
     receipts_history_script,
     receipts_history_unavailable_fragment,
 )
+from companion_ui.workspace.settings_drawer import (
+    settings_drawer_markup,
+    settings_drawer_script,
+)
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
@@ -619,6 +623,7 @@ def _render_workspace_header_strip(
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-memory" data-surface="memory" data-intent="memory.open" title="Memory candidate review" aria-label="Open memory candidate review drawer" onclick="overlayHost.mount('memory')">&#9670;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-receipts" data-surface="receipts" data-intent="receipts.open" title="Receipts history" aria-label="Open read-only receipts history" onclick="overlayHost.mount('receipts')">&#9776;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-settings" data-surface="settings" data-intent="settings.open" title="Settings" aria-label="Open settings drawer" onclick="overlayHost.mount('settings')">&#9881;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-help" data-surface="help" title="Help" aria-label="Open help" onclick="companionHelp.open()">?</button>
           </nav>
           <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
@@ -2016,49 +2021,9 @@ def _render_note_section(fields: dict) -> str:
             data-authority="read-only-projection"
             aria-live="polite"
             hidden></div>
-          <form class="display-preferences"
-            data-testid="display-preferences"
-            data-storage-scope="browser-local"
-            data-authority="render-only">
-            <label class="display-preference-control">
-              <span>Font size</span>
-              <select data-testid="display-pref-font-size"
-                name="font-size"
-                aria-label="Font size">
-                <option value="15px">15</option>
-                <option value="16px">16</option>
-                <option value="18px">18</option>
-                <option value="20px">20</option>
-              </select>
-            </label>
-            <label class="display-preference-control">
-              <span>Line height</span>
-              <select data-testid="display-pref-line-height"
-                name="line-height"
-                aria-label="Line height">
-                <option value="1.45">1.45</option>
-                <option value="1.65">1.65</option>
-                <option value="1.85">1.85</option>
-                <option value="2">2.0</option>
-              </select>
-            </label>
-            <label class="display-preference-control">
-              <span>Reading width</span>
-              <select data-testid="display-pref-reading-width"
-                name="reading-width"
-                aria-label="Reading width">
-                <option value="56ch">56ch</option>
-                <option value="68ch">68ch</option>
-                <option value="78ch">78ch</option>
-              </select>
-            </label>
-            <label class="display-preference-toggle">
-              <input type="checkbox"
-                data-testid="display-pref-focus-mode"
-                name="focus-mode">
-              <span>Focus mode</span>
-            </label>
-          </form>
+          <!-- The shipped #1675 display-preference controls moved into the
+               Settings drawer (#1789, SEP-07) — presentation consolidation
+               only; their storage/apply mechanism below is unchanged. -->
           <div class="note-edit-bar" data-testid="workspace-note-edit-bar">
             <button type="button" class="note-edit-toggle"
               data-testid="workspace-note-edit-toggle"
@@ -9479,6 +9444,7 @@ def render_index_html(
   {panel_palette_markup(fields)}
   {memory_review_drawer_markup()}
   {receipts_history_modal_markup()}
+  {settings_drawer_markup(fields)}
 
   {note_outline_script()}
 
@@ -9998,6 +9964,7 @@ def render_index_html(
   {_display_preferences_script()}
   {_note_readback_script()}
   {_note_editor_script()}
+  {settings_drawer_script()}
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
   {_render_operator_drawer()}

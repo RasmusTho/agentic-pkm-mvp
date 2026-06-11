@@ -372,8 +372,9 @@ def test_undeclared_overlays_rejected() -> None:
     # Declared-but-unshipped overlays do not mount (inert), and do not raise:
     # the host never invents a surface for them. (`capture` left this set when
     # the capture modal shipped, #1791; `cmd` when the palette shipped, #1786;
-    # `memory` when the review drawer shipped, #1793.)
-    for declared_unshipped in ("settings", "map"):
+    # `memory` when the review drawer shipped, #1793; `settings` when the
+    # settings drawer shipped, #1789.)
+    for declared_unshipped in ("map",):
         assert declared_unshipped in DECLARED_OVERLAYS
         assert declared_unshipped not in SHIPPED_OVERLAY_OCCUPANTS
         assert mount(_state(), declared_unshipped) == _state()
