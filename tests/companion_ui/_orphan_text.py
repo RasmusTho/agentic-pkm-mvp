@@ -122,6 +122,9 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         # Memory candidate review drawer (#1793, SEP-09b) — overlay-host
         # occupant; all drawer text lives inside this container.
         "memory-review-drawer",
+        # Receipts history modal (#1794, SEP-10) — overlay-host occupant;
+        # all modal text lives inside this container.
+        "receipts-history-modal",
     }
 )
 

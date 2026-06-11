@@ -52,11 +52,18 @@ DECLARED_OVERLAYS: tuple[str, ...] = (
 # #1785 scope: the narrow-mode vault-browser modal is treated as an
 # overlay-host occupant for the dismiss rule. The ⌘N capture modal (#1791,
 # ``capture_modal.py``), the ⌘K Panel command palette (#1786, SEP-04,
-# ``panel_palette.py``), and the memory candidate review drawer (#1793,
-# SEP-09b, ``memory_review_drawer.py``) are shipped occupants. Later SEP
-# tasks (map #1787, settings #1789, receipts #1794) extend this tuple when
-# their surfaces land.
-SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = ("vault", "capture", "cmd", "memory")
+# ``panel_palette.py``), the memory candidate review drawer (#1793,
+# SEP-09b, ``memory_review_drawer.py``), and the read-only receipts history
+# modal (#1794, SEP-10, ``receipts_history.py``) are shipped occupants.
+# Later SEP tasks (map #1787, settings #1789) extend this tuple when their
+# surfaces land.
+SHIPPED_OVERLAY_OCCUPANTS: tuple[str, ...] = (
+    "vault",
+    "capture",
+    "cmd",
+    "memory",
+    "receipts",
+)
 
 # Keyboard map (spec §Keyboard map) — exactly ⌘K / ⌘N / Esc; fuller model
 # deferred to package Q14.
@@ -88,9 +95,10 @@ DEFAULT_POSTURE_EMPHASIS: str = "recovery"
 
 # Topbar surface-icon vocabulary (issue #1785 scope; `memory` added by #1793
 # — the review drawer is reached from the topbar and from the re-entry
-# card's unresolved-inspect affordance) and the subset whose surfaces have
-# shipped. No dead affordances: icons for unshipped surfaces are absent
-# until their task ships.
+# card's unresolved-inspect affordance; `receipts` added by #1794 — the
+# read-only history modal is reached from the topbar) and the subset whose
+# surfaces have shipped. No dead affordances: icons for unshipped surfaces
+# are absent until their task ships.
 TOPBAR_SURFACES: tuple[str, ...] = (
     "vault",
     "command",
@@ -101,7 +109,7 @@ TOPBAR_SURFACES: tuple[str, ...] = (
     "receipts",
     "help",
 )
-SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = ("vault", "memory", "help")
+SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = ("vault", "memory", "receipts", "help")
 
 # Coarse derived postures the vault-status dot may render. Detailed health
 # stays with /api/status (runtime popover); the dot never exposes slices.
