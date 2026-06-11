@@ -5128,9 +5128,23 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
         {_reentry_resume_affordance(leave, stale=stale)}
         <button class="reentry-dismiss" type="button" data-testid="reentry-dismiss"
           data-intent="entry.dismiss" data-unresolved-tension="preserved"
-          onclick="this.closest('[data-region=reentry-card]').remove()">Start fresh</button>
+          onclick="entryDismiss(this)">Start fresh</button>
       </div>
     </section>"""
+
+
+def _entry_dismiss_script() -> str:
+    return """
+  <script>
+  function entryDismiss(control) {
+    var card = control && control.closest('[data-region=reentry-card]');
+    if (card) { card.remove(); }
+    if (document.body) {
+      document.body.dataset.entryState = 'shell_active';
+      document.body.setAttribute('data-entry-state', 'shell_active');
+    }
+  }
+  </script>"""
 
 
 def _render_reentry_whisper_column(orientation: dict) -> str:
@@ -5862,6 +5876,7 @@ def _render_orientation_index_html(
   </main>
   {vault_browser_script}
   {ambient_script}
+  {_entry_dismiss_script()}
   {memory_review_overlay_html}
   {_render_help_drawer()}
   {_render_operator_drawer()}
