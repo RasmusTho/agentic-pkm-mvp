@@ -77,6 +77,10 @@ from companion_ui.workspace.overlay_host import (
     overlay_host_markup,
     overlay_host_script,
 )
+from companion_ui.workspace.panel_palette import (
+    panel_palette_markup,
+    panel_palette_script,
+)
 from companion_ui.workspace.real_note_workspace_dev_page import (
     NoteLoadIntent,
     RealNoteWorkspaceDevPage,
@@ -9413,6 +9417,7 @@ def render_index_html(
   </div>
   {overlay_host_markup(anchor_note_path=note_path)}
   {capture_modal_markup()}
+  {panel_palette_markup(fields)}
 
   {note_outline_script()}
 
@@ -9530,6 +9535,7 @@ def render_index_html(
   </script>
   {overlay_host_script()}
   {capture_modal_script()}
+  {panel_palette_script()}
 
   <script>
   (function() {{

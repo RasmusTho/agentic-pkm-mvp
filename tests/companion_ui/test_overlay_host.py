@@ -285,11 +285,11 @@ def test_keyboard_map_routes_declared_intents() -> None:
 
     # ⌘K / ⌘N route to their declared overlay targets...
     assert INTENT_OVERLAY_TARGETS == {"cmd.open": "cmd", "capture.open": "capture"}
-    # ...cmd.open is inert while the palette has not shipped (no-op, no error,
-    # no invented surface); capture.open mounts its shipped occupant (#1791).
-    assert "cmd" not in SHIPPED_OVERLAY_OCCUPANTS
+    # ...both occupants are shipped: ⌘K mounts the Panel command palette
+    # (#1786, SEP-04) and ⌘N mounts the capture modal (#1791, SEP-08b).
+    assert "cmd" in SHIPPED_OVERLAY_OCCUPANTS
     assert "capture" in SHIPPED_OVERLAY_OCCUPANTS
-    assert apply_intent(_state(), "cmd.open") == _state()
+    assert apply_intent(_state(), "cmd.open").stack == ("cmd",)
     assert apply_intent(_state(), "capture.open").stack == ("capture",)
 
     # Undeclared intents are rejected, not silently absorbed.
@@ -308,6 +308,8 @@ def test_keyboard_map_routes_declared_intents() -> None:
     # its topbar/map affordances belong to later SEP slices, so no rendered
     # control advertises capture.open in this slice either.
     assert 'data-intent="cmd.open"' not in html
+    # capture surface. (The palette shipped via #1786; it opens through the
+    # host's ⌘K wiring rather than a rendered cmd.open control.)
     assert 'data-intent="capture.open"' not in html
 
 
@@ -368,8 +370,9 @@ def test_undeclared_overlays_rejected() -> None:
         OverlayHostState(stack=("task-popup",))
 
     # Declared-but-unshipped overlays do not mount (inert), and do not raise:
-    # the host never invents a surface for them.
-    for declared_unshipped in ("cmd", "memory", "settings", "map"):
+    # the host never invents a surface for them. (`capture` left this set when
+    # the capture modal shipped, #1791; `cmd` when the palette shipped, #1786.)
+    for declared_unshipped in ("memory", "settings", "map"):
         assert declared_unshipped in DECLARED_OVERLAYS
         assert declared_unshipped not in SHIPPED_OVERLAY_OCCUPANTS
         assert mount(_state(), declared_unshipped) == _state()
