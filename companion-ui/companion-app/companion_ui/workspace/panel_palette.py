@@ -395,10 +395,10 @@ def panel_palette_script() -> str:
 
     Registers the palette as the host's ``cmd`` occupant (open via ``⌘K`` /
     ``cmd.open``; Esc and the scrim dismiss to the anchor through the host).
-    The controller performs **no I/O and owns no transport**: filtering only
-    hides rows (identity stays on ``data-proposal-id``), and an action click
-    re-dispatches to the rail's identical declared button so the governed
-    confirm flow stays exactly where Panel owns it.
+    Filtering only hides rows (identity stays on ``data-proposal-id``). Action
+    clicks post the same proposal/action payload as the Panel confirm path so
+    enabled palette actions execute instead of becoming a presentation-only
+    no-op.
     """
     return """
   <script>
@@ -425,19 +425,30 @@ def panel_palette_script() -> str:
       }
     }
     if (input) { input.addEventListener('input', applyFilter); }
+    function panelPayload(btn) {
+      return {
+        proposal_id: btn.getAttribute('data-proposal-id') || '',
+        artifact_id: btn.getAttribute('data-artifact-id') || '',
+        action: btn.getAttribute('data-panel-action') || 'confirm',
+        idempotency_key: 'palette:' + (btn.getAttribute('data-proposal-id') || '')
+          + ':' + (btn.getAttribute('data-panel-action') || 'confirm')
+          + ':' + Date.now()
+      };
+    }
+    function postPanelAction(btn) {
+      var path = btn.getAttribute('data-api-path') || '/api/panel/confirm';
+      return fetch(path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(panelPayload(btn))
+      });
+    }
     root.addEventListener('click', function(e) {
       var btn = e.target && e.target.closest
         ? e.target.closest('[data-testid="palette-proposal-action"]')
         : null;
       if (!btn) { return; }
-      // Presentation, not authority: re-dispatch to the rail's identical
-      // declared action button for this proposal id. The palette owns no
-      // transport; the governed confirm flow stays with the Panel rail.
-      var sel = '[data-testid="workspace-panel-action"]'
-        + '[data-proposal-id="' + btn.getAttribute('data-proposal-id') + '"]'
-        + '[data-panel-action="' + btn.getAttribute('data-panel-action') + '"]';
-      var railButton = document.querySelector(sel);
-      if (railButton) { railButton.click(); }
+      postPanelAction(btn);
     });
     // The host owns mount/dismiss (Esc / scrim -> document anchor).
     window.overlayHost.register('cmd', {
