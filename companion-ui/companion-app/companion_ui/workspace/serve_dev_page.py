@@ -75,6 +75,7 @@ from companion_ui.workspace.workspace_http_client import (
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
+_DEFAULT_API_TIMEOUT_SECONDS = 2.0
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
@@ -90,10 +91,20 @@ def load_config() -> dict:
     Returns a dict with keys: host, port, api_base_url.
     Defaults: HOST=0.0.0.0, PORT=8111, COMPANION_API_BASE_URL=http://127.0.0.1:18001.
     """
+    try:
+        api_timeout_seconds = float(
+            os.environ.get(
+                "COMPANION_API_TIMEOUT_SECONDS",
+                str(_DEFAULT_API_TIMEOUT_SECONDS),
+            )
+        )
+    except (TypeError, ValueError):
+        api_timeout_seconds = _DEFAULT_API_TIMEOUT_SECONDS
     return {
         "host": os.environ.get("HOST", _DEFAULT_HOST),
         "port": int(os.environ.get("PORT", str(_DEFAULT_PORT))),
         "api_base_url": os.environ.get("COMPANION_API_BASE_URL", _DEFAULT_API_BASE_URL),
+        "api_timeout_seconds": max(0.25, api_timeout_seconds),
     }
 
 
@@ -9159,7 +9170,10 @@ def make_handler(
 def main() -> None:
     """Entry point: read env config, bind server, serve until KeyboardInterrupt."""
     config = load_config()
-    client = WorkspaceHttpClient(base_url=config["api_base_url"])
+    client = WorkspaceHttpClient(
+        base_url=config["api_base_url"],
+        timeout=config["api_timeout_seconds"],
+    )
     handler = make_handler(client=client, api_base_url=config["api_base_url"])
     server = CompanionThreadingHTTPServer((config["host"], config["port"]), handler)
     print(
@@ -9172,6 +9186,10 @@ def main() -> None:
     )
     print(
         f"[companion-ui] Runtime API:  {config['api_base_url']}",
+        flush=True,
+    )
+    print(
+        f"[companion-ui] API timeout:  {config['api_timeout_seconds']}s",
         flush=True,
     )
     print(
