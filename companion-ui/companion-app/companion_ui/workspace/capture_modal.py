@@ -34,6 +34,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_toggle_markup,
+)
+
 # The overlay-host id this surface occupies (declared in
 # overlay_host.DECLARED_OVERLAYS; shipped via SHIPPED_OVERLAY_OCCUPANTS).
 CAPTURE_OVERLAY_ID = "capture"
@@ -274,9 +279,11 @@ def capture_modal_markup() -> str:
     <div class="capture-modal-panel">
       <div class="capture-modal-header">
         <span class="capture-modal-title">Capture</span>
+        """ + guidance_toggle_markup("capture") + """
         <button class="capture-modal-close" data-testid="capture-close"
                 onclick="overlayHost.dismiss()" aria-label="Close">&times;</button>
       </div>
+      """ + guidance_callout_markup("capture") + """
       <textarea class="capture-input" id="capture-input"
                 data-testid="capture-input" data-region="capture-input"
                 rows="4" placeholder="What needs taking care of?"

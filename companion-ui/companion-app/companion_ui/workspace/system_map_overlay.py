@@ -36,6 +36,11 @@ from __future__ import annotations
 import html as _html
 from dataclasses import dataclass, field
 
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_toggle_markup,
+)
+
 # The overlay-host id this surface occupies (declared in
 # overlay_host.DECLARED_OVERLAYS; shipped via SHIPPED_OVERLAY_OCCUPANTS).
 SYSTEM_MAP_OVERLAY_ID = "map"
@@ -467,11 +472,13 @@ def system_map_overlay_markup(*, available_routes: tuple[str, ...] = ()) -> str:
         <span class="system-map-kicker">System map</span>
         <h2 class="system-map-title">Every surface, one index</h2>
       </div>
+      {guidance_toggle_markup('map')}
       <button type="button" class="system-map-close"
         data-testid="system-map-close" data-intent="overlay.dismiss"
         aria-label="Close and return to the document"
         onclick="overlayHost.dismiss()">&times;</button>
     </header>
+    {guidance_callout_markup('map')}
     <p class="system-map-note" data-testid="system-map-note">An index of the
       companion's surfaces — it renders and routes, nothing more. Everything
       opens over the document anchor and returns to it; nothing here

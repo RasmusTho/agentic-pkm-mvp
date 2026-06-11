@@ -42,6 +42,11 @@ from __future__ import annotations
 import html as _html
 from typing import Any
 
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_toggle_markup,
+)
+
 # The overlay-host id this surface occupies (declared in
 # overlay_host.DECLARED_OVERLAYS; shipped via SHIPPED_OVERLAY_OCCUPANTS).
 RECEIPTS_OVERLAY_ID = "receipts"
@@ -381,12 +386,14 @@ def receipts_history_modal_markup() -> str:
         <span class="receipts-history-title">Receipts</span>
         <span class="receipts-history-readonly"
               data-testid="receipts-history-readonly">read-only</span>
+        """ + guidance_toggle_markup("receipts") + """
         <button type="button" class="receipts-history-close"
                 data-testid="receipts-history-close"
                 data-intent="overlay.dismiss"
                 aria-label="Close and return to the document"
                 onclick="overlayHost.dismiss()">&times;</button>
       </div>
+      """ + guidance_callout_markup("receipts") + """
       <div class="receipts-history-body" id="receipts-history-body"
            data-testid="receipts-history-body" data-loaded="false">
         <p class="receipts-history-loading">Loading receipt history…</p>
