@@ -71,6 +71,12 @@ from companion_ui.workspace.entry_state import (
     entry_state_attributes,
     resolve_entry_state,
 )
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_layer_script,
+    guidance_layer_style,
+    guidance_toggle_markup,
+)
 from companion_ui.workspace.memory_review_drawer import (
     MEMORY_REVIEW_FRAGMENT_ROUTE,
     MEMORY_REVIEW_QUEUE_ENDPOINT,
@@ -630,6 +636,7 @@ def _render_workspace_header_strip(
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-receipts" data-surface="receipts" data-intent="receipts.open" title="Receipts history" aria-label="Open read-only receipts history" onclick="overlayHost.mount('receipts')">&#9776;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-settings" data-surface="settings" data-intent="settings.open" title="Settings" aria-label="Open settings drawer" onclick="overlayHost.mount('settings')">&#9881;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-help" data-surface="help" title="Help" aria-label="Open help" onclick="companionHelp.open()">?</button>
+            {guidance_toggle_markup('topbar')}
           </nav>
           <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
             <kbd>/</kbd><span>⌘K</span>
@@ -637,7 +644,10 @@ def _render_workspace_header_strip(
           <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>
           {dev_ribbon}
         </div>
-      </header>"""
+      </header>
+      <!-- Guidance layer (#1788, SEP-06): the shell callout — explanation
+           only, hidden unless the shell root carries data-guidance="on". -->
+      {guidance_callout_markup('shell')}"""
 
 
 def _render_rail_empty_state(
@@ -5078,7 +5088,9 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
       <div class="reentry-head">
         <span class="orientation-section-kicker">Re-entry</span>
         <span class="reentry-traj-pill" data-testid="reentry-traj-pill">{_e(traj_state)}</span>
+        {guidance_toggle_markup('reentry')}
       </div>
+      {guidance_callout_markup('reentry')}
       <ol class="reentry-questions">
         <li class="reentry-q" data-reentry-question="doing">
           <span class="reentry-q-label">What was I doing</span>
@@ -5372,6 +5384,11 @@ def _render_orientation_index_html(
         + overlay_host_script()
         + memory_drawer_script_html
         + system_map_overlay_script()
+        # Guidance layer (#1788, SEP-06): the re-entry card and the map head
+        # carry the ⓘ affordance on the entry surfaces, so the visibility
+        # gate and the UI-local toggle controller ship with the substrate.
+        + guidance_layer_style()
+        + guidance_layer_script()
     )
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -9471,9 +9488,11 @@ def render_index_html(
         <span class="vault-browser-title">Browse vault</span>
         <span class="vault-browser-identity" id="vault-browser-identity"
               data-testid="vault-browser-identity"></span>
+        {guidance_toggle_markup('vault')}
         <button class="vault-browser-close" onclick="vaultBrowser.close()"
                 data-testid="vault-browser-close" aria-label="Close">&times;</button>
       </div>
+      {guidance_callout_markup('vault')}
       <input type="text" class="vault-browser-search" id="vault-browser-search"
              data-testid="vault-browser-search"
              placeholder="Search by title or path…"
@@ -9491,6 +9510,7 @@ def render_index_html(
   {receipts_history_modal_markup()}
   {settings_drawer_markup(fields)}
   {system_map_overlay_markup(available_routes=map_available_routes)}
+  {guidance_layer_style()}
 
   {note_outline_script()}
 
@@ -9612,6 +9632,7 @@ def render_index_html(
   {memory_review_drawer_script()}
   {receipts_history_script()}
   {system_map_overlay_script()}
+  {guidance_layer_script()}
 
   <script>
   (function() {{

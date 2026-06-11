@@ -47,6 +47,11 @@ from __future__ import annotations
 import html as _html
 import re as _re
 
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_toggle_markup,
+)
+
 # The drawer's four sections, in render order (SETTINGS_DRAWER.md §What This
 # Task Does).
 SETTINGS_SECTIONS: tuple[str, ...] = (
@@ -504,11 +509,13 @@ def settings_drawer_markup(fields: dict) -> str:
         <span class="settings-kicker">Settings</span>
         <h2 class="settings-title">Local UI preferences</h2>
       </div>
+      {guidance_toggle_markup('settings')}
       <button type="button" class="settings-close"
         data-testid="settings-close" data-intent="overlay.dismiss"
         aria-label="Close and return to the document"
         onclick="overlayHost.dismiss()">&times;</button>
     </header>
+    {guidance_callout_markup('settings')}
     <p class="settings-authority-note" data-testid="settings-authority-note">
       Preferences re-render identical content. They never touch the vault
       and are always resettable.</p>

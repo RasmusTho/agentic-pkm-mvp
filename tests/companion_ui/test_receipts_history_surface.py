@@ -346,13 +346,18 @@ def test_surface_is_strictly_read_only() -> None:
     modal = _modal(html)
     script = _modal_script(html)
 
-    # The modal shell declares itself read-only and offers exactly one
-    # affordance: dismiss. No save, confirm, retry, edit, annotate, or any
-    # other action control exists anywhere on the surface.
+    # The modal shell declares itself read-only and offers exactly two
+    # affordances: dismiss, and the UI-local guidance ⓘ that every shipped
+    # overlay head carries (#1788, SEP-06 — presentation visibility only,
+    # never a receipt action). No save, confirm, retry, edit, annotate, or
+    # any other action control exists anywhere on the surface.
     assert 'data-read-only="true"' in modal
     buttons = re.findall(r"<button[^>]*>", modal)
-    assert len(buttons) == 1, "the receipts modal offers only dismiss"
-    assert 'data-testid="receipts-history-close"' in buttons[0]
+    assert len(buttons) == 2, (
+        "the receipts modal offers only dismiss and the guidance toggle"
+    )
+    assert 'data-intent="guidance.toggle"' in buttons[0]
+    assert 'data-testid="receipts-history-close"' in buttons[1]
     for forbidden_element in ("<form", "<input", "<textarea", "<select"):
         assert forbidden_element not in modal
 

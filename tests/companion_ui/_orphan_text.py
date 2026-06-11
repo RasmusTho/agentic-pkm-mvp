@@ -212,6 +212,11 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         "palette-proposal-row",
         "palette-blocked",
         "palette-receipt",
+        "palette-title",
+        # Guidance layer (#1788, SEP-06) — opt-in explanatory callouts plus
+        # the ⓘ toggle affordance (topbar, overlay heads, re-entry card)
+        "guidance-callout",
+        "guidance-toggle",
     }
 )
 

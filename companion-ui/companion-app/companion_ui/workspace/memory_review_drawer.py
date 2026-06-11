@@ -40,6 +40,11 @@ from __future__ import annotations
 import html as _html
 from urllib.parse import quote
 
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_toggle_markup,
+)
+
 # The normative callout (SYSTEM_ENTRY_POINT_SPEC.md; ADR-0009). The runtime
 # declares the same phrase on the queue payload (`review_callout`); the static
 # drawer copy is the same normative sentence, not a UI classification.
@@ -432,11 +437,13 @@ def memory_review_drawer_markup() -> str:
         <span class="memory-review-kicker">Memory review</span>
         <h2 class="memory-review-title">Pending candidates</h2>
       </div>
+      {guidance_toggle_markup('memory')}
       <button type="button" class="memory-review-close"
         data-testid="memory-review-close" data-intent="overlay.dismiss"
         aria-label="Close and return to the document"
         onclick="overlayHost.dismiss()">&times;</button>
     </header>
+    {guidance_callout_markup('memory')}
     <p class="memory-review-callout" data-testid="memory-review-callout"
       data-tone="advisory">{MEMORY_REVIEW_CALLOUT}</p>
     <div class="memory-review-queue" data-testid="memory-review-queue"

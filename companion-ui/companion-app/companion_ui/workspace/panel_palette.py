@@ -33,6 +33,11 @@ from __future__ import annotations
 import html as _html
 from typing import Any, Optional
 
+from companion_ui.workspace.guidance_layer import (
+    guidance_callout_markup,
+    guidance_toggle_markup,
+)
+
 # The overlay-host id the palette occupies (SYSTEM_ENTRY_POINT_SPEC.md
 # §Allowed transitions: `overlay(cmd|…)`; §Keyboard map: ⌘K → `cmd.open`).
 PALETTE_OVERLAY_ID: str = "cmd"
@@ -347,6 +352,13 @@ _PALETTE_CSS = """
       font-size: 0.78rem;
     }
     .palette-empty { color: var(--fg-2); font-size: 0.78rem; list-style: none; }
+    .palette-head { display: flex; justify-content: space-between; align-items: center; }
+    .palette-title {
+      color: var(--fg-2);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
 """
 
 
@@ -379,6 +391,11 @@ def panel_palette_markup(fields: Optional[dict[str, Any]]) -> str:
        data-presentation-of="panel-rail"
        data-open="false"
        role="dialog" aria-modal="true" aria-label="Panel command palette">
+    <div class="palette-head" data-testid="palette-head">
+      <span class="palette-title">Panel</span>
+      {guidance_toggle_markup('cmd')}
+    </div>
+    {guidance_callout_markup('cmd')}
     <p class="palette-not-chat" data-testid="palette-not-chat-callout">Panel ≠ Chat — a faster presentation of the same governed Panel proposals; no free-text generation, no conversation.</p>
     <input type="search" class="palette-filter" id="palette-filter-input"
            data-testid="palette-filter-input" data-input-role="filter"
