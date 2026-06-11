@@ -68,4 +68,4 @@ A governed system the human cannot audit afterwards degrades into "trust me." Hi
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] receipts-history-surface: read-only receipts modal`. Depends on SEP-03.
+Filed as **#1794** (`[SystemEntryPoint] receipts-history-surface: read-only receipts modal`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

@@ -72,4 +72,4 @@ Capture is where task-manager posture would creep in (due dates, states, nagging
 
 ## Related GitHub Issues
 
-Create **two** issues: `[SystemEntryPoint] capture-inbox-endpoint: governed capture append` (runtime; no UI dependency) and `[SystemEntryPoint] capture-modal: ⌘N capture UI` (depends on the endpoint issue and SEP-03).
+Filed as **#1790** (`[SystemEntryPoint] capture-inbox-endpoint: governed capture append`) and **#1791** (`[SystemEntryPoint] capture-modal: ⌘N capture UI`). Do not create duplicate issues; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

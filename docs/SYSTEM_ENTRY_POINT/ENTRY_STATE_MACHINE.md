@@ -77,4 +77,4 @@ Every other task in this capability (re-entry shapes, overlay host, state-galler
 
 ## Related GitHub Issues
 
-Create one issue: `[SystemEntryPoint] entry-state-machine: server-side entry-state resolution`. This is the foundation issue; it blocks SEP-02 and SEP-03.
+Filed as **#1783** (`[SystemEntryPoint] entry-state-machine: server-side entry-state resolution`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.
