@@ -22,15 +22,15 @@ copies; `issue-maintenance-change-control` owns the reconciliation procedure tha
 | PR | CLOSED (unmerged) | `Done` |
 | PR | OPEN + Draft | `In Progress` |
 | PR | OPEN + non-draft + review requested | `Review` |
-| PR | OPEN + non-draft, no review requested | `In Progress` |
+| PR | OPEN + non-draft, no review requested | `Review` |
 | Any | Present but no Project entry | Add to Project, apply row above |
 
 ## Review semantics
 
-`Review` is the explicit review-handoff state, not a synonym for "a non-draft PR exists". Since
-`publish-pr` defaults to opening non-draft PRs, an open non-draft PR without a requested review is
-still active implementation and belongs in `In Progress`. (Settled by #1806 — review-requested
-semantics; do not reintroduce the non-draft-defaults-to-Review variant.)
+`Review` is the Project handoff state for open non-draft PRs. The shipped Project automation maps
+`opened`, `reopened`, and `ready_for_review` non-draft PR events to `Review`; draft PRs remain
+`In Progress` until they are marked ready. Maintenance runs must not treat a normal open non-draft
+PR card in `Review` as drift.
 
 ## Binding rules
 

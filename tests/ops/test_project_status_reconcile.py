@@ -3,6 +3,7 @@ import subprocess
 
 import pytest
 
+from scripts import project_status
 from scripts import reconcile_project_status
 from scripts.reconcile_project_status import (
     desired_pr_status,
@@ -19,6 +20,19 @@ def test_desired_pr_status_open_non_draft_pr_is_review() -> None:
         desired_pr_status({"state": "OPEN", "isDraft": False, "mergedAt": None}, None)
         == "Review"
     )
+
+
+def test_open_non_draft_pr_without_review_request_matches_documented_status() -> None:
+    matrix = Path(".codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "| PR | OPEN + non-draft, no review requested | `Review` |" in matrix
+    assert (
+        desired_pr_status({"state": "OPEN", "isDraft": False, "mergedAt": None}, None)
+        == "Review"
+    )
+    assert project_status.desired_status("opened", False) == "Review"
 
 
 def test_desired_pr_status_open_draft_pr_is_in_progress() -> None:

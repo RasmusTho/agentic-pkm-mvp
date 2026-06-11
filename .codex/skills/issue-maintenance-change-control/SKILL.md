@@ -73,7 +73,7 @@ These are the high-frequency drift patterns that are easy to miss. A maintenance
 - **Closed Issues stuck in `Review` or `In Progress`** — the Issue is Done; non-terminal status on closed Issues is drift, not a pending handoff.
 - **Open `agent:ready` Issues not in `Ready`** — the queue is lying about what is pickable. The `agent:ready ↔ Status=Ready` binding is a post-condition, not just a declarative rule.
 - **PRs with no Project Status (blank / not in Project)** — the board cannot reflect lifecycle if the PR isn't represented at all. Open and closed PRs both need Project entries.
-- **Open non-draft PRs with review requested stuck in `In Progress`** — the review handoff happened but the board still shows active implementation. Without an explicit review request, `In Progress` is the correct status for an open non-draft PR (see the lifecycle truth matrix).
+- **Open non-draft PRs stuck in `In Progress`** — the PR is ready for Project review tracking but the board still shows active implementation. Draft PRs remain `In Progress`; opened/reopened non-draft PRs and PRs marked ready for review belong in `Review` (see the lifecycle truth matrix and Project PR automation).
 
 ## Change-control checklist (Core Runtime <-> Agentic Lab)
 
