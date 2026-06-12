@@ -67,6 +67,7 @@ from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
+from app.vault.manager import MachineRole, VaultContext, get_vault_manager
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
@@ -144,7 +145,96 @@ class CompanionTTSStatusResponse(BaseModel):
     operator_receipt: dict[str, object]
 
 
+class VaultContextResponse(BaseModel):
+    status: str
+    active_vault_id: str | None = None
+    active_vault_name: str | None = None
+    active_vault_path: str | None = None
+    settings_path: str | None = None
+    local_instance_id: str | None = None
+    machine_role: str | None = None
+    validation_error: str | None = None
+    permissions: dict[str, bool] = Field(default_factory=dict)
+
+
+class VaultSelectRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    remember: bool = True
+
+
+class VaultInitializeRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    vault_name: str | None = None
+    machine_role: MachineRole = "primary"
+    remember: bool = True
+
+
+class VaultInitializeResponse(BaseModel):
+    context: VaultContextResponse
+    created_files: list[str]
+    skipped_existing_files: list[str]
+
+
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
+
+
+def _vault_context_response(context: VaultContext) -> VaultContextResponse:
+    manager = get_vault_manager()
+    permissions = manager.permissions_for_context(context)
+    return VaultContextResponse(
+        status=context.status,
+        active_vault_id=context.active_vault_id,
+        active_vault_name=context.active_vault_name,
+        active_vault_path=context.active_vault_path,
+        settings_path=context.settings_path,
+        local_instance_id=context.local_instance_id,
+        machine_role=context.machine_role,
+        validation_error=context.validation_error,
+        permissions={
+            "enableVaultWatcher": permissions.enable_vault_watcher,
+            "enableAutoIndexing": permissions.enable_auto_indexing,
+            "allowWritesToVault": permissions.allow_writes_to_vault,
+            "allowSharedSettingsEdits": permissions.allow_shared_settings_edits,
+            "allowLocalSettingsEdits": permissions.allow_local_settings_edits,
+        },
+    )
+
+
+def _active_companion_vault_root() -> Path:
+    context = get_vault_manager().context
+    if context.status == "selected" and context.active_vault_path:
+        return Path(context.active_vault_path).expanduser()
+    return resolve_vault_root()
+
+
+@router.get("/vault/context", response_model=VaultContextResponse)
+def read_companion_vault_context() -> VaultContextResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    return _vault_context_response(context)
+
+
+@router.post("/vault/select", response_model=VaultContextResponse)
+def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
+    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
+    return _vault_context_response(context)
+
+
+@router.post("/vault/initialize", response_model=VaultInitializeResponse)
+def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
+    result = get_vault_manager().initialize_vault(
+        Path(req.path),
+        vault_name=req.vault_name,
+        machine_role=req.machine_role,
+        remember=req.remember,
+    )
+    return VaultInitializeResponse(
+        context=_vault_context_response(result.context),
+        created_files=list(result.created_files),
+        skipped_existing_files=list(result.skipped_existing_files),
+    )
 
 
 def _parse_browse_max_notes() -> int:
@@ -690,7 +780,7 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
 def list_vault_notes(
     q: str = Query("", description="Optional search filter by title or path"),
 ) -> VaultNoteListResponse:
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     notes = _list_vault_notes(vault_root, q=q)
     return VaultNoteListResponse(
         notes=notes,
@@ -1054,7 +1144,7 @@ def _orientation_leave_point(
     projection = latest_leave_point_projection(
         vault_id=identity.vault_name,
         channel=identity.channel,
-        vault_root=resolve_vault_root(),
+        vault_root=_active_companion_vault_root(),
         derived_label=frame_label,
         derived_at=_orientation_iso(signals.ingestion.last_run_at),
     )
@@ -1255,7 +1345,7 @@ def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
 
 
 def _orientation_identity() -> VaultIdentityState:
-    return _vault_identity_state(resolve_vault_root())
+    return _vault_identity_state(_active_companion_vault_root())
 
 
 def _orientation_error(trace_id: str, message: str) -> HTTPException:
@@ -2092,7 +2182,7 @@ def read_companion_vault_browser(
     # identity, and explicit empty / error / identity-unavailable states.
     # Hidden / dot-prefixed folders are excluded.
     # Metadata filters (kind, zone, review_state, trust) added in #1254.
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     effective_limit = min(limit, _safe_vault_browse_max_notes())
     active_filters: dict[str, list[str]] = {}
     if kind:
@@ -2175,7 +2265,7 @@ def read_companion_vault_link_index() -> VaultLinkIndexResponse:
     # VaultLinkResolver and resolve vault-internal wikilinks end-to-end. Mirrors
     # the vault browser's read-only posture (no mutation, no write path); the UI
     # must not read the filesystem directly (UI_RUNTIME_BOUNDARIES).
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_paths, truncated = _collect_vault_note_paths(
         vault_root, limit=_safe_vault_link_index_max()
     )
@@ -2225,7 +2315,7 @@ def read_companion_vault_related(
         else None
     )
     safe_artifact_uuid = artifact_uuid.strip() if artifact_uuid else None
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     notes = _collect_relation_notes(vault_root)
     target = _resolve_related_scope(
         notes,
@@ -2264,7 +2354,7 @@ def queue_vault_browser_review(
         else None
     )
     safe_artifact_uuid = req.artifact_uuid.strip() if req.artifact_uuid else None
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     target = _resolve_vault_action_scope(
         _collect_relation_notes(vault_root),
         note_path=safe_note_path,
@@ -2499,7 +2589,7 @@ def read_companion_workspace(
 ) -> WorkspaceStateResponse:
     trace_id = uuid4().hex
     safe_note_path = _validate_workspace_note_path(note_path)
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     artifact_path = _find_workspace_note(vault_root, safe_note_path)
     if artifact_path is None:
         raise HTTPException(
@@ -2591,7 +2681,7 @@ def update_companion_workspace_note_body(
             },
         )
 
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_path = _find_workspace_note(vault_root, safe_active_note_path)
     if note_path is None:
         raise HTTPException(
@@ -2700,7 +2790,7 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse:
         ) from exc
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(
@@ -2783,7 +2873,7 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
         pass
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(
