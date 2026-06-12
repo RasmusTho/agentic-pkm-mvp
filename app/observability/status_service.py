@@ -973,6 +973,8 @@ def _db_outbox_ready(
         return False
     if outbox_lag is None:
         return False
+    if worker_queue.processed_total is None:
+        return False
     return outbox_lag.outbox_events is not None or outbox_lag.pending_estimate is not None
 
 
@@ -983,6 +985,10 @@ def _reason_for_db_outbox(
     if _db_outbox_ready(worker_queue, outbox_lag):
         return None
     if worker_queue.mode == "db":
+        if outbox_lag is not None and (
+            outbox_lag.outbox_events is not None or outbox_lag.pending_estimate is not None
+        ):
+            return "DB outbox worker evidence unavailable; worker heartbeat/processed count could not be read"
         return "DB outbox source unavailable; durable queue/receipt counts could not be read"
     return f"DB outbox source unavailable; worker queue mode is {worker_queue.mode}"
 

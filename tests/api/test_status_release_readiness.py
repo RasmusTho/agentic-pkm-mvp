@@ -127,6 +127,23 @@ def test_missing_outbox_reports_degraded_reason(monkeypatch, tmp_path: Path) -> 
         assert any("DB outbox source unavailable" in reason for reason in matrix[capability]["reasons"])
 
 
+def test_db_outbox_requires_worker_evidence(monkeypatch, tmp_path: Path) -> None:
+    _patch_status_inputs(
+        monkeypatch,
+        tmp_path,
+        worker_queue=WorkerQueueStatus(mode="db", pending=0, processed_total=None, source_path="outbox"),
+        outbox_lag=OutboxLagStatus(outbox_events=0, worker_processed_total=None, pending_estimate=0),
+    )
+
+    response = TestClient(app).get("/api/status")
+    assert response.status_code == 200
+    matrix = response.json()["integrated_runtime_v1"]
+
+    for capability in ("receipts_history", "panel_confirm"):
+        assert matrix[capability]["state"] == "degraded"
+        assert any("worker evidence unavailable" in reason for reason in matrix[capability]["reasons"])
+
+
 def test_matrix_does_not_affect_health_passfail(monkeypatch, tmp_path: Path) -> None:
     _patch_status_inputs(monkeypatch, tmp_path)
     monkeypatch.setattr(
