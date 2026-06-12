@@ -80,6 +80,11 @@ KEYBOARD_MAP: dict[str, str] = {
 INTENT_OVERLAY_TARGETS: dict[str, str] = {
     "cmd.open": "cmd",
     "capture.open": "capture",
+    "map.open": "map",
+    "memory.open": "memory",
+    "receipts.open": "receipts",
+    "settings.open": "settings",
+    "vault.open": "vault",
 }
 
 # The five canonical postures (POSTURE_TRANSITIONS.md). The posture pill is

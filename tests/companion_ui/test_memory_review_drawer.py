@@ -680,17 +680,18 @@ def test_reachable_from_reentry_and_dismisses_to_anchor() -> None:
     assert "Escape" not in script
 
 
-def test_unresolved_link_stays_on_open_loops_when_memory_queue_empty() -> None:
+def test_unresolved_link_declares_memory_intent_when_queue_empty() -> None:
     html = _render_orientation(_orientation_payload(pending_candidates=0))
     card = _reentry_card(html)
     inspect = re.search(r'<a[^>]*data-testid="reentry-inspect"[^>]*>', card)
 
     assert inspect, "the re-entry card must keep its inspect affordance"
     inspect_link = inspect.group(0)
-    assert 'data-intent="open_loops.inspect"' in inspect_link
+    assert 'data-intent="memory.open"' in inspect_link
+    assert 'data-memory-candidate-count="0"' in inspect_link
     assert 'href="#workspace-orientation-open-loops"' in inspect_link
-    assert "overlayHost.mount('memory')" not in inspect_link
-    assert "return false" not in inspect_link
+    assert "overlayHost.mount('memory')" in inspect_link
+    assert "return false" in inspect_link
     assert "1 open loops" in card
     assert "1 staged" in card
     assert "0 memory candidates" in card
