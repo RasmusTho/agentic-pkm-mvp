@@ -5,8 +5,8 @@ Owner: Companion UI / interaction model
 Temporal class: stable
 Review cadence: event-driven
 Source of truth: authoritative for entry/shell composition; per-surface authority remains with owner contracts; runtime truth remains with shipped code, tests, and docs/STATUS.md
-Last reviewed: 2026-06-11
-Last verified against: companion-ui/design_handoff/2026-06-09-system-entry-point/, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, companion-ui/docs/OVERLAY_GRAMMAR.md, companion-ui/docs/POSTURE_TRANSITIONS.md, companion-ui/docs/CONTINUITY_AND_DECAY.md, companion-ui/docs/ATTENTION_MODEL.md, companion-ui/docs/CANVAS_SUGGESTION_FLOW.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/DISPLAY_PREFERENCE_LOCAL_STATE_CONTRACT.md, companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md, companion-ui/docs/BLOCKED_AND_STALE_STATE_SPEC.md, companion-ui/docs/CORE_TERM_MAPPING.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CANVAS_CHAT_SURFACE/README.md, companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py
+Last reviewed: 2026-06-12
+Last verified against: tests/companion_ui/test_entry_state_gallery.py (state-gallery validation harness, #1795), companion-ui/design_handoff/2026-06-09-system-entry-point/, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, companion-ui/docs/OVERLAY_GRAMMAR.md, companion-ui/docs/POSTURE_TRANSITIONS.md, companion-ui/docs/CONTINUITY_AND_DECAY.md, companion-ui/docs/ATTENTION_MODEL.md, companion-ui/docs/CANVAS_SUGGESTION_FLOW.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/DISPLAY_PREFERENCE_LOCAL_STATE_CONTRACT.md, companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md, companion-ui/docs/BLOCKED_AND_STALE_STATE_SPEC.md, companion-ui/docs/CORE_TERM_MAPPING.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CANVAS_CHAT_SURFACE/README.md, companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py
 
 # System Entry Point — Normalized Spec
 
@@ -262,7 +262,7 @@ Q10 (ambient foreground refresh opt-in, gated on `COMPANION_ORIENTATION_AMBIENT_
 
 ## Validation expectations
 
-A validating implementation renders the package's state gallery against **fixture orientation snapshots** and verifies:
+The validating implementation is **shipped** (#1795, SEP-11): `tests/companion_ui/test_entry_state_gallery.py` renders the package's state gallery against fixture orientation snapshots and asserts every item below across the fixture matrix (entry states A1–A7 including the degraded/stale cross-flags, shell states for every shipped occupant, responsive C1, guidance E, and the shipped settings/read-back/capture/receipts F-states). A validating implementation verifies:
 
 - every declared entry-point transition, and rejection of undeclared transitions;
 - no UI-derived posture / class / authority anywhere — all classification server-declared;
@@ -273,7 +273,9 @@ A validating implementation renders the package's state gallery against **fixtur
 - `prefers-reduced-motion` is respected and every end-state is fully visible without animation;
 - narrow/portrait preserves every critical affordance (rail → bottom sheet; whisper column suppressed).
 
-The fixture set itself is owned by the validation implementation task (`docs/SYSTEM_ENTRY_POINT/STATE_GALLERY_VALIDATION.md`), not this document.
+The fixture set itself is owned by the validation harness (`docs/SYSTEM_ENTRY_POINT/STATE_GALLERY_VALIDATION.md` → `tests/companion_ui/test_entry_state_gallery.py`), not this document.
+
+Shipped-vs-new audit at capability closure (#1795): every surface in §Surface composition carries its delivering issue number; the only rows still **new** are the source-peek popover presentation and the posture emphasis switch (truthfully undelivered — declared overlay ids that do not mount), and the context lane / place band stay **parked** under the gated decision issue #1796.
 
 ## Authority boundaries
 
