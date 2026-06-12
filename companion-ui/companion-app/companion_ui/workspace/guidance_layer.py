@@ -339,7 +339,10 @@ def guidance_layer_script() -> str:
       toggle: function() {
         // Mirrors guidance_layer.toggled_guidance: flip the root
         // attribute only. Nothing persisted, no endpoint reached, no
-        // content semantics changed.
+        // content semantics changed. Mark the session override so Settings
+        // default re-application cannot erase it until reload or another
+        // explicit guidance toggle.
+        document.body.setAttribute('data-guidance-session-override', 'true');
         if (isOn()) { document.body.removeAttribute('data-guidance'); }
         else { document.body.setAttribute('data-guidance', 'on'); }
         sync();

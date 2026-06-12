@@ -283,14 +283,33 @@ def test_keyboard_map_routes_declared_intents() -> None:
     assert after_esc.stack == ()
     assert after_esc == _state()
 
-    # ⌘K / ⌘N route to their declared overlay targets...
-    assert INTENT_OVERLAY_TARGETS == {"cmd.open": "cmd", "capture.open": "capture"}
+    # ⌘K / ⌘N route to their declared overlay targets; shipped topbar
+    # surface intents are declared here too, so markup does not advertise
+    # host mounts outside the model.
+    assert INTENT_OVERLAY_TARGETS == {
+        "cmd.open": "cmd",
+        "capture.open": "capture",
+        "map.open": "map",
+        "memory.open": "memory",
+        "receipts.open": "receipts",
+        "settings.open": "settings",
+        "vault.open": "vault",
+    }
     # ...both occupants are shipped: ⌘K mounts the Panel command palette
     # (#1786, SEP-04) and ⌘N mounts the capture modal (#1791, SEP-08b).
     assert "cmd" in SHIPPED_OVERLAY_OCCUPANTS
     assert "capture" in SHIPPED_OVERLAY_OCCUPANTS
     assert apply_intent(_state(), "cmd.open").stack == ("cmd",)
     assert apply_intent(_state(), "capture.open").stack == ("capture",)
+    for intent, target in (
+        ("map.open", "map"),
+        ("memory.open", "memory"),
+        ("receipts.open", "receipts"),
+        ("settings.open", "settings"),
+        ("vault.open", "vault"),
+    ):
+        assert target in SHIPPED_OVERLAY_OCCUPANTS
+        assert apply_intent(_state(), intent).stack == (target,)
 
     # Undeclared intents are rejected, not silently absorbed.
     with pytest.raises(ValueError):
@@ -302,6 +321,17 @@ def test_keyboard_map_routes_declared_intents() -> None:
     assert "'cmd'" in script and "cmd.open" in script
     assert "'capture'" in script and "capture.open" in script
     assert "Escape" in script and "overlay.dismiss" in script
+
+    topbar = _topbar(html)
+    for intent in (
+        "vault.open",
+        "map.open",
+        "memory.open",
+        "receipts.open",
+        "settings.open",
+    ):
+        assert f'data-intent="{intent}"' in topbar
+        assert intent in INTENT_OVERLAY_TARGETS
 
     # No dead affordances: the palette and capture surfaces open through the
     # host's ⌘K/⌘N wiring. Since the system map shipped (#1787, SEP-05) the

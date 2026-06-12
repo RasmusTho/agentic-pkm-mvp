@@ -374,7 +374,7 @@ def test_resurfacing_cards_do_not_create_notification_semantics() -> None:
     section = html.split('data-testid="workspace-orientation-resurface"', 1)[1].split("</section>", 1)[0]
 
     assert 'data-notification="false"' in section
-    assert 'data-urgency="none"' in section
+    assert "urgency" not in section.lower()
     assert "badge" not in section.lower()
     assert "inbox" not in section.lower()
     assert "urgent" not in section.lower()
