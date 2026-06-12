@@ -46,6 +46,7 @@ runtime/settings/
 runtime/builderops/
 runtime/dispatcher/
 runtime/orientation/
+runtime/panel/
 verification_report.md
 
 # Local hygiene artifacts

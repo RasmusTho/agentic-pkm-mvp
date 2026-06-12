@@ -354,14 +354,15 @@ Non-negotiable constraints observed in this pack:
 
 - Current implementation evidence: Panel confirm is implemented as the runtime
   authority point for policy, WriteGuard, idempotency, execution, receipts, and
-  events. Proposal and idempotency stores are process-local globals.
+  events. Staged proposals and confirm idempotency keys persist in additive
+  SQLite runtime state and degrade honestly to memory-only mode if unavailable.
 - Main files: `app/api/routes/panel.py`, `app/panel/confirmation.py`,
   `app/panel/canvas_pipeline.py`.
 - User entry point: Companion Panel affordances where routed; dedicated
   confirm-session helper exists.
 - API/CLI entry point: `POST /api/panel/confirm`, `POST /api/panel/checkbox-projection`.
-- Feature flags or dev-only gates: no primary flag, but staged proposals depend
-  on process memory unless backed by a staging path.
+- Feature flags or dev-only gates: no primary flag; staged proposals use the
+  runtime Panel staging store (`runtime/panel/` by default).
 - Runtime/provider/config dependencies: WriteGuard, outbox/event store, proposal
   store, idempotency key.
 - Authority path: governed Panel confirm.
@@ -370,8 +371,8 @@ Non-negotiable constraints observed in this pack:
 - Health/status visibility: status includes panel diagnostics and WriteGuard.
 - Tests that cover it: Panel confirm API/unit/integration tests and receipt/
   event boundary tests.
-- Missing integration work: durable proposal/idempotency persistence,
-  end-to-end UI proxy parity, and unified receipt history after confirm.
+- Missing integration work: end-to-end UI proxy parity and unified receipt
+  history after confirm.
 - v1 eligibility: core.
 - Evidence anchors: `app/api/routes/panel.py:1`,
   `app/api/routes/panel.py:33`,
