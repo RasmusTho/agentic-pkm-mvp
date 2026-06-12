@@ -136,10 +136,10 @@ This parent closes only after all core v1 child issues have posted validation re
 
 | Order | Proposed title | Scope | Why it exists | Depends on | Verify targets | Draft v1 class |
 | --- | --- | --- | --- | --- | --- | --- |
-| 01 | `task(integration): classify Integrated Runtime v1 scope and capability tiers` | Core/optional/experimental/out-of-scope table | Prevent scope explosion and force explicit productization decisions | Evidence pack + errata | docs scope table, no code | Foundation |
-| 02 | `task(system-entry-point): close v1 release substrate residuals` | Align #1782/#1795/#1851 with v1 entry substrate | Front door must be truthful before integration release | #1782/#1795/#1851 state | SEP tests, state-gallery tests | Core |
-| 03 | `fix(companion-ui): enforce active-control route parity for v1 surfaces` | Active UI controls route, hide, or disable factually | Remove island/dead-affordance failure mode | 01, 02 | Companion UI route tests | Core |
-| 04 | `feature(status): expose Integrated Runtime v1 readiness matrix` | Operator-facing ready/degraded/unavailable/experimental matrix | One status surface must explain whether v1 is usable | 01 | status/API/UI tests | Core |
+| 01 | `task(integration): classify Integrated Runtime v1 scope and capability tiers` | Core/optional/experimental/out-of-scope table | Prevent scope explosion and force explicit productization decisions | Evidence pack + errata | scope table + deferred governance issue | Foundation |
+| 02 | `task(system-entry-point): close v1 release substrate residuals` | Align #1782/#1795/#1851 with v1 entry substrate | Front door must be truthful before integration release | #1782/#1795/#1851 state | SEP/state-gallery tests + owner-doc writeback | Core |
+| 03 | `fix(companion-ui): enforce active-control route parity for v1 surfaces` | Active UI controls route, hide, or disable factually | Remove island/dead-affordance failure mode | 01, 02 | Companion UI route parity tests | Core |
+| 04 | `feature(status): expose Integrated Runtime v1 readiness matrix` | Operator-facing ready/degraded/unavailable/experimental matrix | One status surface must explain whether v1 is usable | 01 | status/API/UI readiness tests | Core |
 | 05 | `test(uat): add no-mock v1 golden path scaffold` | Start -> Companion -> orient -> browse -> queue -> confirm -> receipt | Release must prove an integrated workflow | 03, 04 | UAT runbook + receipt | Core |
 | 06 | `feature(companion-ui): prove Vault Browser queue-review to Panel confirm handoff` | Queue-review visible handoff, confirm, refresh, receipt | It is the narrowest governed mutation loop | 03 | API/UI/e2e tests | Core |
 | 07 | `feature(receipts): harden v1 receipt-history projection states` | Pending/durable/blocked/source-unavailable states | User must understand accountability without receipt/event conflation | 06 | receipt UI tests | Core |
@@ -164,11 +164,11 @@ Create the v1 scope matrix, using the evidence pack and errata. Include System E
 
 #### Acceptance Criteria
 - [ ] Every candidate capability has one v1 class and rationale.
-  Verify: scope table in owner draft.
+  Verify: `docs/INTEGRATED_RUNTIME_V1/README.md` or successor owner spec contains a complete scope table.
 - [ ] No future v6.1 capability is smuggled into core v1 without a release gate.
-  Verify: explicit out-of-scope/non-goals section.
+  Verify: out-of-scope/non-goals section names deferred v6.1+ surfaces.
 - [ ] Proportional governance is linked as deferred.
-  Verify: follow-up issue draft or linked placeholder.
+  Verify: future governance issue draft or linked placeholder exists and is referenced from the parent.
 
 #### Suggested Validation
 - docs-only review.
@@ -184,8 +184,11 @@ Verify state gallery, review residuals, shipped child-surface table, and owner d
 
 #### Acceptance Criteria
 - [ ] #1851 residuals are closed or linked as release blockers.
+  Verify: #1851 state plus parent issue comment on #1782 or Integrated Runtime v1 parent.
 - [ ] #1795 state-gallery proof has a closure path.
+  Verify: `tests/companion_ui/test_entry_state_gallery.py` target exists or explicit blocker issue is linked.
 - [ ] `SYSTEM_ENTRY_POINT_SPEC.md`, `docs/STATUS.md`, and `docs/SYSTEM_ENTRY_POINT/` do not overclaim.
+  Verify: docs diff updates shipped/residual state or records no-change rationale.
 
 #### Suggested Validation
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/`
@@ -201,9 +204,13 @@ For every active v1-visible control, prove the route is same-origin reachable, o
 
 #### Acceptance Criteria
 - [ ] Panel confirm controls can reach `/api/panel/confirm` or are not active.
+  Verify: focused Companion UI route parity test covering Panel confirm markup and POST allowlist.
 - [ ] Vault queue-review and vault-related controls are live-routed or factually disabled.
+  Verify: focused Companion UI test covering `/api/companion/vault-browser/actions/queue-review` and `/api/companion/vault-related`.
 - [ ] Canvas controls are hidden/disabled unless v1 includes Canvas and routes are live.
+  Verify: focused Companion UI test covering Canvas open/edit/undo/close/governance controls under enabled and disabled states.
 - [ ] TTS status controls are live-routed if TTS is v1-visible.
+  Verify: focused Companion UI test covering `/api/companion/tts/status` visibility/routing or factual hidden state.
 
 #### Suggested Validation
 - focused `tests/companion_ui/` route parity suite.
@@ -219,8 +226,11 @@ Expose capability readiness: ready, degraded, unavailable, experimental, or out 
 
 #### Acceptance Criteria
 - [ ] Status names v1 capabilities and readiness state.
+  Verify: API/status test asserts each v1 capability key and readiness enum.
 - [ ] Provider unavailable and feature disabled states are explicit.
+  Verify: API/status test with provider-disabled/flag-disabled fixtures.
 - [ ] Process-memory-backed capabilities are marked experimental/degraded unless a persistence decision exists.
+  Verify: API/status test covering Panel proposals/idempotency, Canvas sessions, memory review, and bundle receipts posture.
 
 #### Suggested Validation
 - API/status tests.
@@ -236,8 +246,11 @@ Create a runbook/test scaffold that starts runtime, opens Companion UI, loads or
 
 #### Acceptance Criteria
 - [ ] UAT has exact commands, expected UI/API states, and failure criteria.
+  Verify: UAT runbook includes command blocks, expected observations, and failure criteria.
 - [ ] Golden path proves at least one read-only step, one proposal step, one governed confirm, and one receipt visibility step.
+  Verify: UAT receipt records those four stages with concrete runtime responses or screenshots/HTML snapshots.
 - [ ] Negative safety cases do not create hidden writes or invented receipts.
+  Verify: negative UAT section covers WriteGuard blocked, provider unavailable, no-vault/degraded, missing receipt source, and content-hash mismatch where applicable.
 
 #### Suggested Validation
 - runbook dry-run against test vault where available.
