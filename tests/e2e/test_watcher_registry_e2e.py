@@ -10,9 +10,18 @@ import pytest
 import app.watcher.registry as registry
 from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.cli.uat import seed_vault_test_notes
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
 from scripts.yaml_roundtrip import load_frontmatter
 
 pytestmark = pytest.mark.not_pg
+
+
+def _initialize_design_handoff_vault(vault_root: Path, app_local_path: Path) -> None:
+    result = VaultManager(
+        app_local_store=AppLocalSettingsStore(app_local_path)
+    ).initialize_vault(vault_root, machine_role="testNode", remember=False)
+    assert result.context.status == "selected"
 
 
 def _write_registry_config(path: Path) -> None:
@@ -71,6 +80,7 @@ def test_watcher_registry_uses_env_paths_heals_uuid_and_applies_panel_policy(
     notes.mkdir(parents=True, exist_ok=True)
     obsidian = vault_root / ".obsidian"
     obsidian.mkdir(parents=True, exist_ok=True)
+    _initialize_design_handoff_vault(vault_root, tmp_path / "app-local.md")
 
     no_uuid_note = inbox / "no_uuid.md"
     no_uuid_note.write_text(
@@ -215,6 +225,7 @@ def test_watcher_registry_uses_full_system_layout_scope_for_uat_seed(
     system_rel = "config"
     (vault_root / system_rel).mkdir(parents=True, exist_ok=True)
     (vault_root / "notes").mkdir(parents=True, exist_ok=True)
+    _initialize_design_handoff_vault(vault_root, tmp_path / "app-local.md")
     (vault_root / system_rel / "vault.layout.md").write_text(
         dedent(
             f"""\
