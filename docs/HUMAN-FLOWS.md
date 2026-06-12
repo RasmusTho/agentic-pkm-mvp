@@ -61,7 +61,9 @@ authorship, accountability, and local-first artifact control rather than replaci
 
 The full product-level statement of this thesis, including the failure modes that would
 violate it, lives in `docs/COGNITIVE_PROSTHESIS_CHARTER.md`. The bridge from these human flows
-to the runtime substrate lives in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`.
+to the runtime substrate lives in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`. The agent-facing
+function contract — how helping agents, including human-delegated external agents, use this
+substrate to serve these flows — lives in `docs/AGENT-FLOWS.md`, downstream of this document.
 
 ### Cognitive-load reduction as prosthetic function
 
@@ -159,6 +161,7 @@ They summarize the kinds of cycles the system should keep legible and support ac
 - Source -> interpret -> stabilize
 - Intent -> propose -> decide -> execute -> receipt
 - Review -> reclassify -> promote/archive
+- Remember -> recall -> explain -> correct
 
 Validation note:
 - these loops and the everyday scenarios below are the product-level acceptance source for system-level UAT
@@ -266,6 +269,21 @@ It must not erase the existence of creative, reflective, or commitment-oriented 
 The system should help the human compile and curate memory by weaving together `Source -> interpret -> stabilize`, `Capture -> clarify -> place`, `Review -> reclassify -> promote/archive`, and `Retrieve -> orient -> act`.
 Compilation should reduce cognitive load while preserving human authorship, provenance, uncertainty, and review posture across the resulting working artifacts.
 Generated compiled artifacts are not automatically canonical truth; they remain reviewable outputs until the human decides what to keep, promote, revise, or archive.
+
+### Remember -> recall -> explain -> correct
+
+The human must be able to trust that the system's memory about prior work, decisions, and agent
+actions remains legible and correctable:
+- the system may remember support material on the human's behalf,
+- recalled material must show what was used and where it came from,
+- recall must be explainable rather than presented as bare conviction,
+- and when the system's memory diverges from the human's, the human can inspect and correct it,
+  with corrections producing new records rather than rewriting prior ones.
+
+This loop is the human-facing contract behind inspectable agent memory. The agent-facing
+obligations — per-flow recall bindings, explanation duties, and paired correction paths — are
+owned by `docs/AGENT-FLOWS.md`; memory semantics remain owned by
+`docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`.
 
 ### Support commitments and action
 
@@ -958,6 +976,7 @@ document should continue to hold.
 ## References
 
 - `docs/PROJECT_KERNEL.md`
+- `docs/AGENT-FLOWS.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/USER_NEEDS_MODEL.md`
 - `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
