@@ -67,6 +67,7 @@ from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
+from app.vault.manager import MachineRole, VaultContext, get_vault_manager
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
@@ -144,7 +145,89 @@ class CompanionTTSStatusResponse(BaseModel):
     operator_receipt: dict[str, object]
 
 
+class VaultContextResponse(BaseModel):
+    status: str
+    active_vault_id: str | None = None
+    active_vault_name: str | None = None
+    active_vault_path: str | None = None
+    settings_path: str | None = None
+    local_instance_id: str | None = None
+    machine_role: str | None = None
+    validation_error: str | None = None
+    permissions: dict[str, bool] = Field(default_factory=dict)
+
+
+class VaultSelectRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    remember: bool = True
+
+
+class VaultInitializeRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    vault_name: str | None = None
+    machine_role: MachineRole = "primary"
+    remember: bool = True
+
+
+class VaultInitializeResponse(BaseModel):
+    context: VaultContextResponse
+    created_files: list[str]
+    skipped_existing_files: list[str]
+
+
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
+
+
+def _vault_context_response(context: VaultContext) -> VaultContextResponse:
+    manager = get_vault_manager()
+    permissions = manager.permissions_for_context(context)
+    return VaultContextResponse(
+        status=context.status,
+        active_vault_id=context.active_vault_id,
+        active_vault_name=context.active_vault_name,
+        active_vault_path=context.active_vault_path,
+        settings_path=context.settings_path,
+        local_instance_id=context.local_instance_id,
+        machine_role=context.machine_role,
+        validation_error=context.validation_error,
+        permissions={
+            "enableVaultWatcher": permissions.enable_vault_watcher,
+            "enableAutoIndexing": permissions.enable_auto_indexing,
+            "allowWritesToVault": permissions.allow_writes_to_vault,
+            "allowSharedSettingsEdits": permissions.allow_shared_settings_edits,
+            "allowLocalSettingsEdits": permissions.allow_local_settings_edits,
+        },
+    )
+
+
+@router.get("/vault/context", response_model=VaultContextResponse)
+def read_companion_vault_context() -> VaultContextResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    return _vault_context_response(context)
+
+
+@router.post("/vault/select", response_model=VaultContextResponse)
+def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
+    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
+    return _vault_context_response(context)
+
+
+@router.post("/vault/initialize", response_model=VaultInitializeResponse)
+def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
+    result = get_vault_manager().initialize_vault(
+        Path(req.path),
+        vault_name=req.vault_name,
+        machine_role=req.machine_role,
+        remember=req.remember,
+    )
+    return VaultInitializeResponse(
+        context=_vault_context_response(result.context),
+        created_files=list(result.created_files),
+        skipped_existing_files=list(result.skipped_existing_files),
+    )
 
 
 def _parse_browse_max_notes() -> int:
