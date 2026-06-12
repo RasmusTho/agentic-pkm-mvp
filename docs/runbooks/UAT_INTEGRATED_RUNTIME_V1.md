@@ -209,14 +209,26 @@ Scripted coverage: `tests/uat/test_golden_path_integrated_runtime.py::test_resum
 <!-- negative-safety -->
 ## Negative Safety
 
-This runbook reserves the negative-safety anchor for sibling issue #1879. The positive golden path above does not claim ownership of the negative suite.
+Run the governed mutation-boundary negative suite with:
 
-Expected extension points for #1879:
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/uat -m uat_integrated_runtime
+```
+
+The suite proves the release gate fails safe and honestly across blocked writes,
+stale source hashes, provider unavailability, missing receipt sources, wrong vault
+startup, and replay/foreign intent confirmation. It must not be used to weaken
+WriteGuard, receipt-source honesty, or vault isolation boundaries.
+
+Scripted coverage: `tests/uat/test_negative_safety_integrated_runtime.py`.
+
+Covered boundaries:
 - WriteGuard blocked mutation.
-- Content-hash mismatch on human save or confirm.
-- Same-turn confirm rejection.
+- Content-hash mismatch on human save and Panel checkbox projection.
+- Provider-unavailable coauthoring while capture/review/confirm remain honest.
 - Missing receipt source.
 - Wrong vault or wrong environment binding.
+- Replay and foreign intent confirmation rejection.
 
 ## Validation
 
@@ -237,3 +249,4 @@ Interpretation:
 - With `RUN_INTEGRATED_RUNTIME_UAT=1`, all golden-path legs must pass.
 - Confirm/receipt legs fail if same-origin confirm route parity is missing after #1851/#1875 close.
 - Resume fails if durable proposal/idempotency staging is unavailable after #1877 close.
+- Negative safety must pass when opted in and must remain fail-closed around governance writes, source hashes, provider availability, receipt honesty, vault isolation, and replay/foreign intent handling.
