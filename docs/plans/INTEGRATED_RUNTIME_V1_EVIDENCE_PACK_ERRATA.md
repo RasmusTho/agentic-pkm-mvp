@@ -1,3 +1,5 @@
+State: Active errata addendum for the Integrated Runtime v1 evidence pack; non-authoritative unless promoted into owner docs.
+
 # Integrated Runtime v1 Evidence Pack Errata
 
 Status: reconciliation addendum for
