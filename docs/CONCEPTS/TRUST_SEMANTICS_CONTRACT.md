@@ -81,6 +81,15 @@ The system must not auto-apply actions that:
 - Move or duplicate content across domains in a way that obscures provenance or collapses boundaries.
 - Convert low-trust material into asserted truth without explicit review/adoption.
 
+### Scope note: mediated writes vs observed writes
+The rules above govern writes **the system mediates**. A human may also delegate direct
+filesystem access to an external agent over declared Markdown roots
+(`docs/AGENT-FLOWS.md` §4/§7). Such direct writes happen outside the system's mediation: they are
+not APPLY, the automatic-write conditions do not apply to them, and the system does not pretend
+to gate them. Trust semantics still bind at **read and promotion time**: observed external-agent
+material carries the imported/external or machine-proposed archetype until reviewed, and
+promoting it into confirmed knowledge is a trust delta under the confirmation rules above.
+
 ## Evidence + receipt requirements (per verb)
 
 Receipts are required whenever trust gates ASSERT/SUGGEST/APPLY. Receipts are conceptual audit records; their storage location is not specified here.
