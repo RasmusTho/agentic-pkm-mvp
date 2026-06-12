@@ -133,7 +133,7 @@ Review status values:
 
 Docs still tagged `Baseline-only (v4.10)` in tables below should be read as foundation-only and queued for baseline/forward-line review; the active SoT baseline is v5.5.
 
-The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The active reading path is defined by the role map below.
+The 2026 docs cleanup work is not retained as live documentation. The active reading path is defined by the role map below; removed historical snapshots are available from git history.
 
 ## SoT Notes
 - v4.10 — locked Reality-MVP baseline (foundation only).
@@ -147,13 +147,6 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | README.md | Top-level overview | Aligned (v6.0 seams shipped; v6.1+ framing) | 2026-05-17 | v5.5 baseline quickstart + invariants; v6.0 seams baseline shipped; broader v6 consumption is v6.1+; points readers to DOCS_INDEX/STATUS/ARCHITECTURE and the wider active docs set. |
-| docs/archive/docs-refactor/DOCS_REFACTOR_PLAN.md | Documentation simplification plan | Legacy (archived) | 2026-03-14 | Archived planning record for the 2026 docs cleanup effort; no longer an active decision surface. |
-| docs/archive/docs-refactor/DOCS_SECOND_WAVE_CLEANUP.md | Second-wave cleanup matrix | Legacy (archived) | 2026-03-14 | Archived execution matrix for the completed cleanup wave. |
-| docs/archive/docs-refactor/HISTORICAL_EXTRACTION_REVIEW.md | Historical extraction review | Legacy (archived) | 2026-03-14 | Archived extraction review used during the historical-doc cleanup pass. |
-| docs/archive/github-templates/CHANGELOG.md | Repo change log (archived) | Legacy (archived) | 2025-12-07 | Moved from root; superseded by STATUS/ROADMAP v4.10. |
-| docs/archive/github-templates/ISSUE_TEMPLATE_v4.6-objective.md | Issue template (historical) | Legacy (archived) | 2025-12-07 | Moved from .github; v4.6 template kept for history. |
-| docs/archive/github-templates/pull_request_template.md | PR template (historical) | Legacy (archived) | 2025-12-07 | Moved from .github; v4.6 scaffold not current CI expectations. |
-| docs/archive/README.md | Archive index | Legacy (archived) | 2025-12-17 | Index of archived docs; not part of the active doc set. |
 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
@@ -229,7 +222,6 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/ARCHITECTURE.md | Architecture (SoT v5.x line on v5.5 base) | Aligned (forward line v5.x) | 2026-05-31 | Active runtime architecture source of truth; refreshed against the shipped panel-confirm / artifact-note / companion-workspace / workspace-orientation slices on top of the v6.0 seam baseline, while still separating active v5.5 runtime, delivered v5.6 closures, read-only Chat cognition scaffold, bounded canvas-session scaffolding behind `CANVAS_ENABLED`, closed A2A lifecycle cleanup, remaining post-v5.6 follow-ups, and the current GitHub Issue contract without reviving historical AMG/SetDB or module-map claims. |
 | docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md | Core Runtime vs Agentic Lab boundary contract | Aligned (forward line v5.x) | 2026-03-09 | Defines the operator-safe core boundary, opt-in lab boundary, ownership map, and non-goals for simplification work. |
 | docs/CONCURRENCY.md | Concurrency + idempotency guardrails | Aligned (forward line v5.x) | 2026-03-14 | Normative concurrency/idempotency requirements for the current runtime, with representative validation coverage and commands. |
-| docs/archive/architecture/SYSTEM_DESIGN_v4.10.md | System design / topology | Baseline-only (v4.10) | 2026-03-14 | Historical reference for v4.10 topology/external surfaces; moved out of the active docs root and not authoritative for the current baseline. |
 | docs/STATUS.md | Operational snapshot | Aligned (SoT v5.5 baseline locked + v5.6 delivered) | 2026-05-31 | Current snapshot of runtime reality, verification status, and post-v5.6 follow-up posture; refreshed to record shipped Agent Memory #1079-#1085 and workspace-orientation slices while keeping the baseline framing truthful about v6.0 seams shipped versus broader v6.1+ and production Companion UI work still planned. |
 | docs/DESIGN_PRINCIPLES.md | Stable system design principles | Aligned (SoT v5.5 baseline + v6 direction framing) | 2026-03-27 | Canonical owner of boundary-first design, interaction-first architecture, capability-based composition plus bounded agents, explicit mutation authority, governance-before-autonomy, and documentation-layer responsibilities; read before changing architecture or roadmap framing. |
 | docs/ROADMAP.md | Strategic roadmap | Aligned (major reset accepted; SoT v5.5 baseline locked + v5.6 delivered) | 2026-06-04 | Roadmap treats v5.6 as a closed delivery line, keeps v5.5 as the locked baseline, records shipped Agent Memory #1079-#1085 plus seam-level Companion UI/runtime-client additions without promoting them to full product-baseline status, and keeps broader v6.1+ interaction/runtime consumption explicitly forward-looking. The 2026-06-04 reset freezes normal backlog-wave generation until current-state and decision-gate reconciliation is accepted. After #1508, high-churn execution movement belongs in BuilderOps `RoadmapExecutionItem` records and the generated `roadmap-execution` projection rather than daily roadmap PR updates. |
@@ -253,7 +245,6 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2026-03-27 | System-level runtime agent architecture doc covering shared patterns, capability-oriented agent direction, agent matrix, and coordination direction; explicitly treats the matrix as a current coordination map rather than a target-state claim of one-agent-per-function decomposition. |
 | docs/AGENT_ISSUE_DISPATCHER.md | Local Agent Issue Dispatcher MVP contract | Aligned (forward line v5.x) | 2026-04-25 | Authoritative contract for the local Agent Issue Dispatcher MVP: purpose, non-goals, source-of-truth boundaries against GitHub Issues and GitHub Projects, data model, status/transition rules, lease/claim semantics, agent loop, SQLite + JSONL observability, and relationship to parent #617 and lease-boundary predecessor #561; runtime implementation tracked under #622/#623/#624/#625. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2026-04-21 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT, and now explicitly reflects envelope versioning, representative event-family coverage, DB outbox consumer expectations, retry metadata, no dedicated DLQ claim, and `watcher.run` emission by both registry and legacy watcher ticks with registry-specific audit semantics. |
-| docs/archive/architecture/DIAGRAMS.md | Legacy diagrams | Legacy (archived) | 2026-03-14 | Legacy diagrams moved out of the active docs root; use `docs/DIAGRAMS.md` for the current runtime view. |
 | docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x + v6 planning) | 2026-05-31 | User-facing behavior contract for the current system; refreshed against the shipped read-only artifact workspace, workspace-orientation re-entry seam, and explicit panel-confirm flow while preserving the rule that broader hybrid Chat/Panel mutation and production Companion UI hardening remain future work, not current baseline truth. |
 | docs/HUMAN_FLOW_TO_RUNTIME_MAP.md | Human flow to runtime map | Reference | 2026-05-12 | Targeted map linking human-flow language to runtime-adjacent concept contracts for context bundles and agent memory/knowledge without rewriting owner flow docs. |
 | docs/READING_PATHS.md | Reading paths | Reference | 2026-05-12 | Targeted reading guide for changing retrieval/orientation/resurfacing, agent memory, companion UI, and governance/writeback contract surfaces. |
@@ -261,7 +252,6 @@ The 2026 docs cleanup work is archived under `docs/archive/docs-refactor/`. The 
 | docs/PANEL_AGENT.md | PanelAgent / NoteInteractionAgent | Aligned (forward line v5.x) | 2026-03-27 | PanelAgent-specific runtime contract covering panel syntax, runtime behavior, events, and wiring; now explicitly frames Panel as the current mutation-capable interaction surface rather than a target-state claim about permanent agent decomposition. |
 | docs/runbooks/UAT_PANEL_WATCHER.md | UAT guide (panel + watcher) | Aligned (forward line v5.x) | 2026-03-30 | Registry watcher UAT flow with AI fence policy, UUID healing, and explicit v5.6 enablement checks (`settings-explain`, `status`, CI corroboration when applicable); explicitly scoped as operational validation of the current runtime path, not the full target-state design. |
 | docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md | Incident triage runbook (watcher/panel/orchestrator) | Aligned (forward line v5.x) | 2026-03-31 | Current-state incident triage for watcher, panel runtime, and CLI-first orchestrator; structured around where to look first, commands/signals to inspect, trace_id correlation, and escalation paths. Covers heartbeat freshness, outbox interpretation, span traces, and common issues for each surface. |
-| docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md | Module map | Legacy (archived) | 2026-03-14 | Historical module map retained for orientation and naming continuity; moved out of the active docs root. |
 | docs/research/pattern-harvest-agentic-architecture.md | Research synthesis (outer/inner agent architecture) | Aligned (analysis, docs-only) | 2026-02-05 | Pattern harvest of events/A2A/tools/observability/config; backlog + Mermaid diagram; no runtime wiring. |
 | docs/research/cognitive-semantics-literature-memo.md | Research synthesis (cognitive semantics, PKM, identity, archives) | Aligned (analysis, docs-only) | 2026-03-20 | Literature memo on relevance axes, context/spheres, role identity, and archive/retention semantics; explicitly distinguishes strong source support from provisional repo language. |
 | docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md | Research synthesis (cognitive-load reduction and decision surfaces) | Aligned (analysis, docs-only) | 2026-06-07 | Grounds cognitive-load reduction as a governed human-agent workflow capability and central cognitive-prosthetic function rather than a UI theme or accessibility side topic; ranks evidence for TTS/listening, spacing/layout, reading throughput, text-production/encoding support, correction-as-proposal, diagnosis-specific fonts, Bionic-style rendering, automation bias, summarization faithfulness, and cognitive offloading/resurfacing; maps source-preserving proposal/review patterns for #1640-#1643, adds WP-T1 Phase B correction-as-proposal guardrails, and adds FA-5 resurfacing guardrails: scarce/budgeted, why-now provenance, pull-default, task-support vs learning split. Non-normative; owner authority remains with HUMAN-FLOWS, PANEL_AGENT, Companion UI contracts, and downstream promoted owner-doc work. |
@@ -348,6 +338,8 @@ These directories are docs-only specification authority for v6.0 capability boun
 | docs/OBSERVABILITY.md | Observability | Aligned (forward line v5.x) | 2026-04-22 | Runtime observability contract for heartbeats, counters, spans, and status interpretation; keeps runtime monitoring separate from higher-level architecture ownership, aligns `watcher_runs` semantics with the registry watcher audit stream, documents bounded retry/poison-message observability without claiming a dedicated DLQ, and reflects retrieval view-freshness status metadata. |
 | docs/OPERATIONS.md | Operations playbook | Aligned (forward line v5.x) | 2026-05-31 | Top-level operator entrypoint focused on current runtime checks, watcher operations, settings validation, event/queue troubleshooting, and escalation to HEALTH, OBSERVABILITY, INFRASTRUCTURE, and runbooks; refreshed against current workspace-orientation runtime surfaces while preserving the current dev/test-only canvas gate posture and existing operator verification path. |
 | docs/RUNTIME_PROOF_PLAN.md | Runtime proof baseline plan | Reference | 2026-05-13 | Minimal operational proof plan for startup, health/status, watcher detection, event/outbox creation, worker consumption, settings source correctness, write guards, and minimal ASK/panel/canvas happy paths; explicitly states runtime proof is confidence evidence and not legacy proof-of-non-use. |
+| docs/plans/INTEGRATED_RUNTIME_V1_EVIDENCE_PACK.md | Integrated Runtime v1 evidence pack | Active evidence pack | 2026-06-12 | Factual evidence pack for future productization planning. Non-authoritative unless promoted into owner docs; records why existing runtime capabilities are not yet one integrated production/operator workflow. |
+| docs/plans/INTEGRATED_RUNTIME_V1_EVIDENCE_PACK_ERRATA.md | Integrated Runtime v1 evidence pack errata | Active evidence pack errata | 2026-06-12 | Reconciliation addendum for the Integrated Runtime v1 evidence pack against current `main`; non-authoritative unless promoted into owner docs. |
 | docs/LOCAL_TEST_BOOTSTRAP/README.md | Local test bootstrap spec index | Reference | 2026-04-09 | Index for the local test bootstrap specification set and its task-document workflow. |
 | docs/LOCAL_TEST_BOOTSTRAP/RESET_RUNTIME_STATE.md | Bootstrap spec: reset runtime state | Reference | 2026-04-07 | BOOTSTRAP-01 task spec for reset-zero-force and clean-state runtime artifact removal. |
 | docs/LOCAL_TEST_BOOTSTRAP/INITIALIZE_TEST_VAULT.md | Bootstrap spec: initialize test vault | Reference | 2026-04-07 | BOOTSTRAP-02 task spec for seeding the clean `vault-test/` verification surface. |
@@ -391,44 +383,17 @@ These directories are docs-only specification authority for v6.0 capability boun
 | docs/GLOSSARY.md | Glossary | Aligned (forward line v5.x) | 2026-02-05 | Definitions updated to match v5.5 baseline (outbox/JSONL audit, rerank hooks). |
 | docs/CONCEPTS/DEFINITION_OWNERSHIP.md | Definition ownership convention | Reference | 2026-03-22 | Minimal working convention for precedence, downstream reference discipline, and semantic change visibility across Core SoT concept docs. |
 | docs/learning-log.md | Delivery learning log compatibility view | Historical / compatibility reference | 2026-06-01 | Historical record of pre-BuilderOps delivery-plan divergences and explicit compatibility fallbacks. New operational delivery learning belongs in BuilderOps `LearningSignal` records; learning summaries should be generated through the BuilderOps `learning-summary` projection. Governed by `docs/development/DELIVERY_FEEDBACK_LOOP.md`. |
-| docs/legacy/CHANGELOG.md | Docs changelog | Legacy (archived) | 2026-02-05 | Historical; prefer STATUS/ROADMAP for current baseline and forward line. |
-| docs/legacy/PLANNER.md | Planner contract | Legacy (archived) | 2026-02-05 | Historical reference; planner/orchestrator behavior has evolved. |
-| docs/legacy/PROJECTOR.md | Projector | Legacy (archived) | 2026-02-05 | Historical reference; projector behavior is not current baseline. |
-| docs/legacy/ALIGNMENT.md | Alignment guide | Legacy (archived) | 2025-12-07 | Legacy “Second-Brain” guide; superseded by SoT v4.10. |
-| docs/legacy/ingest.md | Ingest (historical/current) | Legacy (archived) | 2026-02-05 | Historical reference; prefer HUMAN-FLOWS/OPERATIONS for current ingest. |
-| docs/legacy/OVERVIEW_WS.md | Workspace overview | Legacy (archived) | 2025-12-07 | v4.3 walking-skeleton; superseded by SoT v4.10 docs. |
-| docs/legacy/MEMORY.md | Memory (legacy overview) | Legacy (archived) | 2025-12-07 | Historical memory-layer description; not used in Reality-MVP. |
-| docs/archive/architecture/SYSTEM_OVERVIEW.md | System overview (historical) | Legacy (archived) | 2026-03-14 | Historical v4.2 overview moved out of the active docs root; superseded by current SoT docs. |
 
 ## Historical / Archived (Architecture Deep Dives)
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/history/SOT_4X_HISTORY.md | 4.x SoT history | Legacy (archived) | 2026-03-14 | Historical ladder and milestones for v4.x; use only for background, not current-state decisions. |
-| docs/archive/architecture/next-steps.md | Architecture future/bridge (historical) | Legacy (archived) | 2025-12-17 | SoT v4.3-era addendum; kept for reference with an explicit HISTORICAL banner; not authoritative for current SoT. |
-| docs/archive/architecture/obsidian_integration.md | Obsidian integration deep dive (historical) | Legacy (archived) | 2025-12-17 | SoT v4.3-era deep dive; kept for reference with an explicit HISTORICAL banner; not authoritative for current SoT. |
-| docs/architecture/memory/api.md | Memory API v4.2 | Legacy (archived) | 2025-12-07 | V4.2 agent-memory API; not in Reality-MVP. |
-| docs/architecture/memory/c4-component.md | Memory C4 component | Legacy (archived) | 2025-12-07 | Legacy memory component view; see ARCHITECTURE/DATA_MODEL. |
-| docs/architecture/memory/c4-container.md | Memory C4 container | Legacy (archived) | 2025-12-07 | Legacy container diagram; superseded by SYSTEM_DESIGN_v4.10. |
-| docs/architecture/memory/c4-context.md | Memory C4 context | Legacy (archived) | 2025-12-07 | Legacy context (AMG/SetDB); not applicable to v4.10. |
-| docs/architecture/memory/data-model.md | Memory data model | Legacy (archived) | 2025-12-07 | Agent_memories/memory_edges tables not present in v4.10. |
-| docs/architecture/memory/event-taxonomy.md | Memory event taxonomy | Legacy (archived) | 2025-12-07 | Memory events not emitted; use EVENTS.md/app.events.types. |
-| docs/architecture/memory/observability.md | Memory observability | Legacy (archived) | 2025-12-07 | Proposed metrics for non-existent memory store. |
-| docs/architecture/memory/perf.md | Memory performance | Legacy (archived) | 2025-12-07 | Legacy perf notes; see RETRIEVAL/INGEST for current concerns. |
-| docs/architecture/memory/security.md | Memory security | Legacy (archived) | 2025-12-07 | Legacy security for memory store; see SECURITY/PRIVACY. |
-| docs/architecture/memory/sequence-per.md | Memory PER sequence | Legacy (archived) | 2025-12-07 | PER sequence for memory store not in Reality-MVP. |
-| docs/architecture/memory/overview.md | Memory overview | Legacy (archived) | 2025-12-07 | V4.2 memory overview; replaced by ObjectStore/VectorIndex. |
-| docs/uml/README.md | UML index | Legacy (archived) | 2025-12-17 | Legacy UML overview + diagram index; replaced by the architecture docs. |
-| docs/uml/agent_sequence.md | UML sequence | Legacy (archived) | 2025-12-07 | Run_agent supervisor loop; not part of Reality-MVP. |
-| docs/uml/agent_components.md | UML components | Legacy (archived) | 2025-12-11 | Legacy agent service components; watcher block marked removed and superseded by planned v5.x watcher track (see ROADMAP/STATUS/HUMAN-FLOWS). |
 
 ## Runbooks, How-to, Settings Examples, and Examples
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/runbooks/ingest.md | Runbook: ingest | Legacy (archived) | 2026-02-05 | Historical reference; prefer OPERATIONS + STARTUP_FULL_SYSTEM runbook. |
 | docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md | Runbook: agentops incident triage | Aligned (forward line v5.x) | 2026-03-31 | Canonical current-state incident workflow for watcher, panel runtime, and CLI-first orchestrator surfaces; routes trace/heartbeat/outbox/audit interpretation without implying planned A2A behavior. |
 | docs/runbooks/RUNBOOK_GO_LIVE.md | Runbook: go-live checklist | Aligned (forward line v5.x) | 2026-03-30 | Go-live preflight updated for registry watcher + DB outbox + Ollama embeddings defaults, with explicit watcher enablement checks and CI corroboration guidance for v5.6 rollout decisions. |
 | docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md | Runbook: prod go-live acceptance | Aligned (forward line v5.x) | 2026-05-15 | 13-phase operator acceptance procedure covering preflight, environment/vault verification, DB/LLM checks, canonical startup, health/status verification, real-vault smoke test, watcher→outbox→worker path, write-guard/allowlist checks, promotion receipt capture, rollback rehearsal, soak guidance, acceptance/rejection criteria, and rollback-first failure handling. Machine-readable receipt template at docs/runbooks/prod_acceptance_receipt.example.json. |
-| docs/runbooks/RUNBOOK_STARTUP.md | Runbook: startup checklist | Legacy (archived) | 2026-03-08 | Historical SoT v4.10 checklist; updated with Obsidian contract notes, but current runtime source remains RUNBOOK_STARTUP_FULL_SYSTEM + scripts/start_full_system.sh. |
 | docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md | Runbook: full-system startup | Aligned (forward line v5.x) | 2026-05-18 | Canonical v5.x startup; includes startup command semantics table (prod-start-full, test-start-full, prod-up, test-up, alpha-up deprecated), concept map (startup vs promotion vs rollback), health boundary checks, and explicit watcher enablement checks. |
 | docs/runbooks/UAT_REAL_NOTE_VERTICAL_SLICE.md | UAT: real-note vertical slice | Aligned (forward line v5.x) | 2026-05-18 | End-to-end UAT runbook for the read-only artifact API and companion UI components against an actual vault note; covers PRs #1062–#1070; test/runbook scope only, no new feature work. |
 | docs/runbooks/UAT_CANVAS_COAUTHORING.md | UAT: agentic canvas co-authoring and Chat→Panel handoff | Aligned (forward line v5.x) | 2026-06-09 | End-to-end operator validation of the agentic canvas loop against a real vault note; covers Canvas Phase 2 (#1716/#1717) and Chat→Panel Governance Handoff Phase 3 (#1726/#1727/#1728) plus live /coauthor wiring (#1733). Dev/staging only, gated behind `CANVAS_ENABLED`. |
@@ -436,7 +401,6 @@ These directories are docs-only specification authority for v6.0 capability boun
 | docs/runbooks/RUNBOOK_RESET_TO_ZERO.md | Runbook: reset to zero | Aligned (forward line v5.x) | 2026-02-05 | Reset flow updated for DB outbox canonical queue + JSONL audit log. |
 | docs/runbooks/E2E_ALPHA.md | Alpha E2E contract | Aligned (forward line v5.x) | 2026-02-05 | Canonical alpha-up → alpha_e2e → alpha-smoke flow, runtime note cleanup, and status semantics. |
 | docs/runbooks/UNMANAGED_OBSIDIAN_VAULT_AUDIT.md | Runbook: unmanaged vault audit | Aligned (docs-only, target-state framing) | 2026-05-19 | Phased audit and opportunistic migration strategy for an unmanaged Obsidian vault; applies life-wide artifact taxonomy; 5 phases (observe, classify, introduce overlays, opportunistic migration, optional automation); docs-only, no runtime behavior. |
-| docs/howto/memory.md | How-to: memory | Legacy (archived) | 2025-12-07 | Agent-memory guide superseded by ObjectStore/decisions in v4.10. |
 | docs/settings/sample-flows/ingest.flow.md | Sample flow | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Template for future planner/orchestrator ingest; not loaded in v4.10. |
 | docs/settings/sample-agents/planner.md | Sample agent config | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Planner config template for v5.x; unused in Reality-MVP. |
 | docs/settings/sample-agents/normalizer.md | Sample agent config | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Normalizer config template; runtime uses direct agents, not these YAMLs. |
@@ -461,38 +425,22 @@ These directories are docs-only specification authority for v6.0 capability boun
 ## Agents / Codex Guidance
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/agents/AGENT_SPEC.md | Agent spec | Legacy (archived) | 2026-02-05 | Historical reference; prefer AGENTS + EVENTS for current contracts. |
 | .codex/AGENTS.md | Codex compatibility pointer | Aligned (forward line v5.x) | 2026-03-29 | Non-canonical compatibility entrypoint that redirects Codex-style discovery to the root `AGENTS.md` and development reference docs. |
 | CLAUDE.md | Claude Code entrypoint | Aligned (forward line v5.x) | 2026-03-29 | Minimal Claude compatibility entrypoint that defers to the root `AGENTS.md`. |
-| docs/codex/GUIDELINES.md | Codex guidelines | Legacy (archived) | 2026-03-29 | Historical guidance only; use the root `AGENTS.md` plus `docs/development/*` for current builder-agent policy and workflow. |
 
 ## ADRs
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | docs/adr/INDEX.md | ADR index | Baseline-only (v4.10, with known debt) | 2026-02-05 | Design records index; not runtime truth; may be partially outdated. |
-| docs/adr/ADR-00X-agent-memory-v1.md | ADR (agent memory v1) | Legacy (archived) | 2025-12-07 | Historical PG JSONB memory; superseded by ObjectStore/decisions in v4.10. |
-| docs/adr/ADR-00X-agent-memory-v42.md | ADR (agent memory v42) | Legacy (archived) | 2025-12-07 | Scoped PG memory/edges not implemented in v4.10. |
-| docs/adr/0001-externa-komponenter.md | ADR external components | Legacy (archived) | 2025-12-07 | Superseded by SYSTEM_DESIGN_v4.10 and LLM/COMPONENTS docs. |
 | docs/adr/0004-outbox-latency.md | ADR outbox latency | Partially outdated | 2026-02-05 | Targeted outbox→index <=2s; intent only (not enforced as CI gate); delta vs v5.5 baseline noted. |
 | docs/adr/0005-per-loop.md | ADR PER loop | Partially outdated | 2026-02-05 | Historical rationale for shared PER base; v5.5 uses mixed loop/graph implementations; delta noted. |
 | docs/adr/ADR-0006-deepagents-harness.md | ADR DeepAgents harness | Proposed | 2026-03-25 | Evaluation memo for DeepAgents as outer agent harness; decision pending pilot. |
 | docs/adr/ADR-0008-leave-point-cursor.md | ADR leave-point cursor | Proposed | 2026-05-31 | Decides that the Workspace Orientation leave-point cursor is admissible only as a bounded append-only operational trace pointer, not memory, durable workspace state, session truth, receipt, workflow resume command, UI-owned state, or vault artifact. |
 | docs/adr/ADR-0010-builderops-vault-authority-boundary.md | ADR BuilderOps Vault authority boundary | Accepted (docs/governance decision) | 2026-06-01 | Defines BuilderOps Vault as the operating plane for builder-agent work while preserving the repo as product/runtime truth authority; names BuilderOps surfaces, non-authority boundaries, projection boundaries, explicit promotion targets, and the raw worklog boundary from #1495. BuilderOps store, CLI, API/tool boundary, promotion gateway, and generated projections are shipped in app/builderops/ as build-plane infrastructure; records and projections are not product/runtime truth. Updated by PR #1611. |
-| docs/adrs/ADR-00xx-promotion-agent.md | ADR promotion agent | Partially outdated | 2026-02-05 | Historical lifecycle intent; current baseline uses DB outbox + idempotent promotion consumer; delta noted. |
 
 ## Legacy and Archive
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/archive/NEXT-STEPS.md | Archived plan | Legacy (archived) | — |  |
-| docs/archive/transcription.md | Archived transcription doc | Legacy (archived) | — |  |
-| docs/archive/SoT-v4.1.md | Legacy SoT v4.1 | Legacy (archived) | — |  |
-| docs/archive/TESTS.md | Archived tests doc | Legacy (archived) | — |  |
-| docs/archive/RUNBOOK.md | Archived runbook | Legacy (archived) | — |  |
-| docs/archive/decision-log-2025-10.md | Decision log | Legacy (archived) | — |  |
-| docs/archive/VERSIONING.md | Versioning (archived) | Legacy (archived) | — |  |
-| docs/archive/codex_plan.md | Codex plan (archived) | Legacy (archived) | — |  |
-| docs/legacy/PROJECT_OVERVIEW.md | Legacy overview | Legacy (archived) | — |  |
-| docs/legacy/TODO.md | Legacy TODO | Legacy (archived) | 2025-12-11 | Notes that the old ingestion watcher is deprecated; planned v5.x watcher track supersedes it. |
 
 ## Scenario and Protocol Docs
 | Path | Scope | Review status | Last reviewed | Notes |

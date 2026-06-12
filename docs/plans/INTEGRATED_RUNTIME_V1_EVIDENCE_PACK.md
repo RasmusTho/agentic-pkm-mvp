@@ -1,3 +1,5 @@
+State: Active factual evidence pack for future productization planning; non-authoritative unless promoted into owner docs.
+
 # Integrated Runtime v1 Evidence Pack
 
 Status: factual evidence pack for a future productization epic. This does not

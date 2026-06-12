@@ -12,8 +12,7 @@ Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
 
-Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder history is in `docs/history/SOT_4X_HISTORY.md`. Forward-looking plan lives in `docs/ROADMAP.md`.
-Those documents are kept for reference but are not active truth for the current baseline. If a historical or roadmap document conflicts with this document on current-state runtime architecture, this document wins.
+Forward-looking plan lives in `docs/ROADMAP.md`. Historical snapshots are no longer retained as live repo files; use git history for removed background material. If a roadmap document conflicts with this document on current-state runtime architecture, this document wins.
 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
 
@@ -69,8 +68,7 @@ Related documents and authority boundaries:
   attentional relevance, and surfacing need should be understood upstream of the runtime `zone`
   overlay.
 - `docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md` defines the current timeout handling, SLA boundaries, and observable timeout behavior across orchestration surfaces (executor-level per-tool timeout, orchestrator constraints, and A2A limitations).
-- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` is a historical reference for external dependencies, deployment topology, and human-facing surfaces from the v4.10 foundation snapshot. It is useful background, but it is not authoritative for the current v5.5 baseline.
-- `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md` is a historical high-level module map retained for orientation and naming continuity. It may not reflect current v5.5 wiring and should not be treated as the active system map when evaluating current behavior.
+- Removed historical architecture snapshots are available through git history only and are not authoritative for the current v5.5 baseline.
 
 Function-first reading rule:
 - `docs/HUMAN-FLOWS.md` defines what the system is meant to help the human do.
@@ -643,12 +641,7 @@ hybrid Chat/Panel crossings are bounded by
 
 ## Historical Material
 
-Historical topology, older runtime surfaces, and superseded architecture detail live outside this document:
-- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
-- `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
-- `docs/history/SOT_4X_HISTORY.md`
-
-This document deliberately does not inline those older sections. For current-state questions, the active sections above are authoritative.
+Historical topology, older runtime surfaces, and superseded architecture detail are no longer retained as live repo files. Use git history only when that background is needed. For current-state questions, the active sections above are authoritative.
 
 ## GitHub Delivery Control Plane (development governance)
 

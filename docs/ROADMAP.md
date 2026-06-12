@@ -10,7 +10,7 @@ Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md,
 
 # Roadmap — Strategic Control
 
-This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
+This roadmap is forward-looking and skimmable. Deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`; removed history snapshots live only in git history.
 
 BuilderOps roadmap execution boundary: `docs/ROADMAP.md` remains the repo strategic sequencing
 surface. Daily movement state belongs in BuilderOps `RoadmapExecutionItem` records and the generated
@@ -303,7 +303,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 - PanelAgent LangGraph track: `docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md`
 - AgentOps/A2A/MCP hardening: `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`
 - Fitness/CI contract: `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`
-- Historical ladder: `docs/history/SOT_4X_HISTORY.md`
+- Historical ladder: removed from the live repo; use git history if the old snapshot is needed.
 
 ## Delivery Control Plane (GitHub)
 

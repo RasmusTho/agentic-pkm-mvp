@@ -9,21 +9,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_ROOT = REPO_ROOT / "docs"
 DOCS_INDEX = DOCS_ROOT / "DOCS_INDEX.md"
 
-# Paths/prefixes that may omit a State: header because they are legacy, archived,
-# or sample/templates not used at runtime.
+# Paths/prefixes that may omit a State: header because they are samples/templates
+# not used at runtime.
 STATE_OPTIONAL_PREFIXES: tuple[str, ...] = (
-    "docs/archive/",
-    "docs/archive/github-templates/",
     "docs/examples/",
-    "docs/legacy/",
-    "docs/uml/",
     "docs/adr/",
-    "docs/adrs/",
 )
-STATE_OPTIONAL_FILES: set[str] = {
-    "docs/legacy/OVERVIEW_WS.md",
-    "docs/howto/memory.md",
-}
+STATE_OPTIONAL_FILES: set[str] = set()
 
 STATE_RE = re.compile(r"^State:\s", re.MULTILINE)
 FRONTMATTER_RE = re.compile(r"\A---\n(?=.*^name:\s)(?=.*^description:\s)", re.MULTILINE | re.DOTALL)
