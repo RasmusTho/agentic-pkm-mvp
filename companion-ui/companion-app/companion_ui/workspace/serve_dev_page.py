@@ -4166,7 +4166,6 @@ def _render_canvas_session_controls(
             data-affordance-status="blocked">
             """ + unavailable_copy + """
           </div>"""
-    recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
     recovery_html = ""
     if conflict_detected:
         recovery_state = "acknowledged" if recovery_acknowledged else "needs acknowledgement"
@@ -4182,8 +4181,10 @@ def _render_canvas_session_controls(
             <button
               type="button"
               data-testid="workspace-canvas-recovery-ack"
-              data-api-method="LOCAL"
-              data-api-path="{recovery_api_path}">Acknowledge</button>
+              data-affordance-status="blocked"
+              data-runtime-backed="false"
+              data-blocked-reason="Canvas recovery acknowledgement runtime route is not shipped"
+              disabled>Acknowledge</button>
           </div>"""
     # Live agentic co-authoring loop (#1733). Gated strictly by canvas_enabled and
     # an active session: the user states an intent, the server composes and applies
@@ -10380,6 +10381,27 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            if parsed.path == "/api/companion/vault-related":
+                params = {
+                    key: values[0]
+                    for key, values in parse_qs(parsed.query).items()
+                    if values and values[0]
+                }
+                try:
+                    data = self._client.get("/api/companion/vault-related", params=params)
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/companion/tts/status":
+                try:
+                    data = self._client.get("/api/companion/tts/status", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path.startswith("/api/companion/tts/audio/"):
                 self._proxy_audio(parsed.path)
                 return
@@ -10508,15 +10530,42 @@ def make_handler(
             self.end_headers()
             self.wfile.write(body)
 
+        # GET paths the page server proxies through to the runtime API.
+        _GET_PROXY_PATHS = frozenset(
+            {
+                "/api/companion/orientation",
+                "/api/companion/workspace",
+                "/api/companion/vault/notes",
+                "/api/companion/vault-related",
+                "/api/companion/tts/status",
+                "/api/operator/status",
+                "/api/operator/health",
+                "/api/operator/settings/validate",
+                "/api/operator/events/tail",
+            }
+        )
+        _GET_PROXY_PATTERNS = (
+            re.compile(r"^/api/companion/tts/audio/[a-f0-9]{64}\.wav$"),
+        )
+
+        @classmethod
+        def _get_path_allowed(cls, path: str) -> bool:
+            if path in cls._GET_PROXY_PATHS:
+                return True
+            return any(pattern.fullmatch(path) for pattern in cls._GET_PROXY_PATTERNS)
+
         # POST paths the page server proxies through to the runtime API
         # (same-origin model; the browser never talks to the runtime directly).
         _POST_PROXY_PATHS = frozenset(
             {
                 "/api/companion/workspace/body",
+                "/api/companion/workspace/update",
                 "/api/companion/capture",
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
+                "/api/companion/vault-browser/actions/queue-review",
+                "/api/canvas/sessions",
                 "/api/panel/confirm",
                 "/api/panel/checkbox-projection",
                 "/api/operator/ask",  # operator diagnostics Ask (#1758)
@@ -10531,6 +10580,7 @@ def make_handler(
         # the provider-unavailable notice — server declares, UI renders.
         _POST_PROXY_PATTERNS = (
             re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
+            re.compile(r"^/api/canvas/sessions/[^/]+/edits$"),
             # Governed memory review decisions (#1793 -> #1792 endpoints).
             # Runtime refusals (409, e.g. the accept dry-run) are forwarded
             # verbatim by _proxy_error so the drawer renders calm with the
@@ -10542,6 +10592,28 @@ def make_handler(
             if path in self._POST_PROXY_PATHS:
                 return True
             return any(pattern.fullmatch(path) for pattern in self._POST_PROXY_PATTERNS)
+
+        _DELETE_PROXY_PATTERNS = (
+            re.compile(r"^/api/canvas/sessions/[^/]+$"),
+            re.compile(r"^/api/canvas/sessions/[^/]+/edits/last$"),
+        )
+
+        @classmethod
+        def _delete_path_allowed(cls, path: str) -> bool:
+            return any(pattern.fullmatch(path) for pattern in cls._DELETE_PROXY_PATTERNS)
+
+        @classmethod
+        def route_allowed(cls, method: str, path: str) -> bool:
+            method = method.upper()
+            if method == "GET":
+                return cls._get_path_allowed(path)
+            if method == "POST":
+                if path in cls._POST_PROXY_PATHS:
+                    return True
+                return any(pattern.fullmatch(path) for pattern in cls._POST_PROXY_PATTERNS)
+            if method == "DELETE":
+                return cls._delete_path_allowed(path)
+            return False
 
         # Operator POST paths that rewrite to a different runtime path.
         # key = companion-UI path, value = runtime API path.
@@ -10567,6 +10639,18 @@ def make_handler(
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             try:
                 data = self._client.post(runtime_path, json=payload)
+            except WorkspaceClientError as exc:
+                self._proxy_error(exc)
+                return
+            self._send_json(200, data)
+
+        def do_DELETE(self) -> None:
+            parsed = urlparse(self.path)
+            if not self._delete_path_allowed(parsed.path):
+                self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
+                return
+            try:
+                data = self._client.delete(parsed.path, params={})
             except WorkspaceClientError as exc:
                 self._proxy_error(exc)
                 return
