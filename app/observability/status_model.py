@@ -167,6 +167,12 @@ class WatcherAutomationStatus(BaseModel):
     last_run_skipped_allowed_actions: int | None = None
 
 
+class IntegratedRuntimeCapabilityStatus(BaseModel):
+    tier: str
+    state: str
+    reasons: list[str] = Field(default_factory=list)
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     environment: str
@@ -194,6 +200,7 @@ class SystemStatus(BaseModel):
     instance_provenance: Optional[InstanceProvenanceStatus] = None
     context_dimensions: Optional[ContextDimensionsStatus] = None
     v6_0_seams: Optional[Dict[str, str]] = None
+    integrated_runtime_v1: Optional[Dict[str, IntegratedRuntimeCapabilityStatus]] = None
 
 
 __all__ = [
@@ -215,5 +222,6 @@ __all__ = [
     "WatcherAutomationStatus",
     "WatcherLifecycleStatus",
     "ContextDimensionsStatus",
+    "IntegratedRuntimeCapabilityStatus",
     "SystemStatus",
 ]

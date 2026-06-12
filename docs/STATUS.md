@@ -150,6 +150,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - `sot_forward_line_version` / `feature_line_version`: code-level release-line marker that still reports v5.6 on top of the v5.5 baseline; this is not proof that v5.6 remains the active issue queue.
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
 - Counters (totals + 24h window): `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), `watcher_runs` (`watcher.run` from registry and legacy watcher ticks), and ingest run counts per plane. Registry watcher health is also tracked via heartbeat + tick logs.
+- `integrated_runtime_v1`: informational release-readiness matrix for the Integrated Runtime v1 operator view. It names the v1 capabilities, tier, state, and reasons from existing probes/flags only; it does not affect health/readiness pass-fail, grant authority, emit events, or perform writes.
 
 ## Concurrency & Safety (v5.5 gate)
 - DedupTaskQueue now guards watcher auto-runs and powers the `skipped_dedup` signal before releasing keys.
