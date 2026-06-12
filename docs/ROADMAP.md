@@ -53,6 +53,7 @@ runtime exposure, or claim public internet readiness.
 ## Now / Next / Later
 - **Now**
   - **Major roadmap reset and SoT reconciliation** — active sequencing guard. Do not generate the next normal backlog wave from target-state docs. First reconcile shipped runtime, delivered seams, owner-doc promotion state, BuilderOps projection boundaries, and open GitHub state using `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md`.
+  - **Integrated Runtime v1 release line (#1874)** — active integration sequencing item for route parity, readiness matrix, Panel staging persistence, golden-path UAT, negative-safety UAT, and docs reduction.
   - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
   - Keep the shipped PanelAgent LangGraph decider opt-in and watcher policy auto-exec plumbing stable under the v5.5 baseline guardrails while broader rollout stays gated.
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
