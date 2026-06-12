@@ -23,6 +23,8 @@ This runbook defines the operator-executed procedure for accepting the productio
 - Deep Agents / v6.1 runtime capability consumption
 - New watcher authority or mutation behavior
 
+Companion-inclusive Integrated Runtime v1 acceptance is tracked by epic #1874 and remains a separate release gate from this baseline production go-live procedure until its UAT runbook lands.
+
 ---
 
 ## Prerequisites

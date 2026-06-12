@@ -1,4 +1,5 @@
-State: Active factual evidence pack for future productization planning; non-authoritative unless promoted into owner docs.
+State: Superseded by #1874.
+Supersession: Integrated Runtime v1 planning truth now lives in epic #1874 and its wave-1 child issues; use the errata-corrected classification in #1874 where this archived evidence pack and the errata differ.
 
 # Integrated Runtime v1 Evidence Pack
 

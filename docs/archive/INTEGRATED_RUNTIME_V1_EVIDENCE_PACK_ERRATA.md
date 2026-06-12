@@ -1,4 +1,5 @@
-State: Active errata addendum for the Integrated Runtime v1 evidence pack; non-authoritative unless promoted into owner docs.
+State: Superseded by #1874.
+Supersession: Integrated Runtime v1 planning truth now lives in epic #1874 and its wave-1 child issues; this archived errata remains historical correction context for the classification promoted into #1874.
 
 # Integrated Runtime v1 Evidence Pack Errata
 
