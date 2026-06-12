@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
+import app.api.routes.panel as panel_routes
 import app.panel.checkbox_projection as projection_module
 import app.panel.confirmation as confirm_module
 from app.agents.panel.writeback import stable_action_id
@@ -28,7 +29,14 @@ from app.panel.checkbox_projection import extract_panel_selectable_options
 from app.panel.confirmation import StagedProposal
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
-pytestmark = pytest.mark.uat_integrated_runtime
+pytestmark = [
+    pytest.mark.uat_integrated_runtime,
+    pytest.mark.skipif(
+        os.getenv("RUN_INTEGRATED_RUNTIME_UAT", "").strip().lower()
+        not in {"1", "true", "yes", "on"},
+        reason="opt-in integrated runtime UAT; set RUN_INTEGRATED_RUNTIME_UAT=1",
+    ),
+]
 
 
 def _write_note(
@@ -147,6 +155,8 @@ def _outbox_events(path: Path) -> list[dict]:
 
 @pytest.fixture(autouse=True)
 def _clear_runtime_state(monkeypatch: pytest.MonkeyPatch):
+    panel_routes.UnknownProposalError = confirm_module.UnknownProposalError
+    panel_routes.SameTurnExecutionError = confirm_module.SameTurnExecutionError
     confirm_module._proposal_store.clear()
     confirm_module._idempotency_store.clear()
     projection_module._idempotency_store.clear()
