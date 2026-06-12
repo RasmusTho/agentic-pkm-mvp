@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-06-11
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, merged PRs #1800/#1801/#1802/#1816/#1817/#1818/#1833, GitHub issue #1508, System Entry Point parent #1782 validation receipts through wave 3a, and current repo state at 3861b111 on 2026-06-11
+Last reviewed: 2026-06-12
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py, companion-ui/companion-app/companion_ui/workspace/guidance_layer.py, companion-ui/companion-app/companion_ui/workspace/settings_drawer.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, tests/companion_ui/test_system_map_overlay.py, tests/companion_ui/test_guidance_layer.py, tests/companion_ui/test_settings_drawer.py, tests/companion_ui/test_entry_state_gallery.py, merged PRs #1798-#1802/#1816-#1818/#1833/#1834/#1846/#1847/#1854, GitHub issue #1508, System Entry Point parent #1782 validation receipts through #1795 closure, and current repo state at 808658ab on 2026-06-12
 
 # Roadmap — Strategic Control
 
@@ -19,10 +19,11 @@ Use that projection for operational views of theme, capability, status, active i
 last movement, next decision, and shipped refs. Do not update this roadmap merely to record routine
 movement.
 
-System Entry Point execution is an active roadmap-execution item, not a completed roadmap baseline:
-parent #1782 remains open while the entry-state/re-entry/overlay-host/palette/capture/memory/receipts
-child surfaces have shipped and system-map/guidance/settings/state-gallery closure work remains
-represented by the issue tree and BuilderOps execution records.
+System Entry Point execution is now a completed Companion UI capability delivery, not a broader
+product-baseline promotion. Parent #1782 closed through #1795 validation after the entry-state,
+re-entry, overlay-host, palette, capture, memory, receipts, system-map, guidance, settings, and
+state-gallery child surfaces shipped. Remaining context-lane/place-band decisions stay parked under
+the gated follow-up issue #1796 and BuilderOps execution records.
 
 Major roadmap reset boundary: `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` is the accepted
 strategic reset input for the next sequencing pass. It freezes normal backlog-wave generation until
