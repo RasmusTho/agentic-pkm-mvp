@@ -5,17 +5,20 @@ Owner: Product / architecture
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-12
-Last verified against: docs/PROJECT_KERNEL.md, docs/HUMAN-FLOWS.md, docs/ARCHITECTURE.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/FINDING_AND_REORIENTING/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md, docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md
+Last reviewed: 2026-06-12
+Last verified against: docs/PROJECT_KERNEL.md, docs/HUMAN-FLOWS.md, docs/AGENT-FLOWS.md, docs/ARCHITECTURE.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/FINDING_AND_REORIENTING/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md, docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md
 
 # Human Flow to Runtime Map
 
 > Audience: readers who already understand the product thesis (`docs/COGNITIVE_PROSTHESIS_CHARTER.md`) and the human flows (`docs/HUMAN-FLOWS.md`), and need to see how each flow lands on the runtime substrate.
 
 This document is a bridge, not a contract. The human-flow column is normative against
-`docs/HUMAN-FLOWS.md`. The system-capability, surface, runtime-support, and
-provenance/receipt columns are descriptive — they summarize where in the architecture each flow
-is supported or is *intended* to be supported.
+`docs/HUMAN-FLOWS.md` (all six canonical loops, including
+`Remember -> recall -> explain -> correct`, are anchored there). The system-capability, surface,
+runtime-support, and provenance/receipt columns are descriptive — they summarize where in the
+architecture each flow is supported or is *intended* to be supported. Agent-facing obligations
+for these flows (per-flow authority bindings, recall/correction duties, participation modes) are
+owned by `docs/AGENT-FLOWS.md`, not by this map.
 
 Current implementation truth is owned by `docs/STATUS.md`, `docs/ROADMAP.md`, and the relevant
 owner docs. Where a row describes a capability that is not yet shipped, the "likely future

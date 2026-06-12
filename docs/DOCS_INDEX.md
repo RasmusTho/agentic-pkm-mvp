@@ -26,6 +26,7 @@ First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to lo
 | Work area | First-read docs |
 | --- | --- |
 | Builder-agent workflow | `AGENTS.md` → `.codex/skills/README.md` → `docs/development/AGENT_OPERATING_PROTOCOL.md` |
+| Agent-facing flows / direct agent workspaces | `docs/AGENT-FLOWS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
 | Runtime agents | `docs/AGENTS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
 | Contextualization Layer | `docs/CONTEXTUALIZATION_LAYER/README.md`, `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` |
 | Companion notes | `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/CONTEXTUALIZATION_LAYER/COMPANION_NOTE_PATTERN.md` |
@@ -42,6 +43,8 @@ High-signal map of which doc owns which authority. This index remains the canoni
 role map; the rows below are a quick pointer, not a replacement for the full tables.
 
 - Documentation role map: `docs/DOCS_INDEX.md`
+- Flow-level function contracts: `docs/HUMAN-FLOWS.md` (human, upstream) + `docs/AGENT-FLOWS.md`
+  (agent-facing, downstream)
 - Semantic topology and authority map: `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`
 - Current runtime truth: `docs/ARCHITECTURE.md` + `docs/STATUS.md`
 - Runtime events and outbox contract: `docs/EVENTS.md`
@@ -115,6 +118,7 @@ High-risk temporal docs in the active set:
 | docs/ARCHITECTURE.md | operational | event-driven | current baseline/runtime changes |
 | docs/OPERATIONS.md | operational | event-driven | current runbooks + runtime commands |
 | docs/HUMAN-FLOWS.md | strategic | event-driven | current product/kernel + shipped interaction behavior |
+| docs/AGENT-FLOWS.md | strategic | event-driven | human-flow contract + concept contracts + shipped agent surfaces |
 | docs/tracks/*.md | snapshot | per-release | shipped PRs/issues and current owner docs |
 
 Recommended agent workflow:
@@ -245,7 +249,8 @@ The 2026 docs cleanup work is not retained as live documentation. The active rea
 | docs/AGENTS.md | Agents overview | Aligned (forward line v5.x + LangGraph inner principle) | 2026-03-27 | System-level runtime agent architecture doc covering shared patterns, capability-oriented agent direction, agent matrix, and coordination direction; explicitly treats the matrix as a current coordination map rather than a target-state claim of one-agent-per-function decomposition. |
 | docs/AGENT_ISSUE_DISPATCHER.md | Local Agent Issue Dispatcher MVP contract | Aligned (forward line v5.x) | 2026-04-25 | Authoritative contract for the local Agent Issue Dispatcher MVP: purpose, non-goals, source-of-truth boundaries against GitHub Issues and GitHub Projects, data model, status/transition rules, lease/claim semantics, agent loop, SQLite + JSONL observability, and relationship to parent #617 and lease-boundary predecessor #561; runtime implementation tracked under #622/#623/#624/#625. |
 | docs/EVENTS.md | Outbox/event contracts | Aligned (forward line v5.x) | 2026-04-21 | Canonical Outbox envelope + selected event meanings; compatibility anchored in EVENT_COMPATIBILITY_CONTRACT, and now explicitly reflects envelope versioning, representative event-family coverage, DB outbox consumer expectations, retry metadata, no dedicated DLQ claim, and `watcher.run` emission by both registry and legacy watcher ticks with registry-specific audit semantics. |
-| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x + v6 planning) | 2026-05-31 | User-facing behavior contract for the current system; refreshed against the shipped read-only artifact workspace, workspace-orientation re-entry seam, and explicit panel-confirm flow while preserving the rule that broader hybrid Chat/Panel mutation and production Companion UI hardening remain future work, not current baseline truth. |
+| docs/HUMAN-FLOWS.md | Human flows | Aligned (forward line v5.x + v6 planning) | 2026-06-12 | User-facing behavior contract for the current system; refreshed against the shipped read-only artifact workspace, workspace-orientation re-entry seam, and explicit panel-confirm flow while preserving the rule that broader hybrid Chat/Panel mutation and production Companion UI hardening remain future work, not current baseline truth. Now carries all six canonical loops, including `Remember -> recall -> explain -> correct`, and points downstream to `docs/AGENT-FLOWS.md`. |
+| docs/AGENT-FLOWS.md | Agent flows (agent-facing function contract) | Aligned (initial contract, 2026-06-12) | 2026-06-12 | Second flow-level function contract, subordinate to `docs/HUMAN-FLOWS.md`: agent participation modes (mediated internal/external, direct filesystem, future MCP/RBAC, ad hoc pasted), mediated-vs-observed write distinction, agent task families, per-flow authority bindings, declared agent workspaces and living Markdown knowledge-base zones, continuous knowledge compilation, mediated egress limits, and the explicit decline of the mediated `may_write` widening slot. Binds to concept-contract vocabulary; owns no runtime truth. |
 | docs/HUMAN_FLOW_TO_RUNTIME_MAP.md | Human flow to runtime map | Reference | 2026-05-12 | Targeted map linking human-flow language to runtime-adjacent concept contracts for context bundles and agent memory/knowledge without rewriting owner flow docs. |
 | docs/READING_PATHS.md | Reading paths | Reference | 2026-05-12 | Targeted reading guide for changing retrieval/orientation/resurfacing, agent memory, companion UI, and governance/writeback contract surfaces. |
 | docs/TESTING.md | Testing strategy | Aligned (forward line v5.x) | 2026-04-02 | Current testing contract covering baseline checks, deterministic slices, and the working distinction between testing, slice verification, feature validation, and acceptance. |

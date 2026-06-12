@@ -1,4 +1,5 @@
 State: Concept contract companion (agent memory and knowledge; human-authored truth remains primary).
+Changed: 2026-06-12 — `docs/AGENT-FLOWS.md` explicitly declines the `may_write` widening slot reserved below for Yggdrasil-mediated agent memory; `may_write=false` remains universal unless a future governed owner contract changes it. Human-declared direct filesystem write zones (see `docs/AGENT-FLOWS.md` §7) are a separate human-delegated access mode, not a `may_write` widening and not agent memory.
 
 # Agent Memory and Knowledge Contract
 
@@ -356,6 +357,13 @@ Memory or context alone must not authorize mutations, note writes, or state tran
 separate governed contract explicitly changes it with receipts and human review. Promotion from
 candidate to active memory must not occur silently from context influence; explicit lifecycle
 transitions with receipts are required.
+
+`docs/AGENT-FLOWS.md` has explicitly declined this widening slot for Yggdrasil-mediated agent
+memory; the slot remains reserved for a future governed owner contract. Note the distinction in
+`docs/AGENT-FLOWS.md` §4/§7: Markdown written by human-delegated direct filesystem agents in
+declared workspace roots is an observed external artifact, not agent memory and not a mediated
+write — it carries no memory authority flags and enters knowledge only through the normal
+review/promotion path.
 
 This default is the design-intent posture documented here. Runtime enforcement may be partial at
 any given point. Where the runtime does not yet enforce a tier, the constraint remains normative
