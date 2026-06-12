@@ -62,7 +62,7 @@ Every surface row below is tagged with exactly one status:
 | Vault Browser (browse, outline, artifact inspector) | shipped/dev-staging | Find, Reorient | read-only; `queue_review` is governed handoff (`POST /api/companion/vault-browser/actions/queue-review`) | `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; `app/api/routes/companion.py` |
 | Panel / agent rail | shipped/dev-staging | Act | governed handoff (propose → decide → execute → receipt); owns governed action | `companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md`; CanvasPanelPipeline, checkbox projection |
 | Receipts / provenance | shipped/dev-staging | Act, Reorient | read-only display; receipts must not be invented by the UI | `docs/STATUS.md` (APPLY accountability fields); receipt query (#1532) |
-| Operational loop (inspect → queue → confirm → receipt) | shipped/dev-staging | Find, Act, Reorient | derived, read-only loop projection over existing surfaces; queue stages, confirm executes through `POST /api/panel/confirm`, receipt posture is shown not owned; UI is never durable authority | #1603; queue `loop_stage` (`app/api/routes/companion.py`), confirm `receipt_visibility` (`app/panel/confirmation.py`), `workspace-operational-loop` region (`serve_dev_page.py`) |
+| Operational loop (inspect → queue → confirm → receipt) | shipped/dev-staging | Find, Act, Reorient | derived, read-only loop projection over existing surfaces; queue stages, confirm executes through `POST /api/panel/confirm`, receipt posture is shown not owned; UI is never durable authority | #1603; queue `loop_stage` (`app/api/routes/companion.py`), confirm `receipt_visibility` (`app/panel/confirmation.py`), `workspace-operational-loop` region (`serve_dev_page.py`). **Two distinct receipt paths**: (1) `queue_review` + `POST /api/panel/confirm` → durable receipt in governance/receipt layer (`panel.receipts`, `receipt_visibility`); UAT: #1604. (2) `POST /api/panel/checkbox-projection` → durable `- [x]` + `> [!info]- AI status` callout written directly into vault note Markdown; UAT: #1621. See `docs/PANEL_AGENT.md` for both UAT receipts. |
 | Memory candidate boundary (orientation seam) | shipped/dev-staging | Reorient | read-only awareness + intent emission only; never hidden authority | ADR-0009; `tests/api/test_orientation_memory_seam.py` (#1457/#1466) |
 | Agent-memory posture in Vault Browser inspector | shipped/dev-staging | Find, Reorient | read-only projection; server-declared | scope decision #1474 (closed); read-only projection #1547 (closed); Vault Browser surfacing #1551 (`app/agent_memory/posture_projection.py`). See **Known blocked areas**. |
 | Ambient foreground orientation refresh | shipped/dev-staging (default-off) | Reorient | read-only; non-notification | feat #1458 (closed), receipt/orientation fixes #1532 (merged). **Not** an open item. |
@@ -132,6 +132,49 @@ These invariants hold across every mode and surface above:
 - Receipts must not be invented.
 - The UI must not infer governance, memory authority, urgency, salience, or actionability
   locally.
+
+## Cognitive-load state extension
+
+The cognitive-load operating model adds a per-state authority-class map for fixture planning and
+scripted UAT. This table is a reconciliation/reference extension only. It does not add APIs,
+authority semantics, or shipped behavior.
+
+Authority classes: `Canonical`, `Projection`, `Proposal`, `Confirmation`, `Receipt`, and `Local UI`.
+The class is server-declared; the UI must not infer it locally.
+
+| State | Mode | Class | Status | User-facing posture | System MUST NOT | Fixture |
+|---|---|---|---|---|---|---|
+| Empty workspace | Reorient | Projection | shipped/dev-staging | No open sessions; one way in | Manufacture activity | `empty_state` |
+| Returning to task | Reorient | Projection | shipped/dev-staging | Re-entry cue; resume/open/dismiss | Trap with no path forward (#1690) | `cold_load` |
+| Note browsing | Find | Projection | shipped/dev-staging | Browse/search/open vault notes | Reclassify zone locally | `browser_tree` |
+| Note reading | Find/Reorient | Canonical | shipped/dev-staging | Body primary; display prefs/read/listen | Mutate body from projection | `read_mode` |
+| Proposal available | Act | Proposal | shipped/dev-staging | Distinct card; unchecked options | Pre-check or present as truth | `proposal_avail` |
+| Proposal expanded | Act | Proposal | shipped/dev-staging | Consequence and provenance upfront | Hide consequence behind disclosure | `proposal_expand` |
+| Multiple options | Act | Proposal | shipped/dev-staging | Small bounded option set | Confirm-all; infer id by position | `multi_option` |
+| Stale proposal | Act | Proposal | target-state | Guard-held: source changed; regenerate | Confirm against stale hash | `stale_source` |
+| Selected, not executed | Act | Proposal | shipped/dev-staging | Checked option; no execution yet | Treat checkbox as execution | `checkbox_selected` |
+| Executing | Act | Confirmation | shipped/dev-staging | Applying via governed path | Imply projection did the write | `executing` |
+| Blocked — WriteGuard | Act | Proposal | target-state | Guard-held: gate, reason, path forward | Present as generic error | `blocked_guard` |
+| Blocked — stale hash | Act | Proposal | target-state | Guard-held: source/identity mismatch | Conflate with policy block | `blocked_hash` |
+| Receipt written | Act/Reorient | Receipt | shipped/dev-staging | Outcome, id, before/after where available | Hide receipt | `receipt_written` |
+| Already confirmed | Act | Receipt | shipped/dev-staging | Idempotent receipt posture; no change | Rewrite or double-count | `idempotent` |
+| Rejected | Act | Proposal | shipped/dev-staging | Dismissed/logged; no durable apply receipt | Write a durable apply receipt | `rejected` |
+| Deferred | Act | Proposal | target-state | Parked with return condition | Auto-resurface without why-now | `deferred` |
+| Clarification requested | Act | Proposal | shipped/dev-staging | One bounded question | Treat answer as governed write | `clarify` |
+| Resurfacing available | Resurface | Projection | shipped/dev-staging | Scarce why-now card with source | Surface without why-now/provenance | `resurface_avail` |
+| Resurfacing dismissed | Resurface | Projection | target-state | Gone for the session | Re-push dismissed item | `resurface_dismiss` |
+| Resurfacing capped | Resurface | Projection | target-state | Budget/cap visible | Exceed budget via push | `resurface_capped` |
+| Memory candidate | Reorient | Proposal | shipped/dev-staging | Inspectable candidate/provenance | Treat candidate as memory truth | `memory_candidate` |
+| Dictation draft | Capture | Proposal | target-state | Non-authoritative draft | Save without read-back/confirm | `dictation_draft` |
+| Correction proposal | Capture | Proposal | shipped/dev-staging | Staged diff; real-word flags | Apply silently or alter meaning | `correction` |
+| Read-back verification | Capture | Projection | target-state | Faithful narration of draft | Read a cleaned version | `read_back` |
+| Listening mode | all | Local UI | target-state | Local modality control over projection content | Auto-play or summary-as-source | `tts_mode` |
+| Local display override | all | Local UI | shipped/dev-staging | Local-only badge; byte-unchanged | Write preference to vault | `display_override` |
+| Error / conflict | all | Projection | target-state | Calm degraded state | Alarm or block-as-error | `render_degraded` |
+
+Blocked and stale are not independent authority classes. They are Proposal or Confirmation states
+held by a guard; presentation is governed by
+`companion-ui/docs/BLOCKED_AND_STALE_STATE_SPEC.md`.
 
 ## Related docs
 

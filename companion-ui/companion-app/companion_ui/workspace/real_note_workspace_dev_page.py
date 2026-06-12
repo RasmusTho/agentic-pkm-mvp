@@ -377,7 +377,13 @@ class RealNoteWorkspaceDevPage:
         )
         if content_hash:
             self._last_content_hash_by_note[resolved_note_path] = content_hash
-        shell = RealNoteWorkspaceShell(payload=payload, agent_rail_state=None)
+        shell = RealNoteWorkspaceShell(
+            payload=payload,
+            agent_rail_state=None,
+            # Mirror the server-declared canvas guard so the co-authoring region
+            # is reachable when the runtime enables it. The UI never infers this.
+            canvas_enabled=bool(guards.get("canvas_enabled", True)),
+        )
         panel_count = int(panel.get("proposal_count") or 0)
         panel_state = panel.get("state") or "idle"
         panel_message = _panel_message(panel)
@@ -1013,6 +1019,16 @@ def _proposal_rows_from_panel(
             cognition_route=evidence_raw.get("cognition_route", ""),
         )
         affordances = _proposal_affordance_set(raw.get("affordances"))
+        # Server-declared proposal-scoped origin attribution (e.g.
+        # "canvas_coauthoring" from CHAT-PANEL-HANDOFF-01). Surfaced for
+        # attribution only; the UI never infers it and leaves it None when the
+        # server did not declare one.
+        proposal_origin = raw.get("proposal_origin")
+        # Server-declared reflected receipt posture (CHAT-PANEL-HANDOFF-03),
+        # correlated by intent_id for a canvas-originated proposal that has
+        # executed. Passed through verbatim; the UI invents no receipt and
+        # infers no success. None unless the server declared it.
+        reflected_receipt = raw.get("reflected_receipt")
         row = ProposalRow(
             proposal_id=raw.get("proposal_id", ""),
             artifact_id=raw.get("artifact_id") or artifact_id,
@@ -1020,6 +1036,10 @@ def _proposal_rows_from_panel(
             evidence=evidence,
             available_affordances=affordances,
             status=raw.get("status", "staged"),
+            proposal_origin=str(proposal_origin) if proposal_origin else None,
+            reflected_receipt=(
+                reflected_receipt if isinstance(reflected_receipt, dict) else None
+            ),
         )
         rows.append(row.as_render_dict())
     return rows

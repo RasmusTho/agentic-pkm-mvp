@@ -32,10 +32,30 @@ class CanvasPanelPipeline:
     with artifact_id equal to the note_path relative to vault_root.
     """
 
+    #: Proposal-scoped origin recorded on every canvas-originated Panel proposal.
+    #: This is distinct from the vault-note/frontmatter ``origin`` field; it marks
+    #: the *proposal* as canvas co-authoring provenance for Panel attribution.
+    PROPOSAL_ORIGIN = "canvas_coauthoring"
+
     def __init__(self, proposal_store: ProposalStore, artifact_id: str, note_path: str) -> None:
         self._store = proposal_store
         self._artifact_id = artifact_id
         self._note_path = note_path
+
+    @staticmethod
+    def _instruction(action_type: str, payload: dict[str, Any]) -> str:
+        """Human-facing proposal instruction for Panel review.
+
+        When the payload carries the original natural-language request (#1772),
+        surface it alongside the coarse action type so reviewing the proposal
+        shows what the human actually asked for. Falls back to the generic form
+        when no request text was carried (e.g. explicit ``/governance`` calls
+        with caller-supplied payloads).
+        """
+        original_request = payload.get("original_request")
+        if isinstance(original_request, str) and original_request.strip():
+            return f'canvas governance: {action_type} — "{original_request.strip()}"'
+        return f"canvas governance: {action_type}"
 
     def submit_intent(
         self,
@@ -54,7 +74,7 @@ class CanvasPanelPipeline:
                 ),
                 panel=PanelInfo(
                     panel_id=proposal_id,
-                    instruction=f"canvas governance: {action_type}",
+                    instruction=self._instruction(action_type, payload),
                 ),
                 actions=[
                     PanelIntentAction(
@@ -78,6 +98,7 @@ class CanvasPanelPipeline:
                 artifact_id=self._artifact_id,
                 intent_event=intent_event,
                 trace_id=proposal_id,
+                proposal_origin=self.PROPOSAL_ORIGIN,
             ),
         )
         return proposal_id

@@ -50,7 +50,7 @@ Run promote-to-test first, or invoke with --bypass-test-receipt and supply a ris
 
 ## Channel isolation preflight
 
-Before any prod mutation, confirm all four prod bindings are correct:
+Before any prod mutation, confirm every prod binding in the table below is correct:
 
 | Binding | Required value |
 | --- | --- |
@@ -88,7 +88,7 @@ Before any prod mutation, confirm all four prod bindings are correct:
 
 6. **Prod-scoped verify.** Invoke `verify-promotion` against the prod channel:
    - Confirms `PKM_ENVIRONMENT=prod`, vault=real vault, DB=`app`.
-   - Runs all seven checks from `verify-promotion`.
+   - Runs every check defined by `verify-promotion`.
    - On PASS: appends the promotion acceptance receipt to the prod plan.
 
 7. **On FAIL.** Invoke `rollback-promotion`:
@@ -113,6 +113,8 @@ This is the capability-level validation evidence referenced by `docs/RELEASE_CHA
 - Does not undo external side-effects.
 
 ## Operator steps
+
+The `promote-test-to-prod ...` commands below are skill invocations, not installed shell binaries — they name this skill's entry contract and arguments.
 
 ```bash
 # Normal path — after promote-to-test produced a PASS receipt:

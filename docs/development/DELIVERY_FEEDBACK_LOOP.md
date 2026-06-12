@@ -176,7 +176,9 @@ BuilderOps adoption is enforced at workflow boundaries, not by human recall.
 
 - `issue-to-code` runs a BuilderOps routing checkpoint before implementation context becomes hidden
   local memory and again before PR handoff.
-- `publish-pr` requires a `BuilderOps Routing` section in every PR body.
+- `publish-pr` requires a `BuilderOps Routing` section in every Tier 2+ PR body; Tier 1
+  docs/governance-lane PRs may omit it when nothing was routed
+  (`docs/development/GOVERNANCE_PROPORTIONALITY.md`).
 - `verification-and-closure` verifies that unresolved BuilderOps material is represented by a
   BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason before merge.
 - `automation-maintenance` audits recurring Codex app prompts for BuilderOps-first routing.

@@ -606,11 +606,9 @@ def _check_authority_spine() -> Dict[str, str]:
     Values are bounded status strings safe for operator inspection.
     """
     try:
-        from app.write_guard import DEFAULT_WRITE_GUARD
-        from app.health_contract import WRITE_BLOCKED_STATES
+        from app.health_contract import DEFAULT_CONTRACT, WRITE_BLOCKED_STATES
 
-        snapshot = DEFAULT_WRITE_GUARD.snapshot_fn()
-        state = snapshot.get("state", "unknown")
+        state = DEFAULT_CONTRACT.state_machine.state
         write_guard_posture = "blocked" if state in WRITE_BLOCKED_STATES else "active"
     except Exception:
         write_guard_posture = "unavailable"

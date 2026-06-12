@@ -55,10 +55,20 @@ def _render(*, body: str = "---\ntitle: T\nuuid: u\n---\n# Head\n\nBody text.\n"
 def test_editor_present_when_canvas_disabled() -> None:
     # The whole point: editing works even with Canvas off (no ceremony).
     html = _render(canvas_enabled=False)
+    assert '<details class="note-edit-bar"' in html
     assert 'data-testid="workspace-note-source-editor"' in html
     assert 'data-testid="workspace-note-edit-toggle"' in html
     assert 'data-testid="workspace-note-edit-save"' in html
     assert 'data-testid="workspace-note-edit-cancel"' in html
+
+
+def test_editor_controls_collapsed_by_default() -> None:
+    html = _render(canvas_enabled=False)
+
+    start = html.index('<details class="note-edit-bar"')
+    opening_tag = html[start:html.index(">", start)]
+    assert " open" not in opening_tag
+    assert '<summary class="note-edit-summary">' in html
 
 
 def test_editor_present_when_canvas_enabled() -> None:
@@ -68,10 +78,11 @@ def test_editor_present_when_canvas_enabled() -> None:
 
 def test_editor_has_native_spellcheck() -> None:
     html = _render()
-    # Native browser/OS spellcheck — the state-of-the-art path (impossible in CM).
+    # Native browser/OS spellcheck remains available, but autocorrect-on-type is disabled.
     assert 'spellcheck="true"' in html
     assert 'autocapitalize="sentences"' in html
-    assert 'autocorrect="on"' in html
+    assert 'autocorrect="off"' in html
+    assert "autocorrect=" + '"on"' not in html
 
 
 def test_editor_carries_frontmatter_stripped_source_and_hash() -> None:

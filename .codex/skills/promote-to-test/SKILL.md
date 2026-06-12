@@ -26,7 +26,7 @@ candidate commit
 
 ## Channel identity for the test promotion
 
-Before executing any step, confirm all four bindings are correct:
+Before executing any step, confirm every binding in the table below is correct:
 
 | Binding | Required value |
 | --- | --- |
@@ -106,6 +106,8 @@ The bypass receipt does not grant immunity from rollback requirements. If verify
 - The candidate commit resolves cleanly.
 
 ## Operator steps
+
+The `promote-to-test ...` command below is a skill invocation, not an installed shell binary — it names this skill's entry contract and arguments.
 
 ```bash
 # From a test-scoped worktree (not the prod checkout):

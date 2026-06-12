@@ -42,3 +42,23 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     ):
         assert name in text
     assert "agentic-pkm -> issue-to-code -> publish-pr -> pr-integration -> verification-and-closure" in text
+
+
+def test_issue_to_code_preflight_captures_expected_branch_and_worktree() -> None:
+    text = _read(".codex/skills/issue-to-code/SKILL.md")
+    section = text.split("15a. **Branch-Truth Gate", maxsplit=1)[1].split(
+        "15b. **Branch-Truth Gate", maxsplit=1
+    )[0]
+
+    branch_capture = 'EXPECTED_BRANCH="$(git branch --show-current)"'
+    worktree_capture = 'EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"'
+    preflight = "scripts/agent_workspace_preflight.sh"
+
+    assert branch_capture in section
+    assert worktree_capture in section
+    assert preflight in section
+    assert section.index(branch_capture) < section.index(preflight)
+    assert section.index(worktree_capture) < section.index(preflight)
+    assert '--expected-branch "$EXPECTED_BRANCH"' in section
+    assert '--expected-worktree "$EXPECTED_WORKTREE"' in section
+    assert "Do not continue with empty expected values" in section

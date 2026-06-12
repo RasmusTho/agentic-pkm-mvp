@@ -63,6 +63,11 @@ jobs:
           grep -qE '^[[:space:]]+```mermaid' docs/DIAGRAMS.md && { echo "Mermaid fences must not be indented"; exit 1; } || true
           grep -qF '$begin:math:text$' docs/DIAGRAMS.md && { echo "Forbidden math fence syntax inside table detected"; exit 1; } || true
 
+      # Stdlib-only, runs unconditionally (docs-lane PRs included) — drift
+      # insurance for .codex/skills/ (issue #1810).
+      - name: Skills consistency lint
+        run: python3 scripts/lint_skills_consistency.py
+
       - name: Run smoke tests (mock LLM, no PG, fail-fast)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 12
@@ -87,6 +92,7 @@ jobs:
             tests/e2e/test_watcher_registry_e2e.py \
             tests/architecture/test_import_rules.py \
             tests/architecture/test_obsidian_port_boundaries.py \
+            tests/governance/test_skills_consistency_lint.py \
             tests/guard/test_no_direct_db_imports.py \
             tests/ports/test_vault_port_contract.py \
             tests/services/test_filesystem_vault_adapter.py \

@@ -13,6 +13,7 @@ The browser is read-only; no UI test in this module exercises a mutation path.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -302,6 +303,39 @@ def test_vault_browser_renders_health_badge_for_invalid_frontmatter() -> None:
 
     assert 'data-testid="workspace-vault-browser-note-health"' in html
     assert "invalid" in html or "missing" in html
+
+
+def test_vault_browser_health_badge_does_not_dump_missing_fields_in_nav_label() -> None:
+    """Invalid metadata remains inspectable without turning the nav row into a warning block."""
+    note = _note_with_metadata(
+        frontmatter_valid=False,
+        missing_required_fields=["uuid"],
+        kind=None,
+        review_state=None,
+        trust=None,
+    )
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=[note], total_notes=1, filtered_notes=1),
+    )
+    fields = page.render_fields()
+    assert fields is not None
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    row_match = re.search(
+        r'<li[^>]+data-testid="workspace-vault-browser-note-row"[^>]*>(.*?)</li>',
+        html,
+        re.DOTALL,
+    )
+    assert row_match, "vault browser note row must render"
+    row_html = row_match.group(1)
+    assert 'data-testid="workspace-vault-browser-note-health"' in row_html
+    assert 'data-missing-fields="uuid"' in row_html
+    assert "missing:" not in row_html
+    assert ">uuid<" not in row_html
 
 
 def test_valid_frontmatter_renders_no_health_warning() -> None:

@@ -6,8 +6,8 @@ Foundational documents for cognitive interaction architecture.
 
 ## Product architecture and hosting
 - `COMPANION_UI_TARGET_ARCHITECTURE.md` — owner doc for Companion UI target architecture: local-first web app served by Yggdrasil, localhost/LAN/Tailscale access model, runtime API as the only vault access path, vault-boundary rules, current shipped state, browser dev server as the next slice, long-term options (PWA, desktop wrapper), non-goals. Governing issue: #1102.
-- `LOCAL_ACCESS_MODEL.md` — local access posture for Companion UI: localhost default, LAN/Tailscale opt-in, token/session auth option, CSRF posture, dev/production separation, public internet non-goal.
-- `MLP_PRODUCTION_LAUNCH_SAFETY.md` — minimal Companion UI MLP production launch safety runbook: command, port map, localhost default, LAN/Tailscale opt-in, no-public-exposure warning, readiness checks, stop/rollback, and known limitations. Governing issue: #1188.
+- `LOCAL_ACCESS_MODEL.md` — local access posture for Companion UI: trusted-device server bind default, loopback opt-out, token/session auth option, CSRF posture, dev/production separation, public internet non-goal.
+- `MLP_PRODUCTION_LAUNCH_SAFETY.md` — minimal Companion UI MLP production launch safety runbook: command, port map, server/LAN default, loopback opt-out, no-public-exposure warning, readiness checks, stop/rollback, and known limitations. Governing issue: #1188.
 
 ## Core set
 - `SYSTEM_OVERVIEW.md`
@@ -34,6 +34,7 @@ Foundational documents for cognitive interaction architecture.
 - `PANEL_STATE_DISCOVERY_DELTA.md` — Panel browser discovery gap analysis; confirms the workspace aggregate is sufficient for the current slice. Governing issue: #1127.
 - `CANVAS_AGENT_MVP_CONTRACT.md` — normalized Canvas Agent MVP surface contract: co-authoring posture, session lifecycle, user-present authority, direct in-place editing, undo/rollback, `.chats/` provenance, governance-bearing escape hatch, distinction from Panel and from Canvas bounded suggestion flow. Governing issue: #1021.
 - `CANVAS_SUGGESTION_FLOW.md` — normalized implementation spec for the Canvas Suggestion Flow: state machine, component inventory, intent vocabulary, backend mapping, invariants. Derived from design handoff `companion-ui/design_handoff/2026-05-11-canvas-suggestion-flow/`. Implementation contracts for #868–#874.
+- `SYSTEM_ENTRY_POINT_SPEC.md` — normalized spec for the System Entry Point and unified-shell composition: entry-point state enum (boot / no_vault / cold_start / orienting / shell_active), re-entry shapes per the latency ladder, data-attribute and intent vocabularies, surface composition table (shipped vs new per surface), and resolutions for the package's open questions (Q4–Q9, Q17–Q19; Q15–Q16 parked). Derived from design handoff `companion-ui/design_handoff/2026-06-09-system-entry-point/`. Feature breakdown: `docs/SYSTEM_ENTRY_POINT/`.
 
 ## Cognitive architecture consolidation set
 - `TEMPORAL_COGNITION.md`

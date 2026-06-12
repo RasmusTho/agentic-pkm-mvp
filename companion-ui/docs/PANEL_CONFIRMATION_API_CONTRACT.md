@@ -269,9 +269,11 @@ A receipt is a durable record of execution outcome. For the first read-mode
 checkbox projection slice, the projection response may return `receipt: null`;
 the Companion UI refreshes workspace state after projection instead of treating
 the transport response as a durable receipt store. Durable receipts are written
-to the vault AI-status callout by the normal Panel runtime when execution
-completes (see `PANEL_DURABLE_PROJECTION_MAPPING.md`). Companion UI never
-writes receipts directly.
+to the vault AI-status callout only by normal Panel runtime paths that emit such
+receipts (see `PANEL_DURABLE_PROJECTION_MAPPING.md`). Companion UI never writes
+receipts directly, and `status=executed` from checkbox projection is not by
+itself a universal guarantee that an AI-status callout was appended for every
+mapped, logged, or unhandled runtime path.
 
 Receipt fields:
 
@@ -293,7 +295,8 @@ equivalent to the CLI/watcher flow:
 - The target checkbox is projected as checked (`- [x]`) inside the valid Panel
   `AI-åtgärder` section.
 - Executed checkboxes removed from the panel working set.
-- AI status callout (`> [!info]- AI status`) updated with the execution receipt.
+- AI status callout (`> [!info]- AI status`) updated with the execution receipt
+  when the invoked Panel runtime path emits one.
 - Event stream emissions as appropriate.
 - Vault state remains readable/actionable in Obsidian without Companion UI
   being present.

@@ -275,10 +275,21 @@ def _heading_text_and_anchor(raw_text: str) -> tuple[str, str]:
     text = raw_text.strip()
     explicit_anchor = _EXPLICIT_ANCHOR_RE.search(text)
     if explicit_anchor:
-        text = text[: explicit_anchor.start()].strip()
+        text = _plain_heading_text(text[: explicit_anchor.start()])
         return text, explicit_anchor.group(1)
-    text = text.strip(" #\t")
+    text = _plain_heading_text(text)
     return text, _slugify_heading(text)
+
+
+def _plain_heading_text(text: str) -> str:
+    text = text.strip(" #\t")
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"(\*\*|__)(.+?)\1", r"\2", text)
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", text)
+    text = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _slugify_heading(text: str) -> str:

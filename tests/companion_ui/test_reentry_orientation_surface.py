@@ -3,20 +3,32 @@ from __future__ import annotations
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
+from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
 
 class _OrientationClient:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        vault_browser_payload: dict[str, Any] | None = None,
+        orientation_error: Exception | None = None,
+    ) -> None:
         self.payload = payload
+        self.vault_browser_payload = vault_browser_payload or _vault_browser_payload()
+        self.orientation_error = orientation_error
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
         self.post_calls: list[tuple[str, dict[str, Any]]] = []
         self.delete_calls: list[tuple[str, dict[str, Any] | None]] = []
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
         self.get_calls.append((url, params))
-        if url != "/api/companion/orientation":
-            raise AssertionError(f"unexpected GET from re-entry surface: {url}")
-        return self.payload
+        if url == "/api/companion/orientation":
+            if self.orientation_error is not None:
+                raise self.orientation_error
+            return self.payload
+        if url == "/api/companion/vault-browser":
+            return self.vault_browser_payload
+        raise AssertionError(f"unexpected GET from re-entry surface: {url}")
 
     def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
         self.post_calls.append((url, json))
@@ -137,6 +149,55 @@ def _orientation_payload(*, degraded: bool = False) -> dict[str, Any]:
     }
 
 
+def _with_resurface_candidates(payload: dict[str, Any], count: int) -> dict[str, Any]:
+    payload["resurface"]["candidates"] = [
+        {
+            "id": f"candidate-{idx}",
+            "label": f"Candidate {idx}",
+            "why_now": f"Relevant now because signal {idx} changed.",
+            "signal_labels": [f"signal={idx}"],
+            "artifact_ref": _artifact_ref(f"Notes/resurface-{idx}.md", f"Candidate {idx}", f"art-{idx}"),
+            "authority_role": "derived",
+            "source_ref": _source_ref(f"resurfacing signal {idx}"),
+        }
+        for idx in range(count)
+    ]
+    return payload
+
+
+def _vault_browser_payload() -> dict[str, Any]:
+    return {
+        "notes": [
+            {
+                "note_path": "Notes/resume.md",
+                "title": "Resume plan",
+                "zone": "Notes",
+                "kind": "human_note",
+                "frontmatter_valid": True,
+                "missing_required_fields": [],
+            },
+            {
+                "note_path": "Projects/Deep work.md",
+                "title": "Deep work",
+                "zone": "Projects",
+                "kind": "human_note",
+                "frontmatter_valid": True,
+                "missing_required_fields": [],
+            },
+        ],
+        "query": "",
+        "total_notes": 2,
+        "filtered_notes": 2,
+        "read_only": True,
+        "identity_available": True,
+        "vault_identity": {
+            "vault_name": "dev-vault",
+            "channel": "dev",
+            "provenance": "env",
+        },
+    }
+
+
 def test_renders_orientation_with_no_active_note() -> None:
     client = _OrientationClient(_orientation_payload())
 
@@ -146,7 +207,10 @@ def test_renders_orientation_with_no_active_note() -> None:
         api_base_url="http://127.0.0.1:18001",
     )
 
-    assert client.get_calls == [("/api/companion/orientation", {})]
+    assert client.get_calls == [
+        ("/api/companion/orientation", {}),
+        ("/api/companion/vault-browser", {"q": "", "limit": 250}),
+    ]
     assert 'data-testid="workspace-reentry-orientation"' in html
     assert 'data-read-only="true"' in html
     assert "Resume the runtime API contract" in html
@@ -156,17 +220,41 @@ def test_renders_orientation_with_no_active_note() -> None:
     assert "pending proposals" in html
     assert "logged" in html
     assert 'data-authority-role="derived"' in html
+    assert 'data-testid="workspace-orientation-vault-entry"' in html
+    assert 'data-testid="workspace-vault-browser-note-link"' in html
+    assert 'href="/?note_path=Notes/resume.md"' in html
 
 
 def test_deep_links_to_artifact_workspace() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         orientation=_orientation_payload(),
+        orientation_vault_browser=_vault_browser_payload(),
     )
 
     assert 'href="/workspace?note_path=Notes%2Fresume.md"' in html
     assert 'href="/workspace?note_path=Notes%2Frecent.md"' in html
     assert 'href="/workspace?note_path=Notes%2Fresurface.md"' in html
+
+
+def test_root_keeps_vault_entry_when_orientation_unavailable() -> None:
+    client = _OrientationClient(
+        _orientation_payload(),
+        orientation_error=WorkspaceClientNetworkError("orientation connection refused"),
+    )
+
+    html = handle_get(
+        query_string="",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+
+    assert 'data-testid="workspace-reentry-orientation"' in html
+    assert 'data-testid="workspace-orientation-degraded"' in html
+    assert "orientation_unavailable" in html
+    assert 'data-testid="workspace-orientation-vault-entry"' in html
+    assert 'data-testid="workspace-vault-browser-note-link"' in html
+    assert 'data-testid="workspace-error-state"' not in html
 
 
 def test_leave_point_renders_structured_api_shape() -> None:
@@ -190,6 +278,7 @@ def test_leave_point_renders_structured_api_shape() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         orientation=payload,
+        orientation_vault_browser=_vault_browser_payload(),
     )
 
     assert 'data-leave-point-kind="present"' in html
@@ -203,6 +292,7 @@ def test_degraded_state_rendered() -> None:
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         orientation=_orientation_payload(degraded=True),
+        orientation_vault_browser=_vault_browser_payload(),
     )
 
     assert 'data-testid="workspace-orientation-degraded"' in html
@@ -227,3 +317,64 @@ def test_no_mutation_calls() -> None:
     assert "/api/companion/note/save" not in html
     assert "/api/companion/workspace/body" not in html
     assert "/api/panel/confirm" not in html
+
+
+def test_resurfacing_cards_are_budgeted_to_three_by_default() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 5),
+    )
+
+    assert html.count('data-testid="workspace-orientation-resurface-candidate"') == 3
+    assert 'data-resurface-default-budget="3"' in html
+    assert 'data-resurface-overflow-count="2"' in html
+
+
+def test_resurfacing_cards_can_expand_to_server_cap() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 5),
+    )
+
+    assert 'data-testid="workspace-orientation-resurface-expand"' in html
+    assert 'data-server-cap="5"' in html
+    assert html.count('data-testid="workspace-orientation-resurface-overflow-candidate"') == 2
+    assert "Candidate 4" in html
+
+
+def test_resurfacing_cards_show_why_now_source_signals_and_authority() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 1),
+    )
+
+    assert 'data-testid="workspace-orientation-resurface-why-now"' in html
+    assert 'data-testid="workspace-orientation-resurface-provenance"' in html
+    assert 'data-authority-role="derived"' in html
+    assert "signal=0" in html
+    assert "resurfacing signal 0" in html
+
+
+def test_resurfacing_cards_surface_degraded_posture() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(degraded=True), 2),
+    )
+
+    assert 'data-testid="workspace-orientation-resurface"' in html
+    assert 'data-resurface-posture="degraded"' in html
+    assert "resurfacing_source_unavailable" in html
+
+
+def test_resurfacing_cards_do_not_create_notification_semantics() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_with_resurface_candidates(_orientation_payload(), 5),
+    )
+    section = html.split('data-testid="workspace-orientation-resurface"', 1)[1].split("</section>", 1)[0]
+
+    assert 'data-notification="false"' in section
+    assert 'data-urgency="none"' in section
+    assert "badge" not in section.lower()
+    assert "inbox" not in section.lower()
+    assert "urgent" not in section.lower()

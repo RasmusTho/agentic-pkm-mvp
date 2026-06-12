@@ -5,8 +5,8 @@ Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-05
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/SECURITY_DATA_FLOWS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, docs/adr/ADR-0008-leave-point-cursor.md, docs/adr/ADR-0009-orientation-memory-candidate-intent.md, docs/adr/ADR-0011-orientation-push-ambient-resurfacing.md, docs/adr/ADR-0012-orientation-multiagent-reads.md, app/api/routes/companion.py, app/orientation/leave_point_cursor.py, app/agent_memory/posture_projection.py, app/knowledge_compilation/runtime_artifacts.py, app/knowledge_compilation/proposal_builders.py, app/knowledge_compilation/reorientation_packet.py, app/knowledge_compilation/review_admission.py, tests/api/test_companion_workspace_api.py, tests/api/test_companion_orientation_api.py, tests/api/test_leave_point_cursor.py, tests/api/test_companion_vault_browser_queue_review.py, tests/api/test_companion_vault_browser_agent_memory_posture.py, tests/knowledge_compilation/test_runtime_artifacts.py, tests/knowledge_compilation/test_proposal_builders.py, tests/knowledge_compilation/test_reorientation_packet.py, tests/knowledge_compilation/test_review_admission_handoff.py, merged PRs #1448/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1586/#1591, and current repo state at 9b0564b2 on 2026-06-05
+Last reviewed: 2026-06-11
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, app/api/routes/capture.py, app/api/routes/companion.py, app/api/routes/canvas.py, app/api/routes/panel.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, merged PRs #1800/#1801/#1802/#1816/#1817/#1818/#1833, System Entry Point parent #1782 validation receipts through wave 3a, and current repo state at 3861b111 on 2026-06-11
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
@@ -62,6 +62,32 @@ authorship, accountability, and local-first artifact control rather than replaci
 The full product-level statement of this thesis, including the failure modes that would
 violate it, lives in `docs/COGNITIVE_PROSTHESIS_CHARTER.md`. The bridge from these human flows
 to the runtime substrate lives in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`.
+
+### Cognitive-load reduction as prosthetic function
+
+Reducing cognitive load is a central human-first function, not an accessibility side topic. The
+system should carry externalizable burdens that otherwise sit in working memory: remembering where
+the human left off, keeping source and proposal together, preserving pending decision state,
+separating facts from interpretation, and making receipts visible after action.
+
+The rule is: reduce friction, not intelligence. The system should remove mechanical costs around
+decoding, parsing, spelling, text production, source comparison, and resumption without flattening
+the content, hiding uncertainty, or treating the human's slowest channel as the human's reasoning
+capacity.
+
+Encoding assistance belongs to this function only when it preserves the human's intended meaning
+and voice. A correction may reduce spelling friction; it must not silently rewrite authorship,
+normalize style, or replace what the human meant.
+
+Resurfacing belongs to this function only when it lowers orientation and memory-context load. It
+should be scarce, source-linked, and non-authoritative; a persistent stream of suggestions that the
+human must monitor is a new burden, not a prosthetic aid.
+
+This function must not reduce load by hiding consequences, replacing source review with agent
+summary, or making the system's recommendation behave like approval. Reading-support and
+accessibility techniques can help implement the function, but the owning product category is
+authority-preserving cognitive offloading. The projection boundary for this work is
+`docs/COGNITIVE_LOAD_PROJECTION_LAYER.md`.
 
 ## 1. What the system is meant to do
 
@@ -147,6 +173,37 @@ Scope note:
 - It is not a blanket requirement that every runtime interaction must pass through a human approval step before the system can propose or execute low-risk work.
 - The runtime should reduce cognitive load by generating autonomous proposals where the action is low-risk and the artifact value is not threatened, while reserving harder guardrails for writes or transitions that could damage artifact integrity, provenance, or user trust.
 - Suggested actions may surface as proposed checkbox items in an AI panel when the system has enough context to help but not enough certainty or authority to mutate directly.
+
+### Source -> interpret -> stabilize
+
+Shipped Source Understanding support (#1646, delivered by #1689/#1691/#1692/#1693) gives this loop
+a narrow runtime seam for source material and selected passages. It is not generic summarization,
+automatic literature review, or durable knowledge creation.
+
+The shipped surface is:
+
+- `POST /api/source-understanding/p0`, which accepts one source or selected passage and returns a
+  non-authoritative Source Understanding packet with Orientation, Structure, Claims, and Evidence;
+- a stabilized-note proposal handoff model that stages review material without auto-promotion;
+- Concept and Critique lens projections that distinguish source-defined concepts, agent
+  clarification, source-stated limitations, and agent-inferred review concerns; and
+- Integration and Action lens projections that distinguish caller-supplied retrieved context from
+  agent speculation, degrade when broader context is unavailable, and keep possible next steps as
+  proposal-class review objects.
+
+All Source Understanding packets and lenses are non-authoritative projections. They preserve source
+identity, source references, selection scope, line anchors where supplied, and explicit anchor
+limitations where exact anchors are unavailable. Selection-scoped output must not claim
+whole-document understanding.
+
+The shipped runtime does not mutate canonical Markdown, notes, relations, metadata, receipts,
+memory, tasks, or commitments by generation alone. Stabilized notes, concept notes, integration
+links, and action execution remain target-state or governed handoff work unless a later accepted
+proposal crosses an existing governed mutation path with WriteGuard and receipt posture.
+
+Related cognitive-load work under #1638 supports the same authority-preserving projection posture
+through source-preserving summaries, resurfacing, and correction-as-proposal surfaces. It remains a
+separate parent path; #1646 owns Source Understanding Mode.
 
 ### Capture
 
@@ -921,6 +978,8 @@ That direction is no longer handoff-only: a bounded implementation now exists in
 ## Vault Browser as orientation surface
 
 The Companion UI vault browser is the human-first navigation and orientation surface over the vault for the reorient/find/return-to-context flows. Its long-term capability contract — concepts (`VaultArtifact`, `VaultView`, `VaultQuery`, `VaultRelation`, `VaultActivity`, `VaultHealth`, `VaultAction`, `VaultProposal`, `VaultReceipt`), action-mode boundary, MLP-versus-future scope, and non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Current shipped behavior is bounded as `Vault Browser MLP v0`: read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into the Companion workspace. When a browse cap applies, the retained subset is deterministic: lexicographically smallest matching note paths are preserved. The browser is a projection layer; the vault and Markdown/frontmatter remain the human control surface. Per the topology authority decision in `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` and #1488, current browser `zone` posture is frontmatter-preferred with path-derived fallback over the active vault; topology-derived zones remain deferred projection material until a future issue defines source, provenance, degradation, and visible ranking/filter semantics.
+
+The System Entry Point work now gives these flows a declared shell substrate: the system can render cold start, re-entry, and active-document states explicitly; return-to-context can use the latency-ladder treatment; and command/capture/memory/receipts overlays return to the document anchor instead of becoming separate apps. This is still a composed Companion UI capability under parent #1782, not a claim that every planned shell surface has been accepted: system map, guidance, settings, and final state-gallery validation remain open until their issue receipts close.
 
 ## Companion Niflheim dev UAT workspace update check
 

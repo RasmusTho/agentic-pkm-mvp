@@ -825,11 +825,21 @@ fi
 unset scope_glob_raw
 runtime_env="--env-file $runtime_env_path"
 
+# Derive the channel-specific tmp dir for runtime artifacts written from
+# inside the container.  For pkm-test the container path is /app/tmp-test/;
+# for all other channels it is /app/tmp/ (prod/dev defaults).
+case "${COMPOSE_PROJECT_NAME:-}" in
+  pkm-test) _container_tmp_dir="/app/tmp-test" ;;
+  *)        _container_tmp_dir="/app/tmp" ;;
+esac
+# The host-side "latest tick log" pointer always lives under the host tmp/
+# directory for operator convenience regardless of channel.
 latest_tick_log_path="$ROOT/tmp/latest_watcher_tick_log"
-tick_log_path="/app/tmp/watcher_tick-$(date -u +"%Y%m%d-%H%M%S").jsonl"
+tick_log_path="${_container_tmp_dir}/watcher_tick-$(date -u +"%Y%m%d-%H%M%S").jsonl"
 printf "WATCHER_TICK_LOG_PATH=%s\n" "$tick_log_path" >> "$runtime_env_path"
 export WATCHER_TICK_LOG_PATH="$tick_log_path"
 printf "%s\n" "$tick_log_path" > "$latest_tick_log_path"
+unset _container_tmp_dir
 
 echo "Vault host path: $vault_host_path -> /app/vault"
 

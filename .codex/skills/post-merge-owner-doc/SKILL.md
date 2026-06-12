@@ -81,7 +81,7 @@ work with `Verify:` targets.
 ## Routing
 
 - You write owner-doc PRs through `docs-authoring`. You do not write code.
-- You file follow-up issues following the repo issue contract (`## Context`, `## Scope`, `## Source Anchors`, `## Constraints`, `## Acceptance Criteria`, `## Out of Scope`, `## Suggested Validation`, `## Source Docs`), with `Verify:` markers on every AC.
+- You file follow-up issues following the canonical issue contract (`.codex/skills/_shared/ISSUE_CONTRACT.md`), with `Verify:` markers on every AC.
 - You do not add `agent:needs-human`. Follow-up issues are `agent:ready` when the wording is bounded; otherwise they stay `Backlog` with no agent label and wait for the user's next pass.
 
 ## Backfill mode
@@ -99,7 +99,7 @@ When invoked against a batch of recent closed issues (not a single just-merged P
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 

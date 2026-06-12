@@ -135,6 +135,8 @@ def test_panel_selectable_option_checkbox_is_clickable_with_projection_attrs():
     assert 'data-option-id="opt_ui"' in li
     assert 'data-source-hash="source-hash"' in li
     assert 'data-content-hash="content-hash"' in li
+    assert "notes/panel.md lines 1-1; source hash source-hash" in li
+    assert "notes/panel.md lines 0-1" not in li
     assert "<input type=\"checkbox\" disabled" not in li
 
 

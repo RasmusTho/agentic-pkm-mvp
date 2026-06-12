@@ -153,6 +153,31 @@ class TestNoteHeader:
         assert header_match, "workspace-note-header region not found"
         assert "Deep Work Session" in header_match.group()
 
+    def test_markdown_title_syntax_does_not_leak_into_chrome(self) -> None:
+        html = _html_with_note(
+            title="0. **Executive summary**",
+            body="# 0. **Executive summary**\n\nBody with **bold** text.",
+        )
+        header_match = re.search(
+            r'data-testid="workspace-note-header".*?</header>',
+            html,
+            re.DOTALL,
+        )
+        assert header_match, "workspace-note-header region not found"
+        header = header_match.group()
+        anchor_match = re.search(
+            r'data-testid="workspace-anchor-pill".*?</span>',
+            html,
+            re.DOTALL,
+        )
+        assert anchor_match, "workspace-anchor-pill not found"
+
+        assert "0. Executive summary" in header
+        assert "0. Executive summary" in anchor_match.group()
+        assert "**Executive summary**" not in header
+        assert "**Executive summary**" not in anchor_match.group()
+        assert "<strong>bold</strong>" in html
+
     def test_note_path_in_provenance(self) -> None:
         html = _html_with_note(note_path="Projects/Alpha.md")
         # Path is in the breadcrumb's data-note-path attribute (§7.3 / #1337)
@@ -185,7 +210,8 @@ class TestNoteHeader:
             artifact_identity_state="unresolved_missing_uuid",
         )
         assert 'data-testid="workspace-artifact-identity-caution"' in html
-        assert "Artifact identity unresolved" in html
+        assert "Identity unresolved" in html
+        assert "Governed actions may be blocked until resolved." in html
 
     def test_provenance_labels_are_lowercase(self) -> None:
         """Provenance labels must use subdued lowercase (path, artifact, hash)."""
@@ -215,6 +241,28 @@ class TestNoteBody:
         )
         assert body_match, "workspace-note-body region not found"
         assert "This is the note body." in body_match.group()
+
+    def test_rendered_body_container_receives_workspace_body_text(self) -> None:
+        html = _html_with_note(body="# Alpha\n\nThis body must not disappear.")
+        rendered_match = re.search(
+            r'data-testid="workspace-note-rendered"[^>]*>(.*?)</div>\s*<textarea',
+            html,
+            re.DOTALL,
+        )
+        assert rendered_match, "workspace-note-rendered container not found"
+        assert "This body must not disappear." in rendered_match.group(1)
+
+    def test_empty_workspace_body_renders_controlled_empty_state(self) -> None:
+        html = _html_with_note(body="")
+        rendered_match = re.search(
+            r'data-testid="workspace-note-rendered"[^>]*>(.*?)</div>\s*<textarea',
+            html,
+            re.DOTALL,
+        )
+        assert rendered_match, "workspace-note-rendered container not found"
+        rendered_html = rendered_match.group(1)
+        assert 'data-testid="workspace-note-body-empty"' in rendered_html
+        assert "No note body loaded" in rendered_html
 
     def test_body_precedes_rail_in_markup(self) -> None:
         """workspace-note-body must appear before workspace-agent-rail in source order."""

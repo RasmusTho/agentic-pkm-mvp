@@ -106,6 +106,13 @@ def test_title_from_heading(client: TestClient, vault: Path) -> None:
     assert entry["title"] == "My Todo List"
 
 
+def test_title_from_heading_strips_inline_markdown(client: TestClient, vault: Path) -> None:
+    _note(vault, "Inbox/summary.md", "# 0. **Executive summary**\n\nItems.\n")
+    resp = _get_notes(client)
+    entry = next(n for n in resp.json()["notes"] if "summary" in n["path"])
+    assert entry["title"] == "0. Executive summary"
+
+
 def test_title_fallback_to_stem(client: TestClient, vault: Path) -> None:
     _note(vault, "notes/unnamed.md", "No heading here.\n")
     resp = _get_notes(client)

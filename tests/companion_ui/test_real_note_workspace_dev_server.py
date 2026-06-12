@@ -2,7 +2,7 @@
 
 Verifies:
 - Module exists and can be imported.
-- Default config uses HOST=127.0.0.1, PORT=8111, COMPANION_API_BASE_URL=http://127.0.0.1:18001.
+- Default config uses HOST=0.0.0.0, PORT=8111, COMPANION_API_BASE_URL=http://127.0.0.1:18001.
 - Env overrides for host/port/API base URL are respected.
 - render_index_html produces dev/staging marker.
 - render_index_html includes configured API base URL.
@@ -183,7 +183,7 @@ class TestLoadConfig:
         monkeypatch.delenv("HOST", raising=False)
         from companion_ui.workspace.serve_dev_page import load_config
 
-        assert load_config()["host"] == "127.0.0.1"
+        assert load_config()["host"] == "0.0.0.0"
 
     def test_default_port(self, monkeypatch) -> None:
         monkeypatch.delenv("PORT", raising=False)
@@ -196,6 +196,30 @@ class TestLoadConfig:
         from companion_ui.workspace.serve_dev_page import load_config
 
         assert load_config()["api_base_url"] == "http://127.0.0.1:18001"
+
+    def test_default_api_timeout(self, monkeypatch) -> None:
+        monkeypatch.delenv("COMPANION_API_TIMEOUT_SECONDS", raising=False)
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 2.0
+
+    def test_api_timeout_override(self, monkeypatch) -> None:
+        monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", "0.5")
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 0.5
+
+    def test_api_timeout_invalid_value_uses_default(self, monkeypatch) -> None:
+        monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", "not-a-number")
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 2.0
+
+    def test_api_timeout_has_minimum_floor(self, monkeypatch) -> None:
+        monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", "0.01")
+        from companion_ui.workspace.serve_dev_page import load_config
+
+        assert load_config()["api_timeout_seconds"] == 0.25
 
     def test_host_override(self, monkeypatch) -> None:
         monkeypatch.setenv("HOST", "0.0.0.0")
@@ -226,6 +250,7 @@ class TestLoadConfig:
             "host": "0.0.0.0",
             "port": 8113,
             "api_base_url": "http://127.0.0.1:18000",
+            "api_timeout_seconds": 2.0,
         }
 
 
@@ -472,7 +497,37 @@ class TestHandleGet:
     def test_empty_query_renders_index_no_note(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
 
-        client = _FakeClient()
+        class _RootClient(_FakeClient):
+            def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+                self.get_calls.append((url, params))
+                if url == "/api/companion/orientation":
+                    return {}
+                if url == "/api/companion/vault-browser":
+                    return {
+                        "notes": [
+                            {
+                                "note_path": "Notes/resume.md",
+                                "title": "Resume plan",
+                                "zone": "Notes",
+                                "kind": "human_note",
+                                "frontmatter_valid": True,
+                                "missing_required_fields": [],
+                            }
+                        ],
+                        "query": "",
+                        "total_notes": 1,
+                        "filtered_notes": 1,
+                        "read_only": True,
+                        "identity_available": True,
+                        "vault_identity": {
+                            "vault_name": "dev-vault",
+                            "channel": "dev",
+                            "provenance": "env",
+                        },
+                    }
+                raise AssertionError(f"unexpected GET from empty-root surface: {url}")
+
+        client = _RootClient()
         html = handle_get(
             query_string="",
             client=client,
@@ -480,7 +535,14 @@ class TestHandleGet:
         )
         assert "DEV" in html or "STAGING" in html
         assert 'data-testid="workspace-reentry-orientation"' in html
-        assert client.get_calls == [("/api/companion/orientation", {})]
+        assert client.get_calls == [
+            ("/api/companion/orientation", {}),
+            ("/api/companion/vault-browser", {"q": "", "limit": 250}),
+        ]
+        assert 'data-testid="workspace-orientation-vault-entry"' in html
+        assert 'data-read-only="true"' in html
+        assert 'data-testid="workspace-vault-browser-note-link"' in html
+        assert 'href="/?note_path=Notes/resume.md"' in html
 
     def test_note_path_param_triggers_api_call(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
@@ -630,10 +692,10 @@ class TestDevServerBoundaries:
                         )
         assert not string_violations, f"Named vault found in code string: {string_violations}"
 
-    def test_default_bind_is_local_only(self) -> None:
+    def test_default_bind_is_server_lan(self) -> None:
         from companion_ui.workspace.serve_dev_page import _DEFAULT_HOST
 
-        assert _DEFAULT_HOST == "127.0.0.1"
+        assert _DEFAULT_HOST == "0.0.0.0"
 
     def test_default_port_is_8111(self) -> None:
         from companion_ui.workspace.serve_dev_page import _DEFAULT_PORT

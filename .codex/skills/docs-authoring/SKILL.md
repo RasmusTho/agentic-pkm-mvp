@@ -38,6 +38,11 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 - Keep current-state docs honest. Do not write future-state intent as shipped reality.
 - If the task starts affecting implementation or delivered behavior, stop using this lane and switch back to the normal Issue-first implementation workflow.
 
+## Publication discipline
+
+- Route branch / commit / push / PR actions through `.codex/skills/publish-pr/SKILL.md` — do not run an ad hoc commit/push from this lane. `publish-pr` owns the branch-truth gate.
+- Branch-truth gate (mandatory) [branch-truth-gate]: run the canonical gate from `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` — dedicated worktree preferred, capture `EXPECTED_BRANCH`/`EXPECTED_WORKTREE` at branch creation (the capture is required; empty variables disable the drift checks), hardened preflight with `--allow-dirty` before commit and again before push.
+
 ## Output posture
 
 - Treat this skill as a routing guide, not a second policy surface.
@@ -45,4 +50,4 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Do not batch to end of task; context is freshest now. Only log if you can name an upstream artifact that could absorb the fix.
+**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.

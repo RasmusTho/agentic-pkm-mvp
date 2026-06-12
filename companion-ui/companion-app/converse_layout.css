@@ -1,14 +1,35 @@
 :root {
-  --bg-surface: #121820;
-  --bg-raised: #17212b;
-  --fg-1: #e7edf3;
-  --fg-2: #c7d4de;
-  --fg-3: #8d9cab;
-  --border: #2c3a46;
-  --vault-online: #3fb37f;
+  --bg-base: #070b12;
+  --bg-surface: #0c1220;
+  --bg-raised: #111a2e;
+  --bg-overlay: #162038;
+  --fg-1: #dce8f0;
+  --fg-2: #7a9ab8;
+  --fg-3: #3d5570;
+  --border: #152030;
+  --border-strong: #1e3050;
+  --accent: #d4a843;
+  --accent-dim: #80621a;
+  --cyan: #00d4e8;
+  --vault: #39e87d;
   --agent: #4a9eff;
-  --cyan: #6edbff;
+  --agent-dim: #1e5a9a;
+  --agent-muted: #051228;
   --amber: #f09030;
+  --amber-muted: #1a0e02;
+  --destructive: #ff3d3d;
+  --destructive-dim: #8a1a1a;
+  --destructive-muted: #160404;
+  --au-canonical: var(--vault);
+  --au-projection: var(--cyan);
+  --au-proposal: var(--agent);
+  --au-confirm: var(--accent);
+  --au-receipt: #b98be0;
+  --au-local: #6b7a90;
+  --au-blocked: var(--destructive);
+  --font-display: "EB Garamond", Georgia, serif;
+  --font-ui: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
 }
 
 * {
@@ -17,16 +38,16 @@
 
 body {
   margin: 0;
-  background: #0d131a;
+  background: var(--bg-base);
   color: var(--fg-1);
-  font-family: "SF Pro Text", "Segoe UI", sans-serif;
+  font-family: var(--font-ui);
 }
 
 .converse-shell {
   height: 100vh;
   display: grid;
   grid-template-rows: 38px 1fr;
-  background: radial-gradient(circle at 20% 0%, rgba(74, 158, 255, 0.08), transparent 35%), #0d131a;
+  background: var(--bg-base);
 }
 
 .top-bar {
@@ -50,7 +71,7 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--vault-online);
+  background: var(--au-canonical);
 }
 
 .main-landscape {
@@ -69,14 +90,22 @@ body {
 }
 
 .document-column {
-  max-width: 640px;
+  max-width: 66ch;
   width: 100%;
   margin: 0 auto;
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+.document-column h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0;
 }
 
 .rail {
   background: var(--bg-surface);
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--au-proposal);
   display: grid;
   grid-template-rows: 38px 1fr auto;
   min-height: 0;
@@ -157,7 +186,7 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: rgba(74, 158, 255, 0.8);
+  background: var(--au-proposal);
 }
 
 .hugin-label,
@@ -187,8 +216,8 @@ body {
 
 .suggested-insertion-block {
   margin-top: 10px;
-  border-left: 3px solid #f09030;
-  background: rgba(240, 144, 48, 0.07);
+  border-left: 3px solid var(--amber);
+  background: var(--amber-muted);
   border-radius: 0 2px 2px 0;
   padding: 10px 12px;
   position: relative;
@@ -203,9 +232,9 @@ body {
 
 .suggestion-card {
   opacity: 1;
-  border: 1px solid rgba(240, 144, 48, 0.3);
-  border-left: 3px solid #f09030;
-  background: rgba(240, 144, 48, 0.07);
+  border: 1px solid var(--agent-dim);
+  border-left: 3px solid var(--au-proposal);
+  background: var(--bg-raised);
   border-radius: 2px;
   padding: 8px 10px;
 }
@@ -214,7 +243,7 @@ body {
   margin: 0 0 5px;
   font-size: 8px;
   letter-spacing: 0.08em;
-  color: var(--amber);
+  color: var(--au-proposal);
 }
 
 .suggestion-card-diff-hint {
@@ -232,13 +261,13 @@ body {
 .suggestion-actions button {
   padding: 4px 12px;
   border-radius: 2px;
-  background: rgba(240, 144, 48, 0.08);
+  background: var(--bg-surface);
   font-size: 11px;
 }
 
 [data-testid="apply-suggestion"] {
-  border: 1px solid var(--amber);
-  color: var(--amber);
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
 }
 
 [data-testid="discard-suggestion"] {

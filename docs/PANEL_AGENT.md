@@ -45,6 +45,64 @@ For the interaction-surface authority contract, see:
 - `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AUTHORITY_BOUNDARY.md`
 - `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md`
 
+<!-- ACCESSIBLE-PANEL-PROPOSAL-FORMAT -->
+## Normalized Decision-Surface Proposal Format
+
+Panel proposals that require human review or confirmation should be written and rendered as
+decision surfaces. This format is a documentation contract for future proposal authoring and UI
+projection work; it does not claim that every existing generated proposal already conforms, and it
+does not change runtime semantics.
+
+The minimum reviewable proposal shape is:
+
+```text
+What this is:
+Artifact / source:
+What the human needs to decide:
+Recommended action or available option:
+Why this is proposed:
+Facts / evidence / source claims:
+Agent interpretation:
+Risk / uncertainty / consequence:
+Available choices:
+  - Confirm
+  - Defer
+  - Reject
+  - Clarify
+Confirmation authority:
+Source freshness / option identity:
+Expected receipt or status:
+```
+
+Cognitive-load and review requirements:
+
+- Keep facts, source claims, agent interpretation, recommendation, uncertainty, and requested
+  human action visibly separate.
+- Treat the proposal as a non-authoritative projection until explicit human confirmation.
+- Make recommendation is not approval clear in wording and layout.
+- Use short fields and stable field order so listening and text-to-speech (TTS) can read the
+  decision surface without skipping risk, uncertainty, source reference, or available choices.
+- Use self-contained checkbox labels. A checkbox label must remain understandable when read aloud
+  without relying on DOM position, previous prose, or visual grouping.
+- Keep source or source-reference visible. If source anchors are unavailable, state the limitation.
+- Keep `Confirm`, `Defer`, `Reject`, and `Clarify` distinct in the decision surface; do not imply
+  durable defer/reject semantics unless a governed path implements them.
+
+Authority and downstream boundaries:
+
+- Governance-bearing execution requires explicit confirmation. This section does not weaken the
+  rule in the conceptual role above or the PA2-FREEFORM proposal-vs-execution boundary.
+- A recommendation is not approval and must not be treated as execution authority.
+- Companion UI read-mode confirmation is a downstream consumer of this format, not a new approval
+  model.
+- Read-mode checkbox confirmation must continue to route through
+  `companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md` and the source-backed
+  `POST /api/panel/checkbox-projection` endpoint.
+- Confirmation identity must preserve `option_id`, `panel_id`, content/source hashes, and source
+  freshness requirements. The UI must not infer authority from label text or rendered position.
+- The format is grounded in `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md` decision mode and
+  `docs/research/COGNITIVE_LOAD_REDUCTION_RESEARCH.md` ("Proposal Template Pattern For #1642").
+
 ## PanelAgent Runtime V1 (current baseline)
 - Panel should be read as the current mutation-capable interaction surface in the runtime.
 - Runtime V1 uses a fixed mapping from panel actions to follow-up events (e.g., promotion intents) and writes receipts into an in-note AI status callout; the panel stays a small working set with no history.
@@ -208,7 +266,32 @@ Governed `queue_review` loop proven end-to-end:
 - **Reject** (second proposal) — `status=rejected`, `receipt=null`, `receipt_visibility=none_rejected`, no execution.
 - **Durable receipt visibility** — the workspace orientation governance summary reflected the governed receipts (`latest_receipt_outcome=rejected`, pending proposal/receipt counts, `source_ref.kind=receipt` / `panel.receipts`).
 
-Scope boundary: this proves the **governance-handoff** (`queue_review`) loop and its durable receipt in the governance/receipt layer. The **in-note checkbox-projection** receipt path (durable `- [x]` + `> [!info]- AI status` callout) was not exercised — the note's `AI-åtgärder` option was not a runtime-declared selectable option — and is tracked as follow-up **#1621**. No broader Companion UI production readiness is claimed.
+Scope boundary: this proves the **governance-handoff** (`queue_review`) loop and its durable receipt in the governance/receipt layer. The **in-note checkbox-projection** path was not exercised — the note's `AI-åtgärder` option was not a runtime-declared selectable option — and is tracked as follow-up **#1621**. No broader Companion UI production readiness is claimed.
+
+### In-note checkbox-projection receipt loop — #1621 (2026-06-06)
+
+<!-- CHECKBOX-PROJECTION-UAT -->
+Verification of the **in-note checkbox-projection** path (#1621): the path by which a Panel `AI-åtgärder` option becomes a runtime-declared selectable option and then projects a durable `- [x]` checkbox into the note. The controlled fixture verifies the source-backed projection path; AI-status callout receipt visibility remains tied to the normal Panel runtime result path and is not claimed here as universal for every mapped, logged, or unhandled action. Exercised on a controlled test-vault fixture (no private content).
+
+How the option becomes runtime-declared (panel-agent/watcher declaration path):
+
+The runtime-declaration path requires the action line in `AI-åtgärder` to carry both a durable `<!--ai:option_id=...-->` marker (scoped identity) and a `<!--ai:proposed=...-->` marker (pending-confirmation provenance). These are written by the panel-agent or watcher proposal path when a runtime-generated proposal is staged; they are never hand-inserted by the operator in a UAT scenario. `extract_panel_selectable_options` skips any action line without `option_id`, so only runtime-declared proposals surface in `/api/companion/workspace` `panel.selectable_options`.
+
+Checkbox-projection loop (proven with controlled test vault fixture):
+
+- **Declare** — runtime proposal path writes `- [ ] Send email <!--ai:option_id=opt_abc--> <!--ai:id=send.email--> <!--ai:proposed=979-->` into the note's `AI-åtgärder` section. `extract_panel_selectable_options` returns this as a `PanelSelectableOption` (`selectable=True`).
+- **Project** — `POST /api/panel/checkbox-projection` (request carries `artifact_id`, `note_path`, `panel_id`, `option_id`, `expected_content_hash`, `expected_source_hash`, `idempotency_key`). The service validates note-path safety, content-hash freshness, artifact identity, option presence and source-hash, WriteGuard, then projects the checkbox.
+- **Durable projection in note** — the note is updated to `- [x] Send email <!--ai:option_id=opt_abc-->`. The service returns `status=projected` for today's source-backed checkbox projection plus runtime invocation when no response-level receipt/callout evidence is present, with `content_hash_before != content_hash_after` and `receipt=null`. AI-status callout receipts are produced by the normal Panel runtime where that runtime path emits a receipt, but runtime results alone do not make this endpoint report `status=executed`.
+- **Idempotency** — if the option line is already `- [x]`, the endpoint returns `status=already_projected` (HTTP 200) and does not re-write.
+
+Distinction from `queue_review` / `POST /api/panel/confirm` governance path:
+
+| Path | Mechanism | Durable receipt surface |
+|---|---|---|
+| `queue_review` + `POST /api/panel/confirm` | Stages a governance proposal; human confirms/rejects through the Panel confirmation endpoint; receipt in governance/receipt layer (`panel.receipts`, `receipt_visibility`). | Governance/receipt layer (orientation governance summary, `panel.receipts`). |
+| `POST /api/panel/checkbox-projection` | Source-backed runtime-mediated projection of a runtime-declared selectable checkbox option; validated against content + source hashes; governed writer path; no staged proposal record. | In-note Markdown: durable `- [x]` projection; AI-status callout receipt only when the invoked Panel runtime path emits one. |
+
+Evidence: `tests/panel/test_panel_checkbox_projection.py::test_projection_endpoint_checks_markdown_source_and_projects_checkbox` (happy path, `status=projected`, `receipt=null`, `- [x]` confirmed in note), `test_projection_endpoint_already_checked_is_idempotent` (`status=already_projected`, no duplicate write). These tests prove projection and idempotency on controlled test-vault fixtures; they also prove the endpoint does not fabricate response-level receipt evidence from runtime results alone.
 
 ### Event payload (panel.intent.created)
 ```json

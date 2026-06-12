@@ -108,6 +108,37 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
 
+### Compose/env binding invariant (Issues #1627, #1655, #1769)
+
+A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB_DSN` to values that match the **intended channel** — not another channel. A test stack whose compose declares `PKM_ENVIRONMENT=prod` would direct all writes at prod resources despite running under the test project namespace; this is a channel-isolation breach.
+
+**Omitted bindings are violations (Issue #1655).** The base compose file feeds every app service (`api`, `worker`, `watcher`) from an `env_file` chain whose first layer is `config/runtime.defaults.env` (prod `app` DSNs). If a channel's overlay omits `DATABASE_URL` / `DB_DSN` for a channel-critical service — by dropping the keys or the entire service block — compose layering silently resolves the binding from that chain. The preflight therefore checks the **effective** binding and fail-closes when it lands on another channel or cannot be verified.
+
+**Resolution follows the full env_file chain (Issue #1769).** Compose services may declare multiple `env_file` entries and **later files win**: the base services layer `${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}` (written by `scripts/export_runtime_env.sh`, carrying `DATABASE_URL` / `DB_DSN`) *after* the defaults file, so the defaults alone are not the effective binding. For omitted DSN keys, the preflight resolves the per-service `env_file` chain of the merged compose model (base `docker-compose.yaml` + overlay, overlay entries appended) in declaration order, interpolating `${VAR:-default}` path expressions the way compose does (invoking environment first, then `.env` in the compose directory). It fail-closes when:
+
+- the effective DSN resolves to another channel (e.g. a prod overlay whose omitted DSN is won by a `tmp/runtime.env` layer carrying `app_test`), or
+- a layer that would win exists but cannot be read, or
+- a **required** layer is missing at preflight time (compose would refuse to start; the preflight does not silently assume absence), or
+- a layer's path expression cannot be resolved, making the effective binding unverifiable, or
+- the winning entry for a channel-critical key is a bare `KEY` line (no `=`): compose treats it as unset/host-environment passthrough at `compose up` time, so the effective binding is unverifiable at preflight time (a later layer that redefines the key still supersedes it).
+
+A `required: false` layer that is absent at preflight time contributes nothing, exactly as compose treats it; the preflight verifies the layering **as it stands at preflight time** — creating or editing env-file layers after the preflight and before stack start bypasses the guard. When no base compose file sits next to the overlay, the base layering is modeled as the single committed defaults file, preserving the #1655 contract.
+
+Omission is only acceptable when the chain-resolved value already binds the intended channel (e.g. `docker-compose.prod.yml` relies on the prod base defaults and a prod-channel runtime layer). This is channel-aware resolution of one shared rule, not a per-channel behavior split.
+
+Explicit overlay DSNs do not suppress structural `env_file` chain validation. Even when
+`DATABASE_URL` and `DB_DSN` are declared with channel-correct values, the preflight still
+fail-closes on declared required layers that are missing, unreadable, or have unresolvable path
+expressions, because Compose must still resolve and load the service's `env_file` chain safely.
+
+**Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
+
+- by `scripts/test/test_ui_doctor.sh` (and therefore `make test-ui-doctor`) before any Docker or network check;
+- by `make verify-test-channel` via `tests/release_channels/test_channel_isolation_preflight.py`;
+- and should be called at the start of `promote-to-test` / `execute-promotion` before any stack mutation.
+
+The guard is **read-only**: it reports and fail-closes; it never edits operator files. When it fails, the operator must correct the compose overlay to match the intended channel before proceeding.
+
 ## Promotion contract
 
 Promotion is the operation that turns an accepted commit on `main` into the running `stable` build in prod. It has four explicit phases:
@@ -118,15 +149,34 @@ Promotion is the operation that turns an accepted commit on `main` into the runn
    - config / settings delta;
    - risk notes (flags, known regressions, acceptance-criteria status of included PRs).
    The prepare phase produces a **promotion plan** the operator can review before executing.
-2. **Execute.** Move the `stable` ref to the chosen commit. Apply migrations to `pkm_prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
+2. **Execute.** Advance the `stable` ref via a governed PR targeting `stable`. Apply migrations to `pkm_prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
 3. **Verify.** Post-promotion health, status, and smoke checks against the running prod. Health must be green against [HEALTH.md](../HEALTH.md) contracts before the promotion is considered accepted.
-4. **Rollback (conditional).** If verification fails, return `stable` to the previous ref, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
+4. **Rollback (conditional).** If verification fails, return `stable` through a governed rollback PR, update prod to the merged `origin/stable` rollback commit, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
 
 Promotion trigger is **manual, single-user**. No PR-merge-triggered automation, no CI-driven promotion. The operator decides when to promote.
 
+### Protected-branch promotion invariant
+
+`origin/stable` is a protected branch (`enforce_admins: true`; required status checks: `smoke`, `smoke-docker`, `pr-contract`; PR required). **Direct pushes and refs-API updates are rejected.**
+
+Every stable-ref movement — whether forward (promotion) or backward (rollback) — proceeds through a governed PR targeting `stable`. The PR must pass all three required status checks before an operator merges it. This is non-negotiable; the protection must not be weakened.
+
+### Ancestry preflight invariant
+
+Before any stable-ref movement, `execute-promotion` verifies:
+
+```bash
+git merge-base --is-ancestor origin/stable <candidate-sha>
+```
+
+If this check fails, promotion aborts fail-closed with a reconciliation-PR instruction. Promotion cannot proceed until `stable` is an ancestor of the candidate.
+
+**Current state (verified 2026-06-06):** `git merge-base --is-ancestor origin/stable origin/main` returns exit 0 — PASS. stable/main divergence is resolved.
+
 ## Rollback posture
 
-- The previous stable ref is always resolvable (e.g. previous tag retained, or `stable-prev` pointer maintained).
+- The previous stable ref is always resolvable (recorded as `stable-prev` pointer file in `ops/promotions/` before any stable movement).
+- Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR. After merge, prod is updated to the merged `origin/stable` rollback commit before reversible migrations are reversed; `stable-prev` remains the rollback target/anchor.
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
 
 ### Vault is not release state
@@ -162,7 +212,7 @@ skill per job, per the human-first one-agent-one-job principle:
 - `prepare-promotion` — produce the promotion plan (code/migration/config delta, risk notes, AC status).
 - `execute-promotion` — move the `stable` ref, apply migrations, restart prod.
 - `verify-promotion` — post-promotion health, status, and smoke checks.
-- `rollback-promotion` — reverse ref, reverse reversible migrations, restart.
+- `rollback-promotion` — merge governed rollback PR, update prod to merged `origin/stable`, reverse reversible migrations, restart.
 
 The skills remain downstream artifacts. Their shape is specified in the task files and the skill
 entrypoints under `.codex/skills/`, not redefined here.

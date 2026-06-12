@@ -25,11 +25,25 @@ This task produces the rollback contract as a docs artifact under `docs/RELEASE_
 - Specifies the runtime-artifact posture: runtime artifacts under the prod channel's directory are regenerated after rollback; they are not restored to a prior snapshot.
 - States what rollback explicitly does not do: recover from vault data loss, undo external side-effects (messages sent, files written outside the vault/DB/artifacts scope), or restore lost operator authored content.
 
+## Protected-branch rollback
+
+`origin/stable` is a protected branch (`enforce_admins: true`; required status checks: `smoke`, `smoke-docker`, `pr-contract`; PR required). **Direct pushes and refs-API updates to `stable` are rejected.** This constraint applies equally to rollback: a rollback cannot directly write to the protected `stable` ref.
+
+Rollback under branch protection proceeds as follows:
+
+1. `rollback-promotion` opens a **revert PR** targeting `stable` (reverting the promotion merge commit, or targeting `stable-prev` via a dedicated rollback branch).
+2. The revert PR must pass all three required status checks: `smoke`, `smoke-docker`, `pr-contract`.
+3. An operator reviews and merges the revert PR. After merge, `origin/stable` points to the protected rollback head. That head may be a merge commit whose tree restores the previous stable state.
+4. Prod fetches and checks out the merged `origin/stable` rollback commit before any reversible prod migrations are reversed.
+5. The rollback receipt records the revert PR URL, the `stable-prev` target/anchor, and the merged `origin/stable` rollback SHA as ref-restoration evidence.
+
+This contract does **not** promise a direct protected-branch write as a rollback path. Any instruction that would require bypassing branch protection to complete rollback is outside this contract.
+
 ## Concretely
 
-- **Previous-stable resolution**: `execute-promotion` records the previous `stable` commit (e.g. as `stable-prev`, as an annotated-tag predecessor, or as a promotion-plan receipt on disk). `rollback-promotion` resolves the previous-stable without ambiguity.
-- **Ref movement**: rollback moves `stable` back to the previous commit and updates the prod checkout's HEAD (same mechanism as `execute-promotion`, reverse direction).
-- **Migration reversal**: migrations flagged reversible per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION` are reversed in the reverse order they were applied. Migrations flagged forward-only were already acknowledged by the operator at promotion time; rollback does not attempt to reverse them, and the operator understands that the DB shape may not return to its pre-promotion state.
+- **Previous-stable resolution**: `execute-promotion` records the previous `stable` commit as `stable-prev` (pointer file in `ops/promotions/`). `rollback-promotion` resolves the previous-stable without ambiguity from this record.
+- **Ref movement**: rollback restores `stable` through a governed revert PR targeting `stable` (see Protected-branch rollback above). `stable-prev` is the rollback target/anchor, while the prod checkout's HEAD is updated to the merged `origin/stable` rollback commit after the revert PR merges.
+- **Migration reversal**: migrations flagged reversible per `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION` are reversed in the reverse order they were applied, but only after prod is running code from the merged `origin/stable` rollback commit. Migrations flagged forward-only were already acknowledged by the operator at promotion time; rollback does not attempt to reverse them, and the operator understands that the DB shape may not return to its pre-promotion state.
 - **Vault**: the real vault is not rewound. The operator's authored content during the promoted period remains intact. Note-level undo is a vault concern.
 - **Runtime artifacts**: prod's runtime artifacts (`tmp/`) are allowed to be regenerated; no rollback-specific snapshot/restore of these artifacts is required.
 - **External effects**: anything the promoted code caused outside the prod channel's scope (e.g. notifications sent, files written outside the vault/DB/artifacts boundary) is not reversed by rollback. If such side-effects exist, they should be called out as risk notes in the promotion plan.

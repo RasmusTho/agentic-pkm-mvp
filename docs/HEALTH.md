@@ -87,5 +87,5 @@ Fields returned under `authority_spine`:
 
 All values are bounded status strings; no raw state, path, secret, token, or traceback is exposed. The sanitization gate in `_sanitize_health_value()` applies to `authority_spine` exactly as it does to every other health field.
 
-The `write_guard` field reflects the current `HealthContract` state via `DEFAULT_WRITE_GUARD.snapshot_fn()`. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
+The `write_guard` field reflects the current cached `HealthContract` state without evaluating the WriteGuard or running the full health contract diagnostics. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
 <!-- SECTION:HEALTH:END -->

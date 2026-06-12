@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-05-12
-Last verified against: docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md, docs/FINDING_AND_REORIENTING/README.md, docs/STATUS.md
+Last verified against: docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/COGNITIVE_LOAD_PROJECTION_LAYER.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md, docs/FINDING_AND_REORIENTING/README.md, docs/STATUS.md
 
 # Companion UI Product Spec
 
@@ -101,25 +101,30 @@ Current shipped runtime truth is owned by:
 ### 3) Resurface
 
 - Human question it answers: "What quietly important thing should return to attention now?"
-- Cognitive burden it reduces: missed follow-up, forgotten relevance, and attention drift.
-- Primary surface(s): Companion suggestions rail/area across Chat/Panel host context; optional
-  automation-triggered surfacing.
+- Cognitive burden it reduces: missed follow-up, forgotten relevance, and re-orientation effort
+  after attention drift.
+- Primary surface(s): Companion orientation/resurface areas across Chat/Panel host context. The
+  baseline posture is pull/snapshot/read-only; ambient refresh is bounded foreground refresh only
+  where ADR-0011 or a successor owner decision admits it.
 - Supporting runtime capabilities: resurfacing capability contract; relevance-change signals;
   context-bundle support for explanation.
 - Context bundle usage: resurfacing bundle should carry why-now signals, linked artifacts, and
   relation context.
 - Agent memory usage: optional contextual hinting; memory contribution must be explicit and
   reviewable.
-- Provenance/receipt expectations: resurfacing should explain "why now" and keep semantic
-  relatedness distinct from priority, trust, authority, and actionability.
+- Provenance/receipt expectations: resurfacing should explain "why now" with short
+  pointer/provenance-first signals and keep semantic relatedness distinct from priority, trust,
+  authority, and actionability.
 - Authority limits: Resurface can suggest; it must not escalate to urgent-task semantics unless
-  explicitly promoted/escalated.
+  explicitly promoted/escalated. Resurfacing presence must not become approval, urgency, memory
+  promotion, or write authority.
 - Failure modes:
   - semantic similarity mistaken for urgency;
   - suggestion pressure that feels mandatory;
   - hidden ranking logic with no explanation.
-- Target-state UX behavior: low-pressure suggestions with clear actions: dismiss, snooze, pin, or
-  inspect.
+- Target-state UX behavior: scarce, low-pressure, source-linked suggestions with clear actions:
+  inspect, dismiss, snooze, or pin when those actions are explicitly scoped. No alert, badge,
+  notification inbox, focus stealing, or persistent monitoring stream is implied by this mode.
 - Current-state caveat: minimal resurfacing runtime seams exist; full product-surface suggestion
   orchestration remains target-state.
 
@@ -156,6 +161,10 @@ Current shipped runtime truth is owned by:
 - Chat is not source of truth.
 - Agent memory is not hidden authority.
 - Human-readable artifacts remain primary.
+- Cognitive-load support is central to the Companion experience: reduce decoding, parsing,
+  spelling, review, and resumption friction without simplifying away the human's reasoning task.
+- Review surfaces should be verifiability-first: source and consequences stay reachable before an
+  agent projection becomes a decision.
 - The UI should reveal enough system state to support trust without exposing unnecessary runtime
   machinery.
 

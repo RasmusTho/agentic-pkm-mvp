@@ -67,6 +67,16 @@ def test_headings_extracted() -> None:
     assert "Gamma" in outline
 
 
+def test_heading_labels_do_not_leak_inline_markdown() -> None:
+    document = parse_vault_markdown("# 0. **Executive summary**\n\nBody.")
+
+    outline = render_note_outline(document)
+
+    assert 'href="#0-executive-summary"' in outline
+    assert "0. Executive summary" in outline
+    assert "**Executive summary**" not in outline
+
+
 def test_heading_navigation() -> None:
     html = _workspace_html("# Alpha\n\nBody.\n\n## Beta\n\nMore body.")
 

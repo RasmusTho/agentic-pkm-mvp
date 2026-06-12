@@ -30,7 +30,7 @@ From the repository root:
 
 ```bash
 cd companion-ui/companion-app
-COMPANION_API_BASE_URL=http://127.0.0.1:18000 HOST=127.0.0.1 PORT=8113 \
+COMPANION_API_BASE_URL=http://127.0.0.1:18000 HOST=0.0.0.0 PORT=8113 \
   python -m companion_ui.workspace.serve_production_page
 ```
 
@@ -51,20 +51,22 @@ The runtime API must already be running on the configured production API base UR
 
 ## Bind Address
 
-Default production binding is local-only:
+Default production binding is server/LAN:
 
 ```text
-HOST=127.0.0.1
+HOST=0.0.0.0
 ```
 
-LAN or Tailscale exposure must be an explicit operator action:
+Loopback-only binding remains available as an explicit operator opt-out:
 
 ```bash
-HOST=0.0.0.0 PORT=8113 COMPANION_API_BASE_URL=http://<trusted-host>:18000 \
+HOST=127.0.0.1 PORT=8113 COMPANION_API_BASE_URL=http://127.0.0.1:18000 \
   python -m companion_ui.workspace.serve_production_page
 ```
 
 Use LAN/Tailscale only on trusted personal networks or trusted tailnets. Prefer Tailscale over open LAN when another device needs access.
+
+The production and dev/test UI launchers use threaded request handling so a slow browser, LAN, or Tailscale client connection does not block unrelated local requests. This does not change the exposure posture: public internet exposure remains unsupported.
 
 ## No Public Exposure
 
@@ -95,7 +97,7 @@ Rollback options:
 
 - Return to the previous known-good git checkout or release channel.
 - Restart the runtime API on the previous known-good version.
-- Restart Companion UI using the same local-only bind and API base URL.
+- Restart Companion UI using the same bind address and API base URL.
 
 The UI does not own durable vault writes, so UI rollback does not require vault migration. Runtime rollback must still respect runtime migration and data-store rules.
 

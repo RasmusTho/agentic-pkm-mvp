@@ -14,11 +14,26 @@ from uuid import uuid4
 import yaml
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
-from app.agent_memory.review_queue import MemoryCandidateReviewQueue
+from app.agent_memory.candidate import MemoryCandidate, MemoryType
+from app.agent_memory.promotion import (
+    PromotedMemory,
+    PromotionError,
+    promote as promote_memory_candidate,
+    reject as reject_memory_candidate,
+    revise as revise_memory_candidate,
+)
+from app.agent_memory.review_queue import (
+    MemoryCandidateReviewQueue,
+    ReviewDecision,
+    ReviewEntry,
+    ReviewQueueError,
+    ReviewStatus,
+)
 from app.agent_memory.posture_projection import (
     AgentMemoryPostureTarget,
     agent_memory_posture_for_artifacts,
@@ -47,6 +62,11 @@ from app.panel.confirmation import StagedProposal
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
+from app.tts.cache import TTSUnsafeCacheRootError, audio_path
+from app.tts.config import load_tts_config
+from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
+from app.tts.service import synthesize_tts
+from app.tts.status import tts_runtime_status
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
@@ -69,6 +89,59 @@ class VaultIdentityState(BaseModel):
     vault_name: str
     channel: str
     provenance: str
+
+
+class CompanionTTSRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    language: str | None = None
+    rate: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
+class CompanionTTSSegment(BaseModel):
+    index: int
+    text: str
+    language: str
+
+
+class CompanionTTSPlanResponse(BaseModel):
+    enabled: bool
+    local_only: bool
+    allow_browser_fallback: bool
+    allow_cloud_fallback: bool
+    normalized_text: str
+    language: str
+    provider: str
+    voice_id: str
+    provider_available: bool
+    provider_reason: str | None
+    warnings: list[str] = Field(default_factory=list)
+    cache_key: str
+    cached: bool
+    mixed_language: bool
+    segments: list[CompanionTTSSegment]
+    audio_url: str
+
+
+class CompanionTTSSynthesizeResponse(BaseModel):
+    ok: bool
+    state: str
+    cached: bool
+    cache_key: str
+    audio_url: str | None
+    content_type: str
+    provider: str
+    language: str
+    voice_id: str
+    reason: str | None
+
+
+class CompanionTTSStatusResponse(BaseModel):
+    environment: dict[str, bool]
+    config: dict[str, object]
+    paths: dict[str, dict[str, object]]
+    providers: dict[str, dict[str, object]]
+    cache: dict[str, object]
+    operator_receipt: dict[str, object]
 
 
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
@@ -2338,6 +2411,88 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
     )
 
 
+@router.post("/tts/plan", response_model=CompanionTTSPlanResponse)
+def plan_companion_tts(req: CompanionTTSRequest) -> CompanionTTSPlanResponse:
+    config = load_tts_config()
+    try:
+        plan = build_tts_plan(
+            text=req.text,
+            config=config,
+            language=req.language,
+            rate=req.rate,
+        )
+    except TTSNormalizedTextEmptyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "tts_text_empty_after_normalization", "message": str(exc)},
+        ) from exc
+    except TTSUnsafeCacheRootError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "tts_unsafe_cache_root", "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "tts_request_too_large", "message": str(exc)},
+        ) from exc
+    return CompanionTTSPlanResponse.model_validate(plan)
+
+
+@router.post("/tts/synthesize", response_model=CompanionTTSSynthesizeResponse)
+def synthesize_companion_tts(req: CompanionTTSRequest) -> CompanionTTSSynthesizeResponse:
+    config = load_tts_config()
+    try:
+        result = synthesize_tts(
+            text=req.text,
+            config=config,
+            language=req.language,
+            rate=req.rate,
+        )
+    except TTSNormalizedTextEmptyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "tts_text_empty_after_normalization", "message": str(exc)},
+        ) from exc
+    except TTSUnsafeCacheRootError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "tts_unsafe_cache_root", "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "tts_request_too_large", "message": str(exc)},
+        ) from exc
+    status_code = 200 if result["ok"] or result["state"] == "cached" else 503
+    if status_code != 200:
+        raise HTTPException(status_code=status_code, detail=result)
+    return CompanionTTSSynthesizeResponse.model_validate(result)
+
+
+@router.get("/tts/status", response_model=CompanionTTSStatusResponse)
+def read_companion_tts_status() -> CompanionTTSStatusResponse:
+    config = load_tts_config()
+    return CompanionTTSStatusResponse.model_validate(tts_runtime_status(config))
+
+
+@router.get("/tts/audio/{cache_key}.wav")
+def read_companion_tts_audio(cache_key: str) -> FileResponse:
+    if re.fullmatch(r"[a-f0-9]{64}", cache_key) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "audio_not_found", "message": "No cached audio exists for the requested key."},
+        )
+    config = load_tts_config()
+    path = audio_path(config, cache_key)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "audio_not_found", "message": "No cached audio exists for the requested key."},
+        )
+    return FileResponse(path, media_type="audio/wav")
+
+
 @router.get("/workspace", response_model=WorkspaceStateResponse)
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
@@ -2669,6 +2824,346 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
         status="ok",
         note_path=safe_note_path,
         content_hash=_content_hash(written),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Memory candidate review-queue endpoints (#1792, SEP-09a)
+#
+# Bounded read + governed review outcomes over the existing
+# ``agent_memory.review_queue`` machinery. Accept promotes only through
+# ``app.agent_memory.promotion`` per ADR-0009 — no new promotion path. Reject
+# and revise are durable, receipt-bearing review outcomes whose receipts are
+# the frozen ``PromotedMemory`` artifacts produced by that runtime machinery;
+# the endpoints fabricate nothing. Defer is non-terminal queue bookkeeping:
+# the candidate stays pending, no semantic transition occurs, and no receipt
+# is produced or invented. The orientation seam (intent emission) is unchanged.
+# ---------------------------------------------------------------------------
+
+MEMORY_REVIEW_QUEUE_SOURCE = ORIENTATION_MEMORY_INTENT_TARGET_QUEUE
+MEMORY_REVIEW_CALLOUT = "Unreviewed memory is not semantic authority."
+
+
+class MemoryReviewAuthorityPosture(BaseModel):
+    """Server-declared authority posture for a pending candidate.
+
+    A candidate is a proposal. Until an explicit review decision is recorded
+    through the governed boundary it carries no semantic authority.
+    """
+
+    authority: Literal["non_authoritative"] = "non_authoritative"
+    authority_role: Literal["candidate"] = "candidate"
+    review_posture: str
+    semantic_authority: Literal[False] = False
+
+
+class MemoryReviewQueueCandidate(BaseModel):
+    """Bounded review projection of one pending candidate.
+
+    Mirrors the field set the review boundary already admits via the
+    agent-memory posture projection (``VaultAgentMemoryPostureItemState``):
+    identity, title, provenance, and proposed class — never ``content``.
+    """
+
+    candidate_id: str
+    title: str
+    why_now: str
+    proposed_memory_type: str
+    inferred: bool
+    source_refs: list[str] = Field(default_factory=list)
+    derived_from: str | None = None
+    generated_by: str | None = None
+    revision_of: str | None = None
+    authority_posture: MemoryReviewAuthorityPosture
+
+
+class MemoryReviewQueueResponse(BaseModel):
+    source: Literal["agent_memory.review_queue"] = "agent_memory.review_queue"
+    review_callout: str = MEMORY_REVIEW_CALLOUT
+    pending_count: int
+    candidates: list[MemoryReviewQueueCandidate] = Field(default_factory=list)
+    source_ref: WorkspaceOrientationSourceRef
+
+
+class MemoryReviewRevisionPayload(BaseModel):
+    """Reviewer-authored revision input for the ``revise`` outcome.
+
+    Fields left unset inherit from the original candidate so provenance is
+    never dropped during revision.
+    """
+
+    title: str | None = None
+    content: str | None = None
+    memory_type: MemoryType | None = None
+
+
+class MemoryReviewDecisionRequest(BaseModel):
+    action: Literal["accept", "reject", "revise", "defer"]
+    reviewed_by: str = ""
+    notes: str | None = None
+    revision: MemoryReviewRevisionPayload | None = None
+
+
+class MemoryReviewReceipt(BaseModel):
+    """Projection of the frozen ``PromotedMemory`` audit artifact.
+
+    Every field is copied from the runtime artifact produced by the governed
+    machinery; the endpoint never mints receipt identity or outcome.
+    """
+
+    receipt_id: str
+    kind: Literal["agent_memory.review_decision"] = "agent_memory.review_decision"
+    source: Literal["agent_memory.promotion"] = "agent_memory.promotion"
+    outcome: str
+    candidate_id: str
+    decided_by: str
+    decided_at: str
+    decision_notes: str | None = None
+    revision_of: str | None = None
+    recorded_at: str
+
+
+class MemoryReviewDecisionResponse(BaseModel):
+    status: Literal["accepted", "rejected", "revised", "deferred"]
+    candidate_id: str
+    candidate_pending: bool
+    receipt: MemoryReviewReceipt | None = None
+    revision_candidate_id: str | None = None
+    detail: str | None = None
+
+
+def _memory_review_why_now(entry: ReviewEntry) -> str:
+    candidate = entry.candidate
+    posture = "inferred" if candidate.inferred else "asserted"
+    origin = candidate.generated_by or candidate.derived_from or "an unattributed runtime source"
+    reason = (
+        f"Awaiting explicit review: {posture} {candidate.memory_type.value} candidate "
+        f"from {origin}. {MEMORY_REVIEW_CALLOUT}"
+    )
+    if entry.revision_of:
+        reason += f" Revision of candidate {entry.revision_of}."
+    return reason
+
+
+def _memory_review_candidate_projection(entry: ReviewEntry) -> MemoryReviewQueueCandidate:
+    candidate = entry.candidate
+    return MemoryReviewQueueCandidate(
+        candidate_id=candidate.candidate_id,
+        title=candidate.title,
+        why_now=_memory_review_why_now(entry),
+        proposed_memory_type=candidate.memory_type.value,
+        inferred=candidate.inferred,
+        source_refs=list(candidate.source_refs),
+        derived_from=candidate.derived_from,
+        generated_by=candidate.generated_by,
+        revision_of=entry.revision_of,
+        authority_posture=MemoryReviewAuthorityPosture(review_posture=entry.review_posture),
+    )
+
+
+def _memory_review_receipt_projection(promoted: PromotedMemory) -> MemoryReviewReceipt:
+    return MemoryReviewReceipt(
+        receipt_id=promoted.promotion_id,
+        outcome=promoted.outcome.value,
+        candidate_id=promoted.candidate.candidate_id,
+        decided_by=promoted.decided_by,
+        decided_at=_orientation_iso(promoted.decided_at) or promoted.decided_at.isoformat(),
+        decision_notes=promoted.decision_notes,
+        revision_of=promoted.revision_of,
+        recorded_at=_orientation_iso(promoted.promoted_at) or promoted.promoted_at.isoformat(),
+    )
+
+
+def _memory_review_get_entry(queue: MemoryCandidateReviewQueue, candidate_id: str) -> ReviewEntry:
+    try:
+        return queue.get(candidate_id)
+    except ReviewQueueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "candidate_not_found",
+                "message": f"no candidate in review queue: {candidate_id}",
+            },
+        ) from exc
+
+
+def _memory_review_decide(
+    queue: MemoryCandidateReviewQueue,
+    candidate_id: str,
+    decision: ReviewDecision,
+    *,
+    reviewed_by: str,
+    notes: str | None,
+    revision: MemoryCandidate | None = None,
+) -> ReviewEntry:
+    """Record the decision through the governed queue boundary.
+
+    ``ReviewQueueError`` (blank reviewer, already-decided entry, revision id
+    collisions) is the governed boundary refusing the decision; it surfaces as
+    a 409 with no transition recorded.
+    """
+
+    try:
+        return queue.decide(
+            candidate_id,
+            decision,
+            decided_by=reviewed_by,
+            notes=notes,
+            revision=revision,
+        )
+    except ReviewQueueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "review_decision_refused", "message": str(exc)},
+        ) from exc
+
+
+def _memory_review_revision_candidate(
+    entry: ReviewEntry, payload: MemoryReviewRevisionPayload | None
+) -> MemoryCandidate:
+    """Build the revised candidate sent back for review.
+
+    Reviewer-authored overrides apply on top of the original candidate;
+    provenance fields are always inherited and ``correction_of`` preserves the
+    evidence chain back to the original.
+    """
+
+    original = entry.candidate
+    overrides = payload or MemoryReviewRevisionPayload()
+    return MemoryCandidate(
+        title=overrides.title or original.title,
+        memory_type=overrides.memory_type or original.memory_type,
+        inferred=original.inferred,
+        content=overrides.content if overrides.content is not None else original.content,
+        confidence=original.confidence,
+        source_refs=list(original.source_refs),
+        derived_from=original.derived_from,
+        generated_by=original.generated_by,
+        correction_of=original.candidate_id,
+    )
+
+
+@router.get("/memory/review-queue", response_model=MemoryReviewQueueResponse)
+def get_memory_review_queue() -> MemoryReviewQueueResponse:
+    """Bounded read over pending memory candidates awaiting review."""
+
+    queue = _orientation_memory_review_queue()
+    candidates = [_memory_review_candidate_projection(entry) for entry in queue.pending()]
+    return MemoryReviewQueueResponse(
+        pending_count=len(candidates),
+        candidates=candidates,
+        source_ref=_orientation_source_ref(
+            "agent_memory.review_queue",
+            MEMORY_REVIEW_QUEUE_SOURCE,
+            "memory candidate review queue",
+        ),
+    )
+
+
+@router.post(
+    "/memory/review-queue/{candidate_id}/decision",
+    response_model=MemoryReviewDecisionResponse,
+    response_model_exclude_none=False,
+)
+def post_memory_review_decision(
+    candidate_id: str, req: MemoryReviewDecisionRequest
+) -> MemoryReviewDecisionResponse:
+    """Record a governed review outcome (accept/reject/revise) or defer."""
+
+    queue = _orientation_memory_review_queue()
+    entry = _memory_review_get_entry(queue, candidate_id)
+
+    if req.action == "defer":
+        # Non-terminal queue bookkeeping: the candidate stays pending, no
+        # semantic transition is recorded, and no receipt is produced.
+        if entry.status is not ReviewStatus.PENDING:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "candidate_already_decided",
+                    "message": f"candidate already decided: {candidate_id}",
+                },
+            )
+        return MemoryReviewDecisionResponse(
+            status="deferred",
+            candidate_id=candidate_id,
+            candidate_pending=True,
+            receipt=None,
+            detail=(
+                "Deferred: candidate remains pending in agent_memory.review_queue; "
+                "no review decision was recorded and no receipt exists."
+            ),
+        )
+
+    if req.action == "accept":
+        # Dry-run the governed promotion gate on a frozen copy before
+        # recording the decision, so a runtime refusal (e.g. semantic
+        # promotion without stricter evidence) leaves the candidate pending
+        # instead of half-recorded as promoted.
+        trial = entry.model_copy(
+            update={
+                "status": ReviewStatus.PROMOTED,
+                "decision": ReviewDecision.PROMOTE,
+                "decided_by": req.reviewed_by or "reviewer:unspecified",
+                "decided_at": datetime.datetime.now(datetime.timezone.utc),
+            }
+        )
+        try:
+            promote_memory_candidate(trial)
+        except PromotionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "promotion_refused", "message": str(exc)},
+            ) from exc
+        decided = _memory_review_decide(
+            queue,
+            candidate_id,
+            ReviewDecision.PROMOTE,
+            reviewed_by=req.reviewed_by,
+            notes=req.notes,
+        )
+        promoted = promote_memory_candidate(decided)
+        return MemoryReviewDecisionResponse(
+            status="accepted",
+            candidate_id=candidate_id,
+            candidate_pending=False,
+            receipt=_memory_review_receipt_projection(promoted),
+        )
+
+    if req.action == "reject":
+        decided = _memory_review_decide(
+            queue,
+            candidate_id,
+            ReviewDecision.REJECT,
+            reviewed_by=req.reviewed_by,
+            notes=req.notes,
+        )
+        rejected = reject_memory_candidate(decided)
+        return MemoryReviewDecisionResponse(
+            status="rejected",
+            candidate_id=candidate_id,
+            candidate_pending=False,
+            receipt=_memory_review_receipt_projection(rejected),
+        )
+
+    # revise
+    revision_candidate = _memory_review_revision_candidate(entry, req.revision)
+    decided = _memory_review_decide(
+        queue,
+        candidate_id,
+        ReviewDecision.REVISE,
+        reviewed_by=req.reviewed_by,
+        notes=req.notes,
+        revision=revision_candidate,
+    )
+    revision_entry = queue.get(revision_candidate.candidate_id)
+    revised = revise_memory_candidate(decided, revision_entry)
+    return MemoryReviewDecisionResponse(
+        status="revised",
+        candidate_id=candidate_id,
+        candidate_pending=False,
+        receipt=_memory_review_receipt_projection(revised),
+        revision_candidate_id=revision_candidate.candidate_id,
     )
 
 

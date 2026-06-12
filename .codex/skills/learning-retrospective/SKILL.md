@@ -142,10 +142,11 @@ and skill prompts are static while LearningSignals accumulate, the retrospective
 ## Capturing learning
 
 **Capturing learning:** if during this work you notice a divergence from plan — you did something
-you did not expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning`
-before continuing. Create a BuilderOps `LearningSignal`; use `docs/learning-log.md` only as an
-explicit compatibility fallback. Do not batch to end of task; context is freshest now. Only capture
-if you can name an upstream artifact that could absorb the fix.
+you did not expect to do, or discovered an earlier artifact was wrong — route it through
+`capture-learning`, which owns the invocation timing: invoke immediately only when the divergence
+needs upstream repair now; otherwise note the signal for `learning-retrospective`. Create a
+BuilderOps `LearningSignal`; use `docs/learning-log.md` only as an explicit compatibility fallback.
+Only capture if you can name an upstream artifact that could absorb the fix.
 
 ## Output format
 

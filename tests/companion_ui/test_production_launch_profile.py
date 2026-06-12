@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
+from http.server import ThreadingHTTPServer
+
 
 def test_production_port(monkeypatch) -> None:
     monkeypatch.delenv("PORT", raising=False)
@@ -10,11 +13,11 @@ def test_production_port(monkeypatch) -> None:
     assert load_config()["port"] == 8113
 
 
-def test_production_default_host_is_local_only(monkeypatch) -> None:
+def test_production_default_host_is_server_bind(monkeypatch) -> None:
     monkeypatch.delenv("HOST", raising=False)
     from companion_ui.workspace.serve_production_page import load_config
 
-    assert load_config()["host"] == "127.0.0.1"
+    assert load_config()["host"] == "0.0.0.0"
 
 
 def test_production_default_api_points_at_prod_runtime(monkeypatch) -> None:
@@ -53,11 +56,32 @@ def test_production_safety_warning_is_explicit() -> None:
     from companion_ui.workspace.serve_production_page import _PRODUCTION_SAFETY_WARNING
 
     warning = _PRODUCTION_SAFETY_WARNING.lower()
-    assert "local-only" in warning
+    assert "server/lan bind default" in warning
     assert "public internet exposure is not supported" in warning
     assert "auth" in warning
     assert "tls" in warning
     assert "reverse proxy" in warning
+
+
+def test_companion_ui_dev_server_uses_threaded_http_server() -> None:
+    from companion_ui.workspace import serve_dev_page
+
+    assert issubclass(serve_dev_page.CompanionThreadingHTTPServer, ThreadingHTTPServer)
+    assert serve_dev_page.CompanionThreadingHTTPServer.daemon_threads is True
+    assert "CompanionThreadingHTTPServer" in inspect.getsource(serve_dev_page.main)
+
+
+def test_companion_ui_production_server_uses_threaded_http_server() -> None:
+    from companion_ui.workspace import serve_dev_page
+    from companion_ui.workspace import serve_production_page
+
+    assert (
+        serve_production_page.CompanionThreadingHTTPServer
+        is serve_dev_page.CompanionThreadingHTTPServer
+    )
+    assert "CompanionThreadingHTTPServer" in inspect.getsource(
+        serve_production_page.main
+    )
 
 
 def test_production_shell_shows_runtime_channel_and_guard_state() -> None:
@@ -96,9 +120,22 @@ def test_production_launch_safety_doc_covers_operator_requirements() -> None:
     assert "python -m companion_ui.workspace.serve_production_page" in doc
     assert "Runtime API | 18001 | 18002 | 18000" in doc
     assert "Companion UI | 8111 | 8112 | 8113" in doc
-    assert "HOST=127.0.0.1" in doc
+    assert "HOST=0.0.0.0" in doc
     assert "Tailscale" in doc
     assert "Do not expose this profile to the public internet." in doc
     assert "curl -fsS http://127.0.0.1:18000/health" in doc
     assert "Ctrl-C" in doc
     assert "No direct UI vault writes" in doc
+
+
+def test_production_launch_docs_cover_tailscale_warning() -> None:
+    from pathlib import Path
+
+    doc = Path("companion-ui/docs/MLP_PRODUCTION_LAUNCH_SAFETY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "HOST=127.0.0.1" in doc
+    assert "Tailscale" in doc
+    assert "trusted personal networks or trusted tailnets" in doc
+    assert "Do not expose this profile to the public internet." in doc

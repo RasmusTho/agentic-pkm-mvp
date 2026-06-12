@@ -1,4 +1,5 @@
-fastapi==0.119.0
+fastapi==0.136.3
+starlette==1.2.1
 uvicorn[standard]==0.37.0
 pydantic==2.12.0
 pydantic-settings==2.6.1
@@ -10,7 +11,7 @@ PyYAML==6.0.3
 jsonschema==4.23.0
 rank_bm25==0.2.0
 requests>=2.32.0
-prometheus-fastapi-instrumentator==7.1.0
+prometheus-fastapi-instrumentator==8.0.0
 prometheus-client==0.23.1
 langgraph>=0.2.39
 numpy==2.3.5

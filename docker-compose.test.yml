@@ -17,6 +17,12 @@ services:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      WATCHER_STATE_DIR: tmp-test
+      WATCHER_STOP_FILE: /app/tmp-test/WATCHER_STOP
+      INDEX_OUTBOX_PATH: /app/tmp-test/index-outbox.jsonl
+      WATCHER_HEARTBEAT_PATH: /app/tmp-test/watcher_heartbeat.json
+      WORKER_HEARTBEAT_PATH: /app/tmp-test/worker_heartbeat.json
+      WATCHER_STATE_PATH: /app/tmp-test/watcher_state.json
       VAULT_SYSTEM_DIR_REL: "⚙️ System"
       VAULT_INBOX_DIR_REL: "📥 Inbox"
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
@@ -26,6 +32,12 @@ services:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      WATCHER_STATE_DIR: tmp-test
+      WATCHER_STOP_FILE: /app/tmp-test/WATCHER_STOP
+      INDEX_OUTBOX_PATH: /app/tmp-test/index-outbox.jsonl
+      WATCHER_HEARTBEAT_PATH: /app/tmp-test/watcher_heartbeat.json
+      WORKER_HEARTBEAT_PATH: /app/tmp-test/worker_heartbeat.json
+      WATCHER_STATE_PATH: /app/tmp-test/watcher_state.json
       VAULT_SYSTEM_DIR_REL: "⚙️ System"
       VAULT_INBOX_DIR_REL: "📥 Inbox"
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
@@ -35,6 +47,12 @@ services:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      WATCHER_STATE_DIR: tmp-test
+      WATCHER_STOP_FILE: /app/tmp-test/WATCHER_STOP
+      INDEX_OUTBOX_PATH: /app/tmp-test/index-outbox.jsonl
+      WATCHER_HEARTBEAT_PATH: /app/tmp-test/watcher_heartbeat.json
+      WORKER_HEARTBEAT_PATH: /app/tmp-test/worker_heartbeat.json
+      WATCHER_STATE_PATH: /app/tmp-test/watcher_state.json
       VAULT_SYSTEM_DIR_REL: "⚙️ System"
       VAULT_INBOX_DIR_REL: "📥 Inbox"
       VAULT_DESK_DIR_REL: "🛠️ Workbench"

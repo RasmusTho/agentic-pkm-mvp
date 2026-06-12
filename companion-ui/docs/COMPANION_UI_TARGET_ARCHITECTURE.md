@@ -100,19 +100,19 @@ For environment and port details, see `docs/ENVIRONMENTS.md`.
 
 ## 4. Access Model
 
-**Default: localhost only.**
+**Default: server/LAN bind.**
 
 | Bind target | When to use | Notes |
 |---|---|---|
-| `127.0.0.1` (localhost) | Default | Local-only; safe starting point |
-| LAN IP / `0.0.0.0` | Intentional LAN access | Explicit operator choice; not the default |
-| Tailscale IP / `0.0.0.0` | Intentional Tailnet access | Explicit operator choice; not the default |
+| LAN IP / `0.0.0.0` | Default server access | Trusted-device personal use |
+| Tailscale IP / `0.0.0.0` | Default tailnet access | Preferred for personal remote access |
+| `127.0.0.1` (localhost) | Explicit opt-out | Local-only fallback |
 | Public internet | Not supported now | Requires future auth/TLS/reverse-proxy hardening |
 
 Rules:
 
-- The dev server must bind to `127.0.0.1` by default.
-- LAN or Tailscale binding must be an explicit operator choice (e.g., `HOST=0.0.0.0`).
+- The dev server binds to `0.0.0.0` by default for server use.
+- Loopback-only binding must be an explicit operator choice (e.g., `HOST=127.0.0.1`).
 - Companion UI must never be exposed to the public internet without auth/TLS/reverse-proxy hardening.
   That hardening is deferred; it is not part of the dev server scope.
 - Work-computer access is deferred unless already safely reachable through the operator's approved

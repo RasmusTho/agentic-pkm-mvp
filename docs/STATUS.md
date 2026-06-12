@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-06-05
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDARIES.md, docs/SECURITY_DATA_FLOWS.md, docs/security/API_SECURITY_MATRIX.md, docs/security/STRIDE_LITE_REVIEW_2026_06_04.md, docs/PANEL_AGENT.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CANVAS_CHAT_SURFACE/README.md, docs/ENVIRONMENTS.md, docs/EVENTS.md, docs/OBSERVABILITY.md, docs/RELEASE_CHANNELS/README.md, docs/RELEASE_CHANNELS/TERMINOLOGY.md, docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md, docs/runbooks/UAT_PANEL_WATCHER.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/PANEL_CONFIRMATION_API_CONTRACT.md, companion-ui/docs/PANEL_DURABLE_PROJECTION_MAPPING.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, app/cli/health.py, app/api/routes/health.py, app/knowledge/write_ops.py, app/knowledge/locators.py, app/db/dsn.py, app/ingest/vault_alpha.py, app/watcher/registry.py, tests/api/test_health_api.py, tests/knowledge/test_write_ops.py, tests/watcher/test_panel_watcher_outbox_db.py, merged PRs #1085/#1460/#1461/#1463/#1464/#1466/#1475/#1486/#1490/#1525/#1526/#1488/#1487/#1459/#1534/#1535/#1536/#1537/#1538/#1551/#1552/#1569/#1570/#1571/#1572/#1574/#1577/#1581/#1582/#1583/#1584/#1585/#1586/#1591, GitHub issue #1085 closed 2026-05-22, GitHub issue #1457 implementation evidence, closed issues #1559/#1565/#1566 (delivered via PRs #1574/#1577), closed bug #1576 (completed 2026-06-05), Companion UI test-suite repair #1443 / PR #1475 (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui` -> 1260 passed, 1 skipped), and current repo state at 9b0564b2 on 2026-06-05
+Last reviewed: 2026-06-12
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py, companion-ui/companion-app/companion_ui/workspace/guidance_layer.py, companion-ui/companion-app/companion_ui/workspace/settings_drawer.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, tests/companion_ui/test_system_map_overlay.py, tests/companion_ui/test_guidance_layer.py, tests/companion_ui/test_settings_drawer.py, tests/companion_ui/test_entry_state_gallery.py, merged PRs #1798–#1802/#1816–#1818/#1833/#1834/#1846/#1847, the System Entry Point #1782 validation receipts through the #1795 state-gallery closure, and current repo state on 2026-06-12
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
@@ -32,6 +32,7 @@ promote public internet readiness.
 - `/api/orientation` now provides a minimal read-only orientation runtime seam that returns a situational frame without a query term; explanation remains bounded to `leave_point`, `open_items`, and `notable_change` derived from runtime signals.
 - Leave-point cursor lookup now applies scope filtering at the DB boundary and uses a wider corrupt-row recovery candidate window; this is hardening of the existing read-only orientation seam, not a new mutation surface or semantic authority.
 - Workspace orientation and Companion UI repair hardening keeps placeholder "no unresolved" text out of returned open loops, requires independent signal categories before emitting MemoryCandidate handoff intents, preserves non-UTC authored timestamp offsets in Vault Browser metadata, exposes previous-page cursor metadata for Vault Browser navigation, renders structured leave-point fields (`logical_ref`/`artifact_uuid`/`captured_at`), and keeps direct note-save paths and proxied runtime error details bounded to the active vault/runtime response.
+- The System Entry Point capability (#1782) is delivered. All twelve implementation children shipped: server-declared entry state (#1783/PR #1800), latency-ladder re-entry treatments (#1784/PR #1801), unified topbar/overlay host (#1785/PR #1802), the ⌘K Panel command palette (#1786/PR #1817), the system map overlay (#1787/PR #1846), the opt-in guidance layer (#1788/PR #1847), the settings drawer (#1789/PR #1834), governed capture append plus the ⌘N capture modal (#1790/PR #1799, #1791/PR #1816), memory review-queue endpoints plus drawer (#1792/PR #1798, #1793/PR #1818), and the read-only receipts history modal (#1794/PR #1833). The fixture-driven state-gallery validation harness (#1795, SEP-11; `tests/companion_ui/test_entry_state_gallery.py`) proves the composition: declared transitions render and undeclared transitions are rejected, cold/first-contact/no-vault render no re-entry overlay, the governed-vs-body-edit receipt asymmetry holds, no UI-derived authority classification renders, the display budget stays at or below the server caps, reduced-motion end-states are fully visible, and narrow mode preserves every critical affordance. The source-peek popover presentation and posture emphasis switch remain truthfully unshipped (declared overlay ids that do not mount); the context lane / place band stay parked under the gated decision issue #1796. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits
   explicit "why now" explanations with signal provenance, and exposes operator-visible receipt/status
@@ -201,6 +202,32 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /
   `close`, `/api/canvas/sessions*`, session-log persistence, and governance-bearing mutation routing
   are shipped; broader Chat cognition and hybrid Panel/Chat mutation remain separate follow-up work.
+- Agentic Canvas Co-Authoring (Phase 2, dev/staging, `CANVAS_ENABLED`) is now shipped: the canvas
+  surface is no longer a write-pipe without an author. A write-capable co-authoring cognition
+  (`app/chat/coauthoring_cognition.py`) turns a user intent plus the current note body into a
+  generated body edit applied through the existing `CanvasWriter` via `POST /api/canvas/sessions/{id}/coauthor`;
+  mock/degraded LLM responses are rejected (503) rather than written, and frontmatter/cross-note
+  generations route through `GovernanceRouter` (409). The Companion UI shell exposes a server-gated
+  co-authoring region (intent input, applied-edit render, undo) wired to `/coauthor` and
+  `/edits/last`, reachable only when the runtime declares `guards.canvas_enabled`. Delivery:
+  capability spec `docs/CANVAS_CHAT_SURFACE/` Phase 2; parent #1715, tasks #1716 (PR #1720) and
+  #1717 (PR #1723), spec docs PR #1719. Core Runtime defaults and the read-only Chat scaffold are
+  unchanged. A live operator browser demo of the open→intent→applied-edit→undo loop remains the
+  optional end-to-end confirmation; in-process and CI (`companion-ui-browser-runtime`) validation passed.
+- Chat→Panel Governance Handoff (Phase 3, dev/staging, `CANVAS_ENABLED`) is now shipped: a
+  governance-bearing co-authoring intent is navigable end to end instead of dead-ending in the UI.
+  The `/coauthor` governance-bearing path returns a structured `GovernanceHandoffRef` (HTTP 409 body:
+  `status=routed_to_panel`, `intent_id`, `action_type`) and stages the Panel proposal with a
+  proposal-scoped `StagedProposal.proposal_origin="canvas_coauthoring"` (distinct from vault-note
+  `NoteRef.origin`). The Companion UI canvas region captures the handoff reference and exposes a
+  read-only "view in Panel" affordance keyed to `intent_id`; the Panel rail (model + served HTML)
+  surfaces the server-declared canvas-origin attribution; confirmation routes through the existing
+  `POST /api/panel/confirm`; and the executed receipt is reflected back into the originating context
+  (read-only, server-declared, correlated strictly by `intent_id`, never invented). Delivery:
+  capability spec `docs/CANVAS_CHAT_SURFACE/` Phase 3; parent #1725, tasks #1726 (PR #1731), #1727
+  (PR #1732), #1728 (PR #1734), spec docs PR #1729, and live `serve_dev_page` wiring through
+  #1733 / PR #1736. Panel remains the primary command surface; receipts stay server-owned; Core
+  Runtime defaults unchanged.
 - Panel confirmation is now a bounded shipped runtime path: `POST /api/panel/confirm` confirms
   explicit panel actions through the governed confirmation path, preserves blocked/rejected receipts,
   and the runtime/client surface now includes `GET /api/artifacts/note` plus the companion-app
@@ -222,8 +249,43 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   live Niflheim dev runtime by a real-note UAT (#1604, 2026-06-06): the governed `queue_review`
   confirm/reject path executed end-to-end with durable receipts visible in the governance/receipt
   layer (orientation governance summary, `panel.receipts`). The UAT is bounded to that
-  governance-handoff path; the in-note checkbox-projection receipt (`- [x]` + AI-status callout) is
-  tracked as follow-up #1621. Receipt detail: `docs/PANEL_AGENT.md` (Companion UI operational-loop UAT).
+  governance-handoff path; the in-note checkbox-projection path is separately verified for durable
+  source-backed `- [x]` projection (#1621, 2026-06-06): see `docs/PANEL_AGENT.md` (In-note
+  checkbox-projection receipt loop — #1621) for the narrowed fixture evidence. AI-status callout
+  receipt visibility on that path is runtime-result specific, not a universal claim for every
+  mapped/logged action. The two receipt paths are distinct: the `queue_review` +
+  `POST /api/panel/confirm` path writes a durable receipt into the governance/receipt layer
+  (`panel.receipts`, `receipt_visibility`); the `POST /api/panel/checkbox-projection` path writes a
+  durable checked checkbox directly into the vault note Markdown and may also surface an AI-status
+  callout when the invoked Panel runtime path emits one.
+- Cognitive-load Phase 0 verification snapshot (#1638/#1657, 2026-06-07; fixed by #1698,
+  2026-06-08): code inspection of
+  `app/panel/checkbox_projection.py` confirms the source-backed checkbox-projection path validates
+  `expected_content_hash`, resolves artifact identity, validates `expected_source_hash`, verifies
+  option selectability, and calls `WriteGuard.assert_writes_allowed("panel.checkbox_projection")`
+  before `write_note_from_absolute(...)`. The endpoint now narrows its response contract: a
+  successful source-backed checkbox projection plus runtime invocation returns `status="projected"`
+  when no response-level receipt/callout evidence is present, with `receipt=None`. It must not
+  report `status="executed"` merely because the invoked runtime returned internal results; any future
+  `executed` response must carry response-level receipt/callout evidence.
+  Display/listening preference verification found no implemented preference write path; current TTS
+  endpoints (`POST /api/companion/tts/plan`, `POST /api/companion/tts/synthesize`) are local-first
+  speech planning/synthesis and not preference persistence. `WORKSPACE_STATE_CONTRACT.md` remains
+  the storage-home owner for future local UI preference state. Orientation and resurfacing read
+  paths remain read-side projections; context-bundle consumption explicitly keeps `may_write=false`.
+  Runtime/UI fixing for #1690 remains gated by the issue pickup rule because the issue is labelled
+  `agent:ready` but Project status is currently `Backlog`, not `Ready`.
+- Cognitive-load runtime adoption delivered and closed (#1638, 2026-06-09): the bounded runtime/UI
+  children are shipped — source-preserving summary regression fixtures (#1679), scarce pointer-first
+  `why_now` resurfacing cards (#1680), and correction-as-proposal review for direct note-editor draft
+  text (#1681), all delivered via PR #1689 — and the owner-doc promotion (#1682) is delivered, so
+  parent #1638 is closed. Shipped support stays within the existing read-side projection and
+  proposal-class boundaries: resurfacing has no notification/urgency/priority semantics, summaries and
+  corrections remain non-authoritative and cannot mutate canonical Markdown without the authorized
+  human save/confirm path. Broader cognitive-support behaviour beyond these bounded surfaces remains
+  target-state (`docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md`). Source Understanding Mode
+  (#1646/#1647) is a separate, still-open parent path — it reuses the same source-primary posture but
+  was never a #1638 child or blocker. See `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/`.
 <!-- authority-spine-diagnostic -->
 - Authority spine diagnostic surfaced in health API (#1601): `/api/health` now includes an
   `authority_spine` key with bounded operator-visible posture strings (`write_guard`,
@@ -243,8 +305,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 <!-- agent-state-spine-contract -->
 - Agent-state spine contract verified (#1625): the shared runtime-state linkage spine (`trace_id`,
   `authority`, `authority_basis`, `proposal_id`, `receipt_event_id`) defined in
-  `app/agents/runtime_state.py` is now formally documented and compliance-tested. All four active
-  agent state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`)
+  `app/agents/runtime_state.py` is now formally documented and compliance-tested. All five active
+  agent state surfaces (`AskAgentState`, `GraphAgentState`, `AgentStateBase`, `PanelAgentState`, `PilotAgentState`)
   satisfy the contract. A lightweight architecture compliance gate
   (`tests/architecture/test_agent_state_spine.py`) ensures future state classes surface any spine
   gap before reaching production. The spine is intentionally narrow: it standardises trace

@@ -99,7 +99,9 @@ Issue required: no — bounded immediate repair
 - Reason: <why no BuilderOps material was created, or what was routed>
 
 The `Direct Repair` block is the contract for bounded direct repair PRs. The `BuilderOps Routing`
-section is mandatory delivery traceability, not a second lane classifier.
+section is mandatory delivery traceability for Tier 2+ PRs, not a second lane classifier. Tier 1
+PRs (docs-authoring or governance lane, per `docs/development/GOVERNANCE_PROPORTIONALITY.md`) may
+omit the section entirely when nothing was routed — absence means `none`.
 
 - If the `Direct Repair` block is present and complete, no governing issue is required.
 - If the `Direct Repair` block is present and complete, no separate lane checkbox is required.

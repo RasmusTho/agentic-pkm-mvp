@@ -116,7 +116,8 @@ def test_projection_endpoint_checks_markdown_source_and_projects_checkbox(
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "executed"
+    assert data["status"] == "projected"
+    assert data["receipt"] is None
     assert data["content_hash_before"] != data["content_hash_after"]
     updated = note.read_text(encoding="utf-8")
     assert "- [x] Send email <!--ai:option_id=opt_abc-->" in updated
@@ -322,7 +323,8 @@ def test_projection_endpoint_runtime_failure_rolls_back_for_retry(
     retry = client.post("/api/panel/checkbox-projection", json=retry_body)
 
     assert retry.status_code == 200
-    assert retry.json()["status"] == "executed"
+    assert retry.json()["status"] == "projected"
+    assert retry.json()["receipt"] is None
     assert "- [x] Send email <!--ai:option_id=opt_abc-->" in note.read_text(encoding="utf-8")
 
 
