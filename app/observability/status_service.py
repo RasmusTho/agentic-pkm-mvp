@@ -135,6 +135,19 @@ def _prune_ask_metrics(now: float | None = None) -> None:
         _ASK_ERRORS.pop(0)
 
 
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def reset_ask_metrics() -> None:
     _ASK_LATENCIES.clear()
     _ASK_ERRORS.clear()
@@ -518,11 +531,39 @@ def _get_panel_diagnostics() -> PanelDiagnostics:
     except Exception:
         pass
 
+    staging_posture: dict[str, object] = {}
+    try:
+        from app.panel.confirmation import panel_staging_store_posture
+
+        staging_posture = panel_staging_store_posture()
+    except Exception:
+        staging_posture = {
+            "degraded": True,
+            "degraded_reason": "panel staging posture unavailable",
+        }
+
     return PanelDiagnostics(
         **diag,
         source_paths=source_paths,
         source_mtimes=source_mtimes,
         combined_sha256=combined_sha256,
+        staging_proposal_store_mode=_optional_str(
+            staging_posture.get("proposal_store_mode")
+        ),
+        staging_idempotency_store_mode=_optional_str(
+            staging_posture.get("idempotency_store_mode")
+        ),
+        staging_store_degraded=bool(staging_posture.get("degraded")),
+        staging_store_degraded_reason=_optional_str(
+            staging_posture.get("degraded_reason")
+        ),
+        staging_store_path=_optional_str(staging_posture.get("db_path")),
+        pending_staged_proposals=_safe_int(
+            staging_posture.get("pending_proposal_count"), 0
+        ),
+        panel_confirm_idempotency_keys=_safe_int(
+            staging_posture.get("idempotency_key_count"), 0
+        ),
     )
 
 

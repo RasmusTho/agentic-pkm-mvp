@@ -240,6 +240,10 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   `POST /api/companion/vault-browser/actions/queue-review` when server-resolved artifact scope is
   available. This is only queue staging: durable execution and receipt-supporting records remain
   behind `POST /api/panel/confirm`.
+- Pending Panel proposals and `POST /api/panel/confirm` idempotency keys now survive API restart via
+  additive SQLite runtime state. Recovery is pending-only and executes nothing; if that backing is
+  unavailable, the runtime falls back to memory-only staging and reports degraded Panel staging
+  posture through `/api/status`.
 - Companion UI operational loop (inspect → queue → confirm → receipt) is now a coherent, inspectable
   control surface over the existing shipped surfaces (#1603). The queue-review response names its
   loop position (`loop_stage: "queued_pending_confirmation"`), the Panel confirmation response exposes
