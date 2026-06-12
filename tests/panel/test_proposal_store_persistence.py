@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import app.panel.confirmation as confirm_module
 from app.events.panel import (
     NoteRef,
@@ -125,6 +127,10 @@ def test_staged_proposal_survives_restart_and_confirms(tmp_path: Path) -> None:
     assert response.receipt is not None
     assert response.receipt_visibility == "durable_vault_visible"
 
+    assert restarted_proposals.get("prop-persist-1") is None
+    after_confirm_proposals, _ = _stores(db_path)
+    assert after_confirm_proposals.get("prop-persist-1") is None
+
 
 def test_idempotency_keys_survive_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "panel-confirmation.sqlite3"
@@ -160,6 +166,39 @@ def test_idempotency_keys_survive_restart(tmp_path: Path) -> None:
 
     assert execute.call_count == 1
     assert replay == first
+
+
+def test_confirmed_proposal_cannot_execute_again_with_fresh_key(tmp_path: Path) -> None:
+    db_path = tmp_path / "panel-confirmation.sqlite3"
+    proposal_store, idempotency_store = _stores(db_path)
+    _stage(proposal_store)
+    service = PanelConfirmationService(
+        proposal_store,
+        idempotency_store,
+        same_turn_ttl=0,
+    )
+
+    with patch.object(
+        confirm_module,
+        "execute_panel_intent",
+        return_value=_runtime_result(),
+    ):
+        service.confirm(_request(idempotency_key="first-confirm"))
+
+    restarted_proposals, restarted_idempotency = _stores(db_path)
+    restarted_service = PanelConfirmationService(
+        restarted_proposals,
+        restarted_idempotency,
+        same_turn_ttl=0,
+    )
+
+    with patch.object(
+        confirm_module,
+        "execute_panel_intent",
+        side_effect=AssertionError("handled proposal must not re-execute"),
+    ):
+        with pytest.raises(confirm_module.UnknownProposalError):
+            restarted_service.confirm(_request(idempotency_key="fresh-confirm"))
 
 
 def test_recovery_never_executes(tmp_path: Path) -> None:

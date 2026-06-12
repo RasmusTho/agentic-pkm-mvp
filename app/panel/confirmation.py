@@ -343,6 +343,21 @@ class ProposalStore:
     def get(self, proposal_id: str) -> StagedProposal | None:
         return self._proposals.get(proposal_id)
 
+    def remove(self, proposal_id: str) -> None:
+        self._proposals.pop(proposal_id, None)
+        if self._db_path is None or self.degraded:
+            return
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "DELETE FROM panel_staged_proposals WHERE proposal_id = ?",
+                    (proposal_id,),
+                )
+                conn.commit()
+        except Exception as exc:
+            self._degraded_reason = f"{type(exc).__name__}: {exc}"
+            logger.warning("panel proposal store remove degraded to memory-only: %s", exc)
+
     def count_for_artifact(self, artifact_id: str) -> int:
         return sum(
             1 for proposal in self._proposals.values() if proposal.artifact_id == artifact_id
@@ -696,6 +711,7 @@ class PanelConfirmationService:
                     events_emitted=[],
                 )
                 self._idempotency.set(request.idempotency_key, resp)
+                self._proposals.remove(request.proposal_id)
                 return resp
             _write_blocked_projection(
                 proposal,
@@ -723,6 +739,7 @@ class PanelConfirmationService:
                 events_emitted=["panel.action.blocked"],
             )
             self._idempotency.set(request.idempotency_key, resp)
+            self._proposals.remove(request.proposal_id)
             return resp
 
         if request.action == "reject":
@@ -736,6 +753,7 @@ class PanelConfirmationService:
                 events_emitted=[],
             )
             self._idempotency.set(request.idempotency_key, resp)
+            self._proposals.remove(request.proposal_id)
             return resp
 
         import app.panel.confirmation as _self_mod
@@ -817,6 +835,7 @@ class PanelConfirmationService:
             )
 
         self._idempotency.set(request.idempotency_key, resp)
+        self._proposals.remove(request.proposal_id)
         return resp
 
 
