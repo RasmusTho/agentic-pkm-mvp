@@ -29,7 +29,10 @@ from companion_ui.renderer.models import (
     MarkdownDiagnostic,
     VaultMarkdownDocument,
 )
-from companion_ui.renderer.vault_markdown_parser import parse_vault_markdown
+from companion_ui.renderer.vault_markdown_parser import (
+    _plain_heading_text,
+    parse_vault_markdown,
+)
 
 
 _TOKEN_RE = re.compile(r"(`[^`\n]+`|!\[[^\]\n]*\]\([^) \n][^)\n]*\)|!\[\[[^\]\n]+?\]\]|\[\[[^\]\n]+?\]\])")
@@ -434,7 +437,7 @@ def _heading_text_and_anchor(raw_text: str) -> tuple[str, str]:
         text = text[: explicit_anchor.start()].strip()
         return text, explicit_anchor.group(1)
     text = text.strip(" #\t")
-    return text, _slugify_anchor(text)
+    return text, _slugify_anchor(_plain_heading_text(text))
 
 
 def _list_kind(line: str) -> str | None:

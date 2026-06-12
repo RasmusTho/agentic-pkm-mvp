@@ -298,6 +298,12 @@ class TestWorkspaceHeaderStrip:
         positions = [header.index(token) for token in ordered_testids]
         assert positions == sorted(positions)
 
+    def test_inactive_quick_open_is_visually_deemphasized(self) -> None:
+        html = _html()
+        assert "opacity: 0.46;" in html
+        assert ".workspace-quick-open span" in html
+        assert "display: none;" in html
+
     def test_runtime_status_popover_contains_runtime_fields(self) -> None:
         html = _html(
             guard_canvas_enabled=False,
