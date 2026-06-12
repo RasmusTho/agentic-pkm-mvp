@@ -113,6 +113,13 @@ def test_title_from_heading_strips_inline_markdown(client: TestClient, vault: Pa
     assert entry["title"] == "0. Executive summary"
 
 
+def test_title_from_heading_strips_markdown_image_sigil(client: TestClient, vault: Path) -> None:
+    _note(vault, "Inbox/diagram.md", "# ![Diagram](https://example.com/x.png)\n\nItems.\n")
+    resp = _get_notes(client)
+    entry = next(n for n in resp.json()["notes"] if "diagram" in n["path"])
+    assert entry["title"] == "Diagram"
+
+
 def test_title_fallback_to_stem(client: TestClient, vault: Path) -> None:
     _note(vault, "notes/unnamed.md", "No heading here.\n")
     resp = _get_notes(client)
