@@ -17,6 +17,8 @@ input for sequencing, not a runtime-promotion document. This status file remains
 owner doc. Capabilities should be read as shipped only when code plus tests or operator evidence are
 present and any owner-doc promotion gate has been satisfied.
 
+Integrated Runtime v1 release line: #1874 is open to integrate already-shipped capabilities through route parity, readiness matrix, Panel staging persistence, golden-path UAT, and negative-safety UAT gates without claiming new shipped behavior here.
+
 Security review note: the security architecture spine (`docs/SECURITY_ARCHITECTURE.md` plus its
 trust-boundary, data-flow, API-matrix, and STRIDE-lite companions) is now the review-routing owner
 for security framing. The recent security hardening PRs (#1581-#1586/#1591) add review inputs and
