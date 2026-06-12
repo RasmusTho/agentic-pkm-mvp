@@ -13,7 +13,7 @@ related_docs:
   - docs/CANVAS_CHAT_SURFACE/README.md
 ---
 
-State: Filed specification with a live issue tree. The parent feature issue is #1782 (validation hub, `agent:blocked`); all child issues (#1783–#1795) and the parked Q15–Q16 decision issue (#1796) were filed 2026-06-10. GitHub is the authoritative backlog surface; see §Relationship to GitHub Issues for the per-task map (PARENT_FEATURE_ISSUE.md keeps the filing record).
+State: Capability delivered. All twelve implementation children (#1783–#1794) merged; the final child (#1795, SEP-11) shipped the fixture-driven state-gallery validation harness (`tests/companion_ui/test_entry_state_gallery.py`) and executed the parent-closure handoff. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt. The parked Q15–Q16 decision issue (#1796, `agent:needs-human`) remains open. GitHub is the authoritative backlog surface; see §Relationship to GitHub Issues for the per-task delivery map (PARENT_FEATURE_ISSUE.md keeps the filing record).
 
 # System Entry Point Specification
 
@@ -62,18 +62,20 @@ The boundary explicitly **composes** shipped surfaces; it does not rebuild them.
 
 ## Capability-Level Acceptance Criteria
 
-- [ ] The shell root declares `data-entry-state` for exactly the five spec states, and undeclared transitions are rejected.
+All capability-level criteria are satisfied as of the #1795 state-gallery closure:
+
+- [x] The shell root declares `data-entry-state` for exactly the five spec states, and undeclared transitions are rejected.
   Verify: `tests/companion_ui/test_entry_state_machine.py::test_undeclared_transitions_are_rejected`
-- [ ] Cold start (first contact and >14d) and `no_vault` render no re-entry overlay.
+- [x] Cold start (first contact and >14d) and `no_vault` render no re-entry overlay.
   Verify: `tests/companion_ui/test_entry_state_machine.py::test_cold_start_shows_no_reentry_overlay`
-- [ ] Every overlay dismisses back to the document anchor with no route reset and no loss of staged suggestions or open-loop counts.
+- [x] Every overlay dismisses back to the document anchor with no route reset and no loss of staged suggestions or open-loop counts.
   Verify: `tests/companion_ui/test_overlay_host.py::test_overlay_dismiss_returns_to_anchor_without_route_reset`
-- [ ] Governed intents surface receipts; body edits do not (receipt asymmetry).
+- [x] Governed intents surface receipts; body edits do not (receipt asymmetry).
   Verify: `tests/companion_ui/test_entry_state_gallery.py::test_governed_vs_body_edit_receipt_asymmetry`
-- [ ] The orientation display budget keeps visible items at or below the server caps with the spec's default scarce subset.
+- [x] The orientation display budget keeps visible items at or below the server caps with the spec's default scarce subset.
   Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_display_budget_caps_visible_items`
-- [ ] The full state gallery renders from fixtures with no UI-derived authority classification.
-  Verify: `tests/companion_ui/test_entry_state_gallery.py::test_state_gallery_renders_all_declared_states`
+- [x] The full state gallery renders from fixtures with no UI-derived authority classification.
+  Verify: `tests/companion_ui/test_entry_state_gallery.py::test_state_gallery_renders_all_declared_states` and `::test_no_ui_derived_authority`
 
 ## Verification Path
 
@@ -81,29 +83,29 @@ Task-level verification follows each task file's `How to Verify (Pre-Merge)` sec
 
 ## Validation / Acceptance Path
 
-The parent feature issue (#1782; pre-filing draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)) is the live validation hub. Each child PR posts a short validation receipt to the parent before the next dependent child is picked up. Owner-doc promotion (updating `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` shipped-vs-new statuses and `docs/STATUS.md`) happens via the final child (SEP-11) or its parent-closure handoff, not per-slice.
+The parent feature issue (#1782; pre-filing draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)) was the live validation hub: each child PR posted a validation receipt to the parent before the next dependent child was picked up. Owner-doc promotion (the `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` shipped-vs-new audit and the `docs/STATUS.md` delivery record) executed with the final child (SEP-11, #1795) as its parent-closure handoff. Epic #1782 is closed by the delivery coordinator on the #1795 validation receipt.
 
 ## Relationship to GitHub Issues
 
-The issue tree was filed 2026-06-10 per `.codex/skills/feature-breakdown/SKILL.md`. SEP-08 and SEP-09 each map to two issues (runtime endpoint + UI surface), per their task files' split-dependency notes. GitHub is the authoritative backlog state; the table below is the filing record.
+The issue tree was filed 2026-06-10 per `.codex/skills/feature-breakdown/SKILL.md`. SEP-08 and SEP-09 each map to two issues (runtime endpoint + UI surface), per their task files' split-dependency notes. GitHub is the authoritative backlog state; the table below is the filing and delivery record.
 
-| Task spec | Issue | Initial pickup state |
+| Task spec | Issue | Delivery |
 |---|---|---|
-| Parent feature issue (validation hub) | #1782 | `Backlog` + `agent:blocked` (not a pickup issue) |
-| SEP-01 [ENTRY_STATE_MACHINE.md](ENTRY_STATE_MACHINE.md) | #1783 | `Ready` + `agent:ready`, prio:high |
-| SEP-02 [REENTRY_ORIENTATION_TREATMENT.md](REENTRY_ORIENTATION_TREATMENT.md) | #1784 | `agent:blocked` by #1783 |
-| SEP-03 [UNIFIED_TOPBAR_AND_OVERLAY_HOST.md](UNIFIED_TOPBAR_AND_OVERLAY_HOST.md) | #1785 | `agent:blocked` by #1783, prio:high |
-| SEP-04 [PANEL_COMMAND_PALETTE.md](PANEL_COMMAND_PALETTE.md) | #1786 | `agent:blocked` by #1785 |
-| SEP-05 [SYSTEM_MAP_OVERLAY.md](SYSTEM_MAP_OVERLAY.md) | #1787 | `agent:blocked` by #1785 |
-| SEP-06 [GUIDANCE_LAYER.md](GUIDANCE_LAYER.md) | #1788 | `agent:blocked` by #1785 |
-| SEP-07 [SETTINGS_DRAWER.md](SETTINGS_DRAWER.md) | #1789 | `agent:blocked` by #1785 |
-| SEP-08a [CAPTURE_TO_VAULT_INBOX.md](CAPTURE_TO_VAULT_INBOX.md) (runtime endpoint) | #1790 | `Ready` + `agent:ready` (no prerequisites) |
-| SEP-08b [CAPTURE_TO_VAULT_INBOX.md](CAPTURE_TO_VAULT_INBOX.md) (capture modal UI) | #1791 | `agent:blocked` by #1790 + #1785 |
-| SEP-09a [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (runtime endpoints) | #1792 | `Ready` + `agent:ready` (no prerequisites) |
-| SEP-09b [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (review drawer UI) | #1793 | `agent:blocked` by #1792 + #1785 |
-| SEP-10 [RECEIPTS_HISTORY_SURFACE.md](RECEIPTS_HISTORY_SURFACE.md) | #1794 | `agent:blocked` by #1785 |
-| SEP-11 [STATE_GALLERY_VALIDATION.md](STATE_GALLERY_VALIDATION.md) | #1795 | `agent:blocked` by all prior; parent-closure handoff |
-| Parked context lane / place band decision (Q15–Q16) | #1796 | `agent:needs-human`, prio:low (decision issue, not implementation) |
+| Parent feature issue (validation hub) | #1782 | open until the coordinator closes it on the #1795 validation receipt |
+| SEP-01 [ENTRY_STATE_MACHINE.md](ENTRY_STATE_MACHINE.md) | #1783 | delivered — PR #1800 |
+| SEP-02 [REENTRY_ORIENTATION_TREATMENT.md](REENTRY_ORIENTATION_TREATMENT.md) | #1784 | delivered — PR #1801 |
+| SEP-03 [UNIFIED_TOPBAR_AND_OVERLAY_HOST.md](UNIFIED_TOPBAR_AND_OVERLAY_HOST.md) | #1785 | delivered — PR #1802 |
+| SEP-04 [PANEL_COMMAND_PALETTE.md](PANEL_COMMAND_PALETTE.md) | #1786 | delivered — PR #1817 |
+| SEP-05 [SYSTEM_MAP_OVERLAY.md](SYSTEM_MAP_OVERLAY.md) | #1787 | delivered — PR #1846 |
+| SEP-06 [GUIDANCE_LAYER.md](GUIDANCE_LAYER.md) | #1788 | delivered — PR #1847 |
+| SEP-07 [SETTINGS_DRAWER.md](SETTINGS_DRAWER.md) | #1789 | delivered — PR #1834 |
+| SEP-08a [CAPTURE_TO_VAULT_INBOX.md](CAPTURE_TO_VAULT_INBOX.md) (runtime endpoint) | #1790 | delivered — PR #1799 |
+| SEP-08b [CAPTURE_TO_VAULT_INBOX.md](CAPTURE_TO_VAULT_INBOX.md) (capture modal UI) | #1791 | delivered — PR #1816 |
+| SEP-09a [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (runtime endpoints) | #1792 | delivered — PR #1798 |
+| SEP-09b [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (review drawer UI) | #1793 | delivered — PR #1818 |
+| SEP-10 [RECEIPTS_HISTORY_SURFACE.md](RECEIPTS_HISTORY_SURFACE.md) | #1794 | delivered — PR #1833 |
+| SEP-11 [STATE_GALLERY_VALIDATION.md](STATE_GALLERY_VALIDATION.md) | #1795 | delivered by this slice's PR (state-gallery harness + parent-closure handoff) |
+| Parked context lane / place band decision (Q15–Q16) | #1796 | open — `agent:needs-human`, prio:low (decision issue, not implementation) |
 
 ## Parked
 
