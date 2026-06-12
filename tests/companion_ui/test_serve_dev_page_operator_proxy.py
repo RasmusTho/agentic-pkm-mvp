@@ -355,7 +355,6 @@ def test_canvas_session_lifecycle_routes_proxied() -> None:
         post_responses={
             "/api/canvas/sessions": {"session_id": "session-1875"},
             "/api/canvas/sessions/session-1875/edits": {"ok": True},
-            "/api/canvas/sessions/session-1875/recovery/ack": {"ok": True},
         },
         delete_responses={
             "/api/canvas/sessions/session-1875/edits/last": {"ok": True},
@@ -381,11 +380,6 @@ def test_canvas_session_lifecycle_routes_proxied() -> None:
         {"new_body": "Updated", "change_summary": "route parity"},
     )
 
-    p = _PostDriver(handler_cls, "/api/canvas/sessions/session-1875/recovery/ack", {})
-    p.run_post()
-    assert p.status_code == 200
-    assert client.post_calls[-1] == ("/api/canvas/sessions/session-1875/recovery/ack", {})
-
     d = _DeleteDriver(handler_cls, "/api/canvas/sessions/session-1875/edits/last")
     d.run_delete()
     assert d.status_code == 200
@@ -395,6 +389,18 @@ def test_canvas_session_lifecycle_routes_proxied() -> None:
     d.run_delete()
     assert d.status_code == 200
     assert client.delete_calls[-1] == ("/api/canvas/sessions/session-1875", {})
+
+
+def test_canvas_recovery_ack_route_not_proxied() -> None:
+    client = _FakeClient()
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    p = _PostDriver(handler_cls, "/api/canvas/sessions/session-1875/recovery/ack", {})
+    p.run_post()
+
+    assert p.status_code == 404
+    assert p.payload == {"error": "not_found", "message": "Unknown Companion UI route"}
+    assert client.post_calls == []
 
 
 def test_tts_status_get_proxied() -> None:

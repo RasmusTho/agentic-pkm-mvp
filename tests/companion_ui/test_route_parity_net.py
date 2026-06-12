@@ -289,7 +289,6 @@ def test_every_referenced_endpoint_is_proxied_or_hidden() -> None:
         ("POST", "/api/canvas/sessions/session-1875/edits"),
         ("DELETE", "/api/canvas/sessions/session-1875/edits/last"),
         ("DELETE", "/api/canvas/sessions/session-1875"),
-        ("POST", "/api/canvas/sessions/session-1875/recovery/ack"),
     }
     missing_expected = [
         (method, path)

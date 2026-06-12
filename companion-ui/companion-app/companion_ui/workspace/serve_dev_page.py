@@ -4166,7 +4166,6 @@ def _render_canvas_session_controls(
             data-affordance-status="blocked">
             """ + unavailable_copy + """
           </div>"""
-    recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
     recovery_html = ""
     if conflict_detected:
         recovery_state = "acknowledged" if recovery_acknowledged else "needs acknowledgement"
@@ -4182,8 +4181,10 @@ def _render_canvas_session_controls(
             <button
               type="button"
               data-testid="workspace-canvas-recovery-ack"
-              data-api-method="POST"
-              data-api-path="{recovery_api_path}">Acknowledge</button>
+              data-affordance-status="blocked"
+              data-runtime-backed="false"
+              data-blocked-reason="Canvas recovery acknowledgement runtime route is not shipped"
+              disabled>Acknowledge</button>
           </div>"""
     # Live agentic co-authoring loop (#1733). Gated strictly by canvas_enabled and
     # an active session: the user states an intent, the server composes and applies
@@ -10580,7 +10581,6 @@ def make_handler(
         _POST_PROXY_PATTERNS = (
             re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
             re.compile(r"^/api/canvas/sessions/[^/]+/edits$"),
-            re.compile(r"^/api/canvas/sessions/[^/]+/recovery/ack$"),
             # Governed memory review decisions (#1793 -> #1792 endpoints).
             # Runtime refusals (409, e.g. the accept dry-run) are forwarded
             # verbatim by _proxy_error so the drawer renders calm with the
