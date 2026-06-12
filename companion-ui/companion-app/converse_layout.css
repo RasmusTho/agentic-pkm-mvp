@@ -90,7 +90,7 @@ body {
 }
 
 .document-column {
-  max-width: 66ch;
+  max-width: 640px;
   width: 100%;
   margin: 0 auto;
   font-size: 17px;
@@ -216,7 +216,7 @@ body {
 
 .suggested-insertion-block {
   margin-top: 10px;
-  border-left: 3px solid var(--amber);
+  border-left: 3px solid #f09030;
   background: var(--amber-muted);
   border-radius: 0 2px 2px 0;
   padding: 10px 12px;

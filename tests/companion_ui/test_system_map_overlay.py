@@ -280,12 +280,12 @@ def test_map_renders_composition_table_nodes() -> None:
     # The map re-classifies nothing: statuses mirror the spec table.
     by_id = {node.surface_id: node for node in MAP_SURFACES}
     for shipped in ("orientation", "anchor", "vault", "panel", "palette",
-                    "suggestions", "memory", "tts", "capture", "receipts",
-                    "settings", "map"):
+                    "suggestions", "memory", "peek", "tts", "capture",
+                    "receipts", "settings", "map", "guidance"):
         assert by_id[shipped].status == "shipped", shipped
-    for partial in ("chat_rail", "peek"):
+    for partial in ("chat_rail",):
         assert by_id[partial].status == "partial", partial
-    for new in ("posture", "guidance"):
+    for new in ("posture",):
         assert by_id[new].status == "new", new
     # Product modes per docs/COMPANION_UI_PRODUCT_SPEC.md, not re-derived.
     assert by_id["vault"].modes == ("find",)
@@ -386,6 +386,9 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         assert 'aria-disabled="true"' in tag, sid
         assert "onclick" not in tag, sid
         assert "data-intent" not in tag, sid
+    assert 'data-surface-id="peek" data-mode="find" data-status="shipped"' in overlay
+    assert "provenance lines are live" in overlay
+    assert 'data-surface-id="guidance" data-mode="local-ui" data-status="shipped"' in overlay
 
     # Shipped surfaces with no map-open affordance (reached by state or by
     # in-document controls) are truthfully non-routable, not dead buttons.
@@ -426,6 +429,15 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
                 "settings"):
         assert cold_nodes[sid].startswith("<article"), sid
         assert "onclick" not in cold_nodes[sid], sid
+
+    no_vault_nodes = _nodes(_map_overlay(_render_no_vault_orientation()))
+    assert no_vault_nodes["vault"].startswith("<button")
+
+    error_nodes = _nodes(_map_overlay(_render_no_vault_error_page()))
+    for sid in routable_surface_ids():
+        assert error_nodes[sid].startswith("<article"), sid
+        assert 'data-routable="false"' in error_nodes[sid], sid
+        assert "onclick" not in error_nodes[sid], sid
 
 
 # ---------------------------------------------------------------------------

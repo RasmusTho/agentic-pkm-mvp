@@ -2109,8 +2109,7 @@ def _render_note_section(fields: dict) -> str:
             </div>
             {text_correction_proposals_html}
           </details>
-          <div class="note-body-content" data-testid="workspace-note-rendered"
-            data-content-hash="{content_hash}">{body_empty_state_html}{body}</div>
+          <div class="note-body-content" data-testid="workspace-note-rendered">{body_empty_state_html}{body}</div>
           <textarea class="note-source-editor" id="note-source-editor"
             data-testid="workspace-note-source-editor"
             spellcheck="true" autocapitalize="sentences" autocorrect="off"
@@ -4908,7 +4907,6 @@ def _render_orientation_resurface(
           data-resurface-default-budget="{default_budget}"
           data-resurface-overflow-count="{len(overflow_candidates)}"
           data-notification="false"
-          data-urgency="none"
           data-persistence-backed="false"
           data-authority="read-only-projection">
           <div class="orientation-section-header">
@@ -5126,13 +5124,7 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
         artifact_link = _orientation_artifact_link(
             leave.get("artifact_ref"), testid="reentry-stop-link"
         )
-    inspect_intent = "memory.open" if counts["memory_candidates"] > 0 else "open_loops.inspect"
-    inspect_onclick = (
-        "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
-        if counts["memory_candidates"] > 0
-        else ""
-    )
-    inspect_onclick_attr = f' onclick="{inspect_onclick}"' if inspect_onclick else ""
+    inspect_onclick = "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
     return f"""
     <section class="reentry-card" data-region="reentry-card" data-testid="reentry-card"
       data-traj-state="{_e(traj_state)}" data-reentry-treatment="{_e(shape)}"
@@ -5158,9 +5150,10 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
             {counts["open_loops"]} open loops · {counts["staged"]} staged
             · {counts["memory_candidates"]} memory candidates
             <a class="reentry-inspect" data-testid="reentry-inspect"
-              data-intent="{inspect_intent}"
+              data-intent="memory.open"
+              data-memory-candidate-count="{counts["memory_candidates"]}"
               href="#workspace-orientation-open-loops"
-              {inspect_onclick_attr}>inspect</a>
+              onclick="{inspect_onclick}">inspect</a>
           </span>
         </li>
         <li class="reentry-q" data-reentry-question="changed">
@@ -5186,6 +5179,10 @@ def _entry_dismiss_script() -> str:
   function entryDismiss(control) {
     var card = control && control.closest('[data-region=reentry-card]');
     if (card) { card.remove(); }
+    var siblingCues = document.querySelectorAll('[data-region=delta-strip], [data-region=whisper-column]');
+    for (var i = 0; i < siblingCues.length; i++) {
+      siblingCues[i].remove();
+    }
     if (document.body) {
       document.body.dataset.entryState = 'shell_active';
       document.body.setAttribute('data-entry-state', 'shell_active');
@@ -5429,10 +5426,11 @@ def _render_orientation_index_html(
     # ships on every orientation render; only the vault route truthfully
     # exists on the entry surfaces (the declared cold_start → shell_active
     # path), so the map offers exactly that one.
+    orientation_map_routes = ("vault",) if vault_entry_html else ()
     overlay_host_overlays_html = (
         overlay_host_markup(anchor_note_path="")
         + memory_drawer_markup_html
-        + system_map_overlay_markup(available_routes=("vault",))
+        + system_map_overlay_markup(available_routes=orientation_map_routes)
         + overlay_host_script()
         + memory_drawer_script_html
         + system_map_overlay_script()
@@ -6772,7 +6770,7 @@ def render_index_html(
             "settings",
         )
         if fields is not None
-        else ("vault",)
+        else ()
     )
 
     return f"""<!DOCTYPE html>
@@ -10215,7 +10213,7 @@ def handle_get(
                 "/api/companion/vault-browser",
                 params=browser_params,
             )
-        except WorkspaceClientError as exc:
+        except (WorkspaceClientError, AssertionError) as exc:
             orientation_vault_browser_error = str(exc)
         if orientation is None and orientation_vault_browser is not None:
             orientation = _orientation_unavailable_frame(orientation_error)
@@ -10519,6 +10517,7 @@ def make_handler(
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
+                "/api/panel/confirm",
                 "/api/panel/checkbox-projection",
                 "/api/operator/ask",  # operator diagnostics Ask (#1758)
             }

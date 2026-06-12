@@ -93,7 +93,9 @@ def test_palette_action_posts_to_panel_confirm() -> None:
     assert "method: 'POST'" in script
     assert "proposal_id: btn.getAttribute('data-proposal-id')" in script
     assert "artifact_id: btn.getAttribute('data-artifact-id')" in script
-    assert "action: btn.getAttribute('data-panel-action')" in script
+    assert "action: 'confirm'" in script
+    assert "data-panel-action') !== 'confirm'" in script
+    assert "action: btn.getAttribute('data-panel-action')" not in script
     assert "idempotency_key: 'palette:'" in script
     assert "postPanelAction(btn)" in script
     assert "railButton.click()" not in script
