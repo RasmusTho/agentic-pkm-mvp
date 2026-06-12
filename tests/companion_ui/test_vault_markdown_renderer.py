@@ -270,6 +270,13 @@ def test_heading_fragment_wikilink_resolves() -> None:
     assert "?note_path=Notes%2FExisting%20Note.md#some-heading" in rendered.html
 
 
+def test_heading_anchor_matches_outline_plain_markdown_label() -> None:
+    rendered = render_vault_markdown("# [Foo](bar.md)\n\nBody.")
+
+    assert '<h1 id="foo">' in rendered.html
+    assert "[Foo](bar.md)</h1>" in rendered.html
+
+
 def test_block_id_wikilink_resolves() -> None:
     # #1345 AC4 — block-id link resolves; href keeps the literal ^block-id form.
     rendered = render_vault_markdown(
