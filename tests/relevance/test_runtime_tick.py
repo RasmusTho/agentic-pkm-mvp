@@ -56,9 +56,15 @@ def test_moment_materialized_and_surfaced(tmp_path: Path, monkeypatch: pytest.Mo
     vault = _build_vault(tmp_path)
     monkeypatch.setenv("VAULT_ROOT", str(vault))
     receipts = tmp_path / "moment_receipts.jsonl"
+    reachout_receipts = tmp_path / "reachout_receipts.jsonl"
 
     # The runtime tick (watcher/scheduler hook) computes + materializes moments.
-    summary = run_relevance_tick(vault, vault_context=_ctx(vault), outbox_path=receipts)
+    summary = run_relevance_tick(
+        vault,
+        vault_context=_ctx(vault),
+        outbox_path=receipts,
+        reachout_outbox_path=reachout_receipts,
+    )
     assert summary["materialized"] >= 1
 
     # A durable Markdown artifact landed in the vault system plane, with a receipt.

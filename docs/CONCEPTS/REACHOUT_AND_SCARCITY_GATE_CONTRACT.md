@@ -129,7 +129,7 @@ Stated against the capability-contract field set (`docs/CAPABILITY_CONTRACT_MODE
 | **Provenance requirements** | Each decision records the moment ref, the urgency band, the interruptibility reading, the threshold applied, and the outcome (climbed / deferred / floor-suppressed). |
 | **Deterministic fallback** | The gate is already deterministic; its safe default is **silence** (hold to the higher threshold) whenever interruptibility is uncertain or unavailable. |
 | **Observability** | Every decision is a receipt; the threshold and floor are inspectable. |
-| **Maturity** | Forward-line design; the glance path ships in CRE-03 (pull-only), the in-app/push reach-out in CRE-04. |
+| **Maturity** | Forward-line design with shipped runtime slices: the glance path shipped in CRE-03 (pull-only); #1964 runs the reach-out decision loop on governed context ticks and projects in-app nudges; OS-push delivery remains deferred. |
 | **Replacement strategy** | The decision contract is stable; the learned tolerance curve may evolve behind it without changing the deterministic comparison or the floor. |
 
 Capability metadata: `capability_class: governed_execution`, `authority_class: governed_effect`,

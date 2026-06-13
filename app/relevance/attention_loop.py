@@ -114,6 +114,7 @@ class AttentionLoop:
             writes_blocked = True
 
         pattern_tuple = tuple(patterns)
+        latest_by_moment = _latest_reachout_by_moment(outbox_path=self.outbox_path)
         decisions: list[ReachOutDecision] = []
         for moment in moments:
             effect = apply_patterns(moment, pattern_tuple, threshold.state)
@@ -123,6 +124,16 @@ class AttentionLoop:
                 suppressed=effect.suppressed,
                 writes_blocked=writes_blocked,
             )
+            if _matches_latest_reachout(
+                latest_by_moment.get(moment.uuid),
+                outcome=outcome,
+                rung=rung,
+                threshold_state=threshold.state,
+                effective_band=effect.effective_band,
+                applied=effect.applied,
+                reason=reason,
+            ):
+                continue
             receipt_id = self._emit_reachout_receipt(
                 moment=moment,
                 outcome=outcome,
@@ -132,6 +143,14 @@ class AttentionLoop:
                 applied=effect.applied,
                 reason=reason,
             )
+            latest_by_moment[moment.uuid] = {
+                "outcome": outcome,
+                "rung": rung,
+                "interruptibility_state": threshold.state,
+                "effective_band": effect.effective_band,
+                "applied_patterns": list(effect.applied),
+                "reason": reason,
+            }
             decisions.append(
                 ReachOutDecision(
                     moment_uuid=moment.uuid,
@@ -232,6 +251,39 @@ def query_reachout_receipts(
             continue
         rows.append(record)
     return rows
+
+
+def _latest_reachout_by_moment(*, outbox_path: Path | None) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for record in query_reachout_receipts(outbox_path=outbox_path):
+        payload = record.get("payload") or {}
+        reachout = payload.get("reachout") or {}
+        moment_uuid = payload.get("moment_uuid")
+        if isinstance(moment_uuid, str) and isinstance(reachout, dict):
+            latest[moment_uuid] = reachout
+    return latest
+
+
+def _matches_latest_reachout(
+    latest: dict[str, Any] | None,
+    *,
+    outcome: ReachOutcome,
+    rung: ReachRung,
+    threshold_state: str,
+    effective_band: UrgencyBand,
+    applied: tuple[str, ...],
+    reason: str,
+) -> bool:
+    if latest is None:
+        return False
+    return (
+        latest.get("outcome") == outcome
+        and latest.get("rung") == rung
+        and latest.get("interruptibility_state") == threshold_state
+        and latest.get("effective_band") == effective_band
+        and tuple(latest.get("applied_patterns") or ()) == applied
+        and latest.get("reason") == reason
+    )
 
 
 def _iso(value: datetime) -> str:
