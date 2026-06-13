@@ -16,15 +16,35 @@ def test_invalid_settings_returns_validation_error_and_defaults(tmp_path) -> Non
     manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
     context = manager.initialize_vault(tmp_path / "vault").context
     paths = tmp_path / "vault" / "settings" / "paths.md"
-    paths.write_text("---\nhandoffFolder: [not a string]\n---\n", encoding="utf-8")
+    paths.write_text("---\nhandoffFolder: [unterminated\n---\n", encoding="utf-8")
 
     result = SettingsService().resolve(context)
 
     assert result.settings["handoffFolder"].value == "Design Handoff"
     assert result.settings["handoffFolder"].source == "built-in"
     assert len(result.validation_errors) == 1
-    assert result.validation_errors[0].key == "handoffFolder"
+    assert "YAML is invalid" in result.validation_errors[0].message
     assert result.validation_errors[0].source_file == str(paths)
+
+
+def test_reload_reflects_external_markdown_edit(tmp_path) -> None:
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
+    context = manager.initialize_vault(tmp_path / "vault").context
+    service = SettingsService()
+    paths = tmp_path / "vault" / "settings" / "paths.md"
+
+    first = service.reload(context)
+    assert first.settings["handoffFolder"].value == "Design Handoff"
+
+    text = paths.read_text(encoding="utf-8")
+    paths.write_text(text.replace("handoffFolder: Design Handoff", "handoffFolder: External Handoff"), encoding="utf-8")
+
+    reloaded = service.reload(context)
+
+    assert reloaded.settings["handoffFolder"].value == "External Handoff"
+    assert reloaded.settings["handoffFolder"].source_file == str(paths)
+    assert reloaded.validation_errors == ()
+    assert "# Path Settings" in paths.read_text(encoding="utf-8")
 
 
 def test_conflicted_settings_returns_validation_error_and_defaults(tmp_path) -> None:
