@@ -24,6 +24,10 @@ Last reviewed: 2026-06-10
 
 A user opens a note in the vault and starts a canvas session. The agent edits the note body directly, in place, as they collaborate — the way a second author would. The user does not review a diff; they see edits appear. The session closes. The note retains the result. A session log in `.chats/<note-slug>/` captures the intent trail.
 
+Each applied co-authoring request appends one session-log turn containing the user's intent and the
+change summary for that body edit. The session log is subordinate provenance, not a second durable
+source of note content.
+
 This is the human flow described in `docs/HUMAN-FLOWS.md` §8: "I want to think on a note with a writing partner."
 
 ## What This Capability Does Not Build

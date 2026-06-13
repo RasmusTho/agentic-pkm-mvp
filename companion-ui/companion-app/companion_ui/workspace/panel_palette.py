@@ -148,9 +148,10 @@ def _row_actions_html(row: dict[str, Any]) -> str:
     buttons: list[str] = []
     for label in row["actions"]:
         # `panel.confirm` is the declared governed intent (spec §Intent
-        # vocabulary); reject/correct remain visible review affordances but
-        # do not post invalid ConfirmRequest actions from the palette.
-        if label != "confirm":
+        # vocabulary). `reject` uses the same ConfirmRequest transport as the
+        # rail; `correct` remains visible but presentation-only until a
+        # correction payload exists.
+        if label == "correct":
             buttons.append(
                 '<button type="button" class="palette-proposal-action" '
                 'data-testid="palette-proposal-action" '
@@ -427,8 +428,8 @@ def panel_palette_script() -> str:
     ``cmd.open``; Esc and the scrim dismiss to the anchor through the host).
     Filtering only hides rows (identity stays on ``data-proposal-id``). Action
     clicks post the same proposal/action payload as the Panel confirm path.
-    Correct/reject are rendered as presentation-only affordances here because
-    the runtime ConfirmRequest does not accept ``action: "correct"``.
+    Correct is rendered as a presentation-only affordance here because the
+    runtime ConfirmRequest does not accept ``action: "correct"``.
     """
     return """
   <script>
@@ -456,12 +457,13 @@ def panel_palette_script() -> str:
     }
     if (input) { input.addEventListener('input', applyFilter); }
     function panelPayload(btn) {
+      var action = btn.getAttribute('data-panel-action') || 'confirm';
       return {
         proposal_id: btn.getAttribute('data-proposal-id') || '',
         artifact_id: btn.getAttribute('data-artifact-id') || '',
-        action: 'confirm',
+        action: action,
         idempotency_key: 'palette:' + (btn.getAttribute('data-proposal-id') || '')
-          + ':confirm'
+          + ':' + action
           + ':' + Date.now()
       };
     }
@@ -478,7 +480,7 @@ def panel_palette_script() -> str:
         ? e.target.closest('[data-testid="palette-proposal-action"]')
         : null;
       if (!btn) { return; }
-      if (btn.getAttribute('data-panel-action') !== 'confirm') { return; }
+      if (btn.getAttribute('data-runtime-backed') !== 'true') { return; }
       postPanelAction(btn);
     });
     // The host owns mount/dismiss (Esc / scrim -> document anchor).
