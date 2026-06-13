@@ -87,7 +87,7 @@ The parent feature issue (#1782; pre-filing draft archived in [PARENT_FEATURE_IS
 
 ## Relationship to GitHub Issues
 
-The issue tree was filed 2026-06-10 per `.codex/skills/feature-breakdown/SKILL.md`. SEP-08 and SEP-09 each map to two issues (runtime endpoint + UI surface), per their task files' split-dependency notes. GitHub is the authoritative backlog state; the table below is the filing and delivery record.
+The issue tree was filed 2026-06-10 per `.codex/skills/feature-breakdown/SKILL.md`. SEP-08 and SEP-09 each map to two issues (runtime endpoint + UI surface), per their task files' split-dependency notes. Live GitHub issue and Project state are the current pickup authority; the table below is only the filing, dependency, and delivery record.
 
 | Task spec | Issue | Delivery |
 |---|---|---|
