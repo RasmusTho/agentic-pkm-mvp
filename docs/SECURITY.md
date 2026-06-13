@@ -7,8 +7,8 @@ Lightweight policy for local and CI runs.
 ## API keys & endpoints
 - Store keys (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) only in local `.env` files or a secrets manager. Never commit them to Git, CI logs, or docs.
 - `LLM_PROVIDER=mock` is the CI default, so no external keys are needed for tests.
-- Integrated Runtime v1 currently binds its local services on all interfaces by default: the FastAPI runtime starts `uvicorn` on `0.0.0.0:8000`, Compose publishes the API host port to container port `8000`, Ollama sets `OLLAMA_HOST=0.0.0.0:11434`, and the Companion UI startup helper binds to `0.0.0.0` unless configured otherwise. This is a trusted-LAN posture, not a localhost-only posture and not an internet-ready security boundary.
-- For loopback-only operation, use the shipped opt-outs where they exist: set `CUI_BIND_LAN=0` for Companion UI, or set `HOST` explicitly for that UI server. API and Ollama host binding changes are runtime/config changes and should be made deliberately outside this doc-only policy update.
+- Integrated Runtime v1 still exposes non-UI local services on trusted interfaces by default: the FastAPI runtime starts `uvicorn` on `0.0.0.0:8000`, Compose publishes the API host port to container port `8000`, and Ollama sets `OLLAMA_HOST=0.0.0.0:11434`. Companion UI channel launchers bind the browser UI to `127.0.0.1` by default and require `CUI_BIND_LAN=1` for LAN/Tailscale UAT. This is not an internet-ready security boundary.
+- For Companion UI non-loopback UAT, set `CUI_BIND_LAN=1` deliberately. API and Ollama host binding changes are runtime/config changes and should be made deliberately outside the Companion UI launcher default.
 - Do not expose the API, Ollama, or Companion UI to untrusted networks without an explicit access-control boundary such as an SSH tunnel, VPN, or reverse-proxy design with auth and TLS.
 
 ## Least privilege
