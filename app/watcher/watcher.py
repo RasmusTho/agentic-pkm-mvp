@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.watcher.config import WatcherConfig
 from app.watcher.heartbeat import write_heartbeat
+from app.watcher.relevance_tick import relevance_tick_enabled, run_relevance_tick
 from app.watcher.state import WatcherState
 
 
@@ -328,6 +329,16 @@ def run_tick(
     summary["rate_limited"] = state.rate_limited
     summary["scan_root"] = ",".join(str(root) for root in scan_roots)
     summary["scope_glob"] = cfg.scope_glob
+
+    # Contextual Relevance Engine tick (governed, vault-internal, Act tier). Isolated
+    # and guarded so it can never break the core watcher loop. Pull-only — no reach-out.
+    if relevance_tick_enabled():
+        try:
+            rel = run_relevance_tick(cfg.vault_path)
+            summary["relevance_moments_materialized"] = rel.get("materialized", 0)
+        except Exception as exc:  # noqa: BLE001 - never let the relevance tick break the watcher
+            state.errors += 1
+            summary["relevance_tick_error"] = str(exc)
 
     elapsed_ms = max(int((time.time() - tick_start) * 1000), 0)
     summary["tick_ms"] = elapsed_ms

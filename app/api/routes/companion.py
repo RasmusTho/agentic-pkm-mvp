@@ -61,6 +61,7 @@ from app.panel.checkbox_projection import (
 )
 from app.panel.confirmation import StagedProposal
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
+from app.relevance import collect_now_moments
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.tts.cache import TTSUnsafeCacheRootError, audio_path
@@ -470,6 +471,24 @@ def read_companion_vault_context() -> VaultContextResponse:
 def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
     context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
     return _vault_context_response(context)
+
+
+@router.get("/now", response_model=list[dict])
+def read_companion_now() -> list[dict]:
+    """Glance surface — materialized moments from the Contextual Relevance Engine.
+
+    Pull-only, read-only projection of vault-native moment artifacts. No write, no
+    notification, no reach-out: the human pulls this; the system does not interrupt.
+    """
+    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    if context.status == "selected" and context.active_vault_path:
+        return collect_now_moments(context)
+    # Parity with `_active_companion_vault_root`: fall back to the configured VAULT_ROOT.
+    try:
+        root = resolve_vault_root()
+    except VaultRootMisconfiguredError:
+        return []
+    return collect_now_moments(VaultContext(status="selected", active_vault_path=str(root)))
 
 
 @router.post("/vault/initialize", response_model=VaultInitializeResponse)
