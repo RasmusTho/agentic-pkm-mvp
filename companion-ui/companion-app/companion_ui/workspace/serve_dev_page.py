@@ -5881,6 +5881,7 @@ def _render_orientation_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
+  {_render_help_toggle()}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -6618,7 +6619,6 @@ def _render_help_drawer() -> str:
     .help-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
     .help-drawer-frame{flex:1;border:0;width:100%;background:var(--bg-base)}
   </style>
-  """ + _render_help_toggle() + """
   <div class="help-drawer-host" id="workspace-help-host"
        data-testid="workspace-help-host" data-open="false"
        data-authority-role="server_declared">
@@ -6648,10 +6648,29 @@ def _render_help_drawer() -> str:
     function setExpanded(state) {
       if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
     }
+    function handleEscape(ev) {
+      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
+        window.companionHelp.close();
+      }
+    }
+    function installHelpFrameEscapeHandling() {
+      try {
+        var frameWindow = frame.contentWindow;
+        var frameDocument = frameWindow ? frameWindow.document : null;
+        if (!frameDocument || frameDocument.__companionHelpEscapeInstalled) { return; }
+        frameDocument.addEventListener('keydown', handleEscape);
+        frameDocument.__companionHelpEscapeInstalled = true;
+      } catch (e) {
+        // Same-origin is expected for /help; if that contract changes, the
+        // parent document Escape handler still covers shell focus.
+      }
+    }
+    frame.addEventListener('load', installHelpFrameEscapeHandling);
     window.companionHelp = {
       open: function() {
         // Lazy-load the guide on first open (server declares the content).
         if (!frame.getAttribute('src')) { frame.setAttribute('src', frame.dataset.src); }
+        installHelpFrameEscapeHandling();
         host.setAttribute('data-open', 'true');
         setExpanded(true);
       },
@@ -6665,11 +6684,7 @@ def _render_help_drawer() -> str:
         else { this.open(); }
       }
     };
-    document.addEventListener('keydown', function(ev) {
-      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
-        window.companionHelp.close();
-      }
-    });
+    document.addEventListener('keydown', handleEscape);
   }());
   </script>"""
 
@@ -9559,6 +9574,7 @@ def render_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
+  {_render_help_toggle()}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
