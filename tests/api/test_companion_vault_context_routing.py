@@ -11,6 +11,14 @@ from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
 
 
+class CountingVaultManager(VaultManager):
+    load_last_active_calls = 0
+
+    def load_last_active(self):
+        self.load_last_active_calls += 1
+        return super().load_last_active()
+
+
 @pytest.fixture()
 def client() -> TestClient:
     return TestClient(app)
@@ -90,3 +98,28 @@ def test_save_note_body_targets_persisted_vault(
     assert env_note.read_text(encoding="utf-8") == "# Shared\n\nEnv body.\n"
     assert fresh_manager.context.status == "selected"
     assert fresh_manager.context.active_vault_path == str(selected_vault)
+
+
+def test_no_last_active_fallback_uses_env_vault_and_attempts_lazy_load_once(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_vault = tmp_path / "env-vault"
+    _write_note(env_vault, "notes/env-only.md", "# Env Only\n\nEnv fallback.\n")
+    monkeypatch.setenv("VAULT_ROOT", str(env_vault))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+
+    manager = CountingVaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
+    assert manager.context.status == "none"
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+
+    first_resp = client.get("/api/companion/vault/notes", params={"q": "env-only"})
+    second_resp = client.get("/api/companion/vault/notes", params={"q": "env-only"})
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 200
+    assert [note["path"] for note in first_resp.json()["notes"]] == ["notes/env-only.md"]
+    assert [note["path"] for note in second_resp.json()["notes"]] == ["notes/env-only.md"]
+    assert manager.context.status == "none"
+    assert manager.load_last_active_calls == 1
