@@ -41,7 +41,7 @@ from app.agent_memory.posture_projection import (
 )
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
-from app.config.paths import resolve_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_vault_root
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -229,6 +229,24 @@ class VaultSettingsResponse(BaseModel):
     validation_errors: list[VaultSettingsValidationErrorResponse]
 
 
+class VaultSelectionRequiredAction(BaseModel):
+    kind: Literal["open_existing", "create_new", "open_recent"]
+    label: str
+    endpoint: str | None = None
+
+
+class VaultSelectionRequiredResponse(BaseModel):
+    state: Literal["vault_selection_required"] = "vault_selection_required"
+    reason: Literal["vault_root_misconfigured"] = "vault_root_misconfigured"
+    message: str
+    configured_vault_root: str
+    context: VaultContextResponse
+    recent_vaults: list[KnownVaultResponse] = Field(default_factory=list)
+    actions: list[VaultSelectionRequiredAction] = Field(default_factory=list)
+    requested_note_path: str | None = None
+    trace_id: str | None = None
+
+
 class VaultSettingUpdateRequest(BaseModel):
     key: str = Field(..., min_length=1)
     value: Any
@@ -344,6 +362,52 @@ def _recent_vaults_response() -> list[KnownVaultResponse]:
     ]
 
 
+def _vault_selection_required_context(
+    exc: VaultRootMisconfiguredError,
+) -> VaultContext:
+    return VaultContext(
+        status="missing",
+        active_vault_path=str(exc.configured_path),
+        validation_error=str(exc),
+    )
+
+
+def _vault_selection_required_response(
+    exc: VaultRootMisconfiguredError,
+    *,
+    requested_note_path: str | None = None,
+    trace_id: str | None = None,
+) -> VaultSelectionRequiredResponse:
+    return VaultSelectionRequiredResponse(
+        message=(
+            "The configured vault path is missing. Open an existing vault or "
+            "choose a recent vault to continue."
+        ),
+        configured_vault_root=str(exc.configured_path),
+        context=_vault_context_response(_vault_selection_required_context(exc)),
+        recent_vaults=_recent_vaults_response(),
+        actions=[
+            VaultSelectionRequiredAction(
+                kind="open_existing",
+                label="Open existing vault",
+                endpoint="/api/companion/vault/select",
+            ),
+            VaultSelectionRequiredAction(
+                kind="create_new",
+                label="Create new vault",
+                endpoint="/api/companion/vault/initialize",
+            ),
+            VaultSelectionRequiredAction(
+                kind="open_recent",
+                label="Open recent vault",
+                endpoint="/api/companion/vault/select",
+            ),
+        ],
+        requested_note_path=requested_note_path,
+        trace_id=trace_id,
+    )
+
+
 def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
     service = SettingsService()
     resolution = service.resolve(context)
@@ -394,6 +458,11 @@ def read_companion_vault_context() -> VaultContextResponse:
     context = manager.context
     if context.status == "none":
         context = manager.load_last_active()
+    if context.status == "none":
+        try:
+            resolve_vault_root()
+        except VaultRootMisconfiguredError as exc:
+            context = _vault_selection_required_context(exc)
     return _vault_context_response(context)
 
 
@@ -960,6 +1029,28 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
             provenance="settings",
         )
 
+    try:
+        context = get_vault_manager().context
+    except Exception:
+        context = None
+    if (
+        context is not None
+        and context.status == "selected"
+        and context.active_vault_path
+    ):
+        try:
+            selected_root = Path(context.active_vault_path).expanduser().resolve()
+            resolved_root = vault_root.expanduser().resolve()
+        except Exception:
+            selected_root = Path(context.active_vault_path).expanduser()
+            resolved_root = vault_root.expanduser()
+        if selected_root == resolved_root:
+            return VaultIdentityState(
+                vault_name=context.active_vault_name or vault_root.name or str(vault_root),
+                channel=channel,
+                provenance="selected",
+            )
+
     # No configured name: infer identity from the VAULT_ROOT path as before.
     vault_root_raw = os.getenv("VAULT_ROOT", "").strip()
     vault_name = vault_root.name or str(vault_root)
@@ -1005,11 +1096,17 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
     return notes
 
 
-@router.get("/vault/notes", response_model=VaultNoteListResponse)
+@router.get(
+    "/vault/notes",
+    response_model=VaultNoteListResponse | VaultSelectionRequiredResponse,
+)
 def list_vault_notes(
     q: str = Query("", description="Optional search filter by title or path"),
-) -> VaultNoteListResponse:
-    vault_root = _active_companion_vault_root()
+) -> VaultNoteListResponse | VaultSelectionRequiredResponse:
+    try:
+        vault_root = _active_companion_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(exc)
     notes = _list_vault_notes(vault_root, q=q)
     return VaultNoteListResponse(
         notes=notes,
@@ -2843,13 +2940,23 @@ def read_companion_tts_audio(cache_key: str) -> FileResponse:
     return FileResponse(path, media_type="audio/wav")
 
 
-@router.get("/workspace", response_model=WorkspaceStateResponse)
+@router.get(
+    "/workspace",
+    response_model=WorkspaceStateResponse | VaultSelectionRequiredResponse,
+)
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
-) -> WorkspaceStateResponse:
+) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     safe_note_path = _validate_workspace_note_path(note_path)
-    vault_root = _active_companion_vault_root()
+    try:
+        vault_root = _active_companion_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(
+            exc,
+            requested_note_path=safe_note_path,
+            trace_id=trace_id,
+        )
     artifact_path = _find_workspace_note(vault_root, safe_note_path)
     if artifact_path is None:
         raise HTTPException(

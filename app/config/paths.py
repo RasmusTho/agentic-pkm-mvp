@@ -19,6 +19,17 @@ class ResolvedPaths:
 _DEFAULT_VAULT = Path("vault")
 
 
+class VaultRootMisconfiguredError(RuntimeError):
+    """Raised when an explicitly configured vault root cannot be used."""
+
+    def __init__(self, env_var: str, configured_path: Path) -> None:
+        self.env_var = env_var
+        self.configured_path = configured_path
+        super().__init__(
+            f"{env_var} is set to a missing vault root: {configured_path}"
+        )
+
+
 def _clean_path(value: str | Path | None) -> Optional[Path]:
     if value is None:
         return None
@@ -50,10 +61,19 @@ def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal
         env_specific = None
 
     if env_specific is not None:
+        if not env_specific.exists():
+            env_var = (
+                "VAULT_ROOT_DEV"
+                if environment == "dev"
+                else "VAULT_ROOT_TEST"
+            )
+            raise VaultRootMisconfiguredError(env_var, env_specific)
         return env_specific
 
     if env_root is not None:
-        base = env_root if env_root.exists() else _DEFAULT_VAULT
+        if not env_root.exists():
+            raise VaultRootMisconfiguredError("VAULT_ROOT", env_root)
+        base = env_root
     else:
         base = _DEFAULT_VAULT
 
@@ -170,6 +190,7 @@ def resolve_paths(
 
 __all__ = [
     "ResolvedPaths",
+    "VaultRootMisconfiguredError",
     "resolve_vault_root",
     "resolve_yggdrasil_root",
     "resolve_system_settings_path",
