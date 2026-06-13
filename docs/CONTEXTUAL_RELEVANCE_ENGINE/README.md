@@ -40,8 +40,8 @@ of waiting to be pulled.
 | --- | --- | --- | --- |
 | 1 | [`DEFINE_MOMENT_AND_CONTEXT_MODEL`](DEFINE_MOMENT_AND_CONTEXT_MODEL.md) | design / concept contract | delivered (#1922, PR #1939) |
 | 2 | [`DEFINE_RELEVANCE_AND_SCARCITY_CONTRACTS`](DEFINE_RELEVANCE_AND_SCARCITY_CONTRACTS.md) | design / concept contract | delivered (#1923, PR #1945) |
-| 3 | [`BUILD_VAULT_NATIVE_PULL_MOMENTS`](BUILD_VAULT_NATIVE_PULL_MOMENTS.md) | implementation | delivered (#1924) |
-| 4 | [`BUILD_PROACTIVE_ATTENTION_LOOP`](BUILD_PROACTIVE_ATTENTION_LOOP.md) | implementation | blocked on 3 (#1925) |
+| 3 | [`BUILD_VAULT_NATIVE_PULL_MOMENTS`](BUILD_VAULT_NATIVE_PULL_MOMENTS.md) | implementation | delivered (#1924, PR #1948) |
+| 4 | [`BUILD_PROACTIVE_ATTENTION_LOOP`](BUILD_PROACTIVE_ATTENTION_LOOP.md) | implementation | delivered (#1925) |
 
 The first two tasks define the contracts the capability needs (it is a novel capability; the
 contracts do not exist yet). They are docs/concept-contract tasks whose ACs verify against doc
