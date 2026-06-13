@@ -101,13 +101,19 @@ def test_settings_editor_respects_role_permissions(tmp_path: Path, monkeypatch) 
 
     readonly, readonly_vault = _manager(tmp_path, role="readOnlySatellite")
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: readonly)
-    blocked_local = client.post(
+    allowed_readonly_local = client.post(
         "/api/companion/vault/settings",
         json={"key": "enableAutoIndexing", "value": True},
     )
-    assert blocked_local.status_code == 403
-    assert "writes disabled" in blocked_local.text
+    assert allowed_readonly_local.status_code == 200, allowed_readonly_local.text
     assert _frontmatter(readonly_vault / "settings" / "local.md")["enableAutoIndexing"] is True
+
+    blocked_readonly_shared = client.post(
+        "/api/companion/vault/settings",
+        json={"key": "handoffFolder", "value": "Read Only Handoff"},
+    )
+    assert blocked_readonly_shared.status_code == 403
+    assert "writes disabled" in blocked_readonly_shared.text
 
     projection = client.get("/api/companion/vault/settings")
     assert projection.status_code == 200, projection.text

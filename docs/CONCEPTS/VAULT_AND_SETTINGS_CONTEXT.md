@@ -53,11 +53,11 @@ The local clone role is structurally represented in vault-local settings:
 
 - `primary`: can edit shared and local settings; can run watchers, indexers, and writers.
 - `satellite`: can use shared content; local settings may disable shared edits, watchers, or indexing.
-- `readOnlySatellite`: can view settings and content, but should not write vault project files.
+- `readOnlySatellite`: can view settings and content, but must not write vault project files.
 - `automationNode`: may run without active UI and can run background services when configured.
 - `testNode`: test or temporary vault role.
 
-The first implementation gates obvious writes/background services by `allowWritesToVault`, `enableVaultWatcher`, and `enableAutoIndexing`; later issues harden role-specific UI and service policy.
+The first implementation gates obvious writes/background services by `allowWritesToVault`, `enableVaultWatcher`, and `enableAutoIndexing`. `readOnlySatellite` is a hard ceiling for vault project writes, watcher, indexing, and shared settings edits even if local settings try to enable them. Local settings edits are governed separately by `allowLocalSettingsEdits`, so a machine can be configured to adjust `settings/local.md` without gaining vault project write permission.
 
 ## Identity Model
 
@@ -144,6 +144,8 @@ Examples:
 - Watchers require a selected vault, `enableVaultWatcher: true`, and a role that allows background work.
 - Indexers require a selected vault and `enableAutoIndexing: true`.
 - Writers and handoff generators require a selected vault and `allowWritesToVault: true`.
+- Shared settings edits require project write permission plus `allowSharedSettingsEdits: true`.
+- Local settings edits require `allowLocalSettingsEdits: true` and do not grant project write permission.
 - Path resolution for vault-relative files must fail with an actionable unavailable state when no selected vault exists.
 
 On vault switch, services should stop old watchers/jobs, clear cached vault paths, reload settings, emit or handle `vault.changed`, and restart only when the next context is selected and permissions allow it.
