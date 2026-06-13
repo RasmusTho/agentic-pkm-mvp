@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 import yaml
@@ -72,6 +72,8 @@ from app.vault.manager import MachineRole, VaultContext, get_vault_manager
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
+
+_LAST_ACTIVE_LOAD_ATTEMPTED_ATTR = "_companion_last_active_load_attempted"
 
 
 class ArtifactState(BaseModel):
@@ -202,10 +204,19 @@ def _vault_context_response(context: VaultContext) -> VaultContextResponse:
 
 
 def _active_companion_vault_root() -> Path:
-    context = get_vault_manager().context
+    manager = get_vault_manager()
+    context = _companion_vault_context_with_lazy_last_active(manager)
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser()
     return resolve_vault_root()
+
+
+def _companion_vault_context_with_lazy_last_active(manager: Any) -> VaultContext:
+    context = manager.context
+    if context.status == "none" and not getattr(manager, _LAST_ACTIVE_LOAD_ATTEMPTED_ATTR, False):
+        setattr(manager, _LAST_ACTIVE_LOAD_ATTEMPTED_ATTR, True)
+        context = manager.load_last_active()
+    return context
 
 
 @router.get("/vault/context", response_model=VaultContextResponse)
