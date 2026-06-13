@@ -106,6 +106,14 @@ Before editing, classify the change:
 - Do not turn `AGENTS.md` or `CLAUDE.md` into architecture, index, roadmap, or historical recordkeeping files.
 - Keep builder-agent guidance separate from runtime/system-agent documentation.
 
+## Communicating with the owner
+
+The owner is the operator and decision-maker. Optimize answers for fast decision support and low running cost, not for narrating how you got there.
+
+- Lead with next steps. Keep answers concise; do not include a verbose reasoning trace.
+- When a decision is the owner's to make, present it as: clear **Problem → Options → Consequences** (the consequences of each choice matter most). Surface every open decision explicitly rather than burying it.
+- Keep durable audit artifacts complete but separate from the human-facing summary: BuilderOps receipts, `Verify:` markers, and traceability live in the record, not in the lead. Do not add machinery whose only purpose is to capture reasoning for audit.
+
 ## Docs authoring lane
 
 Docs-only changes that evolve authoritative specification, roadmap, ADR, plan, human-flow, or governance surfaces may use the explicit docs-authoring PR lane without a governing GitHub Issue.
