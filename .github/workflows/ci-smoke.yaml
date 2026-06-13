@@ -147,9 +147,9 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 8
         run: |
-          pytest -p xdist.plugin -c /dev/null -m "not pg and not alpha_llm" \
+          pytest -c /dev/null -m "not pg and not alpha_llm" \
             tests/quality_wave/test_uat_harness.py \
-            --maxfail=1 -ra --durations=20 -n auto --dist=loadfile
+            --maxfail=1 -ra --durations=20
 
       - name: Skip heavy pytest smoke for docs-only PR
         if: github.event_name == 'pull_request' && steps.changes.outputs.heavy_smoke != 'true'
