@@ -8,7 +8,7 @@ prerequisites: []
 depends_on: []
 can_parallelize_with: []
 ---
-State: Specified. Not yet delivered.
+State: Implemented. Delivery PR for issue #1904.
 
 # PERSIST_REVIEW_DECISIONS
 
