@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-12
-Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py, companion-ui/companion-app/companion_ui/workspace/guidance_layer.py, companion-ui/companion-app/companion_ui/workspace/settings_drawer.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, tests/companion_ui/test_system_map_overlay.py, tests/companion_ui/test_guidance_layer.py, tests/companion_ui/test_settings_drawer.py, tests/companion_ui/test_entry_state_gallery.py, merged PRs #1798-#1802/#1816-#1818/#1833/#1834/#1846/#1847/#1854, System Entry Point parent #1782 validation receipts through #1795 closure, and current repo state at 808658ab on 2026-06-12
+Last reviewed: 2026-06-13
+Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
 
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6.0 seams shipped)
 
@@ -26,6 +26,10 @@ The current architecture is a local-first Mimer runtime, not the full Yggdrasil 
 - `ReasoningFacade`, LangGraph, A2A, MCP descriptors, canvas-session scaffolding, and Orchestrator V2 are real repo surfaces,
   but their current status is mixed: some are active runtime paths, some are flagged pilots, and
   some are scaffolding or reference contracts rather than broad production rollout;
+- `app/relevance/` now ships the first Contextual Relevance Engine runtime seam: deterministic
+  vault-native, pull-only moment evaluation, governed materialization into non-authoritative moment
+  artifacts with receipts, and a read-only Companion "now" projection. The proactive reach-out loop
+  and external connector inputs are not shipped architecture.
 - the planned architecture continues toward capability-based composition, separate Panel and Chat
   interaction surfaces, governed execution, and relation-aware context without treating ASK,
   retrieval, a single agent, or historical AMG/SetDB terminology as the architectural center.
