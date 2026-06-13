@@ -13,9 +13,9 @@ import inspect
 
 import pytest
 
-from app.api.routes import canvas
 from app.api.routes.companion import RuntimeState
 from app.chat import governance_router
+from app.chat.canvas_writer import CanvasWriter
 
 
 @pytest.mark.xfail(reason="commitments not yet surfaced in the companion workspace state (#1960)", strict=False)
@@ -26,12 +26,16 @@ def test_commitments_surface_in_workspace_state() -> None:
     assert "commitment" in fields, "RuntimeState exposes no commitment surface yet"
 
 
-@pytest.mark.xfail(reason="/coauthor body-edit path does not assert the WriteGuard (#1961)", strict=False)
+@pytest.mark.xfail(reason="canvas body-edit path does not assert the WriteGuard (#1961 / PR #1966)", strict=False)
 def test_coauthor_enforces_the_write_guard() -> None:
-    """Arrow 6: the co-authoring write path must check the WriteGuard, like /governance."""
+    """Arrow 6: the co-authoring write path must check the WriteGuard, like /governance.
 
-    assert "assert_writes_allowed" in inspect.getsource(canvas.coauthor), (
-        "the /coauthor write path is not gated by the WriteGuard"
+    The guard belongs in ``CanvasWriter.apply_edit`` — the single chokepoint the
+    ``/coauthor`` and ``/edits`` routes both call. Flips to pass when #1966 lands.
+    """
+
+    assert "assert_writes_allowed" in inspect.getsource(CanvasWriter.apply_edit), (
+        "the canvas body-edit chokepoint is not gated by the WriteGuard"
     )
 
 
