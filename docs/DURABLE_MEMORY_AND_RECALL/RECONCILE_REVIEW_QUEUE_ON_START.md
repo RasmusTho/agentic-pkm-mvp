@@ -8,7 +8,7 @@ prerequisites: [DURABLE-MEMORY-01]
 depends_on: [PERSIST_REVIEW_DECISIONS.md]
 can_parallelize_with: []
 ---
-State: Specified. Not yet delivered. Blocked on DURABLE-MEMORY-01.
+State: Implemented. Delivery PR for issue #1905.
 
 # RECONCILE_REVIEW_QUEUE_ON_START
 

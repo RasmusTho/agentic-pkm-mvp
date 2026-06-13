@@ -1118,6 +1118,11 @@ def _orientation_source_ref(kind: str, ref: str, label: str | None = None) -> Wo
 
 
 def _orientation_memory_review_queue() -> MemoryCandidateReviewQueue:
+    _MEMORY_CANDIDATE_REVIEW_QUEUE.configure_reconciliation(
+        decision_store=_memory_review_decision_store(),
+        vault_context=_memory_review_vault_context(),
+        channel=_memory_review_channel(),
+    )
     return _MEMORY_CANDIDATE_REVIEW_QUEUE
 
 
