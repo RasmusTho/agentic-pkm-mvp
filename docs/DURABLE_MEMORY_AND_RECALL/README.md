@@ -52,6 +52,16 @@ two binding choices recorded:
 - **activation/recall state must never persist as authority**: what was recalled for a task is
   recorded in a recall receipt, not stamped as a durable property of the artifact.
 
+## Cross-task invariant: promotion is terminal only on materialization
+
+A promote-to-semantic decision becomes *terminal* — the state that suppresses a candidate from the
+pending review set — only once its vault artifact is successfully materialized. A blocked or failed
+materialization records a failed-attempt receipt and keeps the promotion **actionable** (the
+candidate stays reviewable/retryable). This prevents a promoted candidate from silently disappearing
+from review with no artifact and no retry path. The invariant is shared by `PERSIST_REVIEW_DECISIONS`
+(represents terminal vs. non-terminal), `MATERIALIZE_PROMOTED_MEMORY_TO_VAULT` (marks terminal only
+on success), and `RECONCILE_REVIEW_QUEUE_ON_START` (suppresses only terminal decisions).
+
 ## Non-Goals
 
 - making pending (undecided) candidates durable across restart;

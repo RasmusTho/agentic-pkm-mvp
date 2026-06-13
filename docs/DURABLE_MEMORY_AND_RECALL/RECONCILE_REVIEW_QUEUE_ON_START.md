@@ -20,9 +20,14 @@ that already has a persisted decision is not presented again as a new, undecided
 ## What This Task Does
 
 On queue construction / candidate intake, consults the durable decision store from
-DURABLE-MEMORY-01 and filters or annotates candidates whose decision is already recorded: a
-previously promoted/rejected/revised candidate is excluded from the pending set (or shown with its
-decided posture), rather than appearing as fresh pending work.
+DURABLE-MEMORY-01 and filters or annotates candidates whose decision is **terminal**: a rejected,
+revised, or promoted-**and-materialized** candidate is excluded from the pending set (or shown with
+its decided posture), rather than appearing as fresh pending work.
+
+A promotion that has not yet materialized its vault artifact (blocked or failed write — see
+`MATERIALIZE_PROMOTED_MEMORY_TO_VAULT` "Terminal-on-success invariant") is **non-terminal** and must
+NOT be suppressed: such a candidate stays actionable so the materialization is re-attempted. This is
+the safeguard against a promoted candidate silently disappearing from review with no artifact.
 
 The pending queue itself remains runtime state and is still rebuilt from observation — this task does
 not persist the queue. It only reconciles the rebuilt queue against the durable decision record.
@@ -30,9 +35,9 @@ not persist the queue. It only reconciles the rebuilt queue against the durable 
 ## Concretely
 
 ```
-# decision store already contains: candidate_X -> REJECT (from a prior session)
-rebuild_review_queue(observed_candidates=[candidate_X, candidate_Y])
-  -> pending = [candidate_Y]            # candidate_X is not re-surfaced as new
+# decision store: candidate_X -> REJECT (terminal); candidate_Z -> PROMOTE pending-materialization
+rebuild_review_queue(observed=[candidate_X, candidate_Y, candidate_Z])
+  -> pending = [candidate_Y, candidate_Z]   # X (terminal) suppressed; Z (unmaterialized) stays actionable
   -> (candidate_X retrievable as already-decided via the decision store)
 ```
 
@@ -45,10 +50,13 @@ that the pending queue is discardable runtime state.
 
 ## Acceptance Criteria
 
-- [ ] A candidate with a persisted decision is not re-surfaced as a new pending item after restart.
+- [ ] A candidate with a terminal decision is not re-surfaced as a new pending item after restart.
   Verify: `tests/agent_memory/test_review_queue_reconciliation.py::test_decided_candidates_not_resurfaced`
 - [ ] A candidate with no persisted decision still appears as pending.
   Verify: `tests/agent_memory/test_review_queue_reconciliation.py::test_undecided_candidates_still_pending`
+- [ ] A promoted-but-not-yet-materialized candidate (blocked/failed write) is NOT suppressed; it
+  stays actionable so materialization is re-attempted.
+  Verify: `tests/agent_memory/test_review_queue_reconciliation.py::test_promoted_but_unmaterialized_candidate_stays_actionable`
 - [ ] Reconciliation is vault-scoped: a decision in another vault/channel does not suppress a
   candidate in the active one.
   Verify: `tests/agent_memory/test_review_queue_reconciliation.py::test_reconciliation_is_vault_scoped`

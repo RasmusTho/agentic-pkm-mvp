@@ -45,6 +45,12 @@ A pending (undecided) candidate is NOT persisted by this task — per
 `RUNTIME_VS_DURABLE_STATE_BOUNDARY.md :: Persistence rules`, pending entries are discardable runtime
 state.
 
+The store must distinguish **terminal** outcomes (reject, revise, promote-and-materialized) from a
+**non-terminal** promote that is still pending materialization, so downstream reconciliation
+(`RECONCILE_REVIEW_QUEUE_ON_START`) suppresses only terminal outcomes. Recording the decision does
+not by itself make a semantic promotion terminal — `MATERIALIZE_PROMOTED_MEMORY_TO_VAULT` marks it
+terminal only once the artifact write succeeds, and writes a failed-attempt receipt otherwise.
+
 ## Why This Matters
 
 Today review decisions live only in a process-memory singleton

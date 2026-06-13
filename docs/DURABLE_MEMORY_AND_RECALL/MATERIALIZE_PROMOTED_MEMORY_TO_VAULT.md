@@ -34,6 +34,15 @@ existing authority path: `proposal → WriteGuard → receipt → vault artifact
 Episodic/working/preference promotions that the contract does NOT treat as semantic knowledge are
 out of scope for materialization; only semantic promotion materializes a vault artifact.
 
+**Terminal-on-success invariant.** A promote-to-semantic decision becomes *terminal* — the state
+that suppresses the candidate from the pending review set in `RECONCILE_REVIEW_QUEUE_ON_START` —
+only once the vault artifact is successfully materialized. If materialization is blocked
+(safe_mode/unhealthy) or otherwise fails, the system records a **failed-attempt receipt** and the
+promotion stays **actionable**: the candidate remains in (or returns to) the pending/retry set and
+is re-attempted when writes are allowed again. A promoted candidate must never be suppressed from
+review while no artifact exists. (Non-semantic promotions need no artifact and are terminal on
+decision.)
+
 ## Concretely
 
 ```
@@ -44,7 +53,11 @@ promote(candidate, target_class=SEMANTIC, decided_by="companion-ui:reviewer")
   -> PromotionReceipt{vault_id, channel, artifact_path, candidate_id, decided_by, decided_at}
 
 # blocked path:
-# health state == safe_mode/unhealthy -> WritesBlockedError, no note written, decision still recorded
+# health state == safe_mode/unhealthy
+#   -> WritesBlockedError, no note written
+#   -> failed-attempt receipt recorded; promotion stays ACTIONABLE (non-terminal)
+#   -> candidate is NOT suppressed from review; re-attempted when writes are allowed
+#   -> a terminal promoted decision is recorded only after the artifact write succeeds
 ```
 
 ## Why This Matters
@@ -61,6 +74,10 @@ receipt → durable artifact, never silent persistence") and the writing-surface
   Verify: `tests/agent_memory/test_memory_materialization.py::test_promotion_materializes_via_writeguard_with_receipt`
 - [ ] When writes are blocked (safe_mode/unhealthy), no vault note is written and the attempt raises.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_blocked_writes_prevent_materialization`
+- [ ] Blocked/failed materialization records a failed-attempt receipt and keeps the promotion
+  actionable (the candidate is NOT marked terminal and NOT suppressed from review); a terminal
+  promoted decision is recorded only after the artifact write succeeds.
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_blocked_materialization_keeps_promotion_actionable`
 - [ ] The materialized note carries provenance and an agent-promoted label and does not overwrite an
   existing human-authored note.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_materialized_note_preserves_provenance_and_human_authorship`
