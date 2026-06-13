@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager, no_vault_context
+from app.vault.paths import VaultPathResolver
 from app.vault.settings_service import SettingsService
 
 
@@ -125,3 +126,18 @@ def test_app_local_settings_cannot_override_vault_project_behavior(tmp_path) -> 
     assert effective["appInstallId"].scope == "app-local"
     assert effective["handoffFolder"].value == "Design Handoff"
     assert effective["handoffFolder"].scope == "vault-shared"
+
+
+def test_settings_change_updates_path_resolver(tmp_path) -> None:
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
+    context = manager.initialize_vault(tmp_path / "vault").context
+    service = SettingsService()
+    resolver = VaultPathResolver(service)
+
+    initial = resolver.resolve(context)
+    assert initial.handoff_dir == tmp_path / "vault" / "Design Handoff"
+
+    service.update_setting(context, "handoffFolder", "Client Projects")
+
+    updated = resolver.resolve(context)
+    assert updated.handoff_dir == tmp_path / "vault" / "Client Projects"

@@ -12,6 +12,9 @@ from app.config.paths import (
     resolve_system_settings_path,
     resolve_vault_root,
 )
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
+from app.vault.paths import VaultPathResolver
 
 
 def test_resolve_vault_root_prefers_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -112,3 +115,30 @@ def test_resolve_paths_combines(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert isinstance(result, ResolvedPaths)
     assert result.vault_root == vault_root
     assert result.system_settings_path == settings_path
+
+
+def test_vault_paths_resolve_from_vault_context_settings(tmp_path: Path) -> None:
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
+    context = manager.initialize_vault(tmp_path / "vault").context
+    paths_settings = tmp_path / "vault" / "settings" / "paths.md"
+    paths_settings.write_text(
+        "---\n"
+        "schema: design-handoff.paths.v1\n"
+        "scope: vault-shared\n"
+        "handoffFolder: Project Intake\n"
+        "assetsFolder: Project Intake/Files\n"
+        "templatesFolder: Project Intake/Templates\n"
+        "archiveFolder: Project Intake/Closed\n"
+        "---\n"
+        "# Path Settings\n",
+        encoding="utf-8",
+    )
+
+    resolved = VaultPathResolver().resolve(context)
+
+    assert resolved.vault_root == tmp_path / "vault"
+    assert resolved.settings_dir == tmp_path / "vault" / "settings"
+    assert resolved.handoff_dir == tmp_path / "vault" / "Project Intake"
+    assert resolved.assets_dir == tmp_path / "vault" / "Project Intake" / "Files"
+    assert resolved.templates_dir == tmp_path / "vault" / "Project Intake" / "Templates"
+    assert resolved.archive_dir == tmp_path / "vault" / "Project Intake" / "Closed"
