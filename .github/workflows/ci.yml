@@ -2,10 +2,38 @@
 name: CI
 on:
   workflow_dispatch:
+  pull_request:
 permissions: read-all
 
 jobs:
+  pr-unit-tests-not-pg:
+    name: Unit tests (not pg)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt
+          pip install -r dev-requirements.txt
+      - name: Run not-pg unit tests
+        run: pytest -q -m "not pg" | tee pytest-not-pg.log
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-not-pg-logs
+          path: pytest-not-pg.log
+
   validate-context:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +81,7 @@ jobs:
           test -f data/context/retrieval.yaml
           test -f golden/note_evergreen.md
   ws-smoke:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
@@ -85,6 +114,7 @@ jobs:
         if: failure()
         run: cat /tmp/ws-api.log
   tests:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     services:
       postgres:
