@@ -69,6 +69,12 @@ from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.manager import MachineRole, VaultContext, get_vault_manager
+from app.vault.settings_service import (
+    SettingDefinition,
+    SettingsService,
+    SettingsValidationError,
+    SettingsWriteError,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
@@ -178,6 +184,61 @@ class VaultInitializeResponse(BaseModel):
     skipped_existing_files: list[str]
 
 
+class VaultSettingDefinitionResponse(BaseModel):
+    key: str
+    type: str
+    description: str
+    scope: str
+    file: str | None = None
+    editable_in_companion: bool
+    editable: bool
+    write_blocked_reason: str | None = None
+    allowed_values: list[Any] = Field(default_factory=list)
+
+
+class VaultSettingValueResponse(BaseModel):
+    key: str
+    value: Any
+    scope: str
+    source: str
+    source_file: str | None = None
+
+
+class VaultSettingsValidationErrorResponse(BaseModel):
+    message: str
+    source_file: str | None = None
+    scope: str | None = None
+    key: str | None = None
+
+
+class KnownVaultResponse(BaseModel):
+    ref: str
+    path: str
+    vault_id: str | None = None
+    vault_name: str | None = None
+    local_instance_id: str | None = None
+    last_opened_at: str | None = None
+
+
+class VaultSettingsResponse(BaseModel):
+    context: VaultContextResponse
+    settings_folder: str | None = None
+    recent_vaults: list[KnownVaultResponse] = Field(default_factory=list)
+    definitions: list[VaultSettingDefinitionResponse]
+    settings: list[VaultSettingValueResponse]
+    validation_errors: list[VaultSettingsValidationErrorResponse]
+
+
+class VaultSettingUpdateRequest(BaseModel):
+    key: str = Field(..., min_length=1)
+    value: Any
+
+
+class VaultSettingUpdateResponse(BaseModel):
+    updated: VaultSettingValueResponse
+    settings: VaultSettingsResponse
+
+
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
 
 
@@ -200,6 +261,113 @@ def _vault_context_response(context: VaultContext) -> VaultContextResponse:
             "allowSharedSettingsEdits": permissions.allow_shared_settings_edits,
             "allowLocalSettingsEdits": permissions.allow_local_settings_edits,
         },
+    )
+
+
+def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext) -> str | None:
+    if not definition.editable_in_companion:
+        return "not editable in Companion UI"
+    if definition.scope not in {"vault-shared", "vault-local"}:
+        return "not a vault-scoped setting"
+    if context.status != "selected":
+        return f"requires selected vault; current status is {context.status}"
+    manager = get_vault_manager()
+    permissions = manager.permissions_for_context(context)
+    if not permissions.allow_writes_to_vault:
+        return "writes disabled by machine role or local permission"
+    if definition.scope == "vault-shared" and not permissions.allow_shared_settings_edits:
+        return "shared settings edits disabled for this local role"
+    if definition.scope == "vault-local" and not permissions.allow_local_settings_edits:
+        return "local settings edits disabled for this local role"
+    return None
+
+
+def _setting_definition_response(
+    definition: SettingDefinition,
+    context: VaultContext,
+) -> VaultSettingDefinitionResponse:
+    blocked_reason = _setting_blocked_reason(definition, context)
+    return VaultSettingDefinitionResponse(
+        key=definition.key,
+        type=definition.type,
+        description=definition.description,
+        scope=definition.scope,
+        file=definition.file,
+        editable_in_companion=definition.editable_in_companion,
+        editable=blocked_reason is None,
+        write_blocked_reason=blocked_reason,
+        allowed_values=list(definition.allowed_values),
+    )
+
+
+def _setting_value_response(setting: Any) -> VaultSettingValueResponse:
+    return VaultSettingValueResponse(
+        key=setting.key,
+        value=setting.value,
+        scope=setting.scope,
+        source=setting.source,
+        source_file=setting.source_file,
+    )
+
+
+def _settings_error_response(error: SettingsValidationError) -> VaultSettingsValidationErrorResponse:
+    return VaultSettingsValidationErrorResponse(
+        message=error.message,
+        source_file=error.source_file,
+        scope=error.scope,
+        key=error.key,
+    )
+
+
+def _recent_vaults_response() -> list[KnownVaultResponse]:
+    manager = get_vault_manager()
+    try:
+        settings = manager.app_local_store.load()
+    except Exception:
+        return []
+    items = sorted(
+        settings.known_vaults.values(),
+        key=lambda item: item.last_opened_at or "",
+        reverse=True,
+    )
+    return [
+        KnownVaultResponse(
+            ref=item.ref,
+            path=item.path,
+            vault_id=item.vault_id,
+            vault_name=item.vault_name,
+            local_instance_id=item.local_instance_id,
+            last_opened_at=item.last_opened_at,
+        )
+        for item in items
+    ]
+
+
+def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
+    service = SettingsService()
+    resolution = service.resolve(context)
+    editable_definitions = [
+        definition
+        for definition in service.registry.definitions
+        if definition.requires_vault or definition.scope in {"vault-shared", "vault-local"}
+    ]
+    return VaultSettingsResponse(
+        context=_vault_context_response(context),
+        settings_folder=context.settings_path,
+        recent_vaults=_recent_vaults_response(),
+        definitions=[
+            _setting_definition_response(definition, context)
+            for definition in editable_definitions
+        ],
+        settings=[
+            _setting_value_response(resolution.settings[definition.key])
+            for definition in editable_definitions
+            if definition.key in resolution.settings
+        ],
+        validation_errors=[
+            _settings_error_response(error)
+            for error in resolution.validation_errors
+        ],
     )
 
 
@@ -246,6 +414,53 @@ def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeRe
         context=_vault_context_response(result.context),
         created_files=list(result.created_files),
         skipped_existing_files=list(result.skipped_existing_files),
+    )
+
+
+@router.post("/vault/reload", response_model=VaultContextResponse)
+def reload_companion_vault() -> VaultContextResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    elif context.active_vault_path:
+        context = manager.select_vault(Path(context.active_vault_path), remember=False)
+    return _vault_context_response(context)
+
+
+@router.get("/vault/settings", response_model=VaultSettingsResponse)
+def read_companion_vault_settings() -> VaultSettingsResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    return _vault_settings_response(context)
+
+
+@router.post("/vault/settings", response_model=VaultSettingUpdateResponse)
+def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSettingUpdateResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status != "selected" or not context.active_vault_path:
+        raise HTTPException(
+            status_code=409,
+            detail=f"settings writes require a selected initialized vault; current status is {context.status}",
+        )
+    service = SettingsService()
+    definition = service.registry.get(req.key)
+    if definition is None:
+        raise HTTPException(status_code=404, detail=f"unknown setting: {req.key}")
+    blocked_reason = _setting_blocked_reason(definition, context)
+    if blocked_reason:
+        raise HTTPException(status_code=403, detail=blocked_reason)
+    try:
+        updated = service.update_setting(context, req.key, req.value)
+    except SettingsWriteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    refreshed = manager.select_vault(Path(context.active_vault_path), remember=False)
+    return VaultSettingUpdateResponse(
+        updated=_setting_value_response(updated),
+        settings=_vault_settings_response(refreshed),
     )
 
 
