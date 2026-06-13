@@ -11,11 +11,11 @@ and emits no notification: it only returns :class:`Moment` proposals.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 import yaml
 
@@ -121,8 +121,18 @@ class DeterministicRelevanceEvaluator:
             if band == "pressing"
             else ("open-loop-pressure" if band == "timely" else "reorientation")
         )
+        need_summary = f"Start of day — {self.today.isoformat()}"
+        urgency_basis = "; ".join(basis_parts) or "start-of-day reorientation"
+        inputs_digest = self._digest(inputs)
         moment = Moment(
-            uuid=uuid4().hex,
+            uuid=self._moment_uuid(
+                need_basis=need_basis,
+                need_summary=need_summary,
+                urgency_band=band,
+                urgency_basis=urgency_basis,
+                surfaced=surfaced,
+                inputs_digest=inputs_digest,
+            ),
             created=self._iso(self._now),
             trigger=MomentTrigger(
                 kind="start-of-day",
@@ -130,12 +140,12 @@ class DeterministicRelevanceEvaluator:
             ),
             need=MomentNeed(
                 basis=need_basis,  # type: ignore[arg-type]
-                summary=f"Start of day — {self.today.isoformat()}",
+                summary=need_summary,
             ),
             surfaced_refs=surfaced,
             urgency=MomentUrgency(
                 band=band,
-                basis="; ".join(basis_parts) or "start-of-day reorientation",
+                basis=urgency_basis,
                 evaluator=EVALUATOR_ID,
             ),
             context_snapshot={
@@ -143,7 +153,7 @@ class DeterministicRelevanceEvaluator:
             },
             provenance=MomentProvenance(
                 produced_by=PRODUCED_BY,
-                inputs_digest=self._digest(inputs),
+                inputs_digest=inputs_digest,
             ),
         )
         return [moment]
@@ -197,6 +207,32 @@ class DeterministicRelevanceEvaluator:
     def _digest(inputs: list[str]) -> str:
         joined = "\n".join(inputs).encode("utf-8")
         return f"sha256:{hashlib.sha256(joined).hexdigest()[:16]}"
+
+    @staticmethod
+    def _moment_uuid(
+        *,
+        need_basis: str,
+        need_summary: str,
+        urgency_band: UrgencyBand,
+        urgency_basis: str,
+        surfaced: list[SurfacedRef],
+        inputs_digest: str,
+    ) -> str:
+        payload = {
+            "inputs_digest": inputs_digest,
+            "need_basis": need_basis,
+            "need_summary": need_summary,
+            "urgency_band": urgency_band,
+            "urgency_basis": urgency_basis,
+            "surfaced_refs": [
+                {"ref": ref.ref, "uuid": ref.uuid, "why": ref.why}
+                for ref in surfaced
+            ],
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return f"moment-{digest[:32]}"
 
 
 def _split_frontmatter(text: str) -> tuple[dict, str]:

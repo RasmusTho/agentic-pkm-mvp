@@ -331,11 +331,13 @@ def run_tick(
     summary["scope_glob"] = cfg.scope_glob
 
     # Contextual Relevance Engine tick (governed, vault-internal, Act tier). Isolated
-    # and guarded so it can never break the core watcher loop. Pull-only — no reach-out.
+    # and guarded so it can never break the core watcher loop. No OS notification delivery.
     if relevance_tick_enabled():
         try:
             rel = run_relevance_tick(cfg.vault_path)
             summary["relevance_moments_materialized"] = rel.get("materialized", 0)
+            summary["relevance_reachout_decisions"] = rel.get("reachout_decisions", 0)
+            summary["relevance_in_app_nudges"] = rel.get("in_app_nudges", 0)
         except Exception as exc:  # noqa: BLE001 - never let the relevance tick break the watcher
             state.errors += 1
             summary["relevance_tick_error"] = str(exc)
