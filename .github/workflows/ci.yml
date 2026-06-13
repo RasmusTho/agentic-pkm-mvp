@@ -64,7 +64,7 @@ jobs:
       - name: Install API dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r app/requirements.txt
+          pip install -r requirements.txt
       - name: Start API
         run: nohup python -m uvicorn app.api.app:app --host 0.0.0.0 --port 8000 >/tmp/ws-api.log 2>&1 &
       - name: Wait for readiness
@@ -111,7 +111,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r app/requirements.txt
+          pip install -r requirements.txt
           pip install -r dev-requirements.txt
       - name: Upgrade database
         run: alembic upgrade head || true
