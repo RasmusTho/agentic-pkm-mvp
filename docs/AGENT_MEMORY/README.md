@@ -31,9 +31,18 @@ All five Agent Memory implementation slices have been delivered:
 4. Explainable recall
 5. Unreviewed-memory authority guard
 
-These slices implement the bounded capability described by this directory. They do not make agent
-memory a hidden source of truth and do not allow unreviewed memory to authorize writes. Delivery
-evidence for each slice is recorded under [Relationship to GitHub Issues](#relationship-to-github-issues).
+These slices implement the bounded capability described by this directory and do not make agent
+memory a hidden source of truth.
+
+The unreviewed-memory authority guard (`app/agent_memory/authority_guard.py`) ships as a **decision
+contract**: a pure function encoding which memory states may escalate to mutation authority. It has
+no runtime call site **by design** — no memory→action ("writeback") path consumes it yet. Until such
+a path exists, the guarantee that unreviewed memory cannot authorize writes is held **by
+construction**: no runtime flow lets recalled memory drive a mutation, and candidates are typed
+non-authoritative. When a memory→action path is built, it must invoke the guard on its production
+path per the enforcement-AC call-site rule (`docs/development/DEV_WORKFLOW.md :: Acceptance
+verifiability`). Delivery evidence for each slice is recorded under
+[Relationship to GitHub Issues](#relationship-to-github-issues).
 
 ## Relationship to the Contract
 
@@ -142,4 +151,7 @@ Promote current-state owner docs only after implementation receipts show all of 
 - review decisions remain explicit and inspectable,
 - promotion preserves provenance and correction paths,
 - recall explains why memory was used,
-- and unreviewed memory cannot authorize writeback or override human-authored knowledge.
+- and unreviewed memory cannot authorize writeback or override human-authored knowledge — today held
+  by construction (no memory→action path consumes the authority guard); when such a path is added it
+  must invoke the guard on its production path (`docs/development/DEV_WORKFLOW.md :: Acceptance
+  verifiability`).
