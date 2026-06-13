@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, NamedTuple, TypeAlias, Literal
+from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
 
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultContext
@@ -219,7 +219,8 @@ class SettingsService:
         raw_scope = str(document.frontmatter.get("scope") or definition.scope).strip()
         if raw_scope not in VALID_SOURCE_SCOPES:
             raise SettingsWriteError(f"settings file declares unsupported scope: {raw_scope}")
-        if not _source_can_set_definition(raw_scope, definition):
+        source_scope = cast(SettingScope, raw_scope)
+        if not _source_can_set_definition(source_scope, definition):
             raise SettingsWriteError(f"{path.name} cannot set {key}")
 
         frontmatter = dict(document.frontmatter)
@@ -228,7 +229,7 @@ class SettingsService:
         return EffectiveSetting(
             key=key,
             value=value,
-            scope=raw_scope,  # type: ignore[arg-type]
+            scope=source_scope,
             source=str(path),
             source_file=str(path),
         )
