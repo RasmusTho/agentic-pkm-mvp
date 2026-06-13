@@ -5,8 +5,8 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-14
-Last verified against: docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/AGENTS.md, docs/FINDING_AND_REORIENTING/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/CONTEXT_BUNDLES/README.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md, docs/RETRIEVAL.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879.
+Last reviewed: 2026-06-13
+Last verified against: docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/AGENTS.md, docs/FINDING_AND_REORIENTING/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/CONTEXT_BUNDLES/README.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md, docs/RETRIEVAL.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879, proportional-governance decision #1881.
 
 # Capability Contract Model
 
@@ -220,6 +220,59 @@ Examples: index rebuild, companion note drift correction, receipt record backfil
 ---
 
 These capability classes compose with the existing governance, policy, WriteGuard, and event-receipt contracts. They do not replace or bypass those contracts. A capability class assignment is a constraint, not an enabler: assigning `governed_execution` to a capability does not grant it mutation rights; it names the class so the appropriate gates are invoked.
+
+## Proportional governance tiers
+
+<!-- proportional governance tiers -->
+
+This section records the proportional-governance decision from issue #1881. It refines the `requires_human_gate` field defined in `Capability class definitions` from a boolean into three authorization tiers. It does **not** change `requires_policy_gate` or `receipt_required`: WriteGuard, policy evaluation, the event envelope, and the receipt contract apply at every tier exactly as before. A tier names *who authorizes a durable effect*, not whether the effect is governed. Read-only and proposal authority classes are unaffected — a read-only capability never reaches a tier because it produces no durable effect.
+
+Integrated Runtime v1 shipped a single posture: every durable mutation routed through full human-governed confirmation. Proportional governance relaxes that **only** where reversibility makes it safe, on the principle that **log + Git is the safety net** — an effect Git can reconstruct does not need a human gate; an effect that escapes Git's undo or leaves the local trust boundary does. Reversibility, not mutation-class alone, is the bright line between `agent-review` and `ask-you`.
+
+### Tier definitions
+
+| Tier | Authorizer | Applies to |
+|---|---|---|
+| `act` | the agent applies directly; deterministic gate only (WriteGuard + receipt) | additive or internal effects that are reversible via log + Git |
+| `agent-review` | a second cognition verifies the proposed effect before commit; no human gate | canonical-note mutations that are Git-reversible but carry risk or provenance ambiguity |
+| `ask-you` | explicit human confirmation | **only** irreversible or external effects — those that escape the Git undo or leave the local boundary |
+
+### Per-flow tier assignments
+
+| Flow | `capability_class` | Tier |
+|---|---|---|
+| Orientation, retrieval, resurfacing, citation checking, commitment surfacing, context building, clarification | read-only classes | none — no durable effect |
+| Capture append | `governed_execution` (additive) | `act` |
+| Checkbox projection | `governed_execution` (additive, derived projection) | `act` |
+| Index / derived-store repair | `repair_maintenance` (index scope) | `act` |
+| Companion-note drift correction | `repair_maintenance` (system-derived) | `act` |
+| Queue-review classification, low-risk classes | `proposal` → additive label/state | `act` |
+| Note patch applied to a canonical vault note (cross-note) | `governed_execution` | `agent-review` |
+| Frontmatter / metadata change | `governed_execution` (additive) | `agent-review` |
+| Memory candidate admission | `proposal` → `governed_effect` | `agent-review` |
+| Vault-note repair | `repair_maintenance` (vault scope) | `agent-review` |
+| Synthesis that becomes an applied change | `synthesis_review` (proposal subclass) | `agent-review` |
+| Body edit to a canonical note | `governed_execution` | `ask-you` (deliberate exception — see below) |
+| External send / publish | `governed_effect` (external) | `ask-you` |
+| Destructive op not Git-recoverable (bulk delete, untracked loss) | `governed_execution` (destructive) | `ask-you` |
+| Archive materialization | `governed_effect` at materialization | `ask-you` |
+| Schema / migration-class change | `governed_effect` (destructive) | `ask-you` |
+
+### Ratified boundary decisions
+
+Three lines sit where the relaxation collides with the v1 posture. They were decided explicitly on #1881, not derived mechanically:
+
+1. **Body edits stay human (`ask-you`) — for now.** Git makes body edits reversible, so the reversibility principle would otherwise place them at `agent-review`. They are deliberately held at the human gate (the v1 human-save / canvas-suggestion model) because direct prose authorship is the human's primary creative surface. This is the one principled exception to "human only for irreversible/external," and is revisitable under the evidence gate below.
+2. **Cross-note mutation and frontmatter changes move to `agent-review`.** Issue #1881's pre-decision framing listed these as always-human; the decision moves the Git-reversible cases to a verifying cognition with no human gate. This is the relaxation that reduces friction: agents apply reversible structural edits after review, backed by the Git undo.
+3. **Destructive-but-Git-recoverable effects are `agent-review`, not `ask-you`.** Overwriting a tracked note is destructive but reconstructable from Git, so it stays at `agent-review`. Only destruction that escapes the Git undo — deleting untracked/uncommitted material, bulk irreversible operations — is `ask-you`. Git-recoverability, not the `destructive` mutation-class alone, is the line for the human gate.
+
+### Constraints carried from #1881
+
+- Every durable effect at every tier still produces a receipt and passes WriteGuard, the policy gate, and the event envelope. No tier introduces a hidden write.
+- No tier permits an LLM output to be the direct source of a governed effect. `agent-review` is a verifying cognition over a proposal, not autonomous execution.
+- A tier assignment is a constraint, not an enabler (consistent with the class-assignment rule above): assigning `act` does not grant mutation rights a capability would not otherwise hold.
+- Moving a flow to a lower tier requires the evidence gate — UAT receipts, negative-safety coverage, and incident history recorded against this section.
+- This section is the recorded design proposal for #1881. Runtime enforcement of tiers is implementation work opened as separate issues; this document remains docs-only target-state framing.
 
 ## Out of scope for this document
 
