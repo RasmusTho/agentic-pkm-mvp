@@ -190,6 +190,7 @@ def test_preflight_fails_base_branch_behind_when_head_lacks_remote(
         "local_sha": "local-main-sha",
         "remote_sha": "origin-main-sha",
         "status": "behind",
+        "reason": "rebase_required",
         "head_contains_remote": False,
         "mismatch": True,
     }
@@ -220,6 +221,7 @@ def test_preflight_accepts_stale_local_base_when_head_contains_remote(
         "local_sha": "local-main-sha",
         "remote_sha": "origin-main-sha",
         "status": "behind",
+        "reason": "advisory_stale_local_ref",
         "head_contains_remote": True,
         "mismatch": False,
     }
@@ -249,6 +251,62 @@ def test_preflight_diverged_base_branch_still_fails(tmp_path, monkeypatch) -> No
         "head_contains_remote": None,
         "mismatch": True,
     }
+
+
+def test_behind_head_missing_remote_reason_distinct_from_diverged(
+    tmp_path, monkeypatch
+) -> None:
+    """A failing 'behind' (HEAD missing origin/main) must carry a rebase-oriented
+    reason that is distinct from the 'diverged' status reason — so operators can tell
+    them apart without reading mismatch."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _fake_base_branch_run_git(tmp_path, git_dir))
+    # HEAD does NOT contain origin/main -> mismatch=True (blocking behind)
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _fake_merge_base_run({("main", "origin/main")}),
+    )
+
+    report = git_hygiene.preflight_report(tmp_path, base_branch="main")
+
+    base = report["checks"]["base_branch"]
+    assert base["status"] == "behind"
+    assert base["mismatch"] is True
+    # The reason must be rebase-oriented and must not equal "diverged"
+    assert "reason" in base
+    assert base["reason"] == "rebase_required"
+    assert base["reason"] != "diverged"
+
+
+def test_advisory_behind_not_reported_as_failure(
+    tmp_path, monkeypatch
+) -> None:
+    """A non-failing 'behind' (HEAD already contains origin/main) must surface an
+    advisory reason, not a failure reason — operators should see it as a warning, not
+    an error."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _fake_base_branch_run_git(tmp_path, git_dir))
+    # HEAD contains origin/main -> mismatch=False (advisory behind)
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _fake_merge_base_run({("main", "origin/main"), ("origin/main", "HEAD")}),
+    )
+
+    report = git_hygiene.preflight_report(tmp_path, base_branch="main")
+
+    base = report["checks"]["base_branch"]
+    assert base["status"] == "behind"
+    assert base["mismatch"] is False
+    assert report["ok"] is True  # gate must not fail
+    # The reason must be advisory, not a failure reason
+    assert "reason" in base
+    assert base["reason"] == "advisory_stale_local_ref"
 
 
 def test_janitor_report_respects_active_lease_and_reports_candidates(
