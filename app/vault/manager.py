@@ -243,12 +243,19 @@ class VaultManager:
             )
         fm = local_doc.frontmatter
         role = _machine_role(fm.get("machineRole"))
-        allow_writes_default = role != "readOnlySatellite"
+        if role == "readOnlySatellite":
+            return VaultPermissions(
+                enable_vault_watcher=False,
+                enable_auto_indexing=False,
+                allow_writes_to_vault=False,
+                allow_shared_settings_edits=False,
+                allow_local_settings_edits=_bool_setting(fm.get("allowLocalSettingsEdits"), default=True),
+            )
         shared_default = role in {"primary", "automationNode", "testNode"}
         return VaultPermissions(
-            enable_vault_watcher=_bool_setting(fm.get("enableVaultWatcher"), default=role != "readOnlySatellite"),
-            enable_auto_indexing=_bool_setting(fm.get("enableAutoIndexing"), default=role != "readOnlySatellite"),
-            allow_writes_to_vault=_bool_setting(fm.get("allowWritesToVault"), default=allow_writes_default),
+            enable_vault_watcher=_bool_setting(fm.get("enableVaultWatcher"), default=True),
+            enable_auto_indexing=_bool_setting(fm.get("enableAutoIndexing"), default=True),
+            allow_writes_to_vault=_bool_setting(fm.get("allowWritesToVault"), default=True),
             allow_shared_settings_edits=_bool_setting(fm.get("allowSharedSettingsEdits"), default=shared_default),
             allow_local_settings_edits=_bool_setting(fm.get("allowLocalSettingsEdits"), default=True),
         )
@@ -260,6 +267,8 @@ class VaultManager:
         require_writes: bool = False,
         require_watcher: bool = False,
         require_indexing: bool = False,
+        require_shared_settings_edits: bool = False,
+        require_local_settings_edits: bool = False,
     ) -> VaultContext:
         ctx = self._context
         if ctx.status != "selected" or not ctx.active_vault_path:
@@ -271,6 +280,13 @@ class VaultManager:
             raise VaultRequiredError(f"{operation} requires the vault watcher, but it is disabled for this vault")
         if require_indexing and not permissions.enable_auto_indexing:
             raise VaultRequiredError(f"{operation} requires auto indexing, but it is disabled for this vault")
+        if require_shared_settings_edits:
+            if not permissions.allow_writes_to_vault:
+                raise VaultRequiredError(f"{operation} requires vault writes, but this local role disallows them")
+            if not permissions.allow_shared_settings_edits:
+                raise VaultRequiredError(f"{operation} requires shared settings edits, but this local role disallows them")
+        if require_local_settings_edits and not permissions.allow_local_settings_edits:
+            raise VaultRequiredError(f"{operation} requires local settings edits, but this local role disallows them")
         return ctx
 
     def _remember_context(self, context: VaultContext, vault_path: Path) -> None:
@@ -384,8 +400,8 @@ def _initial_settings_files(
                 "localInstanceId": local_instance_id,
                 "machineRole": machine_role,
                 "syncRole": "local",
-                "enableVaultWatcher": True,
-                "enableAutoIndexing": True,
+                "enableVaultWatcher": machine_role != "readOnlySatellite",
+                "enableAutoIndexing": machine_role != "readOnlySatellite",
                 "allowWritesToVault": machine_role != "readOnlySatellite",
                 "allowSharedSettingsEdits": machine_role in {"primary", "automationNode", "testNode"},
                 "allowLocalSettingsEdits": True,
