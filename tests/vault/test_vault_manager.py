@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+from app.vault.markdown_settings import MarkdownSettingsStore
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
 
@@ -77,6 +79,53 @@ def test_select_initialized_vault_reads_ids(tmp_path: Path) -> None:
     assert context.status == "selected"
     assert context.active_vault_id == initialized.context.active_vault_id
     assert context.local_instance_id == initialized.context.local_instance_id
+
+
+def test_subscriber_failure_is_logged(tmp_path: Path, caplog) -> None:
+    vault = tmp_path / "vault"
+    manager = _manager(tmp_path)
+    manager.initialize_vault(vault)
+
+    def failing_subscriber(event) -> None:
+        raise RuntimeError("subscriber boom")
+
+    manager.subscribe(failing_subscriber)
+    caplog.set_level(logging.ERROR, logger="app.vault.manager")
+
+    context = manager.select_vault(vault)
+
+    assert context.status == "selected"
+    assert any("vault changed subscriber failed" in record.getMessage() for record in caplog.records)
+    assert any(record.exc_info for record in caplog.records)
+
+
+def test_missing_vault_id_is_stable_across_calls(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    manager = _manager(tmp_path)
+    manager.initialize_vault(vault)
+    store = MarkdownSettingsStore()
+    vault_path = vault / "settings" / "vault.md"
+    local_path = vault / "settings" / "local.md"
+    vault_doc = store.read(vault_path)
+    local_doc = store.read(local_path)
+    vault_frontmatter = dict(vault_doc.frontmatter)
+    local_frontmatter = dict(local_doc.frontmatter)
+    vault_frontmatter.pop("vaultId")
+    local_frontmatter.pop("localInstanceId")
+    store.write_frontmatter(vault_path, vault_frontmatter, body=vault_doc.body)
+    store.write_frontmatter(local_path, local_frontmatter, body=local_doc.body)
+
+    first = manager.validate_vault(vault)
+    second = manager.validate_vault(vault)
+    selected = manager.select_vault(vault)
+
+    assert first.status == "selected"
+    assert first.active_vault_id
+    assert first.active_vault_id == second.active_vault_id == selected.active_vault_id
+    assert first.local_instance_id
+    assert first.local_instance_id == second.local_instance_id == selected.local_instance_id
+    assert store.read(vault_path).frontmatter["vaultId"] == first.active_vault_id
+    assert store.read(local_path).frontmatter["localInstanceId"] == first.local_instance_id
 
 
 def test_conflicted_settings_mark_vault_invalid(tmp_path: Path) -> None:

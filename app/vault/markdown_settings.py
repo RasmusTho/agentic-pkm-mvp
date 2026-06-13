@@ -22,7 +22,19 @@ class MarkdownSettingsDocument:
 
 
 def has_conflict_markers(text: str) -> bool:
-    return any(marker in text for marker in CONFLICT_MARKERS)
+    in_conflict = False
+    saw_separator = False
+    for line in text.splitlines():
+        if line.startswith("<<<<<<<"):
+            in_conflict = True
+            saw_separator = False
+            continue
+        if in_conflict and line.startswith("======="):
+            saw_separator = True
+            continue
+        if in_conflict and saw_separator and line.startswith(">>>>>>>"):
+            return True
+    return False
 
 
 def split_markdown_settings(text: str, *, path: Path | None = None) -> tuple[dict[str, Any], str]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
@@ -23,6 +24,7 @@ REQUIRED_SETTINGS_FILES = (
     "local.md",
 )
 LOCAL_GITIGNORE = "# Design Handoff local settings\nlocal.md\n*.local.md\nlocal/\nruntime/\ncache/\n"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -165,14 +167,38 @@ class VaultManager:
                 validation_error="settings/local.md has an incompatible schema",
             )
 
+        try:
+            vault_id = self._ensure_frontmatter_id(
+                settings_dir / "vault.md",
+                vault_doc.frontmatter,
+                key="vaultId",
+                prefix="vault",
+                body=vault_doc.body,
+            )
+            local_instance_id = self._ensure_frontmatter_id(
+                settings_dir / "local.md",
+                local_doc.frontmatter,
+                key="localInstanceId",
+                prefix="local",
+                body=local_doc.body,
+            )
+        except OSError as exc:
+            return VaultContext(
+                status="invalid",
+                active_vault_name=expanded.name,
+                active_vault_path=str(expanded),
+                settings_path=str(settings_dir),
+                validation_error=f"unable to persist generated vault identity: {exc}",
+            )
+
         role = _machine_role(local_doc.frontmatter.get("machineRole"))
         return VaultContext(
             status="selected",
-            active_vault_id=_required_str(vault_doc.frontmatter.get("vaultId"), fallback=f"vault-{uuid4()}"),
+            active_vault_id=vault_id,
             active_vault_name=_required_str(vault_doc.frontmatter.get("vaultName"), fallback=expanded.name),
             active_vault_path=str(expanded),
             settings_path=str(settings_dir),
-            local_instance_id=_required_str(local_doc.frontmatter.get("localInstanceId"), fallback=f"local-{uuid4()}"),
+            local_instance_id=local_instance_id,
             machine_role=role,
         )
 
@@ -315,7 +341,25 @@ class VaultManager:
             try:
                 callback(event)
             except Exception:
-                continue
+                logger.exception("vault changed subscriber failed")
+
+    def _ensure_frontmatter_id(
+        self,
+        path: Path,
+        frontmatter: dict[str, Any],
+        *,
+        key: str,
+        prefix: str,
+        body: str,
+    ) -> str:
+        existing = str(frontmatter.get(key)).strip() if frontmatter.get(key) is not None else ""
+        if existing:
+            return existing
+        generated = f"{prefix}-{uuid4()}"
+        updated = dict(frontmatter)
+        updated[key] = generated
+        self.markdown_store.write_frontmatter(path, updated, body=body)
+        return generated
 
 
 _GLOBAL_MANAGER: VaultManager | None = None
