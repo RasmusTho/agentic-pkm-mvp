@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import Any
 from uuid import uuid4
 
 import yaml
@@ -193,7 +194,7 @@ def _append_promotion_receipt(
 ) -> str:
     receipt_id = uuid4().hex
     timestamp = _iso(datetime.now(timezone.utc))
-    payload = {
+    payload: dict[str, Any] = {
         "receipt_id": receipt_id,
         "intent_event_id": f"memory-promote:{entry.candidate_id}",
         "source_event": f"memory-promote:{entry.candidate_id}",
