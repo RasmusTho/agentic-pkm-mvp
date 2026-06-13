@@ -17,6 +17,7 @@ def test_agent_state_minimal_valid_shape_and_documented_fields() -> None:
     assert state.trace_id is None
     assert state.query == "what is yggdrasil"
     assert state.hits == []
+    assert state.recalled == []
     assert state.answer is None
     assert state.reasoning is None
     assert state.llm_route is None
