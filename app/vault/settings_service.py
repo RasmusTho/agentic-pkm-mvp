@@ -189,6 +189,9 @@ class SettingsService:
     def effective_settings(self, context: VaultContext) -> dict[str, EffectiveSetting]:
         return self.resolve(context).settings
 
+    def reload(self, context: VaultContext) -> SettingsResolution:
+        return self.resolve(context)
+
     def update_setting(self, context: VaultContext, key: str, value: Any) -> EffectiveSetting:
         definition = self.registry.get(key)
         if definition is None:
