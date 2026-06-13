@@ -50,6 +50,14 @@ it adds durable persistence of review decisions, startup queue reconciliation, g
 materialization of promoted memory, and guarded recall activation. Read that directory for
 implementation work that extends this delivered capability.
 
+## Lifecycle Specification Follow-up
+
+Post-materialization lifecycle (archive/cold-storage and forget/tombstone) is specified in:
+[DEFINE_MEMORY_LIFECYCLE_ARCHIVE_AND_FORGET.md](DEFINE_MEMORY_LIFECYCLE_ARCHIVE_AND_FORGET.md)
+(governing issue #1919). This spec covers `active → archived → restored` and
+`active/archived → forgotten/tombstoned` transitions. Runtime implementation of these flows
+requires separate implementation issues.
+
 ## Remaining Follow-ups
 
 - Companion-aware handling remains separate if still tracked by #1085 / PR #1216 or successor docs.
