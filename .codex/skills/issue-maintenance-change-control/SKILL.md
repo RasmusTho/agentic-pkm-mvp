@@ -364,7 +364,7 @@ Use this when the user asks for a maintenance run across everything not done.
 7. **Reconcile open PR Project status** against the lifecycle truth matrix:
    - Open Draft PRs → `In Progress`
    - Open non-Draft PRs with review explicitly requested → `Review`
-   - Open non-Draft PRs without review requested → `In Progress`
+   - Open non-Draft PRs without review requested → `Review`
    - Open PRs missing from the Project entirely → add them, then apply the row above
 
 8. **Reconciliation helper (optional, with known gaps).** If the repo has a reconciliation helper (for example `scripts/reconcile_project_status.py`), run it after steps 2, 6, and 7 as a belt-and-braces pass — not as the primary mechanism.
