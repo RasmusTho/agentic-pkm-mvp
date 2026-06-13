@@ -487,6 +487,13 @@ daily note plus open-loop / near-deadline notes), materializes each as the CRE-0
 the vault system plane (`<system_folder>/moments/<id>.md`) through the WriteGuard with provenance and
 an Act-tier receipt, and projects them read-only at a companion-UI "now"/glance surface
 (`companion_ui/workspace/now_surface.py`). Pull-only: no proactivity, no external source, no
-notification. The concept contracts are CRE-01/CRE-02 (#1922/#1923); the proactive attention loop
-(reach-out ladder + scarcity gate runtime) remains CRE-04 (#1925). Capability boundary and acceptance
-live in `docs/CONTEXTUAL_RELEVANCE_ENGINE/` and the parent validation hub #1921.
+notification. The concept contracts are CRE-01/CRE-02 (#1922/#1923). The proactive attention loop is
+now shipped too (#1925, CRE-04): `app/relevance/attention_loop.py` runs the deterministic
+reach-out/scarcity gate — a moment climbs the graduated ladder (glance → in-app nudge → OS push) only
+as far as its urgency clears the current context-dependent interruption threshold; the zero-tolerance
+floor (sleep / declared DND) never pushes; below threshold a moment defers to the glance surface and
+re-attempts (defer-not-drop); user-declared patterns are soft guidance; every reach-out and deliberate
+suppression emits an Act-tier receipt with no external side-effects. HUMAN-FLOWS §5 and the
+human-flow→runtime map carry the owner-doc promotion. The emergent/learned pattern loop and external
+connectors remain deferred follow-ons. Capability boundary and acceptance live in
+`docs/CONTEXTUAL_RELEVANCE_ENGINE/` and the parent validation hub #1921.

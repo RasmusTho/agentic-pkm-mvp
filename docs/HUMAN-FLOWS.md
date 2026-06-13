@@ -561,6 +561,20 @@ Across weeks and months, the system should help the human:
 - carry creative/hobby worlds forward,
 - and maintain a usable memory of prior thought and prior action.
 
+### Made proactive
+
+Historically these rhythms were almost entirely *pull*: the human had to remember to open
+orientation, run review, or check what was next. The **Contextual Relevance Engine** makes the
+rhythms *proactive* — the system anticipates the moment and brings the right thing — without becoming
+a firehose. It computes **moments** from the context model and reaches out only as far up a graduated
+ladder (glance → in-app nudge → OS push) as a moment's urgency clears the human's **current**
+interruption threshold. **Sleep and declared do-not-disturb are a zero-tolerance floor: never a push,
+regardless of urgency.** Below threshold, a moment is not dropped — it **defers** to the glance
+surface and re-attempts when interruptibility rises (suppression is timing, not deletion). Every
+materialized moment and every reach-out or deliberate suppression is a non-authoritative, source-linked
+vault artifact with a receipt. Scarcity is the discipline (§0): right thing, right moment — silent
+otherwise. See `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` and `docs/CONTEXTUAL_RELEVANCE_ENGINE/`.
+
 ## 6. Choosing the right representation
 
 A user-facing system like this should help the human distinguish not only *content*, but *what kind
