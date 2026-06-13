@@ -202,7 +202,10 @@ def _vault_context_response(context: VaultContext) -> VaultContextResponse:
 
 
 def _active_companion_vault_root() -> Path:
-    context = get_vault_manager().context
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser()
     return resolve_vault_root()
