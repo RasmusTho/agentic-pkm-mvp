@@ -72,6 +72,10 @@ class _SourceDocument(NamedTuple):
     document: MarkdownSettingsDocument
 
 
+class SettingsWriteError(ValueError):
+    """Raised when a scoped settings write cannot be applied safely."""
+
+
 class SettingsRegistry:
     def __init__(self, definitions: tuple[SettingDefinition, ...] = ()) -> None:
         self._definitions = definitions or SETTING_DEFINITIONS
@@ -184,6 +188,47 @@ class SettingsService:
 
     def effective_settings(self, context: VaultContext) -> dict[str, EffectiveSetting]:
         return self.resolve(context).settings
+
+    def update_setting(self, context: VaultContext, key: str, value: Any) -> EffectiveSetting:
+        definition = self.registry.get(key)
+        if definition is None:
+            raise SettingsWriteError(f"unknown setting: {key}")
+        if not definition.editable_in_companion:
+            raise SettingsWriteError(f"{key} is not editable in Companion UI")
+        if definition.scope not in {"vault-shared", "vault-local"}:
+            raise SettingsWriteError(f"{key} is not a vault-scoped setting")
+        if context.status != "selected" or not context.settings_path:
+            raise SettingsWriteError("settings writes require a selected initialized vault")
+        if not definition.file:
+            raise SettingsWriteError(f"{key} has no Markdown settings file")
+        valid, message = _validate_value(definition, value)
+        if not valid:
+            raise SettingsWriteError(message or f"invalid value for {key}")
+
+        path = Path(context.settings_path) / definition.file
+        try:
+            document = self.markdown_store.read(path)
+        except FileNotFoundError as exc:
+            raise SettingsWriteError(f"settings file does not exist: {path}") from exc
+        except (OSError, MarkdownSettingsError) as exc:
+            raise SettingsWriteError(str(exc)) from exc
+
+        raw_scope = str(document.frontmatter.get("scope") or definition.scope).strip()
+        if raw_scope not in VALID_SOURCE_SCOPES:
+            raise SettingsWriteError(f"settings file declares unsupported scope: {raw_scope}")
+        if not _source_can_set_definition(raw_scope, definition):
+            raise SettingsWriteError(f"{path.name} cannot set {key}")
+
+        frontmatter = dict(document.frontmatter)
+        frontmatter[key] = value
+        self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
+        return EffectiveSetting(
+            key=key,
+            value=value,
+            scope=raw_scope,  # type: ignore[arg-type]
+            source=str(path),
+            source_file=str(path),
+        )
 
     def resolve(self, context: VaultContext) -> SettingsResolution:
         values = {
@@ -360,4 +405,5 @@ __all__ = [
     "SettingsResolution",
     "SettingsService",
     "SettingsValidationError",
+    "SettingsWriteError",
 ]

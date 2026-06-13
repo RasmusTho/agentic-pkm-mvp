@@ -115,6 +115,14 @@ from companion_ui.workspace.system_map_overlay import (
     system_map_overlay_markup,
     system_map_overlay_script,
 )
+from companion_ui.workspace.vault_settings_panel import (
+    VAULT_INITIALIZE_ENDPOINT,
+    VAULT_RELOAD_ENDPOINT,
+    VAULT_SELECT_ENDPOINT,
+    VAULT_SETTINGS_ENDPOINT,
+    vault_settings_panel_markup,
+    vault_settings_panel_script,
+)
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
@@ -9638,6 +9646,7 @@ def render_index_html(
   {memory_review_drawer_markup()}
   {receipts_history_modal_markup()}
   {settings_drawer_markup(fields)}
+  {vault_settings_panel_markup()}
   {system_map_overlay_markup(available_routes=map_available_routes)}
   {guidance_layer_style()}
 
@@ -10162,6 +10171,7 @@ def render_index_html(
   {_note_readback_script()}
   {_note_editor_script()}
   {settings_drawer_script()}
+  {vault_settings_panel_script()}
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
   {_render_operator_drawer()}
@@ -10397,6 +10407,14 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            if parsed.path == VAULT_SETTINGS_ENDPOINT:
+                try:
+                    data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path == "/api/companion/vault-related":
                 params = {
                     key: values[0]
@@ -10552,6 +10570,7 @@ def make_handler(
                 "/api/companion/orientation",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
+                VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
                 "/api/companion/tts/status",
                 "/api/operator/status",
@@ -10581,6 +10600,10 @@ def make_handler(
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
                 "/api/companion/vault-browser/actions/queue-review",
+                VAULT_SELECT_ENDPOINT,
+                VAULT_INITIALIZE_ENDPOINT,
+                VAULT_RELOAD_ENDPOINT,
+                VAULT_SETTINGS_ENDPOINT,
                 "/api/canvas/sessions",
                 "/api/panel/confirm",
                 "/api/panel/checkbox-projection",
