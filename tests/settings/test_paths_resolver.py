@@ -6,6 +6,7 @@ import pytest
 
 from app.config.paths import (
     ResolvedPaths,
+    VaultRootMisconfiguredError,
     resolve_flow_settings_path,
     resolve_paths,
     resolve_runtime_artifact_path,
@@ -34,7 +35,22 @@ def test_resolve_vault_root_test_environment_appends_test_suffix(monkeypatch: py
 def test_resolve_vault_root_test_environment_honours_explicit_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     test_root = tmp_path / "custom_test_vault"
     monkeypatch.setenv("VAULT_ROOT_TEST", str(test_root))
+    test_root.mkdir()
     assert resolve_vault_root(environment="test") == test_root
+
+
+def test_set_but_missing_vault_root_raises_not_silent_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    missing_root = tmp_path / "missing-vault"
+    monkeypatch.setenv("VAULT_ROOT", str(missing_root))
+
+    with pytest.raises(VaultRootMisconfiguredError) as exc_info:
+        resolve_vault_root()
+
+    assert exc_info.value.env_var == "VAULT_ROOT"
+    assert exc_info.value.configured_path == missing_root
 
 
 def test_resolve_runtime_artifact_path_scopes_test_environment() -> None:
