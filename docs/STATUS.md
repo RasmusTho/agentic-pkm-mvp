@@ -480,3 +480,13 @@ Scope: architecture alignment only. No runtime change, no event-payload change, 
 The vocabulary is the language new cognitive-mediation catalog entries (tracked separately) are
 expected to populate; existing entries remain valid without retroactive backfill. Delivers #981
 under the PanelAgent / Cognitive Mediation program coordinated by #978.
+
+Contextual Relevance Engine — first runtime slice shipped (#1924, vault-native pull-only moments).
+The `app/relevance/` package computes "moments" deterministically from vault-native inputs (today's
+daily note plus open-loop / near-deadline notes), materializes each as the CRE-01 moment artifact in
+the vault system plane (`<system_folder>/moments/<id>.md`) through the WriteGuard with provenance and
+an Act-tier receipt, and projects them read-only at a companion-UI "now"/glance surface
+(`companion_ui/workspace/now_surface.py`). Pull-only: no proactivity, no external source, no
+notification. The concept contracts are CRE-01/CRE-02 (#1922/#1923); the proactive attention loop
+(reach-out ladder + scarcity gate runtime) remains CRE-04 (#1925). Capability boundary and acceptance
+live in `docs/CONTEXTUAL_RELEVANCE_ENGINE/` and the parent validation hub #1921.
