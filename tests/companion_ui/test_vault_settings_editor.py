@@ -9,7 +9,7 @@ from app.api.app import app
 from app.api.routes import companion as companion_module
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import MachineRole, VaultManager
-from companion_ui.workspace.vault_settings_panel import vault_settings_panel_markup
+from companion_ui.workspace.vault_settings_panel import vault_settings_panel_markup, vault_settings_panel_script
 
 
 def _manager(tmp_path: Path, *, role: MachineRole = "primary") -> tuple[VaultManager, Path]:
@@ -53,6 +53,30 @@ def test_companion_writes_markdown_settings_scope(tmp_path: Path, monkeypatch) -
     assert local_payload["updated"]["source_file"] == str(vault / "settings" / "local.md")
     assert _frontmatter(vault / "settings" / "local.md")["enableAutoIndexing"] is False
     assert "enableAutoIndexing" not in _frontmatter(vault / "settings" / "paths.md")
+
+    array_setting = client.post(
+        "/api/companion/vault/settings",
+        json={"key": "workflowStatuses", "value": ["draft", "review", "done"]},
+    )
+    assert array_setting.status_code == 200, array_setting.text
+    array_payload = array_setting.json()
+    assert array_payload["updated"]["scope"] == "vault-shared"
+    assert array_payload["updated"]["source_file"] == str(vault / "settings" / "workflow.md")
+    assert _frontmatter(vault / "settings" / "workflow.md")["workflowStatuses"] == [
+        "draft",
+        "review",
+        "done",
+    ]
+
+    projection = client.get("/api/companion/vault/settings")
+    assert projection.status_code == 200, projection.text
+    html = vault_settings_panel_markup(projection.json())
+    assert 'data-setting-key="workflowStatuses"' in html
+    assert 'data-setting-type="array"' in html
+    assert 'data-testid="vault-setting-input-workflowStatuses"' in html
+    script = vault_settings_panel_script()
+    assert "parseSettingValue" in script
+    assert "JSON.parse(raw" in script
 
 
 def test_settings_editor_respects_role_permissions(tmp_path: Path, monkeypatch) -> None:

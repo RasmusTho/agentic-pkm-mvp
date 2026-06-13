@@ -134,25 +134,26 @@ def _validation_errors(errors: list[dict[str, Any]]) -> str:
 def _input_for_definition(definition: dict[str, Any], value: Any, disabled: bool) -> str:
     key = str(definition.get("key") or "")
     setting_type = str(definition.get("type") or "string")
+    type_attr = f' data-setting-type="{_e(setting_type)}"'
     disabled_attr = ' disabled aria-disabled="true"' if disabled else ""
     if setting_type == "boolean":
         checked = " checked" if bool(value) else ""
         return (
             f'<input type="checkbox" data-testid="vault-setting-input-{_e(key)}" '
-            f'name="{_e(key)}"{checked}{disabled_attr}>'
+            f'name="{_e(key)}"{type_attr}{checked}{disabled_attr}>'
         )
     if definition.get("allowed_values"):
         options = "".join(
             f'<option value="{_e(option)}"{" selected" if option == value else ""}>{_e(option)}</option>'
             for option in definition.get("allowed_values") or []
         )
-        return f'<select data-testid="vault-setting-input-{_e(key)}" name="{_e(key)}"{disabled_attr}>{options}</select>'
+        return f'<select data-testid="vault-setting-input-{_e(key)}" name="{_e(key)}"{type_attr}{disabled_attr}>{options}</select>'
     if setting_type in {"array", "object"}:
         raw = json.dumps(value, ensure_ascii=False)
-        return f'<textarea data-testid="vault-setting-input-{_e(key)}" name="{_e(key)}"{disabled_attr}>{_e(raw)}</textarea>'
+        return f'<textarea data-testid="vault-setting-input-{_e(key)}" name="{_e(key)}"{type_attr}{disabled_attr}>{_e(raw)}</textarea>'
     return (
         f'<input data-testid="vault-setting-input-{_e(key)}" name="{_e(key)}" '
-        f'value="{_e("" if value is None else value)}"{disabled_attr}>'
+        f'value="{_e("" if value is None else value)}"{type_attr}{disabled_attr}>'
     )
 
 
@@ -177,6 +178,7 @@ def _settings_editor(projection: dict[str, Any], status: str) -> str:
             f"""
         <form class="vault-setting-row" data-testid="vault-setting-row"
           data-setting-key="{_e(key)}" data-setting-scope="{_e(definition.get("scope") or "")}"
+          data-setting-type="{_e(definition.get("type") or "string")}"
           data-setting-file="{_e(definition.get("file") or "")}" data-editable="{str(editable).lower()}"
           data-blocked-reason="{_e(blocked)}" data-intent="vault.settings.write"
           data-api-method="POST" data-api-path="{VAULT_SETTINGS_ENDPOINT}">
@@ -256,6 +258,21 @@ def vault_settings_panel_script() -> str:
         root.setAttribute('data-load-error', String(err && err.message || err));
       }});
     }}
+    function parseSettingValue(form, input) {{
+      if (!input) {{ return null; }}
+      if (input.type === 'checkbox') {{ return input.checked; }}
+      var settingType = form.getAttribute('data-setting-type') || input.getAttribute('data-setting-type') || 'string';
+      var raw = input.value;
+      if (settingType === 'array' || settingType === 'object') {{
+        try {{
+          return JSON.parse(raw || (settingType === 'array' ? '[]' : '{{}}'));
+        }} catch (err) {{
+          form.setAttribute('data-write-error', 'invalid JSON for ' + settingType);
+          throw err;
+        }}
+      }}
+      return raw;
+    }}
     document.addEventListener('submit', function(event) {{
       var form = event.target;
       if (!form || !form.matches('[data-intent="vault.select"],[data-intent="vault.initialize"],[data-intent="vault.settings.write"]')) {{ return; }}
@@ -263,7 +280,12 @@ def vault_settings_panel_script() -> str:
       if (form.getAttribute('data-intent') === 'vault.settings.write') {{
         var key = form.getAttribute('data-setting-key');
         var input = form.querySelector('[name="' + key + '"]');
-        var value = input && input.type === 'checkbox' ? input.checked : (input ? input.value : null);
+        var value;
+        try {{
+          value = parseSettingValue(form, input);
+        }} catch (err) {{
+          return;
+        }}
         jsonFetch('{VAULT_SETTINGS_ENDPOINT}', {{
           method: 'POST',
           body: JSON.stringify({{ key: key, value: value }})
