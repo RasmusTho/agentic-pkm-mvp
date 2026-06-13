@@ -93,23 +93,6 @@ def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
     return matches_scope(rel_path, scope_glob)
 
 
-def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
-    for path in sorted(scan_root.rglob("*.md")):
-        try:
-            rel = path.relative_to(vault_root)
-        except Exception:
-            continue
-        if any(part.startswith(".") for part in rel.parts):
-            continue
-        if not _matches_scope(rel, scope_glob):
-            continue
-        try:
-            mtime = path.stat().st_mtime
-        except Exception:
-            continue
-        yield rel, mtime, path
-
-
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
     return derive_scope_roots(vault_root, scope_glob)[0]
 
@@ -136,10 +119,6 @@ def _scan_markdown_many(
                 continue
             seen.add(rel)
             yield rel, mtime, path
-
-
-def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
-    yield from _scan_markdown_many(vault_root, [scan_root], scope_glob)
 
 
 def _now_iso_from_timestamp(value: float) -> str:
