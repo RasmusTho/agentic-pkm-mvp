@@ -122,9 +122,10 @@ Each capability class carries the following authority/risk metadata fields along
 | `capability_class` | One of: `orientation`, `proposal`, `retrieval`, `clarification`, `synthesis_review`, `governed_execution`, `repair_maintenance`. |
 | `authority_class` | One of: `read-only`, `proposal`, `governed_effect` (from Standard capability contract shape). |
 | `mutation_risk` | One of: `none` (no durable write), `additive` (appends, does not overwrite), `destructive` (overwrites or deletes). |
-| `requires_human_gate` | Boolean. Whether explicit human confirmation is required before any effect is applied. |
+| `requires_human_gate` | Boolean. Whether explicit human confirmation is required before any effect is applied. Stays boolean and keeps its existing runtime/catalog meaning; equivalent to `authorization_tier == ask-you` (see `Proportional governance tiers`). |
 | `requires_policy_gate` | Boolean. Whether a policy/admission check is required before the capability may be invoked or its output acted upon. |
 | `receipt_required` | Boolean. Whether a receipt artifact must be produced and persisted when this capability's output is applied. |
+| `authorization_tier` | One of: `act`, `agent-review`, `ask-you` (see `Proportional governance tiers`). Additive, per-flow refinement of the human-gate axis. `requires_human_gate` is its derived boolean projection (`true` iff tier is `ask-you`). Optional: entries that declare only `requires_human_gate` remain valid. |
 
 #### Orientation
 
@@ -225,7 +226,9 @@ These capability classes compose with the existing governance, policy, WriteGuar
 
 <!-- proportional governance tiers -->
 
-This section records the proportional-governance decision from issue #1881. It refines the `requires_human_gate` field defined in `Capability class definitions` from a boolean into three authorization tiers. It does **not** change `requires_policy_gate` or `receipt_required`: WriteGuard, policy evaluation, the event envelope, and the receipt contract apply at every tier exactly as before. A tier names *who authorizes a durable effect*, not whether the effect is governed. Read-only and proposal authority classes are unaffected — a read-only capability never reaches a tier because it produces no durable effect.
+This section records the proportional-governance decision from issue #1881. It adds one metadata field — `authorization_tier` — that refines the human-gate axis defined in `Capability class definitions` into three values. It does **not** redefine `requires_human_gate`: that field stays a boolean with its existing shipped meaning (it is consumed today by the panel-action catalog in `docs/settings/panel-actions.md` and by `_is_governance_bearing` in `app/agents/panel_agent/graph.py`, per #982). The tier is the finer-grained value; the boolean is its derived projection — `requires_human_gate == (authorization_tier == ask-you)`. `requires_policy_gate` and `receipt_required` are unchanged: WriteGuard, policy evaluation, the event envelope, and the receipt contract apply at every tier exactly as before. A tier names *who authorizes a durable effect*, not whether the effect is governed. Read-only and proposal authority classes are unaffected — a read-only capability never reaches a tier because it produces no durable effect.
+
+The per-class `requires_human_gate` values in `Capability class definitions` are class-level defaults. `governed_execution` and `repair_maintenance` span tiers: the operative gate for a specific flow is its `authorization_tier`, and the boolean follows from the projection above. Existing catalog entries are unaffected until a flow opts into a finer tier.
 
 Integrated Runtime v1 shipped a single posture: every durable mutation routed through full human-governed confirmation. Proportional governance relaxes that **only** where reversibility makes it safe, on the principle that **log + Git is the safety net** — an effect Git can reconstruct does not need a human gate; an effect that escapes Git's undo or leaves the local trust boundary does. Reversibility, not mutation-class alone, is the bright line between `agent-review` and `ask-you`.
 
@@ -236,6 +239,8 @@ Integrated Runtime v1 shipped a single posture: every durable mutation routed th
 | `act` | the agent applies directly; deterministic gate only (WriteGuard + receipt) | additive or internal effects that are reversible via log + Git |
 | `agent-review` | a second cognition verifies the proposed effect before commit; no human gate | canonical-note mutations that are Git-reversible but carry risk or provenance ambiguity |
 | `ask-you` | explicit human confirmation | **only** irreversible or external effects — those that escape the Git undo or leave the local boundary |
+
+**Boolean projection:** `act` and `agent-review` ⇒ `requires_human_gate: false`; `ask-you` ⇒ `requires_human_gate: true`. `requires_policy_gate` and `receipt_required` are independent of the tier.
 
 ### Per-flow tier assignments
 
