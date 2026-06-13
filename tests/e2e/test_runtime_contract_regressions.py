@@ -14,6 +14,7 @@ from app.runtime.runtime_loop import RuntimeLoopConfig, run_once
 from app.objects import ObjectStore
 from app.stores import reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
+from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
 
@@ -140,6 +141,7 @@ def _run_registry_variant(
 ) -> dict[str, object]:
     reset_store_backends()
     vault_root = tmp_path / name / "vault"
+    initialize_test_vault(vault_root)
     paths = _seed_registry_vault(vault_root)
     config_path = tmp_path / name / "watchers.yaml"
     _write_registry_config(config_path)

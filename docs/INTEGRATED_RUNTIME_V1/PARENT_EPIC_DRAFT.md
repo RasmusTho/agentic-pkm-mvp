@@ -1,3 +1,5 @@
+State: Non-authoritative parent-epic draft superseded for executable delivery by epic #1874 and child issues.
+
 # Parent Epic Draft - Yggdrasil Integrated Runtime v1
 
 Status: pre-Fable draft. Do not file this as-is without human scope approval or Fable/Codex validation. This draft exists to reduce Fable token cost and give the future synthesis pass a concrete structure to critique.

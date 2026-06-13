@@ -6,6 +6,7 @@ from textwrap import dedent
 import pytest
 
 import app.watcher.registry as registry
+from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
 
@@ -31,6 +32,7 @@ def test_registry_logs_db_outbox_enqueue_failures_with_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
     inbox = vault_root / "📥 Inbox"
     inbox.mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +52,7 @@ def test_registry_logs_db_outbox_enqueue_failures_with_context(
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "📥 Inbox/**")
     monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
     monkeypatch.setenv("WATCHER_TICK_SLEEP_SECONDS", "0.05")
