@@ -396,7 +396,7 @@ Use this when the user asks for a maintenance run across everything not done.
     - Every merged / closed PR is in `Status=Done`
     - Every open Draft PR is in `Status=In Progress`
     - Every open non-Draft PR with review explicitly requested is in `Status=Review`
-    - Every open non-Draft PR without review requested is in `Status=In Progress`
+    - Every open non-Draft PR without review requested is in `Status=Review`
     - Zero Project items are in `NO_STATUS`
     If any drift remains, the run is not complete — fix before writing the receipt.
 
