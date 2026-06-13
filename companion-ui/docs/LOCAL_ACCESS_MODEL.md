@@ -26,35 +26,36 @@ For the current production/network exposure review profile, use
 `companion-ui/docs/PRODUCTION_EXPOSURE_SECURITY_PROFILE.md`. That profile consumes this access model
 and the security architecture spine; it does not implement hardening.
 
-## Server Bind Default
+## Loopback Bind Default
 
-Default operator posture: bind Companion UI to `0.0.0.0` for server/LAN/Tailscale access and
-require no auth for trusted-device personal use.
+Default operator posture: bind Companion UI to `127.0.0.1` and require no auth for loopback-only
+personal use.
 
 Rules:
 
-- The Companion UI dev/prod launchers bind to `0.0.0.0` by default because the operator runs the
-  system as a server.
-- Loopback-only mode remains available by explicitly setting `HOST=127.0.0.1` or
-  `CUI_BIND_LAN=0`.
+- The Companion UI dev/test/prod channel launchers bind to `127.0.0.1` by default.
+- LAN/Tailscale UAT requires an explicit `CUI_BIND_LAN=1` operator action, which binds the UI to
+  `0.0.0.0`.
+- `HOST` is not a Companion UI channel launcher exposure control.
 - The runtime API used by the page may still be local to the server process.
-- No token, cookie, or login is required for trusted-device personal server use.
-- This default is acceptable only on trusted personal networks or trusted tailnets.
+- No token, cookie, or login is required for loopback-only personal use.
+- This default is acceptable only while the service is not reachable from other devices.
 
 Rationale:
 
-- The operator's normal use case is remote access to a personal server, so loopback-only startup
-  breaks the expected product surface.
+- Loopback-only access keeps the default threat model local to the operator's machine.
 - The current server is still explicitly not public-internet ready.
 - Adding auth before the trusted-device workflow is proven would create more operational complexity
-  without making public exposure supported.
+  without changing the default network exposure.
 
 ## LAN and Tailscale
 
-LAN or Tailscale access is the default trusted-device posture.
+LAN or Tailscale access is opt-in trusted-device UAT posture.
 
 Rules:
 
+- The Companion UI channel launchers expose the UI on LAN/Tailscale only when `CUI_BIND_LAN=1` is
+  set.
 - The operator is responsible for deciding that the LAN or Tailnet is trusted
   enough for the current dev/staging posture.
 - Public internet exposure is not supported.
@@ -116,7 +117,7 @@ For the current read-only dev page:
 
 | Concern | Dev/staging profile | Future production profile |
 |---|---|---|
-| Bind address | `0.0.0.0` default; `127.0.0.1` available by explicit operator opt-out | Trusted-device server bind by default; public exposure still requires hardening |
+| Bind address | `127.0.0.1` default; `0.0.0.0` only with `CUI_BIND_LAN=1` | Localhost-first; supported non-loopback access requires explicit hardening |
 | Auth | None for loopback-only | Token/session auth for supported non-loopback access |
 | TLS | Not required for loopback-only dev | Required for public or reverse-proxied exposure; public exposure is not currently supported |
 | Reverse proxy | Out of scope | Future hardening option |

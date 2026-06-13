@@ -104,15 +104,36 @@ def test_shared_library_doctor_is_read_only() -> None:
     )
 
 
-def test_shared_library_honors_explicit_host_before_bind_default() -> None:
-    """The documented HOST loopback opt-out must work through channel launchers."""
+def test_shared_library_defaults_to_loopback_bind() -> None:
+    """Unset CUI_BIND_LAN must keep the browser UI on loopback by default.
+
+    Verify: Issue #1962 AC1 —
+      tests/ops/test_companion_ui_startup_targets.py::test_shared_library_defaults_to_loopback_bind
+    """
     text = SHARED_LIB.read_text(encoding="utf-8")
-    assert 'if [ -n "${HOST:-}" ]; then' in text
-    assert 'host="${HOST}"' in text
-    assert 'elif [ "${CUI_BIND_LAN:-1}" = "0" ]; then' in text
-    assert text.index('if [ -n "${HOST:-}" ]; then') < text.index(
-        'elif [ "${CUI_BIND_LAN:-1}" = "0" ]; then'
+    assert "CUI_BIND_LAN=1" in text
+    assert "${CUI_BIND_LAN:-0}" in text, (
+        "Shared library must treat unset CUI_BIND_LAN as loopback default (Issue #1962)."
     )
+    assert 'host="127.0.0.1"' in text
+    assert "loopback default" in text
+    assert "CUI_BIND_LAN:-1" not in text
+    assert "server/LAN default" not in text
+
+
+def test_companion_ui_lan_bind_requires_explicit_opt_in() -> None:
+    """LAN/Tailscale binding must require CUI_BIND_LAN=1, not HOST.
+
+    Verify: Issue #1962 AC2 —
+      tests/ops/test_companion_ui_startup_targets.py::test_companion_ui_lan_bind_requires_explicit_opt_in
+    """
+    text = SHARED_LIB.read_text(encoding="utf-8")
+    assert 'if [ "${CUI_BIND_LAN:-0}" = "1" ]; then' in text
+    assert 'host="0.0.0.0"' in text
+    assert "LAN/Tailscale UAT explicitly requested" in text
+    assert 'if [ -n "${HOST:-}" ]; then' not in text
+    assert 'host="${HOST}"' not in text
+    assert "HOST explicitly set" not in text
 
 
 # ── dev / Niflheim (#1358) ────────────────────────────────────────────────────
