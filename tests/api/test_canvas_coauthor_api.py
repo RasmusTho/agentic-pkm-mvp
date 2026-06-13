@@ -190,6 +190,9 @@ def test_coauthor_appends_intent_to_session_log(monkeypatch, vault: Path) -> Non
     log_content = log_path.read_text(encoding="utf-8")
     assert "tighten the intro" in log_content
     assert "tightened intro" in log_content
+    assert log_content.count("**User:** tighten the intro") == 1
+    assert log_content.count("**Change:** tightened intro") == 1
+    assert "**User:** \n" not in log_content
 
 
 # ---------------------------------------------------------------------------

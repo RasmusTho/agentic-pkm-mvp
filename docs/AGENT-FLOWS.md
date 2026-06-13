@@ -261,9 +261,10 @@ that vocabulary; it does not extend it.
 
 ## 10. Knowledge-base, source, and provenance rules
 
-- Agents read projections, never the artifact itself (`docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`);
-  the vault note outranks any projection of it, and decision-weight claims must be verifiable
-  against the durable artifact.
+- Yggdrasil-mediated agents read projections, never the artifact itself
+  (`docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`); direct-filesystem agents may read
+  files under their declared OS-level roots (§7, §12). In both modes, the vault note outranks any
+  projection of it, and decision-weight claims must be verifiable against the durable artifact.
 - Epistemic class is read from existing fields (`review_state`, `maturity`, `ingest_state`,
   memory status, receipt kind) plus zone (§7); agents must distinguish human-confirmed notes,
   rough drafts, imported sources, source summaries, agent interpretation, observed external-agent

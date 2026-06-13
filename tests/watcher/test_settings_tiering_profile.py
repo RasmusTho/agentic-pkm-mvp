@@ -7,6 +7,7 @@ import pytest
 
 from app.watcher.config import WatcherConfig
 from app.watcher.registry import RegistryConfig, WatcherSpec
+from tests.helpers.vault_settings import initialize_test_vault
 
 
 pytestmark = pytest.mark.not_pg
@@ -43,7 +44,7 @@ def _write_registry_config(path: Path) -> None:
 
 def test_registry_ignores_dev_knobs_in_operator_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault = tmp_path / "vault"
-    vault.mkdir()
+    initialize_test_vault(vault)
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "operator")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
@@ -59,7 +60,7 @@ def test_registry_ignores_dev_knobs_in_operator_profile(tmp_path: Path, monkeypa
 
 def test_registry_honors_dev_knobs_in_lab_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault = tmp_path / "vault"
-    vault.mkdir()
+    initialize_test_vault(vault)
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
@@ -74,6 +75,7 @@ def test_registry_honors_dev_knobs_in_lab_profile(tmp_path: Path, monkeypatch: p
 
 
 def test_watcher_config_ignores_dev_knobs_in_operator_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    initialize_test_vault(tmp_path)
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "operator")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(tmp_path))
@@ -90,6 +92,7 @@ def test_watcher_config_ignores_dev_knobs_in_operator_profile(tmp_path: Path, mo
 
 
 def test_watcher_config_honors_dev_knobs_in_lab_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    initialize_test_vault(tmp_path)
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(tmp_path))
