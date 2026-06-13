@@ -82,10 +82,12 @@ next*. The parent feature issue is a blocked validation hub while child slices a
 delivered child posts a validation receipt to it. One task spec may map to more than one issue if the
 implementation is large.
 
-GitHub issues (filled in when filed):
+GitHub issues:
 
-- Parent feature issue (validation hub, `agent:blocked`): _#TBD_
-- `DEFINE_MOMENT_AND_CONTEXT_MODEL`: _#TBD_ — `agent:ready`
-- `DEFINE_RELEVANCE_AND_SCARCITY_CONTRACTS`: _#TBD_ — `agent:blocked` (on task 1)
-- `BUILD_VAULT_NATIVE_PULL_MOMENTS`: _#TBD_ — `agent:blocked` (on tasks 1–2)
-- `BUILD_PROACTIVE_ATTENTION_LOOP`: _#TBD_ — `agent:blocked` (on tasks 1–3)
+- Parent feature issue (validation hub, `agent:blocked`): **#1921**
+- `DEFINE_MOMENT_AND_CONTEXT_MODEL`: **#1922** — `agent:blocked` → flips to `agent:ready` when this brief/spec PR (#1918) merges
+- `DEFINE_RELEVANCE_AND_SCARCITY_CONTRACTS`: **#1923** — `agent:blocked` (on #1922)
+- `BUILD_VAULT_NATIVE_PULL_MOMENTS`: **#1924** — `agent:blocked` (on #1922, #1923)
+- `BUILD_PROACTIVE_ATTENTION_LOOP`: **#1925** — `agent:blocked` (on #1922–#1924); final child, carries the owner-doc promotion handoff
+
+All four children are filed `agent:blocked` pending merge of the brief/spec (PR #1918) and the design-contract chain. #1922 is the first to become ready.
