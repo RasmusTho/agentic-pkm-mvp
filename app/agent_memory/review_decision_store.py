@@ -143,6 +143,56 @@ class ReviewDecisionStore:
             ).fetchall()
         return tuple(_record_from_payload(json.loads(row["payload"])) for row in rows)
 
+    def mark_terminal(
+        self,
+        candidate_id: str,
+        *,
+        vault_context: VaultContext,
+        channel: str,
+    ) -> ReviewDecisionRecord:
+        record = self.get_decision(
+            candidate_id,
+            vault_context=vault_context,
+            channel=channel,
+        )
+        if record is None:
+            raise ReviewDecisionStoreError("cannot mark missing decision terminal")
+        terminal_record = ReviewDecisionRecord(
+            vault_id=record.vault_id,
+            channel=record.channel,
+            candidate_id=record.candidate_id,
+            outcome=record.outcome,
+            decided_by=record.decided_by,
+            decided_at=record.decided_at,
+            source_refs=record.source_refs,
+            receipt_kind=record.receipt_kind,
+            terminal=True,
+            decision_notes=record.decision_notes,
+            revision_of=record.revision_of,
+            generated_by=record.generated_by,
+            derived_from=record.derived_from,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE agent_memory_review_decisions
+                SET terminal = 1, payload = ?
+                WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                """,
+                (
+                    json.dumps(
+                        _record_payload(terminal_record),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    record.vault_id,
+                    record.channel,
+                    record.candidate_id,
+                ),
+            )
+            conn.commit()
+        return terminal_record
+
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path)
