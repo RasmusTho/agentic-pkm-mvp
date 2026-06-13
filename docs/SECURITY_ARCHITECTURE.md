@@ -114,7 +114,9 @@ These invariants are binding review inputs:
 7. Context bundles are inspectable evidence envelopes; they do not become memory, truth, or write
    authorization by existing.
 8. `may_write` is never sufficient on its own. WriteGuard, policy, trust semantics, and admission
-   still run independently.
+   still run independently. All vault-internal writes must pass WriteGuard before filesystem
+   mutation, including system-owned companion files and companion healing or continuity rewrites;
+   non-vault log and tmp writes are exempt by path ownership.
 9. Receipts must remain human-legible accountability artifacts, distinct from raw traces.
 10. External providers and tools may supply capability, inference, transport, or interface; they do
     not become authority without explicit Yggdrasil contracts.
