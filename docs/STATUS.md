@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
 Last reviewed: 2026-06-13
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948 and #1977, and current repo state at 4e642410 on 2026-06-14
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
@@ -19,12 +19,14 @@ present and any owner-doc promotion gate has been satisfied.
 
 Integrated Runtime v1 release line: #1874 is open to integrate already-shipped capabilities through route parity, readiness matrix, Panel staging persistence, golden-path UAT, and negative-safety UAT gates without claiming new shipped behavior here.
 
-Contextual Relevance Engine posture: CRE-01 and CRE-02 are delivered concept-contract slices, and
-CRE-03 is shipped as the first runtime slice. The shipped CRE-03 surface computes vault-native,
-pull-only moments from local vault data, materializes them as non-authoritative moment artifacts
-with receipts, and exposes a read-only Companion "now" / glance projection. It does not read
-external connectors, emit notifications, or implement the proactive reach-out loop; CRE-04 remains
-the bounded follow-up for proactive attention.
+Contextual Relevance Engine posture: CRE-01 and CRE-02 are delivered concept-contract slices;
+CRE-03 is shipped as the vault-native pull runtime slice, and CRE-04 is shipped for governed
+in-app proactive reach-out decisions. The shipped CRE surface computes vault-native moments from
+local vault data, materializes them as non-authoritative moment artifacts with receipts, records a
+reach-out or deliberate suppression receipt per candidate on the governed relevance tick, and exposes
+Companion "now" / glance projections plus threshold-cleared in-app nudges. It does not read external
+connectors or emit OS/system notifications; external source integration and OS-push delivery remain
+deferred follow-ons.
 
 Security review note: the security architecture spine (`docs/SECURITY_ARCHITECTURE.md` plus its
 trust-boundary, data-flow, API-matrix, and STRIDE-lite companions) is now the review-routing owner
@@ -488,21 +490,19 @@ The vocabulary is the language new cognitive-mediation catalog entries (tracked 
 expected to populate; existing entries remain valid without retroactive backfill. Delivers #981
 under the PanelAgent / Cognitive Mediation program coordinated by #978.
 
-Contextual Relevance Engine — first runtime slice shipped (#1924, vault-native pull-only moments).
-The `app/relevance/` package computes "moments" deterministically from vault-native inputs (today's
-daily note plus open-loop / near-deadline notes), materializes each as the CRE-01 moment artifact in
-the vault system plane (`<system_folder>/moments/<id>.md`) through the WriteGuard with provenance and
-an Act-tier receipt, and projects them read-only at a companion-UI "now"/glance surface
-(`companion_ui/workspace/now_surface.py`). Pull-only: no proactivity, no external source, no
-notification. The concept contracts are CRE-01/CRE-02 (#1922/#1923). The **pull path is wired into
-the runtime as of #1958** (Wave 2 of v6.1 delivery hub #1956): a governed watcher tick
+Contextual Relevance Engine — vault-native pull path plus in-app reach-out runtime slices shipped
+(#1924/#1958/#1964). The `app/relevance/` package computes "moments" deterministically from
+vault-native inputs (today's daily note plus open-loop / near-deadline notes), materializes each as
+the CRE-01 moment artifact in the vault system plane (`<system_folder>/moments/<id>.md`) through the
+WriteGuard with provenance and an Act-tier receipt, and projects them read-only at a companion-UI
+"now"/glance surface (`companion_ui/workspace/now_surface.py`). The pull path is wired into the
+runtime as of #1958 (Wave 2 of v6.1 delivery hub #1956): a governed watcher tick
 (`app/watcher/relevance_tick.py`) computes and materializes moments each tick, and
-`GET /api/companion/now` surfaces them read-only at the companion-UI glance surface — so the engine
-no longer sits dormant. The proactive **attention loop** is built and unit-tested (#1925, CRE-04):
-`app/relevance/attention_loop.py` implements the deterministic reach-out/scarcity gate (graduated
-ladder; urgency vs the context-dependent interruption threshold; zero-tolerance floor never pushes;
-defer-not-drop; soft declared patterns; Act-tier receipts; no external side-effects) — but the
-**reach-out is not yet wired into the runtime** (gated on #1881; a separate slice). HUMAN-FLOWS §5 and
-the human-flow→runtime map carry the owner-doc promotion. The emergent/learned pattern loop and
-external connectors remain deferred follow-ons. Capability boundary and acceptance live in
-`docs/CONTEXTUAL_RELEVANCE_ENGINE/` and the parent validation hub #1921.
+`GET /api/companion/now` surfaces them read-only at the companion-UI glance surface. The proactive
+attention loop is wired into the same runtime tick as of #1964: after materializing moments,
+`app/watcher/relevance_tick.py` invokes `app/relevance/attention_loop.py` to record a reach-out or
+deliberate suppression receipt per candidate, and `GET /api/companion/now` can surface an in-app
+nudge when a moment clears the current in-app threshold. Zero-tolerance contexts still suppress;
+OS-push delivery, external connectors, and the emergent/learned pattern loop remain deferred
+follow-ons. Capability boundary and acceptance live in `docs/CONTEXTUAL_RELEVANCE_ENGINE/` and the
+parent validation hub #1921.
