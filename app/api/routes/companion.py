@@ -273,10 +273,11 @@ def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext
         return f"requires selected vault; current status is {context.status}"
     manager = get_vault_manager()
     permissions = manager.permissions_for_context(context)
-    if not permissions.allow_writes_to_vault:
-        return "writes disabled by machine role or local permission"
-    if definition.scope == "vault-shared" and not permissions.allow_shared_settings_edits:
-        return "shared settings edits disabled for this local role"
+    if definition.scope == "vault-shared":
+        if not permissions.allow_writes_to_vault:
+            return "writes disabled by machine role or local permission"
+        if not permissions.allow_shared_settings_edits:
+            return "shared settings edits disabled for this local role"
     if definition.scope == "vault-local" and not permissions.allow_local_settings_edits:
         return "local settings edits disabled for this local role"
     return None
