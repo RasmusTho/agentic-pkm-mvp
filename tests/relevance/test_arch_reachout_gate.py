@@ -7,15 +7,13 @@ Two layers, deliberately separated so the map is honest:
   interruption threshold; the zero-tolerance floor never pushes; a below-threshold
   moment defers to the glance surface (never dropped); blocked writes / declared
   suppression also defer.
-* The reach-out is NOT yet wired into a runtime loop — that test is XFAIL and
-  flips to pass when #1964 lands (and is gated on the #1881 tier decision).
+* The reach-out is wired into the governed relevance tick by #1964; the runtime
+  call site must remain in app/watcher or app/api.
 """
 
 from __future__ import annotations
 
 import inspect
-
-import pytest
 
 import app.watcher.relevance_tick as relevance_tick_mod
 import app.watcher.watcher as watcher_mod
@@ -58,12 +56,10 @@ def test_blocked_writes_and_suppression_defer() -> None:
     assert decide_reachout("critical", home, suppressed=True)[0] == "defer"
 
 
-@pytest.mark.xfail(reason="reach-out not yet wired into a runtime loop (#1964, gated on #1881)", strict=False)
 def test_reachout_is_invoked_by_a_runtime_loop() -> None:
     """Arrow 3 wiring: a runtime entrypoint must drive AttentionLoop on a tick.
 
-    Today the attention loop is built but called by nothing — this is the dormancy
-    gap. When #1964 wires it (into the relevance tick or a scheduler), this passes.
+    #1964 wires it into the relevance tick, which is invoked from the watcher.
     """
 
     wired = "AttentionLoop" in inspect.getsource(watcher_mod) or "AttentionLoop" in inspect.getsource(
