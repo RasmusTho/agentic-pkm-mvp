@@ -7,6 +7,7 @@ import pytest
 
 import app.watcher.registry as registry
 from scripts.yaml_roundtrip import load_frontmatter
+from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
 
@@ -57,6 +58,7 @@ def test_registry_panel_policy_skips_never_and_counts_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
     inbox = vault_root / "📥 Inbox"
     inbox.mkdir(parents=True, exist_ok=True)
 
@@ -82,6 +84,7 @@ def test_registry_panel_policy_skips_never_and_counts_candidates(
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "📥 Inbox/**")
     monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
     monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
@@ -117,6 +120,7 @@ def test_registry_panel_auto_exec_disabled_skips_mutations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
     inbox = vault_root / "📥 Inbox"
     inbox.mkdir(parents=True, exist_ok=True)
 
@@ -135,6 +139,7 @@ def test_registry_panel_auto_exec_disabled_skips_mutations(
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "📥 Inbox/**")
     monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("WATCHER_AUTO_EXEC", "0")
     monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
@@ -160,6 +165,7 @@ def test_registry_panel_auto_exec_defaults_enabled_when_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
     inbox = vault_root / "📥 Inbox"
     inbox.mkdir(parents=True, exist_ok=True)
 
@@ -178,6 +184,7 @@ def test_registry_panel_auto_exec_defaults_enabled_when_unset(
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "📥 Inbox/**")
     monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("WATCHER_AUTO_EXEC", raising=False)
     monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")
@@ -200,6 +207,7 @@ def test_registry_panel_settings_default_false_disables_when_env_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
     inbox = vault_root / "📥 Inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     _write_watchers_settings(vault_root, "false")
@@ -219,6 +227,7 @@ def test_registry_panel_settings_default_false_disables_when_env_unset(
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "📥 Inbox/**")
     monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("WATCHER_AUTO_EXEC", raising=False)
     monkeypatch.setenv("WATCHER_SUMMARY_INTERVAL", "0")

@@ -1,3 +1,5 @@
+State: Non-authoritative pre-Fable planning queue; use only as planning context, not executable backlog truth.
+
 # Codex Delegation Queue - Integrated Runtime v1
 
 Status: pre-Fable delegation queue. These are bounded repo-near tasks that are cheaper and more deterministic for Codex than for Fable. Do not treat this as a final implementation backlog until the Integrated Runtime v1 parent scope is accepted.
