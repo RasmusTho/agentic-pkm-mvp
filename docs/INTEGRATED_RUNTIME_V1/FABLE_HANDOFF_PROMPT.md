@@ -1,3 +1,5 @@
+State: Non-authoritative pre-Fable handoff prompt; use only as planning context, not executable backlog truth.
+
 # Fable Handoff Prompt - Integrated Runtime v1
 
 Status: paste-ready prompt for a future Fable synthesis pass. This prompt assumes the model receives the evidence pack, errata, selected SoT excerpts, and relevant issue bodies.

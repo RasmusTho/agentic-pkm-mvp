@@ -1,3 +1,5 @@
+State: Non-authoritative planning package superseded for executable delivery by epic #1874 and child issues.
+
 # Integrated Runtime v1 - Pre-Fable Package
 
 Status: non-authoritative planning package. This directory prepares the handoff from the merged Integrated Runtime v1 evidence pack and errata into a future Fable synthesis pass.
