@@ -22,6 +22,9 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 MEMORY_MATERIALIZATION_ACTION = "memory.materialize"
 MEMORY_MATERIALIZATION_SOURCE = "agent_memory.materialization"
 DEFAULT_MEMORY_DIR = "Agent Memory"
+DEFAULT_MATERIALIZATION_RECEIPTS_PATH = Path(
+    "runtime/agent_memory/materialization_receipts.jsonl"
+)
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,7 @@ def materialize_promoted_memory(
     )
     result = query_promotion_receipts(
         vault_root=vault_root,
-        outbox_path=outbox_path,
+        outbox_path=outbox_path or DEFAULT_MATERIALIZATION_RECEIPTS_PATH,
     )
     if not any(row.receipt_id == receipt_id for row in result.rows):
         raise MemoryMaterializationError("materialization receipt was not queryable")
@@ -170,6 +173,7 @@ def _render_memory_note(entry: ReviewEntry, *, artifact_uuid: str) -> str:
         "labels": ["agent-promoted-memory"],
         "promoted_from_candidate_id": candidate.candidate_id,
         "source_refs": list(candidate.source_refs),
+        "inferred": candidate.inferred,
         "generated_by": candidate.generated_by,
         "derived_from": candidate.derived_from,
         "decided_by": entry.decided_by,
@@ -216,6 +220,7 @@ def _append_promotion_receipt(
             "source_event": f"memory-promote:{entry.candidate_id}",
             "intent_type": "agent_memory_materialization",
             "candidate_id": entry.candidate_id,
+            "inferred": entry.inferred,
             "source_refs": list(entry.source_refs),
         },
         "outcome": {
@@ -239,7 +244,7 @@ def _append_promotion_receipt(
         "timestamp": timestamp,
         "payload": payload,
     }
-    path = outbox_path or Path("runtime/agent_memory/materialization_receipts.jsonl")
+    path = outbox_path or DEFAULT_MATERIALIZATION_RECEIPTS_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
@@ -255,5 +260,6 @@ def _iso(value: datetime | None) -> str | None:
 __all__ = [
     "MemoryMaterializationError",
     "MemoryMaterializationResult",
+    "DEFAULT_MATERIALIZATION_RECEIPTS_PATH",
     "materialize_promoted_memory",
 ]
