@@ -59,6 +59,8 @@ class CanvasWriter:
         session: SessionLog | None,
         new_body: str,
         change_summary: str,
+        *,
+        user_prompt: str = "",
     ) -> None:
         """Replace the body of ``session.note_path`` with ``new_body``.
 
@@ -103,8 +105,12 @@ class CanvasWriter:
         # Write through KnowledgePort boundary
         write_note_from_absolute(note_abs, new_content, vault_root=self._vault_root)
 
-        # Append to session log (change summary; user prompt not captured at this layer)
-        self._log_writer.append_turn(session, user_prompt="", change_summary=change_summary)
+        # Append a single provenance turn for this body edit.
+        self._log_writer.append_turn(
+            session,
+            user_prompt=user_prompt,
+            change_summary=change_summary,
+        )
 
 
 # ---------------------------------------------------------------------------

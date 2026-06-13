@@ -504,10 +504,13 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
     body_before = current_body
     log_writer = SessionLogWriter(vault_root=vault_root)
     writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
-    # Record the user's intent as provenance in the session log.
-    log_writer.append_turn(session, user_prompt=req.intent, change_summary=change_summary)
     try:
-        writer.apply_edit(session, generated.body, change_summary)
+        writer.apply_edit(
+            session,
+            generated.body,
+            change_summary,
+            user_prompt=req.intent,
+        )
     except GovernanceBearingMutationError:
         # Defense in depth: the writer caught a governance-bearing body the
         # cognition let through. Route with default FRONTMATTER_UPDATE; the

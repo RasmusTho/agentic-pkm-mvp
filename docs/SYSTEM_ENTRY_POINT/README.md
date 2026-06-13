@@ -13,7 +13,7 @@ related_docs:
   - docs/CANVAS_CHAT_SURFACE/README.md
 ---
 
-State: Capability delivered. All twelve implementation children (#1783–#1794) merged; the final child (#1795, SEP-11) shipped the fixture-driven state-gallery validation harness (`tests/companion_ui/test_entry_state_gallery.py`) and executed the parent-closure handoff. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt. The parked Q15–Q16 decision issue (#1796, `agent:needs-human`) remains open. GitHub is the authoritative backlog surface; see §Relationship to GitHub Issues for the per-task delivery map (PARENT_FEATURE_ISSUE.md keeps the filing record).
+State: Capability delivered. All twelve implementation children (#1783–#1794) merged; the final child (#1795, SEP-11) shipped the fixture-driven state-gallery validation harness (`tests/companion_ui/test_entry_state_gallery.py`) and executed the parent-closure handoff. Epic #1782 was closed on 2026-06-12 by the delivery coordinator after the #1795 validation receipt. The parked Q15–Q16 decision issue (#1796, `agent:needs-human`) remains open. GitHub is the authoritative backlog surface; see §Relationship to GitHub Issues for the per-task delivery map (PARENT_FEATURE_ISSUE.md keeps the filing record).
 
 # System Entry Point Specification
 
@@ -83,7 +83,7 @@ Task-level verification follows each task file's `How to Verify (Pre-Merge)` sec
 
 ## Validation / Acceptance Path
 
-The parent feature issue (#1782; pre-filing draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)) was the live validation hub: each child PR posted a validation receipt to the parent before the next dependent child was picked up. Owner-doc promotion (the `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` shipped-vs-new audit and the `docs/STATUS.md` delivery record) executed with the final child (SEP-11, #1795) as its parent-closure handoff. Epic #1782 is closed by the delivery coordinator on the #1795 validation receipt.
+The parent feature issue (#1782; pre-filing draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)) was the live validation hub: each child PR posted a validation receipt to the parent before the next dependent child was picked up. Owner-doc promotion (the `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` shipped-vs-new audit and the `docs/STATUS.md` delivery record) executed with the final child (SEP-11, #1795) as its parent-closure handoff. Epic #1782 was closed by the delivery coordinator on 2026-06-12 after the #1795 validation receipt.
 
 ## Relationship to GitHub Issues
 
@@ -91,7 +91,7 @@ The issue tree was filed 2026-06-10 per `.codex/skills/feature-breakdown/SKILL.m
 
 | Task spec | Issue | Delivery |
 |---|---|---|
-| Parent feature issue (validation hub) | #1782 | open until the coordinator closes it on the #1795 validation receipt |
+| Parent feature issue (validation hub) | #1782 | closed 2026-06-12 after the #1795 validation receipt |
 | SEP-01 [ENTRY_STATE_MACHINE.md](ENTRY_STATE_MACHINE.md) | #1783 | delivered — PR #1800 |
 | SEP-02 [REENTRY_ORIENTATION_TREATMENT.md](REENTRY_ORIENTATION_TREATMENT.md) | #1784 | delivered — PR #1801 |
 | SEP-03 [UNIFIED_TOPBAR_AND_OVERLAY_HOST.md](UNIFIED_TOPBAR_AND_OVERLAY_HOST.md) | #1785 | delivered — PR #1802 |
@@ -104,7 +104,7 @@ The issue tree was filed 2026-06-10 per `.codex/skills/feature-breakdown/SKILL.m
 | SEP-09a [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (runtime endpoints) | #1792 | delivered — PR #1798 |
 | SEP-09b [MEMORY_REVIEW_DRAWER.md](MEMORY_REVIEW_DRAWER.md) (review drawer UI) | #1793 | delivered — PR #1818 |
 | SEP-10 [RECEIPTS_HISTORY_SURFACE.md](RECEIPTS_HISTORY_SURFACE.md) | #1794 | delivered — PR #1833 |
-| SEP-11 [STATE_GALLERY_VALIDATION.md](STATE_GALLERY_VALIDATION.md) | #1795 | delivered by this slice's PR (state-gallery harness + parent-closure handoff) |
+| SEP-11 [STATE_GALLERY_VALIDATION.md](STATE_GALLERY_VALIDATION.md) | #1795 | delivered — PR #1854 (state-gallery harness + parent-closure handoff) |
 | Parked context lane / place band decision (Q15–Q16) | #1796 | open — `agent:needs-human`, prio:low (decision issue, not implementation) |
 
 ## Parked
