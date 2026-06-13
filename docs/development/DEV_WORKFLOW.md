@@ -82,6 +82,16 @@ Enforcement note:
   - blocking CI coverage is added for the missing check and enabled.
 - For `ruff --fix` in `conftest.py` or known re-export modules, review F401 removals manually and preserve intentional re-exports with `# noqa: F401` where needed.
 
+### CI / validation expectations
+
+The CI workflow runs a non-required `Unit tests (not pg)` check automatically on `pull_request`.
+That check executes `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"` without a Postgres
+service so unit regressions are visible before merge.
+
+This PR check is intentionally non-required until it has been observed green on real PRs. Promoting
+the check to a required branch-protection gate, or adding `pg`-marked tests with a Postgres service
+to the PR path, is deferred to follow-up work based on observed signal and CI cost/flakiness.
+
 ## Documentation rules
 
 - Update the owner doc first.
