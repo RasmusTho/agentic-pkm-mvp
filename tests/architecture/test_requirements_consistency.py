@@ -15,6 +15,7 @@ ROOT_REQUIREMENTS = REPO_ROOT / "requirements.txt"
 APP_REQUIREMENTS = REPO_ROOT / "app" / "requirements.txt"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+SETTINGS_CI_WORKFLOW = WORKFLOWS / "settings-ci.yaml"
 PY312_SMOKE = REPO_ROOT / "scripts" / "py312_smoke_test.sh"
 
 PINNED_RUNTIME_PACKAGES = ("numpy", "langgraph")
@@ -116,6 +117,13 @@ def _workflow_run_blocks() -> list[tuple[Path, str, str]]:
     return blocks
 
 
+def _load_workflow(path: Path) -> dict:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise AssertionError(f"Expected workflow mapping in {_relative(path)}")
+    return data
+
+
 def _install_sources() -> list[InstallSource]:
     sources = [
         InstallSource(DOCKERFILE, "Dockerfile", ref)
@@ -207,3 +215,22 @@ def test_docker_and_ci_install_same_numpy_major() -> None:
     assert not mismatches, "Docker and CI runtime dependency majors diverged:\n" + "\n".join(
         mismatches
     )
+
+
+def test_settings_ci_runtime_lock_runs_on_ci_python_line() -> None:
+    workflow = _load_workflow(SETTINGS_CI_WORKFLOW)
+    settings_job = workflow["jobs"]["settings"]
+    setup_steps = [
+        step
+        for step in settings_job["steps"]
+        if step.get("uses", "").startswith("actions/setup-python@")
+    ]
+    assert len(setup_steps) == 1, "settings-ci must declare one Python runtime"
+    assert setup_steps[0]["with"]["python-version"] == "3.12"
+
+    install_steps = [
+        step
+        for step in settings_job["steps"]
+        if "pip install -r requirements.txt" in str(step.get("run", ""))
+    ]
+    assert install_steps, "settings-ci must install the canonical root requirements.txt"
