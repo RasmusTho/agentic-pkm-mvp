@@ -65,6 +65,7 @@ from companion_ui.workspace.overlay_host import (
     SHIPPED_TOPBAR_SURFACES,
     OverlayHostState,
     apply_intent,
+    dismiss,
     mount,
 )
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
@@ -421,6 +422,31 @@ _OCCUPANT_MARKERS: dict[str, str] = {
     "settings": 'data-region="settings-drawer"',
     "map": 'data-region="system-map-overlay"',
 }
+
+_OCCUPANT_REGISTRATION_MARKERS: dict[str, str] = {
+    occupant: f"window.overlayHost.register('{occupant}'"
+    for occupant in SHIPPED_OVERLAY_OCCUPANTS
+}
+
+_OCCUPANT_OPEN_INTENTS: dict[str, str] = {
+    "vault": "vault.open",
+    "cmd": "cmd.open",
+    "capture": "capture.open",
+    "memory": "memory.open",
+    "receipts": "receipts.open",
+    "settings": "settings.open",
+    "map": "map.open",
+}
+
+
+@dataclass(frozen=True)
+class OpenOverlayFixture:
+    """Pure open-state proof for one shipped overlay-host occupant."""
+
+    occupant: str
+    host: OverlayHostState
+    html: str
+    required: tuple[str, ...] = field(default=())
 
 
 @dataclass(frozen=True)
@@ -834,6 +860,37 @@ def _gallery() -> dict[str, GalleryState]:
     return states
 
 
+@functools.lru_cache(maxsize=1)
+def _open_overlay_gallery() -> dict[str, OpenOverlayFixture]:
+    """Exercise every shipped overlay occupant as an open host-state fixture.
+
+    The rendered shell mounts each occupant closed by default; the open-state
+    proof stays pure and deterministic by using the same overlay-host model
+    the in-page controller mirrors.
+    """
+    shell = _gallery()["B1_shell_active_anchor"].html
+    base = OverlayHostState(
+        anchor_note_path="Notes/note.md",
+        route="/api/companion/workspace?note_path=Notes%2Fnote.md",
+        scroll_owner="note-body",
+        rail_state="open",
+        staged_suggestion_ids=("sugg-1",),
+        open_loop_count=3,
+    )
+    return {
+        occupant: OpenOverlayFixture(
+            occupant=occupant,
+            host=mount(base, occupant),
+            html=shell,
+            required=(
+                _OCCUPANT_MARKERS[occupant],
+                _OCCUPANT_REGISTRATION_MARKERS[occupant],
+            ),
+        )
+        for occupant in SHIPPED_OVERLAY_OCCUPANTS
+    }
+
+
 def _body_tag(html: str) -> str:
     m = re.search(r"<body[^>]*>", html)
     assert m, "rendered page must have a <body> tag"
@@ -916,12 +973,65 @@ def test_state_gallery_renders_all_declared_states() -> None:
     assert "guidance-callout" in shell
 
 
+def test_state_gallery_exercises_each_shipped_overlay_open_state() -> None:
+    fixtures = _open_overlay_gallery()
+    assert set(fixtures) == set(SHIPPED_OVERLAY_OCCUPANTS)
+    assert set(_OCCUPANT_MARKERS) == set(SHIPPED_OVERLAY_OCCUPANTS)
+    assert set(_OCCUPANT_REGISTRATION_MARKERS) == set(SHIPPED_OVERLAY_OCCUPANTS)
+    assert set(_OCCUPANT_OPEN_INTENTS) == set(SHIPPED_OVERLAY_OCCUPANTS)
+
+    base = OverlayHostState(
+        anchor_note_path="Notes/note.md",
+        route="/api/companion/workspace?note_path=Notes%2Fnote.md",
+        scroll_owner="note-body",
+        rail_state="open",
+        staged_suggestion_ids=("sugg-1",),
+        open_loop_count=3,
+    )
+
+    for occupant, fixture in fixtures.items():
+        assert fixture.occupant == occupant
+        assert fixture.host.stack == (occupant,), occupant
+        assert apply_intent(base, _OCCUPANT_OPEN_INTENTS[occupant]) == fixture.host
+
+        host = re.search(r'<div[^>]*data-region="overlay-host"[^>]*>', fixture.html)
+        assert host, occupant
+        declared = re.search(r'data-declared-overlays="([^"]*)"', host.group(0))
+        shipped = re.search(r'data-shipped-occupants="([^"]*)"', host.group(0))
+        assert declared and occupant in declared.group(1).split(), occupant
+        assert shipped and occupant in shipped.group(1).split(), occupant
+
+        for marker in fixture.required:
+            assert marker in fixture.html, f"{occupant}: missing {marker}"
+
+        closed = dismiss(fixture.host)
+        assert closed.stack == (), occupant
+        assert closed.anchor_note_path == base.anchor_note_path, occupant
+        assert closed.route == base.route, occupant
+        assert closed.scroll_owner == base.scroll_owner, occupant
+        assert closed.rail_state == base.rail_state, occupant
+        assert closed.staged_suggestion_ids == base.staged_suggestion_ids, occupant
+        assert closed.open_loop_count == base.open_loop_count, occupant
+
+    # Declared-but-unshipped overlays stay inert, and parked Q15/Q16 surfaces
+    # are not part of the shipped open-state coverage.
+    unshipped = set(DECLARED_OVERLAYS) - set(SHIPPED_OVERLAY_OCCUPANTS)
+    assert unshipped
+    assert unshipped.isdisjoint(fixtures)
+    for occupant in unshipped:
+        assert mount(base, occupant) == base, occupant
+    for parked in ("context", "location"):
+        assert parked not in fixtures
+        with pytest.raises(ValueError):
+            mount(base, parked)
+
+
 # ---------------------------------------------------------------------------
 # AC: undeclared entry transitions are rejected across the fixture matrix
 # ---------------------------------------------------------------------------
 
 
-def test_transition_rejection_across_fixtures() -> None:
+def test_undeclared_transitions_rejected_across_fixtures() -> None:
     gallery = _gallery()
 
     # The resolution type rejects undeclared states, shapes, and cross-flag
