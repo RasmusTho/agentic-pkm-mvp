@@ -237,6 +237,7 @@ Form:
 Rules:
 
 - Behavioral ACs point to a concrete test (existing or to-be-added) by file and test name.
+- Enforcement ACs — behavioral ACs asserting a guard, gate, or invariant holds on the live runtime path — must point to a test that exercises the production call site, not the guard function in isolation. "Module exists and is unit-tested" does not discharge an enforcement AC; "invoked on the runtime path and asserted there" does.
 - Non-behavioral ACs point to a concrete observable target: doc writeback path plus anchor, roadmap diff, or runtime receipt.
 - If an AC cannot carry a resolvable `Verify:` target, refine or split it before marking the Issue `agent:ready`.
 - `Suggested Validation` remains the section that lists the commands and procedures that execute the declared `Verify:` targets. ACs and Suggested Validation are coupled: commands exist to resolve the Verify targets, not to duplicate them.
