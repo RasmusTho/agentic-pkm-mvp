@@ -8,8 +8,7 @@ prerequisites: [DURABLE-MEMORY-01]
 depends_on: [PERSIST_REVIEW_DECISIONS.md]
 can_parallelize_with: []
 ---
-State: Specified. Not yet delivered. Blocked on DURABLE-MEMORY-01. Largest slice; may produce more
-than one GitHub issue at implementation time.
+State: Implemented. Delivery PR for issue #1906.
 
 # MATERIALIZE_PROMOTED_MEMORY_TO_VAULT
 
