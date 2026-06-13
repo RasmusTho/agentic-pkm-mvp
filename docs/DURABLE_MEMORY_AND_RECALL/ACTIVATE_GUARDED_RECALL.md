@@ -8,7 +8,7 @@ prerequisites: [DURABLE-MEMORY-03]
 depends_on: [MATERIALIZE_PROMOTED_MEMORY_TO_VAULT.md]
 can_parallelize_with: []
 ---
-State: Specified. Not yet delivered. Blocked on DURABLE-MEMORY-03.
+State: Implemented. Delivery PR for issue #1907.
 
 # ACTIVATE_GUARDED_RECALL
 
