@@ -27,6 +27,7 @@ from app.agent_memory.promotion import (
     reject as reject_memory_candidate,
     revise as revise_memory_candidate,
 )
+from app.agent_memory.review_decision_store import ReviewDecisionStore
 from app.agent_memory.review_queue import (
     MemoryCandidateReviewQueue,
     ReviewDecision,
@@ -339,6 +340,7 @@ ORIENTATION_MEMORY_INTENT_HANDOFF_HINT = "panel_governance_review"
 
 
 _MEMORY_CANDIDATE_REVIEW_QUEUE = MemoryCandidateReviewQueue()
+_MEMORY_REVIEW_DECISION_STORE = ReviewDecisionStore()
 
 
 class WorkspaceOrientationScope(BaseModel):
@@ -1116,7 +1118,38 @@ def _orientation_source_ref(kind: str, ref: str, label: str | None = None) -> Wo
 
 
 def _orientation_memory_review_queue() -> MemoryCandidateReviewQueue:
+    _MEMORY_CANDIDATE_REVIEW_QUEUE.configure_reconciliation(
+        decision_store=_memory_review_decision_store(),
+        vault_context=_memory_review_vault_context(),
+        channel=_memory_review_channel(),
+    )
     return _MEMORY_CANDIDATE_REVIEW_QUEUE
+
+
+def _memory_review_decision_store() -> ReviewDecisionStore:
+    return _MEMORY_REVIEW_DECISION_STORE
+
+
+def _memory_review_vault_context() -> VaultContext:
+    context = get_vault_manager().context
+    if context.active_vault_id or context.active_vault_path:
+        return context
+    vault_root = resolve_vault_root()
+    return VaultContext(
+        status="selected",
+        active_vault_id=os.getenv("VAULT_ID") or None,
+        active_vault_name=vault_root.name,
+        active_vault_path=str(vault_root),
+    )
+
+
+def _memory_review_channel() -> str:
+    return (
+        os.getenv("PKM_ENVIRONMENT")
+        or os.getenv("CHANNEL")
+        or os.getenv("PKM_CHANNEL")
+        or "default"
+    ).strip() or "default"
 
 
 def _orientation_memory_summary() -> WorkspaceOrientationMemory:
@@ -3212,6 +3245,11 @@ def post_memory_review_decision(
             reviewed_by=req.reviewed_by,
             notes=req.notes,
         )
+        _memory_review_decision_store().record_decision(
+            decided,
+            vault_context=_memory_review_vault_context(),
+            channel=_memory_review_channel(),
+        )
         promoted = promote_memory_candidate(decided)
         return MemoryReviewDecisionResponse(
             status="accepted",
@@ -3227,6 +3265,11 @@ def post_memory_review_decision(
             ReviewDecision.REJECT,
             reviewed_by=req.reviewed_by,
             notes=req.notes,
+        )
+        _memory_review_decision_store().record_decision(
+            decided,
+            vault_context=_memory_review_vault_context(),
+            channel=_memory_review_channel(),
         )
         rejected = reject_memory_candidate(decided)
         return MemoryReviewDecisionResponse(
@@ -3245,6 +3288,11 @@ def post_memory_review_decision(
         reviewed_by=req.reviewed_by,
         notes=req.notes,
         revision=revision_candidate,
+    )
+    _memory_review_decision_store().record_decision(
+        decided,
+        vault_context=_memory_review_vault_context(),
+        channel=_memory_review_channel(),
     )
     revision_entry = queue.get(revision_candidate.candidate_id)
     revised = revise_memory_candidate(decided, revision_entry)
