@@ -93,6 +93,37 @@ about when it intrudes** — the adaptiveness never touches the authority or sca
 User-defined is the seed; emergent is the same loop run longer. Emergent proposals are
 review-class objects, never silently active authority.
 
+### 3.3 Reach-out channels and interruptibility (the scarcity model)
+
+The engine reaches out on a **graduated ladder of intrusiveness**; a moment climbs only as high as
+it earns:
+
+- **Glance surface** — a companion-UI "now" view; always available, zero interruption (pull).
+- **In-app nudge** — a badge/banner when the app is already open.
+- **OS push notification** — the real interrupt; top rung, highest bar. Reserved for time-critical /
+  commitment-risk moments (the rare genuinely notification-worthy case most apps fake and this one
+  actually has).
+
+Scarcity is **not a fixed per-day cap**. It is a **context-dependent interruption threshold driven
+by the human's current cognitive load / interruptibility** — the same context model that drives
+relevance also tells the engine how interruptible the human is right now:
+
+- low load (at home, not in a meeting) → higher tolerance → lower bar to surface
+- high load (in a 1-1, deep focus) → lower tolerance → higher bar
+- **sleep / declared do-not-disturb → zero tolerance → never push** — a hard, deterministic floor,
+  non-negotiable
+
+A push fires only when a moment's urgency clears the *current* threshold. Below it, the moment
+**degrades down the ladder and defers** — it is never dropped; it waits at the glance surface and
+re-attempts when interruptibility rises. **Suppression is timing, not deletion.**
+
+The tolerance curve is **seeded by the human** (the bands that matter — home / meeting / focus /
+sleep) and then **learned** from engagement vs. dismissal, within the deterministic zero-tolerance
+floor. This is the scarcity expression of §3.1's split: adaptive about *when you're interruptible*,
+deterministic about the *never-push* floor. The default direction is silence — when interruptibility
+is uncertain, hold to the higher threshold. Anchors the existing cognitive-load surfaces:
+`docs/COGNITIVE_LOAD_PROJECTION_LAYER.md`, `docs/COMPANION_UI_COGNITIVE_LOAD_OPERATING_MODEL.md`.
+
 ## 4. Governance posture (settled in #1881)
 
 Surfacing is mostly in the safe lane; the deterministic gate is reserved for the few effects the
@@ -163,24 +194,24 @@ gap, not an out-of-scope request.
 
 ## 8. Open design questions (only the ones that shape the architecture)
 
-Resolved already (this brief): general engine not a feature list; context model + adaptive
-evaluator; user-defined → emergent patterns; adaptive cognition + deterministic gate; governance
-tiers per #1881.
+Resolved (this brief): general engine not a feature list; context model + adaptive evaluator;
+user-defined → emergent patterns; adaptive cognition + deterministic gate; governance tiers per
+#1881; **reach-out channel** = the graduated ladder in §3.3 (glance + in-app + OS push — owner: "I
+need both; this is truly notification-worthy compared to most other things"); **scarcity rule** =
+the context-dependent interruption threshold in §3.3 (driven by current cognitive load; zero floor
+at sleep/DND; defer-not-drop; seeded then learned).
 
-Still open — and primarily the human's to anchor, because they are about *the human's attention*:
+Still open — deferred, not blocking the core engine:
 
-- **The reach-out channel.** How does the engine proactively reach the human — a "now" surface in
-  the companion UI the human glances at, vs. an OS/push notification? This is the proactivity
-  substrate.
-- **The scarcity rule.** The concrete policy that keeps the engine a prosthesis, not a firehose
-  (e.g., a hard cap on proactive surfacings; only strong triggers earn a push; everything else
-  stays pull).
-- **Connector privacy posture (deferred).** The local-first guarantees for any calendar/email/
-  location source — inherits #1796 Q16; do not resolve until slice 4.
+- **Connector privacy posture (deferred to slice 4).** The local-first guarantees for any
+  calendar/email/location source — inherits #1796 Q16; do not resolve until the external-connector
+  slice.
 
 ## 9. Constraints (non-negotiable)
 
-- **Scarcity is the core feature, not a setting** (`docs/HUMAN-FLOWS.md` §0).
+- **Scarcity is the core feature, not a setting** (`docs/HUMAN-FLOWS.md` §0) — expressed as the
+  context-dependent interruption threshold in §3.3, with a non-negotiable zero-tolerance floor at
+  sleep / declared do-not-disturb.
 - **Adaptive cognition, deterministic gate** — intelligence in relevance; determinism in the safety
   and scarcity layer.
 - **Vault-first** — every moment has a durable Markdown artifact in the vault; the UI is a
