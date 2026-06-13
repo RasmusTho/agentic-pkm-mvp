@@ -1,4 +1,4 @@
-State: Specification directory (spec/source layer). Not yet delivered. Parent feature issue filed on GitHub as the validation hub; child slices created in dependency order. Docs/spec authoring lane — this directory specifies what must be built; it does not itself ship runtime behavior.
+State: Specification directory (spec/source layer). Not yet delivered. Parent feature issue #1903 filed as the validation hub; child slices #1904–#1908 created in dependency order (#1904 ready, rest blocked). Spec PR #1902. Docs/spec authoring lane — this directory specifies what must be built; it does not itself ship runtime behavior.
 
 Doc role: Capability specification and delivery index for durable agent-memory persistence and guarded recall activation.
 Authority: Navigates the durable-memory capability. Semantic authority remains in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; the runtime-vs-durable boundary remains in `docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md`; current runtime posture remains in `docs/STATUS.md`.
@@ -130,5 +130,11 @@ Promote current-state owner docs only after implementation receipts show all of 
 
 - Predecessor capability (closed): `docs/AGENT_MEMORY/`, parent #900.
 - Governing boundary (closed): #1369 (`docs/CONCEPTS/RUNTIME_VS_DURABLE_STATE_BOUNDARY.md`).
-- Parent feature issue and child slices for this capability are listed in
-  [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) once filed.
+- Spec PR: #1902.
+- Parent feature issue (validation hub): #1903.
+- Child slices (dependency order):
+  - #1904 — PERSIST_REVIEW_DECISIONS (`agent:ready`)
+  - #1905 — RECONCILE_REVIEW_QUEUE_ON_START (`agent:blocked`, depends on #1904)
+  - #1906 — MATERIALIZE_PROMOTED_MEMORY_TO_VAULT (`agent:blocked`, depends on #1904)
+  - #1907 — ACTIVATE_GUARDED_RECALL (`agent:blocked`, depends on #1906)
+  - #1908 — SURFACE_MATERIALIZED_MEMORY_IN_COMPANION (`agent:blocked`, depends on #1906, #1907)

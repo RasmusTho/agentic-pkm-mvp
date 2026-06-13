@@ -1,5 +1,6 @@
-State: Local source for the parent feature issue. Update the issue number and lifecycle state here
-once filed on GitHub.
+State: Filed on GitHub as issue #1903 (validation hub, Status=Backlog + agent:blocked). This file is
+the local source; GitHub #1903 is the authoritative backlog/validation surface. Child slices:
+#1904 (ready), #1905, #1906, #1907, #1908 (blocked). Spec PR: #1902.
 
 # [Feature] Durable Memory and Recall
 
