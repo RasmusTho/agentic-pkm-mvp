@@ -20,6 +20,7 @@ Last reviewed: 2026-06-12
 - Added the architecture contract for no-vault startup, `VaultStatus`, `VaultContext`, scoped Markdown settings, identity separation, role structure, service gating, and Companion UI states.
 - Added a roadmap that keeps remaining work out of chat-only memory.
 - Added or planned code support for central vault context, vault initialization, app-local known-vault registry, Markdown settings parsing/writing, and basic service gating.
+- Added the scoped `SettingsService` / `SettingsRegistry` foundation for built-in defaults, app-local keys, vault-shared settings, vault-local settings, runtime overrides, source reporting, and safe validation errors. Broader legacy-setting extraction remains a later slice.
 
 ## Migration Notes
 
@@ -110,13 +111,8 @@ Acceptance criteria:
 
 Scope:
 
-- Built-in defaults.
-- App-local settings.
-- Vault-shared settings.
-- Vault-local settings.
-- Runtime overrides.
-- Setting definitions with scope, file, default, validation, editability, sync policy.
-- Source tracking per effective setting.
+- Shipped foundation: built-in defaults, app-local settings, vault-shared settings, vault-local settings, runtime overrides, setting definitions, source tracking, and validation errors.
+- Remaining downstream work: wire additional runtime consumers into the service and extract legacy settings incrementally.
 
 Acceptance criteria:
 
