@@ -71,6 +71,7 @@ Delivery rules:
 - Do not claim the whole epic or entire Kanban pool up front.
 - Do not claim more issues than there are ready sub-agent execution slots.
 - Never make speculative claims. Every claimed issue must have an owner agent, worktree/branch plan, validation plan, and expected return receipt.
+- Claim each selected issue before dispatching implementation work. A coordinator may hand work to a sub-agent only after the issue is claimed through `issue-to-code` / `scripts/issue_pickup_claim.sh`, Project Status is `In Progress`, `agent:ready` is removed, and a claim receipt comment names the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
 - For each issue, follow `issue-to-code` from claim through implementation and local validation.
 - Use `publish-pr` for branch, commit, push, and PR creation/update.
 - Use `pr-integration` only when the PR needs readiness or repair before verification.
@@ -89,6 +90,11 @@ Parallel claim is allowed only when all are true:
 - the expected token savings or quality gain is explicit, for example isolating unrelated subsystems, avoiding repeated context reload, or letting independent validation run concurrently
 
 If any parallel worker stalls, fails claim, loses branch/worktree truth, or discovers contract drift, release or reclassify that issue before claiming replacements.
+
+If a sub-agent starts pickup and finds an existing claim receipt or lifecycle claim that does not match
+the dispatching coordinator, it must stop and report the collision instead of implementing. Do not
+rationalize a foreign claim as belonging to the current dispatch; the coordinator must reconcile,
+release, or choose a different issue before work continues.
 
 Delivery mode is complete only when every in-scope issue is either:
 
