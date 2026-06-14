@@ -2,9 +2,9 @@
 
 * Commitments: the domain model ships, but no companion surface exposes them.
   XFAIL until #1960 adds commitments to the workspace state.
-* Canvas: the ``/coauthor`` body-edit path applies edits without asserting the
-  WriteGuard (the ``/governance`` path does). XFAIL pins the bug; it flips to
-  pass when #1961 adds the guard.
+* Canvas: the ``/coauthor`` body-edit path now asserts the WriteGuard in
+  ``CanvasWriter.apply_edit`` — the single chokepoint it shares with ``/edits`` —
+  matching the ``/governance`` path. The guard shipped in #1966 (#1961).
 """
 
 from __future__ import annotations
@@ -26,12 +26,11 @@ def test_commitments_surface_in_workspace_state() -> None:
     assert "commitment" in fields, "RuntimeState exposes no commitment surface yet"
 
 
-@pytest.mark.xfail(reason="canvas body-edit path does not assert the WriteGuard (#1961 / PR #1966)", strict=False)
 def test_coauthor_enforces_the_write_guard() -> None:
     """Arrow 6: the co-authoring write path must check the WriteGuard, like /governance.
 
-    The guard belongs in ``CanvasWriter.apply_edit`` — the single chokepoint the
-    ``/coauthor`` and ``/edits`` routes both call. Flips to pass when #1966 lands.
+    The guard lives in ``CanvasWriter.apply_edit`` — the single chokepoint the
+    ``/coauthor`` and ``/edits`` routes both call. Guarded since #1966 (#1961).
     """
 
     assert "assert_writes_allowed" in inspect.getsource(CanvasWriter.apply_edit), (
