@@ -69,9 +69,11 @@ def test_start_fresh_dismisses_orienting_card_and_opens_shell() -> None:
     assert 'data-intent="entry.dismiss"' in html
     assert 'onclick="entryDismiss(this)"' in html
 
-    m = re.search(r"function entryDismiss\(control\) \{(.*?)\n\s*\}", html, re.S)
+    m = re.search(r"function entryDismiss\(control\) \{(.*?)\n  \}\n  </script>", html, re.S)
     assert m, "entry.dismiss handler must render"
     body = m.group(1)
     assert "card.remove()" in body
+    assert "[data-region=delta-strip], [data-region=whisper-column]" in body
+    assert "siblingCues[i].remove()" in body
     assert "document.body.dataset.entryState = 'shell_active'" in body
     assert "data-entry-state', 'shell_active'" in body

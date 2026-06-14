@@ -39,6 +39,7 @@ from app.observability.status_model import (
     WriteGuardStatus,
     WatcherLifecycleStatus,
     ContextDimensionsStatus,
+    IntegratedRuntimeCapabilityStatus,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.health_contract import DEFAULT_CONTRACT, WRITE_BLOCKED_STATES
@@ -63,6 +64,7 @@ _WATCHER_EVENT_NAMES = {"watcher.run", "watcher.run.completed"}
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
 
 # Status endpoint bounded-read caps. Status helpers must never load full
 # multi-hundred-MB JSONL files into memory; cap line counts and tail reads.
@@ -131,6 +133,19 @@ def _prune_ask_metrics(now: float | None = None) -> None:
         _ASK_LATENCIES.pop(0)
     while _ASK_ERRORS and _ASK_ERRORS[0] < cutoff:
         _ASK_ERRORS.pop(0)
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
 
 
 def reset_ask_metrics() -> None:
@@ -516,11 +531,39 @@ def _get_panel_diagnostics() -> PanelDiagnostics:
     except Exception:
         pass
 
+    staging_posture: dict[str, object] = {}
+    try:
+        from app.panel.confirmation import panel_staging_store_posture
+
+        staging_posture = panel_staging_store_posture()
+    except Exception:
+        staging_posture = {
+            "degraded": True,
+            "degraded_reason": "panel staging posture unavailable",
+        }
+
     return PanelDiagnostics(
         **diag,
         source_paths=source_paths,
         source_mtimes=source_mtimes,
         combined_sha256=combined_sha256,
+        staging_proposal_store_mode=_optional_str(
+            staging_posture.get("proposal_store_mode")
+        ),
+        staging_idempotency_store_mode=_optional_str(
+            staging_posture.get("idempotency_store_mode")
+        ),
+        staging_store_degraded=bool(staging_posture.get("degraded")),
+        staging_store_degraded_reason=_optional_str(
+            staging_posture.get("degraded_reason")
+        ),
+        staging_store_path=_optional_str(staging_posture.get("db_path")),
+        pending_staged_proposals=_safe_int(
+            staging_posture.get("pending_proposal_count"), 0
+        ),
+        panel_confirm_idempotency_keys=_safe_int(
+            staging_posture.get("idempotency_key_count"), 0
+        ),
     )
 
 
@@ -943,6 +986,212 @@ def _get_v6_seams() -> dict | None:
         return None
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    return default
+
+
+def _module_importable(name: str) -> bool:
+    try:
+        __import__(name)
+    except Exception:
+        return False
+    return True
+
+
+def _db_outbox_ready(
+    worker_queue: WorkerQueueStatus,
+    outbox_lag: OutboxLagStatus | None,
+) -> bool:
+    if worker_queue.mode != "db":
+        return False
+    if outbox_lag is None:
+        return False
+    if worker_queue.processed_total is None:
+        return False
+    return outbox_lag.outbox_events is not None or outbox_lag.pending_estimate is not None
+
+
+def _reason_for_db_outbox(
+    worker_queue: WorkerQueueStatus,
+    outbox_lag: OutboxLagStatus | None,
+) -> str | None:
+    if _db_outbox_ready(worker_queue, outbox_lag):
+        return None
+    if worker_queue.mode == "db":
+        if outbox_lag is not None and (
+            outbox_lag.outbox_events is not None or outbox_lag.pending_estimate is not None
+        ):
+            return "DB outbox worker evidence unavailable; worker heartbeat/processed count could not be read"
+        return "DB outbox source unavailable; durable queue/receipt counts could not be read"
+    return f"DB outbox source unavailable; worker queue mode is {worker_queue.mode}"
+
+
+def _state_from_write_guard(write_guard: WriteGuardStatus) -> tuple[str, str | None]:
+    if write_guard.writes_allowed is False:
+        return "degraded", "WriteGuard currently blocks write-capable paths"
+    if write_guard.writes_allowed is None:
+        return "degraded", "WriteGuard posture is unavailable"
+    return "enabled", "WriteGuard posture is available for governed paths"
+
+
+def _view_freshness_reason(view_freshness: ViewFreshnessStatus | None) -> str | None:
+    if view_freshness is None:
+        return "runtime freshness posture is unavailable"
+    if view_freshness.state in {"partial", "stale", "unknown"}:
+        return f"view freshness is {view_freshness.state}: {view_freshness.reason}"
+    return None
+
+
+def _tts_readback_status() -> IntegratedRuntimeCapabilityStatus:
+    if not _env_flag("TTS_ENABLED", default=False):
+        return IntegratedRuntimeCapabilityStatus(
+            tier="optional",
+            state="unavailable",
+            reasons=[
+                "TTS_ENABLED is off; local read-back is optional and fails closed by default",
+                f"TTS_LOCAL_ONLY is {'on' if _env_flag('TTS_LOCAL_ONLY', default=True) else 'off'}",
+            ],
+        )
+
+    reasons = [
+        "TTS_ENABLED is on",
+        f"TTS_LOCAL_ONLY is {'on' if _env_flag('TTS_LOCAL_ONLY', default=True) else 'off'}",
+    ]
+    state = "enabled"
+    try:
+        from app.tts.config import load_tts_config
+        from app.tts.status import tts_runtime_status
+
+        tts_status = tts_runtime_status(load_tts_config())
+        providers = tts_status.get("providers") or {}
+        if not any(provider.get("available") for provider in providers.values() if isinstance(provider, dict)):
+            state = "degraded"
+            reasons.append("no local TTS provider voice is currently ready")
+    except Exception:
+        state = "degraded"
+        reasons.append("TTS runtime status could not be evaluated")
+    return IntegratedRuntimeCapabilityStatus(tier="optional", state=state, reasons=reasons)
+
+
+def _integrated_runtime_v1_matrix(
+    *,
+    write_guard: WriteGuardStatus,
+    worker_queue: WorkerQueueStatus,
+    outbox_lag: OutboxLagStatus | None,
+    view_freshness: ViewFreshnessStatus | None,
+) -> dict[str, IntegratedRuntimeCapabilityStatus]:
+    db_outbox_reason = _reason_for_db_outbox(worker_queue, outbox_lag)
+    write_state, write_reason = _state_from_write_guard(write_guard)
+    freshness_reason = _view_freshness_reason(view_freshness)
+
+    def cap(
+        tier: str,
+        state: str,
+        *reasons: str | None,
+    ) -> IntegratedRuntimeCapabilityStatus:
+        return IntegratedRuntimeCapabilityStatus(
+            tier=tier,
+            state=state,
+            reasons=[reason for reason in reasons if reason],
+        )
+
+    matrix: dict[str, IntegratedRuntimeCapabilityStatus] = {
+        "system_entry_point": cap(
+            "core",
+            "enabled",
+            "System Entry Point shell is shipped; this status block is informational only",
+        ),
+        "companion_ui_routes": cap(
+            "core",
+            "degraded",
+            "Companion UI shell is shipped, but v1 route/proxy parity is a separate release gate",
+        ),
+        "orientation": cap(
+            "core",
+            "degraded" if freshness_reason else "enabled",
+            "read-only orientation runtime seam is available and grants no mutation authority",
+            freshness_reason,
+        ),
+        "resurfacing": cap(
+            "core",
+            "degraded" if freshness_reason else "enabled",
+            "read-only resurfacing evaluator seam is available and grants no mutation authority",
+            freshness_reason,
+        ),
+        "capture": cap(
+            "core",
+            "degraded" if (write_state == "degraded" or db_outbox_reason) else "enabled",
+            "governed capture append API and modal are shipped",
+            write_reason,
+            db_outbox_reason,
+        ),
+        "vault_browser": cap(
+            "core",
+            "degraded",
+            "Vault Browser read surface is shipped",
+            "queue-review and related-route parity remain release-gate checks",
+        ),
+        "panel_confirm": cap(
+            "core",
+            "degraded" if (write_state == "degraded" or db_outbox_reason) else "enabled",
+            "Panel confirm remains the governed authority point",
+            write_reason,
+            db_outbox_reason,
+        ),
+        "receipts_history": cap(
+            "core",
+            "degraded" if db_outbox_reason else "enabled",
+            "read-only receipts history is a projection over runtime receipt/event sources",
+            db_outbox_reason,
+        ),
+        "memory_review": cap(
+            "optional",
+            "degraded" if _env_flag("MEMORY_ENABLED", default=True) else "unavailable",
+            (
+                "MEMORY_ENABLED is on; API and drawer are shipped, but review queue persistence/recall "
+                "remain optional-tier limitations"
+                if _env_flag("MEMORY_ENABLED", default=True)
+                else "MEMORY_ENABLED is off; memory review is unavailable in this runtime"
+            ),
+        ),
+        "source_understanding": cap(
+            "optional",
+            "enabled" if _module_importable("app.api.routes.source_understanding") else "unavailable",
+            "API-only P0 projection; no Companion UI affordance or governed apply path is claimed",
+            "outputs are non-authoritative and do not write memory, index, vault notes, or receipts",
+        ),
+        "canvas_chat": cap(
+            "experimental",
+            "degraded" if _env_flag("CANVAS_ENABLED", default=False) else "experimental_off",
+            (
+                "CANVAS_ENABLED is on; canvas remains experimental with process-memory sessions and provider dependencies"
+                if _env_flag("CANVAS_ENABLED", default=False)
+                else "CANVAS_ENABLED is off; canvas/chat co-authoring is experimental and default-off"
+            ),
+        ),
+        "tts_readback": _tts_readback_status(),
+        "health_status": cap(
+            "core",
+            "enabled",
+            "health/status endpoints are shipped; integrated_runtime_v1 is diagnostic and does not affect pass/fail",
+        ),
+        "environment_config": cap(
+            "core",
+            "enabled",
+            f"environment/config flags are operator-visible; active environment is {active_environment()}",
+        ),
+    }
+    return matrix
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -957,6 +1206,12 @@ def get_system_status() -> SystemStatus:
     stores = get_store_status()
     worker_queue = _get_worker_queue_status()
     write_guard = _get_write_guard_status()
+    outbox_lag = _get_outbox_lag()
+    view_freshness = classify_view_freshness(
+        stores=stores,
+        ingestion=ingestion,
+        worker_queue=worker_queue,
+    )
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         environment=active_environment(),
@@ -975,19 +1230,21 @@ def get_system_status() -> SystemStatus:
         index=_get_index_status(),
         panel_diagnostics=_get_panel_diagnostics(),
         write_guard=write_guard,
-        outbox_lag=_get_outbox_lag(),
+        outbox_lag=outbox_lag,
         events_log=_events_log_status(),
         worker_queue=worker_queue,
-        view_freshness=classify_view_freshness(
-            stores=stores,
-            ingestion=ingestion,
-            worker_queue=worker_queue,
-        ),
+        view_freshness=view_freshness,
         watcher_automation=_get_watcher_automation_status(write_guard=write_guard),
         watcher_lifecycle=_get_watcher_lifecycle_status(),
         instance_provenance=_get_instance_provenance_status(),
         context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),
         v6_0_seams=_get_v6_seams(),
+        integrated_runtime_v1=_integrated_runtime_v1_matrix(
+            write_guard=write_guard,
+            worker_queue=worker_queue,
+            outbox_lag=outbox_lag,
+            view_freshness=view_freshness,
+        ),
     )
 
 

@@ -230,8 +230,8 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         modes=("find",),
         reached="anchored popover (source.peek)",
         returns="dismisses to anchor",
-        status="partial",
-        status_note="provenance lines shipped; the popover presentation has not shipped",
+        status="shipped",
+        status_note="shipped — provenance lines are live; no map route exists on no-vault/error renders",
     ),
     MapNode(
         surface_id="posture",
@@ -296,8 +296,8 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         modes=(),
         reached="ⓘ toggle on topbar, overlay heads, re-entry card",
         returns="cross-cutting; persists nothing",
-        status="new",
-        status_note="new — not yet shipped (#1788)",
+        status="shipped",
+        status_note="shipped (#1788, SEP-06) — cross-cutting local UI toggle",
     ),
 )
 

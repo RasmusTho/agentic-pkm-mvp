@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 import yaml
@@ -27,6 +27,7 @@ from app.agent_memory.promotion import (
     reject as reject_memory_candidate,
     revise as revise_memory_candidate,
 )
+from app.agent_memory.review_decision_store import ReviewDecisionStore
 from app.agent_memory.review_queue import (
     MemoryCandidateReviewQueue,
     ReviewDecision,
@@ -40,7 +41,7 @@ from app.agent_memory.posture_projection import (
 )
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
-from app.config.paths import resolve_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_vault_root
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -60,6 +61,7 @@ from app.panel.checkbox_projection import (
 )
 from app.panel.confirmation import StagedProposal
 from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_artifacts
+from app.relevance import collect_now_moments
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.tts.cache import TTSUnsafeCacheRootError, audio_path
@@ -67,9 +69,18 @@ from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
+from app.vault.manager import MachineRole, VaultContext, get_vault_manager
+from app.vault.settings_service import (
+    SettingDefinition,
+    SettingsService,
+    SettingsValidationError,
+    SettingsWriteError,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
+
+_LAST_ACTIVE_LOAD_ATTEMPTED_ATTR = "_companion_last_active_load_attempted"
 
 
 class ArtifactState(BaseModel):
@@ -144,7 +155,402 @@ class CompanionTTSStatusResponse(BaseModel):
     operator_receipt: dict[str, object]
 
 
+class VaultContextResponse(BaseModel):
+    status: str
+    active_vault_id: str | None = None
+    active_vault_name: str | None = None
+    active_vault_path: str | None = None
+    settings_path: str | None = None
+    local_instance_id: str | None = None
+    machine_role: str | None = None
+    validation_error: str | None = None
+    permissions: dict[str, bool] = Field(default_factory=dict)
+
+
+class VaultSelectRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    remember: bool = True
+
+
+class VaultInitializeRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    vault_name: str | None = None
+    machine_role: MachineRole = "primary"
+    remember: bool = True
+
+
+class VaultInitializeResponse(BaseModel):
+    context: VaultContextResponse
+    created_files: list[str]
+    skipped_existing_files: list[str]
+
+
+class VaultSettingDefinitionResponse(BaseModel):
+    key: str
+    type: str
+    description: str
+    scope: str
+    file: str | None = None
+    editable_in_companion: bool
+    editable: bool
+    write_blocked_reason: str | None = None
+    allowed_values: list[Any] = Field(default_factory=list)
+
+
+class VaultSettingValueResponse(BaseModel):
+    key: str
+    value: Any
+    scope: str
+    source: str
+    source_file: str | None = None
+
+
+class VaultSettingsValidationErrorResponse(BaseModel):
+    message: str
+    source_file: str | None = None
+    scope: str | None = None
+    key: str | None = None
+
+
+class KnownVaultResponse(BaseModel):
+    ref: str
+    path: str
+    vault_id: str | None = None
+    vault_name: str | None = None
+    local_instance_id: str | None = None
+    last_opened_at: str | None = None
+
+
+class VaultSettingsResponse(BaseModel):
+    context: VaultContextResponse
+    settings_folder: str | None = None
+    recent_vaults: list[KnownVaultResponse] = Field(default_factory=list)
+    definitions: list[VaultSettingDefinitionResponse]
+    settings: list[VaultSettingValueResponse]
+    validation_errors: list[VaultSettingsValidationErrorResponse]
+
+
+class VaultSelectionRequiredAction(BaseModel):
+    kind: Literal["open_existing", "create_new", "open_recent"]
+    label: str
+    endpoint: str | None = None
+
+
+class VaultSelectionRequiredResponse(BaseModel):
+    state: Literal["vault_selection_required"] = "vault_selection_required"
+    reason: Literal["vault_root_misconfigured"] = "vault_root_misconfigured"
+    message: str
+    configured_vault_root: str
+    context: VaultContextResponse
+    recent_vaults: list[KnownVaultResponse] = Field(default_factory=list)
+    actions: list[VaultSelectionRequiredAction] = Field(default_factory=list)
+    requested_note_path: str | None = None
+    trace_id: str | None = None
+
+
+class VaultSettingUpdateRequest(BaseModel):
+    key: str = Field(..., min_length=1)
+    value: Any
+
+
+class VaultSettingUpdateResponse(BaseModel):
+    updated: VaultSettingValueResponse
+    settings: VaultSettingsResponse
+
+
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
+
+
+def _vault_context_response(context: VaultContext) -> VaultContextResponse:
+    manager = get_vault_manager()
+    permissions = manager.permissions_for_context(context)
+    return VaultContextResponse(
+        status=context.status,
+        active_vault_id=context.active_vault_id,
+        active_vault_name=context.active_vault_name,
+        active_vault_path=context.active_vault_path,
+        settings_path=context.settings_path,
+        local_instance_id=context.local_instance_id,
+        machine_role=context.machine_role,
+        validation_error=context.validation_error,
+        permissions={
+            "enableVaultWatcher": permissions.enable_vault_watcher,
+            "enableAutoIndexing": permissions.enable_auto_indexing,
+            "allowWritesToVault": permissions.allow_writes_to_vault,
+            "allowSharedSettingsEdits": permissions.allow_shared_settings_edits,
+            "allowLocalSettingsEdits": permissions.allow_local_settings_edits,
+        },
+    )
+
+
+def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext) -> str | None:
+    if not definition.editable_in_companion:
+        return "not editable in Companion UI"
+    if definition.scope not in {"vault-shared", "vault-local"}:
+        return "not a vault-scoped setting"
+    if context.status != "selected":
+        return f"requires selected vault; current status is {context.status}"
+    manager = get_vault_manager()
+    permissions = manager.permissions_for_context(context)
+    if definition.scope == "vault-shared":
+        if not permissions.allow_writes_to_vault:
+            return "writes disabled by machine role or local permission"
+        if not permissions.allow_shared_settings_edits:
+            return "shared settings edits disabled for this local role"
+    if definition.scope == "vault-local" and not permissions.allow_local_settings_edits:
+        return "local settings edits disabled for this local role"
+    return None
+
+
+def _setting_definition_response(
+    definition: SettingDefinition,
+    context: VaultContext,
+) -> VaultSettingDefinitionResponse:
+    blocked_reason = _setting_blocked_reason(definition, context)
+    return VaultSettingDefinitionResponse(
+        key=definition.key,
+        type=definition.type,
+        description=definition.description,
+        scope=definition.scope,
+        file=definition.file,
+        editable_in_companion=definition.editable_in_companion,
+        editable=blocked_reason is None,
+        write_blocked_reason=blocked_reason,
+        allowed_values=list(definition.allowed_values),
+    )
+
+
+def _setting_value_response(setting: Any) -> VaultSettingValueResponse:
+    return VaultSettingValueResponse(
+        key=setting.key,
+        value=setting.value,
+        scope=setting.scope,
+        source=setting.source,
+        source_file=setting.source_file,
+    )
+
+
+def _settings_error_response(error: SettingsValidationError) -> VaultSettingsValidationErrorResponse:
+    return VaultSettingsValidationErrorResponse(
+        message=error.message,
+        source_file=error.source_file,
+        scope=error.scope,
+        key=error.key,
+    )
+
+
+def _recent_vaults_response() -> list[KnownVaultResponse]:
+    manager = get_vault_manager()
+    try:
+        settings = manager.app_local_store.load()
+    except Exception:
+        return []
+    items = sorted(
+        settings.known_vaults.values(),
+        key=lambda item: item.last_opened_at or "",
+        reverse=True,
+    )
+    return [
+        KnownVaultResponse(
+            ref=item.ref,
+            path=item.path,
+            vault_id=item.vault_id,
+            vault_name=item.vault_name,
+            local_instance_id=item.local_instance_id,
+            last_opened_at=item.last_opened_at,
+        )
+        for item in items
+    ]
+
+
+def _vault_selection_required_context(
+    exc: VaultRootMisconfiguredError,
+) -> VaultContext:
+    return VaultContext(
+        status="missing",
+        active_vault_path=str(exc.configured_path),
+        validation_error=str(exc),
+    )
+
+
+def _vault_selection_required_response(
+    exc: VaultRootMisconfiguredError,
+    *,
+    requested_note_path: str | None = None,
+    trace_id: str | None = None,
+) -> VaultSelectionRequiredResponse:
+    return VaultSelectionRequiredResponse(
+        message=(
+            "The configured vault path is missing. Open an existing vault or "
+            "choose a recent vault to continue."
+        ),
+        configured_vault_root=str(exc.configured_path),
+        context=_vault_context_response(_vault_selection_required_context(exc)),
+        recent_vaults=_recent_vaults_response(),
+        actions=[
+            VaultSelectionRequiredAction(
+                kind="open_existing",
+                label="Open existing vault",
+                endpoint="/api/companion/vault/select",
+            ),
+            VaultSelectionRequiredAction(
+                kind="create_new",
+                label="Create new vault",
+                endpoint="/api/companion/vault/initialize",
+            ),
+            VaultSelectionRequiredAction(
+                kind="open_recent",
+                label="Open recent vault",
+                endpoint="/api/companion/vault/select",
+            ),
+        ],
+        requested_note_path=requested_note_path,
+        trace_id=trace_id,
+    )
+
+
+def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
+    service = SettingsService()
+    resolution = service.resolve(context)
+    editable_definitions = [
+        definition
+        for definition in service.registry.definitions
+        if definition.requires_vault or definition.scope in {"vault-shared", "vault-local"}
+    ]
+    return VaultSettingsResponse(
+        context=_vault_context_response(context),
+        settings_folder=context.settings_path,
+        recent_vaults=_recent_vaults_response(),
+        definitions=[
+            _setting_definition_response(definition, context)
+            for definition in editable_definitions
+        ],
+        settings=[
+            _setting_value_response(resolution.settings[definition.key])
+            for definition in editable_definitions
+            if definition.key in resolution.settings
+        ],
+        validation_errors=[
+            _settings_error_response(error)
+            for error in resolution.validation_errors
+        ],
+    )
+
+
+def _active_companion_vault_root() -> Path:
+    manager = get_vault_manager()
+    context = _companion_vault_context_with_lazy_last_active(manager)
+    if context.status == "selected" and context.active_vault_path:
+        return Path(context.active_vault_path).expanduser()
+    return resolve_vault_root()
+
+
+def _companion_vault_context_with_lazy_last_active(manager: Any) -> VaultContext:
+    context = manager.context
+    if context.status == "none" and not getattr(manager, _LAST_ACTIVE_LOAD_ATTEMPTED_ATTR, False):
+        setattr(manager, _LAST_ACTIVE_LOAD_ATTEMPTED_ATTR, True)
+        context = manager.load_last_active()
+    return context
+
+
+@router.get("/vault/context", response_model=VaultContextResponse)
+def read_companion_vault_context() -> VaultContextResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    if context.status == "none":
+        try:
+            resolve_vault_root()
+        except VaultRootMisconfiguredError as exc:
+            context = _vault_selection_required_context(exc)
+    return _vault_context_response(context)
+
+
+@router.post("/vault/select", response_model=VaultContextResponse)
+def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
+    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
+    return _vault_context_response(context)
+
+
+@router.get("/now", response_model=list[dict])
+def read_companion_now() -> list[dict]:
+    """Glance surface — materialized moments from the Contextual Relevance Engine.
+
+    Pull-only, read-only projection of vault-native moment artifacts. No write, no
+    notification, no reach-out: the human pulls this; the system does not interrupt.
+    """
+    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    if context.status == "selected" and context.active_vault_path:
+        return collect_now_moments(context)
+    # Parity with `_active_companion_vault_root`: fall back to the configured VAULT_ROOT.
+    try:
+        root = resolve_vault_root()
+    except VaultRootMisconfiguredError:
+        return []
+    return collect_now_moments(VaultContext(status="selected", active_vault_path=str(root)))
+
+
+@router.post("/vault/initialize", response_model=VaultInitializeResponse)
+def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
+    result = get_vault_manager().initialize_vault(
+        Path(req.path),
+        vault_name=req.vault_name,
+        machine_role=req.machine_role,
+        remember=req.remember,
+    )
+    return VaultInitializeResponse(
+        context=_vault_context_response(result.context),
+        created_files=list(result.created_files),
+        skipped_existing_files=list(result.skipped_existing_files),
+    )
+
+
+@router.post("/vault/reload", response_model=VaultContextResponse)
+def reload_companion_vault() -> VaultContextResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    elif context.active_vault_path:
+        context = manager.select_vault(Path(context.active_vault_path), remember=False)
+    return _vault_context_response(context)
+
+
+@router.get("/vault/settings", response_model=VaultSettingsResponse)
+def read_companion_vault_settings() -> VaultSettingsResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    return _vault_settings_response(context)
+
+
+@router.post("/vault/settings", response_model=VaultSettingUpdateResponse)
+def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSettingUpdateResponse:
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status != "selected" or not context.active_vault_path:
+        raise HTTPException(
+            status_code=409,
+            detail=f"settings writes require a selected initialized vault; current status is {context.status}",
+        )
+    service = SettingsService()
+    definition = service.registry.get(req.key)
+    if definition is None:
+        raise HTTPException(status_code=404, detail=f"unknown setting: {req.key}")
+    blocked_reason = _setting_blocked_reason(definition, context)
+    if blocked_reason:
+        raise HTTPException(status_code=403, detail=blocked_reason)
+    try:
+        updated = service.update_setting(context, req.key, req.value)
+    except SettingsWriteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    refreshed = manager.select_vault(Path(context.active_vault_path), remember=False)
+    return VaultSettingUpdateResponse(
+        updated=_setting_value_response(updated),
+        settings=_vault_settings_response(refreshed),
+    )
 
 
 def _parse_browse_max_notes() -> int:
@@ -249,6 +655,7 @@ ORIENTATION_MEMORY_INTENT_HANDOFF_HINT = "panel_governance_review"
 
 
 _MEMORY_CANDIDATE_REVIEW_QUEUE = MemoryCandidateReviewQueue()
+_MEMORY_REVIEW_DECISION_STORE = ReviewDecisionStore()
 
 
 class WorkspaceOrientationScope(BaseModel):
@@ -641,6 +1048,28 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
             provenance="settings",
         )
 
+    try:
+        context = get_vault_manager().context
+    except Exception:
+        context = None
+    if (
+        context is not None
+        and context.status == "selected"
+        and context.active_vault_path
+    ):
+        try:
+            selected_root = Path(context.active_vault_path).expanduser().resolve()
+            resolved_root = vault_root.expanduser().resolve()
+        except Exception:
+            selected_root = Path(context.active_vault_path).expanduser()
+            resolved_root = vault_root.expanduser()
+        if selected_root == resolved_root:
+            return VaultIdentityState(
+                vault_name=context.active_vault_name or vault_root.name or str(vault_root),
+                channel=channel,
+                provenance="selected",
+            )
+
     # No configured name: infer identity from the VAULT_ROOT path as before.
     vault_root_raw = os.getenv("VAULT_ROOT", "").strip()
     vault_name = vault_root.name or str(vault_root)
@@ -686,11 +1115,17 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
     return notes
 
 
-@router.get("/vault/notes", response_model=VaultNoteListResponse)
+@router.get(
+    "/vault/notes",
+    response_model=VaultNoteListResponse | VaultSelectionRequiredResponse,
+)
 def list_vault_notes(
     q: str = Query("", description="Optional search filter by title or path"),
-) -> VaultNoteListResponse:
-    vault_root = resolve_vault_root()
+) -> VaultNoteListResponse | VaultSelectionRequiredResponse:
+    try:
+        vault_root = _active_companion_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(exc)
     notes = _list_vault_notes(vault_root, q=q)
     return VaultNoteListResponse(
         notes=notes,
@@ -1026,7 +1461,38 @@ def _orientation_source_ref(kind: str, ref: str, label: str | None = None) -> Wo
 
 
 def _orientation_memory_review_queue() -> MemoryCandidateReviewQueue:
+    _MEMORY_CANDIDATE_REVIEW_QUEUE.configure_reconciliation(
+        decision_store=_memory_review_decision_store(),
+        vault_context=_memory_review_vault_context(),
+        channel=_memory_review_channel(),
+    )
     return _MEMORY_CANDIDATE_REVIEW_QUEUE
+
+
+def _memory_review_decision_store() -> ReviewDecisionStore:
+    return _MEMORY_REVIEW_DECISION_STORE
+
+
+def _memory_review_vault_context() -> VaultContext:
+    context = get_vault_manager().context
+    if context.active_vault_id or context.active_vault_path:
+        return context
+    vault_root = resolve_vault_root()
+    return VaultContext(
+        status="selected",
+        active_vault_id=os.getenv("VAULT_ID") or None,
+        active_vault_name=vault_root.name,
+        active_vault_path=str(vault_root),
+    )
+
+
+def _memory_review_channel() -> str:
+    return (
+        os.getenv("PKM_ENVIRONMENT")
+        or os.getenv("CHANNEL")
+        or os.getenv("PKM_CHANNEL")
+        or "default"
+    ).strip() or "default"
 
 
 def _orientation_memory_summary() -> WorkspaceOrientationMemory:
@@ -1054,7 +1520,7 @@ def _orientation_leave_point(
     projection = latest_leave_point_projection(
         vault_id=identity.vault_name,
         channel=identity.channel,
-        vault_root=resolve_vault_root(),
+        vault_root=_active_companion_vault_root(),
         derived_label=frame_label,
         derived_at=_orientation_iso(signals.ingestion.last_run_at),
     )
@@ -1255,7 +1721,7 @@ def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
 
 
 def _orientation_identity() -> VaultIdentityState:
-    return _vault_identity_state(resolve_vault_root())
+    return _vault_identity_state(_active_companion_vault_root())
 
 
 def _orientation_error(trace_id: str, message: str) -> HTTPException:
@@ -2092,7 +2558,7 @@ def read_companion_vault_browser(
     # identity, and explicit empty / error / identity-unavailable states.
     # Hidden / dot-prefixed folders are excluded.
     # Metadata filters (kind, zone, review_state, trust) added in #1254.
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     effective_limit = min(limit, _safe_vault_browse_max_notes())
     active_filters: dict[str, list[str]] = {}
     if kind:
@@ -2175,7 +2641,7 @@ def read_companion_vault_link_index() -> VaultLinkIndexResponse:
     # VaultLinkResolver and resolve vault-internal wikilinks end-to-end. Mirrors
     # the vault browser's read-only posture (no mutation, no write path); the UI
     # must not read the filesystem directly (UI_RUNTIME_BOUNDARIES).
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_paths, truncated = _collect_vault_note_paths(
         vault_root, limit=_safe_vault_link_index_max()
     )
@@ -2225,7 +2691,7 @@ def read_companion_vault_related(
         else None
     )
     safe_artifact_uuid = artifact_uuid.strip() if artifact_uuid else None
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     notes = _collect_relation_notes(vault_root)
     target = _resolve_related_scope(
         notes,
@@ -2264,7 +2730,7 @@ def queue_vault_browser_review(
         else None
     )
     safe_artifact_uuid = req.artifact_uuid.strip() if req.artifact_uuid else None
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     target = _resolve_vault_action_scope(
         _collect_relation_notes(vault_root),
         note_path=safe_note_path,
@@ -2493,13 +2959,23 @@ def read_companion_tts_audio(cache_key: str) -> FileResponse:
     return FileResponse(path, media_type="audio/wav")
 
 
-@router.get("/workspace", response_model=WorkspaceStateResponse)
+@router.get(
+    "/workspace",
+    response_model=WorkspaceStateResponse | VaultSelectionRequiredResponse,
+)
 def read_companion_workspace(
     note_path: str = Query(..., description="Runtime-relative note path"),
-) -> WorkspaceStateResponse:
+) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     safe_note_path = _validate_workspace_note_path(note_path)
-    vault_root = resolve_vault_root()
+    try:
+        vault_root = _active_companion_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(
+            exc,
+            requested_note_path=safe_note_path,
+            trace_id=trace_id,
+        )
     artifact_path = _find_workspace_note(vault_root, safe_note_path)
     if artifact_path is None:
         raise HTTPException(
@@ -2591,7 +3067,7 @@ def update_companion_workspace_note_body(
             },
         )
 
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_path = _find_workspace_note(vault_root, safe_active_note_path)
     if note_path is None:
         raise HTTPException(
@@ -2700,7 +3176,7 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse:
         ) from exc
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(
@@ -2783,7 +3259,7 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
         pass
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
-    vault_root = resolve_vault_root()
+    vault_root = _active_companion_vault_root()
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(
@@ -3122,6 +3598,11 @@ def post_memory_review_decision(
             reviewed_by=req.reviewed_by,
             notes=req.notes,
         )
+        _memory_review_decision_store().record_decision(
+            decided,
+            vault_context=_memory_review_vault_context(),
+            channel=_memory_review_channel(),
+        )
         promoted = promote_memory_candidate(decided)
         return MemoryReviewDecisionResponse(
             status="accepted",
@@ -3137,6 +3618,11 @@ def post_memory_review_decision(
             ReviewDecision.REJECT,
             reviewed_by=req.reviewed_by,
             notes=req.notes,
+        )
+        _memory_review_decision_store().record_decision(
+            decided,
+            vault_context=_memory_review_vault_context(),
+            channel=_memory_review_channel(),
         )
         rejected = reject_memory_candidate(decided)
         return MemoryReviewDecisionResponse(
@@ -3155,6 +3641,11 @@ def post_memory_review_decision(
         reviewed_by=req.reviewed_by,
         notes=req.notes,
         revision=revision_candidate,
+    )
+    _memory_review_decision_store().record_decision(
+        decided,
+        vault_context=_memory_review_vault_context(),
+        channel=_memory_review_channel(),
     )
     revision_entry = queue.get(revision_candidate.candidate_id)
     revised = revise_memory_candidate(decided, revision_entry)

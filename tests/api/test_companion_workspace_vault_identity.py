@@ -138,23 +138,18 @@ def test_vault_provenance_default_when_vault_root_absent(
     assert identity["provenance"] == "default"
 
 
-def test_vault_provenance_fallback_when_vault_root_invalid(
+def test_vault_root_invalid_returns_selection_required_state(
     client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "missing-vault"))
-    fallback_vault = Path("vault").resolve()
-    fallback_note = fallback_vault / "notes" / "note.md"
-    fallback_note.parent.mkdir(parents=True, exist_ok=True)
-    fallback_note.write_text(
-        "---\nuuid: fallback-uuid-1\n---\n\n# Fallback Note\n\nBody.\n",
-        encoding="utf-8",
-    )
+    missing_vault = tmp_path / "missing-vault"
+    monkeypatch.setenv("VAULT_ROOT", str(missing_vault))
     resp = _workspace(client)
     assert resp.status_code == 200
-    identity = resp.json()["runtime"]["vault_identity"]
-    assert identity["vault_name"] == "vault"
-    assert identity["provenance"] == "fallback"
+    data = resp.json()
+    assert data["state"] == "vault_selection_required"
+    assert data["configured_vault_root"] == str(missing_vault)
+    assert data["context"]["status"] == "missing"
 
 
 def _configure_runtime_vault(monkeypatch, tmp_path, name):
@@ -186,25 +181,27 @@ def test_mounted_vault_reports_truthful_identity(
     assert identity["provenance"] == "settings"
 
 
-def test_configured_vault_name_survives_container_path_divergence(
+def test_configured_vault_name_does_not_allow_missing_vault_root_fallback(
     client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The container bug: host VAULT_ROOT does not exist in-container (would infer
-    # `fallback`/`vault`). A configured name overrides that and stays truthful.
+    # A configured display name cannot override a missing env vault root into
+    # silently reading ./vault; the human must choose the real vault instead.
     monkeypatch.chdir(tmp_path)
-    fallback_note = tmp_path / "vault" / "notes" / "note.md"
+    fallback_note = Path("vault") / "notes" / "note.md"
     fallback_note.parent.mkdir(parents=True, exist_ok=True)
     fallback_note.write_text(
         "---\nuuid: fallback-uuid-1\n---\n\n# Fallback Note\n\nBody.\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "host-only" / "Niflheim"))
+    missing_vault = tmp_path / "host-only" / "Niflheim"
+    monkeypatch.setenv("VAULT_ROOT", str(missing_vault))
     _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
     resp = _workspace(client, note_path="notes/note.md")
     assert resp.status_code == 200
-    identity = resp.json()["runtime"]["vault_identity"]
-    assert identity["vault_name"] == "Niflheim"
-    assert identity["provenance"] == "settings"
+    data = resp.json()
+    assert data["state"] == "vault_selection_required"
+    assert data["configured_vault_root"] == str(missing_vault)
+    assert data["context"]["status"] == "missing"
 
 
 def test_configured_vault_name_hot_reloads_without_restart(

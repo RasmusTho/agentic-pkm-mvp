@@ -15,6 +15,7 @@ from app.agents.panel_agent.execution import refresh_panel_note_object, run_pane
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, NOTE_MOVE_WORKBENCH, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
+from app.events.schema import make_outbox_event
 from app.indexer.consumer import process_event as process_indexer_event
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.tracer import start_span
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 _WRITE_GUARD = OptimisticWriteGuard()
 
 _UNKNOWN_INSTANCE = "unknown"
+OUTBOX_EVENT_DEAD_LETTERED = "outbox.event.dead_lettered"
 
 
 def _resolve_instance_id() -> str:
@@ -307,6 +309,40 @@ def _retry_exhausted(payload: Mapping[str, Any]) -> bool:
     return _payload_retry_count(payload) >= _MAX_TRANSIENT_RETRY_ATTEMPTS
 
 
+def _original_event_id(payload: Mapping[str, Any], explicit_event_id: str | None) -> str:
+    if explicit_event_id:
+        return explicit_event_id
+    raw = payload.get("event_id") or payload.get("original_event_id")
+    return str(raw) if raw else ""
+
+
+def _emit_retry_dead_letter(
+    topic: str,
+    payload: Mapping[str, Any],
+    *,
+    note_path: Path,
+    reason: str,
+    retry_count: int,
+    trace_id: str | None,
+    original_event_id: str | None,
+) -> None:
+    event = make_outbox_event(
+        OUTBOX_EVENT_DEAD_LETTERED,
+        source="worker",
+        trace_id=trace_id or str(payload.get("trace_id") or "") or None,
+        payload={
+            "original_topic": topic,
+            "original_event_id": _original_event_id(payload, original_event_id),
+            "note_path": str(note_path),
+            "reason": reason,
+            "retry_count": retry_count,
+        },
+    )
+    append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
+    if _use_db_outbox():
+        write_outbox_event(event)
+
+
 def _queue_transient_retry(
     topic: str,
     payload: Mapping[str, Any],
@@ -314,9 +350,28 @@ def _queue_transient_retry(
     note_path: Path,
     reason: str,
     trace_id: str | None = None,
+    original_event_id: str | None = None,
 ) -> bool:
     retry_count = _payload_retry_count(payload)
     if retry_count >= _MAX_TRANSIENT_RETRY_ATTEMPTS:
+        try:
+            _emit_retry_dead_letter(
+                topic,
+                payload,
+                note_path=note_path,
+                reason=reason,
+                retry_count=retry_count,
+                trace_id=trace_id,
+                original_event_id=original_event_id,
+            )
+        except Exception:
+            logger.exception(
+                "worker retry dead-letter emit failed topic=%s note_path=%s reason=%s retry_count=%s",
+                topic,
+                note_path,
+                reason,
+                retry_count,
+            )
         logger.warning(
             "worker retry exhausted topic=%s note_path=%s reason=%s retry_count=%s",
             topic,
@@ -364,7 +419,11 @@ def _queue_transient_retry(
 
 
 def handle_panel_scan_requested(
-    payload: Mapping[str, Any], *, vault_root: Path | None = None, trace_id: str | None = None, scan_requested_ts: str | None = None
+    payload: Mapping[str, Any],
+    *,
+    vault_root: Path | None = None,
+    trace_id: str | None = None,
+    scan_requested_ts: str | None = None,
 ) -> WorkerPanelSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
@@ -479,7 +538,10 @@ def _use_db_outbox() -> bool:
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 def handle_ingest_vault_changed(
-    payload: Mapping[str, Any], *, vault_root: Path | None = None, trace_id: str | None = None
+    payload: Mapping[str, Any],
+    *,
+    vault_root: Path | None = None,
+    trace_id: str | None = None,
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
@@ -713,6 +775,9 @@ def run(
                     continue
 
                 payload = message.get("payload") or {}
+                if event_id and isinstance(payload, Mapping) and not payload.get("event_id"):
+                    payload = dict(payload)
+                    payload["event_id"] = event_id
                 trace_id = (
                     payload.get("trace_id")
                     or message.get("trace_id")
@@ -738,7 +803,11 @@ def run(
                             handle_ingest_object_deleted(payload)
                         elif topic == PANEL_SCAN_REQUESTED:
                             event_timestamp = message.get("timestamp") or payload.get("timestamp")
-                            handle_panel_scan_requested(payload, trace_id=trace_id, scan_requested_ts=event_timestamp)
+                            handle_panel_scan_requested(
+                                payload,
+                                trace_id=trace_id,
+                                scan_requested_ts=event_timestamp,
+                            )
                         elif topic == PROMOTE_INTENT_CREATED:
                             from app.promotion.consumer import consume_promotion_intent_payload
 

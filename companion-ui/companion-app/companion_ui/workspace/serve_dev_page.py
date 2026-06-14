@@ -115,6 +115,14 @@ from companion_ui.workspace.system_map_overlay import (
     system_map_overlay_markup,
     system_map_overlay_script,
 )
+from companion_ui.workspace.vault_settings_panel import (
+    VAULT_INITIALIZE_ENDPOINT,
+    VAULT_RELOAD_ENDPOINT,
+    VAULT_SELECT_ENDPOINT,
+    VAULT_SETTINGS_ENDPOINT,
+    vault_settings_panel_markup,
+    vault_settings_panel_script,
+)
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
@@ -2109,8 +2117,7 @@ def _render_note_section(fields: dict) -> str:
             </div>
             {text_correction_proposals_html}
           </details>
-          <div class="note-body-content" data-testid="workspace-note-rendered"
-            data-content-hash="{content_hash}">{body_empty_state_html}{body}</div>
+          <div class="note-body-content" data-testid="workspace-note-rendered">{body_empty_state_html}{body}</div>
           <textarea class="note-source-editor" id="note-source-editor"
             data-testid="workspace-note-source-editor"
             spellcheck="true" autocapitalize="sentences" autocorrect="off"
@@ -4167,7 +4174,6 @@ def _render_canvas_session_controls(
             data-affordance-status="blocked">
             """ + unavailable_copy + """
           </div>"""
-    recovery_api_path = f"/api/canvas/sessions/{session_id}/recovery/ack" if session_id else ""
     recovery_html = ""
     if conflict_detected:
         recovery_state = "acknowledged" if recovery_acknowledged else "needs acknowledgement"
@@ -4183,8 +4189,10 @@ def _render_canvas_session_controls(
             <button
               type="button"
               data-testid="workspace-canvas-recovery-ack"
-              data-api-method="LOCAL"
-              data-api-path="{recovery_api_path}">Acknowledge</button>
+              data-affordance-status="blocked"
+              data-runtime-backed="false"
+              data-blocked-reason="Canvas recovery acknowledgement runtime route is not shipped"
+              disabled>Acknowledge</button>
           </div>"""
     # Live agentic co-authoring loop (#1733). Gated strictly by canvas_enabled and
     # an active session: the user states an intent, the server composes and applies
@@ -4908,7 +4916,6 @@ def _render_orientation_resurface(
           data-resurface-default-budget="{default_budget}"
           data-resurface-overflow-count="{len(overflow_candidates)}"
           data-notification="false"
-          data-urgency="none"
           data-persistence-backed="false"
           data-authority="read-only-projection">
           <div class="orientation-section-header">
@@ -5126,13 +5133,7 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
         artifact_link = _orientation_artifact_link(
             leave.get("artifact_ref"), testid="reentry-stop-link"
         )
-    inspect_intent = "memory.open" if counts["memory_candidates"] > 0 else "open_loops.inspect"
-    inspect_onclick = (
-        "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
-        if counts["memory_candidates"] > 0
-        else ""
-    )
-    inspect_onclick_attr = f' onclick="{inspect_onclick}"' if inspect_onclick else ""
+    inspect_onclick = "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
     return f"""
     <section class="reentry-card" data-region="reentry-card" data-testid="reentry-card"
       data-traj-state="{_e(traj_state)}" data-reentry-treatment="{_e(shape)}"
@@ -5158,9 +5159,10 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
             {counts["open_loops"]} open loops · {counts["staged"]} staged
             · {counts["memory_candidates"]} memory candidates
             <a class="reentry-inspect" data-testid="reentry-inspect"
-              data-intent="{inspect_intent}"
+              data-intent="memory.open"
+              data-memory-candidate-count="{counts["memory_candidates"]}"
               href="#workspace-orientation-open-loops"
-              {inspect_onclick_attr}>inspect</a>
+              onclick="{inspect_onclick}">inspect</a>
           </span>
         </li>
         <li class="reentry-q" data-reentry-question="changed">
@@ -5186,6 +5188,10 @@ def _entry_dismiss_script() -> str:
   function entryDismiss(control) {
     var card = control && control.closest('[data-region=reentry-card]');
     if (card) { card.remove(); }
+    var siblingCues = document.querySelectorAll('[data-region=delta-strip], [data-region=whisper-column]');
+    for (var i = 0; i < siblingCues.length; i++) {
+      siblingCues[i].remove();
+    }
     if (document.body) {
       document.body.dataset.entryState = 'shell_active';
       document.body.setAttribute('data-entry-state', 'shell_active');
@@ -5429,10 +5435,11 @@ def _render_orientation_index_html(
     # ships on every orientation render; only the vault route truthfully
     # exists on the entry surfaces (the declared cold_start → shell_active
     # path), so the map offers exactly that one.
+    orientation_map_routes = ("vault",) if vault_entry_html else ()
     overlay_host_overlays_html = (
         overlay_host_markup(anchor_note_path="")
         + memory_drawer_markup_html
-        + system_map_overlay_markup(available_routes=("vault",))
+        + system_map_overlay_markup(available_routes=orientation_map_routes)
         + overlay_host_script()
         + memory_drawer_script_html
         + system_map_overlay_script()
@@ -5882,6 +5889,7 @@ def _render_orientation_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
+  {_render_help_toggle()}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -6619,7 +6627,6 @@ def _render_help_drawer() -> str:
     .help-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
     .help-drawer-frame{flex:1;border:0;width:100%;background:var(--bg-base)}
   </style>
-  """ + _render_help_toggle() + """
   <div class="help-drawer-host" id="workspace-help-host"
        data-testid="workspace-help-host" data-open="false"
        data-authority-role="server_declared">
@@ -6649,10 +6656,29 @@ def _render_help_drawer() -> str:
     function setExpanded(state) {
       if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
     }
+    function handleEscape(ev) {
+      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
+        window.companionHelp.close();
+      }
+    }
+    function installHelpFrameEscapeHandling() {
+      try {
+        var frameWindow = frame.contentWindow;
+        var frameDocument = frameWindow ? frameWindow.document : null;
+        if (!frameDocument || frameDocument.__companionHelpEscapeInstalled) { return; }
+        frameDocument.addEventListener('keydown', handleEscape);
+        frameDocument.__companionHelpEscapeInstalled = true;
+      } catch (e) {
+        // Same-origin is expected for /help; if that contract changes, the
+        // parent document Escape handler still covers shell focus.
+      }
+    }
+    frame.addEventListener('load', installHelpFrameEscapeHandling);
     window.companionHelp = {
       open: function() {
         // Lazy-load the guide on first open (server declares the content).
         if (!frame.getAttribute('src')) { frame.setAttribute('src', frame.dataset.src); }
+        installHelpFrameEscapeHandling();
         host.setAttribute('data-open', 'true');
         setExpanded(true);
       },
@@ -6666,11 +6692,7 @@ def _render_help_drawer() -> str:
         else { this.open(); }
       }
     };
-    document.addEventListener('keydown', function(ev) {
-      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
-        window.companionHelp.close();
-      }
-    });
+    document.addEventListener('keydown', handleEscape);
   }());
   </script>"""
 
@@ -6772,7 +6794,7 @@ def render_index_html(
             "settings",
         )
         if fields is not None
-        else ("vault",)
+        else ()
     )
 
     return f"""<!DOCTYPE html>
@@ -9560,6 +9582,7 @@ def render_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
+  {_render_help_toggle()}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
@@ -9623,6 +9646,7 @@ def render_index_html(
   {memory_review_drawer_markup()}
   {receipts_history_modal_markup()}
   {settings_drawer_markup(fields)}
+  {vault_settings_panel_markup()}
   {system_map_overlay_markup(available_routes=map_available_routes)}
   {guidance_layer_style()}
 
@@ -10147,6 +10171,7 @@ def render_index_html(
   {_note_readback_script()}
   {_note_editor_script()}
   {settings_drawer_script()}
+  {vault_settings_panel_script()}
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
   {_render_operator_drawer()}
@@ -10215,7 +10240,7 @@ def handle_get(
                 "/api/companion/vault-browser",
                 params=browser_params,
             )
-        except WorkspaceClientError as exc:
+        except (WorkspaceClientError, AssertionError) as exc:
             orientation_vault_browser_error = str(exc)
         if orientation is None and orientation_vault_browser is not None:
             orientation = _orientation_unavailable_frame(orientation_error)
@@ -10382,6 +10407,35 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            if parsed.path == VAULT_SETTINGS_ENDPOINT:
+                try:
+                    data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/companion/vault-related":
+                params = {
+                    key: values[0]
+                    for key, values in parse_qs(parsed.query).items()
+                    if values and values[0]
+                }
+                try:
+                    data = self._client.get("/api/companion/vault-related", params=params)
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
+            if parsed.path == "/api/companion/tts/status":
+                try:
+                    data = self._client.get("/api/companion/tts/status", params={})
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path.startswith("/api/companion/tts/audio/"):
                 self._proxy_audio(parsed.path)
                 return
@@ -10510,15 +10564,48 @@ def make_handler(
             self.end_headers()
             self.wfile.write(body)
 
+        # GET paths the page server proxies through to the runtime API.
+        _GET_PROXY_PATHS = frozenset(
+            {
+                "/api/companion/orientation",
+                "/api/companion/workspace",
+                "/api/companion/vault/notes",
+                VAULT_SETTINGS_ENDPOINT,
+                "/api/companion/vault-related",
+                "/api/companion/tts/status",
+                "/api/operator/status",
+                "/api/operator/health",
+                "/api/operator/settings/validate",
+                "/api/operator/events/tail",
+            }
+        )
+        _GET_PROXY_PATTERNS = (
+            re.compile(r"^/api/companion/tts/audio/[a-f0-9]{64}\.wav$"),
+        )
+
+        @classmethod
+        def _get_path_allowed(cls, path: str) -> bool:
+            if path in cls._GET_PROXY_PATHS:
+                return True
+            return any(pattern.fullmatch(path) for pattern in cls._GET_PROXY_PATTERNS)
+
         # POST paths the page server proxies through to the runtime API
         # (same-origin model; the browser never talks to the runtime directly).
         _POST_PROXY_PATHS = frozenset(
             {
                 "/api/companion/workspace/body",
+                "/api/companion/workspace/update",
                 "/api/companion/capture",
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
+                "/api/companion/vault-browser/actions/queue-review",
+                VAULT_SELECT_ENDPOINT,
+                VAULT_INITIALIZE_ENDPOINT,
+                VAULT_RELOAD_ENDPOINT,
+                VAULT_SETTINGS_ENDPOINT,
+                "/api/canvas/sessions",
+                "/api/panel/confirm",
                 "/api/panel/checkbox-projection",
                 "/api/operator/ask",  # operator diagnostics Ask (#1758)
             }
@@ -10532,6 +10619,7 @@ def make_handler(
         # the provider-unavailable notice — server declares, UI renders.
         _POST_PROXY_PATTERNS = (
             re.compile(r"^/api/canvas/sessions/[^/]+/coauthor$"),
+            re.compile(r"^/api/canvas/sessions/[^/]+/edits$"),
             # Governed memory review decisions (#1793 -> #1792 endpoints).
             # Runtime refusals (409, e.g. the accept dry-run) are forwarded
             # verbatim by _proxy_error so the drawer renders calm with the
@@ -10543,6 +10631,28 @@ def make_handler(
             if path in self._POST_PROXY_PATHS:
                 return True
             return any(pattern.fullmatch(path) for pattern in self._POST_PROXY_PATTERNS)
+
+        _DELETE_PROXY_PATTERNS = (
+            re.compile(r"^/api/canvas/sessions/[^/]+$"),
+            re.compile(r"^/api/canvas/sessions/[^/]+/edits/last$"),
+        )
+
+        @classmethod
+        def _delete_path_allowed(cls, path: str) -> bool:
+            return any(pattern.fullmatch(path) for pattern in cls._DELETE_PROXY_PATTERNS)
+
+        @classmethod
+        def route_allowed(cls, method: str, path: str) -> bool:
+            method = method.upper()
+            if method == "GET":
+                return cls._get_path_allowed(path)
+            if method == "POST":
+                if path in cls._POST_PROXY_PATHS:
+                    return True
+                return any(pattern.fullmatch(path) for pattern in cls._POST_PROXY_PATTERNS)
+            if method == "DELETE":
+                return cls._delete_path_allowed(path)
+            return False
 
         # Operator POST paths that rewrite to a different runtime path.
         # key = companion-UI path, value = runtime API path.
@@ -10568,6 +10678,18 @@ def make_handler(
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             try:
                 data = self._client.post(runtime_path, json=payload)
+            except WorkspaceClientError as exc:
+                self._proxy_error(exc)
+                return
+            self._send_json(200, data)
+
+        def do_DELETE(self) -> None:
+            parsed = urlparse(self.path)
+            if not self._delete_path_allowed(parsed.path):
+                self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
+                return
+            try:
+                data = self._client.delete(parsed.path, params={})
             except WorkspaceClientError as exc:
                 self._proxy_error(exc)
                 return

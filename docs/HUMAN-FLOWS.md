@@ -5,8 +5,8 @@ Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-11
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, app/api/routes/capture.py, app/api/routes/companion.py, app/api/routes/canvas.py, app/api/routes/panel.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, merged PRs #1800/#1801/#1802/#1816/#1817/#1818/#1833, System Entry Point parent #1782 validation receipts through wave 3a, and current repo state at 3861b111 on 2026-06-11
+Last reviewed: 2026-06-13
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
@@ -61,7 +61,9 @@ authorship, accountability, and local-first artifact control rather than replaci
 
 The full product-level statement of this thesis, including the failure modes that would
 violate it, lives in `docs/COGNITIVE_PROSTHESIS_CHARTER.md`. The bridge from these human flows
-to the runtime substrate lives in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`.
+to the runtime substrate lives in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`. The agent-facing
+function contract — how helping agents, including human-delegated external agents, use this
+substrate to serve these flows — lives in `docs/AGENT-FLOWS.md`, downstream of this document.
 
 ### Cognitive-load reduction as prosthetic function
 
@@ -159,6 +161,7 @@ They summarize the kinds of cycles the system should keep legible and support ac
 - Source -> interpret -> stabilize
 - Intent -> propose -> decide -> execute -> receipt
 - Review -> reclassify -> promote/archive
+- Remember -> recall -> explain -> correct
 
 Validation note:
 - these loops and the everyday scenarios below are the product-level acceptance source for system-level UAT
@@ -266,6 +269,21 @@ It must not erase the existence of creative, reflective, or commitment-oriented 
 The system should help the human compile and curate memory by weaving together `Source -> interpret -> stabilize`, `Capture -> clarify -> place`, `Review -> reclassify -> promote/archive`, and `Retrieve -> orient -> act`.
 Compilation should reduce cognitive load while preserving human authorship, provenance, uncertainty, and review posture across the resulting working artifacts.
 Generated compiled artifacts are not automatically canonical truth; they remain reviewable outputs until the human decides what to keep, promote, revise, or archive.
+
+### Remember -> recall -> explain -> correct
+
+The human must be able to trust that the system's memory about prior work, decisions, and agent
+actions remains legible and correctable:
+- the system may remember support material on the human's behalf,
+- recalled material must show what was used and where it came from,
+- recall must be explainable rather than presented as bare conviction,
+- and when the system's memory diverges from the human's, the human can inspect and correct it,
+  with corrections producing new records rather than rewriting prior ones.
+
+This loop is the human-facing contract behind inspectable agent memory. The agent-facing
+obligations — per-flow recall bindings, explanation duties, and paired correction paths — are
+owned by `docs/AGENT-FLOWS.md`; memory semantics remain owned by
+`docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`.
 
 ### Support commitments and action
 
@@ -542,6 +560,20 @@ Across weeks and months, the system should help the human:
 - preserve continuity in projects and learning,
 - carry creative/hobby worlds forward,
 - and maintain a usable memory of prior thought and prior action.
+
+### Made proactive
+
+Historically these rhythms were almost entirely *pull*: the human had to remember to open
+orientation, run review, or check what was next. The **Contextual Relevance Engine** makes the
+rhythms *proactive* — the system anticipates the moment and brings the right thing — without becoming
+a firehose. It computes **moments** from the context model and reaches out only as far up a graduated
+ladder (glance → in-app nudge → OS push) as a moment's urgency clears the human's **current**
+interruption threshold. **Sleep and declared do-not-disturb are a zero-tolerance floor: never a push,
+regardless of urgency.** Below threshold, a moment is not dropped — it **defers** to the glance
+surface and re-attempts when interruptibility rises (suppression is timing, not deletion). Every
+materialized moment and every reach-out or deliberate suppression is a non-authoritative, source-linked
+vault artifact with a receipt. Scarcity is the discipline (§0): right thing, right moment — silent
+otherwise. See `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` and `docs/CONTEXTUAL_RELEVANCE_ENGINE/`.
 
 ## 6. Choosing the right representation
 
@@ -958,6 +990,7 @@ document should continue to hold.
 ## References
 
 - `docs/PROJECT_KERNEL.md`
+- `docs/AGENT-FLOWS.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/USER_NEEDS_MODEL.md`
 - `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
@@ -979,7 +1012,7 @@ That direction is no longer handoff-only: a bounded implementation now exists in
 
 The Companion UI vault browser is the human-first navigation and orientation surface over the vault for the reorient/find/return-to-context flows. Its long-term capability contract — concepts (`VaultArtifact`, `VaultView`, `VaultQuery`, `VaultRelation`, `VaultActivity`, `VaultHealth`, `VaultAction`, `VaultProposal`, `VaultReceipt`), action-mode boundary, MLP-versus-future scope, and non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Current shipped behavior is bounded as `Vault Browser MLP v0`: read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into the Companion workspace. When a browse cap applies, the retained subset is deterministic: lexicographically smallest matching note paths are preserved. The browser is a projection layer; the vault and Markdown/frontmatter remain the human control surface. Per the topology authority decision in `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` and #1488, current browser `zone` posture is frontmatter-preferred with path-derived fallback over the active vault; topology-derived zones remain deferred projection material until a future issue defines source, provenance, degradation, and visible ranking/filter semantics.
 
-The System Entry Point work now gives these flows a declared shell substrate: the system can render cold start, re-entry, and active-document states explicitly; return-to-context can use the latency-ladder treatment; and command/capture/memory/receipts overlays return to the document anchor instead of becoming separate apps. This is still a composed Companion UI capability under parent #1782, not a claim that every planned shell surface has been accepted: system map, guidance, settings, and final state-gallery validation remain open until their issue receipts close.
+The System Entry Point work now gives these flows a declared shell substrate: the system can render cold start, re-entry, and active-document states explicitly; return-to-context can use the latency-ladder treatment; and command/capture/memory/receipts/system-map/guidance/settings overlays return to the document anchor instead of becoming separate apps. Parent #1782 closed through #1795 validation, but this remains a composed Companion UI capability rather than a claim that every planned shell idea is shipped: source-peek presentation, posture emphasis switching, and the context lane / place band remain unshipped follow-ups.
 
 ## Companion Niflheim dev UAT workspace update check
 
