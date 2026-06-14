@@ -688,7 +688,14 @@ def _validate_registry_vault(vault_path: Path) -> None:
     context = manager.validate_vault(vault_path)
     if context.status != "selected":
         detail = f": {context.validation_error}" if context.validation_error else ""
-        raise ValueError(f"watcher registry requires an initialized selected vault; status={context.status}{detail}")
+        remedy = (
+            f" — run `python -m app.cli vault init --path {vault_path}` to scaffold settings"
+            if context.status == "uninitialized"
+            else ""
+        )
+        raise ValueError(
+            f"watcher registry requires an initialized selected vault; status={context.status}{detail}{remedy}"
+        )
     permissions = manager.permissions_for_context(context)
     if not permissions.enable_vault_watcher:
         raise ValueError("watcher registry is disabled by settings/local.md")
