@@ -78,8 +78,9 @@ allowed_args:
 ```
 
 The `<json_schema_type>` values currently recognized by the executor are: `string`, `integer`, `number`, `boolean`, `array`, `object`.
+For registry-loaded descriptors, simple top-level unions may also be expressed as `oneOf` entries that each declare one of those `type` values. The executor currently normalizes those unions into pipe-delimited type sets such as `object|string`.
 
-Current behavior: the executor validates that any argument present in the plan step matches the type declared in `allowed_args`. The executor separately validates that all `required` fields from the descriptor schema are present in the step's `tool_args`.
+Current behavior: the executor validates that any argument present in the plan step matches the type declared in `allowed_args`. When a descriptor declares a top-level union, the argument may match any normalized member type in that union. The executor separately validates that all `required` fields from the descriptor schema are present in the step's `tool_args`.
 
 ### In-repo hardcoded descriptors (legacy coexistence)
 

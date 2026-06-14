@@ -242,6 +242,58 @@ def test_tool_provider_builderops_tools_preserve_store_semantics(tmp_path: Path)
     assert read_receipt["result"]["record"] == receipt["result"]["record"]
 
 
+def test_tool_provider_builderops_tools_accept_string_actor_ids(tmp_path: Path) -> None:
+    provider = MCPToolProvider()
+    executor = MockPlanExecutor()
+    db_path = tmp_path / "builderops.sqlite3"
+    context = _context(
+        {
+            "mcp_builderops_enable": True,
+            "allowed_mcp_tools": [
+                "mcp.builderops.create_worklog",
+                "mcp.builderops.append_receipt",
+            ],
+            "builderops_db_path": str(db_path),
+        }
+    )
+
+    created = provider.execute_tool_call(
+        tool_name="mcp.builderops.create_worklog",
+        tool_args={
+            "summary": "String actor worklog",
+            "body": "Created with a string actor id through the MCP boundary.",
+            "source_refs": [{"ref_type": "github_issue", "ref": "#1503"}],
+            "created_by": "tool-codex",
+        },
+        context=context,
+        step_id="builderops-create-string-actor",
+        description="Create BuilderOps worklog with string actor",
+        executor=executor,
+    )
+    record = created["result"]["record"]
+    assert record["created_by"] == {"actor_type": "agent", "id": "tool-codex"}
+
+    receipt = provider.execute_tool_call(
+        tool_name="mcp.builderops.append_receipt",
+        tool_args={
+            "summary": "String actor receipt",
+            "event_type": "object_created",
+            "actor": "tool-codex",
+            "occurred_at": "2026-06-01T00:00:00Z",
+            "target_refs": [{"ref_type": "builderops_object", "ref": record["id"]}],
+            "action": "create",
+            "receipt_body": "Recorded BuilderOps tool write.",
+            "idempotency_key": "tool:receipt-string-actor",
+            "source_refs": [{"ref_type": "github_issue", "ref": "#1503"}],
+        },
+        context=context,
+        step_id="builderops-receipt-string-actor",
+        description="Append BuilderOps receipt with string actor",
+        executor=executor,
+    )
+    assert receipt["result"]["record"]["actor"] == {"actor_type": "agent", "id": "tool-codex"}
+
+
 def test_tool_provider_builderops_tools_are_mocked_until_enabled(
     tmp_path: Path,
 ) -> None:
