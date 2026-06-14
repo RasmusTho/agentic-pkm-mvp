@@ -405,8 +405,8 @@ def normalize_record(record: Mapping[str, Any]) -> JsonDict:
     data.setdefault("created_at", now)
     data.setdefault("updated_at", data["created_at"])
     data["created_by"] = normalize_actor(data.get("created_by"))
-    if object_type == "BuilderOpsReceipt":
-        data["actor"] = normalize_actor(data.get("actor"))
+    if object_type == "BuilderOpsReceipt" and data.get("actor") is not None:
+        data["actor"] = normalize_actor(data["actor"])
 
     if data["authority_class"] not in AUTHORITY_CLASSES:
         raise BuilderOpsValidationError(f"invalid authority_class: {data['authority_class']}")
