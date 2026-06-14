@@ -121,9 +121,6 @@ def test_conflict_indicator_visible() -> None:
         assert 'data-testid="workspace-canvas-recovery-conflict"' in html
         assert session_state in html
         assert 'data-testid="workspace-canvas-recovery-ack"' in html
-        assert 'data-runtime-backed="false"' in html
-        assert 'data-blocked-reason="Canvas recovery acknowledgement runtime route is not shipped"' in html
-        assert 'data-api-path="/api/canvas/sessions/session-1/recovery/ack"' not in html
         assert 'data-testid="workspace-canvas-recovery-copy"' in html
         assert "Acknowledge recovery before applying body edits." in html
 

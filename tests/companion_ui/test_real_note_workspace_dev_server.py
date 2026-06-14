@@ -167,17 +167,6 @@ class TestModuleImport:
 
         assert callable(make_handler)
 
-    def test_panel_confirm_is_same_origin_post_proxy_path(self) -> None:
-        from companion_ui.workspace.serve_dev_page import make_handler
-
-        handler = make_handler(
-            client=_FakeClient(),
-            api_base_url="http://127.0.0.1:18001",
-        )
-
-        assert "/api/panel/confirm" in handler._POST_PROXY_PATHS
-        assert handler._post_path_allowed(handler, "/api/panel/confirm") is True
-
     def test_main_importable(self) -> None:
         from companion_ui.workspace.serve_dev_page import main
 

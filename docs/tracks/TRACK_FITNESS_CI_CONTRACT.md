@@ -16,5 +16,5 @@ Scope: deterministic fitness functions, CI summary lines, baselines, and gating 
 
 ## Links
 - Roadmap Now/Next: `docs/ROADMAP.md`.
-- Historical detail: removed from the live repo; use git history for the old v4.x ladder.
+- Historical detail: `docs/history/SOT_4X_HISTORY.md` (v4.x ladder).
 - Pattern harvest/backlog: `docs/research/pattern-harvest-agentic-architecture.md`.

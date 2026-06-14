@@ -103,13 +103,12 @@ def test_display_preferences_preserve_canonical_body_and_content_hash() -> None:
 
     rendered = re.search(
         r'<div class="note-body-content"[^>]*data-testid="workspace-note-rendered"'
-        r'[^>]*>(.*?)</div>',
+        r'[^>]*data-content-hash="sha256-display"[^>]*>(.*?)</div>',
         html,
         re.S,
     )
-    assert rendered, "rendered note body must render"
+    assert rendered, "rendered note body must carry the server content hash"
     assert "Canonical source paragraph." in rendered.group(1)
-    assert 'data-content-hash="sha256-display"' not in rendered.group(0)
     assert 'data-content-hash="sha256-display"' in html
     assert 'data-note-path="Notes/display.md"' in html
 

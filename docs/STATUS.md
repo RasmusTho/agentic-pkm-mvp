@@ -1,12 +1,12 @@
-State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard); v5.6 delivery line closed; v6.0 seams baseline shipped at capability-seam level (closed capability spec directories plus minimal orientation/resurfacing/commitment-domain/context-dimensions runtimes and read-only Chat cognition scaffold); broader v6.0 runtime consumption is deferred as v6.1+. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening. Contextualization Layer docs/spec package (#1093–#1097) delivered 2026-05-19 (life-wide taxonomy, context activation semantics, metadata contract update, media artifact contract, ingestion/triage policy, vault templates, vault audit runbook — docs-only, no runtime behavior changed). Agent Memory runtime slices for candidate/review/promotion/recall explanation/authority guard plus companion-note-aware handling are shipped (#1079/#1080/#1081/#1082/#1083/#1085), and the Durable Memory and Recall chain is shipped (#1904–#1908): vault-scoped review decision receipts survive restart, the review queue reconciles terminal decisions, promoted semantic memory materializes as an agent-promoted vault artifact through WriteGuard plus receipt, guarded recall emits recall receipts without persisting activation as authority, and Companion can surface materialized-memory provenance/posture. Companion UI: substantial dev/staging-shell capability now shipped to main. The vault Markdown renderer covers §6 typography, callouts, tables, images (real-image fixture verified), and resolved/diagnostic wikilinks, with client-rendered Mermaid that fails gracefully (#1335 umbrella: #1334/#1338/#1340/#1341; #1332 Markdown/editor UAT: Mermaid #1344/PR #1433, wikilink resolver #1345/PR #1432, image fixture #1347/PR #1430, task/code retest #1348). The shell is an adaptive single-shell workspace with one left context panel, a canonical Vault Browser, single-shell scroll ownership, and rail/folder-density compaction (#1395 corrective: #1397/#1398/#1399/#1400/#1401 plus hardening #1417/#1418/#1419/#1425/#1427). Body-edit is wired through `active_note_body_update` with writeguard and an unsaved-edit signal, behind a fixed-height edit composer (#1346/PR #1434, #1416/PR #1429). The governance endpoint stub was replaced with a real CanvasPanelPipeline; the Panel correction path and source-backed read-mode checkbox projection are implemented. Note-independent workspace orientation is now shipped through a contract, API, re-entry UI, leave-point cursor, and MemoryCandidate intent ADR/runtime seam (#1457/#1460/#1461/#1463/#1464/#1466). This remains dev/staging-shell and v6.1 orientation work; broader production Companion UI hardening and packaging remain issue-first.
+State: SoT v5.5 Reality-MVP baseline locked (watcher auto-run gate, panel action provenance, and concurrency guard); v5.6 delivery line closed; v6.0 seams baseline shipped at capability-seam level (closed capability spec directories plus minimal orientation/resurfacing/commitment-domain/context-dimensions runtimes and read-only Chat cognition scaffold); broader v6.0 runtime consumption is deferred as v6.1+. Post-v5.6 follow-ups are tracked separately for LangGraph/Reasoning expansion, Orchestrator V2 hardening, A2A/MCP lifecycle cleanup, and local verification hardening. Contextualization Layer docs/spec package (#1093–#1097) delivered 2026-05-19 (life-wide taxonomy, context activation semantics, metadata contract update, media artifact contract, ingestion/triage policy, vault templates, vault audit runbook — docs-only, no runtime behavior changed). Agent Memory runtime slices for candidate/review/promotion/recall explanation/authority guard plus companion-note-aware handling are now shipped (#1079/#1080/#1081/#1082/#1083/#1085). Companion UI: substantial dev/staging-shell capability now shipped to main. The vault Markdown renderer covers §6 typography, callouts, tables, images (real-image fixture verified), and resolved/diagnostic wikilinks, with client-rendered Mermaid that fails gracefully (#1335 umbrella: #1334/#1338/#1340/#1341; #1332 Markdown/editor UAT: Mermaid #1344/PR #1433, wikilink resolver #1345/PR #1432, image fixture #1347/PR #1430, task/code retest #1348). The shell is an adaptive single-shell workspace with one left context panel, a canonical Vault Browser, single-shell scroll ownership, and rail/folder-density compaction (#1395 corrective: #1397/#1398/#1399/#1400/#1401 plus hardening #1417/#1418/#1419/#1425/#1427). Body-edit is wired through `active_note_body_update` with writeguard and an unsaved-edit signal, behind a fixed-height edit composer (#1346/PR #1434, #1416/PR #1429). The governance endpoint stub was replaced with a real CanvasPanelPipeline; the Panel correction path and source-backed read-mode checkbox projection are implemented. Note-independent workspace orientation is now shipped through a contract, API, re-entry UI, leave-point cursor, and MemoryCandidate intent ADR/runtime seam (#1457/#1460/#1461/#1463/#1464/#1466). This remains dev/staging-shell and v6.1 orientation work; broader production Companion UI hardening and packaging remain issue-first.
 Doc role: Core SoT
 Authority: Current operational snapshot for the active baseline; subordinate to concept contracts for normative semantics, but authoritative for current runtime status and rollout posture.
 Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-06-13
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948 and #1977, and current repo state at 4e642410 on 2026-06-14
+Last reviewed: 2026-06-12
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py, companion-ui/companion-app/companion_ui/workspace/guidance_layer.py, companion-ui/companion-app/companion_ui/workspace/settings_drawer.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, tests/companion_ui/test_system_map_overlay.py, tests/companion_ui/test_guidance_layer.py, tests/companion_ui/test_settings_drawer.py, tests/companion_ui/test_entry_state_gallery.py, merged PRs #1798–#1802/#1816–#1818/#1833/#1834/#1846/#1847, the System Entry Point #1782 validation receipts through the #1795 state-gallery closure, and current repo state on 2026-06-12
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
@@ -16,17 +16,6 @@ Roadmap reset note: `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` is the accept
 input for sequencing, not a runtime-promotion document. This status file remains the current-state
 owner doc. Capabilities should be read as shipped only when code plus tests or operator evidence are
 present and any owner-doc promotion gate has been satisfied.
-
-Integrated Runtime v1 release line: #1874 is open to integrate already-shipped capabilities through route parity, readiness matrix, Panel staging persistence, golden-path UAT, and negative-safety UAT gates without claiming new shipped behavior here.
-
-Contextual Relevance Engine posture: CRE-01 and CRE-02 are delivered concept-contract slices;
-CRE-03 is shipped as the vault-native pull runtime slice, and CRE-04 is shipped for governed
-in-app proactive reach-out decisions. The shipped CRE surface computes vault-native moments from
-local vault data, materializes them as non-authoritative moment artifacts with receipts, records a
-reach-out or deliberate suppression receipt per candidate on the governed relevance tick, and exposes
-Companion "now" / glance projections plus threshold-cleared in-app nudges. It does not read external
-connectors or emit OS/system notifications; external source integration and OS-push delivery remain
-deferred follow-ons.
 
 Security review note: the security architecture spine (`docs/SECURITY_ARCHITECTURE.md` plus its
 trust-boundary, data-flow, API-matrix, and STRIDE-lite companions) is now the review-routing owner
@@ -161,7 +150,6 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - `sot_forward_line_version` / `feature_line_version`: code-level release-line marker that still reports v5.6 on top of the v5.5 baseline; this is not proof that v5.6 remains the active issue queue.
 - `active_features`: human-readable list of forward-line capabilities (PanelAgent runtime, watcher track, config-driven wiring).
 - Counters (totals + 24h window): `panel_runs` (`panel.intent.executed`), `promote.intent.created`, `promotion_executed` (`promote.done`), `watcher_runs` (`watcher.run` from registry and legacy watcher ticks), and ingest run counts per plane. Registry watcher health is also tracked via heartbeat + tick logs.
-- `integrated_runtime_v1`: informational release-readiness matrix for the Integrated Runtime v1 operator view. It names the v1 capabilities, tier, state, and reasons from existing probes/flags only; it does not affect health/readiness pass-fail, grant authority, emit events, or perform writes.
 
 ## Concurrency & Safety (v5.5 gate)
 - DedupTaskQueue now guards watcher auto-runs and powers the `skipped_dedup` signal before releasing keys.
@@ -198,13 +186,6 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   truth. Context Bundles keep `may_write=false` unless a later governed contract explicitly
   changes that posture. No new runtime enforcement was added by #1598; the constraint is normative
   and drives future follow-up implementation issues if concrete enforcement gaps are identified.
-- Durable Memory and Recall is shipped through #1904-#1908. Pending review candidates remain
-  runtime-only; explicit review decisions persist as vault-scoped receipts/traces and reconcile the
-  in-memory queue on intake/startup. Promote-to-semantic decisions become terminal only after the
-  governed materialization path writes an agent-promoted vault artifact through WriteGuard and
-  records the promotion receipt; blocked materialization records a failed-attempt receipt and keeps
-  the promotion actionable. Guarded recall now runs the authority guard and writes recall receipts,
-  but activation state is not persisted as artifact authority.
 - Runtime AgentState contract unification is shipped for the current ASK, generic graph, reasoning
   graph-builder, and PanelAgent state surfaces: `app/agents/runtime_state.py` defines the shared
   trace/authority/proposal/receipt linkage fields and the existing state classes now expose or adapt
@@ -256,10 +237,6 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   `POST /api/companion/vault-browser/actions/queue-review` when server-resolved artifact scope is
   available. This is only queue staging: durable execution and receipt-supporting records remain
   behind `POST /api/panel/confirm`.
-- Pending Panel proposals and `POST /api/panel/confirm` idempotency keys now survive API restart via
-  additive SQLite runtime state. Recovery is pending-only and executes nothing; if that backing is
-  unavailable, the runtime falls back to memory-only staging and reports degraded Panel staging
-  posture through `/api/status`.
 - Companion UI operational loop (inspect → queue → confirm → receipt) is now a coherent, inspectable
   control surface over the existing shipped surfaces (#1603). The queue-review response names its
   loop position (`loop_stage: "queued_pending_confirmation"`), the Panel confirmation response exposes
@@ -298,6 +275,17 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   paths remain read-side projections; context-bundle consumption explicitly keeps `may_write=false`.
   Runtime/UI fixing for #1690 remains gated by the issue pickup rule because the issue is labelled
   `agent:ready` but Project status is currently `Backlog`, not `Ready`.
+- Cognitive-load runtime adoption delivered and closed (#1638, 2026-06-09): the bounded runtime/UI
+  children are shipped — source-preserving summary regression fixtures (#1679), scarce pointer-first
+  `why_now` resurfacing cards (#1680), and correction-as-proposal review for direct note-editor draft
+  text (#1681), all delivered via PR #1689 — and the owner-doc promotion (#1682) is delivered, so
+  parent #1638 is closed. Shipped support stays within the existing read-side projection and
+  proposal-class boundaries: resurfacing has no notification/urgency/priority semantics, summaries and
+  corrections remain non-authoritative and cannot mutate canonical Markdown without the authorized
+  human save/confirm path. Broader cognitive-support behaviour beyond these bounded surfaces remains
+  target-state (`docs/plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md`). Source Understanding Mode
+  (#1646/#1647) is a separate, still-open parent path — it reuses the same source-primary posture but
+  was never a #1638 child or blocker. See `docs/COGNITIVE_LOAD_RUNTIME_ADOPTION/`.
 <!-- authority-spine-diagnostic -->
 - Authority spine diagnostic surfaced in health API (#1601): `/api/health` now includes an
   `authority_spine` key with bounded operator-visible posture strings (`write_guard`,
@@ -351,7 +339,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 For detailed sequencing, version history, and roadmap ladder, use:
 - `docs/ROADMAP.md`
 - `docs/plans/V56_FORWARD_LINE.md`
-- removed historical snapshots in git history
+- `docs/history/SOT_4X_HISTORY.md`
 
 ## GitHub delivery governance snapshot
 
@@ -421,16 +409,16 @@ docs-authoring or docs-to-issue path when scheduled.
 Update (2026-05-12): `docs/COMPANION_UI_PRODUCT_SPEC.md` is now added in this docs-only PR.
 It is a target-state product specification and does not change runtime behavior.
 
-Update (2026-05-13): context bundle and agent memory work moved from contract-definition
+Update (2026-05-13): context bundle and agent memory work has now moved from contract-definition
 only into docs-first feature-breakdown preparation via `docs/CONTEXT_BUNDLES/` and
-`docs/AGENT_MEMORY/`. These directories defined bounded implementation-ready specs and local draft
-parent feature issues.
+`docs/AGENT_MEMORY/`. These directories define bounded implementation-ready specs and local draft
+parent feature issues. No runtime behavior changed; implementation remains future work.
 
 Update (2026-05-13): Context Bundles now have filed GitHub backlog surfaces: parent feature issue
 #894 plus the first two child implementation issues #895 (`CONTEXT-BUNDLES-01`) and #896
 (`CONTEXT-BUNDLES-02`). No runtime behavior changed; implementation remains future work until
-those issues are delivered and validated. Agent Memory has since shipped both its initial runtime
-slices and the durable-memory/guarded-recall chain noted above. The bridge-map reference to the agent-memory
+those issues are delivered and validated. Agent Memory remains local spec-only unless later issue
+searches find or create active implementation issues. The bridge-map reference to the agent-memory
 contract was corrected from a local stale "future" reference to the active
 `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` contract.
 
@@ -489,20 +477,3 @@ Scope: architecture alignment only. No runtime change, no event-payload change, 
 The vocabulary is the language new cognitive-mediation catalog entries (tracked separately) are
 expected to populate; existing entries remain valid without retroactive backfill. Delivers #981
 under the PanelAgent / Cognitive Mediation program coordinated by #978.
-
-Contextual Relevance Engine — vault-native pull path plus in-app reach-out runtime slices shipped
-(#1924/#1958/#1964). The `app/relevance/` package computes "moments" deterministically from
-vault-native inputs (today's daily note plus open-loop / near-deadline notes), materializes each as
-the CRE-01 moment artifact in the vault system plane (`<system_folder>/moments/<id>.md`) through the
-WriteGuard with provenance and an Act-tier receipt, and projects them read-only at a companion-UI
-"now"/glance surface (`companion_ui/workspace/now_surface.py`). The pull path is wired into the
-runtime as of #1958 (Wave 2 of v6.1 delivery hub #1956): a governed watcher tick
-(`app/watcher/relevance_tick.py`) computes and materializes moments each tick, and
-`GET /api/companion/now` surfaces them read-only at the companion-UI glance surface. The proactive
-attention loop is wired into the same runtime tick as of #1964: after materializing moments,
-`app/watcher/relevance_tick.py` invokes `app/relevance/attention_loop.py` to record a reach-out or
-deliberate suppression receipt per candidate, and `GET /api/companion/now` can surface an in-app
-nudge when a moment clears the current in-app threshold. Zero-tolerance contexts still suppress;
-OS-push delivery, external connectors, and the emergent/learned pattern loop remain deferred
-follow-ons. Capability boundary and acceptance live in `docs/CONTEXTUAL_RELEVANCE_ENGINE/` and the
-parent validation hub #1921.

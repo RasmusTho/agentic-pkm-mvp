@@ -122,11 +122,6 @@ It exists to keep high-level design work systematic:
 ### Document Responsibilities
 
 - `docs/DESIGN_PRINCIPLES.md` owns stable design rules and document-layer boundaries.
-- `docs/HUMAN-FLOWS.md` and `docs/AGENT-FLOWS.md` own flow-level function contracts: what the
-  system is for from the human's perspective, and how helping agents use the system to serve
-  those flows. Human Flow is upstream of Agent Flow.
-- `docs/CONCEPTS/*` own concept definitions; flow contracts bind to that vocabulary and must not
-  redefine it.
 - `docs/ARCHITECTURE.md` owns structural boundaries, responsibilities, and invariants.
 - `docs/ROADMAP.md` owns sequencing, gates, and intentional deferrals.
 - `docs/STATUS.md` owns current operational truth.
@@ -139,22 +134,6 @@ It exists to keep high-level design work systematic:
 - If roadmap text starts to read like a kanban board, move detail into a track or plan doc.
 - If architecture text starts to prescribe implementation mechanics prematurely, move detail into a reference or plan doc.
 - If status text mixes present truth with aspirational direction, split the aspirational part into roadmap or plan docs.
-
-### Anti-sprawl Rules
-
-Prefer consolidation over document creation. Before adding a doc: update the owning doc, move
-duplicated material into one canonical location, replace repeated explanations with pointers, add
-`Changed:` notes where an owner contract is amended, and demote or delete stale plan/research
-text when safe. Keep bridge docs short and directional, runtime truth in
-Architecture/Status/Operations, concepts in concept contracts, and flow-level function in
-Human Flow / Agent Flow.
-
-A new document is acceptable only when all of the following hold:
-- no existing owner doc can own the material cleanly;
-- placing the material in an existing doc would create a mixed-authority document;
-- the new doc carries a clear `Doc role`, `Authority`, `Owner`, `Temporal class`,
-  `Review cadence`, and `Source of truth` header and is registered in `docs/DOCS_INDEX.md`;
-- the new doc reduces overall confusion rather than increasing it.
 
 ## Change Classification Rules
 

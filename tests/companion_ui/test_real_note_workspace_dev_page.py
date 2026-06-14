@@ -261,47 +261,6 @@ def test_writeguard_blocked_marks_mutating_affordances_blocked() -> None:
     assert 'data-testid="workspace-panel-proposal-unavailable"' in html
 
 
-def test_help_toggle_is_early_in_workspace_source_order() -> None:
-    """The fixed Help affordance must not be stranded at the end of tab order."""
-    page = _loaded_page()
-    fields = page.render_fields()
-    assert fields is not None
-
-    html = render_index_html(
-        api_base_url="http://127.0.0.1:18001",
-        note_path="notes/research.md",
-        fields=fields,
-    )
-
-    body_idx = html.index("<body")
-    help_toggle_idx = html.index('data-testid="workspace-help-toggle"')
-    topbar_idx = html.index('class="topbar"')
-    drawer_idx = html.index('data-testid="workspace-help-host"')
-
-    assert html.count('<button type="button" class="help-toggle"') == 1
-    assert body_idx < help_toggle_idx < topbar_idx
-    assert help_toggle_idx < drawer_idx
-
-
-def test_help_drawer_installs_escape_handler_inside_same_origin_iframe() -> None:
-    page = _loaded_page()
-    fields = page.render_fields()
-    assert fields is not None
-
-    html = render_index_html(
-        api_base_url="http://127.0.0.1:18001",
-        note_path="notes/research.md",
-        fields=fields,
-    )
-
-    assert 'data-testid="workspace-help-frame"' in html
-    assert "var frameWindow = frame.contentWindow;" in html
-    assert "var frameDocument = frameWindow ? frameWindow.document : null;" in html
-    assert "frameDocument.addEventListener('keydown', handleEscape);" in html
-    assert "frame.addEventListener('load', installHelpFrameEscapeHandling);" in html
-    assert "document.addEventListener('keydown', handleEscape);" in html
-
-
 # ---------------------------------------------------------------------------
 # AC 3: dev page preserves Obsidian-like workflow layout
 # ---------------------------------------------------------------------------

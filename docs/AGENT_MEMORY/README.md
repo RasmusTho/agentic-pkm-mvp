@@ -42,22 +42,6 @@ its lifecycle, and its authority limits. It remains the semantic source of truth
 records how that contract was turned into the delivered slices and where their verification evidence
 lives.
 
-## Successor Capability
-
-The storage-backend non-goal listed above was deferred, not abandoned. The successor capability
-`docs/DURABLE_MEMORY_AND_RECALL/` (parent feature issue #1903, spec PR #1902) closes that gap:
-it adds durable persistence of review decisions, startup queue reconciliation, governed vault
-materialization of promoted memory, and guarded recall activation. Read that directory for
-implementation work that extends this delivered capability.
-
-## Lifecycle Specification Follow-up
-
-Post-materialization lifecycle (archive/cold-storage and forget/tombstone) is specified in:
-[DEFINE_MEMORY_LIFECYCLE_ARCHIVE_AND_FORGET.md](DEFINE_MEMORY_LIFECYCLE_ARCHIVE_AND_FORGET.md)
-(governing issue #1919). This spec covers `active → archived → restored` and
-`active/archived → forgotten/tombstoned` transitions. Runtime implementation of these flows
-requires separate implementation issues.
-
 ## Remaining Follow-ups
 
 - Companion-aware handling remains separate if still tracked by #1085 / PR #1216 or successor docs.

@@ -18,7 +18,6 @@ from app.watcher.state import WatcherState
 from app.workers import outbox_worker
 from scripts.yaml_roundtrip import load_frontmatter
 from tests.helpers.pkm_alpha_helper import reset_memory_stores
-from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
 
@@ -349,7 +348,6 @@ def test_registry_chain_contract_and_rerun_idempotence(tmp_path: Path, monkeypat
     _reset_runtime_state()
 
     vault_root = tmp_path / "vault"
-    initialize_test_vault(vault_root)
     seed = seed_vault_test_notes(vault_root=vault_root, target_subdir="Test")
     config_path = tmp_path / "watchers.yaml"
     _write_registry_config(config_path)
@@ -405,7 +403,6 @@ def test_registry_cold_rebuild_recreates_final_state_from_seed_data(
     _reset_runtime_state()
 
     vault_root = tmp_path / "vault"
-    initialize_test_vault(vault_root)
     seed = seed_vault_test_notes(vault_root=vault_root, target_subdir="Test")
     config_path = tmp_path / "watchers.yaml"
     _write_registry_config(config_path)

@@ -22,7 +22,7 @@
 #   scripts/prod/start_midgard_ui.sh
 #
 # Optional environment:
-#   CUI_BIND_LAN=1                 bind the UI to 0.0.0.0 for LAN/Tailscale UAT
+#   CUI_BIND_LAN=0                 bind the UI to 127.0.0.1 only
 #   CUI_TARGET_NOTE=<rel-path>     verify a note path via /api/companion/workspace
 set -euo pipefail
 

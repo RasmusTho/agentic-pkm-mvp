@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from app.config.paths import VaultRootMisconfiguredError
 from app.services.companion_note import companion_path
 from app.services.note_uuid import ensure_note_uuid
 from app.write_guard import WritesBlockedError
@@ -62,7 +61,7 @@ def resolve_note_artifact_identity(
     if heal_missing_uuid:
         try:
             healed_uuid = ensure_note_uuid(contained_artifact_path, vault_root=resolved_root)
-        except (OSError, ValueError, VaultRootMisconfiguredError, WritesBlockedError):
+        except (OSError, ValueError, WritesBlockedError):
             healed_uuid = ""
         if healed_uuid:
             return ArtifactIdentity(

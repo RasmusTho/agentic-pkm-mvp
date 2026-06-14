@@ -11,13 +11,9 @@ It does not claim that every important system behavior should become its own age
 Where reusable behavior is better modeled as a capability or bounded subsystem, that should remain
 the preferred direction.
 
-This document is downstream of the flow-level function contracts: `docs/HUMAN-FLOWS.md` (what
-the system is for) and `docs/AGENT-FLOWS.md` (how helping agents use the system to serve those
-flows). Its purpose is not to define what the system or its agents are for, but to describe how
-the current runtime organizes assisting units in service of those functions. Agent-facing
-function questions — task families, participation modes, per-flow authority bindings, direct
-filesystem agent workspaces — are owned by `docs/AGENT-FLOWS.md`; this document remains the
-runtime coordination map.
+This document is downstream of the human-function documents.
+Its purpose is not to define what the system is for, but to describe how the current runtime
+organizes assisting units in service of those functions.
 
 This document uses `agent` primarily in the architecture/runtime sense.
 For the broader ontology of `System Agent` as a bounded assisting actor within the second-brain

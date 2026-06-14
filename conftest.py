@@ -21,7 +21,6 @@ def pytest_configure(config) -> None:
         "eval": "evaluation/deepeval tests",
         "e2e": "end-to-end scenarios",
         "human_uat": "human-need acceptance scenarios",
-        "uat_integrated_runtime": "no-mock Integrated Runtime v1 golden-path UAT over the test channel",
         "panel_llm_e2e": "panel + LLM e2e tests",
     }
     for name, desc in markers.items():

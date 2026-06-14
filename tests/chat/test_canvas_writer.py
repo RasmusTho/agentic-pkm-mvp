@@ -7,8 +7,6 @@ import pytest
 
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
 from app.chat.session_log import SessionLog, SessionLogWriter
-from app.health_contract import WRITE_BLOCKED_STATES
-from app.write_guard import WriteGuard, WritesBlockedError
 
 
 # ---------------------------------------------------------------------------
@@ -153,29 +151,3 @@ def test_multiple_edits_each_append_to_log(tmp_path: Path) -> None:
     assert "second edit" in log_content
     # Latest body is what's in the note
     assert "Body v2." in note.read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# WriteGuard: in-place body edits respect the system write lock (#1961)
-# ---------------------------------------------------------------------------
-
-def test_apply_edit_blocked_when_writes_disabled(tmp_path: Path) -> None:
-    """A closed write-guard blocks the body edit and leaves the note unchanged.
-
-    The co-authoring/body-edit path is a governed write, exactly like the
-    governance-bearing path that routes through ``GovernanceRouter``. When the
-    system write-guard is closed (health/maintenance lock) the edit must be
-    rejected and the note left untouched.
-    """
-    note = _note(tmp_path)
-    session = _open_session(tmp_path, note)
-    lw = _log_writer(tmp_path)
-    blocked_state = sorted(WRITE_BLOCKED_STATES)[0]
-    blocked_guard = WriteGuard(snapshot_fn=lambda: {"state": blocked_state, "reason": "maintenance"})
-    writer = CanvasWriter(vault_root=tmp_path, log_writer=lw, write_guard=blocked_guard)
-
-    with pytest.raises(WritesBlockedError):
-        writer.apply_edit(session, "New body content.", "blocked edit")
-
-    # The note body must be untouched after a blocked attempt.
-    assert "Original body." in note.read_text(encoding="utf-8")

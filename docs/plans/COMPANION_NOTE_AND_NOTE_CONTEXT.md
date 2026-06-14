@@ -226,7 +226,7 @@ Update active docs to match implementation. No VaultMirror references in active 
 - `docs/FRONTMATTER.md` — verify companion path is mentioned as system surface
 
 **Do NOT touch:**
-- Removed historical docs — leave in git history only
+- `docs/archive/` — leave as historical record
 - `docs/plans/PROTOCOL_SATELLITE_SYNC.md` — check if VaultMirror ref is load-bearing
 
 **Exit criteria:** Active docs (outside `archive/`) consistent with implementation.

@@ -258,14 +258,9 @@ def test_full_mist_renders_four_fixed_questions_with_counts() -> None:
     assert "2 changes" in card
     assert "Notable change label 0" not in card
 
-    # Deliberate inspect affordance always emits the declared entry/shell
-    # intent. Even with zero candidates, the owner vocabulary stays
-    # `memory.open`; the href remains a no-JS fallback to the orientation
-    # section and is not a separate entry intent.
+    # Deliberate inspect affordance routes to the existing orientation
+    # sections until the memory review drawer (SEP-09) lands.
     assert 'data-testid="reentry-inspect"' in card
-    assert 'data-intent="memory.open"' in card
-    assert 'data-memory-candidate-count="0"' in card
-    assert 'data-intent="open_loops.inspect"' not in card
     assert 'href="#workspace-orientation-open-loops"' in card
 
     # Resume affordance carries the declared intent and jumps to the artifact.
@@ -313,15 +308,6 @@ def test_long_mist_adds_delta_strip_and_whisper_column() -> None:
     narrow_css = html.split("@media (max-width: 860px)", 1)[1].split("}\n", 1)[0]
     assert ".reentry-whisper-col { display: none; }" in html
     assert narrow_css is not None  # media query present
-
-    # Start fresh must remove the card and its sibling long-mist cues before
-    # declaring shell_active, so no orienting whisper column is left behind.
-    dismiss = re.search(r"function entryDismiss\(control\) \{(.*?)\n  \}\n  </script>", html, re.S)
-    assert dismiss, "entry.dismiss handler must render"
-    body = dismiss.group(1)
-    assert "[data-region=delta-strip], [data-region=whisper-column]" in body
-    assert "siblingCues[i].remove()" in body
-    assert "data-entry-state', 'shell_active'" in body
 
 
 # ---------------------------------------------------------------------------

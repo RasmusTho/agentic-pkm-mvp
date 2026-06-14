@@ -11,7 +11,7 @@ Use it as a visual companion to:
 - `docs/EVENTS.md` for event contracts
 - `docs/DESIGN_PRINCIPLES.md` for the higher-level design rules that these diagrams do not own
 
-Historical diagrams are no longer retained as live repo files; use git history for removed snapshots.
+Historical diagrams live in `docs/archive/architecture/DIAGRAMS.md`.
 
 Reading note:
 - these diagrams show current runtime wiring and operator-visible flow,

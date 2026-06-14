@@ -11,8 +11,6 @@ import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.api.routes.artifacts import _content_hash
-from app.health_contract import WRITE_BLOCKED_STATES
-from app.write_guard import DEFAULT_WRITE_GUARD
 
 
 @pytest.fixture(autouse=True)
@@ -69,31 +67,6 @@ def test_edit_updates_vault_file(client: TestClient, vault: Path) -> None:
     assert edit_resp.json()["ok"] is True
     note = vault / "note.md"
     assert "Updated body." in note.read_text(encoding="utf-8")
-
-
-def test_apply_edit_blocked_when_writes_disabled(
-    client: TestClient, vault: Path, monkeypatch
-) -> None:
-    """A closed write-guard makes /edits return 409 and leaves the note unchanged (#1961)."""
-    open_resp = client.post(
-        "/api/canvas/sessions", json={"note_path": "note.md", "label": "blocked-edit"}
-    )
-    session_id = open_resp.json()["session_id"]
-
-    blocked_state = sorted(WRITE_BLOCKED_STATES)[0]
-    monkeypatch.setattr(
-        DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": blocked_state, "reason": "maintenance"}
-    )
-
-    resp = client.post(
-        f"/api/canvas/sessions/{session_id}/edits",
-        json={"new_body": "Should not be written.", "change_summary": "blocked"},
-    )
-
-    assert resp.status_code == 409, resp.text
-    note_text = (vault / "note.md").read_text(encoding="utf-8")
-    assert "Original body." in note_text
-    assert "Should not be written." not in note_text
 
 
 def test_undo_last_edit_reverts_body_and_preserves_log(client: TestClient, vault: Path) -> None:

@@ -117,10 +117,7 @@ def test_ambient_refresh_disabled_by_default(monkeypatch) -> None:
         api_base_url="http://127.0.0.1:18001",
     )
 
-    assert client.get_calls == [
-        ("/api/companion/orientation", {}),
-        ("/api/companion/vault-browser", {"q": "", "limit": 250}),
-    ]
+    assert client.get_calls == [("/api/companion/orientation", {})]
     assert 'data-testid="workspace-reentry-orientation"' in html
     assert 'data-ambient-refresh="disabled"' in html
     assert 'data-refresh-mode="manual"' in html
@@ -137,10 +134,7 @@ def test_ambient_refresh_uses_foreground_pull_after_staleness(monkeypatch) -> No
         api_base_url="http://127.0.0.1:18001",
     )
 
-    assert client.get_calls == [
-        ("/api/companion/orientation", {}),
-        ("/api/companion/vault-browser", {"q": "", "limit": 250}),
-    ]
+    assert client.get_calls == [("/api/companion/orientation", {})]
     assert 'data-ambient-refresh="enabled"' in html
     assert 'data-stale-after="2026-05-31T12:05:00Z"' in html
     assert 'data-refresh-mode="foreground_pull"' in html

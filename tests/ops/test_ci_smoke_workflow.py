@@ -30,17 +30,6 @@ def test_ci_smoke_splits_baseline_and_quality_wave_pytest() -> None:
 
     assert "tests/quality_wave" not in baseline_step
     assert "tests/quality_wave/test_uat_harness.py" in quality_wave_step
-    assert "-n auto --dist=loadfile" in baseline_step
-
-
-def test_quality_wave_smoke_runs_sequentially() -> None:
-    workflow = _workflow_text()
-    quality_wave_step = workflow.split("Pytest Quality Wave smoke (memory, fail-fast)", maxsplit=1)[1]
-
-    assert "tests/quality_wave/test_uat_harness.py" in quality_wave_step
-    assert "-p xdist.plugin" not in quality_wave_step
-    assert "-n auto" not in quality_wave_step
-    assert "--dist=loadfile" not in quality_wave_step
 
 
 def test_ci_smoke_gates_heavy_pytest_for_docs_only_prs() -> None:

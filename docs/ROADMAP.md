@@ -5,12 +5,12 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-06-13
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
+Last reviewed: 2026-06-11
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, merged PRs #1800/#1801/#1802/#1816/#1817/#1818/#1833, GitHub issue #1508, System Entry Point parent #1782 validation receipts through wave 3a, and current repo state at 3861b111 on 2026-06-11
 
 # Roadmap — Strategic Control
 
-This roadmap is forward-looking and skimmable. Deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`; removed history snapshots live only in git history.
+This roadmap is forward-looking and skimmable. History lives in `docs/history/SOT_4X_HISTORY.md`; deep track details live under `docs/tracks/`. Current truth stays in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
 
 BuilderOps roadmap execution boundary: `docs/ROADMAP.md` remains the repo strategic sequencing
 surface. Daily movement state belongs in BuilderOps `RoadmapExecutionItem` records and the generated
@@ -19,11 +19,10 @@ Use that projection for operational views of theme, capability, status, active i
 last movement, next decision, and shipped refs. Do not update this roadmap merely to record routine
 movement.
 
-System Entry Point execution is now a completed Companion UI capability delivery, not a broader
-product-baseline promotion. Parent #1782 closed through #1795 validation after the entry-state,
-re-entry, overlay-host, palette, capture, memory, receipts, system-map, guidance, settings, and
-state-gallery child surfaces shipped. Remaining context-lane/place-band decisions stay parked under
-the gated follow-up issue #1796 and BuilderOps execution records.
+System Entry Point execution is an active roadmap-execution item, not a completed roadmap baseline:
+parent #1782 remains open while the entry-state/re-entry/overlay-host/palette/capture/memory/receipts
+child surfaces have shipped and system-map/guidance/settings/state-gallery closure work remains
+represented by the issue tree and BuilderOps execution records.
 
 Major roadmap reset boundary: `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` is the accepted
 strategic reset input for the next sequencing pass. It freezes normal backlog-wave generation until
@@ -37,11 +36,6 @@ Security sequencing boundary: the security architecture spine and first review i
 `docs/security/STRIDE_LITE_REVIEW_2026_06_04.md`) are now available as design-hardening inputs.
 They guide future security work but do not, by themselves, change the roadmap baseline, widen
 runtime exposure, or claim public internet readiness.
-
-Contextual Relevance Engine sequencing: CRE-01/CRE-02 are delivered concept-contract groundwork,
-and CRE-03 has shipped the vault-native pull moment plus glance-surface slice. The broader proactive
-attention loop is still the next bounded implementation step, not shipped baseline behavior; routine
-issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
 
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
@@ -58,10 +52,6 @@ issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
 ## Now / Next / Later
 - **Now**
   - **Major roadmap reset and SoT reconciliation** — active sequencing guard. Do not generate the next normal backlog wave from target-state docs. First reconcile shipped runtime, delivered seams, owner-doc promotion state, BuilderOps projection boundaries, and open GitHub state using `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md`.
-  - **Integrated Runtime v1 release line (#1874)** — active integration sequencing item for route parity, readiness matrix, Panel staging persistence, golden-path UAT, negative-safety UAT, and docs reduction.
-  - **Contextual Relevance Engine** — CRE-03 shipped the first runtime seam for vault-native,
-    pull-only moments and a read-only glance projection; continue with the proactive attention loop
-    only through the bounded follow-up issue.
   - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
   - Keep the shipped PanelAgent LangGraph decider opt-in and watcher policy auto-exec plumbing stable under the v5.5 baseline guardrails while broader rollout stays gated.
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.
@@ -313,7 +303,7 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 - PanelAgent LangGraph track: `docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md`
 - AgentOps/A2A/MCP hardening: `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`
 - Fitness/CI contract: `docs/tracks/TRACK_FITNESS_CI_CONTRACT.md`
-- Historical ladder: removed from the live repo; use git history if the old snapshot is needed.
+- Historical ladder: `docs/history/SOT_4X_HISTORY.md`
 
 ## Delivery Control Plane (GitHub)
 

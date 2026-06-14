@@ -64,20 +64,6 @@ def test_read_artifact_note_returns_body_payload(
     assert data["content_hash"] == expected_hash
 
 
-def test_read_artifact_note_strips_markdown_image_sigil_from_title(
-    client: TestClient, tmp_path: pathlib.Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    note = tmp_path / "notes" / "diagram.md"
-    note.parent.mkdir(parents=True, exist_ok=True)
-    note.write_text("# ![Diagram](https://example.com/x.png)\n\nSome body text.\n", encoding="utf-8")
-
-    resp = client.get("/api/artifacts/note", params={"note_path": "notes/diagram.md"})
-
-    assert resp.status_code == 200
-    assert resp.json()["title"] == "Diagram"
-
-
 # ---------------------------------------------------------------------------
 # AC 2: missing note returns typed error
 # ---------------------------------------------------------------------------

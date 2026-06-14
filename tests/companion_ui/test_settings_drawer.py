@@ -37,7 +37,6 @@ from companion_ui.workspace.overlay_host import (
     dismiss,
     mount,
 )
-from companion_ui.workspace.guidance_layer import guidance_layer_script
 from companion_ui.workspace.serve_dev_page import render_index_html
 from companion_ui.workspace.settings_drawer import (
     DISPLAY_PREF_CANONICAL,
@@ -288,16 +287,15 @@ def test_preferences_leave_canonical_hash_byte_unchanged() -> None:
     html_after = _render()
     assert html_after == html_before
 
-    # The rendered note body keeps the canonical paragraph verbatim without
-    # restating the machine content hash in visible markup.
+    # The rendered note body still carries the server-declared content hash
+    # and the canonical paragraph verbatim.
     rendered = re.search(
         r'<div class="note-body-content"[^>]*data-testid="workspace-note-rendered"'
-        r'[^>]*>(.*?)</div>',
+        r'[^>]*data-content-hash="sha256-settings"[^>]*>(.*?)</div>',
         html_after,
         re.S,
     )
-    assert rendered, "rendered note body must render"
-    assert 'data-content-hash="sha256-settings"' not in rendered.group(0)
+    assert rendered, "rendered note body must carry the server content hash"
     assert "Canonical source paragraph." in rendered.group(1)
 
     # The controller applies preferences as attributes/classes/values only —
@@ -353,33 +351,6 @@ def test_no_preference_write_reaches_save_or_vault() -> None:
     updated = apply_preference(settings_prefs, "listeningSpeed", "1.15")
     assert updated["listeningSpeed"] == "1.15"
     assert settings_prefs["listeningSpeed"] == "1", "apply_preference is pure"
-
-
-def test_apply_prefs_preserves_session_guidance_override() -> None:
-    html = _render()
-    settings_script = _controller_script(html)
-    guidance_script = guidance_layer_script()
-
-    assert "data-guidance-session-override', 'true'" in guidance_script
-    assert "data-guidance-session-override') !== 'true'" in settings_script
-
-    override_guard = re.search(
-        r"if \(document\.body\.getAttribute\('data-guidance-session-override'\) !== 'true'\) \{"
-        r"(.*?)\n      \}",
-        settings_script,
-        re.S,
-    )
-    assert override_guard, "applyPrefs must guard stored guidance default application"
-    guarded_body = override_guard.group(1)
-    assert "prefs.guidanceDefault" in guarded_body
-    assert "setAttribute('data-guidance', 'on')" in guarded_body
-    assert "removeAttribute('data-guidance')" in guarded_body
-
-    before_guard = settings_script.split(
-        "data-guidance-session-override') !== 'true'", 1
-    )[0]
-    assert "data-guidance', 'on'" not in before_guard
-    assert "removeAttribute('data-guidance')" not in before_guard
 
 
 # ---------------------------------------------------------------------------

@@ -47,7 +47,7 @@ Prereqs:
 - Reference docs: use `docs/DOCS_INDEX.md` to find implementation, operator, and development guidance outside the core set
 - Plan docs (target-state / future-direction — not current baseline): `docs/ROADMAP.md`, `docs/plans/V60_ARCHITECTURE_TARGET.md`, `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md`, `docs/plans/PROTOCOL_SATELLITE_SYNC.md`, and the docs under `docs/tracks/`
 - Historical plan docs: `docs/plans/V56_FORWARD_LINE.md` (delivered/closed)
-- Historical docs are no longer retained as live repo files; use git history for removed snapshots.
+- Historical docs: read only for background after the core docs; they are not current truth
 
 ## Quickstart (Developer / CI)
 Install and run the fast test suite (no vault required):
@@ -100,6 +100,8 @@ Contributions and collaborations are welcome by prior discussion. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and relicensing terms.
 
 ## Historical References
-SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current runtime truth. Read `docs/STATUS.md` and `docs/ARCHITECTURE.md` first; older snapshots have been removed from the live repo and should be recovered from git history only when needed.
+SoT v4.10 is the historical Reality-MVP foundation snapshot and is not current runtime truth. Read `docs/STATUS.md` and `docs/ARCHITECTURE.md` first; use the references below only for background:
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
+- `docs/history/SOT_4X_HISTORY.md`
 
 The current baseline is v5.5; v5.6 is delivered and closed; v6.0 seams baseline is shipped at capability-seam level. Broader v6 runtime/product consumption is v6.1+ work — see `docs/plans/V60_ARCHITECTURE_TARGET.md` and `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md` for target-state design direction.

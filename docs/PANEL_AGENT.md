@@ -192,16 +192,6 @@ Only task checkboxes inside a valid Panel `AI-åtgärder` section are eligible f
 
 Current implementation: Companion UI read mode uses `POST /api/panel/checkbox-projection` for runtime-mediated projection of runtime-declared selectable Panel options. The existing staged `POST /api/panel/confirm` endpoint remains the transient staged-proposal confirmation path and is not the source-backed Markdown checkbox projection endpoint.
 
-Staged proposal persistence (#1877): the staged `POST /api/panel/confirm` path now backs pending
-Panel proposals and confirm idempotency keys with additive SQLite runtime state under
-`runtime/panel/` by default. This persistence is a restart-survival layer only: recovered proposals
-remain pending, never execute on load, and still require the normal explicit confirm request,
-WriteGuard, policy/admission checks, deterministic execution, events, and receipt write. Staging
-creates no vault mutation and no durable receipt; durable receipt visibility remains a consequence
-of confirm/block/reject handling. If the SQLite backing is unavailable, staging falls back to
-memory-only mode and `/api/status` reports the Panel staging store as degraded through
-`panel_diagnostics`.
-
 ### Panel identity vocabulary
 
 - `panel_id`: Runtime identifier for one parsed Panel block within one note/artifact. It scopes proposals and options but does not identify an option by itself.

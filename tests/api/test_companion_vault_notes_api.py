@@ -113,13 +113,6 @@ def test_title_from_heading_strips_inline_markdown(client: TestClient, vault: Pa
     assert entry["title"] == "0. Executive summary"
 
 
-def test_title_from_heading_strips_markdown_image_sigil(client: TestClient, vault: Path) -> None:
-    _note(vault, "Inbox/diagram.md", "# ![Diagram](https://example.com/x.png)\n\nItems.\n")
-    resp = _get_notes(client)
-    entry = next(n for n in resp.json()["notes"] if "diagram" in n["path"])
-    assert entry["title"] == "Diagram"
-
-
 def test_title_fallback_to_stem(client: TestClient, vault: Path) -> None:
     _note(vault, "notes/unnamed.md", "No heading here.\n")
     resp = _get_notes(client)
@@ -145,39 +138,6 @@ def test_response_includes_vault_identity(client: TestClient, vault: Path) -> No
     assert "vault_name" in identity
     assert identity["channel"] == "dev"
     assert identity["provenance"] == "env"
-
-
-def test_selected_vault_overrides_env_vault_root_for_notes(
-    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import app.api.routes.companion as companion_module
-    from app.vault.app_local import AppLocalSettingsStore
-    from app.vault.manager import VaultManager
-
-    env_vault = tmp_path / "env-vault"
-    selected_vault = tmp_path / "selected-vault"
-    _note(env_vault, "notes/env-only.md", "# Env Only\n\nWrong vault.\n")
-    _note(selected_vault, "notes/selected-only.md", "# Selected Only\n\nRight vault.\n")
-    monkeypatch.setenv("VAULT_ROOT", str(env_vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
-
-    manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md"))
-    result = manager.initialize_vault(
-        selected_vault,
-        vault_name="Selected Vault",
-        remember=False,
-    )
-    assert result.context.status == "selected"
-    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
-
-    selected_resp = _get_notes(client, q="selected-only")
-    assert selected_resp.status_code == 200
-    selected_paths = [n["path"] for n in selected_resp.json()["notes"]]
-    assert selected_paths == ["notes/selected-only.md"]
-
-    env_resp = _get_notes(client, q="env-only")
-    assert env_resp.status_code == 200
-    assert env_resp.json()["notes"] == []
 
 
 def test_filter_by_q_matches_path(client: TestClient, vault: Path) -> None:

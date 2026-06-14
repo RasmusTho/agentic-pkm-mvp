@@ -22,7 +22,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.vault.paths import get_vault_system_dir_rel
-from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 _LEGACY_COMPANIONS_DIR = Path("_system/companions")
@@ -145,7 +144,6 @@ def write_companion(vault_root: Path, companion: CompanionNote) -> None:
     The legacy _system/companions/ dual-write has been removed; companions are
     created in exactly one location per the COMPANION_NOTE_CONTRACT.
     """
-    DEFAULT_WRITE_GUARD.assert_writes_allowed("companion_note.write")
     path = vault_root / companion_path(companion.uuid, vault_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = _companion_to_fm(companion)

@@ -1,6 +1,4 @@
 State: Concept contract companion (agent memory and knowledge; human-authored truth remains primary).
-Changed: 2026-06-13 — Durable Memory and Recall shipped review-decision receipts, queue reconciliation, governed semantic-memory materialization, guarded recall receipts, and Companion provenance surfacing. `may_write=false` remains the default for recalled memory unless a future governed owner contract changes it.
-Changed: 2026-06-12 — `docs/AGENT-FLOWS.md` explicitly declines the `may_write` widening slot reserved below for Yggdrasil-mediated agent memory; `may_write=false` remains universal unless a future governed owner contract changes it. Human-declared direct filesystem write zones (see `docs/AGENT-FLOWS.md` §7) are a separate human-delegated access mode, not a `may_write` widening and not agent memory.
 
 # Agent Memory and Knowledge Contract
 
@@ -28,13 +26,7 @@ It does not define:
 - a specific vector store,
 - a specific agent implementation,
 - a hidden prompt cache,
-- or a claim that every target-state lifecycle transition already exists in runtime.
-
-Current shipped runtime covers the durable-memory subset named in
-`docs/DURABLE_MEMORY_AND_RECALL/`: vault-scoped review-decision receipts, review-queue
-reconciliation, governed materialization of promoted semantic memory, guarded recall receipts, and
-Companion surfacing. Broader lifecycle management such as archive/cold-storage policy and complete
-forget/tombstone flows remains future governed work unless promoted by a later issue and receipt.
+- or a claim that durable memory already exists in the runtime exactly as described here.
 
 ## Core rule
 
@@ -208,12 +200,6 @@ The memory is corrected, narrowed, or reclassified.
 
 Stale or low-value memory should fall out of active use or move to archive while remaining inspectable if needed.
 
-Archive/cold-storage posture is a lifecycle state, not the same thing as a salience score or
-storage-temperature metaphor. Archived memory should remain durable, provenance-preserving, and
-explicitly retrievable, while default recall and resurfacing exclude it unless the caller or policy
-opts into archive recall. A future implementation must preserve the existing boundary that zone and
-salience influence rank, not authority, scope, or trust.
-
 ### Recall
 
 The system brings the memory back into use for answering, orienting, resurfacing, or proposing.
@@ -263,11 +249,6 @@ Deletion should be narrow and explainable:
 - remove the recalled support material if needed,
 - keep receipts or audit traces where appropriate,
 - and do not erase source provenance unless another contract explicitly says so.
-
-Complete forgetting is stronger than archiving. A future forget flow should be a governed
-destructive lifecycle transition: remove the semantic memory from normal recall and derived
-indexes, preserve only a minimal non-semantic tombstone/receipt needed for accountability, and avoid
-repeating the forgotten content in receipts, summaries, or recall projections.
 
 ## Relation to receipts
 
@@ -376,13 +357,6 @@ separate governed contract explicitly changes it with receipts and human review.
 candidate to active memory must not occur silently from context influence; explicit lifecycle
 transitions with receipts are required.
 
-`docs/AGENT-FLOWS.md` has explicitly declined this widening slot for Yggdrasil-mediated agent
-memory; the slot remains reserved for a future governed owner contract. Note the distinction in
-`docs/AGENT-FLOWS.md` §4/§7: Markdown written by human-delegated direct filesystem agents in
-declared workspace roots is an observed external artifact, not agent memory and not a mediated
-write — it carries no memory authority flags and enters knowledge only through the normal
-review/promotion path.
-
 This default is the design-intent posture documented here. Runtime enforcement may be partial at
 any given point. Where the runtime does not yet enforce a tier, the constraint remains normative
 for new work and should drive follow-up implementation issues when a concrete enforcement gap is
@@ -390,20 +364,4 @@ identified.
 
 ## Relationship to shipped reality
 
-Current runtime now ships the Durable Memory and Recall subset:
-
-- review decisions persist as vault-scoped receipts/traces and survive restart;
-- the review queue reconciles against terminal persisted decisions while pending candidates remain
-  runtime-only;
-- promote-to-semantic decisions materialize an agent-promoted vault artifact only through
-  `proposal -> WriteGuard -> receipt -> artifact`, and become terminal only after materialization
-  succeeds;
-- blocked or failed materialization records a failed-attempt receipt and keeps the promotion
-  actionable;
-- guarded recall invokes the memory authority guard, emits a recall receipt, and does not persist
-  activation state as artifact authority;
-- Companion surfaces materialized-memory provenance, recall provenance, and authority posture.
-
-This shipped subset does not introduce a vector-store choice, context-bundle persistence,
-archive/cold-storage lifecycle management, complete forgetting, or memory-authorized mutation.
-Those remain governed follow-up areas under this contract and the runtime-vs-durable boundary.
+Current runtime may already expose pieces of memory-adjacent behavior through retrieval, receipts, companion notes, and the read-only Chat cognition scaffold. This document does not claim a fully shipped agent-memory system. It defines the target-state relationship between memory, knowledge, runtime state, and machine mirrors.

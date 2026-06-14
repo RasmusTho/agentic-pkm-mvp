@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,76 +33,6 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 logger = logging.getLogger(__name__)
 
 SAME_TURN_TTL_SECONDS = 5.0
-PANEL_STAGING_SCHEMA_VERSION = 1
-DEFAULT_PANEL_STAGING_STATE_DIR = Path("runtime/panel")
-DEFAULT_PANEL_STAGING_DB_NAME = "panel_confirmation.sqlite3"
-DEFAULT_PANEL_STAGING_RETENTION_SECONDS = 7 * 24 * 60 * 60
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _resolve_panel_staging_db_path(env: dict[str, str] | None = None) -> Path:
-    src = env if env is not None else os.environ
-    state_dir = Path(
-        src.get("PANEL_STAGING_STATE_DIR")
-        or src.get("PANEL_CONFIRMATION_STATE_DIR")
-        or str(DEFAULT_PANEL_STAGING_STATE_DIR)
-    ).expanduser()
-    return Path(
-        src.get("PANEL_STAGING_DB_PATH")
-        or src.get("PANEL_CONFIRMATION_DB_PATH")
-        or str(state_dir / DEFAULT_PANEL_STAGING_DB_NAME)
-    ).expanduser()
-
-
-def _resolve_panel_staging_retention_seconds(env: dict[str, str] | None = None) -> float:
-    src = env if env is not None else os.environ
-    raw = src.get("PANEL_STAGING_RETENTION_SECONDS") or src.get(
-        "PANEL_CONFIRMATION_RETENTION_SECONDS"
-    )
-    if raw is None:
-        return float(DEFAULT_PANEL_STAGING_RETENTION_SECONDS)
-    try:
-        parsed = float(raw)
-    except ValueError:
-        return float(DEFAULT_PANEL_STAGING_RETENTION_SECONDS)
-    return max(parsed, SAME_TURN_TTL_SECONDS)
-
-
-PANEL_STAGING_DDL = [
-    """
-    CREATE TABLE IF NOT EXISTS panel_confirmation_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS panel_staged_proposals (
-        proposal_id TEXT PRIMARY KEY,
-        artifact_id TEXT NOT NULL,
-        intent_event_json TEXT NOT NULL,
-        proposed_at REAL NOT NULL,
-        trace_id TEXT NOT NULL,
-        proposal_origin TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_panel_staged_proposals_artifact
-    ON panel_staged_proposals(artifact_id)
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS panel_confirm_idempotency (
-        key TEXT PRIMARY KEY,
-        response_json TEXT NOT NULL,
-        created_at REAL NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-]
 
 
 class SameTurnExecutionError(RuntimeError):
@@ -208,328 +137,31 @@ class ConfirmResponse(BaseModel):
 
 
 class ProposalStore:
-    def __init__(
-        self,
-        db_path: Path | str | None = None,
-        *,
-        retention_seconds: float | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self._proposals: dict[str, StagedProposal] = {}
-        self._db_path = Path(db_path).expanduser() if db_path is not None else None
-        self._retention_seconds = (
-            float(retention_seconds)
-            if retention_seconds is not None
-            else _resolve_panel_staging_retention_seconds()
-        )
-        self._degraded_reason: str | None = None
-        if self._db_path is not None:
-            self._initialize()
-
-    @classmethod
-    def durable_default(cls) -> "ProposalStore":
-        return cls(
-            _resolve_panel_staging_db_path(),
-            retention_seconds=_resolve_panel_staging_retention_seconds(),
-        )
-
-    @property
-    def mode(self) -> str:
-        if self._db_path is None:
-            return "memory"
-        if self.degraded:
-            return "memory-degraded"
-        return "sqlite"
-
-    @property
-    def degraded(self) -> bool:
-        return self._degraded_reason is not None
-
-    @property
-    def degraded_reason(self) -> str | None:
-        return self._degraded_reason
-
-    @property
-    def db_path(self) -> Path | None:
-        return self._db_path
-
-    def _connect(self) -> sqlite3.Connection:
-        if self._db_path is None:
-            raise RuntimeError("proposal store is memory-only")
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _initialize(self) -> None:
-        try:
-            with self._connect() as conn:
-                for stmt in PANEL_STAGING_DDL:
-                    conn.execute(stmt)
-                conn.execute(
-                    "INSERT OR REPLACE INTO panel_confirmation_meta(key, value) VALUES (?, ?)",
-                    ("schema_version", str(PANEL_STAGING_SCHEMA_VERSION)),
-                )
-                self._purge_expired(conn, now=time.time())
-                rows = conn.execute(
-                    """
-                    SELECT proposal_id, artifact_id, intent_event_json, proposed_at,
-                           trace_id, proposal_origin
-                    FROM panel_staged_proposals
-                    ORDER BY proposed_at ASC
-                    """
-                ).fetchall()
-                conn.commit()
-            self._proposals = {}
-            for row in rows:
-                self._proposals[str(row["proposal_id"])] = StagedProposal(
-                    artifact_id=str(row["artifact_id"]),
-                    intent_event=PanelIntentEvent.model_validate_json(
-                        str(row["intent_event_json"])
-                    ),
-                    proposed_at=float(row["proposed_at"]),
-                    trace_id=str(row["trace_id"] or ""),
-                    proposal_origin=row["proposal_origin"],
-                )
-            self._degraded_reason = None
-        except Exception as exc:
-            self._degraded_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("panel proposal store degraded to memory-only: %s", exc)
-
-    def _purge_expired(self, conn: sqlite3.Connection, *, now: float) -> None:
-        cutoff = now - self._retention_seconds
-        conn.execute(
-            "DELETE FROM panel_staged_proposals WHERE proposed_at < ?",
-            (cutoff,),
-        )
 
     def stage(self, proposal_id: str, proposal: StagedProposal) -> None:
         self._proposals[proposal_id] = proposal
-        if self._db_path is None or self.degraded:
-            return
-        try:
-            now_iso = _utc_now_iso()
-            with self._connect() as conn:
-                self._purge_expired(conn, now=time.time())
-                conn.execute(
-                    """
-                    INSERT INTO panel_staged_proposals (
-                        proposal_id, artifact_id, intent_event_json, proposed_at,
-                        trace_id, proposal_origin, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(proposal_id) DO UPDATE SET
-                        artifact_id=excluded.artifact_id,
-                        intent_event_json=excluded.intent_event_json,
-                        proposed_at=excluded.proposed_at,
-                        trace_id=excluded.trace_id,
-                        proposal_origin=excluded.proposal_origin,
-                        updated_at=excluded.updated_at
-                    """,
-                    (
-                        proposal_id,
-                        proposal.artifact_id,
-                        proposal.intent_event.model_dump_json(),
-                        float(proposal.proposed_at),
-                        proposal.trace_id,
-                        proposal.proposal_origin,
-                        now_iso,
-                        now_iso,
-                    ),
-                )
-                conn.commit()
-        except Exception as exc:
-            self._degraded_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("panel proposal store degraded to memory-only: %s", exc)
 
     def get(self, proposal_id: str) -> StagedProposal | None:
         return self._proposals.get(proposal_id)
 
-    def remove(self, proposal_id: str) -> None:
-        self._proposals.pop(proposal_id, None)
-        if self._db_path is None or self.degraded:
-            return
-        try:
-            with self._connect() as conn:
-                conn.execute(
-                    "DELETE FROM panel_staged_proposals WHERE proposal_id = ?",
-                    (proposal_id,),
-                )
-                conn.commit()
-        except Exception as exc:
-            self._degraded_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("panel proposal store remove degraded to memory-only: %s", exc)
-
-    def count_for_artifact(self, artifact_id: str) -> int:
-        return sum(
-            1 for proposal in self._proposals.values() if proposal.artifact_id == artifact_id
-        )
-
     def clear(self) -> None:
         self._proposals.clear()
-        if self._db_path is None or self.degraded:
-            return
-        try:
-            with self._connect() as conn:
-                conn.execute("DELETE FROM panel_staged_proposals")
-                conn.commit()
-        except Exception as exc:
-            self._degraded_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("panel proposal store clear degraded to memory-only: %s", exc)
 
 
 class ConfirmIdempotencyStore:
-    def __init__(
-        self,
-        db_path: Path | str | None = None,
-        *,
-        retention_seconds: float | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self._cache: dict[str, ConfirmResponse] = {}
-        self._db_path = Path(db_path).expanduser() if db_path is not None else None
-        self._retention_seconds = (
-            float(retention_seconds)
-            if retention_seconds is not None
-            else _resolve_panel_staging_retention_seconds()
-        )
-        self._degraded_reason: str | None = None
-        if self._db_path is not None:
-            self._initialize()
-
-    @classmethod
-    def durable_default(cls) -> "ConfirmIdempotencyStore":
-        return cls(
-            _resolve_panel_staging_db_path(),
-            retention_seconds=_resolve_panel_staging_retention_seconds(),
-        )
-
-    @property
-    def mode(self) -> str:
-        if self._db_path is None:
-            return "memory"
-        if self.degraded:
-            return "memory-degraded"
-        return "sqlite"
-
-    @property
-    def degraded(self) -> bool:
-        return self._degraded_reason is not None
-
-    @property
-    def degraded_reason(self) -> str | None:
-        return self._degraded_reason
-
-    @property
-    def db_path(self) -> Path | None:
-        return self._db_path
-
-    def _connect(self) -> sqlite3.Connection:
-        if self._db_path is None:
-            raise RuntimeError("idempotency store is memory-only")
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _initialize(self) -> None:
-        try:
-            with self._connect() as conn:
-                for stmt in PANEL_STAGING_DDL:
-                    conn.execute(stmt)
-                conn.execute(
-                    "INSERT OR REPLACE INTO panel_confirmation_meta(key, value) VALUES (?, ?)",
-                    ("schema_version", str(PANEL_STAGING_SCHEMA_VERSION)),
-                )
-                self._purge_expired(conn, now=time.time())
-                rows = conn.execute(
-                    "SELECT key, response_json FROM panel_confirm_idempotency ORDER BY created_at ASC"
-                ).fetchall()
-                conn.commit()
-            self._cache = {
-                str(row["key"]): ConfirmResponse.model_validate_json(
-                    str(row["response_json"])
-                )
-                for row in rows
-            }
-            self._degraded_reason = None
-        except Exception as exc:
-            self._degraded_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("panel idempotency store degraded to memory-only: %s", exc)
-
-    def _purge_expired(self, conn: sqlite3.Connection, *, now: float) -> None:
-        cutoff = now - self._retention_seconds
-        conn.execute(
-            "DELETE FROM panel_confirm_idempotency WHERE created_at < ?",
-            (cutoff,),
-        )
 
     def get(self, key: str) -> ConfirmResponse | None:
         return self._cache.get(key)
 
     def set(self, key: str, response: ConfirmResponse) -> None:
         self._cache[key] = response
-        if self._db_path is None or self.degraded:
-            return
-        try:
-            now = time.time()
-            now_iso = _utc_now_iso()
-            with self._connect() as conn:
-                self._purge_expired(conn, now=now)
-                conn.execute(
-                    """
-                    INSERT INTO panel_confirm_idempotency (
-                        key, response_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?)
-                    ON CONFLICT(key) DO UPDATE SET
-                        response_json=excluded.response_json,
-                        updated_at=excluded.updated_at
-                    """,
-                    (
-                        key,
-                        response.model_dump_json(),
-                        now,
-                        now_iso,
-                    ),
-                )
-                conn.commit()
-        except Exception as exc:
-            self._degraded_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("panel idempotency store degraded to memory-only: %s", exc)
 
     def clear(self) -> None:
         self._cache.clear()
-        if self._db_path is None or self.degraded:
-            return
-        try:
-            with self._connect() as conn:
-                conn.execute("DELETE FROM panel_confirm_idempotency")
-                conn.commit()
-        except Exception as exc:
-            self._degraded_reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("panel idempotency store clear degraded to memory-only: %s", exc)
-
-
-def panel_staging_store_posture() -> dict[str, Any]:
-    degraded_reasons = [
-        reason
-        for reason in (
-            _proposal_store.degraded_reason,
-            _idempotency_store.degraded_reason,
-        )
-        if reason
-    ]
-    paths = {
-        str(path)
-        for path in (_proposal_store.db_path, _idempotency_store.db_path)
-        if path is not None
-    }
-    return {
-        "proposal_store_mode": _proposal_store.mode,
-        "idempotency_store_mode": _idempotency_store.mode,
-        "degraded": bool(degraded_reasons),
-        "degraded_reason": "; ".join(degraded_reasons) if degraded_reasons else None,
-        "db_path": sorted(paths)[0] if paths else None,
-        "pending_proposal_count": len(_proposal_store._proposals),
-        "idempotency_key_count": len(_idempotency_store._cache),
-    }
 
 
 def _resolve_outbox_path() -> Path:
@@ -711,7 +343,6 @@ class PanelConfirmationService:
                     events_emitted=[],
                 )
                 self._idempotency.set(request.idempotency_key, resp)
-                self._proposals.remove(request.proposal_id)
                 return resp
             _write_blocked_projection(
                 proposal,
@@ -739,7 +370,6 @@ class PanelConfirmationService:
                 events_emitted=["panel.action.blocked"],
             )
             self._idempotency.set(request.idempotency_key, resp)
-            self._proposals.remove(request.proposal_id)
             return resp
 
         if request.action == "reject":
@@ -753,7 +383,6 @@ class PanelConfirmationService:
                 events_emitted=[],
             )
             self._idempotency.set(request.idempotency_key, resp)
-            self._proposals.remove(request.proposal_id)
             return resp
 
         import app.panel.confirmation as _self_mod
@@ -835,12 +464,11 @@ class PanelConfirmationService:
             )
 
         self._idempotency.set(request.idempotency_key, resp)
-        self._proposals.remove(request.proposal_id)
         return resp
 
 
-_proposal_store = ProposalStore.durable_default()
-_idempotency_store = ConfirmIdempotencyStore.durable_default()
+_proposal_store = ProposalStore()
+_idempotency_store = ConfirmIdempotencyStore()
 _service = PanelConfirmationService(_proposal_store, _idempotency_store)
 
 __all__ = [
@@ -849,7 +477,6 @@ __all__ = [
     "ConfirmRequest",
     "ConfirmResponse",
     "PanelConfirmationService",
-    "panel_staging_store_posture",
     "ProposalStore",
     "Receipt",
     "SameTurnExecutionError",

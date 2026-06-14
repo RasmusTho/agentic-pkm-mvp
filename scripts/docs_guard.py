@@ -21,7 +21,6 @@ temporal_docs = {
     "docs/ARCHITECTURE.md",
     "docs/OPERATIONS.md",
     "docs/HUMAN-FLOWS.md",
-    "docs/AGENT-FLOWS.md",
 }
 temporal_doc_touched = any(c in temporal_docs for c in changed)
 temporal_code_prefixes = (

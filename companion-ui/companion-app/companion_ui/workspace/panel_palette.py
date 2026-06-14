@@ -148,22 +148,8 @@ def _row_actions_html(row: dict[str, Any]) -> str:
     buttons: list[str] = []
     for label in row["actions"]:
         # `panel.confirm` is the declared governed intent (spec §Intent
-        # vocabulary). `reject` uses the same ConfirmRequest transport as the
-        # rail; `correct` remains visible but presentation-only until a
-        # correction payload exists.
-        if label == "correct":
-            buttons.append(
-                '<button type="button" class="palette-proposal-action" '
-                'data-testid="palette-proposal-action" '
-                f'data-panel-action="{_e(label)}" '
-                f'data-proposal-id="{proposal_id}" '
-                f'data-artifact-id="{artifact_id}" '
-                'data-runtime-backed="false" '
-                'data-affordance-status="presentation-only" '
-                'disabled aria-disabled="true">'
-                f"{_ACTION_LABELS[label]}</button>"
-            )
-            continue
+        # vocabulary); reject/correct carry no entry/shell intent, exactly
+        # like the rail's buttons.
         intent_attr = (
             f'data-intent="{_CONFIRM_INTENT}" ' if label == "confirm" else ""
         )
@@ -427,9 +413,9 @@ def panel_palette_script() -> str:
     Registers the palette as the host's ``cmd`` occupant (open via ``⌘K`` /
     ``cmd.open``; Esc and the scrim dismiss to the anchor through the host).
     Filtering only hides rows (identity stays on ``data-proposal-id``). Action
-    clicks post the same proposal/action payload as the Panel confirm path.
-    Correct is rendered as a presentation-only affordance here because the
-    runtime ConfirmRequest does not accept ``action: "correct"``.
+    clicks post the same proposal/action payload as the Panel confirm path so
+    enabled palette actions execute instead of becoming a presentation-only
+    no-op.
     """
     return """
   <script>
@@ -457,13 +443,12 @@ def panel_palette_script() -> str:
     }
     if (input) { input.addEventListener('input', applyFilter); }
     function panelPayload(btn) {
-      var action = btn.getAttribute('data-panel-action') || 'confirm';
       return {
         proposal_id: btn.getAttribute('data-proposal-id') || '',
         artifact_id: btn.getAttribute('data-artifact-id') || '',
-        action: action,
+        action: btn.getAttribute('data-panel-action') || 'confirm',
         idempotency_key: 'palette:' + (btn.getAttribute('data-proposal-id') || '')
-          + ':' + action
+          + ':' + (btn.getAttribute('data-panel-action') || 'confirm')
           + ':' + Date.now()
       };
     }
@@ -480,7 +465,6 @@ def panel_palette_script() -> str:
         ? e.target.closest('[data-testid="palette-proposal-action"]')
         : null;
       if (!btn) { return; }
-      if (btn.getAttribute('data-runtime-backed') !== 'true') { return; }
       postPanelAction(btn);
     });
     // The host owns mount/dismiss (Esc / scrim -> document anchor).

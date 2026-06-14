@@ -7,7 +7,7 @@ from uuid import UUID
 from app.agents.base.audit import audit_log
 from app.events.types import PROMOTION_ORPHAN_OVERRIDE, RELATION_MISSING
 from app.stores import get_relation_index
-from app.stores.relation_candidates import extract_semantic_relations, register_relation_candidates
+from app.stores.relation_index import extract_semantic_relations, register_relation_candidates
 
 
 class OrphanPromotionError(RuntimeError):
