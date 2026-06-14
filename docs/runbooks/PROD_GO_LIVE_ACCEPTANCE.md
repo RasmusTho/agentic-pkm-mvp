@@ -23,6 +23,11 @@ This runbook defines the operator-executed procedure for accepting the productio
 - Deep Agents / v6.1 runtime capability consumption
 - New watcher authority or mutation behavior
 
+Companion-inclusive acceptance is covered by the test-channel golden path in
+`docs/runbooks/UAT_INTEGRATED_RUNTIME_V1.md`. That runbook extends acceptance
+visibility for Start → Orient → Work → Review → Confirm → Receipt → Resume
+without weakening this production baseline scope or using the operator vault.
+
 ---
 
 ## Prerequisites

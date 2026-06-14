@@ -35,6 +35,11 @@ Every Acceptance Criterion declares its verification inline with a `Verify:` mar
 
 - Behavioral AC → concrete test pointer: `Verify: \`tests/<path>::<test_name>\``. The test may be
   new (to be written by the builder); the name is the spec-level commitment.
+- Enforcement AC (a behavioral AC asserting a guard, gate, or invariant holds on the live path)
+  → the `Verify:` test must exercise the **production call site**, not the guard in isolation:
+  `Verify: \`tests/<path>::<test_name>\`` and the test asserts `<guard>` is invoked from
+  `<runtime entrypoint>`. A unit test of the guard function alone does not discharge an
+  enforcement AC.
 - Non-behavioral AC → concrete observable target: doc writeback path plus anchor
   (`Verify: doc writeback at \`docs/<path> :: <anchor>\``), roadmap diff, or runtime receipt.
 - An AC without a resolvable `Verify:` target is not executable; the Issue must not be

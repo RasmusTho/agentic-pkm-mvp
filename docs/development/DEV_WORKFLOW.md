@@ -82,6 +82,16 @@ Enforcement note:
   - blocking CI coverage is added for the missing check and enabled.
 - For `ruff --fix` in `conftest.py` or known re-export modules, review F401 removals manually and preserve intentional re-exports with `# noqa: F401` where needed.
 
+### CI / validation expectations
+
+The CI workflow runs a non-required `Unit tests (not pg)` check automatically on `pull_request`.
+That check executes `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"` without a Postgres
+service so unit regressions are visible before merge.
+
+This PR check is intentionally non-required until it has been observed green on real PRs. Promoting
+the check to a required branch-protection gate, or adding `pg`-marked tests with a Postgres service
+to the PR path, is deferred to follow-up work based on observed signal and CI cost/flakiness.
+
 ## Documentation rules
 
 - Update the owner doc first.
@@ -227,6 +237,7 @@ Form:
 Rules:
 
 - Behavioral ACs point to a concrete test (existing or to-be-added) by file and test name.
+- Enforcement ACs — behavioral ACs asserting a guard, gate, or invariant holds on the live runtime path — must point to a test that exercises the production call site, not the guard function in isolation. "Module exists and is unit-tested" does not discharge an enforcement AC; "invoked on the runtime path and asserted there" does.
 - Non-behavioral ACs point to a concrete observable target: doc writeback path plus anchor, roadmap diff, or runtime receipt.
 - If an AC cannot carry a resolvable `Verify:` target, refine or split it before marking the Issue `agent:ready`.
 - `Suggested Validation` remains the section that lists the commands and procedures that execute the declared `Verify:` targets. ACs and Suggested Validation are coupled: commands exist to resolve the Verify targets, not to duplicate them.

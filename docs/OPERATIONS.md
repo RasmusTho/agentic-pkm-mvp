@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-11
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, app/api/routes/canvas.py, app/api/routes/panel.py, app/api/routes/health.py, app/knowledge/write_ops.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/api/test_health_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1800/#1801/#1802/#1816/#1817/#1818/#1833, System Entry Point parent #1782 validation receipts through wave 3a, and current repo state at 3861b111 on 2026-06-11
+Last reviewed: 2026-06-13
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, Makefile, scripts/verify_runtime_stack.sh, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -219,8 +219,8 @@ Companion docs:
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
 - Companion UI channel launchers (`make dev-ui`, `make test-ui`, `make prod-ui`) bind the browser
-  UI to `0.0.0.0` by default for trusted-device server use. Set `CUI_BIND_LAN=0` when a
-  loopback-only UI bind is required. Public internet exposure remains unsupported.
+  UI to `127.0.0.1` by default. Set `CUI_BIND_LAN=1` to explicitly opt into a `0.0.0.0`
+  bind for trusted LAN/Tailscale UAT. Public internet exposure remains unsupported.
 
 Detailed startup, local topology, and recovery procedures live in `docs/INFRASTRUCTURE.md`.
 Task-specific operator walkthroughs live in `docs/runbooks/`.
@@ -349,7 +349,7 @@ Quick issue routing:
 
 ## Companion UI Entry Surfaces
 
-- Current Companion UI operator-visible entry surfaces include the server-rendered System Entry Point substrate: entry-state declarations, latency-ladder re-entry treatment, unified topbar/overlay host, Panel command palette, governed capture modal, memory review drawer, and read-only receipts history modal.
+- Current Companion UI operator-visible entry surfaces include the server-rendered System Entry Point substrate: entry-state declarations, latency-ladder re-entry treatment, unified topbar/overlay host, Panel command palette, governed capture modal, memory review drawer, read-only receipts history modal, system map overlay, opt-in guidance layer, settings drawer, and the state-gallery validation harness.
 - Capture uses `POST /api/companion/capture`; it is a governed vault-inbox append through WriteGuard and `app.knowledge.write_ops`, with `capture.inbox.appended` emitted as metadata-only operational evidence.
 - Memory review uses `GET /api/companion/memory/review-queue` and `POST /api/companion/memory/review-queue/{candidate_id}/decision`; accept/reject/revise are governed review outcomes, while defer remains non-terminal queue state.
-- Parent #1782 is still open for full System Entry Point validation and final owner-doc closure. Operators should not treat system-map, guidance, settings drawer, or state-gallery closure as shipped until their child issue receipts land.
+- Parent #1782 is closed through #1795 validation. Operators should treat source-peek presentation, posture emphasis switching, and the context lane / place band as unshipped follow-ups unless a later owner-doc update promotes them.

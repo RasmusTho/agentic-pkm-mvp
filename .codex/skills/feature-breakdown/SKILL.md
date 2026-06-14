@@ -107,6 +107,7 @@ Each task specification must contain these sections:
 - `## Acceptance Criteria` — checkboxes for definition of done; each AC carries an inline `Verify:` target (test pointer for behavioral ACs, doc/receipt target for non-behavioral ACs)
 - `## How to Verify (Pre-Merge)` — concrete local and CI verification steps that execute the `Verify:` targets from `Acceptance Criteria`; the two sections are coupled and must stay consistent
 - `## Out of Scope` — what this task does not do
+- `## Restart / Durability Posture` (required only when the task ships a user-facing surface backed by deferred, in-memory, or otherwise non-durable state) — state explicitly what survives a process restart, what does not, and what the user experiences when it does not. Being honest that the state is in-memory is **not** sufficient for a user-facing surface; name the trust consequence (for example "reviewed items reappear unreviewed after restart").
 - `## Related Docs` — links to parent plan, testing docs, implementation files
 - `## Related GitHub Issues` — guidance for issue creation, not a template
 
@@ -114,7 +115,12 @@ AC verifiability rule for task specs:
 
 - Every behavioral AC names the test that proves it (path and test name). New tests are acceptable — the name is the spec-level commitment.
 - Every non-behavioral AC names a concrete observable target (doc writeback anchor, roadmap diff, runtime receipt).
+- When a behavioral AC claims an **enforcement guarantee** — a guard, gate, or invariant that must hold on the live runtime path (for example "unreviewed memory cannot authorize writeback") — the named test must assert the guard is **invoked from its production call site**, not only that the guard function returns the right value in isolation. "Module exists + unit-tested" does not satisfy an enforcement AC; "wired into the runtime path and asserted there" does. The matching `## How to Verify (Pre-Merge)` step must execute that call-site assertion.
 - If an AC cannot name either, the specification is still too coarse. Refine or split the task before creating issues.
+
+### Cross-task invariants (capability-level)
+
+When two or more tasks read or write the same state, the capability `README.md` must carry a `## Cross-Task Invariants / Interaction Safety` section that states the invariants holding *across* tasks and walks the **partial-failure paths** — what happens when one task records a decision but the downstream task that should act on it is blocked, fails, or runs out of order. A breakdown whose tasks are each locally correct can still lose data in the seam between them (for example a promote decision recorded while its materialization is WriteGuard-blocked); this section names that seam and gives it an invariant (for example "a promotion is terminal only once its artifact is materialized"). If you cannot state the cross-task invariants, the slice boundaries are wrong — re-cut them before creating issues.
 
 ## Real-life operating rules
 
@@ -171,7 +177,7 @@ Trigger this skill when any of the following are true:
    - verification path, including the test-or-receipt target for every behavioral and non-behavioral AC in every task
    - validation / acceptance path
 5. Create the specification directory under `docs/{CAPABILITY_NAME}/` with:
-   - `README.md` — overview, task list with links, execution order, acceptance criteria, relationship to GitHub issues
+   - `README.md` — overview, task list with links, execution order, acceptance criteria, relationship to GitHub issues, and — when two or more tasks share state — a `## Cross-Task Invariants / Interaction Safety` section
    - One `.md` file per implementation task, named after what it does
 6. Decide where post-merge evidence will live:
    - parent feature issue body, comments, or both

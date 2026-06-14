@@ -24,6 +24,7 @@ from app.services.outbox import append_jsonl_outbox_event, insert_object_and_out
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
+from app.vault.manager import VaultManager
 from app.vault.layout import load_layout
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
@@ -92,23 +93,6 @@ def _matches_scope(rel_path: Path, scope_glob: str) -> bool:
     return matches_scope(rel_path, scope_glob)
 
 
-def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
-    for path in sorted(scan_root.rglob("*.md")):
-        try:
-            rel = path.relative_to(vault_root)
-        except Exception:
-            continue
-        if any(part.startswith(".") for part in rel.parts):
-            continue
-        if not _matches_scope(rel, scope_glob):
-            continue
-        try:
-            mtime = path.stat().st_mtime
-        except Exception:
-            continue
-        yield rel, mtime, path
-
-
 def _derive_scan_root(vault_root: Path, scope_glob: str) -> Path:
     return derive_scope_roots(vault_root, scope_glob)[0]
 
@@ -135,10 +119,6 @@ def _scan_markdown_many(
                 continue
             seen.add(rel)
             yield rel, mtime, path
-
-
-def _scan_markdown(vault_root: Path, scan_root: Path, scope_glob: str) -> Iterable[tuple[Path, float, Path]]:
-    yield from _scan_markdown_many(vault_root, [scan_root], scope_glob)
 
 
 def _now_iso_from_timestamp(value: float) -> str:
@@ -475,6 +455,8 @@ class RegistryConfig:
         if enable and not vault_raw:
             raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
         vault_path = Path(vault_raw or ".").expanduser()
+        if enable:
+            _validate_registry_vault(vault_path)
         scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
         logger.info(
             "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s inbox_source=%s",
@@ -699,6 +681,24 @@ def _parse_float_factory(*, fallback: float):
 
 def _auto_exec_enabled(vault_root: Path) -> bool:
     return resolve_auto_exec_enabled(vault_root=vault_root)
+
+
+def _validate_registry_vault(vault_path: Path) -> None:
+    manager = VaultManager()
+    context = manager.validate_vault(vault_path)
+    if context.status != "selected":
+        detail = f": {context.validation_error}" if context.validation_error else ""
+        remedy = (
+            f" — run `python -m app.cli vault init --path {vault_path}` to scaffold settings"
+            if context.status == "uninitialized"
+            else ""
+        )
+        raise ValueError(
+            f"watcher registry requires an initialized selected vault; status={context.status}{detail}{remedy}"
+        )
+    permissions = manager.permissions_for_context(context)
+    if not permissions.enable_vault_watcher:
+        raise ValueError("watcher registry is disabled by settings/local.md")
 
 
 def _db_outbox_required() -> bool:

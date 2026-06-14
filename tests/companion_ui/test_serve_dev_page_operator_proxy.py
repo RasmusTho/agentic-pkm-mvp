@@ -32,15 +32,20 @@ class _FakeClient:
         self,
         get_responses: dict[str, Any] | None = None,
         post_responses: dict[str, Any] | None = None,
+        delete_responses: dict[str, Any] | None = None,
         get_error: Exception | None = None,
         post_error: Exception | None = None,
+        delete_error: Exception | None = None,
     ) -> None:
         self.get_responses = get_responses or {}
         self.post_responses = post_responses or {}
+        self.delete_responses = delete_responses or {}
         self.get_error = get_error
         self.post_error = post_error
+        self.delete_error = delete_error
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
         self.post_calls: list[tuple[str, dict[str, Any]]] = []
+        self.delete_calls: list[tuple[str, dict[str, Any] | None]] = []
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
         self.get_calls.append((url, params))
@@ -53,6 +58,12 @@ class _FakeClient:
         if self.post_error:
             raise self.post_error
         return self.post_responses.get(url, {})
+
+    def delete(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.delete_calls.append((url, params))
+        if self.delete_error:
+            raise self.delete_error
+        return self.delete_responses.get(url, {})
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +130,27 @@ class _PostDriver:
 
     def run_post(self) -> None:
         self._instance.do_POST()
+
+
+class _DeleteDriver:
+    """Drives make_handler._Handler.do_DELETE without a real socket."""
+
+    def __init__(self, handler_cls: type, path: str) -> None:
+        self._instance = handler_cls.__new__(handler_cls)
+        self._instance.path = path
+        self._instance.wfile = io.BytesIO()
+        self._instance.headers = {}
+        self.status_code: int | None = None
+        self.payload: dict[str, Any] | None = None
+
+        def _send_json(status_code: int, payload: dict[str, Any]) -> None:
+            self.status_code = status_code
+            self.payload = payload
+
+        self._instance._send_json = _send_json  # type: ignore[method-assign]
+
+    def run_delete(self) -> None:
+        self._instance.do_DELETE()
 
 
 # ---------------------------------------------------------------------------
@@ -275,3 +307,110 @@ def test_operator_overlay_route_degrades_gracefully_on_partial_failure() -> None
     assert 'data-state="degraded"' in html
     # Other panels still present
     assert 'data-testid="operator-panel-health"' in html
+
+
+def test_queue_review_post_proxied() -> None:
+    response = {"status": "queued", "intent_id": "intent-1875"}
+    client = _FakeClient(
+        post_responses={"/api/companion/vault-browser/actions/queue-review": response}
+    )
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    p = _PostDriver(
+        handler_cls,
+        "/api/companion/vault-browser/actions/queue-review",
+        {"note_path": "Notes/current.md"},
+    )
+    p.run_post()
+
+    assert p.status_code == 200
+    assert p.payload == response
+    assert client.post_calls[-1] == (
+        "/api/companion/vault-browser/actions/queue-review",
+        {"note_path": "Notes/current.md"},
+    )
+
+
+def test_vault_related_get_proxied() -> None:
+    response = {"results": [{"note_path": "Notes/related.md"}]}
+    client = _FakeClient(get_responses={"/api/companion/vault-related": response})
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    d = _GetDriver(
+        handler_cls,
+        "/api/companion/vault-related?note_path=Notes/current.md&artifact_uuid=uuid-1875",
+    )
+    d.run_get()
+
+    assert d.status_code == 200
+    assert d.payload == response
+    assert client.get_calls[-1] == (
+        "/api/companion/vault-related",
+        {"note_path": "Notes/current.md", "artifact_uuid": "uuid-1875"},
+    )
+
+
+def test_canvas_session_lifecycle_routes_proxied() -> None:
+    client = _FakeClient(
+        post_responses={
+            "/api/canvas/sessions": {"session_id": "session-1875"},
+            "/api/canvas/sessions/session-1875/edits": {"ok": True},
+        },
+        delete_responses={
+            "/api/canvas/sessions/session-1875/edits/last": {"ok": True},
+            "/api/canvas/sessions/session-1875": {"ok": True},
+        },
+    )
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    p = _PostDriver(handler_cls, "/api/canvas/sessions", {"note_path": "Notes/current.md"})
+    p.run_post()
+    assert p.status_code == 200
+    assert client.post_calls[-1] == ("/api/canvas/sessions", {"note_path": "Notes/current.md"})
+
+    p = _PostDriver(
+        handler_cls,
+        "/api/canvas/sessions/session-1875/edits",
+        {"new_body": "Updated", "change_summary": "route parity"},
+    )
+    p.run_post()
+    assert p.status_code == 200
+    assert client.post_calls[-1] == (
+        "/api/canvas/sessions/session-1875/edits",
+        {"new_body": "Updated", "change_summary": "route parity"},
+    )
+
+    d = _DeleteDriver(handler_cls, "/api/canvas/sessions/session-1875/edits/last")
+    d.run_delete()
+    assert d.status_code == 200
+    assert client.delete_calls[-1] == ("/api/canvas/sessions/session-1875/edits/last", {})
+
+    d = _DeleteDriver(handler_cls, "/api/canvas/sessions/session-1875")
+    d.run_delete()
+    assert d.status_code == 200
+    assert client.delete_calls[-1] == ("/api/canvas/sessions/session-1875", {})
+
+
+def test_canvas_recovery_ack_route_not_proxied() -> None:
+    client = _FakeClient()
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    p = _PostDriver(handler_cls, "/api/canvas/sessions/session-1875/recovery/ack", {})
+    p.run_post()
+
+    assert p.status_code == 404
+    assert p.payload == {"error": "not_found", "message": "Unknown Companion UI route"}
+    assert client.post_calls == []
+
+
+def test_tts_status_get_proxied() -> None:
+    response = {"provider_available": True, "cache_entries": 0}
+    client = _FakeClient(get_responses={"/api/companion/tts/status": response})
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    d = _GetDriver(handler_cls, "/api/companion/tts/status")
+    d.run_get()
+
+    assert d.status_code == 200
+    assert d.payload == response
+    assert client.get_calls[-1] == ("/api/companion/tts/status", {})

@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.stores.memory import MemoryRelationIndex
-from app.stores.relation_index import (
+from app.stores.relation_candidates import (
     RelationCandidate,
     extract_semantic_relations,
     register_relation_candidates,
@@ -41,7 +41,7 @@ def test_register_relation_candidates_audits_missing_targets(monkeypatch: pytest
     def fake_audit(**payload):
         events.append(payload)
 
-    monkeypatch.setattr("app.stores.relation_index.audit_log", fake_audit)
+    monkeypatch.setattr("app.stores.relation_candidates.audit_log", fake_audit)
     added, missing = register_relation_candidates(
         src,
         [
