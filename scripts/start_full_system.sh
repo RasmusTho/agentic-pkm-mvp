@@ -832,6 +832,15 @@ case "${COMPOSE_PROJECT_NAME:-}" in
   pkm-test) _container_tmp_dir="/app/tmp-test" ;;
   *)        _container_tmp_dir="/app/tmp" ;;
 esac
+# Channel-correct host-side tmp dir for reading container-written runtime
+# artifacts back through the shared bind mount. For pkm-test the container
+# writes worker/watcher heartbeats under /app/tmp-test/, which maps to the host
+# tmp-test/ directory; reading host tmp/ would falsely report a missing
+# heartbeat (issue #1997 symptom 3). Prod/dev keep tmp/ — no runtime change.
+case "${COMPOSE_PROJECT_NAME:-}" in
+  pkm-test) host_tmp_dir="tmp-test" ;;
+  *)        host_tmp_dir="tmp" ;;
+esac
 # The host-side "latest tick log" pointer always lives under the host tmp/
 # directory for operator convenience regardless of channel.
 latest_tick_log_path="$ROOT/tmp/latest_watcher_tick_log"
@@ -1035,10 +1044,10 @@ log_flight_recorder_path() {
 
 log_worker_heartbeat_snapshot() {
   log_section "worker heartbeat"
-  if [ -f tmp/worker_heartbeat.json ]; then
-    tail -n 20 tmp/worker_heartbeat.json >>"$startup_log_path" 2>&1 || true
+  if [ -f "${host_tmp_dir:-tmp}/worker_heartbeat.json" ]; then
+    tail -n 20 "${host_tmp_dir:-tmp}/worker_heartbeat.json" >>"$startup_log_path" 2>&1 || true
   else
-    append_startup_log "tmp/worker_heartbeat.json missing"
+    append_startup_log "${host_tmp_dir:-tmp}/worker_heartbeat.json missing"
   fi
 }
 
@@ -1221,18 +1230,18 @@ run_worker_probe() {
   worker_start=$SECONDS
   local heartbeat_ready=0
   while [ $((SECONDS - worker_start)) -lt "$WORKER_HEARTBEAT_TIMEOUT" ]; do
-    if [ -s tmp/worker_heartbeat.json ]; then
+    if [ -s "${host_tmp_dir:-tmp}/worker_heartbeat.json" ]; then
       heartbeat_ready=1
       break
     fi
     sleep 1
   done
   if [ "$heartbeat_ready" -ne 1 ]; then
-    echo "ERROR: worker heartbeat file missing after $WORKER_HEARTBEAT_TIMEOUT seconds" >&2
+    echo "ERROR: worker heartbeat file missing after $WORKER_HEARTBEAT_TIMEOUT seconds (looked in ${host_tmp_dir:-tmp}/worker_heartbeat.json)" >&2
     run_docker_compose logs --tail=200 worker || true
     exit 1
   fi
-  tail -n 1 tmp/worker_heartbeat.json
+  tail -n 1 "${host_tmp_dir:-tmp}/worker_heartbeat.json"
 }
 
 wait_for_healthz() {
