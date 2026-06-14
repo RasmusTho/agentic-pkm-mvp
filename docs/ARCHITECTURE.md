@@ -5,14 +5,15 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-13
-Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
+Last reviewed: 2026-06-11
+Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, merged PRs #1800/#1801/#1802/#1816/#1817/#1818/#1833, System Entry Point parent #1782 validation receipts through wave 3a, and current repo state at 3861b111 on 2026-06-11
 
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6.0 seams shipped)
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
 
-Forward-looking plan lives in `docs/ROADMAP.md`. Historical snapshots are no longer retained as live repo files; use git history for removed background material. If a roadmap document conflicts with this document on current-state runtime architecture, this document wins.
+Historic SoT snapshots and older plans live in `docs/archive/`; the 4.x ladder history is in `docs/history/SOT_4X_HISTORY.md`. Forward-looking plan lives in `docs/ROADMAP.md`.
+Those documents are kept for reference but are not active truth for the current baseline. If a historical or roadmap document conflicts with this document on current-state runtime architecture, this document wins.
 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
 
@@ -26,10 +27,6 @@ The current architecture is a local-first Mimer runtime, not the full Yggdrasil 
 - `ReasoningFacade`, LangGraph, A2A, MCP descriptors, canvas-session scaffolding, and Orchestrator V2 are real repo surfaces,
   but their current status is mixed: some are active runtime paths, some are flagged pilots, and
   some are scaffolding or reference contracts rather than broad production rollout;
-- `app/relevance/` now ships the first Contextual Relevance Engine runtime seam: deterministic
-  vault-native, pull-only moment evaluation, governed materialization into non-authoritative moment
-  artifacts with receipts, and a read-only Companion "now" projection. The proactive reach-out loop
-  and external connector inputs are not shipped architecture.
 - the planned architecture continues toward capability-based composition, separate Panel and Chat
   interaction surfaces, governed execution, and relation-aware context without treating ASK,
   retrieval, a single agent, or historical AMG/SetDB terminology as the architectural center.
@@ -72,7 +69,8 @@ Related documents and authority boundaries:
   attentional relevance, and surfacing need should be understood upstream of the runtime `zone`
   overlay.
 - `docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md` defines the current timeout handling, SLA boundaries, and observable timeout behavior across orchestration surfaces (executor-level per-tool timeout, orchestrator constraints, and A2A limitations).
-- Removed historical architecture snapshots are available through git history only and are not authoritative for the current v5.5 baseline.
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md` is a historical reference for external dependencies, deployment topology, and human-facing surfaces from the v4.10 foundation snapshot. It is useful background, but it is not authoritative for the current v5.5 baseline.
+- `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md` is a historical high-level module map retained for orientation and naming continuity. It may not reflect current v5.5 wiring and should not be treated as the active system map when evaluating current behavior.
 
 Function-first reading rule:
 - `docs/HUMAN-FLOWS.md` defines what the system is meant to help the human do.
@@ -630,7 +628,7 @@ hybrid Chat/Panel crossings are bounded by
 - The Vault Browser is the human-first navigation and orientation projection over the vault hosted in Companion UI.
 - It is a projection layer, not authority: Markdown/frontmatter remains the human control surface; stores/DB remain machine mirrors.
 - Read-only browsing, UI-only state, bounded system writes, governance writes, agent proposals, and blocked actions are kept as distinct action modes; the browser renders server-declared modes and never reclassifies locally.
-- Current shipped Companion UI behavior is `Vault Browser MLP v0` plus the System Entry Point shell substrate: server-declared entry state, latency-ladder re-entry treatments, a unified topbar/shared overlay host, and shipped overlay occupants for Panel command palette, governed capture, memory candidate review, read-only receipts history, system map, opt-in guidance, and settings. The final state-gallery validation harness closed parent #1782 through #1795; source-peek presentation, posture emphasis switching, and the context lane / place band remain unshipped follow-ups. The long-term vault-browser capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; entry/shell composition is owned by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`.
+- Current shipped Companion UI behavior is `Vault Browser MLP v0` plus the active System Entry Point shell substrate: server-declared entry state, latency-ladder re-entry treatments, a unified topbar/shared overlay host, and shipped overlay occupants for Panel command palette, governed capture, memory candidate review, and read-only receipts history. System-map, guidance, settings, and final state-gallery validation remain under parent #1782 until accepted. The long-term vault-browser capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; entry/shell composition is owned by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`.
 
 ## Capability Model
 
@@ -645,7 +643,12 @@ hybrid Chat/Panel crossings are bounded by
 
 ## Historical Material
 
-Historical topology, older runtime surfaces, and superseded architecture detail are no longer retained as live repo files. Use git history only when that background is needed. For current-state questions, the active sections above are authoritative.
+Historical topology, older runtime surfaces, and superseded architecture detail live outside this document:
+- `docs/archive/architecture/SYSTEM_DESIGN_v4.10.md`
+- `docs/archive/architecture/SYSTEM_YGGDRASIL_Modules_And_Flows.md`
+- `docs/history/SOT_4X_HISTORY.md`
+
+This document deliberately does not inline those older sections. For current-state questions, the active sections above are authoritative.
 
 ## GitHub Delivery Control Plane (development governance)
 

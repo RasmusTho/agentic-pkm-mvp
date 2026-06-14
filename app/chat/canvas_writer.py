@@ -16,7 +16,6 @@ from pathlib import Path
 
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.knowledge.write_ops import write_note_from_absolute
-from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 
 # ---------------------------------------------------------------------------
@@ -51,24 +50,15 @@ class CanvasWriter:
         lw.close_session(session, "one edit applied")
     """
 
-    def __init__(
-        self,
-        vault_root: Path,
-        log_writer: SessionLogWriter,
-        *,
-        write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
-    ) -> None:
+    def __init__(self, vault_root: Path, log_writer: SessionLogWriter) -> None:
         self._vault_root = vault_root.resolve()
         self._log_writer = log_writer
-        self._write_guard = write_guard
 
     def apply_edit(
         self,
         session: SessionLog | None,
         new_body: str,
         change_summary: str,
-        *,
-        user_prompt: str = "",
     ) -> None:
         """Replace the body of ``session.note_path`` with ``new_body``.
 
@@ -76,19 +66,12 @@ class CanvasWriter:
         - ``session`` is ``None`` (no active session)
         - ``session.note_path`` is outside ``vault_root`` (cross-note/vault write)
         - ``new_body`` contains a frontmatter block (``---`` at start)
-
-        Raises ``WritesBlockedError`` when the system write-guard is closed.
         """
         # Guard: open session required
         if session is None:
             raise GovernanceBearingMutationError(
                 "No open session — canvas writes require an active session"
             )
-
-        # Guard: respect the system-wide write lock. In-place body edits are
-        # governed writes too — exactly like the governance path asserts in
-        # ``GovernanceRouter`` — so a health/maintenance lock must block them (#1961).
-        self._write_guard.assert_writes_allowed("canvas.coauthor.body_edit")
 
         # Guard: note path must be within vault_root (no cross-vault writes)
         note_abs = session.note_path.resolve()
@@ -120,12 +103,8 @@ class CanvasWriter:
         # Write through KnowledgePort boundary
         write_note_from_absolute(note_abs, new_content, vault_root=self._vault_root)
 
-        # Append a single provenance turn for this body edit.
-        self._log_writer.append_turn(
-            session,
-            user_prompt=user_prompt,
-            change_summary=change_summary,
-        )
+        # Append to session log (change summary; user prompt not captured at this layer)
+        self._log_writer.append_turn(session, user_prompt="", change_summary=change_summary)
 
 
 # ---------------------------------------------------------------------------

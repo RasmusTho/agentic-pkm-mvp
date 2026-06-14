@@ -25,7 +25,6 @@ from pydantic import BaseModel
 from app.api.routes.artifacts import _content_hash
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError, _split_frontmatter
-from app.write_guard import WritesBlockedError
 from app.chat.coauthoring_cognition import CoAuthoringCognition, CoAuthoringUnavailableError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
 from app.chat.intent_classifier import (
@@ -311,8 +310,6 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
     writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
     try:
         writer.apply_edit(session, req.new_body, req.change_summary)
-    except WritesBlockedError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GovernanceBearingMutationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     body_after = _note_body(session.note_path)
@@ -507,18 +504,10 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
     body_before = current_body
     log_writer = SessionLogWriter(vault_root=vault_root)
     writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
+    # Record the user's intent as provenance in the session log.
+    log_writer.append_turn(session, user_prompt=req.intent, change_summary=change_summary)
     try:
-        writer.apply_edit(
-            session,
-            generated.body,
-            change_summary,
-            user_prompt=req.intent,
-        )
-    except WritesBlockedError as exc:
-        # The system write-guard is closed (health/maintenance lock). The
-        # co-authoring body edit is a governed write — reject it cleanly and
-        # leave the note untouched (#1961).
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        writer.apply_edit(session, generated.body, change_summary)
     except GovernanceBearingMutationError:
         # Defense in depth: the writer caught a governance-bearing body the
         # cognition let through. Route with default FRONTMATTER_UPDATE; the
@@ -581,8 +570,6 @@ def undo_last_edit(session_id: str) -> UndoResponse:
             latest.body_before,
             f"[undo:{undo_id}] reverted edit:{latest.edit_id}",
         )
-    except WritesBlockedError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GovernanceBearingMutationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -147,9 +147,9 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 8
         run: |
-          pytest -c /dev/null -m "not pg and not alpha_llm" \
+          pytest -p xdist.plugin -c /dev/null -m "not pg and not alpha_llm" \
             tests/quality_wave/test_uat_harness.py \
-            --maxfail=1 -ra --durations=20
+            --maxfail=1 -ra --durations=20 -n auto --dist=loadfile
 
       - name: Skip heavy pytest smoke for docs-only PR
         if: github.event_name == 'pull_request' && steps.changes.outputs.heavy_smoke != 'true'
@@ -277,7 +277,7 @@ jobs:
           set -euo pipefail
           export VAULT_ROOT="/tmp/ci-vault"
           rm -rf "$VAULT_ROOT"
-          mkdir -p "$VAULT_ROOT/System" "$VAULT_ROOT/settings"
+          mkdir -p "$VAULT_ROOT/System"
           cat > "$VAULT_ROOT/System/vault.layout.md" <<'EOF'
           ---
           version: '1'
@@ -289,84 +289,6 @@ jobs:
           ignore_glob: []
           ---
           # layout
-          EOF
-          cat > "$VAULT_ROOT/settings/vault.md" <<'EOF'
-          ---
-          schema: design-handoff.vault.v1
-          scope: vault-shared
-          vaultId: vault-ci-smoke
-          vaultName: ci-vault
-          createdBy: ci-smoke
-          settingsVersion: 1
-          ---
-          # Vault Settings
-          EOF
-          cat > "$VAULT_ROOT/settings/paths.md" <<'EOF'
-          ---
-          schema: design-handoff.paths.v1
-          scope: vault-shared
-          handoffFolder: Design Handoff
-          assetsFolder: Design Handoff/Assets
-          templatesFolder: Design Handoff/Templates
-          archiveFolder: Design Handoff/Archive
-          ---
-          # Path Settings
-          EOF
-          cat > "$VAULT_ROOT/settings/workflow.md" <<'EOF'
-          ---
-          schema: design-handoff.workflow.v1
-          scope: vault-shared
-          defaultStatus: draft
-          statuses:
-            - draft
-            - in-review
-            - approved
-            - archived
-          ---
-          # Workflow Settings
-          EOF
-          cat > "$VAULT_ROOT/settings/design-handoff.md" <<'EOF'
-          ---
-          schema: design-handoff.core.v1
-          scope: vault-shared
-          autoCreateAssetFolders: true
-          preserveOriginalFileNames: true
-          generateIndexOnChange: true
-          ---
-          # Design Handoff Settings
-          EOF
-          cat > "$VAULT_ROOT/settings/companion-ui.md" <<'EOF'
-          ---
-          schema: design-handoff.companion-ui.v1
-          scope: vault-shared
-          defaultView: handoff
-          showAdvancedSettings: false
-          autoRefresh: true
-          ---
-          # Companion UI Settings
-          EOF
-          cat > "$VAULT_ROOT/settings/local.md" <<'EOF'
-          ---
-          schema: design-handoff.local.v1
-          scope: vault-local
-          localInstanceId: local-ci-smoke
-          machineRole: testNode
-          syncRole: local
-          enableVaultWatcher: true
-          enableAutoIndexing: true
-          allowWritesToVault: true
-          allowSharedSettingsEdits: true
-          allowLocalSettingsEdits: true
-          localExportPath: null
-          ---
-          # Local Settings
-          EOF
-          cat > "$VAULT_ROOT/settings/.gitignore" <<'EOF'
-          local.md
-          *.local.md
-          local/
-          runtime/
-          cache/
           EOF
 
           compose_files="-f docker-compose.yaml"

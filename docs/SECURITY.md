@@ -7,9 +7,7 @@ Lightweight policy for local and CI runs.
 ## API keys & endpoints
 - Store keys (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) only in local `.env` files or a secrets manager. Never commit them to Git, CI logs, or docs.
 - `LLM_PROVIDER=mock` is the CI default, so no external keys are needed for tests.
-- Integrated Runtime v1 still exposes non-UI local services on trusted interfaces by default: the FastAPI runtime starts `uvicorn` on `0.0.0.0:8000`, Compose publishes the API host port to container port `8000`, and Ollama sets `OLLAMA_HOST=0.0.0.0:11434`. Companion UI channel launchers bind the browser UI to `127.0.0.1` by default and require `CUI_BIND_LAN=1` for LAN/Tailscale UAT. This is not an internet-ready security boundary.
-- For Companion UI non-loopback UAT, set `CUI_BIND_LAN=1` deliberately. API and Ollama host binding changes are runtime/config changes and should be made deliberately outside the Companion UI launcher default.
-- Do not expose the API, Ollama, or Companion UI to untrusted networks without an explicit access-control boundary such as an SSH tunnel, VPN, or reverse-proxy design with auth and TLS.
+- If `OLLAMA_URL` is exposed on a network interface, secure the port via SSH tunnel or VPN; default assumption is localhost.
 
 ## Least privilege
 - The Postgres account (`DATABASE_URL`) uses `app:app` for local dev. In production create a dedicated role with only the required `INSERT/SELECT/UPDATE`.
@@ -24,9 +22,9 @@ Lightweight policy for local and CI runs.
 - Health/agent errors should log stack/exception names only; avoid dumping HTTP payloads.
 
 ## Next steps
-1. Define and implement a post-v1 remote-access capability slice with real auth, TLS, and a reviewed exposure model. Remote/online access is not a config flip on the current trusted-LAN runtime.
+1. Add TLS / Basic Auth around future FastAPI endpoints.
 2. Wrap external calls with `CircuitBreaker` + `timeout_wrapper` to avoid DoS via hanging requests.
-3. If the project later wants an automated localhost-only posture check, add the enforcement first and document the exact command then. No such pre-commit check exists today.
+3. Add a `pre-commit` check ensuring `OLLAMA_URL` remains localhost-bound.
 
 ## Auth And Rate Limiting
 

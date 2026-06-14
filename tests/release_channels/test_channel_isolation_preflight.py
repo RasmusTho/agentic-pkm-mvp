@@ -1007,20 +1007,14 @@ def test_real_test_compose_passes_preflight() -> None:
     )
 
 
-def test_real_prod_compose_passes_preflight(tmp_path: Path) -> None:
+def test_real_prod_compose_passes_preflight() -> None:
     """The committed docker-compose.prod.yml must pass the prod channel preflight.
 
     The prod overlay relies on base defaults (config/runtime.defaults.env) for
     its DSN bindings; the preflight must resolve that fallback to the prod
     channel and pass — omission only fails when the fallback crosses channels.
     """
-    layer = _write_env_layer(tmp_path, PROD_DSN, rel="runtime.env")
-
-    result = check_compose_channel_isolation(
-        PROD_COMPOSE,
-        "prod",
-        environ={"WATCHER_RUNTIME_ENV_FILE": str(layer)},
-    )
+    result = check_compose_channel_isolation(PROD_COMPOSE, "prod")
 
     assert result.ok, (
         "docker-compose.prod.yml does not satisfy the prod-channel isolation "

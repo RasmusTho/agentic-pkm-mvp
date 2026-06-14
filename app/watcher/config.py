@@ -8,7 +8,6 @@ from pathlib import Path
 
 from app.settings.tiering import resolve_dev_lab_env_typed
 from app.settings.watcher_settings import load_watcher_settings
-from app.vault.manager import VaultManager
 from app.watcher.heartbeat import DEFAULT_HEARTBEAT_PATH, resolve_heartbeat_path
 
 
@@ -52,17 +51,6 @@ def _default_scope_glob(vault_root: Path) -> str:
     return DEFAULT_SCOPE_GLOB
 
 
-def _validate_watcher_vault(vault_path: Path) -> None:
-    manager = VaultManager()
-    context = manager.validate_vault(vault_path)
-    if context.status != "selected":
-        detail = f": {context.validation_error}" if context.validation_error else ""
-        raise ValueError(f"vault watcher requires an initialized selected vault; status={context.status}{detail}")
-    permissions = manager.permissions_for_context(context)
-    if not permissions.enable_vault_watcher:
-        raise ValueError("vault watcher is disabled by settings/local.md")
-
-
 @dataclass
 class WatcherConfig:
     enable: bool
@@ -91,8 +79,6 @@ class WatcherConfig:
         if enable and not vault_raw:
             raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
         vault_path = Path(vault_raw or ".").expanduser()
-        if enable:
-            _validate_watcher_vault(vault_path)
         watcher_settings = load_watcher_settings(vault_path)
 
         scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()

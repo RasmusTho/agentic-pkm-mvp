@@ -92,7 +92,7 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 ### `app/stores`
 
-**Files (9):** `base.py`, `db_health.py`, `decisions.py`, `memory.py`, `pg.py`, `plan_store.py`, `postgres.py`, `provider.py`, `relation_candidates.py`
+**Files (9):** `base.py`, `db_health.py`, `decisions.py`, `memory.py`, `pg.py`, `plan_store.py`, `postgres.py`, `provider.py`, `relation_index.py`
 
 **Current role:** Transitional store layer; many canonical packages call it directly. Not ready for removal.
 

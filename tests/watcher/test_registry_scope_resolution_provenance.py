@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from app.watcher.registry import RegistryConfig, WatcherSpec
-from tests.helpers.vault_settings import initialize_test_vault
 
 
 def _write_layout_note(vault_root: Path, *, system_folder: str, inbox_folder: str) -> None:
@@ -40,7 +39,7 @@ def _make_specs() -> list[WatcherSpec]:
 
 def test_registry_scope_env_takes_precedence(tmp_path: Path, monkeypatch, caplog) -> None:
     vault_root = tmp_path / "vault"
-    initialize_test_vault(vault_root)
+    vault_root.mkdir()
 
     _write_layout_note(vault_root, system_folder="System", inbox_folder="Input")
 
@@ -61,7 +60,7 @@ def test_registry_scope_env_takes_precedence(tmp_path: Path, monkeypatch, caplog
 
 def test_registry_scope_defaults_to_vault_layout_inbox(tmp_path: Path, monkeypatch, caplog) -> None:
     vault_root = tmp_path / "vault"
-    initialize_test_vault(vault_root)
+    vault_root.mkdir()
 
     _write_layout_note(vault_root, system_folder="System", inbox_folder="Input")
 
@@ -82,7 +81,7 @@ def test_registry_scope_defaults_to_vault_layout_inbox(tmp_path: Path, monkeypat
 
 def test_registry_scope_blank_is_treated_as_unset(tmp_path: Path, monkeypatch, caplog) -> None:
     vault_root = tmp_path / "vault"
-    initialize_test_vault(vault_root)
+    vault_root.mkdir()
 
     _write_layout_note(vault_root, system_folder="System", inbox_folder="Input")
 
@@ -109,7 +108,7 @@ def test_registry_scope_blank_ignores_vault_inbox_override(
     tmp_path: Path, monkeypatch, caplog, env_value: str
 ) -> None:
     vault_root = tmp_path / "vault"
-    initialize_test_vault(vault_root)
+    vault_root.mkdir()
 
     _write_layout_note(vault_root, system_folder="System", inbox_folder="Input")
 

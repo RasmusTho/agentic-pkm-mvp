@@ -31,18 +31,11 @@ EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"
 scripts/agent_workspace_preflight.sh \
   --expected-branch "$EXPECTED_BRANCH" \
   --expected-worktree "$EXPECTED_WORKTREE" \
-  --allow-dirty || exit 1
+  --allow-dirty
 # Non-zero exit => the workspace drifted. STOP. Do not commit. Switch to the
 # correct worktree and re-run the gate. Do not "fix" it by editing
 # EXPECTED_BRANCH to match reality.
 ```
-
-⚠️ **Wire the gate as a hard exit.** The gate only protects you if a non-zero exit actually stops
-publication. Do NOT compose it as `preflight && echo ok || echo 'GATE FAILED'` or any `|| echo`
-form — that swallows the non-zero exit and the subsequent `git commit`/`git push` runs anyway. Use
-`|| exit 1` (or run the bare command under `set -e`). The gate line must be able to terminate the
-script it is pasted into. A failing gate is STOP regardless of which check failed — never read one
-failing condition (such as `base_branch: behind`) as automatically benign.
 
 At the publish boundary the tree is intentionally dirty, so pass `--allow-dirty` — branch and
 worktree drift still fail the gate. At issue pickup (clean tree expected), run the same wrapper

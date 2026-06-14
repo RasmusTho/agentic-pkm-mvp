@@ -26,7 +26,7 @@ Scope: test/runbook only. No new feature work. This loop is **Agentic Lab**: opt
 
 - Repo Python env active with deps installed (`.venv`).
 - A dedicated test vault with at least one `.md` note. Canonical path: `make test-bootstrap` →
-  `vault-test/` (see `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md`, `docs/ENVIRONMENTS.md`). Do **not** point this
+  `vault-test/` (see `docs/runbooks/RUNBOOK_STARTUP.md`, `docs/ENVIRONMENTS.md`). Do **not** point this
   at a real personal vault.
 - An edit-capable LLM provider configured for co-authoring. With a mock/degraded provider the
   `/coauthor` call returns **HTTP 503** by design (it must not write diagnostic text into the note) —
@@ -181,4 +181,4 @@ PR. Keep this runbook as the durable operator script for the canvas co-authoring
 - `docs/CANVAS_CHAT_SURFACE/README.md` (Phase 2 + Phase 3 capability specs)
 - `docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`
 - `docs/runbooks/UAT_REAL_NOTE_VERTICAL_SLICE.md` (sibling UAT model)
-- `docs/ENVIRONMENTS.md` (port map), `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md` (startup)
+- `docs/ENVIRONMENTS.md` (port map), `docs/runbooks/RUNBOOK_STARTUP.md` (startup)

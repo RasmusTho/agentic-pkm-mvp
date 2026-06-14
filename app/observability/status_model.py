@@ -83,13 +83,6 @@ class PanelDiagnostics(BaseModel):
     source_paths: list[str] = Field(default_factory=list)
     source_mtimes: list[str | None] = Field(default_factory=list)
     combined_sha256: str | None = None
-    staging_proposal_store_mode: str | None = None
-    staging_idempotency_store_mode: str | None = None
-    staging_store_degraded: bool = False
-    staging_store_degraded_reason: str | None = None
-    staging_store_path: str | None = None
-    pending_staged_proposals: int = 0
-    panel_confirm_idempotency_keys: int = 0
 
 
 class WriteGuardStatus(BaseModel):
@@ -174,12 +167,6 @@ class WatcherAutomationStatus(BaseModel):
     last_run_skipped_allowed_actions: int | None = None
 
 
-class IntegratedRuntimeCapabilityStatus(BaseModel):
-    tier: str
-    state: str
-    reasons: list[str] = Field(default_factory=list)
-
-
 class SystemStatus(BaseModel):
     timestamp: datetime
     environment: str
@@ -207,7 +194,6 @@ class SystemStatus(BaseModel):
     instance_provenance: Optional[InstanceProvenanceStatus] = None
     context_dimensions: Optional[ContextDimensionsStatus] = None
     v6_0_seams: Optional[Dict[str, str]] = None
-    integrated_runtime_v1: Optional[Dict[str, IntegratedRuntimeCapabilityStatus]] = None
 
 
 __all__ = [
@@ -229,6 +215,5 @@ __all__ = [
     "WatcherAutomationStatus",
     "WatcherLifecycleStatus",
     "ContextDimensionsStatus",
-    "IntegratedRuntimeCapabilityStatus",
     "SystemStatus",
 ]

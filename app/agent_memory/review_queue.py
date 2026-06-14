@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -114,33 +114,10 @@ _DECISION_TO_STATUS: dict[ReviewDecision, ReviewStatus] = {
 class MemoryCandidateReviewQueue:
     """In-memory review queue for memory candidates awaiting decision."""
 
-    def __init__(
-        self,
-        *,
-        decision_store: Any | None = None,
-        vault_context: Any | None = None,
-        channel: str | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self._entries: dict[str, ReviewEntry] = {}
-        self._decision_store = decision_store
-        self._vault_context = vault_context
-        self._channel = channel
-
-    def configure_reconciliation(
-        self,
-        *,
-        decision_store: Any | None,
-        vault_context: Any | None,
-        channel: str | None,
-    ) -> None:
-        self._decision_store = decision_store
-        self._vault_context = vault_context
-        self._channel = channel
 
     def enqueue(self, candidate: MemoryCandidate) -> ReviewEntry:
-        reconciled = self._reconciled_terminal_entry(candidate)
-        if reconciled is not None:
-            return reconciled
         if candidate.candidate_id in self._entries:
             raise ReviewQueueError(
                 f"candidate already in queue: {candidate.candidate_id}"
@@ -148,32 +125,6 @@ class MemoryCandidateReviewQueue:
         entry = ReviewEntry(candidate=candidate)
         self._entries[candidate.candidate_id] = entry
         return entry
-
-    def _reconciled_terminal_entry(
-        self, candidate: MemoryCandidate
-    ) -> ReviewEntry | None:
-        if (
-            self._decision_store is None
-            or self._vault_context is None
-            or not self._channel
-        ):
-            return None
-        record = self._decision_store.get_decision(
-            candidate.candidate_id,
-            vault_context=self._vault_context,
-            channel=self._channel,
-        )
-        if record is None or not record.terminal:
-            return None
-        return ReviewEntry(
-            candidate=candidate,
-            status=_DECISION_TO_STATUS[record.outcome],
-            decision=record.outcome,
-            decided_by=record.decided_by,
-            decided_at=record.decided_at,
-            decision_notes=record.decision_notes,
-            revision_of=record.revision_of,
-        )
 
     def get(self, candidate_id: str) -> ReviewEntry:
         try:

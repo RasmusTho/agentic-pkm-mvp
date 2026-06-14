@@ -10,20 +10,6 @@ def _read(rel_path: str) -> str:
     return (REPO_ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def _section_between(text: str, start: str, end: str) -> str:
-    return text.split(start, maxsplit=1)[1].split(end, maxsplit=1)[0]
-
-
-def _canonical_branch_truth_branch_capture() -> str:
-    text = _read(".codex/skills/_shared/BRANCH_TRUTH_GATE.md")
-    procedure = _section_between(text, "## Procedure", "## Fallback")
-    capture_block = procedure.split("```bash", maxsplit=1)[1].split("```", maxsplit=1)[0]
-    lines = [line.strip() for line in capture_block.splitlines()]
-
-    branch_capture = next(line for line in lines if line.startswith("EXPECTED_BRANCH="))
-    return branch_capture
-
-
 def test_canonical_agents_entrypoint_routes_to_repo_skill_index() -> None:
     text = _read("AGENTS.md")
     assert ".codex/skills/README.md" in text
@@ -60,23 +46,19 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
 
 def test_issue_to_code_preflight_captures_expected_branch_and_worktree() -> None:
     text = _read(".codex/skills/issue-to-code/SKILL.md")
-    section = _section_between(
-        text,
-        "15a. **Branch-Truth Gate",
-        "15b. **Branch-Truth Gate",
-    )
+    section = text.split("15a. **Branch-Truth Gate", maxsplit=1)[1].split(
+        "15b. **Branch-Truth Gate", maxsplit=1
+    )[0]
 
-    branch_capture = _canonical_branch_truth_branch_capture()
-    worktree_capture = 'EXPECTED_WORKTREE="<absolute-worktree-path>"'
+    branch_capture = 'EXPECTED_BRANCH="$(git branch --show-current)"'
+    worktree_capture = 'EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"'
     preflight = "scripts/agent_workspace_preflight.sh"
 
     assert branch_capture in section
     assert worktree_capture in section
-    assert 'EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"' not in section
     assert preflight in section
     assert section.index(branch_capture) < section.index(preflight)
     assert section.index(worktree_capture) < section.index(preflight)
     assert '--expected-branch "$EXPECTED_BRANCH"' in section
     assert '--expected-worktree "$EXPECTED_WORKTREE"' in section
-    assert "|| exit 1" in section
     assert "Do not continue with empty expected values" in section

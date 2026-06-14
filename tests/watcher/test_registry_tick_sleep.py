@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 import app.watcher.registry as registry
-from tests.helpers.vault_settings import initialize_test_vault
 
 pytestmark = pytest.mark.not_pg
 
@@ -25,7 +24,7 @@ def _write_config(path: Path) -> None:
 
 def _base_env(tmp_path: Path, *, tick_sleep: str, monkeypatch: pytest.MonkeyPatch) -> Path:
     vault_path = tmp_path / "vault"
-    initialize_test_vault(vault_path)
+    vault_path.mkdir()
 
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")

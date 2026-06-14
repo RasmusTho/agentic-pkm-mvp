@@ -38,11 +38,6 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - `docs/OPERATIONS.md` remains the top-level operator routing surface.
 - `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md` is the canonical current-state incident workflow for watcher failures, panel runtime / panel intent failures, and CLI-first orchestrator failures.
 - Use `trace_id` only where the current runtime actually emits it in logs, events, or audit rows; do not infer planned A2A routing from the presence of trace-oriented fields.
-- When the outbox worker exhausts its bounded transient retry budget, inspect
-  `outbox.event.dead_lettered` through `GET /api/events/tail?event_prefix=outbox.event` or
-  `python -m app.cli events-doctor --path "$INDEX_OUTBOX_PATH"` to identify the dropped work.
-  The payload records the original topic, original event id when available, note path, failure
-  reason, and retry count.
 
 ## Alpha Compose Runtime
 - Canonical compose stack: `db`, `api`, `watcher`, `worker` (registry watcher).
@@ -50,8 +45,7 @@ Logs are the primary tracing surface; no external APM is required for the curren
 - Treat `events_log` as append-only audit and `worker_queue` as the live queue; do not derive pending across them unless `worker_queue.mode` is `file`/`jsonl` and explicitly wired.
 - Retry/poison-message posture is current-state and bounded: transient missing or unstable note
   failures are requeued with retry metadata, duplicate `event_id` values are skipped, and exhausted
-  retry paths emit `outbox.event.dead_lettered` to the events visibility path before being dropped.
-  Failed retry enqueue paths remain observable through worker logs plus undelivered DB outbox rows.
+  or failed retry enqueue paths are observable through worker logs plus undelivered DB outbox rows.
   Missing-object `index.embedding.requested` events are logged as warnings and recorded with
   `index.embedding.failed` receipts rather than crashing the worker.
   The active runtime does not claim a dedicated DLQ service.

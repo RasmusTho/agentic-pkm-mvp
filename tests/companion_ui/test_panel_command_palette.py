@@ -235,26 +235,21 @@ def test_palette_confirm_routes_through_panel_confirm() -> None:
     html = _render()
     palette = _palette(html)
 
-    # Confirm and reject declare the rail's confirm transport — the same
+    # Every palette action declares the rail's confirm transport — the same
     # endpoint, the same method, the same proposal/artifact identity.
     buttons = _palette_action_buttons(palette)
     assert buttons, "palette must render proposal actions"
-    runtime_buttons = [
-        t
-        for t in buttons
-        if 'data-panel-action="confirm"' in t or 'data-panel-action="reject"' in t
-    ]
-    assert runtime_buttons, "palette must render runtime-backed affordances"
-    for tag in runtime_buttons:
+    for tag in buttons:
         assert _attr(tag, "data-api-method") == "POST"
         assert _attr(tag, "data-api-path") == "/api/panel/confirm"
         assert _attr(tag, "data-proposal-id")
         assert _attr(tag, "data-artifact-id") == "art-1786"
-        assert _attr(tag, "data-runtime-backed") == "true"
-        if 'data-panel-action="confirm"' in tag:
-            # The declared entry/shell intent for governed confirm (spec §Intent
-            # vocabulary: `panel.confirm` — surface "Panel (rail or palette)").
-            assert _attr(tag, "data-intent") == "panel.confirm"
+    confirm_buttons = [t for t in buttons if 'data-panel-action="confirm"' in t]
+    assert confirm_buttons, "palette must render the confirm affordance"
+    for tag in confirm_buttons:
+        # The declared entry/shell intent for governed confirm (spec §Intent
+        # vocabulary: `panel.confirm` — surface "Panel (rail or palette)").
+        assert _attr(tag, "data-intent") == "panel.confirm"
 
     # Palette actions execute the same governed Panel confirm transport.
     script = _palette_script(html)
@@ -262,9 +257,7 @@ def test_palette_confirm_routes_through_panel_confirm() -> None:
     assert "method: 'POST'" in script
     assert "proposal_id: btn.getAttribute('data-proposal-id')" in script
     assert "artifact_id: btn.getAttribute('data-artifact-id')" in script
-    assert "var action = btn.getAttribute('data-panel-action') || 'confirm'" in script
-    assert "action: action" in script
-    assert "data-runtime-backed') !== 'true'" in script
+    assert "action: btn.getAttribute('data-panel-action')" in script
 
     # The runtime receipt surfaces exactly as the rail surfaces it: same
     # server-declared receipt fields, rendered only when declared.
@@ -293,36 +286,6 @@ def test_palette_confirm_routes_through_panel_confirm() -> None:
 
     # No receipt invention: without a server-declared receipt there is none.
     assert 'data-testid="palette-receipt"' not in _palette(_render())
-
-
-def test_palette_correct_affordance_does_not_post_invalid_confirm_action() -> None:
-    html = _render()
-    palette = _palette(html)
-    buttons = _palette_action_buttons(palette)
-    correct_buttons = [t for t in buttons if 'data-panel-action="correct"' in t]
-    assert correct_buttons, "palette must keep the correction affordance visible"
-    for tag in correct_buttons:
-        assert 'data-runtime-backed="false"' in tag
-        assert 'data-affordance-status="presentation-only"' in tag
-        assert "disabled" in tag
-
-
-def test_palette_reject_affordance_is_runtime_backed() -> None:
-    html = _render()
-    palette = _palette(html)
-    buttons = _palette_action_buttons(palette)
-    reject_buttons = [t for t in buttons if 'data-panel-action="reject"' in t]
-    assert reject_buttons, "palette must keep the reject affordance visible"
-    for tag in reject_buttons:
-        assert _attr(tag, "data-runtime-backed") == "true"
-        assert _attr(tag, "data-api-method") == "POST"
-        assert _attr(tag, "data-api-path") == "/api/panel/confirm"
-        assert "disabled" not in tag
-        assert "data-intent" not in tag
-
-    script = _palette_script(html)
-    assert "action: 'correct'" not in script
-    assert "action: btn.getAttribute('data-panel-action')" not in script
 
 
 # ---------------------------------------------------------------------------

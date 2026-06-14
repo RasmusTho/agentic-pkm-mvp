@@ -653,10 +653,8 @@ def settings_drawer_script() -> str:
       document.body.setAttribute('data-listening-modality', prefs.listeningModality);
       var rate = document.querySelector('[data-testid="tts-rate"]');
       if (rate) {{ rate.value = prefs.listeningSpeed; }}
-      if (document.body.getAttribute('data-guidance-session-override') !== 'true') {{
-        if (prefs.guidanceDefault) {{ document.body.setAttribute('data-guidance', 'on'); }}
-        else {{ document.body.removeAttribute('data-guidance'); }}
-      }}
+      if (prefs.guidanceDefault) {{ document.body.setAttribute('data-guidance', 'on'); }}
+      else {{ document.body.removeAttribute('data-guidance'); }}
       var now = new Date();
       var active = quietHoursActive((now.getHours() * 60) + now.getMinutes(), prefs);
       document.body.classList.toggle('quiet-hours-dampened', active);

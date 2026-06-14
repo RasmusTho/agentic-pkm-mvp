@@ -77,4 +77,4 @@ Every other task in this capability (re-entry shapes, overlay host, state-galler
 
 ## Related GitHub Issues
 
-Filed as **#1783** (`[SystemEntryPoint] entry-state-machine: server-side entry-state resolution`). Do not create a duplicate issue. Use live GitHub issue and Project state for current pickup authority; use the filing record in `README.md §Relationship to GitHub Issues` only for the issue map and dependency record.
+Filed as **#1783** (`[SystemEntryPoint] entry-state-machine: server-side entry-state resolution`). Do not create a duplicate issue; use the filing record in `README.md §Relationship to GitHub Issues` for current pickup state and dependencies.

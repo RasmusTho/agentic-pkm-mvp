@@ -153,24 +153,15 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
     else:
         mismatch = True
 
-    result: dict[str, Any] = {
+    return {
         "base_branch": base_branch,
         "remote_ref": remote_ref,
         "local_sha": local_sha,
         "remote_sha": remote_sha,
         "status": status,
+        "head_contains_remote": head_contains_remote,
+        "mismatch": mismatch,
     }
-    # Surface a distinct reason label for 'behind' so operators can differentiate a
-    # blocking case (HEAD missing origin/main → rebase required) from an advisory one
-    # (HEAD already contains origin/main → stale local ref, but gate passes).
-    # No reason key is added for other statuses (current, ahead, diverged, unavailable).
-    if status == "behind":
-        result["reason"] = (
-            "rebase_required" if mismatch else "advisory_stale_local_ref"
-        )
-    result["head_contains_remote"] = head_contains_remote
-    result["mismatch"] = mismatch
-    return result
 
 
 def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:

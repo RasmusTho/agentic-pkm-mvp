@@ -81,9 +81,8 @@ Current consumer expectations:
 - Transient note-read failures in ingest and panel-scan handlers are requeued with
   `_worker_retry_count`, `_worker_retry_reason`, and `_worker_retry_enqueued_at` metadata up to the
   bounded retry limit.
-- There is no dedicated DLQ service in the active runtime. When retry attempts are exhausted, the
-  worker emits `outbox.event.dead_lettered` as a non-retry diagnostic event. When retry enqueueing
-  fails before exhaustion, the worker logs the failure and leaves the condition observable through
+- There is no dedicated DLQ service in the active runtime. When retry enqueueing fails or retry
+  attempts are exhausted, the worker logs the failure and leaves the condition observable through
   worker logs, status/heartbeat signals, and the undelivered DB outbox row.
 
 ## Embeddings and Outbox
@@ -173,26 +172,6 @@ Payload (minimum contract):
 - `errors` (`int`)
 - `dry_run` (`bool`)
 - `limit_exceeded` (`bool`)
-
-### `outbox.event.dead_lettered`
-
-Emitted by the outbox worker when a transient retryable ingest or panel-scan event reaches the
-bounded retry limit and will not be requeued. This is a diagnostic dead-letter signal, not an
-automatic replay request, and it must not be consumed as the original event topic.
-
-Payload (minimum contract):
-- `original_topic` (`string`): topic that exhausted retries.
-- `original_event_id` (`string`): original event id when available, otherwise empty.
-- `note_path` (`string`): note path associated with the failed work.
-- `reason` (`string`): worker retry reason such as `missing_or_unstable_note`, `file_unstable`, or
-  `missing_uuid`.
-- `retry_count` (`int`): retry count at exhaustion.
-
-Operator visibility:
-- inspect via `GET /api/events/tail?event_prefix=outbox.event` or `events-doctor` against
-  `INDEX_OUTBOX_PATH`.
-- the event is emitted separately from the original topic so it does not re-enter the transient
-  retry path.
 
 ### `panel.intent.created`
 

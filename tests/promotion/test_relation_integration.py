@@ -20,7 +20,7 @@ def test_prepare_relations_registers_links(monkeypatch: pytest.MonkeyPatch) -> N
         audit_events.append(payload)
 
     monkeypatch.setattr("app.promotion.gates.audit_log", fake_audit)
-    monkeypatch.setattr("app.stores.relation_candidates.audit_log", fake_audit)
+    monkeypatch.setattr("app.stores.relation_index.audit_log", fake_audit)
     added = prepare_relations_for_promotion(
         src,
         metadata={"supports": [str(dst)]},
@@ -42,7 +42,7 @@ def test_prepare_relations_blocks_when_required(monkeypatch: pytest.MonkeyPatch)
         audit_events.append(payload)
 
     monkeypatch.setattr("app.promotion.gates.audit_log", fake_audit)
-    monkeypatch.setattr("app.stores.relation_candidates.audit_log", fake_audit)
+    monkeypatch.setattr("app.stores.relation_index.audit_log", fake_audit)
     with pytest.raises(OrphanPromotionError):
         prepare_relations_for_promotion(
             src,

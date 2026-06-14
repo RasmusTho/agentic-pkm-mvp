@@ -29,15 +29,6 @@ METRIC_ASK_QUERY = "ask_query_ms"
 
 ALL_PHASE1_METRICS = {METRIC_INGEST_FULL, METRIC_INDEX_WRITE, METRIC_ASK_QUERY}
 
-BENCHMARK_ENV_KEYS = (
-    "LLM_PROVIDER",
-    "LLM_FORCE_PROVIDER",
-    "EMBED_PROFILE",
-    "LLM_MOCK_RESPONSE",
-    "STORE_BACKEND",
-    "INGEST_STATUS_PATH",
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,18 +45,6 @@ def _make_tags(scenario: Dict[str, str], **extra: str) -> Dict[str, str]:
 
 def _ms_since(start: float) -> float:
     return (time.perf_counter() - start) * 1000.0
-
-
-def _snapshot_env() -> dict[str, str | None]:
-    return {key: os.environ.get(key) for key in BENCHMARK_ENV_KEYS}
-
-
-def _restore_env(snapshot: dict[str, str | None]) -> None:
-    for key, value in snapshot.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
 
 
 # ---------------------------------------------------------------------------
@@ -256,65 +235,62 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         sys.exit(1)
 
     seed_files = sorted(seed_dir.glob("*.md"))
-    env_snapshot = _snapshot_env()
-    try:
-        scenario = {
-            "storage_profile": args.storage_profile,
-            "runtime_placement": args.runtime_placement,
-            "model_profile": args.model_profile,
-        }
 
-        # Set environment for memory/mock profiles
-        if args.storage_profile == "memory":
-            os.environ.setdefault("STORE_BACKEND", "memory")
-        if args.model_profile == "mock":
-            os.environ["LLM_PROVIDER"] = "mock"
-            os.environ["LLM_FORCE_PROVIDER"] = "mock"
-            os.environ["EMBED_PROFILE"] = "deterministic"
-            os.environ.setdefault(
-                "LLM_MOCK_RESPONSE",
-                '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
-            )
+    scenario = {
+        "storage_profile": args.storage_profile,
+        "runtime_placement": args.runtime_placement,
+        "model_profile": args.model_profile,
+    }
 
-        all_metrics: List[Dict[str, Any]] = []
-        all_warnings: List[str] = []
+    # Set environment for memory/mock profiles
+    if args.storage_profile == "memory":
+        os.environ.setdefault("STORE_BACKEND", "memory")
+    if args.model_profile == "mock":
+        os.environ["LLM_PROVIDER"] = "mock"
+        os.environ["LLM_FORCE_PROVIDER"] = "mock"
+        os.environ["EMBED_PROFILE"] = "deterministic"
+        os.environ.setdefault(
+            "LLM_MOCK_RESPONSE",
+            '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
+        )
 
-        import tempfile
+    all_metrics: List[Dict[str, Any]] = []
+    all_warnings: List[str] = []
 
-        with tempfile.TemporaryDirectory(prefix="pkm_bench_") as tmp_str:
-            tmp_dir = Path(tmp_str)
+    import tempfile
 
-            # Set a temp ingest status path to avoid polluting real state
-            os.environ["INGEST_STATUS_PATH"] = str(tmp_dir / "ingest_status.json")
+    with tempfile.TemporaryDirectory(prefix="pkm_bench_") as tmp_str:
+        tmp_dir = Path(tmp_str)
 
-            if not seed_files:
-                all_warnings.append("No .md files found in seed directory")
-            else:
-                # Stage 1: Ingest
-                m, w = _bench_ingest(seed_files, scenario, tmp_dir)
-                all_metrics.extend(m)
-                all_warnings.extend(w)
+        # Set a temp ingest status path to avoid polluting real state
+        os.environ["INGEST_STATUS_PATH"] = str(tmp_dir / "ingest_status.json")
 
-                # Stage 2: Index write
-                m, w = _bench_index_write(scenario)
-                all_metrics.extend(m)
-                all_warnings.extend(w)
+        if not seed_files:
+            all_warnings.append("No .md files found in seed directory")
+        else:
+            # Stage 1: Ingest
+            m, w = _bench_ingest(seed_files, scenario, tmp_dir)
+            all_metrics.extend(m)
+            all_warnings.extend(w)
 
-                # Stage 3: ASK query
-                m, w = _bench_ask_query(scenario)
-                all_metrics.extend(m)
-                all_warnings.extend(w)
+            # Stage 2: Index write
+            m, w = _bench_index_write(scenario)
+            all_metrics.extend(m)
+            all_warnings.extend(w)
 
-        result = {
-            "run_id": str(uuid4()),
-            "timestamp": _now_iso(),
-            "scenario": scenario,
-            "metrics": all_metrics,
-            "warnings": all_warnings,
-        }
-        return result
-    finally:
-        _restore_env(env_snapshot)
+            # Stage 3: ASK query
+            m, w = _bench_ask_query(scenario)
+            all_metrics.extend(m)
+            all_warnings.extend(w)
+
+    result = {
+        "run_id": str(uuid4()),
+        "timestamp": _now_iso(),
+        "scenario": scenario,
+        "metrics": all_metrics,
+        "warnings": all_warnings,
+    }
+    return result
 
 
 def main() -> None:

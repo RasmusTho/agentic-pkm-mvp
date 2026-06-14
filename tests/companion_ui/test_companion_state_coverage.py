@@ -256,10 +256,7 @@ def test_reentry_orientation_fresh_state() -> None:
     client = _OrientationClient(_orientation_payload())
     html = handle_get(query_string="", client=client, api_base_url=API_BASE)  # type: ignore[arg-type]
 
-    assert client.get_calls == [
-        ("/api/companion/orientation", {}),
-        ("/api/companion/vault-browser", {"q": "", "limit": 250}),
-    ]
+    assert client.get_calls == [("/api/companion/orientation", {})]
     assert 'data-testid="workspace-reentry-orientation"' in html
     assert 'data-read-only="true"' in html
     assert 'data-authority-role="derived"' in html
