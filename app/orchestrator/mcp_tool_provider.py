@@ -225,6 +225,23 @@ def _extract_allowed_arg_types(schema: Mapping[str, Any] | None) -> Dict[str, st
         arg_type = arg_schema.get("type")
         if isinstance(arg_type, str) and arg_type:
             result[str(arg_name)] = arg_type
+            continue
+        if isinstance(arg_type, list):
+            union_types = [str(item) for item in arg_type if isinstance(item, str) and item]
+            if union_types:
+                result[str(arg_name)] = "|".join(sorted(dict.fromkeys(union_types)))
+            continue
+        one_of = arg_schema.get("oneOf")
+        if isinstance(one_of, list):
+            union_types = [
+                str(option_type)
+                for option in one_of
+                if isinstance(option, Mapping)
+                for option_type in [option.get("type")]
+                if isinstance(option_type, str) and option_type
+            ]
+            if union_types:
+                result[str(arg_name)] = "|".join(sorted(dict.fromkeys(union_types)))
     return result
 
 

@@ -12,7 +12,9 @@ allowed_args:
     event_type:
       type: string
     actor:
-      type: object
+      oneOf:
+        - type: object
+        - type: string
     occurred_at:
       type: string
     target_refs:
@@ -26,7 +28,9 @@ allowed_args:
     source_refs:
       type: array
     created_by:
-      type: object
+      oneOf:
+        - type: object
+        - type: string
   required:
     - summary
     - event_type

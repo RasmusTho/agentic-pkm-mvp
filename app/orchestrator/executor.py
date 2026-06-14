@@ -275,7 +275,11 @@ class MockPlanExecutor(PlanExecutor):
         for arg_name, arg_type in allowed_args.items():
             if arg_name not in args:
                 continue
-            expected_types = self._TYPE_MAP.get(arg_type, tuple())
+            expected_types = tuple(
+                expected_type
+                for candidate in arg_type.split("|")
+                for expected_type in self._TYPE_MAP.get(candidate, tuple())
+            )
             if not isinstance(args[arg_name], expected_types):
                 raise StepExecutionError(
                     f"argument '{arg_name}' must be of type {arg_type}", error_type="invalid_tool_args"
