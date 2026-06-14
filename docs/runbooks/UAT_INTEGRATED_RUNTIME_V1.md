@@ -39,7 +39,19 @@ Out of scope:
 
 ## Prerequisites
 
-Use a clean repo checkout and a clean test channel:
+Use a clean repo checkout and the **one** idempotent test-channel bootstrap —
+it runs `vault init`, derives the canonical channel env (absolute paths,
+host-reachable DSN, `tmp-test/` artifacts, single watcher), and fails loud on
+any inconsistency, so no manual env exports are needed (issue #1997):
+
+```bash
+make bootstrap-test-channel          # config + Docker stack
+# or, for the config layer only (no Docker engine):
+make bootstrap-test-channel-config
+```
+
+The bootstrap is the source of truth. The explicit equivalent it replaces — kept
+only for reference — is:
 
 ```bash
 make test-vault-init
@@ -48,6 +60,12 @@ export VAULT_ROOT_TEST="$(pwd)/vault-test"
 export VAULT_ROOT="$(pwd)/vault-test"
 export INDEX_OUTBOX_PATH="$(pwd)/tmp-test/index-outbox.jsonl"
 export COMPANION_UI_URL="http://127.0.0.1:18002"
+```
+
+To validate the live env at any point, run the fail-loud channel preflight:
+
+```bash
+python -m app.cli ops channel-preflight --channel test --context host
 ```
 
 For a full local stack proof, start the test stack first:

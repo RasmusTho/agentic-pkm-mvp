@@ -75,6 +75,37 @@ A single markdown file at `ops/promotions/YYYY-MM-DD-<short-sha>.md` satisfying 
 - If the `stable` ref is ambiguous or missing, abort and report — do not guess.
 - If a migration lacks a reversibility marker, flag it as a blocking risk in the plan and do not classify it silently.
 
+## Invariant → producers rule (issue #1997 F4)
+
+When a change adds a **runtime precondition** — a new invariant the runtime
+fails-exits without (the #1991 vault-settings init is the canonical example) —
+that change is incomplete until it also updates **every producer of the thing
+the invariant guards** AND adds a fail-loud preflight, in the **same change**.
+
+A "producer" is anything that creates or brings up the guarded resource:
+
+- init / bootstrap scripts (e.g. `scripts/init_test_vault.sh`,
+  `scripts/bootstrap_test_channel.sh`);
+- existing-resource migration (e.g. a `vault init` step for a vault that
+  predates the invariant — for prod this is the blocking risk recorded in step 7
+  above; for the test channel it is baked into the bootstrap);
+- test fixtures that stand up the resource in-process (e.g. the IR-v1 UAT vault
+  fixture);
+- the matching preflight that refuses to run on a violation
+  (`app.vault.promotion_preflight` for the vault, `app.ops.channel_preflight`
+  for the whole test channel).
+
+Why: the 2026-06-14 v6.1 Wave 1 promotion was almost entirely harness pain
+because #1991 made vault-init a hard precondition but its producers
+(`init_test_vault.sh`, the existing prod vault) were never migrated — the
+invariant shipped half-applied and was discovered as a prod startup failure.
+A precondition without migrated producers + a preflight is a latent outage.
+
+Enforcement: the test channel is held to this by `app.ops.channel_preflight`
+(refuses inconsistent config) and the `harness-selfverify` CI gate (runs the
+IR-v1 UAT + the bootstrap smoke + a fault-injection proof). When you add a
+runtime precondition, add it to that gate's coverage too.
+
 ## Authority order for decisions
 
 1. `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md` — plan shape
