@@ -1,0 +1,135 @@
+name: harness-selfverify
+
+# Gate the verification harness itself so it cannot silently rot (issue #1997
+# F1). The 2026-06-14 v6.1 Wave 1 promotion was almost entirely harness pain
+# because the IR-v1 UAT and the promote-to-test path were opt-in and run by no
+# CI workflow — they decayed unnoticed (#1999: 8/10 red on every branch). This
+# workflow runs them on a schedule AND on PRs that touch the harness, and proves
+# (via fault injection) that a broken harness makes the gate go red.
+
+on:
+  schedule:
+    # Daily 06:17 UTC — catches rot even with no harness-touching PRs.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tests/uat/**"
+      - "tests/ops/test_channel_preflight.py"
+      - "tests/ops/test_test_channel_bootstrap_idempotent.py"
+      - "app/ops/**"
+      - "app/cli/ops.py"
+      - "scripts/*test*"
+      - "scripts/bootstrap_test_channel.sh"
+      - "scripts/init_test_vault.sh"
+      - "scripts/start_full_system.sh"
+      - "scripts/ci/harness_gate_fault_injection.sh"
+      - "docker-compose.test.yml"
+      - ".codex/skills/promote-to-test/**"
+      - ".codex/skills/prepare-promotion/**"
+      - ".codex/skills/execute-promotion/**"
+      - ".codex/skills/verify-promotion/**"
+      - ".github/workflows/harness-selfverify.yml"
+
+permissions: read-all
+
+concurrency:
+  group: harness-selfverify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+
+jobs:
+  ir-v1-uat:
+    name: IR-v1 in-process UAT (#1999)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUN_INTEGRATED_RUNTIME_UAT: "1"
+      PKM_ENVIRONMENT: test
+      STORE_BACKEND: memory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+      - name: Canonical IR-v1 golden-path + negative-safety UAT
+        run: |
+          pytest -q -c /dev/null --import-mode=importlib \
+            tests/uat -m uat_integrated_runtime
+
+  channel-harness-unit:
+    name: Channel preflight + bootstrap idempotency
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+      - name: F2 preflight + F3 bootstrap + channel-isolation tests
+        run: |
+          pytest -q -c /dev/null --import-mode=importlib \
+            tests/ops/test_channel_preflight.py \
+            tests/ops/test_test_channel_bootstrap_idempotent.py \
+            tests/ops/test_release_channel_isolation.py \
+            tests/release_channels/test_channel_isolation_preflight.py
+
+  promote-to-test-smoke:
+    name: promote-to-test smoke (zero manual env)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+      - name: One bootstrap, config layer, with NO manual env exports
+        # `env -i` proves a clean promote-to-test needs zero manual env
+        # workarounds: the bootstrap derives and verifies the whole channel env.
+        run: |
+          env -i HOME="$HOME" PATH="$PATH" PYTHON="$(command -v python)" \
+            bash scripts/bootstrap_test_channel.sh --config-only
+      - name: Static compose channel-isolation preflight (test overlay)
+        run: |
+          python -m app.release_channels.channel_isolation_preflight \
+            docker-compose.test.yml test
+
+  fault-injection:
+    name: Fault-injection proof (gate is not vacuous)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+      - name: A deliberately-broken harness MUST be rejected
+        run: |
+          PYTHON="$(command -v python)" bash scripts/ci/harness_gate_fault_injection.sh
