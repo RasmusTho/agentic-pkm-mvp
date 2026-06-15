@@ -27,8 +27,13 @@ _SEEDED_CURVE: dict[str, tuple[UrgencyBand | None, UrgencyBand | None]] = {
     "high": ("pressing", "critical"),
     "meeting": ("critical", None),
 }
-# Default-to-silence when interruptibility is uncertain: hold to a high bar.
-_DEFAULT_CURVE: tuple[UrgencyBand | None, UrgencyBand | None] = ("pressing", "critical")
+# Default-to-silence when interruptibility is uncertain or unrecognized: hold
+# *all* gated rungs unreachable (``None``), not merely a high band. Per the
+# reach-out contract (REACHOUT_AND_SCARCITY_GATE_CONTRACT.md :: Interruption
+# threshold), an uncertain reading must yield silence — a ("pressing","critical")
+# bar still permits in-app/push on a pressing/critical moment, which violates the
+# default direction. Only the glance (pull) floor remains available.
+_DEFAULT_CURVE: tuple[UrgencyBand | None, UrgencyBand | None] = (None, None)
 
 
 @dataclass(frozen=True)

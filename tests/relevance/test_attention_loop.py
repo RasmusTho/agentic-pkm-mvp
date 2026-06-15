@@ -13,6 +13,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.relevance import AttentionLoop, DeclaredPattern, query_reachout_receipts
+from app.relevance.materialization import materialize_moment
+from app.relevance.now_surface import collect_now_moments
 from app.relevance.schema import (
     Moment,
     MomentNeed,
@@ -113,6 +115,39 @@ def test_declared_pattern_changes_surfacing_with_receipts(tmp_path: Path) -> Non
     assert len(rows) == 2
     assert all(row["payload"]["external_side_effect"] is False for row in rows)
     assert all(row["payload"]["governance_tier"] == "act" for row in rows)
+
+
+def test_defer_persists_deferred_lifecycle(tmp_path: Path) -> None:
+    """A deferred moment persists a ``deferred`` lifecycle in the materialized artifact.
+
+    Regression for #2015: the defer path emitted a receipt but left
+    ``Moment.lifecycle`` at ``proposed``, so the glance projection kept showing a
+    deferred moment as ``proposed`` with no durable retry/audit state.
+    """
+
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    ctx = VaultContext(status="selected", active_vault_id="v1", active_vault_path=str(vault))
+    receipts = tmp_path / "reachout.jsonl"
+    moment_receipts = tmp_path / "moment.jsonl"
+
+    moment = _moment("timely")
+    # Materialize first (lifecycle starts at the default "proposed").
+    result = materialize_moment(moment, vault_context=ctx, outbox_path=moment_receipts)
+    assert result.status == "materialized"
+
+    before = collect_now_moments(ctx)
+    assert before and before[0]["lifecycle"] == "proposed"
+
+    # Deep focus -> a "timely" moment is below the bar and defers.
+    loop = AttentionLoop(ctx, outbox_path=receipts)
+    [decision] = loop.tick(moments=[moment], interruptibility="focus")
+    assert decision.outcome == "defer"
+
+    # The materialized artifact now carries a durable "deferred" lifecycle.
+    after = collect_now_moments(ctx)
+    assert after and after[0]["moment_id"] == before[0]["moment_id"]
+    assert after[0]["lifecycle"] == "deferred"
 
 
 def test_no_reachout_when_writes_blocked(tmp_path: Path) -> None:

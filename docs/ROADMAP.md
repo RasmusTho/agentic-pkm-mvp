@@ -39,8 +39,10 @@ They guide future security work but do not, by themselves, change the roadmap ba
 runtime exposure, or claim public internet readiness.
 
 Contextual Relevance Engine sequencing: CRE-01/CRE-02 are delivered concept-contract groundwork,
-and CRE-03 has shipped the vault-native pull moment plus glance-surface slice. The broader proactive
-attention loop is still the next bounded implementation step, not shipped baseline behavior; routine
+CRE-03 shipped the vault-native pull moment plus glance-surface slice, and CRE-04 shipped the
+governed in-app proactive reach-out loop (#1964): the relevance tick records a reach-out or
+deliberate-suppression receipt per candidate and projects threshold-cleared in-app nudges. The
+remaining reach-out work is OS-push delivery and external connectors, which stay deferred; routine
 issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
 
 ## Status vocabulary
@@ -59,9 +61,10 @@ issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
 - **Now**
   - **Major roadmap reset and SoT reconciliation** — active sequencing guard. Do not generate the next normal backlog wave from target-state docs. First reconcile shipped runtime, delivered seams, owner-doc promotion state, BuilderOps projection boundaries, and open GitHub state using `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md`.
   - **Integrated Runtime v1 release line (#1874)** — active integration sequencing item for route parity, readiness matrix, Panel staging persistence, golden-path UAT, negative-safety UAT, and docs reduction.
-  - **Contextual Relevance Engine** — CRE-03 shipped the first runtime seam for vault-native,
-    pull-only moments and a read-only glance projection; continue with the proactive attention loop
-    only through the bounded follow-up issue.
+  - **Contextual Relevance Engine** — CRE-03 shipped the vault-native pull-only moments and a
+    read-only glance projection, and CRE-04 (#1964) shipped the governed in-app proactive reach-out
+    loop on the relevance tick; remaining reach-out work (OS-push delivery, external connectors) is
+    deferred to bounded follow-up issues.
   - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
   - Keep the shipped PanelAgent LangGraph decider opt-in and watcher policy auto-exec plumbing stable under the v5.5 baseline guardrails while broader rollout stays gated.
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.

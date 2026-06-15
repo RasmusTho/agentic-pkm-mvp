@@ -59,6 +59,17 @@ def run_relevance_tick(
     if context is None or context.status != "selected" or not context.active_vault_path:
         return {"materialized": 0, "moment_ids": [], "skipped": "vault-not-selected"}
 
+    # Honor the vault-local write role before any autonomous background write.
+    # ``materialize_moment``'s DEFAULT_WRITE_GUARD is the health/maintenance gate,
+    # not the role gate; an ``allowWritesToVault: false`` satellite must not get
+    # autonomous moment writes from the default-on tick.
+    if not _vault_local_writes_allowed(context):
+        return {
+            "materialized": 0,
+            "moment_ids": [],
+            "skipped": "vault-local-writes-disabled",
+        }
+
     moments = DeterministicRelevanceEvaluator(root).evaluate()
     materialized: list[str] = []
     materialized_moments: list[Moment] = []
@@ -76,7 +87,11 @@ def run_relevance_tick(
         if patterns is not None
         else _declared_patterns_from_env(os.getenv(RELEVANCE_DECLARED_PATTERNS_ENV))
     )
-    decisions = AttentionLoop(context, outbox_path=reachout_outbox_path).tick(
+    decisions = AttentionLoop(
+        context,
+        outbox_path=reachout_outbox_path,
+        moment_outbox_path=outbox_path,
+    ).tick(
         moments=materialized_moments,
         interruptibility=current_interruptibility,
         patterns=declared_patterns,
@@ -96,6 +111,26 @@ def _resolve_context(root: Path) -> VaultContext | None:
         return get_vault_manager().validate_vault(root)
     except Exception:
         return None
+
+
+def _vault_local_writes_allowed(context: VaultContext) -> bool:
+    """Whether the vault-local role permits writes for this context.
+
+    Only blocks when the vault-local role *explicitly* disallows writes (a
+    resolvable ``local.md`` with ``allowWritesToVault: false`` or a
+    ``readOnlySatellite`` role). When the role state cannot be resolved (no
+    ``settings_path`` — e.g. an unconfigured or synthetic context), defer to the
+    downstream WriteGuard / materialization gate rather than blocking here, so
+    this check adds the role gate without changing existing non-role behavior.
+    """
+
+    if not context.settings_path:
+        return True
+    try:
+        return get_vault_manager().permissions_for_context(context).allow_writes_to_vault
+    except Exception:
+        # Settings present but unreadable -> fail-closed on the role gate.
+        return False
 
 
 def _declared_patterns_from_env(raw: str | None) -> tuple[DeclaredPattern, ...]:

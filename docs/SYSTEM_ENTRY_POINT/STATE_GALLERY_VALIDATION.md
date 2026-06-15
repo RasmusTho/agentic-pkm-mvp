@@ -46,7 +46,7 @@ Each child proves its slice; nothing else proves the composition. The gallery ha
 - [ ] Every state declared in the spec's gallery renders from a fixture with its declared `data-entry-state` / regions present.
   Verify: `tests/companion_ui/test_entry_state_gallery.py::test_state_gallery_renders_all_declared_states`
 - [ ] Undeclared entry transitions are rejected across the fixture matrix.
-  Verify: `tests/companion_ui/test_entry_state_gallery.py::test_transition_rejection_across_fixtures`
+  Verify: `tests/companion_ui/test_entry_state_gallery.py::test_undeclared_transitions_rejected_across_fixtures`
 - [ ] Cold, first-contact, and no-vault fixtures contain no re-entry overlay region.
   Verify: `tests/companion_ui/test_entry_state_gallery.py::test_cold_and_no_vault_have_no_reentry_overlay`
 - [ ] Governed-vs-body-edit receipt asymmetry holds across the gallery.

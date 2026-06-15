@@ -249,6 +249,10 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def _coerce_date(raw: object) -> date | None:
+    # ``datetime`` subclasses ``date``; normalize to a pure ``date`` so the
+    # caller's ``due - self.today`` does not raise ``datetime - date``.
+    if isinstance(raw, datetime):
+        return raw.date()
     if isinstance(raw, date):
         return raw
     if isinstance(raw, str):

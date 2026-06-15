@@ -16,6 +16,12 @@ VAULT_SELECT_ENDPOINT = "/api/companion/vault/select"
 VAULT_INITIALIZE_ENDPOINT = "/api/companion/vault/initialize"
 VAULT_RELOAD_ENDPOINT = "/api/companion/vault/reload"
 
+# Page-server route serving the server-rendered panel fragment (the
+# /memory-review precedent). The controller fetches this after load and after
+# every action so the rendered panel reflects the fetched projection instead of
+# discarding it; rendering stays a pure, testable Python function.
+VAULT_SETTINGS_FRAGMENT_ROUTE = "/vault-settings"
+
 
 def _e(value: object) -> str:
     return _html.escape(str(value if value is not None else ""), quote=True)
@@ -191,13 +197,50 @@ def _settings_editor(projection: dict[str, Any], status: str) -> str:
     return f'<section class="vault-settings-editor" data-testid="vault-settings-editor">{"".join(rows)}</section>'
 
 
-def vault_settings_panel_markup(projection: dict[str, Any] | None = None) -> str:
-    projection = projection if isinstance(projection, dict) else {}
+def _panel_body(projection: dict[str, Any]) -> str:
+    """Inner panel content rendered from the fetched projection.
+
+    Shared by :func:`vault_settings_panel_markup` (initial server render) and
+    :func:`vault_settings_panel_fragment` (the reload/after-action re-render),
+    so the projection is applied on load and after every action — never
+    discarded.
+    """
     context = projection.get("context") if isinstance(projection.get("context"), dict) else {"status": "none"}
     status = str(context.get("status") or "none")
     title, summary = _status_copy(status)
     errors = projection.get("validation_errors") if isinstance(projection.get("validation_errors"), list) else []
     recent_vaults = projection.get("recent_vaults") if isinstance(projection.get("recent_vaults"), list) else []
+    return f"""
+    <header class="vault-settings-head" data-testid="vault-settings-head">
+      <span data-testid="vault-status-label">{_e(title)}</span>
+      <p data-testid="vault-status-summary">{_e(summary)}</p>
+      <p data-testid="vault-validation-error">{_e(context.get("validation_error") or "")}</p>
+    </header>
+    {_action_forms(context, recent_vaults)}
+    {_identity_rows(context)}
+    {_validation_errors(errors)}
+    {_settings_editor(projection, status)}"""
+
+
+def _panel_status(projection: dict[str, Any]) -> str:
+    context = projection.get("context") if isinstance(projection.get("context"), dict) else {"status": "none"}
+    return str(context.get("status") or "none")
+
+
+def vault_settings_panel_fragment(projection: dict[str, Any] | None = None) -> str:
+    """Server-rendered inner panel fragment from the fetched projection.
+
+    Served at :data:`VAULT_SETTINGS_FRAGMENT_ROUTE`; the controller swaps this
+    into the panel after load and after every action so the rendered panel
+    reflects the runtime projection instead of discarding it.
+    """
+    projection = projection if isinstance(projection, dict) else {}
+    return f'<div class="vault-settings-body" data-testid="vault-settings-body" data-vault-status="{_e(_panel_status(projection))}">{_panel_body(projection)}</div>'
+
+
+def vault_settings_panel_markup(projection: dict[str, Any] | None = None) -> str:
+    projection = projection if isinstance(projection, dict) else {}
+    status = _panel_status(projection)
     return f"""
   <style>
     .vault-settings-panel {{
@@ -226,16 +269,8 @@ def vault_settings_panel_markup(projection: dict[str, Any] | None = None) -> str
   </style>
   <section class="vault-settings-panel" data-testid="vault-settings-panel"
     data-vault-status="{_e(status)}" data-api-path="{VAULT_SETTINGS_ENDPOINT}"
-    data-api-method="GET">
-    <header class="vault-settings-head" data-testid="vault-settings-head">
-      <span data-testid="vault-status-label">{_e(title)}</span>
-      <p data-testid="vault-status-summary">{_e(summary)}</p>
-      <p data-testid="vault-validation-error">{_e(context.get("validation_error") or "")}</p>
-    </header>
-    {_action_forms(context, recent_vaults)}
-    {_identity_rows(context)}
-    {_validation_errors(errors)}
-    {_settings_editor(projection, status)}
+    data-fragment-path="{VAULT_SETTINGS_FRAGMENT_ROUTE}" data-api-method="GET">
+    {vault_settings_panel_fragment(projection)}
   </section>"""
 
 
@@ -253,10 +288,35 @@ def vault_settings_panel_script() -> str:
           return response.json();
         }});
     }}
+    var fragmentPath = root.getAttribute('data-fragment-path') || '{VAULT_SETTINGS_FRAGMENT_ROUTE}';
+    function applyFragment(html) {{
+      var body = root.querySelector('[data-testid="vault-settings-body"]');
+      if (!body) {{
+        body = document.createElement('div');
+        body.setAttribute('data-testid', 'vault-settings-body');
+        root.appendChild(body);
+      }}
+      body.outerHTML = html;
+      var fresh = root.querySelector('[data-testid="vault-settings-body"]');
+      if (fresh) {{
+        var status = fresh.getAttribute('data-vault-status');
+        if (status) {{ root.setAttribute('data-vault-status', status); }}
+      }}
+      root.removeAttribute('data-load-error');
+    }}
     function reload() {{
-      jsonFetch('{VAULT_SETTINGS_ENDPOINT}').catch(function(err) {{
-        root.setAttribute('data-load-error', String(err && err.message || err));
-      }});
+      // Apply the fetched projection to the panel — never discard it. The
+      // page server renders the panel fragment from the runtime projection;
+      // the controller swaps it in on load and after every action.
+      return fetch(fragmentPath, {{ method: 'GET' }})
+        .then(function(response) {{
+          if (!response.ok) {{ throw new Error(String(response.status)); }}
+          return response.text();
+        }})
+        .then(applyFragment)
+        .catch(function(err) {{
+          root.setAttribute('data-load-error', String(err && err.message || err));
+        }});
     }}
     function parseSettingValue(form, input) {{
       if (!input) {{ return null; }}
@@ -304,22 +364,29 @@ def vault_settings_panel_script() -> str:
         }})
       }}).then(reload).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
     }});
+    // Delegated on document so the handlers survive fragment swaps:
+    // applyFragment() replaces the panel body (which contains both the recent-
+    // vault buttons and the Reload button), so a directly-attached listener
+    // would be lost after the first reload (#2016 Codex review).
     document.addEventListener('click', function(event) {{
       var recent = event.target && event.target.closest('[data-testid="vault-recent-vault"]');
-      if (!recent) {{ return; }}
-      jsonFetch('{VAULT_SELECT_ENDPOINT}', {{
-        method: 'POST',
-        body: JSON.stringify({{ path: recent.getAttribute('data-vault-path') || '' }})
-      }}).then(reload).catch(function(err) {{ recent.setAttribute('data-submit-error', String(err.message || err)); }});
-    }});
-    var reloadButton = root.querySelector('[data-testid="vault-reload"]');
-    if (reloadButton) {{
-      reloadButton.addEventListener('click', function() {{
+      if (recent) {{
+        jsonFetch('{VAULT_SELECT_ENDPOINT}', {{
+          method: 'POST',
+          body: JSON.stringify({{ path: recent.getAttribute('data-vault-path') || '' }})
+        }}).then(reload).catch(function(err) {{ recent.setAttribute('data-submit-error', String(err.message || err)); }});
+        return;
+      }}
+      var reloadButton = event.target && event.target.closest('[data-testid="vault-reload"]');
+      if (reloadButton) {{
         jsonFetch('{VAULT_RELOAD_ENDPOINT}', {{ method: 'POST', body: '{{}}' }}).then(reload).catch(function(err) {{
           root.setAttribute('data-reload-error', String(err.message || err));
         }});
-      }});
-    }}
+      }}
+    }});
+    // Apply the fetched projection on initial load so the panel renders the
+    // runtime vault context instead of the no-vault default shell.
+    reload();
   }})();
   /* /vault-settings-panel-controller */
   </script>"""
@@ -330,6 +397,8 @@ __all__ = [
     "VAULT_RELOAD_ENDPOINT",
     "VAULT_SELECT_ENDPOINT",
     "VAULT_SETTINGS_ENDPOINT",
+    "VAULT_SETTINGS_FRAGMENT_ROUTE",
+    "vault_settings_panel_fragment",
     "vault_settings_panel_markup",
     "vault_settings_panel_script",
 ]

@@ -122,7 +122,7 @@ Stated against the capability-contract field set (`docs/CAPABILITY_CONTRACT_MODE
 | **Name** | `reachout-scarcity-gate` |
 | **Purpose** | Decide, deterministically, whether and how far up the intrusiveness ladder a candidate moment may climb, given its urgency and the current interruptibility threshold; defer or suppress otherwise; emit a receipt for every decision. |
 | **Inputs** | A candidate moment (with `urgency` band) and the current interruptibility reading from the context model. |
-| **Outputs** | A reach-out decision (`glance` \| `in-app` \| `push` \| `defer`) + a receipt; on the zero-tolerance floor, always `defer` for the gated rungs. |
+| **Outputs** | A reach-out decision (`glance` \| `in-app` \| `push` \| `agent-review` \| `defer`) + a receipt; `agent-review` is the recordable outcome for a high-urgency *push* candidate that is genuinely ambiguous (routed to a more capable agent instead of interrupting the human — see the §Governance tier mapping); on the zero-tolerance floor, always `defer` for the gated rungs. |
 | **Allowed callers** | The proactive attention loop (CRE-04) and the now-surface composition (CRE-03, glance only). |
 | **Authority class** | `governed effect` — it causes a governed effect (a reach-out + receipt) through the authority/event envelope; never bypasses it. |
 | **Side effects** | A reach-out signal (glance render / in-app nudge / OS push) and a receipt. **No external side-effects.** |
@@ -133,8 +133,17 @@ Stated against the capability-contract field set (`docs/CAPABILITY_CONTRACT_MODE
 | **Replacement strategy** | The decision contract is stable; the learned tolerance curve may evolve behind it without changing the deterministic comparison or the floor. |
 
 Capability metadata: `capability_class: governed_execution`, `authority_class: governed_effect`,
-`mutation_risk: additive`, `requires_human_gate: no` (reach-out is Act/agent-review),
-`requires_policy_gate: yes` (it *is* the policy gate), `receipt_required: yes`.
+`mutation_risk: additive`, `authorization_tier: act` (high-urgency ambiguous push candidates escalate
+to `agent-review`; never `ask-you`), `requires_human_gate: no`, `requires_policy_gate: yes` (it *is*
+the policy gate), `receipt_required: yes`.
+
+`requires_human_gate: no` is consistent with `capability_class: governed_execution` /
+`authority_class: governed_effect`: per `docs/CAPABILITY_CONTRACT_MODEL.md`, `governed_execution`
+spans tiers, and `requires_human_gate` is the boolean projection of the tier — `true` only at
+`ask-you`. Reach-out's durable effect (a reach-out signal + receipt) is governed (write guard, policy
+gate, receipt) at the `act` / `agent-review` tier and never crosses into an external `ask-you`
+side-effect, so it is governed without requiring a human gate. The policy/admission gate
+(`requires_policy_gate: yes`) and the receipt (`receipt_required: yes`) apply at every tier.
 
 ## Design choices for owner ratification
 

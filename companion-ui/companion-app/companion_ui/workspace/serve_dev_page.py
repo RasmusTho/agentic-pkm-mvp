@@ -120,6 +120,8 @@ from companion_ui.workspace.vault_settings_panel import (
     VAULT_RELOAD_ENDPOINT,
     VAULT_SELECT_ENDPOINT,
     VAULT_SETTINGS_ENDPOINT,
+    VAULT_SETTINGS_FRAGMENT_ROUTE,
+    vault_settings_panel_fragment,
     vault_settings_panel_markup,
     vault_settings_panel_script,
 )
@@ -10414,6 +10416,23 @@ def make_handler(
                     self._proxy_error(exc)
                     return
                 self._send_json(200, data)
+                return
+            if parsed.path == VAULT_SETTINGS_FRAGMENT_ROUTE:
+                # Vault settings panel fragment (#2016): server-rendered from
+                # the runtime settings projection so the panel reflects the
+                # fetched vault context on load and after actions instead of
+                # discarding it. An unreachable runtime renders the calm
+                # no-vault default — no fabricated vault state.
+                try:
+                    data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
+                except WorkspaceClientError:
+                    data = {}
+                body = vault_settings_panel_fragment(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             if parsed.path == "/api/companion/vault-related":
                 params = {
