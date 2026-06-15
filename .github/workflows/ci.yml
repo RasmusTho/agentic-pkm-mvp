@@ -12,7 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
-      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      # NOTE: do NOT set PYTEST_DISABLE_PLUGIN_AUTOLOAD here. Disabling autoload
+      # suppresses pytest-asyncio (and others), so every @pytest.mark.asyncio
+      # test in tests/sync/* and tests/agents/* false-fails. This job must mirror
+      # the full `tests` job, which autoloads plugins. See issue #2036.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r app/requirements.txt
+          pip install -r requirements.txt
           pip install -r dev-requirements.txt
       - name: Run not-pg unit tests
         shell: bash
