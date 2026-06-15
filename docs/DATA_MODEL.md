@@ -1,6 +1,9 @@
 State: SoT v5.5 Reality-MVP baseline locked.
 Doc role: Reference
 Authority: Current persistence and mirror model for the runtime; explains how Core-6 and derived system artifacts are represented without redefining semantic ownership.
+Temporal class: operational
+Source of truth: code
+Last verified against: app/stores/pg.py (2026-06-15)
 # Data Model
 
 The DB is a normalized mirror of the note contract and system overlays. It is not the source of
@@ -148,19 +151,80 @@ Interpretation rule:
 - table names and storage labels describe the current mirror/runtime surface.
 - they do not, by themselves, define the canonical domain vocabulary.
 
-### objects
-- `id` uuid pk
-- `kind` text
-- `source_ref` text
-- `ts` timestamptz default now()
-- `payload` jsonb
-- `search_vector` tsvector generated
+Source-of-truth rule:
+- The active runtime store tables below are created by **runtime DDL in `app/stores/pg.py`**
+  (`_ensure_tables()`), not by Alembic migrations.
+- `app/stores/pg.py` is the canonical shape for these tables; this section mirrors that code and is
+  verified against it (see frontmatter `Last verified against`).
+- These are still mirror/projection surfaces. Documenting them as canonical store tables does not
+  grant the store semantic authority over the note contract or Core-6.
+
+### `store_objects` (canonical)
+- `object_id` uuid pk
+- `kind` text not null
+- `source_ref` text (nullable)
+- `payload` jsonb not null
+- `created_at` timestamptz not null default now()
+- `updated_at` timestamptz not null default now()
 
 The `payload` contains the Core-6 projection plus any policy-enabled state axes and overlays.
 In current runtime practice it may also contain execution-state or legacy compressed semantics that
 the ontology keeps separate.
 
-### chunks
+### `store_vector_index` (canonical)
+- `object_id` uuid pk
+- `kind` text not null
+- `source_ref` text (nullable)
+- `payload` jsonb not null
+- `embedding` `double precision[]` not null
+- `dim` integer not null
+- `model` text not null
+- `updated_at` timestamptz not null default now()
+
+The vector index is a derived runtime artifact. Embeddings are stored as a `double precision[]`
+array (not a `vector`-extension column); similarity is computed in application code, and the index
+is rebuildable from `store_objects` payloads. Every row is tagged with the generating `model` and
+its `dim`.
+
+### `store_relations` (canonical)
+- `src_id` uuid not null
+- `dst_id` uuid not null
+- `rel` text not null
+- `payload` jsonb not null default `{}`
+- `created_at` timestamptz not null default now()
+- `PRIMARY KEY (src_id, dst_id, rel)`
+
+### `store_relation_memberships` (canonical)
+- `src_id` uuid not null
+- `rel` text not null
+- `value` text not null
+- `payload` jsonb not null default `{}`
+- `created_at` timestamptz not null default now()
+- `PRIMARY KEY (src_id, rel, value)`
+
+### `vector_index_meta` (canonical)
+- `id` integer pk (`CHECK (id = 1)`; single-row identity record)
+- `identity_json` text not null (serialized embedding identity: provider, model, dim, normalize)
+- `updated_at` timestamptz not null default now()
+
+This row pins the active embedding identity so the index can detect provider/model/dim drift and
+require a rebuild rather than silently mixing dimensions.
+
+## Historical migration lineage (legacy AMG-core)
+
+The tables below are the legacy AMG-core schema created by Alembic migrations under
+`app/alembic/versions/`. They are **not** the active runtime store and are retained here only as
+historical lineage. The active runtime persistence is the `store_*` set above. Do not treat these
+shapes as the current contract.
+
+### `objects` (legacy)
+- `id` uuid pk
+- `kind` text
+- `source_ref` text
+- `payload` jsonb
+- `created_at` / `updated_at` timestamptz default now()
+
+### `chunks` (legacy)
 - `id` uuid pk
 - `object_id` uuid fk objects(id) on delete cascade
 - `idx` int
@@ -168,34 +232,34 @@ the ontology keeps separate.
 - `offset_end` int
 - `text` text
 
-### embeddings
+### `embeddings` (legacy)
 - `id` uuid pk
 - `object_id` uuid fk objects(id) on delete cascade
 - `model` text
 - `dim` int
-- `vec` vector
+- `embedding` `double precision[]` (or `vector` in older vector-extension branches)
 
-### relations
+### `relations` (legacy)
 - `id` uuid pk
 - `src` uuid
 - `dst` uuid
 - `kind` text
 
-### sets
+### `sets` (legacy)
 - `id` uuid pk
 - `slug` text unique
 - `kind` text
 - `title` text
 - `rules` jsonb
 
-### membership
+### `membership` (legacy)
 - `id` uuid pk
 - `set_id` uuid fk sets(id) on delete cascade
 - `object_id` uuid fk objects(id) on delete cascade
 - `reason` text
 - `score` float
 
-### decisions
+### `decisions` (legacy)
 - `id` uuid pk
 - `object_id` uuid fk objects(id) on delete cascade
 - `key` text
@@ -205,7 +269,7 @@ the ontology keeps separate.
 These are system-side decision records, not durable proof that the corresponding semantic transition
 has been accepted by the human unless an explicit receipt or confirmed mutation also exists.
 
-### audit
+### `audit` (legacy)
 - `id` uuid pk
 - `object_id` uuid null
 - `agent` text
