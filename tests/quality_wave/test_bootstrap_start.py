@@ -1,16 +1,18 @@
 """CI verification for BOOTSTRAP-03: Start full system against test vault.
 
 Verifies the startup script contract for `scripts/start_full_system.sh`:
-- VAULT_ROOT is required and validated before any Docker interaction
-- The script exits with a clear, deterministic error when VAULT_ROOT is missing
-- The script exits with a clear error when VAULT_ROOT points to a non-existent directory
-- The `make start-test-system` target is wired correctly in the Makefile
+- An *unset* VAULT_ROOT now boots into a no-vault idle posture (NOT exit 2) —
+  the #2005 flip of the #1991 fail-exit precondition to idle-until-opened.
+- A *set-but-missing* VAULT_ROOT still exits non-zero with a clear error
+  (the open-vault-on-missing-vault regression guard stays loud).
+- The `make start-test-system` target is wired correctly in the Makefile.
 
-These tests exercise the early-exit contract only (no Docker required).
-They run hermetically in CI without a running Docker daemon.
+These tests exercise the early contract only (no Docker required for the
+hermetic legs).
 
-Governing issue: #333
+Governing issue: #333 (original), #2005 (no-vault idle flip)
 Spec: docs/LOCAL_TEST_BOOTSTRAP/START_FULL_SYSTEM.md :: BOOTSTRAP-03
+      docs/VAULT_OPTIONAL_RUNTIME/BOOT_RUNTIME_WITHOUT_VAULT.md
 """
 from __future__ import annotations
 
@@ -40,18 +42,42 @@ def _startup_env(**extra: str) -> dict[str, str]:
 class TestBootstrapStartContract:
     """BOOTSTRAP-03: start_full_system.sh interface contract."""
 
-    @_requires_docker
-    def test_requires_vault_root(self) -> None:
-        """Script exits non-zero with a clear error when VAULT_ROOT is unset."""
-        result = subprocess.run(
-            ["bash", "scripts/start_full_system.sh"],
-            capture_output=True,
-            text=True,
-            env=_startup_env(),
+    def test_unset_vault_root_boots_idle_not_exit_2(self) -> None:
+        """#2005: an unset VAULT_ROOT no longer exits 2 — it boots no-vault idle.
+
+        Hermetic (no Docker): a fake `docker` that fails loudly proves the
+        script reached the no-vault idle posture (no exit 2, idle banner) before
+        any real Docker interaction. Mirrors the fake-docker pattern in
+        tests/uat/test_negative_safety_integrated_runtime.py.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            fake_docker = Path(td) / "docker"
+            fake_docker.write_text(
+                "#!/usr/bin/env bash\necho fake docker should not run >&2\nexit 99\n",
+                encoding="utf-8",
+            )
+            fake_docker.chmod(0o755)
+            result = subprocess.run(
+                ["bash", "scripts/start_full_system.sh"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=_startup_env(PATH=f"{td}:{_SUBPROCESS_PATH}"),
+            )
+
+        combined = result.stdout + result.stderr
+        # The #1991 fail-exit (exit 2 "VAULT_ROOT is required") is gone.
+        assert result.returncode != 2, (
+            f"Unset VAULT_ROOT must not exit 2 (no-vault idle flip); got rc={result.returncode}: {combined[:600]}"
         )
-        assert result.returncode != 0, "Expected non-zero exit when VAULT_ROOT is unset"
-        stderr = result.stderr + result.stdout
-        assert "VAULT_ROOT" in stderr, f"Expected VAULT_ROOT mentioned in output; got: {stderr[:500]}"
+        assert "VAULT_ROOT is required" not in combined, (
+            f"The exit-2 'VAULT_ROOT is required' gate must be gone: {combined[:600]}"
+        )
+        assert "no-vault idle posture" in combined, (
+            f"Expected the no-vault idle banner; got: {combined[:600]}"
+        )
 
     @_requires_docker
     def test_exits_on_missing_vault_directory(self, tmp_path: Path) -> None:

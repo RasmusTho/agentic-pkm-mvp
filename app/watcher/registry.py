@@ -453,10 +453,14 @@ class RegistryConfig:
         enable = _as_bool(os.getenv("WATCHER_ENABLE", "1"))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
-            raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
+            # No vault bound — idle until one is opened instead of raising
+            # (#2005). The registry comes up disabled; each spec tick
+            # short-circuits on `enable=False`.
+            logger.info("watcher registry idling: WATCHER_ENABLE=1 but no vault bound")
+            enable = False
         vault_path = Path(vault_raw or ".").expanduser()
-        if enable:
-            _validate_registry_vault(vault_path)
+        if enable and not _validate_registry_vault(vault_path):
+            enable = False
         scope_glob, scope_source, inbox_source = _resolve_scope_glob(vault_path)
         logger.info(
             "watcher scope resolved vault_path=%s scope_glob=%s provenance=%s inbox_source=%s",
@@ -683,9 +687,30 @@ def _auto_exec_enabled(vault_root: Path) -> bool:
     return resolve_auto_exec_enabled(vault_root=vault_root)
 
 
-def _validate_registry_vault(vault_path: Path) -> None:
+# Vault statuses that mean "no usable vault yet, but not a misconfiguration":
+# the registry idles until a vault is opened/initialized instead of fail-exiting
+# (#2005 — flips the #1991 hard precondition). A *set-but-missing*
+# (status="missing") or otherwise *invalid* vault still fails loud.
+_IDLE_VAULT_STATUSES = {"none", "uninitialized"}
+
+
+def _validate_registry_vault(vault_path: Path) -> bool:
+    """Return True when the registry should run; False when it should idle.
+
+    Raises only for a *loud* misconfiguration (set-but-missing or invalid vault
+    path, or a vault whose settings disable the watcher). An absent or
+    uninitialized vault returns False so the caller builds an idle runtime.
+    """
+
     manager = VaultManager()
     context = manager.validate_vault(vault_path)
+    if context.status in _IDLE_VAULT_STATUSES:
+        logger.info(
+            "watcher registry idling: no usable vault bound (status=%s path=%s)",
+            context.status,
+            vault_path,
+        )
+        return False
     if context.status != "selected":
         detail = f": {context.validation_error}" if context.validation_error else ""
         remedy = (
@@ -699,6 +724,7 @@ def _validate_registry_vault(vault_path: Path) -> None:
     permissions = manager.permissions_for_context(context)
     if not permissions.enable_vault_watcher:
         raise ValueError("watcher registry is disabled by settings/local.md")
+    return True
 
 
 def _db_outbox_required() -> bool:
