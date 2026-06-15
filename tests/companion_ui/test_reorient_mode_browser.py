@@ -175,7 +175,7 @@ def test_workspace_reorient_failure_degrades_without_blocking_note_load(
     note.parent.mkdir()
     note.write_text("---\nuuid: note-1141\n---\n# Reorient Note\n", encoding="utf-8")
 
-    monkeypatch.setattr(companion, "resolve_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(companion, "_active_companion_vault_root", lambda: tmp_path)
 
     def fail_orientation() -> None:
         raise RuntimeError("orientation unavailable")

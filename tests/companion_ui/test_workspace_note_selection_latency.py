@@ -133,7 +133,7 @@ class TestOrientationSignalsComputedOnce:
 
         monkeypatch.setattr(status_service, "get_orientation_signals", _stub_signals)
         monkeypatch.setattr(companion_module, "get_orientation_signals", _stub_signals)
-        monkeypatch.setattr(companion_module, "resolve_vault_root", lambda: tmp_path)
+        monkeypatch.setattr(companion_module, "_active_companion_vault_root", lambda: tmp_path)
 
         companion_module.read_companion_workspace(note_path="Notes/x.md")
 
