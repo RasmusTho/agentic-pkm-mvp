@@ -86,7 +86,11 @@ def test_automation_node_can_run_background_services_when_enabled(tmp_path) -> N
     manager.require_selected_vault(operation="auto indexer", require_indexing=True)
 
 
-def test_watcher_config_rejects_uninitialized_vault(tmp_path, monkeypatch) -> None:
+def test_watcher_config_idles_on_uninitialized_vault(tmp_path, monkeypatch) -> None:
+    # #2005 flipped the #1991 hard precondition: an uninitialized vault now
+    # idles (enable=False) instead of fail-exiting. A set-but-missing or
+    # otherwise invalid vault still fails loud (see
+    # tests/watcher/test_watcher_idle_without_vault.py).
     from app.watcher.config import WatcherConfig
 
     vault = tmp_path / "vault"
@@ -94,8 +98,8 @@ def test_watcher_config_rejects_uninitialized_vault(tmp_path, monkeypatch) -> No
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
 
-    with pytest.raises(ValueError, match="status=uninitialized"):
-        WatcherConfig.from_env()
+    cfg = WatcherConfig.from_env()
+    assert cfg.enable is False
 
 
 def test_watcher_config_accepts_initialized_vault(tmp_path, monkeypatch) -> None:
