@@ -2768,18 +2768,21 @@ def read_companion_vault_related(
 
 @router.post(
     "/vault-browser/actions/queue-review",
-    response_model=VaultBrowserQueueReviewResponse,
+    response_model=VaultBrowserQueueReviewResponse | VaultSelectionRequiredResponse,
 )
 def queue_vault_browser_review(
     req: VaultBrowserQueueReviewRequest,
-) -> VaultBrowserQueueReviewResponse:
+) -> VaultBrowserQueueReviewResponse | VaultSelectionRequiredResponse:
     safe_note_path = (
         _validate_workspace_markdown_note_path(req.note_path)
         if req.note_path is not None
         else None
     )
     safe_artifact_uuid = req.artifact_uuid.strip() if req.artifact_uuid else None
-    vault_root = _active_companion_vault_root()
+    try:
+        vault_root = _active_companion_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(exc, requested_note_path=safe_note_path)
     target = _resolve_vault_action_scope(
         _collect_relation_notes(vault_root),
         note_path=safe_note_path,
