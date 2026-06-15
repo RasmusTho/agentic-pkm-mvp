@@ -135,13 +135,35 @@ def _recall_node(state: AgentState, *, ask_settings) -> AgentState:
     return state
 
 
+def _recall_only_fallback(state: AgentState) -> str:
+    """Compose a minimal non-reasoning answer from recalled memory alone.
+
+    Recalled memory stays supporting input only — this surfaces the recalled
+    title/context without claiming retrieval authority. Used when retrieval
+    returned zero hits but guarded recall yielded a usable may_answer memory
+    and reasoning is disabled.
+    """
+    top = state.recalled[0]
+    why = (top.why_now or "").strip()
+    title = (top.title or "").strip()
+    if title and why:
+        return f"{title}: {why}"
+    return title or why
+
+
 def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
-    if not state.hits:
+    if not state.hits and not state.recalled:
+        # Preserve the fallback only when neither retrieval nor recall produced context.
         state.answer = "No results found."
         return state
-    # Default answer: snippet/text of top hit
-    top = state.hits[0]
-    fallback = (top.snippet or top.payload.get("text") or top.payload.get("raw_text") or "").strip()
+
+    if state.hits:
+        # Default answer: snippet/text of top hit
+        top = state.hits[0]
+        fallback = (top.snippet or top.payload.get("text") or top.payload.get("raw_text") or "").strip()
+    else:
+        # Recall-only path: retrieval was empty but guarded recall found supporting memory.
+        fallback = _recall_only_fallback(state)
     answer_text = fallback or "No results found."
 
     if reasoning_enabled():

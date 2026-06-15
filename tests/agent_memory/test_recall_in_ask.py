@@ -107,6 +107,10 @@ def _retrieval_response(query: str, *, text: str = "ASK source text") -> Retriev
     )
 
 
+def _empty_retrieval_response(query: str) -> RetrievalResponse:
+    return RetrievalResponse(query=query, trace_id="trace-ask-recall", hits=[])
+
+
 def _receipt_records(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
@@ -255,6 +259,52 @@ def test_recall_is_read_only(monkeypatch) -> None:
     assert state.recalled[0].receipt_reference == "receipt-read-only"
     assert calls[0]["use_right"] is RecallUseRight.ACTIVATABLE
     assert calls[0].get("requested_action_scope") is None
+
+
+def test_ask_answers_from_recall_when_retrieval_is_empty(tmp_path: Path, monkeypatch) -> None:
+    """Recall-only path: zero retrieval hits but a usable may_answer memory must still answer.
+
+    Regression for #1990: the ASK answer node short-circuited with "No results found."
+    whenever retrieval returned zero hits, ignoring guarded recall even when recall produced
+    an activatable memory.
+    """
+    monkeypatch.chdir(tmp_path)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.setenv("REASONING_ENABLE", "1")
+    vault = _vault(vault_root)
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    _materialize(
+        _candidate("candidate-recall-only"),
+        vault=vault,
+        store=store,
+    )
+
+    captured_context: dict[str, str] = {}
+    llm_calls: list[str] = []
+
+    def _fake_retrieve(request):  # type: ignore[no-untyped-def]
+        return _empty_retrieval_response(request.query)
+
+    def _fake_llm_answer(question: str, context: str, ask_settings):  # type: ignore[no-untyped-def]
+        captured_context["context"] = context
+        llm_calls.append(question)
+        return "Answer composed from recalled memory only.", {"provider": "test"}
+
+    monkeypatch.setattr(ask_graph, "retrieve", _fake_retrieve)
+    monkeypatch.setattr(ask_graph, "llm_answer", _fake_llm_answer)
+
+    state = run_ask_graph("How does recall runtime stay read-only?", trace_id="trace-recall-only")
+
+    assert state.hits == []
+    assert state.recalled
+    assert state.recalled[0].title == "Recall runtime"
+    # The answer node must NOT short-circuit; LLM composition runs over recalled memory.
+    assert llm_calls == ["How does recall runtime stay read-only?"]
+    assert "RECALLED MEMORY 1" in captured_context["context"]
+    assert state.answer == "Answer composed from recalled memory only."
+    assert state.answer != "No results found."
 
 
 def test_no_recall_when_no_relevant_memory(tmp_path: Path, monkeypatch) -> None:
