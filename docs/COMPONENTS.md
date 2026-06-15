@@ -47,7 +47,7 @@ Environment note:
 
 - **Companion Note** — First-class system artifact linked 1:1 with a tracked vault note in the
   normal case; preserves continuity, identity-repair context, and bounded ingest/healing metadata.
-  Portable and file-based; not a cache. Maturity: Planned/forward-line contract.
+  Portable and file-based; not a cache. Maturity: Active.
 
 ## Ingest / pipeline agents
 

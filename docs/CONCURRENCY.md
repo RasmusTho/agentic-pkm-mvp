@@ -29,7 +29,7 @@ Writes to notes or objects MUST use optimistic locking with a version token to p
 Events MUST be idempotent across retries.
 
 - **Event IDs:** every event MUST include a unique `event_id`.
-- **Deterministic IDs:** producers SHOULD use deterministic IDs for retry safety (hash of stable fields such as `event_type`, `object_id`, `action_id`, `trace_id`).
+- **Deterministic IDs:** producers SHOULD use deterministic IDs for retry safety (hash of stable fields such as `event`, `object_id`, `action_id`, `trace_id`).
 - **Consumer dedup:** consumers MUST deduplicate by `event_id` and treat duplicates as no-ops.
 
 ## Race scenarios (required behaviors)

@@ -17,5 +17,3 @@ State: Index (historical). ADRs are design records and may be partially outdated
 - [ADR 0010: BuilderOps Vault authority and promotion boundary (accepted, docs/governance)](./ADR-0010-builderops-vault-authority-boundary.md)
 - [ADR 0011: Orientation push and ambient resurfacing boundary (accepted, docs/governance)](./ADR-0011-orientation-push-ambient-resurfacing.md)
 - [ADR 0012: Orientation multi-agent reads boundary (accepted, docs/governance)](./ADR-0012-orientation-multiagent-reads.md)
-- [ADR: Agentminne v1](./ADR-00X-agent-memory-v1.md)
-- [ADR: Agentminne v4.2](./ADR-00X-agent-memory-v42.md)

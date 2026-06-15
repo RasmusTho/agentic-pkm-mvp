@@ -54,7 +54,7 @@ All LangGraph agents follow this **5-layer structure**:
 ```python
 # Input: Outbox event
 {
-  "event": "promotion.intent.created",
+  "event": "promote.intent.created",
   "event_id": "evt-uuid",
   "trace_id": "trace-abc",
   "source": "panel_agent",
@@ -179,7 +179,6 @@ def reason(state: PromotionAgentState) -> PromotionAgentState:
     response = facade.chat(
         messages=[{"role": "user", "content": prompt}],
         trace_id=state.trace_id,
-        model="claude-3-sonnet"
     )
 
     return state.copy(update={
