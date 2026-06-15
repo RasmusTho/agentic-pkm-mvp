@@ -260,6 +260,38 @@ class MemoryCandidateReviewQueue:
         self._entries[candidate_id] = updated
         return updated
 
+    def reset_to_pending(self, candidate_id: str) -> ReviewEntry:
+        """Revert a recorded PROMOTE decision back to PENDING in this queue.
+
+        This is the in-process retry path for an accepted candidate whose
+        durable materialization was blocked (e.g. WriteGuard safe-mode): the
+        durable decision store keeps the promote decision non-terminal, but the
+        live in-memory entry has already transitioned to ``PROMOTED`` and would
+        otherwise be refused by :meth:`decide` as already-decided and excluded
+        from :meth:`pending`. Resetting it keeps the promotion actionable from
+        the live drawer without a process restart or re-intake.
+
+        Only a PROMOTE decision may be reset; reject/revise are terminal review
+        outcomes and are not retryable here.
+        """
+
+        entry = self.get(candidate_id)
+        if entry.decision is not ReviewDecision.PROMOTE:
+            raise ReviewQueueError(
+                f"only a promote decision can be reset to pending: {candidate_id}"
+            )
+        reverted = entry.model_copy(
+            update={
+                "status": ReviewStatus.PENDING,
+                "decision": None,
+                "decided_by": None,
+                "decided_at": None,
+                "decision_notes": None,
+            }
+        )
+        self._entries[candidate_id] = reverted
+        return reverted
+
     def recallable_for_working_context(self) -> list[ReviewEntry]:
         """Entries authorized for working-context recall.
 

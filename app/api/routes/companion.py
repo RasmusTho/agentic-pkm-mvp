@@ -3714,6 +3714,12 @@ def post_memory_review_decision(
                 terminal=False,
             )
             candidate_pending = True
+            # The durable write was blocked (e.g. WriteGuard safe-mode). The
+            # durable decision store keeps the promote decision non-terminal, but
+            # the live in-memory entry has already transitioned to PROMOTED.
+            # Reset it to PENDING so the candidate stays on the live review
+            # drawer and the reviewer can retry the accept without a restart.
+            queue.reset_to_pending(candidate_id)
             logger.warning(
                 "memory materialization blocked for candidate %s: %s",
                 candidate_id,

@@ -23,9 +23,10 @@ import app.agent_memory.materialization as materialization_module
 import app.api.routes.companion as companion_module
 from app.agent_memory.candidate import MemoryCandidate, MemoryType
 from app.agent_memory.review_decision_store import ReviewDecisionStore
-from app.agent_memory.review_queue import MemoryCandidateReviewQueue
+from app.agent_memory.review_queue import MemoryCandidateReviewQueue, ReviewStatus
 from app.api.app import app
 from app.vault.manager import VaultContext
+from app.write_guard import DEFAULT_WRITE_GUARD
 
 
 @pytest.fixture()
@@ -109,6 +110,92 @@ def test_accept_materializes_and_marks_terminal(
     assert "The user keeps design docs ahead of code." in body
 
     # The stored review decision is terminal.
+    record = store.get_decision(
+        candidate.candidate_id, vault_context=vault_context, channel="live"
+    )
+    assert record is not None
+    assert record.terminal is True
+
+
+def test_blocked_accept_stays_retryable_in_live_queue(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When a semantic accept's durable write is blocked (WriteGuard safe-mode),
+    the live in-memory queue entry must revert to PENDING so the reviewer can
+    retry from the drawer — not be stranded as an undecided-but-promoted entry
+    that ``decide`` refuses and ``pending`` hides (Codex P2, #2032)."""
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    receipts_path = tmp_path / "materialization_receipts.jsonl"
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    queue = MemoryCandidateReviewQueue()
+    vault_context = VaultContext(
+        status="selected",
+        active_vault_id="vault-blocked",
+        active_vault_name="Vault Blocked",
+        active_vault_path=str(vault_root),
+    )
+
+    monkeypatch.setattr(companion_module, "_orientation_memory_review_queue", lambda: queue)
+    monkeypatch.setattr(companion_module, "_memory_review_decision_store", lambda: store)
+    monkeypatch.setattr(companion_module, "_memory_review_vault_context", lambda: vault_context)
+    monkeypatch.setattr(companion_module, "_memory_review_channel", lambda: "live")
+    monkeypatch.setattr(
+        materialization_module,
+        "DEFAULT_MATERIALIZATION_RECEIPTS_PATH",
+        receipts_path,
+    )
+    # Force the durable write to be blocked.
+    monkeypatch.setattr(
+        DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "safe_mode", "reason": "operator hold"},
+    )
+
+    candidate = _semantic_candidate()
+    queue.enqueue(candidate)
+
+    resp = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "accept", "reviewed_by": "reviewer:human"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "accepted"
+    assert data["candidate_pending"] is True
+    assert data["materialization"]["status"] == "blocked"
+    assert data["materialization"]["terminal"] is False
+
+    # No vault artifact was written.
+    assert not list(vault_root.rglob("*.md"))
+
+    # The live in-memory entry is back to PENDING and stays on the review surface.
+    entry = queue.get(candidate.candidate_id)
+    assert entry.status is ReviewStatus.PENDING
+    assert [item.candidate_id for item in queue.pending()] == [candidate.candidate_id]
+
+    # The reviewer can retry directly from the live drawer (not refused as
+    # already-decided). With the guard still blocked the retry stays pending.
+    retry = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "accept", "reviewed_by": "reviewer:human"},
+    )
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["candidate_pending"] is True
+
+    # Once writes are allowed again, the same candidate accepts and materializes.
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "running"})
+    success = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "accept", "reviewed_by": "reviewer:human"},
+    )
+    assert success.status_code == 200, success.text
+    success_data = success.json()
+    assert success_data["candidate_pending"] is False
+    assert success_data["materialization"]["status"] == "materialized"
+    assert success_data["materialization"]["terminal"] is True
     record = store.get_decision(
         candidate.candidate_id, vault_context=vault_context, channel="live"
     )
