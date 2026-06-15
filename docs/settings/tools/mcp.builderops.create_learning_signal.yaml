@@ -16,7 +16,9 @@ allowed_args:
     source_refs:
       type: array
     created_by:
-      type: object
+      oneOf:
+        - type: object
+        - type: string
     idempotency_key:
       type: string
   required: [summary, content, signal_type, source_refs]

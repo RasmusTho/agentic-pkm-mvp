@@ -61,6 +61,7 @@ KNOWN_NON_SKILL_TERMS = {
     "learning-summary",  # BuilderOps projection name
     "pkm-prod",  # compose project names
     "pkm-test",
+    "harness-selfverify",  # CI workflow/gate name (added by #2001)
     "pr-contract",  # CI check names
     "smoke-docker",
     "ready-for-verification",  # workflow state phrase
@@ -73,6 +74,7 @@ RETIRED_PHRASE = "Do not batch to end of task"
 KEBAB_TOKEN_RE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
 ROUTING_ENTRY_RE = re.compile(r"^- `([a-z][a-z0-9-]+)`\s*$", re.MULTILINE)
 LABEL_ITEM_RE = re.compile(r"^\s*[-*]\s+`((?:type|prio|agent):[a-z-]+)`\s*\|?\s*$")
+BLOCK_SCALAR_DESCRIPTION_RE = re.compile(r"^[|>](?:[+-]?\d*|\d+[+-]?)$")
 FULL_TAXONOMY_MIN_ITEMS = 6
 
 
@@ -119,7 +121,7 @@ def check_skill_frontmatter(skills_root: Path) -> list[str]:
         description = fields.get("description", "")
         if not description:
             errors.append(f"{rel}: frontmatter description is empty or missing")
-        elif description in {"|", ">"} or description.startswith(("|-", ">-")):
+        elif BLOCK_SCALAR_DESCRIPTION_RE.match(description):
             errors.append(
                 f"{rel}: frontmatter description must be a non-empty single line"
             )

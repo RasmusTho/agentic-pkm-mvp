@@ -24,7 +24,7 @@ The release-channels capability spec lives at `docs/RELEASE_CHANNELS/`. Read `do
 4. For each included PR: extracts title, link, and any associated GitHub Issue; checks whether ACs are marked satisfied on the Issue; notes any open verification gaps.
 5. Enumerates migration files committed since `stable` that have not yet been applied to the prod DB (`pkm_prod` container, port 15432). For each migration: reads its reversibility marker (per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`) and flags forward-only ones explicitly.
 6. Diffs settings/env defaults between the two refs and notes any operator-visible config changes.
-7. Assembles risk notes: forward-only migrations, PRs without full AC verification, any cross-channel touchpoints visible in the diff.
+7. Assembles risk notes: forward-only migrations, PRs without full AC verification, any cross-channel touchpoints visible in the diff, and a **vault-settings preflight** of the prod vault (`app.vault.promotion_preflight.vault_settings_preflight`, or `python -m app.cli vault preflight --path <prod vault>`). If the vault is `uninitialized` (predates the vault-settings foundation), record a required `python -m app.cli vault init --path <prod vault>` step as a **blocking** risk — otherwise the watcher fail-exits on startup (the #1991 prod failure mode).
 8. Writes the promotion plan to `ops/promotions/YYYY-MM-DD-<short-sha>.md` using the required sections from `DEFINE_PROMOTION_PLAN_CONTRACT`.
 9. Prints a summary to the operator: plan path, number of PRs, number of migrations (N reversible, M forward-only), and any blocking risks.
 
@@ -48,6 +48,7 @@ Per `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`:
 - `make prod-up` is running and the prod Postgres container is healthy on port 15432.
 - The `stable` ref resolves without ambiguity (`git rev-parse stable` succeeds).
 - The operator has specified the target commit (defaults to `HEAD` on `main` if not provided).
+- The selected prod vault is initialized for the vault-settings foundation (`python -m app.cli vault preflight --path <prod vault>` reports `initialized`). If it reports `uninitialized`, the plan must carry a `python -m app.cli vault init --path <prod vault>` step before execute (idempotent; reviews the scaffolded `paths.md`/`companion-ui.md` against the real vault).
 
 ## Operator steps
 
@@ -73,6 +74,37 @@ A single markdown file at `ops/promotions/YYYY-MM-DD-<short-sha>.md` satisfying 
 - Never restart any process.
 - If the `stable` ref is ambiguous or missing, abort and report — do not guess.
 - If a migration lacks a reversibility marker, flag it as a blocking risk in the plan and do not classify it silently.
+
+## Invariant → producers rule (issue #1997 F4)
+
+When a change adds a **runtime precondition** — a new invariant the runtime
+fails-exits without (the #1991 vault-settings init is the canonical example) —
+that change is incomplete until it also updates **every producer of the thing
+the invariant guards** AND adds a fail-loud preflight, in the **same change**.
+
+A "producer" is anything that creates or brings up the guarded resource:
+
+- init / bootstrap scripts (e.g. `scripts/init_test_vault.sh`,
+  `scripts/bootstrap_test_channel.sh`);
+- existing-resource migration (e.g. a `vault init` step for a vault that
+  predates the invariant — for prod this is the blocking risk recorded in step 7
+  above; for the test channel it is baked into the bootstrap);
+- test fixtures that stand up the resource in-process (e.g. the IR-v1 UAT vault
+  fixture);
+- the matching preflight that refuses to run on a violation
+  (`app.vault.promotion_preflight` for the vault, `app.ops.channel_preflight`
+  for the whole test channel).
+
+Why: the 2026-06-14 v6.1 Wave 1 promotion was almost entirely harness pain
+because #1991 made vault-init a hard precondition but its producers
+(`init_test_vault.sh`, the existing prod vault) were never migrated — the
+invariant shipped half-applied and was discovered as a prod startup failure.
+A precondition without migrated producers + a preflight is a latent outage.
+
+Enforcement: the test channel is held to this by `app.ops.channel_preflight`
+(refuses inconsistent config) and the harness-selfverify CI gate (runs the
+IR-v1 UAT + the bootstrap smoke + a fault-injection proof). When you add a
+runtime precondition, add it to that gate's coverage too.
 
 ## Authority order for decisions
 

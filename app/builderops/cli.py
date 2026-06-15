@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import click
 
@@ -95,7 +95,12 @@ def _projection_generator(ctx: click.Context) -> BuilderOpsProjectionGenerator:
     return BuilderOpsProjectionGenerator(_store(ctx))
 
 
-def _handle_create(ctx: click.Context, create_fn, payload: dict[str, Any], as_json: bool) -> None:
+def _handle_create(
+    ctx: click.Context,
+    create_fn: Callable[..., Any],
+    payload: dict[str, Any],
+    as_json: bool,
+) -> None:
     try:
         record = create_fn(**payload)
     except BuilderOpsValidationError as exc:

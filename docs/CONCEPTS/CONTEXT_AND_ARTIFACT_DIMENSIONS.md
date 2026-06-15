@@ -183,6 +183,49 @@ They are more often:
 - derived projections,
 - or user-facing ordering signals.
 
+### 7. Interruptibility
+
+This family is different from the six above: it does not describe an *artifact*, it describes the
+*human's current state* — how interruptible the person is right now. It is named here because the
+Contextual Relevance Engine reads the same context model for two different purposes, and this is the
+second one.
+
+It answers questions such as:
+- how interruptible is the human right now,
+- what would it cost to reach out at this moment versus wait,
+- and is this a state in which the system must not reach out at all?
+
+It is grounded in the existing cognitive-load surface rather than inventing a parallel one:
+`docs/COGNITIVE_LOAD_PROJECTION_LAYER.md` already names the human-facing load areas
+(working-memory, reading, decision/confirmation, orientation/resumption, resurfacing) and the
+non-authoritative, scarce, "reduce friction, not intelligence" posture. Interruptibility is the
+reach-out-facing reading of that same load picture: low load (e.g. at home, no meeting active) →
+higher tolerance → a lower bar to surface; high load (a 1-1, deep focus) → lower tolerance → a higher
+bar.
+
+**One context model, two consumers.** The relevance reading of the context model asks *what to
+surface*; the interruptibility reading asks *whether and how to reach out*. They are deliberately
+separated so intelligence about *what matters* never relaxes the discipline about *when to intrude*
+(`docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` §3.1, §3.3). The moment artifact carries an
+interruptibility snapshot for provenance, but the reach-out decision belongs to the scarcity gate
+(CRE-02), not to the artifact.
+
+**Bands are seeded, then learned.** The interruptibility-affecting bands that matter — home /
+meeting / focus / sleep — are *seeded by the human* and then refined from observed engagement vs.
+dismissal. They are illustrative anchors, not a fixed closed enum; the dimension must stay open and
+extensible like the rest of the context model.
+
+**Zero-tolerance states are a hard floor.** Some states carry **zero tolerance** for reach-out:
+**sleep** and **declared do-not-disturb**. In a zero-tolerance state the system never pushes,
+regardless of urgency — this is a deterministic, non-negotiable floor, not a derived preference. When
+interruptibility is *uncertain*, the safe default is the higher threshold (silence). The derived load
+reading adapts; the declared zero-tolerance floor does not.
+
+Most of interruptibility is therefore **derived/provisional** (the current load → tolerance reading),
+but its floor is **explicit and durable** (the human's declared sleep / do-not-disturb states, which
+are authoritative never-interrupt constraints). It must never be encoded as fast-changing path or
+storage metadata.
+
 ## What should likely be explicit vs derived
 
 ### Likely explicit and durable
@@ -194,6 +237,8 @@ They are more often:
 - explicit commitment structures when intentionally represented
 - bounded operational scope when the user wants it represented
 - state fields with already-defined contracts such as `maturity` and `review_state`
+- declared interruptibility floors (sleep / do-not-disturb), which the human sets and which act as
+  durable, authoritative never-interrupt constraints
 
 ### Likely relational rather than intrinsic
 
@@ -211,6 +256,8 @@ They are more often:
 - current navigational centrality
 - access likelihood
 - personal significance unless explicitly declared
+- current interruptibility (the derived load → tolerance reading), bounded below by the declared
+  zero-tolerance floor noted above
 
 ## MECE tree, non-MECE meaning
 

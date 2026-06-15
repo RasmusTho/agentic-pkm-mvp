@@ -10,7 +10,9 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
 from app.api.app import app
+from app.health_contract import WRITE_BLOCKED_STATES
 from app.reasoning.models import ReasoningMode, ReasoningRun
+from app.write_guard import DEFAULT_WRITE_GUARD
 
 
 class _StubFacade:
@@ -170,6 +172,28 @@ def test_coauthor_applies_generated_body(monkeypatch, vault: Path) -> None:
     assert "Expanded decision section with trade-offs." in note_text
     # Frontmatter is preserved.
     assert "uuid: note-uuid-canvas" in note_text
+
+
+def test_coauthor_blocked_when_writes_disabled(monkeypatch, vault: Path) -> None:
+    """A closed write-guard makes /coauthor return 409 and leaves the note unchanged (#1961)."""
+    generated = "# Hello\n\nShould not be written.\n"
+    client = _make_client(monkeypatch, vault, generated, classifier_label=_co_authoring_label())
+    session_id = _open_session(client)
+
+    blocked_state = sorted(WRITE_BLOCKED_STATES)[0]
+    monkeypatch.setattr(
+        DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": blocked_state, "reason": "maintenance"}
+    )
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "expand the decision section", "change_summary": "expanded"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    note_text = (vault / "note.md").read_text(encoding="utf-8")
+    assert "Original body." in note_text
+    assert "Should not be written." not in note_text
 
 
 def test_coauthor_appends_intent_to_session_log(monkeypatch, vault: Path) -> None:

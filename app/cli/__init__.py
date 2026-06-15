@@ -31,6 +31,8 @@ from app.cli.smoke import smoke as smoke_cli
 from app.cli.settings_validate import run_settings_validate
 from app.cli.settings_explain import build_settings_explain_payload, emit_settings_explain
 from app.cli.builderops import builderops as builderops_cli
+from app.cli.vault import vault as vault_cli
+from app.cli.ops import ops as ops_cli
 
 
 from app.config.paths import resolve_system_settings_path, resolve_vault_root
@@ -284,6 +286,8 @@ cli.add_command(llm_cli)
 cli.add_command(events_doctor)
 cli.add_command(smoke_cli, name="smoke")
 cli.add_command(builderops_cli, name="builderops")
+cli.add_command(vault_cli, name="vault")
+cli.add_command(ops_cli, name="ops")
 
 # ---------------------------------------------------------------------------
 # Canvas CLI group

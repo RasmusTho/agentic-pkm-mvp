@@ -17,6 +17,8 @@ def test_agent_state_minimal_valid_shape_and_documented_fields() -> None:
     assert state.trace_id is None
     assert state.query == "what is yggdrasil"
     assert state.hits == []
+    assert state.recalled == []
+    assert state.recalled_content == {}
     assert state.answer is None
     assert state.reasoning is None
     assert state.llm_route is None
@@ -70,3 +72,22 @@ def test_ask_trace_id_forwards_into_retrieval_request(monkeypatch) -> None:
 
     assert captured["trace_id"] == "trace-ask-propagation-1"
     assert state.trace_id == "trace-ask-propagation-1"
+
+
+def test_ask_without_hits_or_recall_returns_no_results(monkeypatch) -> None:
+    """Preserve the fallback when neither retrieval hits nor recalled memory exist (#1990)."""
+
+    def _fake_retrieve(request):
+        return RetrievalResponse(query=request.query, hits=[], trace_id=request.trace_id)
+
+    def _fake_recall(query, **kwargs):
+        return []
+
+    monkeypatch.setattr("app.agents.ask.graph.retrieve", _fake_retrieve)
+    monkeypatch.setattr("app.agents.ask.graph.retrieve_relevant_promoted", _fake_recall)
+
+    state = run_ask_graph("no hits and no recall", trace_id="trace-no-context")
+
+    assert state.hits == []
+    assert state.recalled == []
+    assert state.answer == "No results found."

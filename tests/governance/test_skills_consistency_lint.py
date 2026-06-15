@@ -128,6 +128,29 @@ def test_multiline_frontmatter_description_fails(tmp_path: Path) -> None:
     assert any("description must be a non-empty single line" in e for e in errors), errors
 
 
+def test_frontmatter_description_keep_chomping_block_scalars_fail(tmp_path: Path) -> None:
+    for scalar in ("|+", ">+"):
+        case_dir = scalar.replace("+", "plus").replace("|", "pipe").replace(">", "folded")
+        root = _seed_tree(tmp_path / case_dir)
+        alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+        alpha.write_text(
+            "---\n"
+            "name: alpha-skill\n"
+            f"description: {scalar}\n"
+            "  First line is not the whole description.\n"
+            "---\n\n"
+            "# alpha-skill\n",
+            encoding="utf-8",
+        )
+
+        errors = run_lint(root)
+
+        assert any("description must be a non-empty single line" in e for e in errors), (
+            scalar,
+            errors,
+        )
+
+
 def test_valid_single_line_frontmatter_description_passes(tmp_path: Path) -> None:
     assert run_lint(_seed_tree(tmp_path)) == []
 

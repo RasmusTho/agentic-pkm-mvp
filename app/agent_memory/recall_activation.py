@@ -53,6 +53,11 @@ def activate_guarded_recall(
     explanation_use_right = use_right
     if use_right is RecallUseRight.ACTION_AUTHORIZING and not decision.allow_mutation:
         explanation_use_right = RecallUseRight.ACTIVATABLE
+    # The recall receipt is the authority record for an action-authorizing recall,
+    # and build_recall_explanation requires a non-null receipt_reference for that
+    # use right. Pre-mint the receipt id so the explanation can carry it while the
+    # emitted receipt still uses the same id (single record, no orphan reference).
+    receipt_id = uuid4().hex
     explanation = build_recall_explanation(
         promoted,
         use_right=explanation_use_right,
@@ -61,10 +66,11 @@ def activate_guarded_recall(
         behavioral_claim=behavioral_claim if explanation_use_right is not RecallUseRight.ACTIVATABLE else None,
         action_scope=requested_action_scope if decision.allow_mutation else None,
         authority_source=authority_source if decision.allow_mutation else None,
-        receipt_reference=None,
+        receipt_reference=receipt_id if explanation_use_right is RecallUseRight.ACTION_AUTHORIZING else None,
     )
-    receipt_id = _emit_recall_receipt(
+    _emit_recall_receipt(
         receipt_path,
+        receipt_id=receipt_id,
         promoted=promoted,
         decision=decision,
         explanation=explanation,
@@ -85,13 +91,13 @@ def activate_guarded_recall(
 def _emit_recall_receipt(
     receipt_path: Path,
     *,
+    receipt_id: str,
     promoted: PromotedMemory,
     decision: MemoryAuthorityDecision,
     explanation: RecallExplanation,
     requested_use_right: RecallUseRight,
     source_artifact_path: Path | None,
 ) -> str:
-    receipt_id = uuid4().hex
     record = {
         "event": RECALL_RECEIPT_EVENT,
         "event_id": receipt_id,

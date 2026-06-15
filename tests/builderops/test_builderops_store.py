@@ -10,6 +10,7 @@ from app.builderops.models import (
     BuilderOpsConflictError,
     BuilderOpsLeaseError,
     BuilderOpsValidationError,
+    normalize_record,
 )
 from app.builderops.schema import SCHEMA_VERSION
 from app.builderops.store import SqliteBuilderOpsStore
@@ -17,6 +18,37 @@ from app.builderops.store import SqliteBuilderOpsStore
 
 def _source_ref(ref: str = "#1501") -> list[dict[str, str]]:
     return [{"ref_type": "github_issue", "ref": ref, "authority_surface": "github"}]
+
+
+def _receipt_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "object_type": "BuilderOpsReceipt",
+        "authority_class": "receipt",
+        "promotion_status": "not_promotable",
+        "summary": "Recorded a tool write.",
+        "event_type": "object_created",
+        "actor": "tool-codex",
+        "occurred_at": "2026-06-01T00:00:00Z",
+        "target_refs": [{"ref_type": "builderops_object", "ref": "bo_1"}],
+        "action": "create",
+        "receipt_body": "body",
+        "idempotency_key": "tool:receipt-1",
+        "source_refs": _source_ref(),
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_normalize_record_coerces_string_receipt_actor() -> None:
+    record = normalize_record(_receipt_payload(actor="tool-codex"))
+    assert record["actor"] == {"actor_type": "agent", "id": "tool-codex"}
+
+
+def test_normalize_record_still_rejects_missing_receipt_actor() -> None:
+    payload = _receipt_payload()
+    payload.pop("actor")
+    with pytest.raises(BuilderOpsValidationError, match="missing required field"):
+        normalize_record(payload)
 
 
 def _actor(actor_id: str = "codex") -> dict[str, str]:

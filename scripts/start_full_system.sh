@@ -764,37 +764,55 @@ check_docker_daemon() {
 }
 
 
+# Vault binding. Three distinct states (issue #2005 flips the #1991 fail-exit
+# to idle-until-opened, the symmetric reverse of an invariant):
+#   - VAULT_ROOT unset            -> NO-VAULT IDLE posture (boot, no exit 2).
+#   - VAULT_ROOT set but missing  -> FAIL LOUD (exit 1) — unchanged regression
+#                                    guard (open-vault-on-missing-vault).
+#   - VAULT_ROOT set and present  -> normal vault bring-up.
+NO_VAULT_MODE=0
 vault_host_path="${VAULT_ROOT:-}"
 if [ -z "$vault_host_path" ]; then
-  if [ "$ALLOW_LEGACY_VAULT" -ne 1 ]; then
-    echo "ERROR: VAULT_ROOT is required (set ALLOW_LEGACY_VAULT=1 to default to ./vault)" >&2
-    exit 2
+  if [ "$ALLOW_LEGACY_VAULT" -eq 1 ]; then
+    vault_host_path="./vault"
+  else
+    NO_VAULT_MODE=1
   fi
-  vault_host_path="./vault"
 fi
-if [ ! -d "$vault_host_path" ]; then
-  echo "ERROR: Vault root is missing: $vault_host_path" >&2
-  exit 1
+if [ "$NO_VAULT_MODE" -eq 1 ]; then
+  # No vault bound: the stack comes up, the watcher idles, the API serves the
+  # picker state. No vault dir, mount, rw probe, layout, ingest, index rebuild,
+  # or ask-verify is attempted — those resume when a vault is opened.
+  echo "Vault env: VAULT_ROOT=<unset> — no-vault idle posture (open a vault to activate)"
+  unset VAULT_ROOT
+  export WATCHER_VAULT_PATH=""
+else
+  if [ ! -d "$vault_host_path" ]; then
+    echo "ERROR: Vault root is missing: $vault_host_path" >&2
+    exit 1
+  fi
+  vault_host_path="$(cd "$vault_host_path" && pwd)"
+  export VAULT_ROOT="$vault_host_path"
+  apply_start_full_system_vault_defaults "$vault_host_path"
 fi
-vault_host_path="$(cd "$vault_host_path" && pwd)"
-export VAULT_ROOT="$vault_host_path"
-apply_start_full_system_vault_defaults "$vault_host_path"
 
-echo "Vault env: VAULT_ROOT=${VAULT_ROOT}"
-echo "Vault env: VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-<not set>}"
-echo "Vault env: VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-<not set>}"
-echo "Vault env: VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL:-<not set>}"
+if [ "$NO_VAULT_MODE" -ne 1 ]; then
+  echo "Vault env: VAULT_ROOT=${VAULT_ROOT}"
+  echo "Vault env: VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-<not set>}"
+  echo "Vault env: VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-<not set>}"
+  echo "Vault env: VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL:-<not set>}"
 
-if [ -z "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
-  layout_count=$(find "$vault_host_path" -mindepth 2 -maxdepth 2 -type f -name "vault.layout.md" 2>/dev/null | wc -l | tr -d '[:space:]')
-  if [ "${layout_count:-0}" -gt 1 ]; then
-    preferred_layout=""
-    if [ -n "${VAULT_SYSTEM_DIR_REL:-}" ] && [ -f "$vault_host_path/${VAULT_SYSTEM_DIR_REL}/vault.layout.md" ]; then
-      preferred_layout="${VAULT_SYSTEM_DIR_REL}/vault.layout.md"
-    fi
-    if [ -n "$preferred_layout" ]; then
-      export VAULT_LAYOUT_NOTE_REL="$preferred_layout"
-      echo "Vault layout note: auto-selected '$VAULT_LAYOUT_NOTE_REL' (multiple candidates detected)"
+  if [ -z "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
+    layout_count=$(find "$vault_host_path" -mindepth 2 -maxdepth 2 -type f -name "vault.layout.md" 2>/dev/null | wc -l | tr -d '[:space:]')
+    if [ "${layout_count:-0}" -gt 1 ]; then
+      preferred_layout=""
+      if [ -n "${VAULT_SYSTEM_DIR_REL:-}" ] && [ -f "$vault_host_path/${VAULT_SYSTEM_DIR_REL}/vault.layout.md" ]; then
+        preferred_layout="${VAULT_SYSTEM_DIR_REL}/vault.layout.md"
+      fi
+      if [ -n "$preferred_layout" ]; then
+        export VAULT_LAYOUT_NOTE_REL="$preferred_layout"
+        echo "Vault layout note: auto-selected '$VAULT_LAYOUT_NOTE_REL' (multiple candidates detected)"
+      fi
     fi
   fi
 fi
@@ -807,7 +825,7 @@ if [ -z "$runtime_env_path" ]; then
   esac
 fi
 RUNTIME_ENV_PATH="$runtime_env_path"
-bash scripts/export_runtime_env.sh
+NO_VAULT_MODE="$NO_VAULT_MODE" bash scripts/export_runtime_env.sh
 scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
 scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
 scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"
@@ -832,6 +850,15 @@ case "${COMPOSE_PROJECT_NAME:-}" in
   pkm-test) _container_tmp_dir="/app/tmp-test" ;;
   *)        _container_tmp_dir="/app/tmp" ;;
 esac
+# Channel-correct host-side tmp dir for reading container-written runtime
+# artifacts back through the shared bind mount. For pkm-test the container
+# writes worker/watcher heartbeats under /app/tmp-test/, which maps to the host
+# tmp-test/ directory; reading host tmp/ would falsely report a missing
+# heartbeat (issue #1997 symptom 3). Prod/dev keep tmp/ — no runtime change.
+case "${COMPOSE_PROJECT_NAME:-}" in
+  pkm-test) host_tmp_dir="tmp-test" ;;
+  *)        host_tmp_dir="tmp" ;;
+esac
 # The host-side "latest tick log" pointer always lives under the host tmp/
 # directory for operator convenience regardless of channel.
 latest_tick_log_path="$ROOT/tmp/latest_watcher_tick_log"
@@ -841,7 +868,11 @@ export WATCHER_TICK_LOG_PATH="$tick_log_path"
 printf "%s\n" "$tick_log_path" > "$latest_tick_log_path"
 unset _container_tmp_dir
 
-echo "Vault host path: $vault_host_path -> /app/vault"
+if [ "$NO_VAULT_MODE" -eq 1 ]; then
+  echo "Vault host path: <none> — no-vault idle posture (no /app/vault bind)"
+else
+  echo "Vault host path: $vault_host_path -> /app/vault"
+fi
 
 run_docker_compose() {
   if [ -n "${runtime_env:-}" ]; then
@@ -1035,10 +1066,10 @@ log_flight_recorder_path() {
 
 log_worker_heartbeat_snapshot() {
   log_section "worker heartbeat"
-  if [ -f tmp/worker_heartbeat.json ]; then
-    tail -n 20 tmp/worker_heartbeat.json >>"$startup_log_path" 2>&1 || true
+  if [ -f "${host_tmp_dir:-tmp}/worker_heartbeat.json" ]; then
+    tail -n 20 "${host_tmp_dir:-tmp}/worker_heartbeat.json" >>"$startup_log_path" 2>&1 || true
   else
-    append_startup_log "tmp/worker_heartbeat.json missing"
+    append_startup_log "${host_tmp_dir:-tmp}/worker_heartbeat.json missing"
   fi
 }
 
@@ -1221,18 +1252,18 @@ run_worker_probe() {
   worker_start=$SECONDS
   local heartbeat_ready=0
   while [ $((SECONDS - worker_start)) -lt "$WORKER_HEARTBEAT_TIMEOUT" ]; do
-    if [ -s tmp/worker_heartbeat.json ]; then
+    if [ -s "${host_tmp_dir:-tmp}/worker_heartbeat.json" ]; then
       heartbeat_ready=1
       break
     fi
     sleep 1
   done
   if [ "$heartbeat_ready" -ne 1 ]; then
-    echo "ERROR: worker heartbeat file missing after $WORKER_HEARTBEAT_TIMEOUT seconds" >&2
+    echo "ERROR: worker heartbeat file missing after $WORKER_HEARTBEAT_TIMEOUT seconds (looked in ${host_tmp_dir:-tmp}/worker_heartbeat.json)" >&2
     run_docker_compose logs --tail=200 worker || true
     exit 1
   fi
-  tail -n 1 tmp/worker_heartbeat.json
+  tail -n 1 "${host_tmp_dir:-tmp}/worker_heartbeat.json"
 }
 
 wait_for_healthz() {
@@ -1587,9 +1618,11 @@ set_phase "db_probe"
 run_db_probe
 mark_phase_ok "db_probe"
 wait_for_healthz
-set_phase "vault_rw_probe"
-probe_vault_mount_rw
-mark_phase_ok "vault_rw_probe"
+if [ "$NO_VAULT_MODE" -ne 1 ]; then
+  set_phase "vault_rw_probe"
+  probe_vault_mount_rw
+  mark_phase_ok "vault_rw_probe"
+fi
 
 set_phase "object_stats"
 store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
@@ -1715,12 +1748,18 @@ if [ "${VERIFY_ACTIVE:-0}" -eq 1 ] && [ "$BOOTSTRAP_STATE" = "active" ]; then
   fi
   mark_phase_ok "llm_probe"
 fi
-if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+if [ "$NO_VAULT_MODE" -eq 1 ]; then
+  echo "INFO: no-vault idle posture — skipping vault layout ensure"
+fi
+
+if [ "$NO_VAULT_MODE" -ne 1 ] && [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
   set_phase "vault_layout"
 fi
 
 layout_json=""
-if [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
+if [ "$NO_VAULT_MODE" -eq 1 ]; then
+  layout_json=""
+elif [ "${VERIFY_ACTIVE:-0}" -eq 1 ]; then
   layout_json=$(run_docker_compose exec -T api python -m app.cli vault-layout-ensure --vault-root /app/vault --json)
 else
   set +e
@@ -1947,17 +1986,22 @@ elif [ "$api_health_index_rebuild" -eq 1 ] && [ "$auto_bootstrap" -ne 1 ]; then
   fi
 fi
 
-if ! run_docker_compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
-  echo "ERROR: /app/vault mount is missing inside the api container" >&2
-  exit 1
-fi
+if [ "$NO_VAULT_MODE" -ne 1 ]; then
+  if ! run_docker_compose exec -T api sh -c '[ -d /app/vault ]' >/dev/null 2>&1; then
+    echo "ERROR: /app/vault mount is missing inside the api container" >&2
+    exit 1
+  fi
 
-vault_note_count=$(run_docker_compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
-vault_note_count=${vault_note_count:-0}
-if [ "$vault_note_count" -le 0 ]; then
-  echo "INFO: /app/vault contains no markdown files for the watcher scope"
+  vault_note_count=$(run_docker_compose exec -T api sh -c 'find /app/vault -name "*.md" | wc -l' | tr -d '[:space:]')
+  vault_note_count=${vault_note_count:-0}
+  if [ "$vault_note_count" -le 0 ]; then
+    echo "INFO: /app/vault contains no markdown files for the watcher scope"
+  else
+    echo "INFO: /app/vault contains $vault_note_count markdown files"
+  fi
 else
-  echo "INFO: /app/vault contains $vault_note_count markdown files"
+  vault_note_count=0
+  echo "INFO: no-vault idle posture — no /app/vault mount; ingest/index/verify skipped"
 fi
 
 if [ "$BOOTSTRAP_STATE" = "empty" ]; then
@@ -1971,7 +2015,7 @@ object_count="$objects_before"
 vector_count="$vectors_before"
 ingest_summary_json="{}"
 ingest_status=0
-if [ "$objects_before" -le 0 ]; then
+if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     set +e
@@ -2217,7 +2261,9 @@ if [ "$BOOTSTRAP_STATE" = "active" ]; then
   fi
 fi
 
-if [ "$VERIFY_ACTIVE" -eq 1 ]; then
+if [ "$VERIFY_ACTIVE" -eq 1 ] && [ "$NO_VAULT_MODE" -eq 1 ]; then
+  echo "VERIFY: skipped — no-vault idle posture (open a vault, then re-run verify)"
+elif [ "$VERIFY_ACTIVE" -eq 1 ]; then
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     EXIT_REASON="verify_empty_system"
     EXIT_CODE=1

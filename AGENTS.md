@@ -102,9 +102,18 @@ Before editing, classify the change:
 
 - Keep code, tests, and docs consistent in the same change.
 - When behavior, architecture, or contracts change, update the owning docs in the same change.
+- **Invariant → producers rule:** when you add a runtime precondition (a new invariant the runtime fail-exits without), update *every producer* of the guarded resource (init/bootstrap scripts, existing-resource migration, in-process test fixtures) **and** add a fail-loud preflight, in the same change. A precondition without migrated producers is a latent outage (the #1991 vault-init half-application caused the 2026-06-14 promotion slog). See `.codex/skills/prepare-promotion/SKILL.md :: Invariant → producers rule` and the `harness-selfverify` CI gate.
 - Keep normative content in the owner document; link instead of duplicating it.
 - Do not turn `AGENTS.md` or `CLAUDE.md` into architecture, index, roadmap, or historical recordkeeping files.
 - Keep builder-agent guidance separate from runtime/system-agent documentation.
+
+## Communicating with the owner
+
+The owner is the operator and decision-maker. Optimize answers for fast decision support and low running cost, not for narrating how you got there.
+
+- Lead with next steps. Keep answers concise; do not include a verbose reasoning trace.
+- When a decision is the owner's to make, present it as: clear **Problem → Options → Consequences** (the consequences of each choice matter most). Surface every open decision explicitly rather than burying it.
+- Keep durable audit artifacts complete but separate from the human-facing summary: BuilderOps receipts, `Verify:` markers, and traceability live in the record, not in the lead. Do not add machinery whose only purpose is to capture reasoning for audit.
 
 ## Docs authoring lane
 

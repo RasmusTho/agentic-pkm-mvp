@@ -104,11 +104,12 @@ The canonical gate (worktree doctrine, hardened preflight, and the no-script bra
 scripts/agent_workspace_preflight.sh \
   --expected-branch "$EXPECTED_BRANCH" \
   --expected-worktree "$EXPECTED_WORKTREE" \
-  --allow-dirty
+  --allow-dirty || exit 1
 # Non-zero exit => the workspace drifted. STOP. Do not commit. See the shared gate file.
+# Never wrap this in `|| echo ...`; that swallows the failure and the commit runs anyway.
 ```
 
-Publication-boundary base-branch semantics (specific to this skill): the gate asserts the publication HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` is reported (`status: "behind"`) but does not fail — in the doctrinal worktree flow `main` is checked out in the root worktree and cannot be fast-forwarded from here. A diverged or unresolvable base ref, or a HEAD that does not contain `origin/main`, still fails; fix it by fetching and rebasing onto `origin/main`, never by bypassing with `--base-branch ""`.
+Publication-boundary base-branch semantics (specific to this skill): the gate asserts the publication HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` *while HEAD already contains `origin/main`* is advisory (`status: "behind"`, does not fail) — in the doctrinal worktree flow `main` is checked out in the root worktree and cannot be fast-forwarded from here. A `behind` status where HEAD does **not** yet contain `origin/main` fails the gate and means "rebase onto `origin/main`", which is distinct from a `diverged` base (genuine drift). Either way a failing gate is STOP: fix it by fetching and rebasing onto `origin/main`, never by bypassing with `--base-branch ""` or by reading "behind" as automatically safe.
 
 ### Step 4: Create Commit
 

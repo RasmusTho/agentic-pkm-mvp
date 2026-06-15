@@ -260,6 +260,12 @@ context_bundle:
 
 ## Bounded context admissibility posture
 
+> **Superseded for the admit-by predicate (#2023).** The **inbound admit-by predicate** — *what
+> context is eligible to enter a bundle's consuming use* — is now owned by
+> `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md`. The posture below (the #1598 default) remains
+> valid as the *influence* posture for already-admitted bundle context and is consistent with the
+> tiers in that contract, but it is no longer the authoritative admissibility statement.
+
 Context Bundles are bridge artifacts, not authority escalation primitives.
 
 **`may_write=false` is the default and required posture for all bundles** unless a later

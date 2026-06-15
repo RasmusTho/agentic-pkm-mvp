@@ -53,11 +53,19 @@ The local clone role is structurally represented in vault-local settings:
 
 - `primary`: can edit shared and local settings; can run watchers, indexers, and writers.
 - `satellite`: can use shared content; local settings may disable shared edits, watchers, or indexing.
-- `readOnlySatellite`: can view settings and content, but should not write vault project files.
+- `readOnlySatellite`: can view settings and content, but must not write vault project files.
 - `automationNode`: may run without active UI and can run background services when configured.
 - `testNode`: test or temporary vault role.
 
-The first implementation gates obvious writes/background services by `allowWritesToVault`, `enableVaultWatcher`, and `enableAutoIndexing`; later issues harden role-specific UI and service policy.
+The first implementation gates obvious writes/background services by `allowWritesToVault`, `enableVaultWatcher`, and `enableAutoIndexing`. `readOnlySatellite` is a hard ceiling for vault project writes, watcher, indexing, and shared settings edits even if local settings try to enable them. Local settings edits are governed separately by `allowLocalSettingsEdits`, so a machine can be configured to adjust `settings/local.md` without gaining vault project write permission.
+
+Authority-bearing local keys are gated by the highest class of authority they could grant, so `allowLocalSettingsEdits` alone never lets a clone escalate past its own ceiling through the Companion settings route:
+
+- `allowWritesToVault` requires the clone to already hold vault-write authority.
+- `allowSharedSettingsEdits` requires the clone to already hold shared-settings-edit authority — a satellite with writes but shared edits disabled cannot flip it on itself and then edit shared settings.
+- `machineRole` re-derives every permission default (for example `satellite` to `primary` re-enables shared edits), so it is the strongest escalation vector and also requires shared-settings-edit authority.
+
+Benign local keys (for example `localExportPath`) remain editable under `allowLocalSettingsEdits`.
 
 ## Identity Model
 
@@ -81,6 +89,8 @@ Settings precedence is:
 
 App-local settings must not override project behavior unless a setting definition explicitly marks the key as app-local.
 
+A source's authority comes from where it was read (its source class), not from the `scope` it declares in its own frontmatter. A forged `scope: vault-shared` inside an app-local source does not let it set project-scope keys; the mismatch is reported as a validation error and the declared scope is ignored. Likewise, each vault file-backed setting is bound to its declared `definition.file` during resolution: a later vault-shared/local file cannot override a key owned by another file (for example `companion-ui.md` cannot set `handoffFolder`, which is owned by `paths.md`).
+
 Examples:
 
 - `lastActiveVaultRef`: app-local.
@@ -103,10 +113,12 @@ Rules:
 - The Markdown body explains the file.
 - Shared paths should be vault-relative.
 - Absolute paths are local-only.
+- Vault-relative paths must stay inside the selected vault. A relative path that resolves outside the vault through parent traversal (for example `handoffFolder: ../OtherProject`) is rejected during path resolution, not silently resolved to a sibling directory.
 - Writers preserve the Markdown body where feasible.
 - Writers keep stable key order.
 - Conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) make the file invalid; conflicted settings are not applied.
-- Invalid settings degrade safely; they are reported rather than silently applied.
+- Invalid settings degrade safely; they are reported rather than silently applied. A corrupt app-local registry (for example one with conflict markers) degrades to the no-vault picker state rather than failing vault data/edit routes.
+- A missing generated identity (`vaultId`, `localInstanceId`) is healed by writing the settings file only when the clone has vault-write authority. A `readOnlySatellite` (or any write-disabled clone) is given a non-persisted runtime id instead, so reading a vault never mutates it from a read-only role.
 
 ## Initial Vault Files
 
@@ -144,6 +156,8 @@ Examples:
 - Watchers require a selected vault, `enableVaultWatcher: true`, and a role that allows background work.
 - Indexers require a selected vault and `enableAutoIndexing: true`.
 - Writers and handoff generators require a selected vault and `allowWritesToVault: true`.
+- Shared settings edits require project write permission plus `allowSharedSettingsEdits: true`.
+- Local settings edits require `allowLocalSettingsEdits: true` and do not grant project write permission.
 - Path resolution for vault-relative files must fail with an actionable unavailable state when no selected vault exists.
 
 On vault switch, services should stop old watchers/jobs, clear cached vault paths, reload settings, emit or handle `vault.changed`, and restart only when the next context is selected and permissions allow it.

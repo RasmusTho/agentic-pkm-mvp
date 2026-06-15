@@ -9,6 +9,8 @@ from typing import Any, Dict
 import yaml
 
 from app.vault.layout import load_layout
+from app.vault.manager import VaultContext
+from app.vault.settings_service import SettingsService
 
 
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
@@ -19,6 +21,82 @@ _ALT_SETTINGS_REL_PATH = Path("@Settings") / "system-settings.yaml"
 class VaultPathValue:
     value: str
     provenance: str
+
+
+@dataclass(frozen=True)
+class ResolvedVaultPaths:
+    vault_root: Path
+    settings_dir: Path
+    handoff_dir: Path
+    assets_dir: Path
+    templates_dir: Path
+    archive_dir: Path
+    local_export_path: Path | None
+
+
+class VaultPathResolutionError(RuntimeError):
+    """Raised when vault-scoped paths cannot be resolved from the active context."""
+
+
+class VaultPathResolver:
+    def __init__(self, settings_service: SettingsService | None = None) -> None:
+        self.settings_service = settings_service or SettingsService()
+
+    def resolve(self, context: VaultContext) -> ResolvedVaultPaths:
+        if context.status != "selected" or not context.active_vault_path or not context.settings_path:
+            raise VaultPathResolutionError(
+                f"vault path resolution requires a selected initialized vault; current status is {context.status}"
+            )
+
+        vault_root = Path(context.active_vault_path).expanduser()
+        settings_dir = Path(context.settings_path).expanduser()
+        effective = self.settings_service.effective_settings(context)
+
+        return ResolvedVaultPaths(
+            vault_root=vault_root,
+            settings_dir=settings_dir,
+            handoff_dir=_vault_relative_path(vault_root, effective["handoffFolder"]),
+            assets_dir=_vault_relative_path(vault_root, effective["assetsFolder"]),
+            templates_dir=_vault_relative_path(vault_root, effective["templatesFolder"]),
+            archive_dir=_vault_relative_path(vault_root, effective["archiveFolder"]),
+            local_export_path=_optional_local_path(vault_root, effective["localExportPath"].value),
+        )
+
+
+def _vault_relative_path(vault_root: Path, setting: Any) -> Path:
+    raw = str(setting.value).strip()
+    if not raw:
+        raise VaultPathResolutionError(f"{setting.key} must not be empty")
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        raise VaultPathResolutionError(f"{setting.key} must be vault-relative; absolute paths are local-only")
+    resolved = (vault_root / path).resolve()
+    if not _is_within(resolved, vault_root.resolve()):
+        raise VaultPathResolutionError(
+            f"{setting.key} resolves outside the selected vault; parent traversal is not allowed"
+        )
+    return vault_root / path
+
+
+def _is_within(candidate: Path, root: Path) -> bool:
+    """True if ``candidate`` is ``root`` itself or contained within it."""
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _optional_local_path(vault_root: Path, value: object) -> Path | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return vault_root / path
 
 
 def _resolve_vault_root(vault_root: Path | None = None) -> Path:
@@ -152,6 +230,9 @@ def get_vault_runtime_dir_rel(vault_root: Path | None = None) -> str:
 
 
 __all__ = [
+    "ResolvedVaultPaths",
+    "VaultPathResolutionError",
+    "VaultPathResolver",
     "VaultPathValue",
     "get_vault_inbox_dir_rel",
     "get_vault_runtime_dir_rel",

@@ -42,7 +42,10 @@ jobs:
       - name: Upgrade database
         run: alembic upgrade head || true
       - name: Run unit tests (fast)
-        run: pytest -q -m "not alpha_llm" | tee pytest.log
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q -m "not alpha_llm" | tee pytest.log
       - name: Run fitness report
         run: |
           set -euo pipefail

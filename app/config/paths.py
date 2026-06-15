@@ -19,6 +19,17 @@ class ResolvedPaths:
 _DEFAULT_VAULT = Path("vault")
 
 
+class VaultRootMisconfiguredError(RuntimeError):
+    """Raised when an explicitly configured vault root cannot be used."""
+
+    def __init__(self, env_var: str, configured_path: Path) -> None:
+        self.env_var = env_var
+        self.configured_path = configured_path
+        super().__init__(
+            f"{env_var} is set to a missing vault root: {configured_path}"
+        )
+
+
 def _clean_path(value: str | Path | None) -> Optional[Path]:
     if value is None:
         return None
@@ -50,12 +61,81 @@ def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal
         env_specific = None
 
     if env_specific is not None:
+        if not env_specific.exists():
+            env_var = (
+                "VAULT_ROOT_DEV"
+                if environment == "dev"
+                else "VAULT_ROOT_TEST"
+            )
+            raise VaultRootMisconfiguredError(env_var, env_specific)
         return env_specific
 
     if env_root is not None:
-        base = env_root if env_root.exists() else _DEFAULT_VAULT
+        if not env_root.exists():
+            raise VaultRootMisconfiguredError("VAULT_ROOT", env_root)
+        base = env_root
     else:
         base = _DEFAULT_VAULT
+
+    if environment == "dev":
+        return base.parent / f"{base.name}-dev"
+    if environment == "test":
+        return base.parent / f"{base.name}-test"
+
+    return base
+
+
+def resolve_optional_vault_root(
+    cli_override: Path | None = None,
+    *,
+    environment: Literal["dev", "prod", "test"] | None = None,
+) -> Optional[Path]:
+    """Resolve the vault root, reporting *no vault bound* when nothing is configured.
+
+    Unlike :func:`resolve_vault_root`, an **unset** ``VAULT_ROOT`` (and any
+    env-scoped ``VAULT_ROOT_DEV`` / ``VAULT_ROOT_TEST``) resolves to ``None`` —
+    an explicit no-vault state — instead of silently defaulting to the
+    CWD-relative ``./vault``. That silent fallback is the ``provenance="fallback"``
+    footgun behind the 2026-06-09 "notes won't render" incident.
+
+    The three other cases are preserved exactly as :func:`resolve_vault_root`:
+
+    - an explicit ``cli_override`` short-circuits to that path;
+    - a **set-but-missing** vault root still raises
+      :class:`VaultRootMisconfiguredError` (no #1757 regression);
+    - a **bound, existing** vault root resolves to that path
+      (environment-scoped when requested).
+
+    Callers that must tolerate no-vault (the watcher in #2005, the companion
+    boundary in #2006) branch on a ``None`` result without catching an exception.
+    """
+    if cli_override is not None:
+        return Path(cli_override)
+
+    if environment == "dev":
+        env_specific = _clean_path(os.getenv("VAULT_ROOT_DEV"))
+        env_specific_var = "VAULT_ROOT_DEV"
+    elif environment == "test":
+        env_specific = _clean_path(os.getenv("VAULT_ROOT_TEST"))
+        env_specific_var = "VAULT_ROOT_TEST"
+    else:
+        env_specific = None
+        env_specific_var = ""
+
+    if env_specific is not None:
+        if not env_specific.exists():
+            raise VaultRootMisconfiguredError(env_specific_var, env_specific)
+        return env_specific
+
+    env_root = _clean_path(os.getenv("VAULT_ROOT"))
+    if env_root is None:
+        # No vault configured: report the explicit no-vault state instead of
+        # falling back to a CWD-relative ./vault default.
+        return None
+
+    if not env_root.exists():
+        raise VaultRootMisconfiguredError("VAULT_ROOT", env_root)
+    base = env_root
 
     if environment == "dev":
         return base.parent / f"{base.name}-dev"
@@ -170,7 +250,9 @@ def resolve_paths(
 
 __all__ = [
     "ResolvedPaths",
+    "VaultRootMisconfiguredError",
     "resolve_vault_root",
+    "resolve_optional_vault_root",
     "resolve_yggdrasil_root",
     "resolve_system_settings_path",
     "resolve_flow_settings_path",

@@ -52,15 +52,46 @@ def _default_scope_glob(vault_root: Path) -> str:
     return DEFAULT_SCOPE_GLOB
 
 
-def _validate_watcher_vault(vault_path: Path) -> None:
+# Vault statuses that mean "no usable vault yet, but not a misconfiguration":
+# the runtime idles until one is opened/initialized instead of fail-exiting
+# (#2005 — flips the #1991 hard precondition to idle-until-opened). A
+# *set-but-missing* (status="missing") or otherwise *invalid* vault still fails
+# loud, mirroring `app/watcher/relevance_tick.py` which skips a not-selected
+# vault but never papers over a real misconfig.
+_IDLE_VAULT_STATUSES = {"none", "uninitialized"}
+
+
+def _validate_watcher_vault(vault_path: Path) -> bool:
+    """Return True when the watcher should run; False when it should idle.
+
+    Raises only for a *loud* misconfiguration (a set-but-missing or invalid
+    vault path, or a vault whose settings disable the watcher). An absent or
+    uninitialized vault returns False so the caller builds an idle runtime.
+    """
+
     manager = VaultManager()
     context = manager.validate_vault(vault_path)
+    if context.status in _IDLE_VAULT_STATUSES:
+        logger.info(
+            "vault watcher idling: no usable vault bound (status=%s path=%s)",
+            context.status,
+            vault_path,
+        )
+        return False
     if context.status != "selected":
         detail = f": {context.validation_error}" if context.validation_error else ""
-        raise ValueError(f"vault watcher requires an initialized selected vault; status={context.status}{detail}")
+        remedy = (
+            f" — run `python -m app.cli vault init --path {vault_path}` to scaffold settings"
+            if context.status == "uninitialized"
+            else ""
+        )
+        raise ValueError(
+            f"vault watcher requires an initialized selected vault; status={context.status}{detail}{remedy}"
+        )
     permissions = manager.permissions_for_context(context)
     if not permissions.enable_vault_watcher:
         raise ValueError("vault watcher is disabled by settings/local.md")
+    return True
 
 
 @dataclass
@@ -89,10 +120,14 @@ class WatcherConfig:
         enable = _as_bool(os.getenv("WATCHER_ENABLE", "0"))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
-            raise ValueError("WATCHER_VAULT_PATH is required when WATCHER_ENABLE=1")
+            # No vault bound — idle until one is opened instead of raising
+            # (#2005). The watcher comes up disabled; the run loop short-circuits
+            # on `enable=False`, so no scan/index happens.
+            logger.info("vault watcher idling: WATCHER_ENABLE=1 but no vault bound")
+            enable = False
         vault_path = Path(vault_raw or ".").expanduser()
-        if enable:
-            _validate_watcher_vault(vault_path)
+        if enable and not _validate_watcher_vault(vault_path):
+            enable = False
         watcher_settings = load_watcher_settings(vault_path)
 
         scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()

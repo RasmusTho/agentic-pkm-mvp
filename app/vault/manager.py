@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
@@ -23,6 +24,7 @@ REQUIRED_SETTINGS_FILES = (
     "local.md",
 )
 LOCAL_GITIGNORE = "# Design Handoff local settings\nlocal.md\n*.local.md\nlocal/\nruntime/\ncache/\n"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,14 @@ class VaultManager:
         self._subscribers.append(callback)
 
     def load_last_active(self) -> VaultContext:
-        settings = self.app_local_store.load()
+        try:
+            settings = self.app_local_store.load()
+        except (OSError, MarkdownSettingsError):
+            # A corrupt app-local registry (e.g. Git conflict markers) must not
+            # 500 vault data/edit routes. Degrade to the no-vault picker state.
+            logger.warning("app-local registry unreadable; falling back to no-vault state", exc_info=True)
+            self._context = no_vault_context()
+            return self._context
         ref = settings.last_active_vault_ref
         if not ref:
             self._context = no_vault_context()
@@ -166,13 +175,50 @@ class VaultManager:
             )
 
         role = _machine_role(local_doc.frontmatter.get("machineRole"))
+        # Honor the read-only ceiling before healing a missing identity. The two
+        # ids live in different files with different write authority:
+        #   - vaultId is in the shared, committable vault.md -> requires
+        #     shared-settings write authority to heal.
+        #   - localInstanceId is in the gitignored, machine-local local.md ->
+        #     requires only local-settings write authority to heal.
+        # A read-only role writes neither; a satellite with shared edits disabled
+        # can still persist its own local clone id so recent-vault identity stays
+        # stable (Codex #2030 P2).
+        allow_shared_heal = self._allow_shared_identity_heal(role, local_doc.frontmatter)
+        allow_local_heal = self._allow_local_identity_heal(role, local_doc.frontmatter)
+        try:
+            vault_id = self._ensure_frontmatter_id(
+                settings_dir / "vault.md",
+                vault_doc.frontmatter,
+                key="vaultId",
+                prefix="vault",
+                body=vault_doc.body,
+                persist=allow_shared_heal,
+            )
+            local_instance_id = self._ensure_frontmatter_id(
+                settings_dir / "local.md",
+                local_doc.frontmatter,
+                key="localInstanceId",
+                prefix="local",
+                body=local_doc.body,
+                persist=allow_local_heal,
+            )
+        except OSError as exc:
+            return VaultContext(
+                status="invalid",
+                active_vault_name=expanded.name,
+                active_vault_path=str(expanded),
+                settings_path=str(settings_dir),
+                validation_error=f"unable to persist generated vault identity: {exc}",
+            )
+
         return VaultContext(
             status="selected",
-            active_vault_id=_required_str(vault_doc.frontmatter.get("vaultId"), fallback=f"vault-{uuid4()}"),
+            active_vault_id=vault_id,
             active_vault_name=_required_str(vault_doc.frontmatter.get("vaultName"), fallback=expanded.name),
             active_vault_path=str(expanded),
             settings_path=str(settings_dir),
-            local_instance_id=_required_str(local_doc.frontmatter.get("localInstanceId"), fallback=f"local-{uuid4()}"),
+            local_instance_id=local_instance_id,
             machine_role=role,
         )
 
@@ -243,12 +289,19 @@ class VaultManager:
             )
         fm = local_doc.frontmatter
         role = _machine_role(fm.get("machineRole"))
-        allow_writes_default = role != "readOnlySatellite"
+        if role == "readOnlySatellite":
+            return VaultPermissions(
+                enable_vault_watcher=False,
+                enable_auto_indexing=False,
+                allow_writes_to_vault=False,
+                allow_shared_settings_edits=False,
+                allow_local_settings_edits=_bool_setting(fm.get("allowLocalSettingsEdits"), default=True),
+            )
         shared_default = role in {"primary", "automationNode", "testNode"}
         return VaultPermissions(
-            enable_vault_watcher=_bool_setting(fm.get("enableVaultWatcher"), default=role != "readOnlySatellite"),
-            enable_auto_indexing=_bool_setting(fm.get("enableAutoIndexing"), default=role != "readOnlySatellite"),
-            allow_writes_to_vault=_bool_setting(fm.get("allowWritesToVault"), default=allow_writes_default),
+            enable_vault_watcher=_bool_setting(fm.get("enableVaultWatcher"), default=True),
+            enable_auto_indexing=_bool_setting(fm.get("enableAutoIndexing"), default=True),
+            allow_writes_to_vault=_bool_setting(fm.get("allowWritesToVault"), default=True),
             allow_shared_settings_edits=_bool_setting(fm.get("allowSharedSettingsEdits"), default=shared_default),
             allow_local_settings_edits=_bool_setting(fm.get("allowLocalSettingsEdits"), default=True),
         )
@@ -260,6 +313,8 @@ class VaultManager:
         require_writes: bool = False,
         require_watcher: bool = False,
         require_indexing: bool = False,
+        require_shared_settings_edits: bool = False,
+        require_local_settings_edits: bool = False,
     ) -> VaultContext:
         ctx = self._context
         if ctx.status != "selected" or not ctx.active_vault_path:
@@ -271,6 +326,13 @@ class VaultManager:
             raise VaultRequiredError(f"{operation} requires the vault watcher, but it is disabled for this vault")
         if require_indexing and not permissions.enable_auto_indexing:
             raise VaultRequiredError(f"{operation} requires auto indexing, but it is disabled for this vault")
+        if require_shared_settings_edits:
+            if not permissions.allow_writes_to_vault:
+                raise VaultRequiredError(f"{operation} requires vault writes, but this local role disallows them")
+            if not permissions.allow_shared_settings_edits:
+                raise VaultRequiredError(f"{operation} requires shared settings edits, but this local role disallows them")
+        if require_local_settings_edits and not permissions.allow_local_settings_edits:
+            raise VaultRequiredError(f"{operation} requires local settings edits, but this local role disallows them")
         return ctx
 
     def _remember_context(self, context: VaultContext, vault_path: Path) -> None:
@@ -299,7 +361,56 @@ class VaultManager:
             try:
                 callback(event)
             except Exception:
-                continue
+                logger.exception("vault changed subscriber failed")
+
+    def _allow_shared_identity_heal(self, role: MachineRole, local_frontmatter: dict[str, Any]) -> bool:
+        """Whether a missing ``vaultId`` may be healed by writing the shared vault.md.
+
+        Read-only roles never write the shared vault. A role that otherwise allows
+        writes can still opt out via ``allowSharedSettingsEdits: false`` /
+        ``allowWritesToVault: false`` in its local clone settings.
+        """
+        if role == "readOnlySatellite":
+            return False
+        shared_default = role in {"primary", "automationNode", "testNode"}
+        if not _bool_setting(local_frontmatter.get("allowWritesToVault"), default=role != "readOnlySatellite"):
+            return False
+        if not _bool_setting(local_frontmatter.get("allowSharedSettingsEdits"), default=shared_default):
+            return False
+        return True
+
+    def _allow_local_identity_heal(self, role: MachineRole, local_frontmatter: dict[str, Any]) -> bool:
+        """Whether a missing ``localInstanceId`` may be healed by writing local.md.
+
+        ``local.md`` is the gitignored, machine-local settings file, so this needs
+        only local-settings write authority — not shared-write authority. A
+        read-only role still writes nothing (read never mutates the vault).
+        """
+        if role == "readOnlySatellite":
+            return False
+        return _bool_setting(local_frontmatter.get("allowLocalSettingsEdits"), default=True)
+
+    def _ensure_frontmatter_id(
+        self,
+        path: Path,
+        frontmatter: dict[str, Any],
+        *,
+        key: str,
+        prefix: str,
+        body: str,
+        persist: bool = True,
+    ) -> str:
+        existing = str(frontmatter.get(key)).strip() if frontmatter.get(key) is not None else ""
+        if existing:
+            return existing
+        generated = f"{prefix}-{uuid4()}"
+        if not persist:
+            # Read-only ceiling: provide a runtime id without mutating the vault.
+            return generated
+        updated = dict(frontmatter)
+        updated[key] = generated
+        self.markdown_store.write_frontmatter(path, updated, body=body)
+        return generated
 
 
 _GLOBAL_MANAGER: VaultManager | None = None
@@ -384,8 +495,8 @@ def _initial_settings_files(
                 "localInstanceId": local_instance_id,
                 "machineRole": machine_role,
                 "syncRole": "local",
-                "enableVaultWatcher": True,
-                "enableAutoIndexing": True,
+                "enableVaultWatcher": machine_role != "readOnlySatellite",
+                "enableAutoIndexing": machine_role != "readOnlySatellite",
                 "allowWritesToVault": machine_role != "readOnlySatellite",
                 "allowSharedSettingsEdits": machine_role in {"primary", "automationNode", "testNode"},
                 "allowLocalSettingsEdits": True,

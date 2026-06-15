@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-06-12
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py, companion-ui/companion-app/companion_ui/workspace/guidance_layer.py, companion-ui/companion-app/companion_ui/workspace/settings_drawer.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, tests/companion_ui/test_system_map_overlay.py, tests/companion_ui/test_guidance_layer.py, tests/companion_ui/test_settings_drawer.py, tests/companion_ui/test_entry_state_gallery.py, merged PRs #1798-#1802/#1816-#1818/#1833/#1834/#1846/#1847/#1854, GitHub issue #1508, System Entry Point parent #1782 validation receipts through #1795 closure, and current repo state at 808658ab on 2026-06-12
+Last reviewed: 2026-06-13
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
 
 # Roadmap — Strategic Control
 
@@ -38,6 +38,11 @@ Security sequencing boundary: the security architecture spine and first review i
 They guide future security work but do not, by themselves, change the roadmap baseline, widen
 runtime exposure, or claim public internet readiness.
 
+Contextual Relevance Engine sequencing: CRE-01/CRE-02 are delivered concept-contract groundwork,
+and CRE-03 has shipped the vault-native pull moment plus glance-surface slice. The broader proactive
+attention loop is still the next bounded implementation step, not shipped baseline behavior; routine
+issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
+
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
 - **Operationally accepted** — proven on real vault/external samples with runbook/soak.
@@ -54,6 +59,9 @@ runtime exposure, or claim public internet readiness.
 - **Now**
   - **Major roadmap reset and SoT reconciliation** — active sequencing guard. Do not generate the next normal backlog wave from target-state docs. First reconcile shipped runtime, delivered seams, owner-doc promotion state, BuilderOps projection boundaries, and open GitHub state using `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md`.
   - **Integrated Runtime v1 release line (#1874)** — active integration sequencing item for route parity, readiness matrix, Panel staging persistence, golden-path UAT, negative-safety UAT, and docs reduction.
+  - **Contextual Relevance Engine** — CRE-03 shipped the first runtime seam for vault-native,
+    pull-only moments and a read-only glance projection; continue with the proactive attention loop
+    only through the bounded follow-up issue.
   - **v5.5 baseline lock + safety guard** — runtime/startup defaults `WATCHER_AUTO_EXEC=1`, but operators can force emit-only mode with `WATCHER_AUTO_EXEC=0`; allowlists, dedup/idempotency, optimistic writes, and write-guard/status signals remain the real enablement gates for safe rollout.
   - Keep the shipped PanelAgent LangGraph decider opt-in and watcher policy auto-exec plumbing stable under the v5.5 baseline guardrails while broader rollout stays gated.
   - Watcher → panel → planner/orchestrator automation with safety limits now includes dedup reports, promotion consumer visibility, and explicit skipped receipts.

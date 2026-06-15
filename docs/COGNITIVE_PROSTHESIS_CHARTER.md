@@ -64,6 +64,51 @@ absorb or share with the human include:
 
 For the canonical inventory of human needs, see `docs/CONCEPTS/USER_NEEDS_MODEL.md`.
 
+### 2.1 Two classes of cognitive value: Maintenance and Expansion
+
+The burdens above are the system's **Cognitive Maintenance** work: preserving cognition so nothing
+load-bearing is lost — capture, organization, recall, retrieval, orientation, context integrity,
+continuity, and the audit trail that keeps all of it trustworthy. Its goal is to **prevent loss**.
+
+Maintenance is necessary but not sufficient. The original purpose of Yggdrasil also includes
+**Cognitive Expansion**: helping the human become *more capable than they would be without the
+system*. Its goal is not to prevent loss but to **improve cognition** —
+
+- **Reflection** — examining what is understood, uncertain, open, or neglected.
+- **Synthesis** — drawing scattered material into clearer, more durable understanding.
+- **Insight generation** — surfacing non-obvious connections the human had not made.
+- **Exploration and serendipitous discovery** — bringing latent but newly-relevant material back into view.
+- **Learning and skill development** — understanding that compounds instead of being re-learned.
+- **Creativity** — holding generative material open, recombining it, selectively stabilizing it.
+- **Decision quality** — turning intent and evidence into better-grounded choices.
+- **Human development** — the human's own reasoning, judgement, and output improving over time.
+
+Both classes are first-class purpose. Maintenance protects the human's cognition; Expansion grows
+it. A system that only does Maintenance is a very good filing cabinet; the prosthesis thesis
+requires both. Which Expansion capabilities are *live today* versus deliberately pre-positioned
+behind activation is current-state truth owned by `docs/STATUS.md`, not this charter.
+
+### 2.2 The cognitive arc
+
+Maintenance and Expansion are not separate pipelines; they are two passes over one arc the human
+moves through with the system:
+
+**Capture → Understand → Enhance → Decide → Act → Reflect.**
+
+| Arc stage | Human function (kernel / HUMAN-FLOWS) | Maintenance pass (prevent loss) | Expansion pass (improve cognition) |
+|---|---|---|---|
+| **Capture** | externalize fleeting thought | get it to a stable, provenance-bearing place | make likely intent visible before it is fully formed |
+| **Understand** | source → interpret → stabilize | keep source identity and references attached | synthesis, interpretation lenses, clearer durable concepts |
+| **Enhance** | develop and curate knowledge | reduce entropy, keep findable | compile, connect, surface insight and newly-relevant material |
+| **Decide** | intent → propose → decide | keep open loops and commitments legible | better-grounded proposals and next actions |
+| **Act** | execute → receipt | bounded, reversible, receipted writes | act through delegated capability on the human's behalf |
+| **Reflect** | review → recalibrate; learn | re-surface what drifted; restore trust | learning that compounds; the human's own growth |
+
+The arc owns no mechanism; it is the intent overlay that the kernel, human flows, and runtime
+architecture each serve. Today the Maintenance pass is largely live and the Expansion pass is
+largely pre-positioned — that asymmetry is intentional sequencing (`docs/ROADMAP.md` and the
+roadmap reset), and closing it is the system's next major frontier.
+
 ## 3. Distinguishing the kinds of state in the system
 
 The charter relies on keeping the following kinds of state ontologically separate. Conflating

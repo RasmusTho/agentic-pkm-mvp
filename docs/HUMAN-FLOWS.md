@@ -5,8 +5,8 @@ Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-12
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, app/api/routes/capture.py, app/api/routes/companion.py, app/api/routes/canvas.py, app/api/routes/panel.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py, companion-ui/companion-app/companion_ui/workspace/guidance_layer.py, companion-ui/companion-app/companion_ui/workspace/settings_drawer.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, tests/companion_ui/test_system_map_overlay.py, tests/companion_ui/test_guidance_layer.py, tests/companion_ui/test_settings_drawer.py, tests/companion_ui/test_entry_state_gallery.py, merged PRs #1798-#1802/#1816-#1818/#1833/#1834/#1846/#1847/#1854, System Entry Point parent #1782 validation receipts through #1795 closure, and current repo state at 808658ab on 2026-06-12
+Last reviewed: 2026-06-13
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
@@ -330,6 +330,23 @@ This is why reflection, weekly review, after-action notes, and other review prac
 They are not decorative add-ons.
 They are part of keeping the system useful and believable.
 
+### Close the loop on human outcomes
+
+The system's success is not that capture happened, an index updated, or a receipt was written.
+Those are Maintenance signals — necessary, but they only prove the system did not lose anything.
+The function this flow names is the harder one: did the human's cognition actually improve?
+
+On the human's own review rhythms, the system should help answer questions like:
+- did I re-orient faster than I would have unaided,
+- did I decide with better-grounded evidence,
+- did I understand or learn something that stuck,
+- did I produce work I could not have produced without the system.
+
+This is the Expansion-side acceptance signal (see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1). It
+is a non-blocking target: when the runtime cannot yet support a given outcome, the question is still
+kept as the real measure of whether the prosthesis is working, rather than being replaced by
+mechanism-level metrics that look like success without being it.
+
 ### Support creative and hobby work
 
 The system must explicitly support forms of work that are not reducible to stable knowledge or
@@ -560,6 +577,20 @@ Across weeks and months, the system should help the human:
 - preserve continuity in projects and learning,
 - carry creative/hobby worlds forward,
 - and maintain a usable memory of prior thought and prior action.
+
+### Made proactive
+
+Historically these rhythms were almost entirely *pull*: the human had to remember to open
+orientation, run review, or check what was next. The **Contextual Relevance Engine** makes the
+rhythms *proactive* — the system anticipates the moment and brings the right thing — without becoming
+a firehose. It computes **moments** from the context model and reaches out only as far up a graduated
+ladder (glance → in-app nudge → OS push) as a moment's urgency clears the human's **current**
+interruption threshold. **Sleep and declared do-not-disturb are a zero-tolerance floor: never a push,
+regardless of urgency.** Below threshold, a moment is not dropped — it **defers** to the glance
+surface and re-attempts when interruptibility rises (suppression is timing, not deletion). Every
+materialized moment and every reach-out or deliberate suppression is a non-authoritative, source-linked
+vault artifact with a receipt. Scarcity is the discipline (§0): right thing, right moment — silent
+otherwise. See `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` and `docs/CONTEXTUAL_RELEVANCE_ENGINE/`.
 
 ## 6. Choosing the right representation
 

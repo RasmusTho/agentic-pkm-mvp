@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-12
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md, docs/SYSTEM_ENTRY_POINT/README.md, app/api/routes/capture.py, app/api/routes/companion.py, app/api/routes/canvas.py, app/api/routes/panel.py, app/api/routes/health.py, app/knowledge/write_ops.py, companion-ui/companion-app/companion_ui/workspace/entry_state.py, companion-ui/companion-app/companion_ui/workspace/overlay_host.py, companion-ui/companion-app/companion_ui/workspace/capture_modal.py, companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py, companion-ui/companion-app/companion_ui/workspace/panel_palette.py, companion-ui/companion-app/companion_ui/workspace/receipts_history.py, companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py, companion-ui/companion-app/companion_ui/workspace/guidance_layer.py, companion-ui/companion-app/companion_ui/workspace/settings_drawer.py, tests/api/test_capture_inbox_api.py, tests/api/test_memory_review_queue_api.py, tests/api/test_health_api.py, tests/companion_ui/test_entry_state_machine.py, tests/companion_ui/test_reentry_orientation_treatment.py, tests/companion_ui/test_overlay_host.py, tests/companion_ui/test_capture_modal.py, tests/companion_ui/test_memory_review_drawer.py, tests/companion_ui/test_panel_command_palette.py, tests/companion_ui/test_receipts_history_surface.py, tests/companion_ui/test_system_map_overlay.py, tests/companion_ui/test_guidance_layer.py, tests/companion_ui/test_settings_drawer.py, tests/companion_ui/test_entry_state_gallery.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1798-#1802/#1816-#1818/#1833/#1834/#1846/#1847/#1854, System Entry Point parent #1782 validation receipts through #1795 closure, and current repo state at 808658ab on 2026-06-12
+Last reviewed: 2026-06-13
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, Makefile, scripts/verify_runtime_stack.sh, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -219,8 +219,8 @@ Companion docs:
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
 - Companion UI channel launchers (`make dev-ui`, `make test-ui`, `make prod-ui`) bind the browser
-  UI to `0.0.0.0` by default for trusted-device server use. Set `CUI_BIND_LAN=0` when a
-  loopback-only UI bind is required. Public internet exposure remains unsupported.
+  UI to `127.0.0.1` by default. Set `CUI_BIND_LAN=1` to explicitly opt into a `0.0.0.0`
+  bind for trusted LAN/Tailscale UAT. Public internet exposure remains unsupported.
 
 Detailed startup, local topology, and recovery procedures live in `docs/INFRASTRUCTURE.md`.
 Task-specific operator walkthroughs live in `docs/runbooks/`.
