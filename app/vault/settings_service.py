@@ -247,7 +247,14 @@ class SettingsService:
         errors: list[SettingsValidationError] = []
 
         for source in self._source_documents(context, errors):
-            self._apply_source(values, errors, source.document.frontmatter, source.scope, str(source.path))
+            self._apply_source(
+                values,
+                errors,
+                source.document.frontmatter,
+                source.scope,
+                str(source.path),
+                source_filename=source.path.name,
+            )
 
         if context.status != "selected" and context.validation_error:
             errors.append(
@@ -310,7 +317,22 @@ class SettingsService:
                 )
             )
             return None
-        return _SourceDocument(path=path, scope=raw_scope, document=document)  # type: ignore[arg-type]
+        # Trust the source class (where the file was read from), not the file's
+        # self-declared scope. A forged ``scope: vault-shared`` in an app-local
+        # source must not let app-local content set project-scope keys. The
+        # declared scope may only confirm the known class, never widen it.
+        if raw_scope != fallback_scope:
+            errors.append(
+                SettingsValidationError(
+                    message=(
+                        f"settings file declares scope '{raw_scope}' but is a "
+                        f"{fallback_scope} source; declared scope is ignored"
+                    ),
+                    source_file=str(path),
+                    scope=fallback_scope,
+                )
+            )
+        return _SourceDocument(path=path, scope=fallback_scope, document=document)
 
     def _apply_source(
         self,
@@ -319,9 +341,21 @@ class SettingsService:
         source_values: Mapping[str, Any],
         source_scope: SettingScope,
         source_file: str,
+        *,
+        source_filename: str | None = None,
     ) -> None:
         for definition in self.registry.definitions:
             if not _source_can_set_definition(source_scope, definition):
+                continue
+            # Bind each vault file-backed definition to its declared
+            # ``definition.file``: a later vault-shared/local file must not be
+            # able to override another file's keys (e.g. companion-ui.md setting
+            # handoffFolder, which is owned by paths.md).
+            if (
+                source_filename is not None
+                and definition.file is not None
+                and definition.file != source_filename
+            ):
                 continue
             found = _value_for_definition(source_values, definition)
             if not found[0]:

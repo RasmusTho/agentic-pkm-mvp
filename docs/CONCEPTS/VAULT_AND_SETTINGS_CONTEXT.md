@@ -59,6 +59,8 @@ The local clone role is structurally represented in vault-local settings:
 
 The first implementation gates obvious writes/background services by `allowWritesToVault`, `enableVaultWatcher`, and `enableAutoIndexing`. `readOnlySatellite` is a hard ceiling for vault project writes, watcher, indexing, and shared settings edits even if local settings try to enable them. Local settings edits are governed separately by `allowLocalSettingsEdits`, so a machine can be configured to adjust `settings/local.md` without gaining vault project write permission.
 
+The read-only ceiling outranks `allowLocalSettingsEdits` for authority-bearing local keys. A clone without vault-write authority (a `readOnlySatellite`, or any clone whose `allowWritesToVault` is false) must not edit `machineRole`, `allowWritesToVault`, or `allowSharedSettingsEdits` through the Companion settings route, because doing so would let the clone escalate out of its own ceiling. Benign local keys (for example `localExportPath`) remain editable under `allowLocalSettingsEdits`.
+
 ## Identity Model
 
 Three identities are distinct:
@@ -80,6 +82,8 @@ Settings precedence is:
 5. Runtime/session overrides.
 
 App-local settings must not override project behavior unless a setting definition explicitly marks the key as app-local.
+
+A source's authority comes from where it was read (its source class), not from the `scope` it declares in its own frontmatter. A forged `scope: vault-shared` inside an app-local source does not let it set project-scope keys; the mismatch is reported as a validation error and the declared scope is ignored. Likewise, each vault file-backed setting is bound to its declared `definition.file` during resolution: a later vault-shared/local file cannot override a key owned by another file (for example `companion-ui.md` cannot set `handoffFolder`, which is owned by `paths.md`).
 
 Examples:
 
@@ -103,10 +107,12 @@ Rules:
 - The Markdown body explains the file.
 - Shared paths should be vault-relative.
 - Absolute paths are local-only.
+- Vault-relative paths must stay inside the selected vault. A relative path that resolves outside the vault through parent traversal (for example `handoffFolder: ../OtherProject`) is rejected during path resolution, not silently resolved to a sibling directory.
 - Writers preserve the Markdown body where feasible.
 - Writers keep stable key order.
 - Conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) make the file invalid; conflicted settings are not applied.
-- Invalid settings degrade safely; they are reported rather than silently applied.
+- Invalid settings degrade safely; they are reported rather than silently applied. A corrupt app-local registry (for example one with conflict markers) degrades to the no-vault picker state rather than failing vault data/edit routes.
+- A missing generated identity (`vaultId`, `localInstanceId`) is healed by writing the settings file only when the clone has vault-write authority. A `readOnlySatellite` (or any write-disabled clone) is given a non-persisted runtime id instead, so reading a vault never mutates it from a read-only role.
 
 ## Initial Vault Files
 

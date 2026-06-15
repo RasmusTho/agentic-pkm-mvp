@@ -295,6 +295,17 @@ def _vault_context_response(context: VaultContext) -> VaultContextResponse:
     )
 
 
+# Authority-bearing vault-local keys: editing these grants or revokes
+# project-write / settings-edit authority. A read-only role (or a clone that has
+# its write/shared-edit authority disabled) must NOT be able to grant itself
+# these via a plain local-settings edit, even with allowLocalSettingsEdits=true.
+# Otherwise a readOnlySatellite could escalate to primary or flip
+# allowWritesToVault and break out of its hard ceiling.
+_ROLE_ESCALATION_LOCAL_KEYS = frozenset(
+    {"machineRole", "allowWritesToVault", "allowSharedSettingsEdits"}
+)
+
+
 def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext) -> str | None:
     if not definition.editable_in_companion:
         return "not editable in Companion UI"
@@ -309,8 +320,16 @@ def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext
             return "writes disabled by machine role or local permission"
         if not permissions.allow_shared_settings_edits:
             return "shared settings edits disabled for this local role"
-    if definition.scope == "vault-local" and not permissions.allow_local_settings_edits:
-        return "local settings edits disabled for this local role"
+    if definition.scope == "vault-local":
+        if not permissions.allow_local_settings_edits:
+            return "local settings edits disabled for this local role"
+        if (
+            definition.key in _ROLE_ESCALATION_LOCAL_KEYS
+            and not permissions.allow_writes_to_vault
+        ):
+            # The read-only ceiling outranks allowLocalSettingsEdits for
+            # authority-granting keys.
+            return "authority-bearing local setting cannot be changed without vault-write authority"
     return None
 
 

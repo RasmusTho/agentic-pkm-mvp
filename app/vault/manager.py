@@ -96,7 +96,14 @@ class VaultManager:
         self._subscribers.append(callback)
 
     def load_last_active(self) -> VaultContext:
-        settings = self.app_local_store.load()
+        try:
+            settings = self.app_local_store.load()
+        except (OSError, MarkdownSettingsError):
+            # A corrupt app-local registry (e.g. Git conflict markers) must not
+            # 500 vault data/edit routes. Degrade to the no-vault picker state.
+            logger.warning("app-local registry unreadable; falling back to no-vault state", exc_info=True)
+            self._context = no_vault_context()
+            return self._context
         ref = settings.last_active_vault_ref
         if not ref:
             self._context = no_vault_context()
@@ -167,6 +174,12 @@ class VaultManager:
                 validation_error="settings/local.md has an incompatible schema",
             )
 
+        role = _machine_role(local_doc.frontmatter.get("machineRole"))
+        # Honor the read-only ceiling before healing a missing identity: a
+        # readOnlySatellite (or any role/clone that disallows shared-settings
+        # writes) must not write the shared vault.md / local.md just to backfill a
+        # generated id. Missing ids degrade to a non-persisted runtime id instead.
+        allow_identity_heal = self._allow_identity_heal(role, local_doc.frontmatter)
         try:
             vault_id = self._ensure_frontmatter_id(
                 settings_dir / "vault.md",
@@ -174,6 +187,7 @@ class VaultManager:
                 key="vaultId",
                 prefix="vault",
                 body=vault_doc.body,
+                persist=allow_identity_heal,
             )
             local_instance_id = self._ensure_frontmatter_id(
                 settings_dir / "local.md",
@@ -181,6 +195,7 @@ class VaultManager:
                 key="localInstanceId",
                 prefix="local",
                 body=local_doc.body,
+                persist=allow_identity_heal,
             )
         except OSError as exc:
             return VaultContext(
@@ -191,7 +206,6 @@ class VaultManager:
                 validation_error=f"unable to persist generated vault identity: {exc}",
             )
 
-        role = _machine_role(local_doc.frontmatter.get("machineRole"))
         return VaultContext(
             status="selected",
             active_vault_id=vault_id,
@@ -343,6 +357,22 @@ class VaultManager:
             except Exception:
                 logger.exception("vault changed subscriber failed")
 
+    def _allow_identity_heal(self, role: MachineRole, local_frontmatter: dict[str, Any]) -> bool:
+        """Whether a missing vault identity may be healed by writing settings files.
+
+        Read-only roles never write the shared vault. A role that otherwise allows
+        writes can still opt out via ``allowSharedSettingsEdits: false`` /
+        ``allowWritesToVault: false`` in its local clone settings.
+        """
+        if role == "readOnlySatellite":
+            return False
+        shared_default = role in {"primary", "automationNode", "testNode"}
+        if not _bool_setting(local_frontmatter.get("allowWritesToVault"), default=role != "readOnlySatellite"):
+            return False
+        if not _bool_setting(local_frontmatter.get("allowSharedSettingsEdits"), default=shared_default):
+            return False
+        return True
+
     def _ensure_frontmatter_id(
         self,
         path: Path,
@@ -351,11 +381,15 @@ class VaultManager:
         key: str,
         prefix: str,
         body: str,
+        persist: bool = True,
     ) -> str:
         existing = str(frontmatter.get(key)).strip() if frontmatter.get(key) is not None else ""
         if existing:
             return existing
         generated = f"{prefix}-{uuid4()}"
+        if not persist:
+            # Read-only ceiling: provide a runtime id without mutating the vault.
+            return generated
         updated = dict(frontmatter)
         updated[key] = generated
         self.markdown_store.write_frontmatter(path, updated, body=body)
