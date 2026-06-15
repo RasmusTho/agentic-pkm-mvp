@@ -34,7 +34,7 @@ Overview of tools and libraries required in each environment.
 | --- | --- | --- | --- |
 | Local dev | `LLM_PROVIDER=mock` (or `ollama`), `STORE_BACKEND=memory`, `INDEX_OUTBOX_PATH=./tmp/index-outbox.jsonl` | Python venv, yt-dlp, ffmpeg, optional Ollama. | Health CLI proves ffmpeg/yt-dlp/outbox readiness; JSONL is audit only. |
 | CI smoke (`.github/workflows/smoke.yml`) | `LLM_PROVIDER=mock`, `STORE_BACKEND=memory`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` | Installs ffmpeg via apt, pip installs requirements. | No Ollama; health runs in mock mode. |
-| “Prod” workstation | `LLM_PROVIDER=ollama`, `OLLAMA_HOST`, `OLLAMA_MODEL`, `DATABASE_URL`, `STORE_BACKEND=pg`, `INDEX_OUTBOX_PATH` on persistent storage (e.g. `~/logs/index-outbox.jsonl`) | Same as local + Ollama daemon + Postgres when `STORE_BACKEND=pg`. | DB outbox is canonical in runtime; JSONL is audit-only. Add log rotation/backups for `INDEX_OUTBOX_PATH` (see `docs/OPERATIONS.md`). |
+| “Prod” workstation | `LLM_PROVIDER=ollama`, `OLLAMA_HOST`, `LLM_MODEL`, `DATABASE_URL`, `STORE_BACKEND=pg`, `INDEX_OUTBOX_PATH` on persistent storage (e.g. `~/logs/index-outbox.jsonl`) | Same as local + Ollama daemon + Postgres when `STORE_BACKEND=pg`. | DB outbox is canonical in runtime; JSONL is audit-only. Add log rotation/backups for `INDEX_OUTBOX_PATH` (see `docs/OPERATIONS.md`). |
 
 ## YouTube transcripts and anti-bot notes
 - yt-dlp may be rate limited (403/429). Health only checks imports—run `yt-dlp https://youtu.be/...` manually when debugging.

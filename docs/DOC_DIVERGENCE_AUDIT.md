@@ -5,184 +5,170 @@ Owner: Documentation governance / architecture review
 Temporal class: snapshot
 Review cadence: ad hoc
 Source of truth: mixed
-Last reviewed: 2026-05-28
+Last reviewed: 2026-06-15
+Supersedes: the 2026-05-28 edition of this report (same path).
 
 # Documentation Divergence Audit
 
 ## Purpose and framing
 
 This is a point-in-time audit of documentation reality. It is advisory only and does not change any
-authority boundary. `docs/DOCS_INDEX.md` remains the canonical documentation role map; this report
-is subordinate to it and must not be read as a competing source of truth.
+authority boundary. `docs/DOCS_INDEX.md` remains the canonical documentation role map; this report is
+subordinate to it and must not be read as a competing source of truth.
 
-The audit exists to make one thing explicit:
+The framing from the 2026-05-28 edition still holds and is not repeated in full:
 
-- The repo does **not** lack documentation governance. `docs/DOCS_INDEX.md` already acts as the
-  canonical documentation role map, with role, review status, temporal class, and owner mapping for
-  the active doc set.
-- The consolidation risk is **not** "too many docs" in itself. A large, well-mapped doc set is not a
-  defect.
-- The real risk is **role drift** between six kinds of documentation surface that overlap in
-  subject but differ in authority:
-  1. current-runtime truth (what is shipped now),
-  2. target-state design (capability specs, target architecture),
-  3. implementation writebacks (owner-doc updates after delivery),
-  4. roadmap / spec docs (forward-looking intent),
-  5. operations docs (runbooks, release channels, environments),
-  6. historical / snapshot docs (point-in-time records).
+- The repo does **not** lack documentation governance. `DOCS_INDEX.md` is the canonical role map.
+- The risk is **not** "too many docs." A large, well-mapped doc set is not a defect.
+- The real risk is **role drift** between current-runtime truth, target-state design, implementation
+  writebacks, roadmap/spec, operations, and historical/snapshot surfaces.
 - The correct response is **authority-preserving normalization** — repair contradictions and make
-  authority boundaries legible — **not** a broad rewrite that would itself create drift.
+  authority legible — **not** a broad rewrite that would itself create drift.
 
-## How to read the findings
+## Method (2026-06-15 run)
 
-Each finding names a risk, why it matters, the owner doc(s) that hold authority for the area, and a
-recommended follow-up. Findings are advisory. Where evidence is ambiguous the finding says so and
-names the follow-up rather than guessing.
+Five read-only audit agents swept the corpus in parallel (temporal control surfaces; capability/
+concept owner docs; architecture/contract coherence; duplication/overlap; `DOCS_INDEX` integrity),
+plus a mechanical broken-link scan. Findings were then **re-baselined against `origin/main`**.
 
-## Findings
+**Methodology finding (load-bearing):** the run was launched from a recovery branch
+(`recovery/companion-loopback-bind-wip`) that was **107 commits behind `origin/main`**. Roughly a
+third of the raw findings were *branch-staleness artifacts* — docs already corrected on `main` — not
+real defects. Every finding below was verified against `main` (`969316fb`) before inclusion. The
+lesson: a doc audit must run against `origin/main`, never a stale local branch, or it will "rediscover"
+already-fixed drift and risk re-introducing it.
 
-### 1. `DOCS_INDEX.md` must remain canonical
+## Section 0 — Already fixed on main (do not re-flag)
 
-- **Risk:** A second "map of docs" (including this audit) could be mistaken for the authoritative
-  role map, splitting documentation authority.
-- **Why it matters:** Authority splitting is exactly the role-drift failure this audit warns about.
-  If two maps disagree, agents cannot resolve which doc owns a surface.
-- **Owner doc(s):** `docs/DOCS_INDEX.md`.
-- **Recommended follow-up:** Keep `DOCS_INDEX.md` as the single canonical role map. Any audit,
-  reading path, or routing aid must declare itself subordinate to it (as this report does).
+These were flagged by the sweep but verified resolved on `main`; the prior audit's headline item is
+among them:
 
-### 2. Agent Memory README contains contradictory shipped-vs-planned language
+- `STATUS.md`, `ROADMAP.md`, `OPERATIONS.md` — current on `main` (reference CRE, durable memory, the
+  v6.1 Wave-1 promotion, issues through #2026). The local-branch copies were stale.
+- `ARCHITECTURE.md` — now documents the Contextual Relevance Engine seam (`app/relevance/*`,
+  verified 2026-06-13). The "ARCHITECTURE never mentions CRE" finding was branch-staleness.
+- `docs/AGENT_MEMORY/README.md` **index row** — relabeled `Draft specification` →
+  `Delivered specification (parent #900 closed; all five slices shipped)`. The 2026-05-28 audit's
+  finding #2 is **resolved**.
+- `docs/EVENTS.md` — confirmed clean: no product action-verbs (Find/Reorient/Resurface/Act) have
+  leaked in as emitted-event contracts. (Re-confirmed non-finding.)
+- DB-as-mirror-not-authority invariant — consistent across ARCHITECTURE / DATA_MODEL / DB_SCHEMA /
+  SEMANTIC_AUTHORITY_MATRIX / SYSTEM_OF_SYSTEMS. The authority layer is sound; only table *naming*
+  drifts (see §2).
 
-- **Risk:** `docs/AGENT_MEMORY/README.md` opens with `State: Implemented. All five AGENT-MEMORY
-  slices delivered` but its body still carries planning-era wording ("upstream of any runtime
-  implementation", "it does not claim that the runtime already has these memory surfaces", "Runtime
-  acceptance remains future work"). A reader cannot tell whether the capability shipped.
-- **Why it matters:** This is an internal contradiction in an owner-adjacent capability index. It
-  either understates delivered work or overstates it, depending on which half the reader trusts.
-- **Owner doc(s):** `docs/AGENT_MEMORY/README.md`; semantic authority remains in
-  `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; current runtime posture remains in
-  `docs/STATUS.md`.
-- **Recommended follow-up:** Repair the README so the delivered slices read as shipped and any
-  remaining companion-aware handling reads as an explicit follow-up, not as evidence the slices are
-  unshipped. (Performed in this PR — see change B.) `DOCS_INDEX.md` row for
-  `docs/AGENT_MEMORY/README.md` still labels it "Draft specification" and should be reconciled with
-  the delivery record in a temporal-doc pass.
+## Section 1 — Fixed in this run (applied to the docs PR)
 
-### 3. Companion UI Product Spec is correctly framed but high-risk
+Unambiguous, code-verified current-state corrections, real on `main`:
 
-- **Risk:** `docs/COMPANION_UI_PRODUCT_SPEC.md` is correctly framed as target-state UX and is not a
-  fourth authority surface alongside Panel/Chat/Automation. It remains high-risk because Companion UI
-  is moving fast, so target-state wording can quietly be read as shipped reality.
-- **Why it matters:** Fast-moving UX docs are the most likely to be mistaken for current truth as
-  slices land.
-- **Owner doc(s):** `docs/COMPANION_UI_PRODUCT_SPEC.md` for target-state;
-  `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md` and `docs/PANEL_AGENT.md` for interaction
-  authority; `docs/STATUS.md` and `docs/HUMAN-FLOWS.md` for shipped reality.
-- **Recommended follow-up:** Keep the target-state vs shipped boundary explicit in the spec; verify
-  shipped claims against `STATUS.md` and tests on each Companion UI delivery.
+1. `docs/adr/INDEX.md` — removed two broken placeholder links
+   (`ADR-00X-agent-memory-v1.md`, `ADR-00X-agent-memory-v42.md`); no such files exist.
+2. `docs/COMPONENTS.md` — Companion Note maturity `Planned/forward-line contract` → `Active`
+   (shipped: `app/services/companion_note.py`; the settled production replacement for VaultMirror).
+3. `docs/CONCURRENCY.md` — deterministic-ID field `event_type` → `event` (canonical envelope field
+   per `EVENTS.md`; `event_type` is not in the contract).
+4. `docs/DEPENDENCIES.md` — prod config var `OLLAMA_MODEL` → `LLM_MODEL` (canonical chat-model var;
+   `OLLAMA_MODEL` is a deprecated fallback only).
+5. `docs/LANGGRAPH_AGENT_ARCHITECTURE.md` — example event `promotion.intent.created` →
+   `promote.intent.created` (canonical name, `EVENTS.md` §`promote.intent.created`).
+6. `docs/LANGGRAPH_AGENT_ARCHITECTURE.md` — removed dead `model="claude-3-sonnet"` arg from the
+   `facade.chat()` example (stale model id + bypassed the routing fabric).
 
-### 4. Contextualization Layer docs must be reconciled before implementation
+## Section 2 — Confirmed real on main, judgment required (proposed as issues, not auto-applied)
 
-- **Risk:** `docs/CONTEXTUALIZATION_LAYER/**` is well-scoped docs-only vocabulary but must be
-  reconciled with current `docs/FRONTMATTER.md`, `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`,
-  `docs/COMPONENTS.md`, and the Agent Memory contracts before any implementation derives schema or
-  runtime behavior from it.
-- **Why it matters:** The layer introduces artifact-class and metadata vocabulary that, if
-  implemented without reconciliation, could fork frontmatter or companion-note semantics.
-- **Owner doc(s):** `docs/CONTEXTUALIZATION_LAYER/README.md` (index); `docs/FRONTMATTER.md`,
-  `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/COMPONENTS.md`,
-  `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` for the contracts to reconcile against.
-- **Recommended follow-up:** Before opening implementation issues from this layer, cross-check each
-  metadata/companion concept against the named current contracts and record any divergence.
+These are real defects, but the fix needs an architectural call or a verified rewrite. Auto-applying
+them would risk exactly the broad-rewrite drift this audit warns against.
 
-### 5. Component maturity and runtime status must stay synchronized
+- **DB schema docs describe the wrong tables (high).** `docs/DATA_MODEL.md` and `docs/DB_SCHEMA.md`
+  document the legacy AMG-core migration tables (`objects` / `chunks` / `embeddings` + a fabricated
+  `search_vector` column) and even attribute them to Alembic. The **active runtime** uses
+  `store_objects` + `store_vector_index`, created by runtime DDL in `app/stores/pg.py` (not Alembic).
+  Two contract docs and the code give three different `embeddings` shapes. → Issue: reconcile both
+  docs to the runtime store, demote the AMG tables to an explicit "historical lineage" subsection.
+- **`COMPONENTS.md` ReasoningFacade / BaseLangGraphAgent still "Planned" (med).** Both exist and are
+  imported (`app/reasoning/facade.py`, panel/canvas/chat paths), but are dormant-by-design (Cognitive
+  Expansion is flag-gated). "Planned" understates; "Active" overstates. → Decision: relabel to
+  `Experimental (opt-in, roadmap-gated off)` or add a one-line "code exists, gated off" note.
+- **`ENVIRONMENTS.md` calls `prod` a "future target contract" (med-high).** Identical on `main`;
+  last reviewed 2026-04-02. A real prod channel exists (promotion receipt
+  `ops/promotions/2026-06-13-cc3ce65d.md`). **Caveat that makes this judgment, not mechanical:** the
+  same receipt promoted CRE/recall code *inert* in Wave 1 ("'CRE in prod' ≠ 'CRE running'"). Any
+  reframe must keep the promoted-but-dormant distinction and reconcile with `RELEASE_CHANNELS`.
+- **`SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (med):** Human Surface still reads "Companion-UI is
+  design-handoff … not production runtime" (last reviewed 2026-05-14); the System Entry Point shell
+  shipped. → Current-state correction.
+- **`INTERACTION_SURFACES_AND_AUTHORITY/README.md` + `CONTEXT_BUNDLES/README.md` (med):** owner-doc
+  State/Status lag their own DOCS_INDEX rows and delivery records (canvas Chat shipped behind
+  `CANVAS_ENABLED`; Context Bundles runtime "Satisfied 2026-06-04" yet the intro still says "upstream
+  of any runtime implementation … does not claim the runtime already does it"). → Scope the
+  historical wording; point forward to the satisfied wave.
+- **`EMBEDDINGS.md` / `LLM.md` reconciliation (low):** `EMBED_DIM` example `768` vs code default
+  `1536` (nomic-embed-text is natively 768 — state the authoritative runtime value); and the primary
+  Ollama embedding endpoint (`/api/embed` native vs `/api/embeddings` compat) is described
+  inconsistently. → Reconcile against `app/embedding_config.py` / `app/llm/embeddings.py`.
 
-- **Risk:** Component maturity in `docs/COMPONENTS.md` and shipped/runtime status in
-  `docs/STATUS.md` can drift apart as slices land.
-- **Why it matters:** If a component reads as mature in one doc and unshipped in the other, agents
-  pick the convenient answer.
-- **Owner doc(s):** `docs/COMPONENTS.md` (maturity/wiring), `docs/STATUS.md` (runtime status).
-- **Recommended follow-up:** Treat maturity and status as a synchronized pair in temporal-doc
-  reviews; update both in the same change when a component's reality moves.
+## Section 3 — `DOCS_INDEX` integrity
 
-### 6. Product action vocabulary must not silently become event vocabulary
+Verified against `main`. **Zero dangling rows** (everything the index rows point to exists). The gap
+is *under-coverage* and *stale status labels*, not broken pointers:
 
-- **Risk:** Product/design docs use action verbs (Find, Reorient, Resurface, Act, promote, revise).
-  These must not silently become emitted runtime event names.
-- **Why it matters:** Emitted event names are a contract. A product verb that leaks into runtime as
-  an event name creates an unversioned, unsanctioned contract.
-- **Owner doc(s):** `docs/EVENTS.md` (emitted event contract);
-  `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md` (versioning).
-- **Recommended follow-up:** Emitted event names belong in `docs/EVENTS.md`. A product doc using
-  action vocabulary does not create an event contract unless `EVENTS.md` is updated.
+- **~90 child-spec orphans:** the index uses a one-row-per-child convention for some capability dirs
+  (CONTEXT_BUNDLES, AGENT_MEMORY) but stops at the README for others. On `main`:
+  `SYSTEM_ENTRY_POINT/` has 3 index rows for 13 docs on disk; `CANVAS_CHAT_SURFACE/` has 2 for 12.
+  Others: INTERACTION_SURFACES, COMMITMENT_AS_FIRST_CLASS, FINDING_AND_REORIENTING,
+  SEPARATING_PERSISTENCE_SURFACES, RELEASE_CHANNELS, SCOPE_SPHERE, COGNITIVE_LOAD_RUNTIME_ADOPTION,
+  DISPATCHER_AGENT_ADOPTION, 3 CONTEXTUALIZATION_LAYER children, 4 ADRs (0007/0009/0011/0012), a whole
+  `docs/implementation/` dir, and `CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`.
+- **Stale "pre-delivery" labels for shipped epics:** `SYSTEM_ENTRY_POINT/README.md` row still says
+  "parent feature issue not yet filed" (epic #1782 filed; children #1783–#1795 merged);
+  `CANVAS_CHAT_SURFACE` row predates PRs #605/#618/#619/#626.
 
-### 7. DB / stores must remain machine mirrors, not semantic authority
+→ Proposed as one bounded governance issue (mechanical backfill where the role label is uniform;
+status text needs the per-slice issue/PR mapping).
 
-- **Risk:** Databases, indexes, and stores can be treated as the source of truth instead of as
-  derived projections / machine mirrors of vault artifacts.
-- **Why it matters:** A machine mirror gaining semantic authority violates the vault-first,
-  human-first invariant and creates a hidden source of truth.
-- **Owner doc(s):** `docs/ARCHITECTURE.md`, `docs/COMPONENTS.md`,
-  `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`,
-  `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`.
-- **Recommended follow-up:** Keep DB/stores documented as mirrors/projections; never promote a
-  projection to authority without a contract change in the owner docs.
+## Section 4 — Consolidation proposal (authority-preserving)
 
-### 8. `DOCS_INDEX.md` may need a short authority-boundary block
+The corpus is overwhelmingly single-owner; 8 evaluated clusters are cleanly delineated (architecture
+trio, agents quartet, human-flows trio, context-bundles pair, inventory trio, ~28 contract docs,
+ontology plans, dev-workflow stub). Real overlap is concentrated in ~9 docs / 6 clusters, mostly
+restatement-that-risks-drift or temporal staleness — **not** authority contradiction.
 
-- **Risk:** `DOCS_INDEX.md` is large and table-heavy; the high-signal authority boundaries are
-  spread across many rows and easy to miss.
-- **Why it matters:** Agents need the few load-bearing authority rules quickly, without reading the
-  full index.
-- **Owner doc(s):** `docs/DOCS_INDEX.md`.
-- **Recommended follow-up:** Add a concise authority-boundary block near the top of `DOCS_INDEX.md`
-  that maps each authority kind to its owner doc and states the conflict-resolution rules.
-  (Performed in this PR — see change C.)
+Safe now (cross-link / scope-header only — can fold into the docs PR if approved):
 
-### 9. Ops / release-channel docs need explicit applicability and verification metadata
+- **cognitive-load** (`COGNITIVE_LOAD_PROJECTION_LAYER.md` ↔
+  `COMPANION_UI_COGNITIVE_LOAD_OPERATING_MODEL.md`): the contract owns the authority-class vocabulary
+  and decision test; the operating-model should cite it rather than restate. Add cross-links + scope
+  headers; do not merge (different audiences).
+- **dispatcher adoption** (`DISPATCHER_AGENT_ADOPTION/README.md`): add a "delivered" banner — its
+  premise "no agent workflow calls the dispatcher" is contradicted by the shipped owner contract.
+- **same-filename hazards:** `ARTIFACT_MODEL_AND_LIFECYCLES.md` (CONCEPTS contract vs plans plan) —
+  reciprocal cross-links + one-line scope headers.
 
-- **Risk:** `docs/OPERATIONS.md`, `docs/ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/**` describe
-  operator actions whose applicability (which channel, which environment) and verification anchors
-  are not always explicit.
-- **Why it matters:** Operator docs without clear applicability are dangerous when prod/stable is in
-  scope.
-- **Owner doc(s):** `docs/OPERATIONS.md`, `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`.
-- **Recommended follow-up:** Ensure each ops/release-channel doc states which channel/environment it
-  applies to and its verification anchor; route through `temporal-doc-governance` where stale.
+Judgment required (→ issues):
 
-### 10. Design handoff docs are anchors; owner docs describe shipped reality
+- **Duplicate file:** `docs/plans/BENCHMARK_PROTOCOL.md` vs `docs/benchmarks/BENCHMARK_PROTOCOL.md`.
+  The benchmarks/ copy is the canonical "Active" one; demote plans/ to a stub (the pattern
+  `docs/DEV_WORKFLOW.md` already uses).
+- **Contradictory plans:** `plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md` ("Delivered, Parts 1–8") vs
+  `plans/COMPANION_NOTE_AND_AGENT_CONTEXT_PLAN.md` ("re-baselined … forward-line work"). Reconcile
+  against `STATUS.md`, merge, demote one to a stub.
+- **Largest unmapped surface:** `companion-ui/docs/` (55 files), including ~12
+  cognition/attention/salience design-theory docs that are largely absent from `DOCS_INDEX.md` and
+  overlap `CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`. Assign DOCS_INDEX roles *before*
+  any merge. This is the most likely locus of unmapped role drift in the whole corpus.
 
-- **Risk:** Design handoff / snapshot docs can be read as current truth when they are source anchors
-  or point-in-time records.
-- **Why it matters:** A handoff snapshot mistaken for shipped reality reintroduces target-state
-  claims into current-state reasoning.
-- **Owner doc(s):** the relevant owner doc for the shipped area (e.g. `docs/STATUS.md`,
-  `docs/ARCHITECTURE.md`, capability owner docs); handoff/snapshot docs as anchors only.
-- **Recommended follow-up:** When a design handoff conflicts with an owner-doc writeback, the owner
-  doc plus implementation evidence wins for shipped reality.
+## Section 5 — Recommended backlog issues
 
-### 11. Cognitive concept docs are not shipped UX/runtime without evidence
-
-- **Risk:** Concept docs under `docs/CONCEPTS/**` and cognitive-support specs describe intended
-  behavior that can be misread as fully shipped UX/runtime.
-- **Why it matters:** Concept-as-shipped is the most common target-state-vs-reality confusion.
-- **Owner doc(s):** `docs/CONCEPTS/**` for semantics; `docs/STATUS.md`, tests, and owner docs for
-  shipped confirmation.
-- **Recommended follow-up:** Do not treat a concept or target-state doc as shipped without code/test
-  evidence and owner-doc status.
-
-### 12. External agentic-AI reports are background rationale only
-
-- **Risk:** External AI reviews and agentic-AI reports can be cited as authority over repo docs.
-- **Why it matters:** External reports are input, not authority; repo source of truth must win on
-  conflict.
-- **Owner doc(s):** repo SoT under `docs/` (per `DOCS_INDEX.md` role map).
-- **Recommended follow-up:** Treat external agentic-AI reports as background rationale; the repo
-  source of truth wins on any conflict.
+1. Reconcile DB schema docs (`DATA_MODEL.md` + `DB_SCHEMA.md`) to the runtime store tables. (§2)
+2. `DOCS_INDEX` child-spec backfill + stale-label sweep (~90 rows). (§3)
+3. `ENVIRONMENTS.md` prod-liveness reframe, preserving the promoted-but-dormant distinction. (§2)
+4. Reclassify `COMPONENTS.md` ReasoningFacade / BaseLangGraphAgent maturity. (§2)
+5. Consolidate the duplicate `BENCHMARK_PROTOCOL.md` and the contradictory companion-note plans. (§4)
+6. Map the `companion-ui/docs/` cognition cluster into `DOCS_INDEX.md`. (§4)
+7. Reconcile `EMBED_DIM` and the Ollama embedding endpoint across EMBEDDINGS / LLM / DB_SCHEMA. (§2)
 
 ## Non-goals
 
 - This audit does not create a new canonical map.
 - It does not rewrite architecture, change contracts, or alter shipped reality.
-- It does not delete any document.
-- It does not, by itself, reclassify docs in `DOCS_INDEX.md`; it only recommends follow-ups.
+- It does not delete any document (the one deletion in §1 is two dead links inside an index, not a doc).
+- The §1 fixes are current-state corrections only; everything requiring judgment is deferred to §2–§5.
