@@ -207,6 +207,15 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   for admit-by (the #1598 sections remain valid as the influence posture for already-admitted
   material). Reset Wave-5 deliverable; docs-only — runtime enforcement is Slice #2025 and no flag
   is flipped here.
+- Expansion Activation Gate contract authored (#2024, parent #2022): the deterministic dormant→active
+  flip rule is now owned as a section in `docs/EMERGENT_FEATURES_MODEL.md` ("Expansion Activation
+  Gate"). It defines the gate inputs (admissibility compliance via #2023, authority class + #1881
+  governance tier, loop precondition, reversibility & receipt, observability), the deterministic
+  outcome (activatable / blocked-with-reason), and the principle that the gate stays deterministic
+  even where the gated cognition is adaptive. It replaces the ad-hoc per-capability flags
+  (`REASONING_ENABLE`, `CANVAS_ENABLED`) with one named contract that the #1956 activation waves cite.
+  Docs-only — the gate function is Slice #2025; first activation (ASK synthesis) is Slice #2026
+  (owner-gated). No flag is flipped here.
 - Durable Memory and Recall is shipped through #1904-#1908. Pending review candidates remain
   runtime-only; explicit review decisions persist as vault-scoped receipts/traces and reconcile the
   in-memory queue on intake/startup. Promote-to-semantic decisions become terminal only after the
