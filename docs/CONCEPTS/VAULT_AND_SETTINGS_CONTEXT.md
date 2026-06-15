@@ -59,7 +59,13 @@ The local clone role is structurally represented in vault-local settings:
 
 The first implementation gates obvious writes/background services by `allowWritesToVault`, `enableVaultWatcher`, and `enableAutoIndexing`. `readOnlySatellite` is a hard ceiling for vault project writes, watcher, indexing, and shared settings edits even if local settings try to enable them. Local settings edits are governed separately by `allowLocalSettingsEdits`, so a machine can be configured to adjust `settings/local.md` without gaining vault project write permission.
 
-The read-only ceiling outranks `allowLocalSettingsEdits` for authority-bearing local keys. A clone without vault-write authority (a `readOnlySatellite`, or any clone whose `allowWritesToVault` is false) must not edit `machineRole`, `allowWritesToVault`, or `allowSharedSettingsEdits` through the Companion settings route, because doing so would let the clone escalate out of its own ceiling. Benign local keys (for example `localExportPath`) remain editable under `allowLocalSettingsEdits`.
+Authority-bearing local keys are gated by the highest class of authority they could grant, so `allowLocalSettingsEdits` alone never lets a clone escalate past its own ceiling through the Companion settings route:
+
+- `allowWritesToVault` requires the clone to already hold vault-write authority.
+- `allowSharedSettingsEdits` requires the clone to already hold shared-settings-edit authority — a satellite with writes but shared edits disabled cannot flip it on itself and then edit shared settings.
+- `machineRole` re-derives every permission default (for example `satellite` to `primary` re-enables shared edits), so it is the strongest escalation vector and also requires shared-settings-edit authority.
+
+Benign local keys (for example `localExportPath`) remain editable under `allowLocalSettingsEdits`.
 
 ## Identity Model
 

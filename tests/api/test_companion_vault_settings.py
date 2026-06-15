@@ -153,27 +153,38 @@ def _init_satellite_writes_no_shared_edits(vault_root: Path) -> Path:
     return settings_dir
 
 
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        # Flipping allowSharedSettingsEdits is a direct shared-edit self-grant.
+        ("allowSharedSettingsEdits", True),
+        # Promoting the role re-derives shared-edit authority from the primary
+        # default — the strongest escalation vector (Codex #2030 P1, second pass).
+        ("machineRole", "primary"),
+    ],
+)
 def test_satellite_cannot_self_grant_shared_settings_edits(
     client: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    value: object,
 ) -> None:
     """A satellite with writes but allowSharedSettingsEdits=false must not be able
-    to flip allowSharedSettingsEdits=true on itself and then edit shared settings
-    (Codex #2030 P1: shared-edit self-escalation)."""
+    to grant itself shared-edit authority — neither by flipping
+    allowSharedSettingsEdits nor by promoting machineRole — and then edit shared
+    settings (Codex #2030 P1: shared-edit self-escalation)."""
     vault_root = tmp_path / "vault"
     _init_satellite_writes_no_shared_edits(vault_root)
     manager = VaultManager(app_local_store=AppLocalSettingsStore(path=tmp_path / "app-local.md"))
     manager.select_vault(vault_root, remember=False)
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
 
-    resp = client.post(
-        "/api/companion/vault/settings",
-        json={"key": "allowSharedSettingsEdits", "value": True},
-    )
+    resp = client.post("/api/companion/vault/settings", json={"key": key, "value": value})
 
     assert resp.status_code == 403, resp.text
     local_md = (vault_root / "settings" / "local.md").read_text(encoding="utf-8")
+    assert "machineRole: satellite" in local_md
     assert "allowSharedSettingsEdits: false" in local_md
     # And the shared-settings ceiling is genuinely still in place.
     shared_resp = client.post(

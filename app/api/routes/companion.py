@@ -298,15 +298,18 @@ def _vault_context_response(context: VaultContext) -> VaultContextResponse:
 # Authority-bearing vault-local keys: editing these grants or revokes
 # project-write / settings-edit authority. A clone must NOT be able to grant
 # itself authority it does not already hold via a plain local-settings edit, even
-# with allowLocalSettingsEdits=true. Each key is gated by the *class* of authority
-# it would grant, so no key can be used to escalate past its own ceiling:
-#   - machineRole / allowWritesToVault: grant vault-write authority -> require it.
+# with allowLocalSettingsEdits=true. Each key is gated by the *highest* class of
+# authority it could grant, so no key can be used to escalate past its own ceiling:
+#   - allowWritesToVault: grants vault-write authority -> require vault-write.
 #   - allowSharedSettingsEdits: grants shared-settings authority -> require the
 #     clone to already hold shared-settings authority (a satellite with writes
 #     but allowSharedSettingsEdits=false must not flip it on itself and then edit
 #     shared settings).
-_WRITE_AUTHORITY_LOCAL_KEYS = frozenset({"machineRole", "allowWritesToVault"})
-_SHARED_EDIT_AUTHORITY_LOCAL_KEYS = frozenset({"allowSharedSettingsEdits"})
+#   - machineRole: changing the role re-derives every permission default,
+#     including shared-settings authority (e.g. satellite -> primary), so it is
+#     the strongest escalation vector and requires shared-settings authority too.
+_WRITE_AUTHORITY_LOCAL_KEYS = frozenset({"allowWritesToVault"})
+_SHARED_EDIT_AUTHORITY_LOCAL_KEYS = frozenset({"machineRole", "allowSharedSettingsEdits"})
 
 
 def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext) -> str | None:
