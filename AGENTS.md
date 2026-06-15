@@ -102,6 +102,7 @@ Before editing, classify the change:
 
 - Keep code, tests, and docs consistent in the same change.
 - When behavior, architecture, or contracts change, update the owning docs in the same change.
+- **Invariant → producers rule:** when you add a runtime precondition (a new invariant the runtime fail-exits without), update *every producer* of the guarded resource (init/bootstrap scripts, existing-resource migration, in-process test fixtures) **and** add a fail-loud preflight, in the same change. A precondition without migrated producers is a latent outage (the #1991 vault-init half-application caused the 2026-06-14 promotion slog). See `.codex/skills/prepare-promotion/SKILL.md :: Invariant → producers rule` and the `harness-selfverify` CI gate.
 - Keep normative content in the owner document; link instead of duplicating it.
 - Do not turn `AGENTS.md` or `CLAUDE.md` into architecture, index, roadmap, or historical recordkeeping files.
 - Keep builder-agent guidance separate from runtime/system-agent documentation.
