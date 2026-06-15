@@ -7,7 +7,11 @@ from typing import Any, Iterable, List, Optional
 from langgraph.graph import END, START, StateGraph
 
 from app.agent_memory.recall_activation import activate_guarded_recall
-from app.agent_memory.recall_explanation import ActivationReason, RecallUseRight
+from app.agent_memory.recall_explanation import (
+    ActivationReason,
+    RecallUseRight,
+    render_recall_footer,
+)
 from app.agent_memory.recall_retrieval import RecallCandidate, retrieve_relevant_promoted
 from app.agents.ask.state import AgentState, RetrievedHit
 from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer, reasoning_enabled, score_hit
@@ -190,7 +194,10 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
         if route:
             state.llm_route = route
 
-    state.answer = answer_text
+    # Treatment A (#1972): when recall fired, attribute it with a footer keyed to
+    # the recall receipt — outside the answer prose, never shown when recall is empty.
+    footer = render_recall_footer(state.recalled or [])
+    state.answer = f"{answer_text}\n\n{footer}" if footer else answer_text
     return state
 
 

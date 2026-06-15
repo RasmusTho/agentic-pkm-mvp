@@ -227,7 +227,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   records a failed-attempt receipt and keeps the promotion actionable (the accept response reports the
   candidate as still pending materialization). Guarded recall now runs the authority guard and writes
   recall receipts, including the valid action-authorizing path which carries its recall receipt
-  reference; activation state is not persisted as artifact authority.
+  reference; activation state is not persisted as artifact authority. Guarded recall is invoked
+  read-only in the ASK graph (#1970/#1971), and when it fires the ASK answer attributes the recalled
+  memory with a "Recalled from: … · receipt &lt;id&gt;" footer keyed to the recall receipt (treatment A,
+  #1972) plus a structured `recalled` provenance field on the response; no attribution is shown when
+  recall did not fire.
 - Runtime AgentState contract unification is shipped for the current ASK, generic graph, reasoning
   graph-builder, and PanelAgent state surfaces: `app/agents/runtime_state.py` defines the shared
   trace/authority/proposal/receipt linkage fields and the existing state classes now expose or adapt

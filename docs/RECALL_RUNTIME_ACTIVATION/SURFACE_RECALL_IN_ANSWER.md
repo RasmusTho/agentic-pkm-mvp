@@ -51,6 +51,21 @@ it said. Attribution is what keeps recall an honest, auditable awareness signal.
 - [ ] Owner-doc promotion: the recall runtime is recorded in current-state docs and a runtime-map row.
   - Verify: doc writeback at `docs/STATUS.md` and `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md :: Mapping`
 
+## Decision
+
+**Treatment A — attribution footer** (owner-ratified 2026-06-15; #1972). When guarded recall fires in
+the ASK path, the answer carries a short footer — `Recalled from: <memory> · receipt <id>` — below the
+answer body, keyed to the recall receipt (`RecallExplanation.receipt_reference`). It is always
+human-visible, source-linked, and lives **outside** the answer prose so the agent's voice is
+preserved. The same provenance is also exposed in structured form on the ASK response
+(`recalled: [{memory_id, title, why_now, receipt_id}]`) for the UI. No footer is shown when recall did
+not fire, and attribution is never invented. Treatments **B** (structured provenance field only) and
+**C** (confidence-gated inline + field) were considered and not chosen — B leaves a human reading the
+answer with no visible attribution; C injects into the answer prose and adds a confidence gate.
+
+Implementation: `app/agent_memory/recall_explanation.py::render_recall_footer`, applied in
+`app/agents/ask/graph.py::_answer_node`; structured field in `app/api/routes/ask.py::AskResponse`.
+
 ## How to Verify (Pre-Merge)
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_recall_surfacing.py`

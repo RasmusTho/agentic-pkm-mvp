@@ -303,7 +303,9 @@ def test_ask_answers_from_recall_when_retrieval_is_empty(tmp_path: Path, monkeyp
     # The answer node must NOT short-circuit; LLM composition runs over recalled memory.
     assert llm_calls == ["How does recall runtime stay read-only?"]
     assert "RECALLED MEMORY 1" in captured_context["context"]
-    assert state.answer == "Answer composed from recalled memory only."
+    assert state.answer.startswith("Answer composed from recalled memory only.")
+    # Treatment A (#1972): recall fired, so the answer carries the attribution footer.
+    assert "Recalled from: Recall runtime" in state.answer
     assert state.answer != "No results found."
 
 

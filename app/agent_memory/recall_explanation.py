@@ -6,6 +6,7 @@ records. It does not implement retrieval, activation engines, or UI rendering.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import Enum
 from typing import Optional
 
@@ -160,3 +161,24 @@ def build_recall_explanation(
         authority_source=authority_source,
         receipt_reference=receipt_reference,
     )
+
+
+def render_recall_footer(recalled: Sequence[RecallExplanation]) -> str:
+    """Render the treatment-A attribution footer for recalled memory (#1972).
+
+    A human-visible, source-linked footer keyed to each memory's recall receipt.
+    Returns "" when no memory was recalled (no attribution is shown then) or when
+    no recalled item carries a receipt reference. Attribution lives outside the
+    answer prose, so the agent's voice is preserved; it never invents attribution.
+    """
+
+    parts: list[str] = []
+    for explanation in recalled:
+        receipt = (explanation.receipt_reference or "").strip()
+        if not receipt:
+            continue
+        title = (explanation.title or "").strip() or explanation.artifact_id
+        parts.append(f"{title} · receipt {receipt}")
+    if not parts:
+        return ""
+    return "Recalled from: " + "; ".join(parts)
