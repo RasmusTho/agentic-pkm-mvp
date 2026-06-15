@@ -8,6 +8,7 @@ from app.config.paths import (
     ResolvedPaths,
     VaultRootMisconfiguredError,
     resolve_flow_settings_path,
+    resolve_optional_vault_root,
     resolve_paths,
     resolve_runtime_artifact_path,
     resolve_system_settings_path,
@@ -51,6 +52,52 @@ def test_set_but_missing_vault_root_raises_not_silent_fallback(
 
     assert exc_info.value.env_var == "VAULT_ROOT"
     assert exc_info.value.configured_path == missing_root
+
+
+def test_unset_vault_root_resolves_to_no_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The capability flip: an unset VAULT_ROOT now reports an explicit no-vault
+    # state (None) instead of silently defaulting to a CWD-relative ./vault.
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    assert resolve_optional_vault_root() is None
+    assert resolve_optional_vault_root() != Path("vault")
+
+
+def test_set_but_missing_vault_root_still_fails_loud(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # No #1757 regression: a configured-but-missing VAULT_ROOT must still raise
+    # rather than collapse into the no-vault state.
+    missing_root = tmp_path / "missing-vault"
+    monkeypatch.setenv("VAULT_ROOT", str(missing_root))
+
+    with pytest.raises(VaultRootMisconfiguredError) as exc_info:
+        resolve_optional_vault_root()
+
+    assert exc_info.value.env_var == "VAULT_ROOT"
+    assert exc_info.value.configured_path == missing_root
+
+
+def test_bound_vault_root_resolves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    real_vault = tmp_path / "real_vault"
+    real_vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(real_vault))
+    assert resolve_optional_vault_root() == real_vault
+
+
+def test_optional_resolver_returns_none_for_no_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Callers can branch on the no-vault case without catching an exception.
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    resolution = resolve_optional_vault_root()
+    if resolution is None:
+        handled_no_vault = True
+    else:
+        handled_no_vault = False
+    assert handled_no_vault is True
 
 
 def test_resolve_runtime_artifact_path_scopes_test_environment() -> None:

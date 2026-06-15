@@ -54,7 +54,7 @@ Out of scope (this capability):
 
 | Order | Task | Issue | Adds | Status |
 | --- | --- | --- | --- | --- |
-| 1 | [RESOLVE_NO_VAULT_STATE](RESOLVE_NO_VAULT_STATE.md) | #2004 | config resolver returns a no-vault state when `VAULT_ROOT` is unset (stop defaulting to `./vault`) | Ready |
+| 1 | [RESOLVE_NO_VAULT_STATE](RESOLVE_NO_VAULT_STATE.md) | #2004 | config resolver returns a no-vault state when `VAULT_ROOT` is unset (stop defaulting to `./vault`) | Delivered (`resolve_optional_vault_root` in `app/config/paths.py`) |
 | 2 | [BOOT_RUNTIME_WITHOUT_VAULT](BOOT_RUNTIME_WITHOUT_VAULT.md) | #2005 | watcher idles instead of fail-exiting; `start_full_system.sh` boots with no vault; #1991 flip + F4 producer/preflight updates | Blocked on 1 |
 | 3 | [COMPANION_NO_VAULT_ROUTING](COMPANION_NO_VAULT_ROUTING.md) | #2006 | companion `vault_selection_required` covers the *unset* case; open/switch/register verified end-to-end | Blocked on 1 (∥ 2) |
 | later | [PIN_VAULT_DEFINITION](PIN_VAULT_DEFINITION.md) | #2007 | pin the overloaded "vault" term across docs | Deferred (needs-human) |
