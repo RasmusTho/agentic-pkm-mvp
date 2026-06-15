@@ -56,7 +56,7 @@ Out of scope (this capability):
 | --- | --- | --- | --- | --- |
 | 1 | [RESOLVE_NO_VAULT_STATE](RESOLVE_NO_VAULT_STATE.md) | #2004 | config resolver returns a no-vault state when `VAULT_ROOT` is unset (stop defaulting to `./vault`) | Delivered (`resolve_optional_vault_root` in `app/config/paths.py`) |
 | 2 | [BOOT_RUNTIME_WITHOUT_VAULT](BOOT_RUNTIME_WITHOUT_VAULT.md) | #2005 | watcher idles instead of fail-exiting; `start_full_system.sh` boots with no vault; #1991 flip + F4 producer/preflight updates | Blocked on 1 |
-| 3 | [COMPANION_NO_VAULT_ROUTING](COMPANION_NO_VAULT_ROUTING.md) | #2006 | companion `vault_selection_required` covers the *unset* case; open/switch/register verified end-to-end | Blocked on 1 (∥ 2) |
+| 3 | [COMPANION_NO_VAULT_ROUTING](COMPANION_NO_VAULT_ROUTING.md) | #2006 | companion `vault_selection_required` covers the *unset* case; open/switch/register verified end-to-end | Delivered (`/api/companion/vault/context` returns `reason="no_vault_bound"` with `recent_vaults`; verified by `tests/api/test_companion_vault_routing.py`) |
 | later | [PIN_VAULT_DEFINITION](PIN_VAULT_DEFINITION.md) | #2007 | pin the overloaded "vault" term across docs | Deferred (needs-human) |
 
 ## Execution order
@@ -66,8 +66,8 @@ Out of scope (this capability):
 ## Capability acceptance
 
 - [ ] The runtime stack boots with `VAULT_ROOT` unset and the watcher idles (no fail-exit, no crash). Verify: `tests/runtime/` boot/idle test named in `BOOT_RUNTIME_WITHOUT_VAULT`.
-- [ ] With no vault bound, the companion boundary returns `vault_selection_required` (not 500 / not a `./vault` default). Verify: `tests/api/` companion route test named in `COMPANION_NO_VAULT_ROUTING`.
-- [ ] Opening a vault re-resolves in-process; switching between ≥2 registered vaults persists last-active. Verify: `tests/vault/` or `tests/api/` test named in `COMPANION_NO_VAULT_ROUTING`.
+- [x] With no vault bound, the companion boundary returns `vault_selection_required` (not 500 / not a `./vault` default). Verify: `tests/api/test_companion_vault_routing.py::test_no_vault_returns_selection_required` (and `::test_selection_required_lists_known_vaults` for the `known_vaults` recent list).
+- [x] Opening a vault re-resolves in-process; switching between ≥2 registered vaults persists last-active. Verify: `tests/api/test_companion_vault_routing.py::{test_select_vault_reresolves_in_process,test_switch_between_known_vaults_persists_last_active}`.
 - [ ] No producer of the vault-required invariant still assumes a vault is mandatory (the #1991 flip is complete and symmetric). Verify: `BOOT_RUNTIME_WITHOUT_VAULT` AC + the #1997 channel preflight still requires a vault for the *test* channel only.
 - [ ] The "vault" definition is pinned in docs. Verify: `PIN_VAULT_DEFINITION` doc anchor (deferred).
 

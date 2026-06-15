@@ -41,7 +41,11 @@ from app.agent_memory.posture_projection import (
 )
 from app.api.routes.artifacts import _content_hash, _extract_title
 from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
-from app.config.paths import VaultRootMisconfiguredError, resolve_vault_root
+from app.config.paths import (
+    VaultRootMisconfiguredError,
+    resolve_optional_vault_root,
+    resolve_vault_root,
+)
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -238,9 +242,9 @@ class VaultSelectionRequiredAction(BaseModel):
 
 class VaultSelectionRequiredResponse(BaseModel):
     state: Literal["vault_selection_required"] = "vault_selection_required"
-    reason: Literal["vault_root_misconfigured"] = "vault_root_misconfigured"
+    reason: Literal["vault_root_misconfigured", "no_vault_bound"] = "vault_root_misconfigured"
     message: str
-    configured_vault_root: str
+    configured_vault_root: str | None = None
     context: VaultContextResponse
     recent_vaults: list[KnownVaultResponse] = Field(default_factory=list)
     actions: list[VaultSelectionRequiredAction] = Field(default_factory=list)
@@ -409,6 +413,42 @@ def _vault_selection_required_response(
     )
 
 
+def _no_vault_selection_required_response(
+    *,
+    requested_note_path: str | None = None,
+    trace_id: str | None = None,
+) -> VaultSelectionRequiredResponse:
+    return VaultSelectionRequiredResponse(
+        reason="no_vault_bound",
+        message=(
+            "No vault is bound. Open an existing vault, choose a recent vault, "
+            "or create a new vault to continue."
+        ),
+        configured_vault_root=None,
+        context=_vault_context_response(VaultContext(status="none")),
+        recent_vaults=_recent_vaults_response(),
+        actions=[
+            VaultSelectionRequiredAction(
+                kind="open_existing",
+                label="Open existing vault",
+                endpoint="/api/companion/vault/select",
+            ),
+            VaultSelectionRequiredAction(
+                kind="create_new",
+                label="Create new vault",
+                endpoint="/api/companion/vault/initialize",
+            ),
+            VaultSelectionRequiredAction(
+                kind="open_recent",
+                label="Open recent vault",
+                endpoint="/api/companion/vault/select",
+            ),
+        ],
+        requested_note_path=requested_note_path,
+        trace_id=trace_id,
+    )
+
+
 def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
     service = SettingsService()
     resolution = service.resolve(context)
@@ -453,17 +493,26 @@ def _companion_vault_context_with_lazy_last_active(manager: Any) -> VaultContext
     return context
 
 
-@router.get("/vault/context", response_model=VaultContextResponse)
-def read_companion_vault_context() -> VaultContextResponse:
+@router.get(
+    "/vault/context",
+    response_model=VaultContextResponse | VaultSelectionRequiredResponse,
+)
+def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequiredResponse:
     manager = get_vault_manager()
     context = manager.context
     if context.status == "none":
         context = manager.load_last_active()
     if context.status == "none":
+        # No selected vault and none restored from last-active. Distinguish a
+        # set-but-missing VAULT_ROOT (#1757) from the unset / no-vault case
+        # (#2006): both return the vault_selection_required picker state (200,
+        # never a 500 or a silent ./vault default), with known_vaults surfaced.
         try:
-            resolve_vault_root()
+            root = resolve_optional_vault_root()
         except VaultRootMisconfiguredError as exc:
-            context = _vault_selection_required_context(exc)
+            return _vault_selection_required_response(exc)
+        if root is None:
+            return _no_vault_selection_required_response()
     return _vault_context_response(context)
 
 
