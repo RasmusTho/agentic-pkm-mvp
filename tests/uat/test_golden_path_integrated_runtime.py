@@ -9,7 +9,6 @@ blocker is still open.
 
 from __future__ import annotations
 
-import importlib
 import io
 import json
 import os
@@ -72,6 +71,33 @@ def _clear_runtime_state() -> None:
     confirm_module._idempotency_store.clear()
 
 
+def _rebind_confirmation_stores() -> None:
+    """Rebuild the confirmation module's process-global stores against the current env.
+
+    This is the env-pickup / restart-simulation that the fixture and the resume
+    leg need: the module-level ``_proposal_store`` / ``_idempotency_store`` /
+    ``_service`` are constructed from the environment at import time, so they must
+    be reconstructed after the fixture monkeypatches staging paths and channel,
+    and again when ``test_resume_leg_after_restart`` simulates a process restart.
+
+    We deliberately do NOT ``importlib.reload(confirm_module)``: reload re-executes
+    the module body and rebinds every class object it defines (``Receipt``,
+    ``ConfirmResponse``, ...). Any other test that imported those classes by name
+    keeps a reference to the pre-reload class, so a subsequent
+    ``isinstance(response.receipt, Receipt)`` in a sibling suite fails against the
+    now-stale class object. Rebuilding only the store/service singletons keeps the
+    class identities stable while still re-reading the environment from disk.
+    """
+    confirm_module._proposal_store = confirm_module.ProposalStore.durable_default()
+    confirm_module._idempotency_store = (
+        confirm_module.ConfirmIdempotencyStore.durable_default()
+    )
+    confirm_module._service = confirm_module.PanelConfirmationService(
+        confirm_module._proposal_store,
+        confirm_module._idempotency_store,
+    )
+
+
 @pytest.fixture()
 def golden_path(
     tmp_path: Path,
@@ -109,7 +135,7 @@ def golden_path(
     monkeypatch.delenv("CANVAS_ENABLED", raising=False)
     monkeypatch.delenv("WORKSPACE_UPDATE_FLOW_ENABLED", raising=False)
     monkeypatch.setattr(companion_module, "_configured_vault_name", lambda: "vault-test")
-    importlib.reload(confirm_module)
+    _rebind_confirmation_stores()
     confirm_module._proposal_store.clear()
     confirm_module._idempotency_store.clear()
 
@@ -379,7 +405,7 @@ def test_resume_leg_after_restart(golden_path: GoldenPathContext) -> None:
             RESUME_PERSISTENCE_BLOCKERS,
         )
 
-    importlib.reload(confirm_module)
+    _rebind_confirmation_stores()
     resumed = TestClient(app)
     workspace = _get(resumed, "/api/companion/workspace", note_path=golden_path.note_path)
     assert workspace["artifact"]["note_path"] == golden_path.note_path
