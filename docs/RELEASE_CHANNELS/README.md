@@ -49,7 +49,6 @@ Once the prod baseline is stable, the promotion workflow (prepare â†’ execute â†
 - the `promote-to-test` and `promote-test-to-prod` staged workflows
 - automated migration reversal classification
 - operator acknowledgement receipts for forward-only migrations
-- CI/UAT-as-test policy for the test channel
 
 The absence of these does not block establishing a prod baseline. Operators should not wait for promotion hardening to run prod.
 
