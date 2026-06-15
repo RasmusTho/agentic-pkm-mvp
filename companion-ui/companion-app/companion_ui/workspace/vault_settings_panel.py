@@ -364,22 +364,26 @@ def vault_settings_panel_script() -> str:
         }})
       }}).then(reload).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
     }});
+    // Delegated on document so the handlers survive fragment swaps:
+    // applyFragment() replaces the panel body (which contains both the recent-
+    // vault buttons and the Reload button), so a directly-attached listener
+    // would be lost after the first reload (#2016 Codex review).
     document.addEventListener('click', function(event) {{
       var recent = event.target && event.target.closest('[data-testid="vault-recent-vault"]');
-      if (!recent) {{ return; }}
-      jsonFetch('{VAULT_SELECT_ENDPOINT}', {{
-        method: 'POST',
-        body: JSON.stringify({{ path: recent.getAttribute('data-vault-path') || '' }})
-      }}).then(reload).catch(function(err) {{ recent.setAttribute('data-submit-error', String(err.message || err)); }});
-    }});
-    var reloadButton = root.querySelector('[data-testid="vault-reload"]');
-    if (reloadButton) {{
-      reloadButton.addEventListener('click', function() {{
+      if (recent) {{
+        jsonFetch('{VAULT_SELECT_ENDPOINT}', {{
+          method: 'POST',
+          body: JSON.stringify({{ path: recent.getAttribute('data-vault-path') || '' }})
+        }}).then(reload).catch(function(err) {{ recent.setAttribute('data-submit-error', String(err.message || err)); }});
+        return;
+      }}
+      var reloadButton = event.target && event.target.closest('[data-testid="vault-reload"]');
+      if (reloadButton) {{
         jsonFetch('{VAULT_RELOAD_ENDPOINT}', {{ method: 'POST', body: '{{}}' }}).then(reload).catch(function(err) {{
           root.setAttribute('data-reload-error', String(err.message || err));
         }});
-      }});
-    }}
+      }}
+    }});
     // Apply the fetched projection on initial load so the panel renders the
     // runtime vault context instead of the no-vault default shell.
     reload();
