@@ -24,7 +24,10 @@ jobs:
           pip install -r app/requirements.txt
           pip install -r dev-requirements.txt
       - name: Run not-pg unit tests
-        run: pytest -q -m "not pg" | tee pytest-not-pg.log
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q -m "not pg" | tee pytest-not-pg.log
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -146,9 +149,14 @@ jobs:
       - name: Upgrade database
         run: alembic upgrade head || true
       - name: Run tests
-        run: pytest -q | tee pytest.log
-      - name: Run fitness report
+        shell: bash
         run: |
+          set -o pipefail
+          pytest -q | tee pytest.log
+      - name: Run fitness report
+        shell: bash
+        run: |
+          set -o pipefail
           mkdir -p tmp
           python -m app.fitness.report | tee tmp/ci_summary.log
       - name: Verify CI gates

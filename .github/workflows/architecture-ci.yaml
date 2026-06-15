@@ -106,7 +106,10 @@ jobs:
       - name: Upgrade database
         run: alembic upgrade head || true
       - name: Run tests
-        run: pytest -q | tee pytest.log
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q | tee pytest.log
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4

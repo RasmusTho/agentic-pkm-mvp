@@ -1007,24 +1007,41 @@ def test_real_test_compose_passes_preflight() -> None:
     )
 
 
-def test_real_prod_compose_passes_preflight(tmp_path: Path) -> None:
+def test_real_prod_compose_passes_preflight() -> None:
     """The committed docker-compose.prod.yml must pass the prod channel preflight.
 
-    The prod overlay relies on base defaults (config/runtime.defaults.env) for
-    its DSN bindings; the preflight must resolve that fallback to the prod
-    channel and pass — omission only fails when the fallback crosses channels.
-    """
-    layer = _write_env_layer(tmp_path, PROD_DSN, rel="runtime.env")
+    Regression guard for the committed prod-compose **fallback** path (issue
+    #2018): the prod overlay declares no DSNs, so every app service falls back
+    through its base ``env_file`` chain. The optional runtime layer
+    (``${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}``, ``required: false``)
+    is absent in the repo, so the effective binding is the committed
+    ``config/runtime.defaults.env`` — which carries prod ``app`` DSNs.
 
+    Crucially this exercises the *committed* fallback and does NOT inject a
+    winning later layer (which would duplicate
+    ``test_real_prod_compose_passes_when_runtime_layer_carries_prod_dsn`` and
+    mask drift). It therefore fails closed if either:
+
+    - ``config/runtime.defaults.env`` drifts to an ``app_test`` (cross-channel)
+      DSN, or
+    - the default optional runtime-layer handling regresses (e.g. the layer
+      becomes ``required`` and resolves to the missing ``./tmp/runtime.env``,
+      making the binding unverifiable).
+
+    ``environ={}`` keeps the resolution hermetic: a runner that happens to
+    export ``WATCHER_RUNTIME_ENV_FILE`` cannot inject a winning layer and turn
+    this guard vacuous.
+    """
     result = check_compose_channel_isolation(
         PROD_COMPOSE,
         "prod",
-        environ={"WATCHER_RUNTIME_ENV_FILE": str(layer)},
+        environ={},
     )
 
     assert result.ok, (
         "docker-compose.prod.yml does not satisfy the prod-channel isolation "
-        f"preflight.\n\n{result.summary()}"
+        "preflight via its committed config/runtime.defaults.env fallback.\n\n"
+        f"{result.summary()}"
     )
 
 
