@@ -32,6 +32,17 @@ fi
 echo "==> Copying panel-action-wiring.yaml to ${SYSTEM_CONFIG}/"
 cp "${WIRING_SRC}" "${WIRING_DST}"
 
+# ── Vault-settings init (issue #1991 invariant) ───────────────────────────────
+# Vault init became a hard runtime precondition (#1991): a vault missing the
+# vault-settings files validates as `uninitialized` and the watcher fail-exits.
+# init_test_vault.sh is a producer of the test vault, so it must run vault init
+# (issue #1997 symptom 1 / F4 invariant→producers rule). Idempotent: existing
+# settings files are kept. --no-remember so the operator's last-active vault
+# pointer is never rewritten.
+
+echo "==> Initializing vault settings (idempotent, #1991 invariant)"
+"${PYTHON}" -m app.cli vault init --path "${VAULT_TEST}" --machine-role primary --no-remember
+
 # ── UAT notes ─────────────────────────────────────────────────────────────────
 
 echo "==> Seeding UAT notes into ${TEST_DIR}/"

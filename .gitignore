@@ -52,6 +52,7 @@ verification_report.md
 # Local hygiene artifacts
 Archive/Trash/
 tmp-dev/
+tmp-test/
 vault-test/
 vaults/
 tests/__init__.py

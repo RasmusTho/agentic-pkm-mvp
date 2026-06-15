@@ -370,7 +370,14 @@ def test_missing_vault_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert str(missing_vault) in combined
     assert missing_vault.exists() is False
     assert fallback_vault.exists() is before_fallback_exists
-    monkeypatch.setenv("VAULT_ROOT_TEST", str(tmp_path / "explicit-vault-test"))
+    # Positive leg: a properly-set, existing VAULT_ROOT_TEST resolves. The
+    # runtime now fails loud on a *missing* env-scoped vault root (the
+    # open-vault-on-missing-vault change), so the dir must exist for the success
+    # path — creating it here exercises the real resolution instead of the stale
+    # pre-fail-loud expectation that rotted this leg (issues #1999 / #1997 F1).
+    explicit_vault_test = tmp_path / "explicit-vault-test"
+    explicit_vault_test.mkdir()
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(explicit_vault_test))
     from app.config.paths import resolve_vault_root
 
     assert resolve_vault_root(environment="test").name.endswith("-test")

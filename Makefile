@@ -1,8 +1,16 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
-TEST_VAULT_ROOT ?= $(PWD)/vault-test
-TEST_DATABASE_URL ?= postgresql+psycopg://app:app@db:5432/app_test
+# Absolute, canonical test vault root. $(CURDIR) is make's own absolute working
+# directory (unlike $(PWD), which is an inherited env var that can be stale).
+# Issue #1997 symptom 5: TEST_VAULT_ROOT must be absolute so every caller binds
+# the same vault regardless of CWD.
+TEST_VAULT_ROOT ?= $(CURDIR)/vault-test
+# Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
+# promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
+# the in-container `db:5432` address is unreachable from the host (issue #1997
+# symptom 4). Containers keep `db:5432` via docker-compose.test.yml.
+TEST_DATABASE_URL ?= postgresql+psycopg://app:app@127.0.0.1:15434/app_test
 TEST_API_BASE_URL ?= http://127.0.0.1:18002
 TEST_LLM_PROVIDER ?= mock
 TEST_LLM_MODEL ?= llama3.1:8b
@@ -94,6 +102,16 @@ smoke:
 
 test-vault-init:
 	@PYTHON="$(PYTHON)" bash scripts/init_test_vault.sh
+
+# The ONE idempotent test-channel bring-up (issue #1997 F3). Single source of
+# truth: vault init + canonical channel env + fail-loud preflight, then the
+# single-watcher Docker stack. Safe to re-run. Use `bootstrap-test-channel-config`
+# for the Docker-free config layer (CI / no-engine hosts).
+bootstrap-test-channel:
+	@PYTHON="$(PYTHON)" bash scripts/bootstrap_test_channel.sh
+
+bootstrap-test-channel-config:
+	@PYTHON="$(PYTHON)" bash scripts/bootstrap_test_channel.sh --config-only
 
 reset-zero:
 	@bash scripts/reset_to_zero.sh
