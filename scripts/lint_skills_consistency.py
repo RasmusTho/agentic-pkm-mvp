@@ -61,6 +61,7 @@ KNOWN_NON_SKILL_TERMS = {
     "learning-summary",  # BuilderOps projection name
     "pkm-prod",  # compose project names
     "pkm-test",
+    "harness-selfverify",  # CI workflow/gate name
     "pr-contract",  # CI check names
     "smoke-docker",
     "ready-for-verification",  # workflow state phrase
