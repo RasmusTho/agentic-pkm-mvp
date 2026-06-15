@@ -1,6 +1,9 @@
 State: SoT v5.5 Reality-MVP baseline locked.
 Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
+Temporal class: operational
+Source of truth: code
+Last verified against: app/stores/pg.py (2026-06-15)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -11,10 +14,17 @@ Authority: Human-readable snapshot of the current database schema and DB outbox 
 # DB Schema (Current Reality)
 
 ## Source Of Truth
-- Alembic migrations under `app/alembic/versions/` define the **store** tables/views.
+- Runtime DDL in `app/stores/pg.py` (`_ensure_tables()`) defines the **active store** tables
+  (`store_objects`, `store_vector_index`, `store_relations`, `store_relation_memberships`,
+  `vector_index_meta`). These are created at runtime, **not** by Alembic.
 - `app/services/outbox.py` (`bootstrap()`) defines the **DB outbox** table (canonical queue) at runtime.
+- Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
+  (`objects`/`chunks`/`embeddings`/...) lineage only; see "Historical migration lineage" below. The
+  active runtime does not depend on these tables.
 
-This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. If you change the schema, update this doc in the same PR.
+This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. The
+runtime store shape is mirrored from `app/stores/pg.py`; if you change the store schema there, update
+this doc in the same PR.
 
 Related docs:
 - `docs/DATA_MODEL.md` for semantic ownership and persistence-surface meaning
@@ -62,18 +72,75 @@ Instead they are:
 
 ## Core Tables (Store)
 
-### `objects`
+The active store tables are created by runtime DDL in `app/stores/pg.py` (`_ensure_tables()`), not by
+Alembic. The shapes below mirror that code (verified per the `Last verified against` frontmatter).
+They remain mirror/projection surfaces and do not hold semantic authority over the note contract.
+
+### `store_objects`
+- `object_id` (`uuid`, PK)
+- `kind` (`text`, `NOT NULL`)
+- `source_ref` (`text`, nullable)
+- `payload` (`jsonb`, `NOT NULL`)
+- `created_at` / `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
+- Notes:
+  - `kind="note"` is a runtime/storage label and may represent a projection of a vault note rather
+    than the full semantic class of the human artifact.
+
+### `store_vector_index`
+- `object_id` (`uuid`, PK)
+- `kind` (`text`, `NOT NULL`)
+- `source_ref` (`text`, nullable)
+- `payload` (`jsonb`, `NOT NULL`)
+- `embedding` (`double precision[]`, `NOT NULL`)
+- `dim` (`integer`, `NOT NULL`)
+- `model` (`text`, `NOT NULL`)
+- `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
+- Interpretation:
+  - the vector index is a derived runtime artifact, rebuildable from `store_objects` payloads
+  - embeddings are stored as a `double precision[]` array; there is no `vector`-extension column and
+    no separate `chunk_id` in the active store — similarity is computed in application code
+  - every row carries its generating `model` and `dim`
+  - embeddings do not participate in the identity-history/SCD pattern
+
+### `store_relations`
+- `src_id` (`uuid`, `NOT NULL`)
+- `dst_id` (`uuid`, `NOT NULL`)
+- `rel` (`text`, `NOT NULL`)
+- `payload` (`jsonb`, `NOT NULL`, default `{}`)
+- `created_at` (`timestamptz`, `NOT NULL`, default `now()`)
+- `PRIMARY KEY (src_id, dst_id, rel)`
+
+### `store_relation_memberships`
+- `src_id` (`uuid`, `NOT NULL`)
+- `rel` (`text`, `NOT NULL`)
+- `value` (`text`, `NOT NULL`)
+- `payload` (`jsonb`, `NOT NULL`, default `{}`)
+- `created_at` (`timestamptz`, `NOT NULL`, default `now()`)
+- `PRIMARY KEY (src_id, rel, value)`
+
+### `vector_index_meta`
+- `id` (`integer`, PK, `CHECK (id = 1)` — single-row identity record)
+- `identity_json` (`text`, `NOT NULL`) — serialized embedding identity (provider, model, dim, normalize)
+- `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
+- Interpretation:
+  - pins the active embedding identity so the index can detect provider/model/dim drift and require a
+    rebuild rather than silently mixing dimensions.
+
+## Historical migration lineage (legacy AMG-core)
+
+The tables below are the legacy AMG-core schema defined by Alembic migrations under
+`app/alembic/versions/`. They are retained as historical lineage only; the active runtime store is the
+`store_*` set above and does not depend on these tables. Do not read these shapes as the current
+contract. Note there is no `search_vector` column anywhere in the schema (active or legacy).
+
+### `objects` (legacy)
 - `id` (`uuid`, PK)
 - `kind` (`text`)
 - `source_ref` (`text`, optional in some historical migrations)
 - `payload` (`jsonb`, default `{}`)
 - `created_at` / `updated_at` (`timestamptz`, default `now()`)
-- Notes:
-  - Some historical branches add an optional `uuid` column + index; do not rely on it unless your migration head includes it.
-  - `kind="note"` is currently a runtime/storage label and may represent a projection of a vault
-    note rather than the full semantic class of the human artifact.
 
-### `chunks`
+### `chunks` (legacy)
 - `id` (`uuid`, PK)
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
 - `idx` (`int`)
@@ -81,7 +148,7 @@ Instead they are:
 - `text` (`text`)
 - `created_at` (`timestamptz`, default `now()`)
 
-### `embeddings`
+### `embeddings` (legacy)
 - `id` (`uuid`, PK; default varies by migration)
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
 - `chunk_id` (`uuid`, nullable FK → `chunks.id`, `ON DELETE CASCADE`)
@@ -89,12 +156,8 @@ Instead they are:
 - `dim` (`int`, default `1536`)
 - `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
 - `created_at` (`timestamptz`, default `now()`)
-- Interpretation:
-  - embeddings are derived runtime artifacts
-  - every embedding should be tagged with the generating provider/model
-  - embeddings do not participate in the identity-history/SCD pattern
 
-### `decisions`
+### `decisions` (legacy)
 - `id` (`uuid`, PK; default varies by migration)
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
 - `agent` (`text`, optional)
@@ -110,14 +173,14 @@ Interpretation:
 - rows in `decisions` are operational/system-side decision records.
 - they are not automatically equivalent to human-approved commitments or receipts.
 
-### `membership`
-The current baseline retains the **composite** key form:
+### `membership` (legacy)
+The legacy baseline retains the **composite** key form:
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
 - `set_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`) (sets are stored as objects in this baseline)
 - `created_at` (`timestamptz`, default `now()`)
 - `PRIMARY KEY (object_id, set_id)`
 
-### Views / Helpers
+### Views / Helpers (legacy)
 - `view_chunks_missing_embeddings`
 - `view_objects_ready_for_projection`
 - `latest_decision(object_id uuid, key text) -> jsonb`
@@ -138,6 +201,11 @@ Interpretation:
 - but the event payload is still an operational artifact layer rather than the whole domain model.
 
 ## Explicit Deltas / Known Gaps
+- The active runtime store is the `store_*` set defined by runtime DDL in `app/stores/pg.py`
+  (`_ensure_tables()`). The AMG-core `objects`/`chunks`/`embeddings`/... tables under
+  `app/alembic/versions/` are legacy lineage and are not on the active runtime path; an earlier
+  revision of this doc mis-attributed the store tables to Alembic and listed a fabricated
+  `search_vector` column, both corrected here.
 - This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.
 - Companion-note and identity-history tables described in forward-line docs may not yet exist in
   the current physical schema; where absent, read them as forward-line schema direction rather than
