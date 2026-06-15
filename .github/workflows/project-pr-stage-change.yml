@@ -2,7 +2,7 @@ name: Project PR Stage Change
 
 on:
   pull_request:
-    types: [ready_for_review, converted_to_draft]
+    types: [ready_for_review, converted_to_draft, closed]
 
 permissions:
   contents: read
@@ -15,7 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Project PR stage projection
-        # Stage-change events are deterministic: ready -> Review, draft -> In Progress.
+        # Stage-change events are deterministic: ready -> Review,
+        # draft -> In Progress, closed (merged or unmerged) -> Done. The closed
+        # trigger makes terminal projection event-driven instead of relying on
+        # the best-effort hourly reconcile scan.
         env:
           # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
           # token with Projects read/write is required. Falls back to the default
