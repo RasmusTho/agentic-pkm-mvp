@@ -134,6 +134,11 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         # map text (center node, surface nodes, parked note) lives inside
         # this container.
         "system-map-overlay",
+        # Vault settings panel (vault-selector / settings work) — all labels,
+        # status copy, action buttons, and setting rows live inside this
+        # section; child testids are dynamic (vault-permission-{key},
+        # vault-setting-save-{key}, etc.) so the outer container is registered.
+        "vault-settings-panel",
     }
 )
 
