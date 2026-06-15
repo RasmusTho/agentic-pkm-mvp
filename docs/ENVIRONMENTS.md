@@ -14,6 +14,29 @@ Reading rule:
 - Use this document when a change touches environment-specific behavior, storage boundaries, runtime topology, write safety, rollout posture, or local bootstrap expectations.
 - Use `docs/ARCHITECTURE.md` for system structure, `docs/OPERATIONS.md` for operator procedure, `docs/TESTING.md` for verification layers, and `docs/STATUS.md` for current rollout posture.
 
+## Vault terminology
+
+"Vault" is overloaded. The word names four distinct things in this system, each carrying its own invariants. Pinning them keeps statements like "no vault at initiation" unambiguous and prevents work from relaxing the wrong invariant (for example, accidentally making the *test* vault optional and breaking deterministic UAT). This section is the canonical definition; other docs should reference it instead of redefining "vault" locally. It pins the term per `docs/VAULT_OPTIONAL_RUNTIME/PIN_VAULT_DEFINITION.md`.
+
+The four senses:
+
+- **Content vault** — the directory of Markdown notes the user authors and owns (the Obsidian-style sense: the folder a human opens).
+  - *Invariants*: this is the human-first surface; writes to its tracked notes remain deterministic and guarded by write-safety and idempotency rules (see §Cross-Environment Invariants). `prod` operates on the operator's real content vault; `dev` and `test` use intentionally separate non-production content vaults (see §Vaults and Human-Facing Files). The continuity set that recovery must preserve is the content vault's notes plus their companion notes.
+
+- **Vault-settings** — the per-vault settings/config surface that lives *inside* a content vault (resolved relative to the vault root, e.g. `<vault>/_system/settings/` or `<vault>/@Settings/`; see `app/config/paths.py` and `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`).
+  - *Invariants*: settings and policy remain the control surface for runtime behavior; environment selection must not bypass policy, allowlists, or write guards. Vault-settings are scoped to a specific content vault, not global, and a content vault whose required settings are corrupt or missing is `invalid`/`uninitialized` rather than usable. Their presence/validity is what distinguishes a *selected and initialized* vault from a merely existing folder.
+
+- **`VAULT_ROOT` runtime binding** — the env/runtime binding that points the running process at a content vault at boot (resolved by `resolve_vault_root` / `resolve_optional_vault_root` in `app/config/paths.py`).
+  - *Invariants*: this binding is the boot-time *pointer*, not the data. The unset behavior is **resolver-specific** and the two resolvers differ: `resolve_optional_vault_root()` treats an **unset/unbound** `VAULT_ROOT` as an explicit no-vault state (`None`) with no silent fallback — this is the resolver the no-vault-at-initiation path uses. The legacy `resolve_vault_root()` still falls back to the CWD-relative `_DEFAULT_VAULT` (`./vault`) when `VAULT_ROOT` is unset; migrating its remaining call sites onto the optional/no-vault contract is the remaining no-vault boot work (parent #2003, hardening #2029) and is **not** yet complete. Both resolvers agree on the other cases: a **set-but-missing** `VAULT_ROOT` (path configured but absent) fails loud with `VaultRootMisconfiguredError` — missing data is an error, not a no-vault state — and a **bound, existing** root resolves to that path, environment-scoped when requested. Per-environment overrides (`VAULT_ROOT_DEV`, `VAULT_ROOT_TEST`) and a CLI override take precedence over the base binding.
+
+- **Test vault** — the deterministic, throwaway fixture vault that the local `test` bootstrap/UAT harness provisions (`vault-test/` by default, overridable via `VAULT_ROOT_TEST`; see §Canonical Local Test Bootstrap).
+  - *Invariants*: it is resettable and reproducible, not persistent — the `test` bootstrap resets and re-initializes it from a clean start, and repeatability matters more than durability. It must remain isolated from the `dev` and `prod` content vaults so deterministic UAT does not depend on live or leftover state. Making the *test* vault optional or non-deterministic would break the canonical verification path and is out of scope for any "vault optional" work.
+
+**Which sense "no vault at initiation" refers to.** "No vault at initiation" refers specifically to the **`VAULT_ROOT` runtime-binding** sense: the process boots with `VAULT_ROOT` (and any env-scoped variant) **unset/unbound**, so `resolve_optional_vault_root` reports the explicit no-vault state. It does **not** mean the content vault was deleted, the vault-settings are absent, or the test vault is skipped:
+
+- A **set-but-missing** content vault is a misconfiguration that fails loud (`VaultRootMisconfiguredError`), not a no-vault state.
+- Vault-settings and the test vault are unaffected by the no-vault-at-initiation contract; only the runtime binding may legitimately be absent at boot.
+
 ## Code vs Environment Separation
 
 Two kinds of separation govern how `dev`, `test`, and `prod` stay isolated:
