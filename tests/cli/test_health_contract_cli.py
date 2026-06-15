@@ -18,7 +18,9 @@ def test_health_status_cli_json(monkeypatch, tmp_path: Path) -> None:
     ]
     outbox.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
     monkeypatch.setattr(
         "app.health_contract.diagnose_index",
         lambda: {
@@ -56,7 +58,9 @@ def test_health_status_cli_environment_explicit_dev(monkeypatch, tmp_path: Path)
     ]
     outbox.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
     monkeypatch.setattr(
         "app.health_contract.diagnose_index",
         lambda: {
@@ -85,7 +89,9 @@ def test_health_status_cli_environment_explicit_prod(monkeypatch, tmp_path: Path
     ]
     outbox.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
     monkeypatch.setattr(
         "app.health_contract.diagnose_index",
         lambda: {

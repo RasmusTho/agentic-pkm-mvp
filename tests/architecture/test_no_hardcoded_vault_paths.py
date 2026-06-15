@@ -20,6 +20,11 @@ _ALLOWED_FILES = {
     # values. Runtime consumers should resolve through VaultPathResolver.
     Path("app/vault/manager.py"),
     Path("app/vault/settings_service.py"),
+    # The `vault init` CLI (#1991) only names "Design Handoff" in its module
+    # docstring and click help text; the actual scaffolding delegates to
+    # VaultManager.initialize_vault (allowed above), so no runtime path is
+    # hardcoded here.
+    Path("app/cli/vault.py"),
 }
 
 
