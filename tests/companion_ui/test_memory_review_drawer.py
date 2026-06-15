@@ -45,6 +45,7 @@ from companion_ui.workspace.memory_review_drawer import (
     memory_review_drawer_markup,
     memory_review_queue_fragment,
     memory_review_unavailable_fragment,
+    recall_provenance_surface,
 )
 from companion_ui.workspace.overlay_host import (
     SHIPPED_OVERLAY_OCCUPANTS,
@@ -678,6 +679,34 @@ def test_reachable_from_reentry_and_dismisses_to_anchor() -> None:
         assert forbidden not in script, f"drawer must not call {forbidden}"
     # One Esc owner: the host, not the drawer.
     assert "Escape" not in script
+
+
+def test_missing_authority_flags_default_closed() -> None:
+    """Missing recall authority flags default to closed in the drawer
+    projection (#2016 AC2): the UI never invents affirmative recall authority
+    for a degraded or older payload that did not declare it."""
+    # A payload that declares neither flag must render both closed.
+    surface = recall_provenance_surface({"why_now": "recalled for this turn"})
+    assert 'data-may-answer="false"' in surface
+    assert 'data-may-propose="false"' in surface
+
+    # An explicit falsey value stays closed.
+    closed = recall_provenance_surface({"may_answer": False, "may_propose": False})
+    assert 'data-may-answer="false"' in closed
+    assert 'data-may-propose="false"' in closed
+
+    # The runtime can still declare affirmative authority — it is honored
+    # exactly as supplied, never re-derived.
+    open_recall = recall_provenance_surface(
+        {"may_answer": True, "may_propose": True}
+    )
+    assert 'data-may-answer="true"' in open_recall
+    assert 'data-may-propose="true"' in open_recall
+
+    # Mixed: only the declared-true flag opens.
+    mixed = recall_provenance_surface({"may_answer": True})
+    assert 'data-may-answer="true"' in mixed
+    assert 'data-may-propose="false"' in mixed
 
 
 def test_unresolved_link_declares_memory_intent_when_queue_empty() -> None:
