@@ -115,6 +115,44 @@ def _receipt_records(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _block_synthesis_gate(monkeypatch) -> None:
+    """Force the Expansion Activation Gate (#2026) to block ASK synthesis.
+
+    Post-#2026, ASK answer synthesis is activated through the admissibility
+    gate, not the raw ``REASONING_ENABLE`` flag. These fallback-path tests
+    assert the literal-snippet / recall-only behavior, which is reached only
+    when the gate blocks — so block it deterministically.
+    """
+    from datetime import datetime, timezone
+
+    from app.activation.ask_synthesis import ASK_SYNTHESIS_CAPABILITY_ID
+    from app.activation.gate import (
+        ActivationDecision,
+        ConsumingAuthority,
+        GateDecisionReceipt,
+    )
+
+    def _blocked(source_ids, **kwargs):  # type: ignore[no-untyped-def]
+        return ActivationDecision(
+            capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+            activatable=False,
+            blocked_reasons=["admissibility_undeclared"],
+            admitted_artifact_ids=[],
+            receipt=GateDecisionReceipt(
+                receipt_id="blocked",
+                capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+                consuming_authority=ConsumingAuthority.READ_ONLY,
+                outcome="blocked",
+                blocked_reasons=["admissibility_undeclared"],
+                evaluated=[],
+                admitted_artifact_ids=[],
+                created_at=datetime.now(tz=timezone.utc),
+            ),
+        )
+
+    monkeypatch.setattr(ask_graph, "evaluate_ask_synthesis", _blocked)
+
+
 def test_ask_run_invokes_guarded_recall_with_receipt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     vault_root = tmp_path / "vault"
@@ -337,6 +375,7 @@ def test_ask_recall_only_fallback_uses_content_not_match_reason(tmp_path: Path, 
         return _empty_retrieval_response(request.query)
 
     monkeypatch.setattr(ask_graph, "retrieve", _fake_retrieve)
+    _block_synthesis_gate(monkeypatch)
 
     state = run_ask_graph("How does recall runtime stay read-only?", trace_id="trace-recall-content")
 
@@ -372,6 +411,7 @@ def test_no_recall_when_no_relevant_memory(tmp_path: Path, monkeypatch) -> None:
         return _retrieval_response(request.query, text="Vault fallback snippet should remain normal.")
 
     monkeypatch.setattr(ask_graph, "retrieve", _fake_retrieve)
+    _block_synthesis_gate(monkeypatch)
 
     state = run_ask_graph("fallback snippet", trace_id="trace-no-recall")
 

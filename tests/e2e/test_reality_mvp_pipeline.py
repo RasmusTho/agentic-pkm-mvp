@@ -35,6 +35,41 @@ def test_reality_mvp_note_ingest_and_ask(tmp_path: Path, monkeypatch) -> None:
     get_hybrid_store().set_documents([])
     monkeypatch.setattr(ask_route, "_HYBRID_WARMED", False, raising=False)
 
+    # Post-#2026, ASK answer synthesis is activated through the admissibility
+    # gate. This e2e asserts the ingest -> retrieve -> answer-from-note path,
+    # which under the mock provider (echo-only) is the literal-snippet fallback;
+    # block the synthesis gate so the answer reflects the note content. Real
+    # context-grounded synthesis is proven by the test-channel UAT with the live
+    # (Ollama) provider, not by this mock-provider e2e.
+    from datetime import datetime, timezone
+
+    from app.activation.ask_synthesis import ASK_SYNTHESIS_CAPABILITY_ID
+    from app.activation.gate import (
+        ActivationDecision,
+        ConsumingAuthority,
+        GateDecisionReceipt,
+    )
+
+    def _blocked(source_ids, **kwargs):  # type: ignore[no-untyped-def]
+        return ActivationDecision(
+            capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+            activatable=False,
+            blocked_reasons=["admissibility_undeclared"],
+            admitted_artifact_ids=[],
+            receipt=GateDecisionReceipt(
+                receipt_id="blocked",
+                capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+                consuming_authority=ConsumingAuthority.READ_ONLY,
+                outcome="blocked",
+                blocked_reasons=["admissibility_undeclared"],
+                evaluated=[],
+                admitted_artifact_ids=[],
+                created_at=datetime.now(tz=timezone.utc),
+            ),
+        )
+
+    monkeypatch.setattr("app.agents.ask.graph.evaluate_ask_synthesis", _blocked)
+
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
     note_path = vault_root / "demo_note.md"

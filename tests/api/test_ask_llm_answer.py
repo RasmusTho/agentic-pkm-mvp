@@ -60,9 +60,46 @@ def test_ask_uses_llm_when_enabled(monkeypatch) -> None:
         os.environ.pop("REASONING_PROVIDER", None)
 
 
-def test_ask_falls_back_when_reasoning_disabled(monkeypatch) -> None:
+def _block_synthesis_gate(monkeypatch) -> None:
+    """Force the Expansion Activation Gate (#2026) to block ASK synthesis.
+
+    Post-#2026 the gate, not ``REASONING_ENABLE``, decides whether synthesis
+    runs; the literal-snippet fallback is reached when the gate blocks.
+    """
+    from datetime import datetime, timezone
+
+    from app.activation.ask_synthesis import ASK_SYNTHESIS_CAPABILITY_ID
+    from app.activation.gate import (
+        ActivationDecision,
+        ConsumingAuthority,
+        GateDecisionReceipt,
+    )
+
+    def _blocked(source_ids, **kwargs):  # type: ignore[no-untyped-def]
+        return ActivationDecision(
+            capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+            activatable=False,
+            blocked_reasons=["admissibility_undeclared"],
+            admitted_artifact_ids=[],
+            receipt=GateDecisionReceipt(
+                receipt_id="blocked",
+                capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+                consuming_authority=ConsumingAuthority.READ_ONLY,
+                outcome="blocked",
+                blocked_reasons=["admissibility_undeclared"],
+                evaluated=[],
+                admitted_artifact_ids=[],
+                created_at=datetime.now(tz=timezone.utc),
+            ),
+        )
+
+    monkeypatch.setattr("app.agents.ask.graph.evaluate_ask_synthesis", _blocked)
+
+
+def test_ask_falls_back_when_synthesis_gate_blocks(monkeypatch) -> None:
     _stub_embeddings(monkeypatch)
     os.environ.pop("REASONING_ENABLE", None)
+    _block_synthesis_gate(monkeypatch)
     hybrid = get_store()
     hybrid.set_documents(
         [

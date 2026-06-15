@@ -32,5 +32,10 @@ class AgentState(RuntimeStateModel):
     answer: Optional[str] = None
     reasoning: Optional[List[str]] = None
     llm_route: dict[str, Any] | None = None
+    # Expansion Activation Gate (#2026): receipt id for an admitted ASK answer
+    # synthesis, plus the grounded sources the gate admitted into it. None/empty
+    # when the gate blocked or synthesis did not run (literal-snippet fallback).
+    synthesis_receipt_id: Optional[str] = None
+    synthesis_source_ids: List[str] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}

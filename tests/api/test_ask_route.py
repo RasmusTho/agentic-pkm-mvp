@@ -43,7 +43,32 @@ def test_ask_route_uses_retrieval_capability_contract(monkeypatch) -> None:
         )
 
     monkeypatch.setattr("app.agents.ask.graph.retrieve", _fake_retrieve)
-    monkeypatch.setattr("app.agents.ask.graph.reasoning_enabled", lambda: False)
+    # ASK synthesis is activated through the admissibility gate (#2026); this
+    # contract test asserts the literal-snippet path, so force the gate to block
+    # (the equivalent of the pre-#2026 reasoning-off posture).
+    from app.activation.ask_synthesis import ASK_SYNTHESIS_CAPABILITY_ID
+    from app.activation.gate import ActivationDecision, ConsumingAuthority, GateDecisionReceipt
+    from datetime import datetime, timezone
+
+    def _blocked(source_ids, **kwargs):  # type: ignore[no-untyped-def]
+        return ActivationDecision(
+            capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+            activatable=False,
+            blocked_reasons=["admissibility_undeclared"],
+            admitted_artifact_ids=[],
+            receipt=GateDecisionReceipt(
+                receipt_id="blocked",
+                capability_id=ASK_SYNTHESIS_CAPABILITY_ID,
+                consuming_authority=ConsumingAuthority.READ_ONLY,
+                outcome="blocked",
+                blocked_reasons=["admissibility_undeclared"],
+                evaluated=[],
+                admitted_artifact_ids=[],
+                created_at=datetime.now(tz=timezone.utc),
+            ),
+        )
+
+    monkeypatch.setattr("app.agents.ask.graph.evaluate_ask_synthesis", _blocked)
 
     client = TestClient(app)
     try:
