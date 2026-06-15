@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import heapq
 import json
+import logging
 import os
 import re
 from pathlib import Path, PurePosixPath
@@ -20,6 +21,11 @@ from pydantic import BaseModel, Field
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.agent_memory.candidate import MemoryCandidate, MemoryType
+from app.agent_memory.materialization import (
+    MemoryMaterializationError,
+    MemoryMaterializationResult,
+    materialize_promoted_memory,
+)
 from app.agent_memory.promotion import (
     PromotedMemory,
     PromotionError,
@@ -83,6 +89,8 @@ from app.vault.settings_service import (
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 
 router = APIRouter(prefix="/companion", tags=["companion"])
+
+logger = logging.getLogger(__name__)
 
 _LAST_ACTIVE_LOAD_ATTEMPTED_ATTR = "_companion_last_active_load_attempted"
 
@@ -3448,12 +3456,27 @@ class MemoryReviewReceipt(BaseModel):
     recorded_at: str
 
 
+class MemoryMaterializationProjection(BaseModel):
+    """Projection of the durable-materialization outcome for an accepted memory.
+
+    Copied from the runtime ``MemoryMaterializationResult``; the endpoint never
+    mints materialization identity or outcome. ``terminal`` reflects whether the
+    promotion decision was marked terminal after a successful durable write.
+    """
+
+    status: str
+    artifact_path: str | None = None
+    receipt_id: str | None = None
+    terminal: bool
+
+
 class MemoryReviewDecisionResponse(BaseModel):
     status: Literal["accepted", "rejected", "revised", "deferred"]
     candidate_id: str
     candidate_pending: bool
     receipt: MemoryReviewReceipt | None = None
     revision_candidate_id: str | None = None
+    materialization: MemoryMaterializationProjection | None = None
     detail: str | None = None
 
 
@@ -3496,6 +3519,17 @@ def _memory_review_receipt_projection(promoted: PromotedMemory) -> MemoryReviewR
         decision_notes=promoted.decision_notes,
         revision_of=promoted.revision_of,
         recorded_at=_orientation_iso(promoted.promoted_at) or promoted.promoted_at.isoformat(),
+    )
+
+
+def _memory_materialization_projection(
+    result: MemoryMaterializationResult,
+) -> MemoryMaterializationProjection:
+    return MemoryMaterializationProjection(
+        status=result.status,
+        artifact_path=result.artifact_path,
+        receipt_id=result.receipt_id,
+        terminal=result.terminal,
     )
 
 
@@ -3647,17 +3681,50 @@ def post_memory_review_decision(
             reviewed_by=req.reviewed_by,
             notes=req.notes,
         )
-        _memory_review_decision_store().record_decision(
+        vault_context = _memory_review_vault_context()
+        channel = _memory_review_channel()
+        decision_store = _memory_review_decision_store()
+        decision_store.record_decision(
             decided,
-            vault_context=_memory_review_vault_context(),
-            channel=_memory_review_channel(),
+            vault_context=vault_context,
+            channel=channel,
         )
         promoted = promote_memory_candidate(decided)
+        # Materialize the accepted candidate into the vault. For semantic
+        # candidates this writes the agent-promoted artifact through WriteGuard,
+        # appends the promotion receipt, and marks the stored decision terminal.
+        # If the durable write is blocked (e.g. WriteGuard safe-mode), the
+        # promotion stays non-terminal/actionable and the response reports the
+        # candidate is still pending materialization rather than failing the
+        # accept outright.
+        try:
+            materialization = materialize_promoted_memory(
+                decided,
+                vault_context=vault_context,
+                channel=channel,
+                decision_store=decision_store,
+            )
+            materialization_projection = _memory_materialization_projection(materialization)
+            candidate_pending = not materialization.terminal
+        except MemoryMaterializationError as exc:
+            materialization_projection = MemoryMaterializationProjection(
+                status="blocked",
+                artifact_path=None,
+                receipt_id=None,
+                terminal=False,
+            )
+            candidate_pending = True
+            logger.warning(
+                "memory materialization blocked for candidate %s: %s",
+                candidate_id,
+                exc,
+            )
         return MemoryReviewDecisionResponse(
             status="accepted",
             candidate_id=candidate_id,
-            candidate_pending=False,
+            candidate_pending=candidate_pending,
             receipt=_memory_review_receipt_projection(promoted),
+            materialization=materialization_projection,
         )
 
     if req.action == "reject":

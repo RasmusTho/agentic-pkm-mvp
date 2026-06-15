@@ -140,6 +140,18 @@ class MemoryCandidateReviewQueue:
     def enqueue(self, candidate: MemoryCandidate) -> ReviewEntry:
         reconciled = self._reconciled_terminal_entry(candidate)
         if reconciled is not None:
+            # A terminal decision exists for this candidate.
+            #
+            # Fresh intake (candidate not already on the board): the candidate is
+            # fully resolved, so it is returned but not added to the queue — it
+            # belongs neither to pending() nor decided().
+            #
+            # Stale-pending reconciliation (candidate already queued as PENDING):
+            # replace the stale pending entry with the terminal projection so it
+            # no longer surfaces in pending(); the queue converges on the
+            # terminal decision instead of raising "already in queue".
+            if candidate.candidate_id in self._entries:
+                self._entries[candidate.candidate_id] = reconciled
             return reconciled
         if candidate.candidate_id in self._entries:
             raise ReviewQueueError(

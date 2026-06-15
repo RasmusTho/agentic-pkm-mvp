@@ -216,13 +216,18 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   (`REASONING_ENABLE`, `CANVAS_ENABLED`) with one named contract that the #1956 activation waves cite.
   Docs-only — the gate function is Slice #2025; first activation (ASK synthesis) is Slice #2026
   (owner-gated). No flag is flipped here.
-- Durable Memory and Recall is shipped through #1904-#1908. Pending review candidates remain
-  runtime-only; explicit review decisions persist as vault-scoped receipts/traces and reconcile the
-  in-memory queue on intake/startup. Promote-to-semantic decisions become terminal only after the
-  governed materialization path writes an agent-promoted vault artifact through WriteGuard and
-  records the promotion receipt; blocked materialization records a failed-attempt receipt and keeps
-  the promotion actionable. Guarded recall now runs the authority guard and writes recall receipts,
-  but activation state is not persisted as artifact authority.
+- Durable Memory and Recall is shipped through #1904-#1908, with the live review-accept wiring and
+  audit residuals closed by #2014. Pending review candidates remain runtime-only; explicit review
+  decisions persist as vault-scoped receipts/traces and reconcile the in-memory queue on
+  intake/startup (re-intake of an already-decided candidate replaces any stale pending entry with the
+  terminal decision). The companion review-accept endpoint now drives the governed materialization
+  path directly: accepting a semantic candidate writes an agent-promoted vault artifact through
+  WriteGuard, records the promotion receipt, and marks the stored decision terminal — promote-to-
+  semantic decisions become terminal only after that durable write succeeds. Blocked materialization
+  records a failed-attempt receipt and keeps the promotion actionable (the accept response reports the
+  candidate as still pending materialization). Guarded recall now runs the authority guard and writes
+  recall receipts, including the valid action-authorizing path which carries its recall receipt
+  reference; activation state is not persisted as artifact authority.
 - Runtime AgentState contract unification is shipped for the current ASK, generic graph, reasoning
   graph-builder, and PanelAgent state surfaces: `app/agents/runtime_state.py` defines the shared
   trace/authority/proposal/receipt linkage fields and the existing state classes now expose or adapt
