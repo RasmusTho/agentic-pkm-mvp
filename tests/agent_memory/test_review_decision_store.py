@@ -9,6 +9,7 @@ from app.agent_memory.review_decision_store import (
     REVIEW_DECISION_RECEIPT_KIND,
     ReviewDecisionStore,
     ReviewDecisionStoreError,
+    _default_db_path,
 )
 from app.agent_memory.review_queue import MemoryCandidateReviewQueue, ReviewDecision
 from app.vault.manager import VaultContext
@@ -97,6 +98,20 @@ def test_pending_candidates_are_not_persisted(tmp_path: Path) -> None:
         store.record_decision(pending, vault_context=vault, channel="test")
 
     assert store.list_decisions(vault_context=vault, channel="test") == ()
+
+
+def test_default_db_under_ignored_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default review-decision DB must resolve under the gitignored
+    ``runtime/agent_memory/`` runtime path (#2014, AC#5) so local decision DBs
+    are never committed."""
+
+    monkeypatch.delenv("AGENT_MEMORY_REVIEW_DECISION_DB", raising=False)
+    monkeypatch.delenv("RUNTIME_TRACE_DIR", raising=False)
+
+    default_path = _default_db_path()
+
+    assert default_path.parent == Path("runtime/agent_memory")
+    assert default_path == Path("runtime/agent_memory/review_decisions.sqlite3")
 
 
 def test_decision_record_preserves_provenance(tmp_path: Path) -> None:

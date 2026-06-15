@@ -47,6 +47,7 @@ runtime/builderops/
 runtime/dispatcher/
 runtime/orientation/
 runtime/panel/
+runtime/agent_memory/
 verification_report.md
 
 # Local hygiene artifacts
