@@ -46,8 +46,9 @@ comes from the compiled task policy; env vars supply defaults only when the poli
 - `EMBED_MODEL`
   - Example (default local): `nomic-embed-text:latest`
 - `EMBED_DIM`
-  - Example for `nomic-embed-text:latest`: `768`
-  - Used as a **guardrail**. If provider returns a different dim, indexing fails for that object and an error event is emitted.
+  - Runtime guardrail default: `1536` (`DEFAULT_EMBED_DIM` in `app/embedding_config.py`, mirrored by `settings.embed_dim`). This is the **configured/requested** dimension the runtime asserts against.
+  - Relationship to the model's native dimension: `nomic-embed-text` emits `768` natively. The runtime requests the configured `EMBED_DIM` by sending it as the `dimensions` field in the Ollama payload (see Call graph), so the returned vector is sized to `EMBED_DIM` rather than the raw `768`. The guardrail then asserts the returned vector matches the configured dim.
+  - Used as a **guardrail**. If the provider returns a vector whose length differs from `EMBED_DIM`, indexing fails for that object and an error event is emitted.
 
 ### Optional env vars
 
@@ -90,7 +91,7 @@ The system maintains a stable identity record resolved by `get_embedding_identit
 
 - provider (e.g., `ollama`)
 - model (e.g., `nomic-embed-text:latest`)
-- expected dimension (e.g., `768`)
+- expected dimension (the configured `EMBED_DIM` guardrail; default `1536` — distinct from `nomic-embed-text`'s native `768`, see Configuration)
 - normalize flag (e.g., `true`)
 - (optional) formatting mode policy version (if query/passage rules apply)
 
@@ -128,7 +129,7 @@ Normative call path:
 - `app.index.embeddings.llm_embed_text(...)` routes to the provider-aware embedding implementation in `app.llm.embeddings.embed_text(...)`
 - Provider logic uses `LLM_PROVIDER` and `OLLAMA_HOST` to decide how to call the backend.
 
-> **Note:** When `LLM_PROVIDER=ollama`, the runtime calls Ollama’s native `/api/embed` endpoint with `{model, input, dimensions, truncate: true}`. We only fall back to the OpenAI-compatible `/api/embeddings` mode when that compatibility layer is explicitly enabled on the Ollama daemon.
+> **Note:** When `LLM_PROVIDER=ollama`, the runtime's **primary** embedding call is `${OLLAMA_URL}/api/embeddings` with `{model, prompt, dimensions}` (the `dimensions` field is included unless `OLLAMA_EMBED_DIMENSIONS` disables it). If that request fails, it **falls back** to the OpenAI-compatible `${OLLAMA_URL}/v1/embeddings` endpoint with `{model, input}`. This matches `app/llm/embeddings.py` and the endpoint table in `docs/LLM.md`.
 
 Indexer MUST NOT call deterministic/test-only helpers in production paths.
 
