@@ -53,6 +53,23 @@ def test_desired_pr_status_explicit_status_wins() -> None:
     )
 
 
+def test_desired_status_closed_action_projects_done() -> None:
+    # A `closed` pull_request event is terminal for both merged and
+    # unmerged-closed PRs; the card must reach Done regardless of draft state.
+    assert project_status.desired_status("closed", None) == "Done"
+    assert project_status.desired_status("closed", True) == "Done"
+    assert project_status.desired_status("closed", False) == "Done"
+
+
+def test_pr_stage_change_workflow_subscribes_to_closed_event() -> None:
+    # Merge/close must be event-driven so terminal projection does not depend on
+    # the best-effort hourly reconcile scan.
+    workflow = Path(".github/workflows/project-pr-stage-change.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "closed" in workflow, "stage-change workflow must subscribe to closed PRs"
+
+
 def test_get_pr_fetches_draft_state(monkeypatch) -> None:
     commands = []
 

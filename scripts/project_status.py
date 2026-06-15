@@ -26,6 +26,9 @@ def desired_status(action: str, draft: bool | None) -> str:
         return "Review"
     if action == "converted_to_draft":
         return "In Progress"
+    if action == "closed":
+        # Both merged and unmerged-closed PRs are terminal Project artifacts.
+        return "Done"
     raise ValueError(f"unsupported pull request action: {action}")
 
 
