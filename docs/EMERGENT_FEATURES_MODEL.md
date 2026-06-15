@@ -61,6 +61,39 @@ These rules bind every emergent feature, regardless of which subsystem it compos
 - **Observable by construction.** Every emergent feature must be observable through its context bundle, its receipt, and its feedback signal. Without these three, the feature has no audit trail and no calibration loop, and emergence becomes drift. Observability is not an optional follow-up; it is part of what makes the feature composed.
 - **Legible degradation.** Extension-fabric components that fail or are unavailable must degrade legibly. An emergent feature whose capability, integration, or memory dependency is unavailable must surface the degradation, not silently take over authority or hide the failure from the human.
 
+## Expansion Activation Gate (dormant→active flip rule)
+
+The composition pattern above governs *how* an emergent feature is shaped. This section governs *when* a built-but-dormant Cognitive Expansion capability is allowed to flip from **seam → live** (`docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1–§2.2 Maintenance vs Expansion; current activation ladder in `docs/STATUS.md` "Cognitive Expansion — activation status"). It is the **activation precondition on the composition spine**, not a parallel model: a feature still composes from the seven elements; the gate decides whether it may run on the human's behalf at all.
+
+Today each Expansion surface is gated ad hoc — a per-surface boolean (`REASONING_ENABLE`, `CANVAS_ENABLED`) or simply having no runtime caller, wired one-off under the per-capability waves of #1956. There is no uniform, governed answer to "what must be true before this generative capability is allowed to run?" This gate is that single answer. It **replaces the ad-hoc per-capability flags with one named, inspectable activation record per capability.** It does **not** introduce a runtime composition registry or orchestration engine (consistent with *What this model is not*); it is a docs-level activation discipline over the metadata vocabulary that `docs/CAPABILITY_CONTRACT_MODEL.md` already owns.
+
+### Determinism principle
+
+**The gate is deterministic even where the cognition it gates is adaptive.** The decision to activate (and to keep a capability admissible per invocation) is a deterministic function of declared, inspectable inputs — never of the model's own judgment. Adaptive/LLM cognition may run *inside* an activated capability, but it never decides its own activation. This mirrors the repo-wide stance: adaptive cognition upstream, deterministic gate downstream.
+
+### Gate inputs (each capability must declare and satisfy)
+
+A capability is **activatable** only when all of the following are declared and green. The first four reuse `docs/CAPABILITY_CONTRACT_MODEL.md` vocabulary directly; the gate is the activation discipline over them.
+
+1. **Admissibility compliance** — the capability declares exactly what inbound context/memory it may admit, expressed against `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` (the inbound admit-by predicate, #2023), and admits nothing undeclared. This is the gate input that contract was written to serve.
+2. **Authority class + governance tier** — the capability declares its `authority_class` (`read-only` / `proposal` / `governed_effect`) and, for any durable effect, its `authorization_tier` (`Act` / `agent-review` / `ask-you`, per #1881 proportional governance). Most Expansion surfaces start `read-only`. The gate never raises a capability's authority; it only admits activation at or below the declared class.
+3. **Loop precondition** — the named upstream gate(s) that must already be green: the **proven vertical loop** (reset step 4 — #1597/#1874, live via #1957) and the **admissibility contract defined** (reset step 5 — #2023). A capability whose precondition is not green is **blocked-with-reason**, not activatable.
+4. **Reversibility & receipt** — every activation-gated action emits a receipt (what it did, on whose authority, what it admitted); `governed_effect` additionally requires a reversible write through WriteGuard. Per-invocation enforcement remains with the existing machinery (WriteGuard, receipts, policy evaluation, authority separation) — the gate is the activation check, not a replacement for them.
+5. **Observability** — the capability is legible in `status` / health as activated, with its authority class and admissibility scope readable without reading code.
+
+### Deterministic outcome
+
+For a given capability and posture inputs, the gate returns exactly one of:
+
+- **activatable** — all gate inputs declared and green; the capability may flip dormant→active and emits an **activation receipt** recording the decision and its inputs;
+- **blocked-with-reason** — at least one input missing, undeclared, or not green; the gate returns a structured, inspectable reason (e.g. `loop_precondition_not_green`, `admissibility_undeclared`, `authority_class_exceeds_declared`, `no_reversible_write_path`) and the capability stays dormant.
+
+There is no third "activate anyway" path: absence of a required input is `blocked-with-reason`, never silent activation (stricter-boundary-wins, consistent with the admissibility contract).
+
+### Relationship to the #1956 per-capability activation waves
+
+`#1956` (v6.1 prod delivery) sequences Expansion activation as ordered waves (ASK synthesis → canvas/chat → planner/commitments → knowledge compilation), each entered only after the prior is green. **This gate is the contract each of those waves passes through.** Future activations cite this gate and declare its inputs instead of improvising a new per-surface flag; a wave's "entry gate" is satisfied by a green gate decision, and its capability's activation record is the receipt. The first proof case is ASK answer synthesis (read-side `may_answer`, lowest authority) — implemented as a deterministic gate function in #2025 and activated through the gate in #2026 (owner-gated).
+
 ## Examples
 
 The following worked examples show the composed shape that each emergent feature must take. They are target-state framings, not claims that the example is shipped. Each example names the seven elements explicitly so the composition surface is legible.
@@ -154,6 +187,7 @@ Emergent feature composition is a specific shape with a specific contract. It is
 - `docs/CAPABILITY_CONTRACT_MODEL.md` :: Capability definition; canonical capabilities; capability contract shape.
 - `docs/AGENT_MEMORY/README.md` :: Agent memory contract and authority guards.
 - `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` :: Context bundle semantic contract (authority, fields, provenance).
+- `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` :: Inbound admit-by predicate; gate input 1 for the Expansion Activation Gate.
 - `docs/CONTEXT_BUNDLES/README.md` :: Context bundle implementation-planning surface; bridge between cognition and durable surface.
 - `docs/ARCHITECTURE.md` :: Current runtime baseline; current-vs-planned status; capability model.
 - `docs/HUMAN-FLOWS.md` :: User-facing behavior contract; canonical human loops; everyday scenarios and user needs.
