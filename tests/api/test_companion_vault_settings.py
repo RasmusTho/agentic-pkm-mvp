@@ -126,3 +126,58 @@ def test_corrupt_last_active_falls_back(
     # Context route must not 500 either.
     context_resp = client.get("/api/companion/vault/context")
     assert context_resp.status_code == 200, context_resp.text
+
+
+def _init_satellite_writes_no_shared_edits(vault_root: Path) -> Path:
+    """A satellite clone: writes allowed, but shared-settings edits disabled
+    (the default initialized satellite posture)."""
+    settings_dir = vault_root / "settings"
+    _write(
+        settings_dir / "vault.md",
+        "---\nschema: design-handoff.vault.v1\nscope: vault-shared\nvaultId: v\nvaultName: X\n---\n",
+    )
+    _write(
+        settings_dir / "paths.md",
+        "---\nscope: vault-shared\nhandoffFolder: Design Handoff\n"
+        "assetsFolder: Design Handoff/Assets\ntemplatesFolder: Design Handoff/Templates\n"
+        "archiveFolder: Design Handoff/Archive\n---\n",
+    )
+    for name in ("workflow.md", "design-handoff.md", "companion-ui.md"):
+        _write(settings_dir / name, "---\nscope: vault-shared\n---\n")
+    _write(
+        settings_dir / "local.md",
+        "---\nschema: design-handoff.local.v1\nscope: vault-local\nlocalInstanceId: l1\n"
+        "machineRole: satellite\nallowLocalSettingsEdits: true\n"
+        "allowWritesToVault: true\nallowSharedSettingsEdits: false\n---\n",
+    )
+    return settings_dir
+
+
+def test_satellite_cannot_self_grant_shared_settings_edits(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A satellite with writes but allowSharedSettingsEdits=false must not be able
+    to flip allowSharedSettingsEdits=true on itself and then edit shared settings
+    (Codex #2030 P1: shared-edit self-escalation)."""
+    vault_root = tmp_path / "vault"
+    _init_satellite_writes_no_shared_edits(vault_root)
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(path=tmp_path / "app-local.md"))
+    manager.select_vault(vault_root, remember=False)
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+
+    resp = client.post(
+        "/api/companion/vault/settings",
+        json={"key": "allowSharedSettingsEdits", "value": True},
+    )
+
+    assert resp.status_code == 403, resp.text
+    local_md = (vault_root / "settings" / "local.md").read_text(encoding="utf-8")
+    assert "allowSharedSettingsEdits: false" in local_md
+    # And the shared-settings ceiling is genuinely still in place.
+    shared_resp = client.post(
+        "/api/companion/vault/settings",
+        json={"key": "handoffFolder", "value": "Escalated"},
+    )
+    assert shared_resp.status_code == 403, shared_resp.text

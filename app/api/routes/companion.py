@@ -296,14 +296,17 @@ def _vault_context_response(context: VaultContext) -> VaultContextResponse:
 
 
 # Authority-bearing vault-local keys: editing these grants or revokes
-# project-write / settings-edit authority. A read-only role (or a clone that has
-# its write/shared-edit authority disabled) must NOT be able to grant itself
-# these via a plain local-settings edit, even with allowLocalSettingsEdits=true.
-# Otherwise a readOnlySatellite could escalate to primary or flip
-# allowWritesToVault and break out of its hard ceiling.
-_ROLE_ESCALATION_LOCAL_KEYS = frozenset(
-    {"machineRole", "allowWritesToVault", "allowSharedSettingsEdits"}
-)
+# project-write / settings-edit authority. A clone must NOT be able to grant
+# itself authority it does not already hold via a plain local-settings edit, even
+# with allowLocalSettingsEdits=true. Each key is gated by the *class* of authority
+# it would grant, so no key can be used to escalate past its own ceiling:
+#   - machineRole / allowWritesToVault: grant vault-write authority -> require it.
+#   - allowSharedSettingsEdits: grants shared-settings authority -> require the
+#     clone to already hold shared-settings authority (a satellite with writes
+#     but allowSharedSettingsEdits=false must not flip it on itself and then edit
+#     shared settings).
+_WRITE_AUTHORITY_LOCAL_KEYS = frozenset({"machineRole", "allowWritesToVault"})
+_SHARED_EDIT_AUTHORITY_LOCAL_KEYS = frozenset({"allowSharedSettingsEdits"})
 
 
 def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext) -> str | None:
@@ -323,13 +326,17 @@ def _setting_blocked_reason(definition: SettingDefinition, context: VaultContext
     if definition.scope == "vault-local":
         if not permissions.allow_local_settings_edits:
             return "local settings edits disabled for this local role"
+        # Read-only ceiling / no self-escalation, gated by authority class.
         if (
-            definition.key in _ROLE_ESCALATION_LOCAL_KEYS
+            definition.key in _WRITE_AUTHORITY_LOCAL_KEYS
             and not permissions.allow_writes_to_vault
         ):
-            # The read-only ceiling outranks allowLocalSettingsEdits for
-            # authority-granting keys.
             return "authority-bearing local setting cannot be changed without vault-write authority"
+        if definition.key in _SHARED_EDIT_AUTHORITY_LOCAL_KEYS and (
+            not permissions.allow_writes_to_vault
+            or not permissions.allow_shared_settings_edits
+        ):
+            return "authority-bearing local setting cannot be changed without shared-settings-edit authority"
     return None
 
 
