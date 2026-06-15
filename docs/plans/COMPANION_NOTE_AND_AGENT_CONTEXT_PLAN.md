@@ -69,6 +69,20 @@ codebase rather than older plan text.
 - Companion note + Note Context should still be treated as forward-line work for broader rollout
   hardening and doc cleanup, even though the core implementation is now present.
 
+## Consolidation note (2026-06-15)
+
+This plan is the single live plan for the companion note + Note Context track. The earlier
+sibling plan `docs/plans/COMPANION_NOTE_AND_NOTE_CONTEXT.md` (a frozen 2026-03-27 "Delivered —
+Parts 1–8" snapshot) is now a stub pointing here. The two had contradicted on the same shipped
+track — one read as flatly "Delivered" while this one carries the re-baselined current truth,
+including the v5.7 / #971 single-write-path and creation-eligibility work and the remaining
+doc-sync items (#229) that the older snapshot omitted. Per `docs/STATUS.md` (v5.6 closure receipt
+"Companion note + Note Context doc-sync correction: Issue #229 / PR #237", and the Cognitive
+Expansion table marking companion-note-aware handling as live), this re-baselined plan reflects
+current truth; the older "Parts 1–8" snapshot is redundant and was demoted to preserve lineage. No
+unique still-live content was lost in the merge — the older plan's delivered Part→exit-criteria
+checklist is already subsumed by the "Shipped" section above.
+
 ## Repo re-baseline (2026-03-29)
 
 The current repository disproves the earlier "nothing is implemented yet" assumption for this plan.
