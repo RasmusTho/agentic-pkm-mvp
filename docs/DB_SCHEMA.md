@@ -92,7 +92,7 @@ They remain mirror/projection surfaces and do not hold semantic authority over t
 - `source_ref` (`text`, nullable)
 - `payload` (`jsonb`, `NOT NULL`)
 - `embedding` (`double precision[]`, `NOT NULL`)
-- `dim` (`integer`, `NOT NULL`)
+- `dim` (`integer`, `NOT NULL`) — the configured embedding guardrail dimension (`EMBED_DIM`, default `1536` from `DEFAULT_EMBED_DIM`); this is the requested/configured dimension, distinct from `nomic-embed-text`'s native `768`. See `docs/EMBEDDINGS.md`.
 - `model` (`text`, `NOT NULL`)
 - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
 - Interpretation:
