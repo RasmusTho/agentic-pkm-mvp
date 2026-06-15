@@ -312,7 +312,7 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
     try:
         writer.apply_edit(session, req.new_body, req.change_summary)
     except WritesBlockedError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _writeguard_blocked_http(exc) from exc
     except GovernanceBearingMutationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     body_after = _note_body(session.note_path)
@@ -434,6 +434,27 @@ def _handoff_response(ref: GovernanceHandoffRef) -> JSONResponse:
     return JSONResponse(status_code=409, content=ref.model_dump())
 
 
+def _writeguard_blocked_http(exc: WritesBlockedError) -> HTTPException:
+    """Translate a closed write-guard into a structured, retryable 409.
+
+    Mirrors the companion/capture boundary translation
+    (``app/api/routes/capture.py``, ``app/api/routes/companion.py``): a blocked
+    write is a transient health-gate state, so the body carries
+    ``error``/``state``/``message``/``reason`` rather than a flat string. A
+    client can distinguish this retryable block from a permanent rejection (e.g.
+    a 422 governance-bearing mutation) by the structured ``error`` discriminator.
+    """
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": "writeguard_blocked",
+            "state": "blocked",
+            "message": str(exc),
+            "reason": exc.reason,
+        },
+    )
+
+
 @router.post("/sessions/{session_id}/coauthor", response_model=CoAuthorResponse)
 def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONResponse:
     _require_canvas()
@@ -516,9 +537,9 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
         )
     except WritesBlockedError as exc:
         # The system write-guard is closed (health/maintenance lock). The
-        # co-authoring body edit is a governed write — reject it cleanly and
-        # leave the note untouched (#1961).
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # co-authoring body edit is a governed write — reject it cleanly with a
+        # structured/retryable 409 and leave the note untouched (#1961).
+        raise _writeguard_blocked_http(exc) from exc
     except GovernanceBearingMutationError:
         # Defense in depth: the writer caught a governance-bearing body the
         # cognition let through. Route with default FRONTMATTER_UPDATE; the
@@ -582,7 +603,7 @@ def undo_last_edit(session_id: str) -> UndoResponse:
             f"[undo:{undo_id}] reverted edit:{latest.edit_id}",
         )
     except WritesBlockedError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _writeguard_blocked_http(exc) from exc
     except GovernanceBearingMutationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -28,10 +28,13 @@ The current architecture is a local-first Mimer runtime, not the full Yggdrasil 
 - `ReasoningFacade`, LangGraph, A2A, MCP descriptors, canvas-session scaffolding, and Orchestrator V2 are real repo surfaces,
   but their current status is mixed: some are active runtime paths, some are flagged pilots, and
   some are scaffolding or reference contracts rather than broad production rollout;
-- `app/relevance/` now ships the first Contextual Relevance Engine runtime seam: deterministic
-  vault-native, pull-only moment evaluation, governed materialization into non-authoritative moment
-  artifacts with receipts, and a read-only Companion "now" projection. The proactive reach-out loop
-  and external connector inputs are not shipped architecture.
+- `app/relevance/` ships the Contextual Relevance Engine runtime seam: deterministic vault-native
+  moment evaluation, governed materialization into non-authoritative moment artifacts with receipts,
+  a read-only Companion "now" / glance projection, and — as of #1964 — the governed proactive
+  reach-out loop (`app/relevance/attention_loop.py`, driven by `app/watcher/relevance_tick.py`) that
+  records a reach-out or deliberate-suppression receipt per candidate on the relevance tick and
+  projects threshold-cleared in-app nudges. OS-push delivery and external connector inputs are not
+  yet shipped architecture.
 - the planned architecture continues toward capability-based composition, separate Panel and Chat
   interaction surfaces, governed execution, and relation-aware context without treating ASK,
   retrieval, a single agent, or historical AMG/SetDB terminology as the architectural center.

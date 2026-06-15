@@ -196,6 +196,55 @@ def test_coauthor_blocked_when_writes_disabled(monkeypatch, vault: Path) -> None
     assert "Should not be written." not in note_text
 
 
+def test_blocked_write_returns_structured_response(monkeypatch, vault: Path) -> None:
+    """A closed write-guard yields a structured 409 (not a flat string), mirroring
+    the companion/capture boundary translation, across /coauthor, /edits, and undo.
+
+    The structured body lets a client distinguish a transient health-gate block
+    (retryable) from a permanent rejection. Regression for the canvas write-guard
+    HTTP mapping (#2017): previously these paths returned ``detail=str(exc)``.
+    """
+    generated = "# Hello\n\nShould not be written.\n"
+    client = _make_client(monkeypatch, vault, generated, classifier_label=_co_authoring_label())
+    session_id = _open_session(client)
+
+    blocked_state = sorted(WRITE_BLOCKED_STATES)[0]
+    monkeypatch.setattr(
+        DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": blocked_state, "reason": "maintenance"}
+    )
+
+    def _assert_structured_blocked(resp) -> None:
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert isinstance(detail, dict), detail
+        assert detail["error"] == "writeguard_blocked"
+        assert detail["state"] == "blocked"
+        assert detail["reason"] == "maintenance"
+        assert isinstance(detail["message"], str) and detail["message"]
+
+    # /coauthor — co-authoring generate-and-apply path.
+    _assert_structured_blocked(
+        client.post(
+            f"/api/canvas/sessions/{session_id}/coauthor",
+            json={"intent": "expand the decision section", "change_summary": "expanded"},
+        )
+    )
+
+    # /edits — direct in-place body edit.
+    _assert_structured_blocked(
+        client.post(
+            f"/api/canvas/sessions/{session_id}/edits",
+            json={"new_body": "# Hello\n\nBlocked edit.\n", "change_summary": "edit"},
+        )
+    )
+
+    # The note was never touched on any blocked path.
+    note_text = (vault / "note.md").read_text(encoding="utf-8")
+    assert "Original body." in note_text
+    assert "Should not be written." not in note_text
+    assert "Blocked edit." not in note_text
+
+
 def test_coauthor_appends_intent_to_session_log(monkeypatch, vault: Path) -> None:
     generated = "# Hello\n\nRevised body.\n"
     client = _make_client(monkeypatch, vault, generated)

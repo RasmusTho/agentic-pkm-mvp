@@ -161,14 +161,26 @@ Forgetting is not archiving. See
 **Requirements**:
 - explicit human intent with a formal forget request — forget must not be triggered silently by
   policy, salience decay, or zone transitions,
-- a forget receipt (tombstone record) written before semantic content is removed; the tombstone
-  must record only: memory id, former lifecycle state, transition timestamp, initiator, and a
-  non-semantic reason code — it must **not** include or reconstruct the forgotten semantic content,
+- a **pending forget record** (proposal state) written first, recording the intent to forget so the
+  request is durable and auditable before any destructive action; this pending record is non-semantic
+  (same field constraints as the tombstone below) and is **not** the tombstone,
 - a WriteGuard-gated destructive write that removes semantic content from the memory record and
   from all derived indexes (embeddings, recall projections, companion surfaces),
-- and the memory record transitions to `forgotten` / tombstone state.
+- a forget receipt (tombstone record) emitted **atomically with / after** the successful destructive
+  removal — never before — so a tombstone can never claim a memory was forgotten while its content
+  still remains; the tombstone must record only: memory id, former lifecycle state, transition
+  timestamp, initiator, and a non-semantic reason code — it must **not** include or reconstruct the
+  forgotten semantic content,
+- and the memory record transitions to `forgotten` / tombstone state only once the tombstone is
+  emitted. If the destructive write fails, the pending record is resolved as failed/aborted and **no**
+  tombstone is emitted (the memory stays in its prior lifecycle state).
 
-**Produces**: tombstone/forget receipt (non-semantic).
+**Ordering**: pending forget record → WriteGuard-gated destructive removal → tombstone receipt
+(atomic with / after successful removal). The tombstone is the post-success accountability record, not
+a pre-commit marker.
+
+**Produces**: a pending forget record (proposal), then a tombstone/forget receipt (non-semantic) only
+on successful removal.
 
 **Irreversible**: a forgotten memory cannot be restored.
 
