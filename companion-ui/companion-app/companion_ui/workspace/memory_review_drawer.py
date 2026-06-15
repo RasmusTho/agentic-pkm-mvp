@@ -316,7 +316,13 @@ def materialized_memory_surface(memory: dict) -> str:
 
 
 def recall_provenance_surface(recall: dict) -> str:
-    """Render recall provenance and authority posture from a recall receipt."""
+    """Render recall provenance and authority posture from a recall receipt.
+
+    Recall authority is the runtime's declaration, never the UI's. Missing
+    ``may_answer``/``may_propose`` flags default to *closed* (``false``): the
+    UI never invents affirmative recall authority for a degraded or older
+    payload that did not declare it (issue #2016 constraint; ADR-0009).
+    """
 
     authority_limits = [str(limit) for limit in recall.get("authority_limits") or []]
     limits = "".join(
@@ -327,8 +333,8 @@ def recall_provenance_surface(recall: dict) -> str:
     receipt_ref = recall.get("receipt_reference") or recall.get("receipt_id") or ""
     return f"""
     <section class="memory-recall-provenance" data-testid="memory-recall-provenance"
-      data-may-answer="{'true' if recall.get("may_answer", True) else 'false'}"
-      data-may-propose="{'true' if recall.get("may_propose", True) else 'false'}"
+      data-may-answer="{'true' if recall.get("may_answer") else 'false'}"
+      data-may-propose="{'true' if recall.get("may_propose") else 'false'}"
       data-may-write="{may_write}">
       <p class="memory-recall-why-now" data-testid="memory-recall-why-now">
         {_e(recall.get("why_now") or "")}</p>
@@ -377,12 +383,28 @@ def memory_review_queue_fragment(payload: dict) -> str:
             "No candidates are waiting for review.</p>"
         )
     noun = "candidate" if pending_count == 1 else "candidates"
+    # When the runtime payload also declares materialized (already-promoted)
+    # memories and/or a recall-provenance receipt, the served fragment renders
+    # those surfaces alongside the pending queue. Both are pure projections of
+    # runtime-declared data; the UI classifies nothing and invents nothing.
+    materialized = [
+        m for m in (data.get("materialized_memories") or []) if isinstance(m, dict)
+    ]
+    materialized_html = "".join(
+        materialized_memory_surface(memory) for memory in materialized
+    )
+    recall = data.get("recall")
+    recall_html = (
+        recall_provenance_surface(recall) if isinstance(recall, dict) else ""
+    )
     return f"""
     <div class="memory-review-fragment" data-testid="memory-review-fragment"
       data-source="agent_memory.review_queue" data-pending-count="{pending_count}">
       <p class="memory-review-pending-count" data-testid="memory-review-pending-count">
         {pending_count} pending {noun} awaiting explicit review.</p>
       {body}
+      {materialized_html}
+      {recall_html}
     </div>"""
 
 
