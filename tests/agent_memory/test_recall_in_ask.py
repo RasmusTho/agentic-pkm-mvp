@@ -307,6 +307,48 @@ def test_ask_answers_from_recall_when_retrieval_is_empty(tmp_path: Path, monkeyp
     assert state.answer != "No results found."
 
 
+def test_ask_recall_only_fallback_uses_content_not_match_reason(tmp_path: Path, monkeypatch) -> None:
+    """Non-reasoning recall-only fallback surfaces the recalled fact, not match metadata (#1990).
+
+    Regression for the Codex review note: when REASONING is disabled and retrieval is empty,
+    the fallback must answer from the recalled memory body, not from the lexical match reason
+    (e.g. "content matched ...").
+    """
+    monkeypatch.chdir(tmp_path)
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.delenv("REASONING_ENABLE", raising=False)
+    vault = _vault(vault_root)
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    _materialize(
+        _candidate(
+            "candidate-recall-content",
+            title="Recall runtime",
+            content="Guarded memory recall remains read-only awareness.",
+        ),
+        vault=vault,
+        store=store,
+    )
+
+    def _fake_retrieve(request):  # type: ignore[no-untyped-def]
+        return _empty_retrieval_response(request.query)
+
+    monkeypatch.setattr(ask_graph, "retrieve", _fake_retrieve)
+
+    state = run_ask_graph("How does recall runtime stay read-only?", trace_id="trace-recall-content")
+
+    assert state.hits == []
+    assert state.recalled
+    assert state.answer != "No results found."
+    # The actual recalled fact must appear; match-reason metadata must not be the answer.
+    assert "Guarded memory recall remains read-only awareness." in state.answer
+    assert "matched" not in state.answer
+    assert state.recalled_content[state.recalled[0].artifact_id] == (
+        "Guarded memory recall remains read-only awareness."
+    )
+
+
 def test_no_recall_when_no_relevant_memory(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     vault_root = tmp_path / "vault"

@@ -112,6 +112,7 @@ def _recall_node(state: AgentState, *, ask_settings) -> AgentState:
         return state
 
     recalled = []
+    recalled_content: dict[str, str] = {}
     reasoning = list(state.reasoning or [])
     receipt_path = _recall_receipt_path()
     for candidate in candidates:
@@ -125,11 +126,15 @@ def _recall_node(state: AgentState, *, ask_settings) -> AgentState:
         )
         if guarded.may_answer:
             recalled.append(guarded.explanation)
+            content = (candidate.promoted.candidate.content or "").strip()
+            if content:
+                recalled_content[guarded.explanation.artifact_id] = content
             reasoning.append(
                 f"recall:{guarded.memory_id}:{guarded.explanation.title}:{candidate.reason}"
             )
 
     state.recalled = recalled
+    state.recalled_content = recalled_content
     if reasoning:
         state.reasoning = reasoning
     return state
@@ -139,13 +144,19 @@ def _recall_only_fallback(state: AgentState) -> str:
     """Compose a minimal non-reasoning answer from recalled memory alone.
 
     Recalled memory stays supporting input only — this surfaces the recalled
-    title/context without claiming retrieval authority. Used when retrieval
-    returned zero hits but guarded recall yielded a usable may_answer memory
-    and reasoning is disabled.
+    fact without claiming retrieval authority. Used when retrieval returned
+    zero hits but guarded recall yielded a usable may_answer memory and
+    reasoning is disabled.
+
+    Prefer the recalled memory body (the actual fact); fall back to the title
+    and, only if no content is available, the recall match reason.
     """
     top = state.recalled[0]
-    why = (top.why_now or "").strip()
     title = (top.title or "").strip()
+    content = (state.recalled_content.get(top.artifact_id) or "").strip()
+    if content:
+        return f"{title}: {content}" if title else content
+    why = (top.why_now or "").strip()
     if title and why:
         return f"{title}: {why}"
     return title or why
