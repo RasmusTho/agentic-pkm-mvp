@@ -72,14 +72,26 @@ def build_ask_context(
     hits: List[dict[str, Any]],
     ask_settings: AskSettings,
     recalled: List[RecallExplanation] | None = None,
+    recalled_content: dict[str, str] | None = None,
 ) -> str:
     max_chars = max(0, int(ask_settings.max_context_chars or 0))
     remaining = max_chars if max_chars > 0 else None
     parts: list[str] = [f"Question: {question}", ""]
+    content_map = recalled_content or {}
     for idx, explanation in enumerate(recalled or [], start=1):
         parts.append(f"[RECALLED MEMORY {idx}] title=\"{explanation.title}\"")
         parts.append(f"why_now={explanation.why_now}")
         parts.append("authority_limits=" + ", ".join(explanation.authority_limits))
+        # Ground synthesis in the recalled fact itself, not just its metadata.
+        # In the recall-only path (no retrieval hits) the body is the only
+        # grounding the model gets; without it an admitted synthesis would
+        # replace the correct literal fallback with an ungrounded answer.
+        body = (content_map.get(explanation.artifact_id) or "").strip()
+        if body:
+            if remaining is not None:
+                body = body[:remaining]
+                remaining -= len(body)
+            parts.append(f"content={body}")
         parts.append("")
     for idx, hit in enumerate(hits, start=1):
         payload = hit.get("payload") or {}

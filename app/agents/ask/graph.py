@@ -218,6 +218,7 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
             [h.model_dump() for h in state.hits],
             ask_settings,
             recalled=state.recalled,
+            recalled_content=state.recalled_content,
         )
         llm, route = llm_answer(state.query, context, ask_settings)
         if route:

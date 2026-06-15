@@ -228,3 +228,58 @@ def test_no_context_returns_no_results_without_gate(tmp_path: Path, monkeypatch)
     state = run_ask_graph("nothing matches", trace_id="trace-empty")
     assert state.answer == "No results found."
     assert state.synthesis_receipt_id is None
+
+
+# --- recall-only synthesis is grounded in the memory body ------------------
+# Regression for the recall-only grounding gap: when retrieval returns no hits
+# but guarded recall fires, the gate-admitted synthesis context must carry the
+# recalled memory BODY, not only its title/why-now metadata. Otherwise an
+# admitted synthesis cannot be grounded in the recalled fact and may replace the
+# correct literal recall fallback with an ungrounded LLM answer.
+
+
+def test_build_ask_context_includes_recalled_body() -> None:
+    from types import SimpleNamespace
+
+    from app.agents.ask.utils import build_ask_context, get_ask_settings
+
+    recalled = [
+        SimpleNamespace(
+            artifact_id="mem-1",
+            title="Standup time",
+            why_now="content matched the question",
+            authority_limits=["read-only"],
+        )
+    ]
+    context = build_ask_context(
+        "when is standup?",
+        [],  # recall-only: retrieval returned no hits
+        get_ask_settings(),
+        recalled=recalled,  # type: ignore[arg-type]
+        recalled_content={"mem-1": "The daily standup is at 9am in the main room."},
+    )
+    assert "The daily standup is at 9am in the main room." in context
+    assert "Standup time" in context
+
+
+def test_build_ask_context_omits_body_line_when_no_content() -> None:
+    from types import SimpleNamespace
+
+    from app.agents.ask.utils import build_ask_context, get_ask_settings
+
+    recalled = [
+        SimpleNamespace(
+            artifact_id="mem-1",
+            title="A memory",
+            why_now="why",
+            authority_limits=[],
+        )
+    ]
+    context = build_ask_context(
+        "q",
+        [],
+        get_ask_settings(),
+        recalled=recalled,  # type: ignore[arg-type]
+    )
+    assert "A memory" in context
+    assert "content=" not in context
