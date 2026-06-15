@@ -69,11 +69,24 @@ class AskSource(BaseModel):
     path: str | None = None
 
 
+class RecallAttribution(BaseModel):
+    """Structured provenance for a memory the ASK answer recalled (#1972)."""
+
+    memory_id: str
+    title: str
+    why_now: str
+    receipt_id: str
+
+
 class AskResponse(BaseModel):
     answer: str
     sources: list[AskSource]
     latency_ms: int
     llm_route: dict[str, Any] | None = None
+    # Treatment A: the attribution footer lives in `answer`; this is the same
+    # provenance in structured form (keyed to the recall receipt). None when recall
+    # did not fire.
+    recalled: list[RecallAttribution] | None = None
 
 
 def _to_source(hit: Any) -> AskSource:
@@ -118,12 +131,23 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     latency_ms = int((time.perf_counter() - start) * 1000)
     record_ask_query(float(latency_ms))
     sources = [_to_source(hit) for hit in top_hits]
+    recalled = [
+        RecallAttribution(
+            memory_id=exp.artifact_id,
+            title=exp.title or "",
+            why_now=exp.why_now or "",
+            receipt_id=exp.receipt_reference or "",
+        )
+        for exp in (getattr(state, "recalled", None) or [])
+        if exp.receipt_reference
+    ]
     return AskResponse(
         answer=answer_text,
         sources=sources,
         latency_ms=latency_ms,
         llm_route=getattr(state, "llm_route", None),
+        recalled=recalled or None,
     )
 
 
-__all__ = ["router", "AskRequest", "AskResponse"]
+__all__ = ["router", "AskRequest", "AskResponse", "RecallAttribution"]
