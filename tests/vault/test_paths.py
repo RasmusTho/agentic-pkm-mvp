@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
 from app.vault.paths import (
+    VaultPathResolutionError,
+    VaultPathResolver,
     get_vault_inbox_dir_rel,
     get_vault_runtime_dir_rel,
     get_vault_system_dir_rel,
@@ -210,3 +214,55 @@ def test_paths_do_not_fallback_to_other_vault_settings(monkeypatch, tmp_path: Pa
         get_vault_runtime_dir_rel(target_vault)
     with pytest.raises(FileNotFoundError):
         get_vault_system_dir_rel(target_vault)
+
+
+def _init_vault_with_handoff(vault_root: Path, handoff: str) -> "VaultManager":
+    settings_dir = vault_root / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+
+    def write(name: str, content: str) -> None:
+        (settings_dir / name).write_text(content, encoding="utf-8")
+
+    write(
+        "vault.md",
+        "---\nschema: design-handoff.vault.v1\nscope: vault-shared\nvaultId: v\nvaultName: X\n---\n",
+    )
+    write(
+        "paths.md",
+        "---\nscope: vault-shared\n"
+        f"handoffFolder: {handoff}\n"
+        "assetsFolder: Design Handoff/Assets\n"
+        "templatesFolder: Design Handoff/Templates\n"
+        "archiveFolder: Design Handoff/Archive\n---\n",
+    )
+    write("workflow.md", "---\nscope: vault-shared\n---\n")
+    write("design-handoff.md", "---\nscope: vault-shared\n---\n")
+    write("companion-ui.md", "---\nscope: vault-shared\n---\n")
+    write(
+        "local.md",
+        "---\nschema: design-handoff.local.v1\nscope: vault-local\nlocalInstanceId: l1\nmachineRole: primary\n---\n",
+    )
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(path=vault_root.parent / "app-local.md"))
+    return manager
+
+
+def test_rejects_parent_traversal(tmp_path: Path) -> None:
+    """A vault-relative path with parent traversal that resolves outside the
+    selected vault must be rejected, not silently resolved to a sibling dir."""
+    vault_root = tmp_path / "vault"
+    manager = _init_vault_with_handoff(vault_root, "../OtherProject")
+    context = manager.select_vault(vault_root, remember=False)
+    assert context.status == "selected"
+
+    with pytest.raises(VaultPathResolutionError):
+        VaultPathResolver().resolve(context)
+
+
+def test_allows_legitimate_relative_paths(tmp_path: Path) -> None:
+    """Regression guard: ordinary vault-relative subpaths still resolve inside the vault."""
+    vault_root = tmp_path / "vault"
+    manager = _init_vault_with_handoff(vault_root, "Design Handoff")
+    context = manager.select_vault(vault_root, remember=False)
+
+    resolved = VaultPathResolver().resolve(context)
+    assert resolved.handoff_dir == (vault_root / "Design Handoff")

@@ -70,7 +70,21 @@ def _vault_relative_path(vault_root: Path, setting: Any) -> Path:
     path = Path(raw).expanduser()
     if path.is_absolute():
         raise VaultPathResolutionError(f"{setting.key} must be vault-relative; absolute paths are local-only")
+    resolved = (vault_root / path).resolve()
+    if not _is_within(resolved, vault_root.resolve()):
+        raise VaultPathResolutionError(
+            f"{setting.key} resolves outside the selected vault; parent traversal is not allowed"
+        )
     return vault_root / path
+
+
+def _is_within(candidate: Path, root: Path) -> bool:
+    """True if ``candidate`` is ``root`` itself or contained within it."""
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _optional_local_path(vault_root: Path, value: object) -> Path | None:
