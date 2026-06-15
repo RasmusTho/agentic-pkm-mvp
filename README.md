@@ -1,6 +1,10 @@
 State: SoT v5.5 Reality-MVP baseline (locked); v5.6 delivered and closed; v6.0 seams baseline shipped at capability-seam level; broader v6 runtime/product consumption is v6.1+.
 # Agentic PKM — Vault-First, Event-Driven PKM Runtime
 
+**Why this exists.** Agentic PKM (Yggdrasil) is a local-first **cognitive prosthesis**: it helps a person capture, organize, understand, enhance, and apply knowledge — and act on it — without surrendering authorship. Unaided memory leaks; the system absorbs the bookkeeping burdens (holding open loops, losing fleeting thought, reorienting after time away, keeping sources attributable) so human attention goes to thinking. It pursues two classes of value: **Cognitive Maintenance** (preserve cognition — capture, recall, orientation, continuity) and **Cognitive Expansion** (improve cognition — reflection, synthesis, learning, decision quality). See [`docs/COGNITIVE_PROSTHESIS_CHARTER.md`](docs/COGNITIVE_PROSTHESIS_CHARTER.md) for the full thesis.
+
+**How it's built to be trustworthy.** Because the prosthesis is *active* (agents act on the human's behalf), it is governed: the Markdown vault stays canonical and human-authored, and every machine action is bounded by authority, leaves a receipt, and is reversible. The runtime mechanism below *serves* that purpose — it does not replace it.
+
 Agentic PKM is a vault-first, event-driven PKM runtime:
 - The human writing surface (a Markdown vault) remains the canonical artifact.
 - Derived stores (DB tables, indexes, embeddings) are rebuildable mirrors.

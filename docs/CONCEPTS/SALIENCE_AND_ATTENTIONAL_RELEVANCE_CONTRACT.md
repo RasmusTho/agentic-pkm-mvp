@@ -1,4 +1,5 @@
 State: Concept contract companion (salience, attentional relevance, and surfacing posture; implementation-agnostic).
+Anchored to: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — supports the Expansion pass (exploration / serendipitous discovery) and the Maintenance pass (orientation) in the Maintenance / Expansion model (§2.1). This contract refines one region of that model; the charter wins on purpose framing.
 
 # Salience and Attentional Relevance Contract
 

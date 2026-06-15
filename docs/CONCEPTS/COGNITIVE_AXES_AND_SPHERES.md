@@ -1,4 +1,5 @@
 State: Concept contract companion (cognitive relevance axes, overlapping spheres, and scope clarification).
+Anchored to: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — Cognitive Maintenance / Expansion model (§2.1) and the cognitive arc (§2.2). This contract refines one region of that model; the charter wins on purpose framing.
 
 # Cognitive Axes and Spheres — relevance, centrality, salience, horizon
 

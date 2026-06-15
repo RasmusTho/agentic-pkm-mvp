@@ -506,3 +506,32 @@ nudge when a moment clears the current in-app threshold. Zero-tolerance contexts
 OS-push delivery, external connectors, and the emergent/learned pattern loop remain deferred
 follow-ons. Capability boundary and acceptance live in `docs/CONTEXTUAL_RELEVANCE_ENGINE/` and the
 parent validation hub #1921.
+
+## Cognitive Expansion — activation status (2026-06-15)
+
+This system pursues two classes of value (see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1):
+**Cognitive Maintenance** (preserve cognition) and **Cognitive Expansion** (improve cognition).
+Maintenance is broadly live and test-backed. The Contextual Relevance Engine above is the first
+Expansion-class surface activated end-to-end on the governed control model. Most other Expansion
+surfaces are built and tested but deliberately **pre-positioned** — flag-gated or not yet consumed
+by the running runtime — pending the one-vertical-loop proof and the context/memory admissibility
+gate (`docs/ROADMAP.md`, `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md`). This table is current-state
+truth, not a backlog.
+
+| Expansion surface | Modules | Runtime status today | Activation precondition |
+|---|---|---|---|
+| Contextual Relevance Engine ("now" / reach-out) | `app/relevance/*`, `app/watcher/relevance_tick.py` | **live** (governed tick materializes vault-native moments + records reach-out/suppression receipts; read-only companion "now") | external connectors + OS-push deferred |
+| Panel propose → confirm → execute | `app/panel/*`, `app/agents/panel/*` | **live** (watcher → worker → `/api/panel/confirm`); staged-proposal decision support, not LLM synthesis | proven vertical loop |
+| Resurfacing (why-now, runtime-signal) | `app/resurfacing/*` | **live** on companion workspace/orientation, but signal-derived (runtime status), distinct from the CRE vault-native moment path | semantic relevance source admitted under admissibility gate |
+| Agent-memory review/promotion | `app/agent_memory/*` | **live** (companion review queue + posture projection) | — (Maintenance-adjacent) |
+| ASK answer synthesis | `app/reasoning/*`, `app/agents/ask/*` | **seam — gated off** (`REASONING_ENABLE` default off → ASK returns literal snippets, no generated answer) | admissibility + read-only reasoning acceptance |
+| Canvas / chat co-authoring cognition | `app/chat/*`, `app/api/routes/canvas.py` | **seam — gated off** (`CANVAS_ENABLED=0` in prod → 403) | proven vertical loop + write-authority receipts |
+| Source Understanding lenses | `app/source_understanding/*` | **seam** (`/p0` route reachable, no runtime caller) | a consuming flow + admissibility |
+| Planner / next-action | `app/planner/*`, `app/orchestrator/*` | **dormant** (orchestrator imported only by CLI/smoke, not the three runtime services) | proven loop + commitment surfacing |
+| Commitment surfacing | `app/domain/commitments.py` | **dormant** (reached only via the dormant planner and a seam-status probe) | commitment runtime activation (#1960 line) |
+| Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py` | **dormant** (zero external importers / zero callers) | admissibility + governed writeback |
+
+Definitions: **live** = consumed by a running service in normal operation; **seam** = built and
+registered but flag-gated or uncalled; **dormant** = code plus tests exist, no runtime invocation.
+The CRE shows the activation path working; closing the rest of the Maintenance/Expansion asymmetry
+is the system's next major frontier, and the sequencing is intentional, not an oversight.
