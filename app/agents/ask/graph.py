@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
 from langgraph.graph import END, START, StateGraph
 
+from app.activation.ask_synthesis import emit_ask_synthesis_receipt, evaluate_ask_synthesis
 from app.agent_memory.recall_activation import activate_guarded_recall
 from app.agent_memory.recall_explanation import (
     ActivationReason,
@@ -14,10 +16,12 @@ from app.agent_memory.recall_explanation import (
 )
 from app.agent_memory.recall_retrieval import RecallCandidate, retrieve_relevant_promoted
 from app.agents.ask.state import AgentState, RetrievedHit
-from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer, reasoning_enabled, score_hit
+from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer, score_hit
 from app.components.rerankers import get_reranker
 from app.retrieval.capability import RetrievalRequest, retrieve
 from app.vault.manager import get_vault_manager
+
+logger = logging.getLogger(__name__)
 
 TOP_K_INITIAL = 40
 RECALL_TOP_K = 3
@@ -166,6 +170,25 @@ def _recall_only_fallback(state: AgentState) -> str:
     return title or why
 
 
+def _synthesis_source_ids(state: AgentState) -> list[str]:
+    """Stable ids for the retrieved/recalled context offered to the gate.
+
+    These are the same ids surfaced as ASK sources, so the admitted set links
+    the synthesized answer back to its grounded sources.
+    """
+    ids: list[str] = [h.object_id for h in state.hits if h.object_id]
+    ids.extend(r.artifact_id for r in (state.recalled or []) if r.artifact_id)
+    return ids
+
+
+def _synthesis_source_paths(state: AgentState) -> dict[str, str]:
+    paths: dict[str, str] = {}
+    for hit in state.hits:
+        if hit.object_id and hit.path:
+            paths[hit.object_id] = str(hit.path)
+    return paths
+
+
 def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     if not state.hits and not state.recalled:
         # Preserve the fallback only when neither retrieval nor recall produced context.
@@ -181,7 +204,15 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
         fallback = _recall_only_fallback(state)
     answer_text = fallback or "No results found."
 
-    if reasoning_enabled():
+    # Expansion Activation Gate (#2026): ASK answer synthesis is now activated
+    # THROUGH the deterministic admissibility gate (#2025) over the retrieved
+    # context, not the raw REASONING_ENABLE env flag. When the gate admits, run
+    # the existing run_reasoning(ASK_ANSWER) generation path and emit a
+    # provenance-bearing activation receipt. When it blocks (or generation
+    # yields nothing), preserve the existing literal-snippet fallback.
+    source_ids = _synthesis_source_ids(state)
+    decision = evaluate_ask_synthesis(source_ids)
+    if decision.activatable:
         context = build_ask_context(
             state.query,
             [h.model_dump() for h in state.hits],
@@ -189,10 +220,34 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
             recalled=state.recalled,
         )
         llm, route = llm_answer(state.query, context, ask_settings)
-        if llm:
-            answer_text = llm
         if route:
             state.llm_route = route
+        if llm:
+            answer_text = llm
+            receipt_id = emit_ask_synthesis_receipt(
+                decision,
+                answer_preview=llm,
+                source_paths=_synthesis_source_paths(state),
+                llm_route=route,
+            )
+            state.synthesis_receipt_id = receipt_id
+            state.synthesis_source_ids = list(decision.admitted_artifact_ids)
+        else:
+            # Gate admitted but generation produced no answer: fall back to the
+            # literal snippet with a logged reason. No receipt for a non-synthesis.
+            logger.info(
+                "ask.synthesis: gate admitted but generation returned no answer; "
+                "falling back to literal snippet (capability=%s, admitted=%d)",
+                decision.capability_id,
+                len(decision.admitted_artifact_ids),
+            )
+    else:
+        logger.info(
+            "ask.synthesis: gate blocked synthesis; serving literal snippet "
+            "(capability=%s, reasons=%s)",
+            decision.capability_id,
+            ",".join(decision.blocked_reasons) or "none",
+        )
 
     # Treatment A (#1972): when recall fired, attribute it with a footer keyed to
     # the recall receipt — outside the answer prose, never shown when recall is empty.

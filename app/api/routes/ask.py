@@ -87,6 +87,11 @@ class AskResponse(BaseModel):
     # provenance in structured form (keyed to the recall receipt). None when recall
     # did not fire.
     recalled: list[RecallAttribution] | None = None
+    # Expansion Activation Gate (#2026): receipt id for an admitted ASK answer
+    # synthesis plus the grounded sources the gate admitted into it. None/empty
+    # when the gate blocked synthesis and the literal snippet was served.
+    synthesis_receipt_id: str | None = None
+    synthesis_source_ids: list[str] | None = None
 
 
 def _to_source(hit: Any) -> AskSource:
@@ -141,12 +146,15 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
         for exp in (getattr(state, "recalled", None) or [])
         if exp.receipt_reference
     ]
+    synthesis_source_ids = list(getattr(state, "synthesis_source_ids", None) or [])
     return AskResponse(
         answer=answer_text,
         sources=sources,
         latency_ms=latency_ms,
         llm_route=getattr(state, "llm_route", None),
         recalled=recalled or None,
+        synthesis_receipt_id=getattr(state, "synthesis_receipt_id", None),
+        synthesis_source_ids=synthesis_source_ids or None,
     )
 
 

@@ -214,8 +214,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   outcome (activatable / blocked-with-reason), and the principle that the gate stays deterministic
   even where the gated cognition is adaptive. It replaces the ad-hoc per-capability flags
   (`REASONING_ENABLE`, `CANVAS_ENABLED`) with one named contract that the #1956 activation waves cite.
-  Docs-only — the gate function is Slice #2025; first activation (ASK synthesis) is Slice #2026
-  (owner-gated). No flag is flipped here.
+  Docs-only — the gate function is Slice #2025. The first activation through that gate (ASK answer
+  synthesis, Slice #2026) is now wired: `app/agents/ask/graph.py` admits the retrieved context through
+  `app/activation/gate.py` at read-only authority and runs `run_reasoning(ASK_ANSWER)` on admit (see
+  the Cognitive Expansion table below). Real synthesis on a given channel still depends on that
+  channel's live (Ollama) provider; test-channel UAT gates prod promotion.
 - Durable Memory and Recall is shipped through #1904-#1908, with the live review-accept wiring and
   audit residuals closed by #2014. Pending review candidates remain runtime-only; explicit review
   decisions persist as vault-scoped receipts/traces and reconcile the in-memory queue on
@@ -551,7 +554,7 @@ truth, not a backlog.
 | Panel propose → confirm → execute | `app/panel/*`, `app/agents/panel/*` | **live** (watcher → worker → `/api/panel/confirm`); staged-proposal decision support, not LLM synthesis | proven vertical loop |
 | Resurfacing (why-now, runtime-signal) | `app/resurfacing/*` | **live** on companion workspace/orientation, but signal-derived (runtime status), distinct from the CRE vault-native moment path | semantic relevance source admitted under admissibility gate |
 | Agent-memory review/promotion | `app/agent_memory/*` | **live** (companion review queue + posture projection) | — (Maintenance-adjacent) |
-| ASK answer synthesis | `app/reasoning/*`, `app/agents/ask/*` | **seam — gated off** (`REASONING_ENABLE` default off → ASK returns literal snippets, no generated answer) | admissibility + read-only reasoning acceptance |
+| ASK answer synthesis | `app/reasoning/*`, `app/agents/ask/*`, `app/activation/ask_synthesis.py` | **gated-active-via-contract** (#2026: `_answer_node` admits the retrieved context through the deterministic admissibility gate `app/activation/gate.py` at read-only authority; on admit it runs `run_reasoning(ASK_ANSWER)` + emits an activation receipt; on block/empty it serves the literal snippet — replaces the raw `REASONING_ENABLE` flag) | test-channel UAT with the live (Ollama) provider before prod promotion |
 | Canvas / chat co-authoring cognition | `app/chat/*`, `app/api/routes/canvas.py` | **seam — gated off** (`CANVAS_ENABLED=0` in prod → 403) | proven vertical loop + write-authority receipts |
 | Source Understanding lenses | `app/source_understanding/*` | **seam** (`/p0` route reachable, no runtime caller) | a consuming flow + admissibility |
 | Planner / next-action | `app/planner/*`, `app/orchestrator/*` | **dormant** (orchestrator imported only by CLI/smoke, not the three runtime services) | proven loop + commitment surfacing |
