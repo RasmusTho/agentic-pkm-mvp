@@ -21,6 +21,7 @@ from typing import Any, Literal, Sequence
 from uuid import uuid4
 
 from app.relevance.interruptibility import InterruptibilityThreshold, coerce_threshold
+from app.relevance.materialization import materialize_moment
 from app.relevance.patterns import DeclaredPattern, apply_patterns
 from app.relevance.schema import Moment, UrgencyBand, urgency_rank
 from app.vault.manager import VaultContext
@@ -90,10 +91,13 @@ class AttentionLoop:
         *,
         write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
         outbox_path: Path | None = None,
+        moment_outbox_path: Path | None = None,
     ) -> None:
         self.vault_context = vault_context
         self.write_guard = write_guard
         self.outbox_path = outbox_path
+        # Where the deferred-lifecycle re-materialization receipt is recorded.
+        self.moment_outbox_path = moment_outbox_path
 
     def tick(
         self,
@@ -143,6 +147,12 @@ class AttentionLoop:
                 applied=effect.applied,
                 reason=reason,
             )
+            # Defer-not-drop: a deferred moment is a recorded state, not a removal.
+            # Persist the durable ``deferred`` lifecycle into the materialized
+            # artifact so the glance projection no longer shows it as ``proposed``
+            # (it gains a retry/audit state). Skip when durable writes are blocked.
+            if outcome == "defer" and not writes_blocked:
+                self._persist_deferred_lifecycle(moment)
             latest_by_moment[moment.uuid] = {
                 "outcome": outcome,
                 "rung": rung,
@@ -224,6 +234,29 @@ class AttentionLoop:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
         return receipt_id
+
+    def _persist_deferred_lifecycle(self, moment: Moment) -> None:
+        """Re-materialize the moment artifact with a durable ``deferred`` lifecycle.
+
+        Best-effort and idempotent: keeps the deterministic content-keyed UUID
+        (so the same artifact path is overwritten) and never raises into the
+        decision loop — a failed persistence must not break reach-out accounting.
+        """
+
+        if moment.lifecycle == "deferred":
+            return
+        if not self.vault_context.active_vault_path:
+            return
+        moment.lifecycle = "deferred"
+        try:
+            materialize_moment(
+                moment,
+                vault_context=self.vault_context,
+                write_guard=self.write_guard,
+                outbox_path=self.moment_outbox_path,
+            )
+        except Exception:  # pragma: no cover - durable defer is best-effort
+            return
 
 
 def query_reachout_receipts(
