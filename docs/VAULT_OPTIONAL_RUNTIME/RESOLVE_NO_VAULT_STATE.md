@@ -69,9 +69,13 @@ CI: covered by the existing unit-test job (paths resolver is store-agnostic, no 
 
 ## Related Docs
 - Parent: `docs/VAULT_OPTIONAL_RUNTIME/README.md`
-- `app/config/paths.py :: resolve_vault_root`, `_DEFAULT_VAULT`, `VaultRootMisconfiguredError`
+- `app/config/paths.py :: resolve_optional_vault_root`, `resolve_vault_root`, `_DEFAULT_VAULT`, `VaultRootMisconfiguredError`
 - `app/vault/manager.py :: no_vault_context`, `VaultStatus`
 
 ## Related GitHub Issues
-One bounded issue. Implements VAULT_OPTIONAL_RUNTIME/RESOLVE_NO_VAULT_STATE. Ready
-(`agent:ready`) — it is the unblocked foundation.
+One bounded issue (#2004). Implements VAULT_OPTIONAL_RUNTIME/RESOLVE_NO_VAULT_STATE.
+**Delivered** — `resolve_optional_vault_root()` in `app/config/paths.py` returns `None` for an
+unset `VAULT_ROOT` (no `./vault` default), preserves the set-but-missing
+`VaultRootMisconfiguredError` raise, and resolves a bound, existing vault unchanged. The
+legacy `resolve_vault_root()` is preserved for the bound-vault path; the watcher (#2005) and
+companion boundary (#2006) migrate to the optional API.
