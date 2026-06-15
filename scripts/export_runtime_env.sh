@@ -15,11 +15,11 @@ source "scripts/lib/load_env_defaults.sh"
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
 
-if [ -z "${VAULT_ROOT:-}" ]; then
-  echo "VAULT_ROOT is required to export runtime env" >&2
-  exit 2
-fi
-
+# #2005 — no-vault idle posture: when the runtime boots with no vault bound,
+# there is no vault to derive provider/path settings from. Write a minimal
+# runtime env (no VAULT_ROOT, watcher disabled) so the stack can come up idle
+# and the API serves the picker state. A *set-but-missing* VAULT_ROOT never
+# reaches here — start_full_system.sh fails loud at the bind step first.
 runtime_env_path="${RUNTIME_ENV_PATH:-}"
 if [ -z "$runtime_env_path" ]; then
   case "${COMPOSE_PROJECT_NAME:-}" in
@@ -29,6 +29,36 @@ if [ -z "$runtime_env_path" ]; then
 fi
 runtime_env_dir="$(dirname "$runtime_env_path")"
 mkdir -p "$runtime_env_dir"
+
+if [ "${NO_VAULT_MODE:-0}" -eq 1 ]; then
+  watcher_runtime_env_file="$runtime_env_path"
+  case "$watcher_runtime_env_file" in
+    /*) ;;
+    ./*) ;;
+    *) watcher_runtime_env_file="./$watcher_runtime_env_file" ;;
+  esac
+  cat > "$runtime_env_path" <<ENV
+WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
+LOCAL_UID=${LOCAL_UID:-$(id -u)}
+LOCAL_GID=${LOCAL_GID:-$(id -g)}
+WATCHER_ENABLE=0
+WATCHER_VAULT_PATH=
+ENV
+  if [ -n "${DATABASE_URL:-}" ]; then
+    printf "DATABASE_URL=%s\n" "$DATABASE_URL" >> "$runtime_env_path"
+    printf "DB_DSN=%s\n" "${DB_DSN:-$DATABASE_URL}" >> "$runtime_env_path"
+  elif [ -n "${DB_DSN:-}" ]; then
+    printf "DATABASE_URL=%s\n" "$DB_DSN" >> "$runtime_env_path"
+    printf "DB_DSN=%s\n" "$DB_DSN" >> "$runtime_env_path"
+  fi
+  echo "Exported no-vault idle runtime env -> $runtime_env_path"
+  exit 0
+fi
+
+if [ -z "${VAULT_ROOT:-}" ]; then
+  echo "VAULT_ROOT is required to export runtime env" >&2
+  exit 2
+fi
 
 watcher_runtime_env_file="$runtime_env_path"
 case "$watcher_runtime_env_file" in
