@@ -129,6 +129,13 @@ def test_panel_renders_fetched_projection() -> None:
     assert re.search(r"\breload\(\);", script), "reload() must run on initial load"
     # Every action chains through reload() so the panel re-renders after it.
     assert ".then(reload)" in script
+    # Controls inside the swapped body (Reload button, recent-vault buttons)
+    # use delegated handling so they survive the fragment swap — a directly
+    # attached listener would be lost after the first reload (#2016 Codex).
+    assert "root.querySelector('[data-testid=\"vault-reload\"]')" not in script
+    assert (
+        "event.target.closest('[data-testid=\"vault-reload\"]')" in script
+    ), "the Reload button must be handled via document-delegated click"
 
     # The initial server-rendered panel also carries the fragment route and the
     # applied projection so the first paint already reflects the vault context.
