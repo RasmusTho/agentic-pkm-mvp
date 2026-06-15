@@ -67,3 +67,51 @@ def test_vaultid_heal_runs_for_primary_role(tmp_path: Path) -> None:
 
     assert context.status == "selected"
     assert "vaultId" in vault_md.read_text(encoding="utf-8")
+
+
+def test_local_instance_id_heal_persists_for_satellite(tmp_path: Path) -> None:
+    """A satellite (shared edits disabled by default) with a missing
+    localInstanceId must still persist it to the gitignored local.md, so local
+    clone identity stays stable across loads (Codex #2030 P2)."""
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_vault_missing_vault_id(vault_root, machine_role="satellite")
+    # Remove localInstanceId so only the local id is missing.
+    local_md = settings_dir / "local.md"
+    local_md.write_text(
+        "---\nschema: design-handoff.local.v1\nscope: vault-local\nmachineRole: satellite\n---\n# Local\n",
+        encoding="utf-8",
+    )
+    vault_md = settings_dir / "vault.md"
+    vault_before = vault_md.read_text(encoding="utf-8")
+
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(path=tmp_path / "app-local.md"))
+    first = manager.validate_vault(vault_root)
+    second = manager.validate_vault(vault_root)
+
+    assert first.status == "selected"
+    # localInstanceId persisted to the local file -> stable across loads.
+    assert "localInstanceId" in local_md.read_text(encoding="utf-8")
+    assert first.local_instance_id == second.local_instance_id
+    # vaultId is shared; a satellite with shared edits disabled must NOT write vault.md.
+    assert vault_md.read_text(encoding="utf-8") == vault_before
+    assert "vaultId" not in vault_md.read_text(encoding="utf-8")
+
+
+def test_local_instance_id_heal_skipped_for_readonly(tmp_path: Path) -> None:
+    """The read-only ceiling still blocks even the local.md write."""
+    vault_root = tmp_path / "vault"
+    settings_dir = _init_vault_missing_vault_id(vault_root, machine_role="readOnlySatellite")
+    local_md = settings_dir / "local.md"
+    local_md.write_text(
+        "---\nschema: design-handoff.local.v1\nscope: vault-local\nmachineRole: readOnlySatellite\n---\n# Local\n",
+        encoding="utf-8",
+    )
+    before = local_md.read_text(encoding="utf-8")
+
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(path=tmp_path / "app-local.md"))
+    context = manager.validate_vault(vault_root)
+
+    assert context.status == "selected"
+    assert context.local_instance_id  # runtime id still provided
+    assert local_md.read_text(encoding="utf-8") == before
+    assert "localInstanceId" not in local_md.read_text(encoding="utf-8")

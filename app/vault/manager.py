@@ -175,11 +175,17 @@ class VaultManager:
             )
 
         role = _machine_role(local_doc.frontmatter.get("machineRole"))
-        # Honor the read-only ceiling before healing a missing identity: a
-        # readOnlySatellite (or any role/clone that disallows shared-settings
-        # writes) must not write the shared vault.md / local.md just to backfill a
-        # generated id. Missing ids degrade to a non-persisted runtime id instead.
-        allow_identity_heal = self._allow_identity_heal(role, local_doc.frontmatter)
+        # Honor the read-only ceiling before healing a missing identity. The two
+        # ids live in different files with different write authority:
+        #   - vaultId is in the shared, committable vault.md -> requires
+        #     shared-settings write authority to heal.
+        #   - localInstanceId is in the gitignored, machine-local local.md ->
+        #     requires only local-settings write authority to heal.
+        # A read-only role writes neither; a satellite with shared edits disabled
+        # can still persist its own local clone id so recent-vault identity stays
+        # stable (Codex #2030 P2).
+        allow_shared_heal = self._allow_shared_identity_heal(role, local_doc.frontmatter)
+        allow_local_heal = self._allow_local_identity_heal(role, local_doc.frontmatter)
         try:
             vault_id = self._ensure_frontmatter_id(
                 settings_dir / "vault.md",
@@ -187,7 +193,7 @@ class VaultManager:
                 key="vaultId",
                 prefix="vault",
                 body=vault_doc.body,
-                persist=allow_identity_heal,
+                persist=allow_shared_heal,
             )
             local_instance_id = self._ensure_frontmatter_id(
                 settings_dir / "local.md",
@@ -195,7 +201,7 @@ class VaultManager:
                 key="localInstanceId",
                 prefix="local",
                 body=local_doc.body,
-                persist=allow_identity_heal,
+                persist=allow_local_heal,
             )
         except OSError as exc:
             return VaultContext(
@@ -357,8 +363,8 @@ class VaultManager:
             except Exception:
                 logger.exception("vault changed subscriber failed")
 
-    def _allow_identity_heal(self, role: MachineRole, local_frontmatter: dict[str, Any]) -> bool:
-        """Whether a missing vault identity may be healed by writing settings files.
+    def _allow_shared_identity_heal(self, role: MachineRole, local_frontmatter: dict[str, Any]) -> bool:
+        """Whether a missing ``vaultId`` may be healed by writing the shared vault.md.
 
         Read-only roles never write the shared vault. A role that otherwise allows
         writes can still opt out via ``allowSharedSettingsEdits: false`` /
@@ -372,6 +378,17 @@ class VaultManager:
         if not _bool_setting(local_frontmatter.get("allowSharedSettingsEdits"), default=shared_default):
             return False
         return True
+
+    def _allow_local_identity_heal(self, role: MachineRole, local_frontmatter: dict[str, Any]) -> bool:
+        """Whether a missing ``localInstanceId`` may be healed by writing local.md.
+
+        ``local.md`` is the gitignored, machine-local settings file, so this needs
+        only local-settings write authority — not shared-write authority. A
+        read-only role still writes nothing (read never mutates the vault).
+        """
+        if role == "readOnlySatellite":
+            return False
+        return _bool_setting(local_frontmatter.get("allowLocalSettingsEdits"), default=True)
 
     def _ensure_frontmatter_id(
         self,
