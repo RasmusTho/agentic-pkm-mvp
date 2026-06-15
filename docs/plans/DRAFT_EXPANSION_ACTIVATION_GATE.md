@@ -5,6 +5,8 @@ Temporal class: proposal
 
 # DRAFT — The Expansion Activation Gate
 
+> **Tracked by:** parent #2022 (Expansion Activation Gate — admissibility-governed first activation), with bounded slices #2023 (admissibility contract), #2024 (gate contract), #2025 (gate function), #2026 (ASK synthesis activation, needs-human). Later waves hook under #1972/#1959 (recall) and #1960 (commitments); higher-authority / broad expansion stays gated (reset Wave 7). This doc remains the design rationale; the issues carry the work.
+
 ## Why this draft exists
 
 The Maintenance vs Expansion audit (code-grounded, 2026-06-15) established:
