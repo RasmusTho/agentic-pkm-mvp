@@ -198,6 +198,15 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   truth. Context Bundles keep `may_write=false` unless a later governed contract explicitly
   changes that posture. No new runtime enforcement was added by #1598; the constraint is normative
   and drives future follow-up implementation issues if concrete enforcement gaps are identified.
+- Inbound context/memory admissibility contract authored (#2023, parent #2022): the **admit-by
+  predicate** — what context/memory is eligible to *enter* a proposal, answer, or action — is now
+  owned by `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md`, the input-side analogue of the
+  outbound `AuthorityFlags`. It defines four admission axes (sphere/scope, memory class,
+  provenance/trust + review state, consuming authority) plus an inspectable
+  admit/exclude-with-reason decision object, and **supersedes the documented-only #1598 default**
+  for admit-by (the #1598 sections remain valid as the influence posture for already-admitted
+  material). Reset Wave-5 deliverable; docs-only — runtime enforcement is Slice #2025 and no flag
+  is flipped here.
 - Durable Memory and Recall is shipped through #1904-#1908. Pending review candidates remain
   runtime-only; explicit review decisions persist as vault-scoped receipts/traces and reconcile the
   in-memory queue on intake/startup. Promote-to-semantic decisions become terminal only after the

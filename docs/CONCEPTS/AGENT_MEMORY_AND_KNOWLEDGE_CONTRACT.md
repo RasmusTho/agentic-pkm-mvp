@@ -353,6 +353,13 @@ agent_memory:
 
 ## Bounded memory/context admissibility default
 
+> **Superseded for the admit-by predicate (#2023).** The **inbound admit-by predicate** — *what
+> context/memory is eligible to enter a proposal, answer, or action* — is now owned by
+> `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md`. The conservative default recorded here (the
+> #1598 default) remains valid as the *influence* posture for already-admitted material and is
+> consistent with the tiers in that contract, but it is no longer the authoritative admissibility
+> statement. For admission decisions, read the admissibility contract first.
+
 This section records the conservative admissibility default in force until a separate governed
 contract explicitly changes it. It governs how memory and context may be used across three
 influence tiers.
