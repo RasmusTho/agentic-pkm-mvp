@@ -102,7 +102,7 @@ invariant shipped half-applied and was discovered as a prod startup failure.
 A precondition without migrated producers + a preflight is a latent outage.
 
 Enforcement: the test channel is held to this by `app.ops.channel_preflight`
-(refuses inconsistent config) and the `harness-selfverify` CI gate (runs the
+(refuses inconsistent config) and the harness-selfverify CI gate (runs the
 IR-v1 UAT + the bootstrap smoke + a fault-injection proof). When you add a
 runtime precondition, add it to that gate's coverage too.
 
