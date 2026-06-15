@@ -12,6 +12,8 @@ Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs
 
 This document is the active architecture source of truth for the SoT v5.5 Reality-MVP baseline and the place where current runtime contracts are defined.
 
+> This document owns *how the runtime is wired*. It does **not** own *why the system exists* — that is [`COGNITIVE_PROSTHESIS_CHARTER.md`](COGNITIVE_PROSTHESIS_CHARTER.md) (purpose plus the Cognitive Maintenance / Expansion model) and [`HUMAN-FLOWS.md`](HUMAN-FLOWS.md) (the human functions), which win on intent. Read the charter first: every runtime surface below exists to serve a stage of the cognitive arc (Capture → Understand → Enhance → Decide → Act → Reflect). Most *Cognitive Expansion* surfaces are deliberately pre-positioned behind activation gates rather than live today — `docs/STATUS.md` carries their current activation status.
+
 Forward-looking plan lives in `docs/ROADMAP.md`. Historical snapshots are no longer retained as live repo files; use git history for removed background material. If a roadmap document conflicts with this document on current-state runtime architecture, this document wins.
 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.

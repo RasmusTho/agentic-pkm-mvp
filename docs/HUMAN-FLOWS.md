@@ -330,6 +330,23 @@ This is why reflection, weekly review, after-action notes, and other review prac
 They are not decorative add-ons.
 They are part of keeping the system useful and believable.
 
+### Close the loop on human outcomes
+
+The system's success is not that capture happened, an index updated, or a receipt was written.
+Those are Maintenance signals — necessary, but they only prove the system did not lose anything.
+The function this flow names is the harder one: did the human's cognition actually improve?
+
+On the human's own review rhythms, the system should help answer questions like:
+- did I re-orient faster than I would have unaided,
+- did I decide with better-grounded evidence,
+- did I understand or learn something that stuck,
+- did I produce work I could not have produced without the system.
+
+This is the Expansion-side acceptance signal (see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1). It
+is a non-blocking target: when the runtime cannot yet support a given outcome, the question is still
+kept as the real measure of whether the prosthesis is working, rather than being replaced by
+mechanism-level metrics that look like success without being it.
+
 ### Support creative and hobby work
 
 The system must explicitly support forms of work that are not reducible to stable knowledge or

@@ -1,4 +1,5 @@
 State: Capability boundary contract for human-facing cognitive-load projections; docs-only, no runtime implementation claim.
+Anchored to: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — the Maintenance pass (reduce friction, not intelligence) of the Maintenance / Expansion model (§2.1). This contract refines one region of that model; the charter wins on purpose framing.
 Doc role: Cognitive load projection contract
 Authority: Binding source-of-truth boundary for Cognitive Load Projection Layer docs and downstream issue contracts. It defines how cognitive-load aids, display preferences, listening surfaces, text-production aids, resurfacing aids, and accessibility techniques may project, render, summarize, structure, or propose changes on human-facing views without mutating canonical artifacts or changing authority. Current runtime truth remains owned by shipped implementation docs and tests.
 Owner: Product / Companion UI / interaction authority

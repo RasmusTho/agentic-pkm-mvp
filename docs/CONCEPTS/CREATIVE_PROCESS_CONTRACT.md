@@ -1,4 +1,5 @@
 State: Concept contract companion (creative process, iteration, and exploratory development; implementation-agnostic).
+Anchored to: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — Cognitive Expansion (creativity, exploration) in the Maintenance / Expansion model (§2.1). This contract refines one region of that model; the charter wins on purpose framing.
 
 # Creative Process Contract
 
