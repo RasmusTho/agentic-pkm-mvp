@@ -154,3 +154,75 @@ def test_switch_between_known_vaults_persists_last_active(
     assert settings.last_active_vault_ref == ref_b
     # Both remain registered for future switching.
     assert {ref_a, ref_b} <= set(settings.known_vaults.keys())
+
+
+# --- Cross-endpoint picker-routing contract (set-but-missing VAULT_ROOT) -----
+#
+# Every companion boundary that resolves the vault root must route a
+# *set-but-missing* ``VAULT_ROOT`` into the ``vault_selection_required`` picker
+# state (200, reason ``vault_root_misconfigured``) — never a 500 and never a
+# silent ``./vault`` default. The file docstring above asserted #1757 did this,
+# but until now only ``/vault/context`` was exercised; ``/vault/notes``,
+# ``/workspace``, and the governed ``queue-review`` write action carried the same
+# ``_vault_selection_required_response`` branch untested. This parametrized suite
+# pins that contract for all of them so a future refactor can't silently drop a
+# catch (the gap that let #2006's queue-review path regress to a 500).
+
+
+def _picker_endpoints() -> list[tuple[str, str, str, dict | None, str | None]]:
+    """(id, method, url, json_body, expected_requested_note_path)."""
+    note_path = "notes/x.md"
+    return [
+        ("vault_context", "GET", "/api/companion/vault/context", None, None),
+        ("vault_notes", "GET", "/api/companion/vault/notes", None, None),
+        (
+            "workspace",
+            "GET",
+            f"/api/companion/workspace?note_path={note_path}",
+            None,
+            note_path,
+        ),
+        (
+            "queue_review",
+            "POST",
+            "/api/companion/vault-browser/actions/queue-review",
+            {"note_path": note_path},
+            note_path,
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "method, url, json_body, expected_requested_note_path",
+    [case[1:] for case in _picker_endpoints()],
+    ids=[case[0] for case in _picker_endpoints()],
+)
+def test_set_but_missing_vault_root_routes_to_picker(
+    client: TestClient,
+    manager: VaultManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    url: str,
+    json_body: dict | None,
+    expected_requested_note_path: str | None,
+) -> None:
+    """Set-but-missing VAULT_ROOT -> every picker endpoint returns the misconfig
+    picker state (200), surfaces the configured path, and never 500s.
+    """
+    missing_root = tmp_path / "does-not-exist-vault"
+    assert not missing_root.exists()
+    # The `manager` fixture deletes VAULT_ROOT and reports a no-vault context, so
+    # each endpoint falls through to resolve_vault_root() and raises on the
+    # missing path — exactly the misconfigured-root branch under test.
+    monkeypatch.setenv("VAULT_ROOT", str(missing_root))
+
+    resp = client.request(method, url, json=json_body)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "vault_selection_required"
+    assert body["reason"] == "vault_root_misconfigured"
+    assert body["configured_vault_root"] == str(missing_root)
+    if expected_requested_note_path is not None:
+        assert body["requested_note_path"] == expected_requested_note_path

@@ -211,11 +211,43 @@ def test_queue_review_rejects_missing_scope() -> None:
     assert _proposal_count() == 0
 
 
-def test_queue_review_rejects_unknown_note(
+def test_queue_review_routes_missing_vault_root_to_picker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
+    """A misconfigured (missing) VAULT_ROOT must route the human into the vault
+    picker — the same fail-loud behavior as ``/vault/notes`` / ``/workspace`` —
+    rather than masquerading the unmounted vault as an empty one (#2004). No
+    governance proposal is staged.
+    """
+    missing_root = tmp_path / "vault"
+    monkeypatch.setenv("VAULT_ROOT", str(missing_root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+
+    resp = TestClient(app).post(
+        "/api/companion/vault-browser/actions/queue-review",
+        json={"note_path": "notes/missing.md"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["state"] == "vault_selection_required"
+    assert data["reason"] == "vault_root_misconfigured"
+    assert data["configured_vault_root"] == str(missing_root)
+    assert data["requested_note_path"] == "notes/missing.md"
+    assert _proposal_count() == 0
+
+
+def test_queue_review_rejects_unknown_note_in_valid_vault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An existing vault that simply lacks the requested note still yields a
+    plain 404 — the unknown-note rejection is independent of the picker path.
+    """
+    vault = tmp_path / "vault"
+    _write_note(vault, "notes/present.md", uuid="present-uuid")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
 
     resp = TestClient(app).post(
