@@ -95,3 +95,31 @@ def test_vault_shared_definition_file_binding(tmp_path: Path) -> None:
     default_view = resolution.settings["defaultView"]
     assert default_view.value == "handoff"
     assert default_view.source.endswith("companion-ui.md")
+
+
+def test_vault_local_can_override_shared_key_cross_scope(tmp_path: Path) -> None:
+    """The file-binding guard must not block the documented cross-scope override:
+    a vault-local file (local.md) overriding a vault-shared key (Codex #2030 P2)."""
+    vault_root = tmp_path / "vault"
+    _init_shared_vault(
+        vault_root,
+        extra={
+            "local.md": (
+                "---\nschema: design-handoff.local.v1\nscope: vault-local\n"
+                "localInstanceId: l1\nmachineRole: primary\nhandoffFolder: Local Handoff\n---\n"
+            ),
+        },
+    )
+    settings_dir = vault_root / "settings"
+    context = VaultContext(
+        status="selected",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+    )
+
+    resolution = SettingsService().resolve(context)
+
+    handoff = resolution.settings["handoffFolder"]
+    assert handoff.value == "Local Handoff"
+    assert handoff.scope == "vault-local"
+    assert handoff.source.endswith("local.md")

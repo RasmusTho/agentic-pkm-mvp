@@ -348,12 +348,16 @@ class SettingsService:
             if not _source_can_set_definition(source_scope, definition):
                 continue
             # Bind each vault file-backed definition to its declared
-            # ``definition.file``: a later vault-shared/local file must not be
-            # able to override another file's keys (e.g. companion-ui.md setting
-            # handoffFolder, which is owned by paths.md).
+            # ``definition.file`` only within its own scope class: a vault-shared
+            # file must not override a vault-shared key owned by another shared
+            # file (e.g. companion-ui.md setting handoffFolder, owned by
+            # paths.md). This must NOT block the documented cross-scope override
+            # where a vault-local file (local.md) overrides a vault-shared key —
+            # that legitimate precedence path keeps working.
             if (
                 source_filename is not None
                 and definition.file is not None
+                and source_scope == definition.scope
                 and definition.file != source_filename
             ):
                 continue
