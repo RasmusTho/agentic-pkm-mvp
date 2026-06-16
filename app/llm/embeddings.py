@@ -156,6 +156,62 @@ def _ollama_openai_fallback(text: str, model: str, dim: int, timeout: float) -> 
     return _parse_vector(data, provider="ollama", model=model, expected_dim=dim)
 
 
+def _embedding_max_input_chars() -> int:
+    """Character budget per embedding request, bounding text to the embedding
+    model's context window.
+
+    ``nomic-embed-text`` has a ~2048-token window. Sending a whole oversized
+    note returns HTTP 500 ("the input length exceeds the context length"),
+    which aborts the entire embed batch and the retrieval index build for the
+    whole vault (#2110). A conservative character budget keeps each request in
+    window. Set ``EMBED_MAX_INPUT_CHARS=0`` to disable chunking.
+    """
+    raw = os.getenv("EMBED_MAX_INPUT_CHARS")
+    if raw is None:
+        return 6000
+    try:
+        value = int(raw)
+    except ValueError:
+        return 6000
+    return max(0, value)
+
+
+def _chunk_for_embedding(text: str, max_chars: int) -> List[str]:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return [text]
+    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
+
+
+def _mean_pool(vectors: List[tuple[float, ...]], dim: int) -> tuple[float, ...]:
+    if not vectors:
+        return tuple(0.0 for _ in range(dim))
+    if len(vectors) == 1:
+        return vectors[0]
+    count = len(vectors)
+    summed = [0.0] * dim
+    for vec in vectors:
+        for i in range(dim):
+            summed[i] += vec[i]
+    return tuple(value / count for value in summed)
+
+
+def _ollama_embed_one(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+    try:
+        return _ollama_embed_api(text, model, dim, timeout)
+    except httpx.HTTPError as primary_exc:
+        try:
+            return _ollama_openai_fallback(text, model, dim, timeout)
+        except httpx.HTTPError as fallback_exc:
+            raise RuntimeError(
+                f"Ollama embedding requests failed (model={model}, expected_dim={dim}). "
+                f"Primary error: {primary_exc}; fallback: {fallback_exc}"
+            ) from fallback_exc
+    except ValueError as exc:
+        raise ValueError(
+            f"Ollama embedding parsing failed (model={model}, expected_dim={dim}): {exc}"
+        ) from exc
+
+
 @lru_cache(maxsize=2048)
 def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> tuple[float, ...]:
     if dim is None:
@@ -169,20 +225,13 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
 
     if provider == "ollama":
         timeout = float(os.getenv("LLM_TIMEOUT", "60"))
-        try:
-            return _ollama_embed_api(text, model, dim, timeout)
-        except httpx.HTTPError as primary_exc:
-            try:
-                return _ollama_openai_fallback(text, model, dim, timeout)
-            except httpx.HTTPError as fallback_exc:
-                raise RuntimeError(
-                    f"Ollama embedding requests failed (model={model}, expected_dim={dim}). "
-                    f"Primary error: {primary_exc}; fallback: {fallback_exc}"
-                ) from fallback_exc
-        except ValueError as exc:
-            raise ValueError(
-                f"Ollama embedding parsing failed (model={model}, expected_dim={dim}): {exc}"
-            ) from exc
+        chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
+        if len(chunks) == 1:
+            return _ollama_embed_one(text, model, dim, timeout)
+        # Oversized note: embed each in-window chunk and mean-pool. A single long
+        # note must not 500 the request and abort the whole index build (#2110).
+        vectors = [_ollama_embed_one(chunk, model, dim, timeout) for chunk in chunks]
+        return _mean_pool(vectors, dim)
 
     raise ValueError(f"Unsupported embedding provider: {provider}")
 
