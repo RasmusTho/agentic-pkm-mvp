@@ -48,6 +48,10 @@ services:
       # Agentic Lab canvas surface gate (app/api/routes/canvas.py). Default off so
       # prod stays disabled; export CANVAS_ENABLED=1 to enable for dev/UAT.
       CANVAS_ENABLED: ${CANVAS_ENABLED:-0}
+      # Fixed in-container TTS paths — the SSD bind-mount lands at /data/tts regardless of host path.
+      TTS_MODEL_DIR: /data/tts/models
+      TTS_CACHE_DIR: /data/tts/cache
+      TTS_LOG_DIR: /data/tts/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
