@@ -40,6 +40,10 @@ def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> Re
         title=payload.get("title") or hit.get("title"),
         path=hit.get("source_ref") or payload.get("source_ref"),
         snippet=hit.get("snippet") or hit.get("text"),
+        # Carry the full note body for LLM grounding (build_ask_context bounds it
+        # by max_context_chars). Without this the synthesis context only ever
+        # sees the short display snippet.
+        text=hit.get("text") or payload.get("text") or payload.get("raw_text"),
         payload=payload,
     )
 

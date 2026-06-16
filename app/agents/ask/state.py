@@ -17,7 +17,12 @@ class RetrievedHit(BaseModel):
     trust: Optional[str] = None
     title: Optional[str] = None
     path: Optional[str] = None
+    # `snippet` is the short, keyword-centered window used for display (the API
+    # sources list). `text` is the full note body carried for LLM grounding so
+    # the answer context is not starved by the display window. Keep them
+    # distinct: collapsing the two truncates synthesis input to ~300 chars.
     snippet: Optional[str] = None
+    text: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
