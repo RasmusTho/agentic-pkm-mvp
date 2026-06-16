@@ -1,6 +1,5 @@
 from app.events.types import PROMOTION_EVALUATE_DONE
 
-import os
 from pathlib import Path
 import pytest
 
@@ -12,8 +11,6 @@ from app.agents.citation_checker.agent import run as citation_run
 from app.agents.reviewer.agent import run as review_run
 from app.agents.set_evaluator.agent import run as evaluate_run, run_set_evaluator
 from app.components.reasoning.facade import RankingEntry, RankingResult
-
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
 
 
 def _ingest_note(path: Path, text: str, trace_id: str) -> str:
@@ -34,9 +31,12 @@ def _ingest_note(path: Path, text: str, trace_id: str) -> str:
     return oid
 
 
-def test_set_evaluator_scores_and_gates(tmp_path: Path) -> None:
-    os.environ["LLM_PROVIDER"] = "mock"
-    os.environ["LLM_MOCK_RESPONSE"] = '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'
+def test_set_evaluator_scores_and_gates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv(
+        "LLM_MOCK_RESPONSE",
+        '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
+    )
 
     flagged_text = (
         "# Market Analysis\n"

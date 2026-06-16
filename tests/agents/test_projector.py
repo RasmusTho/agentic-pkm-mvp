@@ -3,14 +3,11 @@ from app.events.types import (
     PROMOTION_PROJECT_SKIP,
 )
 
-import os
 import uuid
 from datetime import datetime, timezone
 
 from app.agents.projector.agent import run as project_run
 from app.objects import ObjectStore, DomainObject
-
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
 
 
 def _create_object() -> str:

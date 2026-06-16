@@ -4,14 +4,16 @@ from app.events.types import (
     CURATION_CITATION_SKIP,
 )
 
-import os
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.classifier.agent import run as classify_run
 from app.agents.citation_checker.agent import run as citation_run
 
 def test_citation_checker_blocks_for_external_without_sources(tmp_path, monkeypatch):
-    os.environ["LLM_PROVIDER"] = "mock"
-    os.environ["LLM_MOCK_RESPONSE"] = '{"type":"note","trust":"external","tags":["topic/test"],"confidence":0.9}'
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv(
+        "LLM_MOCK_RESPONSE",
+        '{"type":"note","trust":"external","tags":["topic/test"],"confidence":0.9}',
+    )
     p = tmp_path / "no_cites.md"
     p.write_text("Enligt rapporten ökade marknaden med 25% mellan 2019 och 2023.")
     norm = normalize_run(str(p), trace_id="t-cite-1")
@@ -25,9 +27,12 @@ def test_citation_checker_blocks_for_external_without_sources(tmp_path, monkeypa
         CURATION_CITATION_SKIP,
     }
 
-def test_citation_checker_ok_when_sources_present(tmp_path):
-    os.environ["LLM_PROVIDER"] = "mock"
-    os.environ["LLM_MOCK_RESPONSE"] = '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.9}'
+def test_citation_checker_ok_when_sources_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv(
+        "LLM_MOCK_RESPONSE",
+        '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.9}',
+    )
     p = tmp_path / "has_cites.md"
     p.write_text("Studien 2022 visar ökning. Källa: https://example.org/report.pdf")
     norm = normalize_run(str(p), trace_id="t-cite-2")

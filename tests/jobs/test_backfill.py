@@ -4,8 +4,9 @@ from app.events.types import (
     PROMOTION_EVALUATE_DONE,
 )
 
-import os
 from pathlib import Path
+
+import pytest
 
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.chunker.agent import run as chunk_run
@@ -14,8 +15,6 @@ from app.agents.reviewer.agent import run as review_run
 from app.agents.set_evaluator.agent import run as evaluate_run
 from app.jobs.backfill import BackfillSummary, run_backfill
 
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
-
 
 def _normalize(path: Path, text: str, trace_id: str) -> str:
     path.write_text(text)
@@ -23,9 +22,12 @@ def _normalize(path: Path, text: str, trace_id: str) -> str:
     return res["object_id"]
 
 
-def test_backfill_pipeline_structure(tmp_path: Path) -> None:
-    os.environ["LLM_PROVIDER"] = "mock"
-    os.environ["LLM_MOCK_RESPONSE"] = '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'
+def test_backfill_pipeline_structure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv(
+        "LLM_MOCK_RESPONSE",
+        '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
+    )
 
     note1 = _normalize(tmp_path / "missing_chunks.md", "# A\n\nContent", "t-backfill-seed-1")
     note2 = _normalize(tmp_path / "missing_embeddings.md", "# B\n\nSecond", "t-backfill-seed-2")

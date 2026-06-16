@@ -1,13 +1,8 @@
-import os
 from datetime import datetime, timedelta, timezone
 from app.memory.store import remember, recall, decay
 
-def _set_env():
-    os.environ.setdefault("MEMORY_ENABLED", "true")
-    os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
 
 def test_memory_store_roundtrip():
-    _set_env()
     agent = "normalizer"
     kind = "normalized"
     oid = "00000000-0000-0000-0000-000000000000"
