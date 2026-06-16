@@ -36,6 +36,9 @@ class TTSConfig:
     allow_cloud_fallback: bool
     piper_command: str | None
     kokoro_command: str | None
+    sv_voice: str = "sv_SE-lisa-medium"
+    en_us_voice: str = "bf_isabella"
+    en_gb_voice: str = "bf_isabella"
 
     @property
     def audio_cache_dir(self) -> Path:
@@ -65,4 +68,7 @@ def load_tts_config() -> TTSConfig:
         allow_cloud_fallback=_truthy_env("TTS_ALLOW_CLOUD_FALLBACK"),
         piper_command=(os.getenv("TTS_PIPER_COMMAND") or "").strip() or None,
         kokoro_command=(os.getenv("TTS_KOKORO_COMMAND") or "").strip() or None,
+        sv_voice=(os.getenv("TTS_SV_VOICE") or "sv_SE-lisa-medium").strip(),
+        en_us_voice=(os.getenv("TTS_EN_US_VOICE") or "bf_isabella").strip(),
+        en_gb_voice=(os.getenv("TTS_EN_GB_VOICE") or "bf_isabella").strip(),
     )

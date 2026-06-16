@@ -10,11 +10,11 @@
 set -euo pipefail
 
 DEST="${1:?usage: fetch_tts_models.sh <models-dir>}"
-PIPER_DIR="$DEST/piper/sv_SE-nst-medium"
+PIPER_DIR="$DEST/piper/sv_SE-lisa-medium"
 KOKORO_DIR="$DEST/kokoro"
 
-PIPER_SV_ONNX_URL="${PIPER_SV_ONNX_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx}"
-PIPER_SV_JSON_URL="${PIPER_SV_JSON_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx.json}"
+PIPER_SV_ONNX_URL="${PIPER_SV_ONNX_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/lisa/medium/sv_SE-lisa-medium.onnx}"
+PIPER_SV_JSON_URL="${PIPER_SV_JSON_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/lisa/medium/sv_SE-lisa-medium.onnx.json}"
 KOKORO_ONNX_URL="${KOKORO_ONNX_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx}"
 KOKORO_VOICES_URL="${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}"
 
@@ -28,8 +28,8 @@ fetch() { # url out
 }
 
 mkdir -p "$PIPER_DIR" "$KOKORO_DIR"
-fetch "$PIPER_SV_ONNX_URL" "$PIPER_DIR/sv_SE-nst-medium.onnx"
-fetch "$PIPER_SV_JSON_URL" "$PIPER_DIR/sv_SE-nst-medium.onnx.json"
+fetch "$PIPER_SV_ONNX_URL" "$PIPER_DIR/sv_SE-lisa-medium.onnx"
+fetch "$PIPER_SV_JSON_URL" "$PIPER_DIR/sv_SE-lisa-medium.onnx.json"
 fetch "$KOKORO_ONNX_URL"   "$KOKORO_DIR/kokoro-v1.0.int8.onnx"
 fetch "$KOKORO_VOICES_URL" "$KOKORO_DIR/voices-v1.0.bin"
 

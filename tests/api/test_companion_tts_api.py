@@ -13,12 +13,12 @@ from app.tts.providers import TTSVoice
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     model_dir = tmp_path / "models"
-    piper_dir = model_dir / "piper" / "sv_SE-nst-medium"
+    piper_dir = model_dir / "piper" / "sv_SE-lisa-medium"
     kokoro_dir = model_dir / "kokoro"
     piper_dir.mkdir(parents=True)
     kokoro_dir.mkdir(parents=True)
-    (piper_dir / "sv_SE-nst-medium.onnx").write_bytes(b"model")
-    (piper_dir / "sv_SE-nst-medium.onnx.json").write_text("{}", encoding="utf-8")
+    (piper_dir / "sv_SE-lisa-medium.onnx").write_bytes(b"model")
+    (piper_dir / "sv_SE-lisa-medium.onnx.json").write_text("{}", encoding="utf-8")
     (kokoro_dir / "kokoro-v1.0.int8.onnx").write_bytes(b"model")
     (kokoro_dir / "voices-v1.0.bin").write_bytes(b"voice")
     monkeypatch.setenv("TTS_ENABLED", "true")
@@ -93,7 +93,7 @@ def test_synthesize_uses_cache_on_repeat(
     assert first.json()["state"] == "generated"
     assert second.json()["state"] == "cached"
     assert first.json()["cache_key"] == second.json()["cache_key"]
-    assert calls == [("Hej världen.", "sv_SE-nst-medium", 1.35)]
+    assert calls == [("Hej världen.", "sv_SE-lisa-medium", 1.35)]
 
     audio = client.get(first.json()["audio_url"])
     assert audio.status_code == 200
@@ -240,9 +240,9 @@ def test_tts_runtime_status_reports_provider_availability_without_models(
     assert set(providers) == {"sv-SE", "en-US", "en-GB"}
     assert providers["sv-SE"]["provider"] == "piper"
     assert providers["sv-SE"]["available"] is False
-    assert "sv_SE-nst-medium.onnx" in providers["sv-SE"]["reason"]
+    assert "sv_SE-lisa-medium.onnx" in providers["sv-SE"]["reason"]
     assert providers["en-US"]["provider"] == "kokoro"
-    assert providers["en-GB"]["voice_id"] == "bf_emma"
+    assert providers["en-GB"]["voice_id"] == "bf_isabella"
 
 
 def test_tts_synthesize_reuses_cache_after_lru_cleanup(

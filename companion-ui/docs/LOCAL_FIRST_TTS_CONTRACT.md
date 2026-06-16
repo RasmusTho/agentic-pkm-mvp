@@ -5,7 +5,7 @@ Owner: Companion UI / runtime integration
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code + local runtime setup
-Last reviewed: 2026-06-08
+Last reviewed: 2026-06-17
 Last verified against: `app/tts/**`, `tests/tts/test_tts_planning.py`, `tests/tts/test_tts_cache.py`, `tests/api/test_companion_tts_api.py`, `tests/companion_ui/test_tts_readback.py`
 
 # Local-First TTS Contract
@@ -56,6 +56,9 @@ TTS_LOCAL_ONLY=true
 TTS_MODEL_DIR=/Volumes/T7/CompanionData/tts/models
 TTS_CACHE_DIR=/Volumes/T7/CompanionData/tts/cache
 TTS_LOG_DIR=/Volumes/T7/CompanionData/tts/logs
+TTS_SV_VOICE=sv_SE-lisa-medium
+TTS_EN_US_VOICE=bf_isabella
+TTS_EN_GB_VOICE=bf_isabella
 TTS_CACHE_MAX_GB=2
 TTS_CACHE_EVICTION=lru
 TTS_MAX_CONCURRENT_JOBS=1
@@ -94,9 +97,14 @@ Provisioning runbook: `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
 
 ## Provider Selection
 
-- `sv-SE` uses Piper voice `sv_SE-nst-medium`.
-- `en-US` uses Kokoro voice `af_heart`.
-- `en-GB` uses Kokoro voice `bf_emma`.
+- `sv-SE` uses Piper voice `sv_SE-lisa-medium`.
+- `en-US` uses Kokoro voice `bf_isabella`.
+- `en-GB` uses Kokoro voice `bf_isabella`.
+
+Voices are configurable via `TTS_SV_VOICE`, `TTS_EN_US_VOICE`, and `TTS_EN_GB_VOICE` (defaults
+above, accepted in the 2026-06-17 operator dogfood, #1702). The runtime selects the configured voice
+independent of whether the model files are present locally; a missing model only flips provider
+availability to false, so CI does not require model files.
 
 Provider commands are local executables only:
 
