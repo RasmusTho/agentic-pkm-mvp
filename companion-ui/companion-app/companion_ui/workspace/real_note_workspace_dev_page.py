@@ -147,6 +147,7 @@ class DevPageState:
     find_payload_available: bool = False
     reorient_sections: dict[str, list[dict[str, Any]]] | None = None
     resurface_candidates: list[dict[str, Any]] | None = None
+    commitments_surface: dict[str, Any] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -276,6 +277,15 @@ class RealNoteWorkspaceDevPage:
         find_payload = raw_find_payload or runtime_find_payload or {}
         reorient_payload = raw.get("reorient") or runtime.get("reorient") or {}
         resurface_payload = raw.get("resurface") or runtime.get("resurface") or {}
+        # Commitments live on RuntimeState (slice 2, #2074). A *missing* field
+        # (older payload) must degrade to "not-shown" rather than a confident
+        # empty surface, so distinguish absence (None) from a present surface.
+        if "commitments" in runtime:
+            commitments_payload: dict[str, Any] | None = runtime.get("commitments")
+        elif "commitments" in raw:
+            commitments_payload = raw.get("commitments")
+        else:
+            commitments_payload = None
         vault_browser_identity = vault_browser.get("vault_identity") or {}
 
         # The runtime echoes artifact_id only when supplied in the request.
@@ -461,6 +471,7 @@ class RealNoteWorkspaceDevPage:
             find_payload_available=find_payload_available,
             reorient_sections=_reorient_sections_from_payload(reorient_payload),
             resurface_candidates=_resurface_candidates_from_payload(resurface_payload),
+            commitments_surface=_commitment_surface_from_payload(commitments_payload),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
@@ -961,6 +972,7 @@ class RealNoteWorkspaceDevPage:
             "find_payload_available": self.state.find_payload_available,
             "reorient_sections": self.state.reorient_sections or {},
             "resurface_candidates": self.state.resurface_candidates or [],
+            "commitments_surface": self.state.commitments_surface,
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
@@ -1147,6 +1159,97 @@ def _resurface_candidates_from_payload(resurface: dict[str, Any]) -> list[dict[s
             }
         )
     return candidates
+
+
+def _commitment_item_from_raw(
+    raw: dict[str, Any],
+    *,
+    family: str,
+    index: int,
+) -> dict[str, Any] | None:
+    """Normalize one slice-2 ``CommitmentSurfaceItem`` for rendering.
+
+    ``family`` is the render family (``next-action`` or ``review-cycle``) the
+    bucket belongs to — the human-facing distinction between "what is mine to do
+    next" and "what returns to me for review".
+    """
+    if not isinstance(raw, dict):
+        return None
+    summary = str(raw.get("summary") or "").strip()
+    target_ref = str(raw.get("target_ref") or "").strip()
+    # A commitment with neither a summary nor a target reference is not
+    # renderable as a meaningful read-only projection; skip it rather than
+    # emitting an empty row.
+    if not summary and not target_ref:
+        return None
+    commitment_id = str(
+        raw.get("commitment_id") or raw.get("id") or f"{family}-{index}"
+    )
+    return {
+        "commitment_id": commitment_id,
+        "family": family,
+        "kind": str(raw.get("kind") or "").strip(),
+        "state": str(raw.get("state") or "").strip(),
+        "summary": summary,
+        "target_ref": target_ref,
+        "source_goal": str(raw.get("source_goal") or "").strip(),
+    }
+
+
+def _commitment_surface_from_payload(
+    commitments: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Normalize the slice-2 ``runtime.commitments`` field for rendering.
+
+    Returns a render-ready surface that distinguishes four states honestly:
+
+    - ``not-shown``: the field was absent (older payload) — never imply zero
+      commitments when the surface was simply not provided.
+    - ``degraded``: the API reported a degraded durable read — surface it as
+      unavailable with the reason, never a confident empty list (CI-2).
+    - ``empty``: a healthy read returned no active commitments — the one case
+      where a confident "nothing here" is legitimate.
+    - ``populated``: active commitments grouped into the next-action family
+      (next + waiting) and the review-cycle family (review_return).
+    """
+    if commitments is None or not isinstance(commitments, dict):
+        return {"state": "not-shown", "read_only": True}
+
+    if bool(commitments.get("degraded")):
+        return {
+            "state": "degraded",
+            "read_only": True,
+            "degraded_reason": str(commitments.get("degraded_reason") or "unknown"),
+        }
+
+    def _bucket(key: str, family: str) -> list[dict[str, Any]]:
+        raw_items = commitments.get(key) or []
+        if not isinstance(raw_items, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for index, raw in enumerate(raw_items, start=1):
+            item = _commitment_item_from_raw(raw, family=family, index=index)
+            if item is not None:
+                items.append(item)
+        return items
+
+    # Next-action family: actionable "mine to do next" — the query projection's
+    # next + waiting buckets. Review-cycle family: review_return.
+    next_action_items = _bucket("next", "next-action") + _bucket(
+        "waiting", "next-action"
+    )
+    review_cycle_items = _bucket("review_return", "review-cycle")
+
+    if not next_action_items and not review_cycle_items:
+        return {"state": "empty", "read_only": True}
+
+    return {
+        "state": "populated",
+        "read_only": bool(commitments.get("read_only", True)),
+        "next_action": next_action_items,
+        "review_cycle": review_cycle_items,
+    }
+
 
 def _suggestion_cards_from_payload(suggestions: dict[str, Any]) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
