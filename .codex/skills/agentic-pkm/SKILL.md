@@ -37,7 +37,7 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 ## Typical commands (verify before running)
 
 - Install: `python -m pip install -e .`
-- Tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`
+- Tests: `pytest -q -m "not pg"`
 - Alpha runtime: `make alpha-up` then `python -m scripts.alpha_e2e`
 
 ## Capturing learning

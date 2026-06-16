@@ -66,7 +66,7 @@ Practical rule:
 - Code-affecting changes:
   - `ruff check app tests`
   - `mypy app`
-  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"`
+  - `pytest -q -m "not pg"`
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
@@ -85,7 +85,7 @@ Enforcement note:
 ### CI / validation expectations
 
 The CI workflow runs a non-required `Unit tests (not pg)` check automatically on `pull_request`.
-That check executes `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"` without a Postgres
+That check executes `pytest -q -m "not pg"` without a Postgres
 service so unit regressions are visible before merge.
 
 This PR check is intentionally non-required until it has been observed green on real PRs. Promoting

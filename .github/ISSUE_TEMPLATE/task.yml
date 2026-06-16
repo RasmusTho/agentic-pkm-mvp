@@ -76,7 +76,7 @@ body:
         Exact commands or checks that execute the `Verify:` targets declared in Acceptance Criteria.
         This section is the procedural form of the AC verification plan — commands should resolve every Verify target, not duplicate them.
       placeholder: |
-        - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/<module>/test_<name>.py`
+        - `pytest -q tests/<module>/test_<name>.py`
         - `python -m app.cli ...`
         - doc check: `docs/<PATH>.md :: <anchor>` present after change
     validations:
