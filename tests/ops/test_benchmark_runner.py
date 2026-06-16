@@ -47,12 +47,47 @@ BENCHMARK_ENV_KEYS = (
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Env keys a sibling test may have leaked into the process (directly via
+# ``os.environ[...] = ...`` rather than ``monkeypatch``) that must NOT be
+# inherited by the benchmark subprocess. A leaked ``VAULT_ROOT`` pointing at a
+# cleaned-up temp dir makes the runner fail loud (VaultRootMisconfiguredError);
+# a leaked Postgres DSN contradicts the memory profile; stale LLM/embed values
+# would override the deterministic mock profile this runner relies on.
+# Stripping them keeps the subprocess hermetic regardless of CI test ordering
+# (#2066).
+_CONTAMINATION_ENV_KEYS = (
+    "VAULT_ROOT",
+    "VAULT_ROOT_DEV",
+    "VAULT_ROOT_TEST",
+    "DATABASE_URL",
+    "DB_DSN",
+    "LLM_PROVIDER",
+    "LLM_FORCE_PROVIDER",
+    "EMBED_PROFILE",
+    "LLM_MOCK_RESPONSE",
+    "STORE_BACKEND",
+    "INGEST_STATUS_PATH",
+)
+
+
+def _hermetic_subprocess_env(env_override: dict | None = None) -> Dict[str, str]:
+    """Build a deterministic env for the benchmark subprocess.
+
+    Start from the current process env, drop any leaked contamination keys, then
+    apply the benchmark's required memory/mock profile. Explicit ``env_override``
+    values win last so callers can opt back into specific keys.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _CONTAMINATION_ENV_KEYS}
+    env["STORE_BACKEND"] = "memory"
+    env["LLM_PROVIDER"] = "mock"
+    if env_override:
+        env.update(env_override)
+    return env
+
 
 def _run_benchmark_module(*extra_args: str, env_override: dict | None = None) -> Dict[str, Any]:
     """Run the benchmark as a subprocess and return parsed JSON."""
-    env = {**os.environ, "STORE_BACKEND": "memory", "LLM_PROVIDER": "mock"}
-    if env_override:
-        env.update(env_override)
+    env = _hermetic_subprocess_env(env_override)
 
     cmd = [
         sys.executable,
@@ -231,6 +266,69 @@ class TestGracefulDegradation:
         # Should still have valid structure, just empty/warning metrics
         assert "warnings" in data
         assert len(data["warnings"]) > 0 or len(data["metrics"]) == 0
+
+
+class TestSubprocessEnvHermetic:
+    """The benchmark subprocess env must not inherit leaked contamination.
+
+    Regression for #2066: a sibling test in the full not-pg CI suite can leak a
+    dirty value into ``os.environ`` (e.g. a stale ``VAULT_ROOT`` pointing at a
+    cleaned-up temp dir, or a Postgres ``DATABASE_URL``). Because
+    ``_run_benchmark_module`` previously seeded the subprocess with
+    ``{**os.environ, ...}``, the child inherited that contamination and could
+    exit non-zero before emitting JSON, depending on collection order.
+    """
+
+    # Keys a sibling test may leak that must never reach the benchmark child.
+    CONTAMINATION_KEYS = (
+        "VAULT_ROOT",
+        "VAULT_ROOT_DEV",
+        "VAULT_ROOT_TEST",
+        "DATABASE_URL",
+        "DB_DSN",
+        "LLM_FORCE_PROVIDER",
+        "EMBED_PROFILE",
+        "LLM_MOCK_RESPONSE",
+        "INGEST_STATUS_PATH",
+    )
+
+    def test_subprocess_env_drops_leaked_contamination(self, monkeypatch) -> None:
+        # Simulate the leak: a prior test left these in the process env.
+        monkeypatch.setenv("VAULT_ROOT", "/nonexistent/leaked/vault/path")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
+        monkeypatch.setenv("DB_DSN", "postgresql://app:app@127.0.0.1:15432/app")
+        monkeypatch.setenv("LLM_FORCE_PROVIDER", "ollama")
+        monkeypatch.setenv("EMBED_PROFILE", "local")
+        monkeypatch.setenv("LLM_MOCK_RESPONSE", '{"type":"note","trust":"external"}')
+
+        captured_env: dict[str, dict[str, str]] = {}
+        real_run = subprocess.run
+
+        def _capturing_run(cmd, *args, **kwargs):
+            captured_env["env"] = dict(kwargs.get("env") or {})
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", _capturing_run)
+
+        data = _run_benchmark_module()
+
+        # The child must still emit valid JSON with the expected scenario.
+        assert data["scenario"]["storage_profile"] == "memory"
+        assert data["scenario"]["model_profile"] == "mock"
+
+        child_env = captured_env["env"]
+        assert child_env, "subprocess env was not captured"
+
+        # No leaked contamination key may reach the child.
+        for key in self.CONTAMINATION_KEYS:
+            assert key not in child_env, (
+                f"leaked env key {key!r} reached the benchmark subprocess: "
+                f"{child_env.get(key)!r}"
+            )
+
+        # The deterministic benchmark profile must be present.
+        assert child_env["STORE_BACKEND"] == "memory"
+        assert child_env["LLM_PROVIDER"] == "mock"
 
 
 class TestBenchmarkEnvironmentScoping:
