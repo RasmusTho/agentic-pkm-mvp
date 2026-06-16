@@ -127,9 +127,10 @@ jobs:
       - name: Install import-linter
         run: |
           python -m pip install --upgrade pip
-          pip install import-linter
+          pip install import-linter==2.11
       - name: Lint imports
-        run: lint-imports
+        # bare `lint-imports` cannot auto-discover importlinter.ini — must pass --config
+        run: lint-imports --config importlinter.ini
 
 
   k6-search:
