@@ -55,7 +55,7 @@ Rationale notes:
 ## Enforcement reality (v1)
 
 - **One `forbidden` contract**, not a `layered` contract. A `layered` contract over package *groups* would forbid legitimate intra-layer imports (e.g. `orchestrator → services`, both execution) because import-linter treats sibling modules in a layer as mutually independent. The directional invariant that adds value without false positives is the single rule "nothing outside interaction imports interaction", expressed as `type = forbidden` (deeper packages → `app.api`/`chat`/`cli`/`web`). Fuller per-layer `layered`/`independence` contracts are a documented refinement, deferred.
-- **Namespace packages are not covered.** 15 `app/` subdirectories are implicit namespace packages (no `__init__.py`), including `app.orientation` and `app.reasoning`. import-linter cannot reference them (it aborts with "Module does not exist"), so they are omitted from the contract and their inward leaks are not yet machine-enforced. Making them regular packages is a follow-up; until then the inventory records their leaks manually.
+- **Namespace packages converted (#2085).** All 15 `app/` subdirectories that were implicit namespace packages (no `__init__.py`) now have empty `__init__.py` files, including `app.orientation` and `app.reasoning`. They are now included in `source_modules` in `importlinter.ini` and their inward leaks are machine-enforced. `app.orientation → app.api`/`app.chat` violations now appear in the contract report and are routed to #2083 for shared-helper extraction.
 
 ## Known violations at adoption
 
@@ -66,8 +66,11 @@ The contract run (`lint-imports --config importlinter.ini`, exit 1 — expected 
 - `app.observability.status_service → app.cli.health` (l.983) — a documented "lazy to avoid circular import" cycle.
 - `app.resurfacing.runtime → app.observability.status_service → app.cli.health` — transitive consequence of the cycle above; clears once it is broken.
 
-**Not yet machine-enforced (recorded manually in the inventory):**
-- `app.orientation.leave_point_cursor → app.api.routes.artifacts` (private `_content_hash`, `_extract_title`) and `→ app.chat.canvas_writer` (private `_split_frontmatter`) — `app.orientation` is a namespace package, excluded from the contract.
+**Now machine-enforced (converted by #2085):**
+- `app.orientation.leave_point_cursor → app.api.routes.artifacts` (private `_content_hash`, `_extract_title`) — now reported by the contract; routed to #2083.
+- `app.orientation.leave_point_cursor → app.chat.canvas_writer` (private `_split_frontmatter`) — now reported by the contract; routed to #2083.
+
+**Not yet machine-enforced (intra-interaction, below module granularity):**
 - `app.api.routes.companion` / `app.api.routes.canvas → app.chat.canvas_writer` (private `_split_frontmatter` / `_body_contains_frontmatter`) — intra-interaction, past-contract; module-level contract does not flag intra-layer.
 
 The shared text helpers (`_content_hash`, `_extract_title`, `_split_frontmatter`) should be extracted into a foundation util that both interaction routes and cognition consumers may import — turning a backward leak into a legitimate downward dependency.
@@ -78,14 +81,14 @@ The shared text helpers (`_content_hash`, `_extract_title`, `_split_frontmatter`
 - Module boundaries become legible and self-reporting on every PR without blocking delivery.
 - The contract immediately surfaces genuine coupling (a backward reach + one cycle) that previously had no detector.
 - Foundation packages acquire an explicit obligation to stay leaf-like (no upward imports), constraining how `events`/`settings` may grow.
-- Coverage is partial: namespace packages and intra-interaction private reaches are not enforced until follow-ups land. The inventory is the bridge.
+- Coverage is partial: intra-interaction private reaches are not enforced (below module granularity). Namespace packages are now fully covered as of #2085. The inventory is the bridge for intra-interaction reaches.
 - A future move to a **required** gate is a one-line branch-protection change once the known violations are cleared.
 - This ADR does not move any code or split any package; package topology is unchanged.
 
 ## Out of scope
 
 - Fixing the known violations or breaking the `observability ↔ cli.health` cycle (→ follow-up FIX issue).
-- Making the 15 namespace packages regular (`__init__.py`) so the contract and mypy fully cover them (→ follow-up FIX issue).
+- Making the 15 namespace packages regular (`__init__.py`) so the contract and mypy fully cover them (→ completed in #2085).
 - Making the import-linter check a required PR gate (deferred).
 - A fuller `layered`/`independence` contract set across all layers.
 - De-coupling or re-homing the `events` / `settings` hubs beyond documenting the leaf obligation.

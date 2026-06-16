@@ -1,4 +1,4 @@
-State: Reference inventory of code import-boundary coupling as of 2026-06-16, produced while delivering #2070. Snapshot, not a contract; the authoritative rule is `docs/adr/ADR-0013-code-dependency-direction.md` and `importlinter.ini`.
+State: Reference inventory of code import-boundary coupling, updated 2026-06-16 via #2085 (all namespace packages converted to regular packages). Snapshot, not a contract; the authoritative rule is `docs/adr/ADR-0013-code-dependency-direction.md` and `importlinter.ini`.
 Doc role: Reference
 Authority: Non-authoritative snapshot. Records current backward/past-contract import leaks and shared-hub fan-out so they can be tracked to follow-up FIX issues. Does not define the boundary rule (ADR-0013 does) and does not gate anything.
 Owner: Architecture
@@ -16,21 +16,25 @@ it cannot yet see, and the shared-hub fan-out, each routed to a follow-up.
 | Leak | Kind | Fix direction | Follow-up |
 |---|---|---|---|
 | `app.panel.checkbox_projection → app.api.routes.artifacts` (l.23, private `_content_hash`) | cognition → interaction, into private | extract `_content_hash` to a foundation util both import downward | #2083 |
+| `app.orientation.leave_point_cursor → app.api.routes.artifacts` (l.14, private `_content_hash`, `_extract_title`) | cognition → interaction, into private | shared-helper extraction | #2083 |
+| `app.orientation.leave_point_cursor → app.chat.canvas_writer` (l.15, private `_split_frontmatter`) | cognition → interaction, into private | shared-helper extraction | #2083 |
 | `app.observability.status_service → app.cli.health` (l.983, "lazy to avoid circular import") | foundation → interaction, import cycle | relocate the health seam so the cycle disappears | #2084 |
 | `app.resurfacing.runtime → app.observability.status_service → app.cli.health` | transitive via the cycle above | clears once #2084 lands | #2084 |
+| `app.orientation.runtime → app.observability.status_service → app.cli.health` | transitive via the cycle above | clears once #2084 lands | #2084 |
 
-## B. Not yet machine-enforced (namespace packages / intra-interaction)
+## B. Not yet machine-enforced (intra-interaction only)
 
-`app.orientation` and `app.reasoning` are implicit namespace packages (no `__init__.py`), so the
-contract cannot reference them; intra-interaction private reaches are below module granularity.
-Recorded here manually:
+All `app/` subdirs are now regular packages (have `__init__.py`) as of #2085, so namespace-package
+exclusions are no longer needed. `app.orientation` and `app.reasoning` are now covered by the
+contract (and their violations appear in section A above, routed to #2083).
+
+Intra-interaction private reaches are below module granularity and therefore still recorded manually:
 
 | Leak | Kind | Fix direction | Follow-up |
 |---|---|---|---|
-| `app.orientation.leave_point_cursor → app.api.routes.artifacts` (private `_content_hash`, `_extract_title`) | cognition → interaction, into private | shared-helper extraction | #2083 (enforce after #2085) |
-| `app.orientation.leave_point_cursor → app.chat.canvas_writer` (private `_split_frontmatter`) | cognition → interaction, into private | shared-helper extraction | #2083 (enforce after #2085) |
+| `app.orientation.leave_point_cursor → app.api.routes.artifacts` (private `_content_hash`, `_extract_title`) | cognition → interaction, into private | shared-helper extraction | #2083 |
+| `app.orientation.leave_point_cursor → app.chat.canvas_writer` (private `_split_frontmatter`) | cognition → interaction, into private | shared-helper extraction | #2083 |
 | `app.api.routes.companion` / `app.api.routes.canvas → app.chat.canvas_writer` (private `_split_frontmatter` / `_body_contains_frontmatter`) | intra-interaction, past-contract | shared-helper extraction | #2083 |
-| 15 `app/` subdirs are namespace packages (no `__init__.py`) — exclude `app.orientation`, `app.reasoning`, `app.watcher`, `app.capture`, `app.eval`, `app.llm`, … from the contract | tooling gap | add `__init__.py`, extend contract `source_modules` | #2085 |
 
 ## C. Shared-hub fan-out (foundation leaves — documented, not a leak)
 
