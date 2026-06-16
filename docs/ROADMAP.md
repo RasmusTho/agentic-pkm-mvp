@@ -178,6 +178,33 @@ Deliverables:
 - Governed mutation paths remain explicit and mediated across interaction and automation surfaces.
 - The v6 target operating model classifies proposed changes as current-state bug fixes, enabling changes, or target-state changes before implementation begins.
 
+## Abstraction Layer Hardening (v6.x planned)
+
+Current-state inventory: 12 explicit abstraction protocols/ABCs span storage (ObjectStore, VectorIndex, RelationIndex, DecisionsStore, DispatcherStore), LLM/reasoning (LLM Adapter, BasePlanner, ReasoningFacade, EmbeddingProvider), vault (KnowledgePort, VaultPort), sync (SyncLayer), retrieval (BaseReranker), and execution (PlanExecutor). Six gaps were identified where concrete modules are wired together by callers without a shared protocol:
+
+**Priority 1 — highest ROI, natural companions to Phase 1 structural separation:**
+- `AgentProtocol` — no shared protocol for concrete agents in `agents/`; orchestrator, policy layer, and dispatcher each carry bespoke agent-handling logic. A protocol enables uniform reasoning about permissions, timeout, and budget across all agent implementations.
+- `SearchPort` — `retrieval/`, `search/`, and `relevance/` are composed directly by callers. A single `SearchPort` (query → ranked results) decouples every consumer agent from retrieval topology (vector-only, hybrid, re-ranked) and makes retrieval strategies swappable. Required before the retrieval quality improvements below can be A/B tested safely.
+
+**Priority 2 — enabling for Deep Agent introduction (Phase 2):**
+- `ChunkIndexPipeline` — `ingest/` and `indexer/` share no protocol; a typed pipeline interface enables swappable chunking and indexing strategies without touching ingest orchestration.
+- `ConfigPort` — three config systems (ENV, `config/`, `settings/`) are accessed directly; a unified access point improves testability and unblocks future hot-reload or remote config.
+
+**Priority 3 — independent, pick up opportunistically:**
+- `NotificationPort` — outbound delivery (webhooks, push, TTS trigger) is scattered across modules; a unified egress abstraction simplifies the outbox→consumer contract.
+- Agent memory store alignment — `agent_memory/` state may not route through the same `ObjectStore` protocol as the rest of the system, creating a parallel persistence track that complicates the storage abstraction story.
+
+Sequencing: Priority 1 items belong in Phase 1 deliverables. Priority 2 items are prerequisites or natural companions for Phase 2 (Deep Agent Introduction). Priority 3 items are independent and non-blocking.
+
+### Retrieval quality improvements (post-SearchPort)
+
+These are deferred until `SearchPort` exists as the safe boundary for swapping strategies:
+
+- **RRF over weighted sum** — current hybrid scoring uses hardcoded 0.5/0.4/0.1 weights (BM25/semantic/overlap). Reciprocal Rank Fusion is more robust to score-scale differences between lexical and dense signals. Note: the weights are intentional as a first-pass trust encoding; RRF should be validated not to degrade the trust hierarchy before replacing them.
+- **Provenance-aware signal weights** — the retrieval scoring has two deliberate trust layers: (1) signal trust (BM25 = exact match = high confidence; semantic = fuzzy = slightly lower), and (2) source provenance trust (vault origin +0.4, own_reviewed +0.2, evergreen +0.2, own_raw +0.1). The long-term direction is to make Layer 1 weights configurable per source type — AI-generated memory artifacts should receive a lower semantic weight than human-authored notes because LLM-generated text is semantically dense and inflates retrieval rank artificially.
+- **Query expansion / HyDE** — single-pass retrieval misses abstract or personal queries ("what was I exploring about X last year"). HyDE (generate a hypothetical answer, embed it) or multi-query (N rephrased variants, merged via RRF) are the standard remedies. Most valuable for PKM-style retrospective queries.
+- **Eval framework** — no automated signal when retrieval quality regresses. RAGAS or an LLM-as-judge faithfulness/relevance scorer in CI is the strategic gap with highest risk exposure.
+
 ## Deep Agents as runtime layer exploration (future work)
 
 <!-- Deep Agents runtime exploration -->
