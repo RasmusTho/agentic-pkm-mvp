@@ -77,6 +77,21 @@ Model files and generated audio must not be stored in the repo. The external lay
   logs/
 ```
 
+### Containerized runtime (prod)
+
+When the runtime runs in a container (the Mac mini prod deployment), the external-SSD root is
+bind-mounted to a fixed container path and the `TTS_*_DIR` values above are the in-container paths:
+
+- Host: `${TTS_HOST_ROOT}` (e.g. `/Volumes/T7/CompanionData/tts`) is bind-mounted to `/data/tts`
+  (`docker-compose.yaml`, `api` service).
+- Container: `TTS_MODEL_DIR=/data/tts/models`, `TTS_CACHE_DIR=/data/tts/cache`,
+  `TTS_LOG_DIR=/data/tts/logs` (tracked, fixed for every channel).
+- Machine-local values (`TTS_HOST_ROOT`, `TTS_ENABLED`) live in `.env.prod.local`; the engines
+  (`piper`, `kokoro_onnx`) are baked into the image. Direct (non-container) hosts use the SSD paths
+  above directly.
+
+Provisioning runbook: `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
+
 ## Provider Selection
 
 - `sv-SE` uses Piper voice `sv_SE-nst-medium`.
