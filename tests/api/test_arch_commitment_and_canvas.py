@@ -1,7 +1,7 @@
 """Architecture map — commitment surfacing (arrow 5; #1960) and canvas write guard (arrow 6; #1961).
 
-* Commitments: the domain model ships, but no companion surface exposes them.
-  XFAIL until #1960 adds commitments to the workspace state.
+* Commitments: the companion ``RuntimeState`` now exposes a read-only commitment
+  surface backed by the durable vault artefacts (slice 2, #2074; parent #1960).
 * Canvas: the ``/coauthor`` body-edit path now asserts the WriteGuard in
   ``CanvasWriter.apply_edit`` — the single chokepoint it shares with ``/edits`` —
   matching the ``/governance`` path. The guard shipped in #1966 (#1961).
@@ -11,16 +11,17 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
-
 from app.api.routes.companion import RuntimeState
 from app.chat import governance_router
 from app.chat.canvas_writer import CanvasWriter
 
 
-@pytest.mark.xfail(reason="commitments not yet surfaced in the companion workspace state (#1960)", strict=False)
 def test_commitments_surface_in_workspace_state() -> None:
-    """Arrow 5: the companion RuntimeState must expose commitments to the human."""
+    """Arrow 5: the companion RuntimeState must expose commitments to the human.
+
+    Surfaced read-only from the durable vault artefacts in slice 2 (#2074); the
+    xfail guard flipped to pass when the commitment field landed on RuntimeState.
+    """
 
     fields = " ".join(RuntimeState.model_fields).lower()
     assert "commitment" in fields, "RuntimeState exposes no commitment surface yet"
