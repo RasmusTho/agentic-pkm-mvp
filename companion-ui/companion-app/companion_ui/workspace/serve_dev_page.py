@@ -1806,6 +1806,15 @@ def _render_note_section(fields: dict) -> str:
     # orientation step), not when it is the idle/empty recall payload (#1419).
     _reorient = fields.get("reorient_sections") or {}
     reorient_actionable = any(_reorient.get(name) for name in _reorient)
+    # Commitments count as actionable when the surface has something the human
+    # should see now: active commitments (populated) or an honest degraded /
+    # not-shown notice. A healthy-empty surface stays idle (#2075).
+    _commitments = fields.get("commitments_surface") or {}
+    commitments_actionable = str(_commitments.get("state") or "") in {
+        "populated",
+        "degraded",
+        "not-shown",
+    }
     rail_actionable = bool(
         rail_safety_critical
         or proposal_count > 0
@@ -1817,6 +1826,7 @@ def _render_note_section(fields: dict) -> str:
         or len(fields.get("find_candidates") or []) > 0
         or reorient_actionable
         or len(fields.get("resurface_candidates") or []) > 0
+        or commitments_actionable
         or len(fields.get("governance_receipts") or []) > 0
         or len(fields.get("suggestion_cards") or []) > 0
         or str(fields.get("suggestion_state", "idle") or "idle") not in {"idle", "", "unknown"}
@@ -1882,6 +1892,9 @@ def _render_note_section(fields: dict) -> str:
     resurface_mode_html = _render_resurface_mode(
         fields.get("resurface_candidates") or [],
         degraded=guard_degraded,
+    )
+    commitments_mode_html = _render_commitments_mode(
+        fields.get("commitments_surface")
     )
     act_mode_html = _render_act_mode(
         proposals=fields.get("panel_proposals") or [],
@@ -1999,6 +2012,7 @@ def _render_note_section(fields: dict) -> str:
         {find_mode_html}
         {reorient_mode_html}
         {resurface_mode_html}
+        {commitments_mode_html}
         {act_mode_html}
         {guard_html}
         {persistence_html}
@@ -3749,6 +3763,179 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
             <span class="rail-state-value">low-pressure</span>
           </div>
           {"".join(rows)}
+        </section>"""
+
+
+def _render_commitment_item(item: dict) -> str:
+    """Render one read-only commitment row. No mutation affordance.
+
+    Carries the render ``family`` marker so the next-action vs review-cycle
+    distinction is observable per-item, not only via the enclosing group.
+    """
+    family = _e(str(item.get("family") or ""))
+    commitment_id = _e(str(item.get("commitment_id") or ""))
+    kind = str(item.get("kind") or "")
+    state = str(item.get("state") or "")
+    summary = str(item.get("summary") or "")
+    target_ref = str(item.get("target_ref") or "")
+    summary_html = (
+        '<div class="commitment-summary" data-testid="commitment-summary">'
+        f"{_e(_cap(summary))}</div>"
+        if summary
+        else ""
+    )
+    target_html = (
+        '<div class="commitment-target" data-testid="commitment-target" '
+        f'data-target-ref="{_e(target_ref)}">{_e(_cap(target_ref))}</div>'
+        if target_ref
+        else ""
+    )
+    meta_bits = " &middot; ".join(
+        _e(bit) for bit in (kind, state) if bit
+    )
+    meta_html = (
+        f'<div class="commitment-meta" data-testid="commitment-meta">{meta_bits}</div>'
+        if meta_bits
+        else ""
+    )
+    return f"""
+            <article
+              class="commitment-item"
+              data-testid="commitment-item"
+              data-commitment-family="{family}"
+              data-commitment-id="{commitment_id}"
+              data-affordance-status="read-only">
+              {summary_html}
+              {target_html}
+              {meta_html}
+            </article>"""
+
+
+def _render_commitment_group(*, family: str, label: str, items: list[dict]) -> str:
+    """Render one commitment family group (next-action or review-cycle).
+
+    The group is always emitted when the surface is populated so the two
+    families remain visually distinct regions even when one is momentarily
+    empty; an empty family shows a quiet read-only placeholder.
+    """
+    if items:
+        body = "".join(_render_commitment_item(item) for item in items)
+    else:
+        body = (
+            '<div class="commitment-group-empty" '
+            f'data-testid="commitment-group-empty-{_e(family)}">'
+            "None right now.</div>"
+        )
+    return f"""
+          <section
+            class="commitment-group"
+            data-testid="commitment-group-{_e(family)}"
+            data-commitment-family="{_e(family)}"
+            data-affordance-status="read-only">
+            <div class="rail-state-row">
+              <span class="rail-state-label" data-testid="commitment-group-label-{_e(family)}">{_e(label)}</span>
+            </div>
+            {body}
+          </section>"""
+
+
+def _render_commitments_mode(surface: dict | None) -> str:
+    """Render the read-only commitment surface (#2075, parent #1960).
+
+    Consumes the normalized slice-2 ``runtime.commitments`` field and renders it
+    read-only — strictly no mutation / state-transition affordance. Visually
+    distinguishes the next-action family (next + waiting) from the review-cycle
+    family (review_return) via separate labelled groups and per-item markers.
+    Degrades honestly: a missing field renders ``not-shown`` and a degraded
+    durable read renders ``unavailable`` with the reason — never a confident
+    empty surface (cross-task invariant CI-2).
+    """
+    state = str((surface or {}).get("state") or "not-shown")
+
+    if state == "not-shown":
+        return """
+        <section
+          class="commitments-mode"
+          data-testid="commitments-mode"
+          data-commitment-state="not-shown"
+          data-affordance-status="unavailable"
+          data-capability="commitments">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Commitments</span>
+            <span class="rail-state-value">unavailable</span>
+          </div>
+          <div class="commitments-notice" data-testid="commitments-not-shown-state">
+            Commitments are not shown — this runtime did not provide the commitment surface.
+          </div>
+        </section>"""
+
+    if state == "degraded":
+        reason = _e(str((surface or {}).get("degraded_reason") or "unknown"))
+        return f"""
+        <section
+          class="commitments-mode"
+          data-testid="commitments-mode"
+          data-commitment-state="degraded"
+          data-affordance-status="unavailable"
+          data-capability="commitments">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Commitments</span>
+            <span class="rail-state-value">unavailable</span>
+          </div>
+          <div
+            class="commitments-notice"
+            data-testid="commitments-degraded-state"
+            data-degraded-reason="{reason}">
+            Commitments are unavailable — the durable read is degraded
+            ({reason}). This is not a sign that you have none.
+          </div>
+        </section>"""
+
+    if state == "empty":
+        return """
+        <section
+          class="commitments-mode"
+          data-testid="commitments-mode"
+          data-commitment-state="empty"
+          data-affordance-status="read-only"
+          data-read-only="true"
+          data-capability="commitments">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Commitments</span>
+            <span class="rail-state-value">clear</span>
+          </div>
+          <div class="commitments-empty" data-testid="commitments-empty-state">
+            No active commitments right now.
+          </div>
+        </section>"""
+
+    # populated
+    next_action_items = list((surface or {}).get("next_action") or [])
+    review_cycle_items = list((surface or {}).get("review_cycle") or [])
+    next_group = _render_commitment_group(
+        family="next-action",
+        label="Next — mine to do",
+        items=next_action_items,
+    )
+    review_group = _render_commitment_group(
+        family="review-cycle",
+        label="Review — returns to me",
+        items=review_cycle_items,
+    )
+    return f"""
+        <section
+          class="commitments-mode"
+          data-testid="commitments-mode"
+          data-commitment-state="populated"
+          data-affordance-status="read-only"
+          data-read-only="true"
+          data-capability="commitments">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Commitments</span>
+            <span class="rail-state-value">read-only</span>
+          </div>
+          {next_group}
+          {review_group}
         </section>"""
 
 
