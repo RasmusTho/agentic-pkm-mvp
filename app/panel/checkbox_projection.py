@@ -20,8 +20,8 @@ from pydantic import BaseModel, Field, field_validator
 from app.agents.panel.parser import is_ai_fence, parse_panel
 from app.agents.panel.writeback import parse_action_line, stable_action_id
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
-from app.api.routes.artifacts import _content_hash
 from app.config.paths import resolve_vault_root
+from app.text.helpers import content_hash as _content_hash
 from app.knowledge.write_ops import write_note_from_absolute
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError

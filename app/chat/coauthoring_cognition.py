@@ -30,7 +30,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from app.chat.canvas_writer import GovernanceBearingMutationError, _body_contains_frontmatter
+from app.chat.canvas_writer import GovernanceBearingMutationError
+from app.text.helpers import body_contains_frontmatter as _body_contains_frontmatter
 from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
 
 # Sentinel prefixes emitted by the mock/degraded reasoning backend. When the

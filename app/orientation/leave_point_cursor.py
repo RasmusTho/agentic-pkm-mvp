@@ -11,8 +11,9 @@ from uuid import uuid4
 
 import yaml
 
-from app.api.routes.artifacts import _content_hash, _extract_title
-from app.chat.canvas_writer import _split_frontmatter
+from app.text.helpers import content_hash as _content_hash
+from app.text.helpers import extract_title as _extract_title
+from app.text.helpers import split_frontmatter as _split_frontmatter
 
 LEAVE_POINT_EVENT_TYPE = "workspace.leave_point.captured.v1"
 LEAVE_POINT_CURSOR_VERSION = 1

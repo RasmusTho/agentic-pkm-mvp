@@ -11,12 +11,17 @@ boundary) — no direct file-system writes from this module.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.knowledge.write_ops import write_note_from_absolute
+from app.text.helpers import body_contains_frontmatter, split_frontmatter
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+
+# Private module-level aliases preserved for any same-module callers;
+# cross-module consumers must import from app.text.helpers directly.
+_body_contains_frontmatter = body_contains_frontmatter
+_split_frontmatter = split_frontmatter
 
 
 # ---------------------------------------------------------------------------
@@ -126,42 +131,6 @@ class CanvasWriter:
             user_prompt=user_prompt,
             change_summary=change_summary,
         )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _body_contains_frontmatter(body: str) -> bool:
-    """Return True if ``body`` starts with a YAML frontmatter block (``---``)."""
-    stripped = body.lstrip()
-    if not stripped.startswith("---"):
-        return False
-    # Must have a closing --- line to count as frontmatter
-    rest = stripped[3:]
-    return bool(re.search(r"\n---", rest))
-
-
-def _split_frontmatter(content: str) -> tuple[str | None, str]:
-    """Split a note's content into (frontmatter_inner, body).
-
-    Returns ``(None, content)`` if there is no frontmatter block.
-    ``frontmatter_inner`` is the text between the opening and closing ``---``
-    delimiters (not including the delimiters or trailing newline).
-    """
-    if not content.startswith("---"):
-        return None, content
-
-    # Find the closing --- after the opening (handle both with body and EOF cases)
-    rest = content[3:]
-    # Try matching with newline after --- (has body)
-    close = re.search(r"\n---(?:\s*\n|\s*$)", rest)
-    if close is None:
-        return None, content
-
-    frontmatter_inner = rest[: close.start()]  # exclude trailing newline
-    body = rest[close.end() :]
-    return frontmatter_inner, body
 
 
 __all__ = ["CanvasWriter", "GovernanceBearingMutationError"]

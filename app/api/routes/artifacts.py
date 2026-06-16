@@ -8,9 +8,7 @@ Rejects path traversal and paths outside the configured vault root.
 
 from __future__ import annotations
 
-import hashlib
 import os
-import re
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.config.paths import resolve_vault_root
+from app.text.helpers import content_hash, extract_title
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
@@ -30,27 +29,10 @@ class ArtifactNoteResponse(BaseModel):
     content_hash: str
 
 
-def _extract_title(body: str, fallback: str) -> str:
-    for line in body.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("# "):
-            return _plain_title(stripped[2:])
-    return fallback
-
-
-def _plain_title(text: str) -> str:
-    text = text.strip(" #\t")
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    text = re.sub(r"(\*\*|__)(.+?)\1", r"\2", text)
-    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", text)
-    text = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"\1", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _content_hash(text: str) -> str:
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+# Private module-level aliases preserved for any same-module callers;
+# cross-module consumers must import from app.text.helpers directly.
+_extract_title = extract_title
+_content_hash = content_hash
 
 
 def _resolve_and_validate(

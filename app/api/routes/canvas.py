@@ -22,9 +22,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.api.routes.artifacts import _content_hash
 from app.services.artifact_identity import resolve_note_artifact_identity
-from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError, _split_frontmatter
+from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
+from app.text.helpers import content_hash as _content_hash, split_frontmatter as _split_frontmatter
 from app.write_guard import WritesBlockedError
 from app.chat.coauthoring_cognition import CoAuthoringCognition, CoAuthoringUnavailableError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
