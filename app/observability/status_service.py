@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import time
@@ -978,9 +979,36 @@ def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
     )
 
 
+def _check_v6_seams() -> dict[str, str]:
+    """Check importability of v6 feature seam modules.
+
+    Lives here (observability layer) so both observability.status_service and
+    cli.health can call it without creating an upward import cycle.
+    """
+
+    def _seam(module: str) -> str:
+        try:
+            importlib.import_module(module)
+            return "enabled"
+        except Exception:
+            return "disabled"
+
+    canvas_gate_on = os.getenv("CANVAS_ENABLED", "0").strip().lower() in _TRUE_VALUES
+    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
+    # Canvas is only truly "enabled" when both the gate is on AND the router imports.
+    # If the gate is on but the import fails, surface "disabled" so the misleading
+    # appearance of an active route does not mask the broken-import case.
+    canvas_state = "enabled" if (canvas_gate_on and canvas_importable) else "disabled"
+    return {
+        "orientation": _seam("app.api.routes.orientation"),
+        "resurfacing": _seam("app.resurfacing"),
+        "commitments": _seam("app.domain.commitments"),
+        "canvas": canvas_state,
+    }
+
+
 def _get_v6_seams() -> dict | None:
     try:
-        from app.cli.health import _check_v6_seams  # lazy to avoid circular import
         return _check_v6_seams()
     except Exception:
         return None

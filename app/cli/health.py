@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 import httpx
 
+from app.observability.status_service import _check_v6_seams
 from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
 from app.services.companion_diagnostics import companion_diagnostics_summary
 from app.config.environment import active_environment
@@ -618,28 +619,6 @@ def _check_authority_spine() -> Dict[str, str]:
         "authority_non_upgrade": "enforced",
         "provenance_required_for_mutations": "yes",
         "read_projection_isolation": "active",
-    }
-
-
-def _check_v6_seams() -> Dict[str, str]:
-    def _seam(module: str) -> str:
-        try:
-            importlib.import_module(module)
-            return "enabled"
-        except Exception:
-            return "disabled"
-
-    canvas_gate_on = os.getenv("CANVAS_ENABLED", "0").strip().lower() in _TRUE_VALUES
-    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
-    # Canvas is only truly "enabled" when both the gate is on AND the router imports.
-    # If the gate is on but the import fails, surface "disabled" so the misleading
-    # appearance of an active route does not mask the broken-import case.
-    canvas_state = "enabled" if (canvas_gate_on and canvas_importable) else "disabled"
-    return {
-        "orientation": _seam("app.api.routes.orientation"),
-        "resurfacing": _seam("app.resurfacing"),
-        "commitments": _seam("app.domain.commitments"),
-        "canvas": canvas_state,
     }
 
 
