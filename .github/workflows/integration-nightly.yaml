@@ -43,7 +43,9 @@ jobs:
         run: mkdir -p tmp
 
       - name: Deterministic acceptance harness
+        shell: bash
         run: |
+          set -o pipefail
           pytest -c /dev/null -q \
             tests/quality_wave/test_uat_harness.py \
             -m "not pg" \
@@ -102,7 +104,9 @@ jobs:
 
       - name: Full test suite (memory, not pg)
         timeout-minutes: 20
+        shell: bash
         run: |
+          set -o pipefail
           pytest -c /dev/null -q \
             -m "not pg and not alpha_llm" \
             --durations=30 \
@@ -203,7 +207,9 @@ jobs:
         run: mkdir -p tmp
 
       - name: Bounded PG verification lane
+        shell: bash
         run: |
+          set -o pipefail
           pytest -c /dev/null -q \
             tests/int/test_pg_backend.py \
             tests/api/test_status_store_pg.py \
