@@ -4,6 +4,21 @@
       "id": "mixed-sv-en",
       "text": "Hej, jag läser den här anteckningen. Then I continue in English.",
       "expected_languages": ["sv-SE", "en-US"]
+    },
+    {
+      "id": "markdown-heading-and-bold",
+      "text": "## Veckans fokus\nGranska **pull request** 2108 före fredag. Then deploy to production.",
+      "expected_languages": ["sv-SE", "en-US"]
+    },
+    {
+      "id": "inline-code-and-link",
+      "text": "Se filen `app/tts/providers.py` och [issue 2114](https://example.com/2114) för detaljer.",
+      "expected_languages": ["sv-SE"]
+    },
+    {
+      "id": "english-tail-passage",
+      "text": "Du har tre öppna åtaganden idag. The vault migration is still waiting on review and needs sign-off.",
+      "expected_languages": ["sv-SE", "en-US"]
     }
   ]
 }

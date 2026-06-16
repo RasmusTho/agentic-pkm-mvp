@@ -40,7 +40,8 @@ def _kokoro_python_available() -> bool:
 def resolve_voice(config: TTSConfig, language: str) -> TTSVoice:
     if language == "sv-SE":
         command = _command(config.piper_command, "piper")
-        model_path = config.model_dir / "piper" / "sv_SE-nst-medium" / "sv_SE-nst-medium.onnx"
+        voice_id = config.sv_voice
+        model_path = config.model_dir / "piper" / voice_id / f"{voice_id}.onnx"
         config_path = model_path.with_suffix(model_path.suffix + ".json")
         missing: list[str] = []
         if command is None:
@@ -52,7 +53,7 @@ def resolve_voice(config: TTSConfig, language: str) -> TTSVoice:
         return TTSVoice(
             provider="piper",
             language="sv-SE",
-            voice_id="sv_SE-nst-medium",
+            voice_id=voice_id,
             model_path=model_path,
             config_path=config_path,
             command=command,
@@ -60,7 +61,7 @@ def resolve_voice(config: TTSConfig, language: str) -> TTSVoice:
             unavailable_reason=", ".join(missing) if missing else None,
         )
 
-    voice_id = "bf_emma" if language == "en-GB" else "af_heart"
+    voice_id = config.en_gb_voice if language == "en-GB" else config.en_us_voice
     command = _command(config.kokoro_command, "kokoro")
     model_path = config.model_dir / "kokoro" / "kokoro-v1.0.int8.onnx"
     voice_path = config.model_dir / "kokoro" / "voices-v1.0.bin"
