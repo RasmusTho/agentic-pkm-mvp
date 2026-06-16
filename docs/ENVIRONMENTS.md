@@ -3,6 +3,10 @@
 State: SoT v5.5 baseline with explicit `dev` / `test` / `prod` environment model, control surfaces, and artifact separation (Issues #263, #266), with the local `test` environment documented as the canonical bootstrap and verification posture. Channel-level identity, per-channel DB isolation, promotion, and rollback are specified by the v6.0 release-channels capability at `docs/RELEASE_CHANNELS/README.md`; this document continues to own environment selection and path scoping only.
 Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
+Temporal class: operational
+Review cadence: as environment/channel posture changes
+Last reviewed: 2026-06-16
+Last verified against: docs/RELEASE_CHANNELS/README.md, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
 
 ## Overview
 
@@ -63,12 +67,13 @@ The repo uses a lightweight but explicit environment model:
 
 - `dev` = flexible local development environment
 - `test` = isolated, resettable, reproducible verification environment
-- `prod` = future target contract for the operator-facing runtime
+- `prod` = the active operator-facing runtime channel (the real vault), with bounded hardening still in progress
 
 Interpretation rule:
 - environment names describe operational posture, not different product semantics
 - `test` is the first concrete reference environment for the current stabilization wave
-- `prod` is a target contract with important current behavior already present, but it should not be described as a fully completed end-state environment story
+- `prod` is a live channel today: a `stable`-pinned build runs against the real vault and is advanced through recorded promotion receipts under `ops/promotions/` (see `docs/RELEASE_CHANNELS/README.md §Promotion contract`). It is not a finished end-state — promotion-workflow automation and other operational details are still being hardened incrementally.
+- **"Promoted to prod" is not "running in prod."** A capability whose code is on the `stable` ref is shipped to the prod *channel*, but that does not mean it is wired into a running service. Some capabilities are deliberately promoted **dormant** (code present, no runtime invocation); the channel being live is distinct from which capabilities are active. The authoritative live/seam/dormant breakdown is `docs/STATUS.md §Cognitive Expansion — activation status`.
 
 ## Environment Definitions
 
@@ -90,8 +95,9 @@ Interpretation rule:
 - **Purpose**: the operator-facing runtime used against a real vault and its associated runtime surfaces.
 - **Isolation level**: conservative and safety-first.
 - **Vault/state/runtime boundaries**: the real vault and its continuity artifacts must remain clearly separated from development and test surfaces.
-- **Implemented now**: important production-facing contracts already exist, including the operator-safe default posture, health/status surfaces, write-safety expectations, and the current runtime path.
-- **Still a target contract**: `prod` should be treated as the future end-state contract for the full operator environment, not as a claim that every operational detail is complete today.
+- **Active channel today**: `prod` is the live operator channel, not a forward-only aspiration. A `stable`-pinned build runs against the real vault (`make prod-start-full VAULT_ROOT=<path>`), with the operator-safe default posture, health/status surfaces, write-safety enforcement, and recorded promotion receipts under `ops/promotions/`. Channel identity, per-channel DB isolation, promotion, and rollback are owned by `docs/RELEASE_CHANNELS/README.md`, which treats `stable`/prod as operational; this document continues to own only environment selection and path scoping.
+- **Promoted ≠ running** (do not over-claim): the prod *channel* being live does not mean every capability shipped to it is active. Code is promoted by moving the `stable` ref, but some capabilities ride along **dormant** — present on `stable` with no runtime invocation — by deliberate sequencing (for example, Wave 1 promoted Contextual Relevance Engine and durable-recall code inert; "CRE in prod" was not "CRE running", per `ops/promotions/2026-06-13-cc3ce65d.md §5`). Treat "promoted to prod" as a channel/code fact and consult `docs/STATUS.md §Cognitive Expansion — activation status` for which capabilities are actually live, seam, or dormant.
+- **Still hardening (not a finished end-state)**: an active channel is not a completed operational story. Promotion-workflow automation (`prepare → execute → verify → rollback`), automated migration-reversal classification, and operator acknowledgement receipts are being hardened as a separate governance layer on top of the live baseline (`docs/RELEASE_CHANNELS/README.md §Future promotion hardening`). The current priority remains a sound, safe prod baseline.
 
 ## Cross-Environment Invariants
 
