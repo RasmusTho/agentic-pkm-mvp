@@ -1,0 +1,9 @@
+# Local TTS engines for the Companion UI read-back path (app/tts/providers.py).
+# Installed into the runtime image (Dockerfile) so `piper` is on PATH and
+# `kokoro_onnx` is importable. Model files are NOT installed here — they live on
+# the external SSD (scripts/fetch_tts_models.sh + companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md).
+#
+# NOTE: validate these resolve on the prod arch (linux/arm64, Apple silicon) at
+# image build — tracked as AC1 of the mechanism issue and the mac-mini deploy task.
+piper-tts==1.2.0
+kokoro-onnx==0.4.9
