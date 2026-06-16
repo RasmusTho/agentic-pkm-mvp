@@ -45,8 +45,12 @@ from app.agent_memory.posture_projection import (
     AgentMemoryPostureTarget,
     agent_memory_posture_for_artifacts,
 )
-from app.api.routes.artifacts import _content_hash, _extract_title
-from app.chat.canvas_writer import _body_contains_frontmatter, _split_frontmatter
+from app.text.helpers import (
+    body_contains_frontmatter as _body_contains_frontmatter,
+    content_hash as _content_hash,
+    extract_title as _extract_title,
+    split_frontmatter as _split_frontmatter,
+)
 from app.config.paths import (
     VaultRootMisconfiguredError,
     resolve_optional_vault_root,
