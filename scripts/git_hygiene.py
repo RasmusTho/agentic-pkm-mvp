@@ -332,6 +332,54 @@ def _branch_has_active_lease(branch: str, active_resources: set[str]) -> bool:
     return f"branch:{branch}" in active_resources
 
 
+def _worktree_reclaim_reason(
+    path: str,
+    branch: str,
+    *,
+    current_worktree: str,
+    active_resources: set[str],
+    pr_states: dict[str, dict[str, Any]] | None,
+    cwd: Path,
+) -> tuple[str | None, str | None]:
+    """Decide whether a present worktree is safe to reclaim.
+
+    Returns ``(skip_reason, merge_proof)`` where exactly one element is set:
+
+    - reclaimable -> ``(None, merge_proof)`` with ``merge_proof`` one of
+      ``ancestor_of_origin_main``, ``merged_pr``, ``closed_pr``.
+    - not reclaimable -> ``(reason, None)``.
+
+    Candidacy gates on **merge state, not branch prefix**: any clean, non-root,
+    non-lease, non-open-PR worktree whose branch is an ancestor of ``origin/main``
+    OR has a merged/closed PR is reclaimable. Squash-merged branches are not
+    ancestors, so PR state is required to catch them.
+    """
+    if Path(path).resolve() == Path(current_worktree).resolve():
+        return "root_worktree", None
+    if f"worktree:{path}" in active_resources or _branch_has_active_lease(
+        branch, active_resources
+    ):
+        return "active_lease", None
+    dirty = _worktree_dirty(path)
+    if dirty is None:
+        return "worktree_state_unavailable", None
+    if dirty:
+        return "dirty_worktree", None
+    pr = _pr_state(branch, pr_states)
+    if pr.get("state") == "OPEN" or pr.get("isDraft"):
+        return "open_or_draft_pr", None
+    if _is_ancestor(cwd, branch, "origin/main"):
+        return None, "ancestor_of_origin_main"
+    if pr.get("state") == "MERGED":
+        return None, "merged_pr"
+    if pr.get("state") == "CLOSED":
+        return None, "closed_pr"
+    # Clean but not provably merged/closed: hold back for manual review rather
+    # than reclaim. Covers unknown PR state (pr_states given but branch absent)
+    # and the report-mode case where PR state was not resolved.
+    return "unknown_merge_state", None
+
+
 def _local_branch_skip_reason(
     branch: str,
     *,
@@ -445,45 +493,38 @@ def build_janitor_plan(
             continue
         local_branches.append({"branch": branch})
 
-    clean_worktrees = []
+    reclaimable_worktrees = []
     orphaned_worktrees = []
     for worktree in worktrees:
         path = worktree.get("worktree")
         branch = worktree.get("branch", "").removeprefix("refs/heads/")
         if not path:
             continue
-        if Path(path).resolve() == Path(current_worktree).resolve():
-            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": "current_worktree"})
-            continue
-        if f"worktree:{path}" in active_resources or _branch_has_active_lease(branch, active_resources):
-            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": "active_lease"})
-            continue
-        if not Path(path).exists():
+        is_root = Path(path).resolve() == Path(current_worktree).resolve()
+        leased = f"worktree:{path}" in active_resources or _branch_has_active_lease(
+            branch, active_resources
+        )
+        # A missing worktree is an orphan (its metadata is pruned, not reclaimed)
+        # — but the root is never missing, and an active lease still wins so we
+        # never touch leased work even if its checkout has gone.
+        if not is_root and not leased and not Path(path).exists():
             orphaned_worktrees.append({"path": path, "branch": branch})
             continue
-        if not branch.startswith("codex/"):
-            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": "non_codex_branch"})
-            continue
-        dirty = _worktree_dirty(path)
-        if dirty is None:
-            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": "worktree_state_unavailable"})
-            continue
-        if dirty:
-            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": "dirty_worktree"})
-            continue
-        branch_skip = _local_branch_skip_reason(
+        # Candidacy gates on merge state, not branch prefix.
+        reason, merge_proof = _worktree_reclaim_reason(
+            path,
             branch,
-            current_branch=current_branch,
+            current_worktree=current_worktree,
             active_resources=active_resources,
-            checked_out={},
-            protected_branches=protected,
             pr_states=pr_states,
             cwd=cwd,
         )
-        if branch_skip:
-            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": branch_skip})
+        if reason:
+            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": reason})
             continue
-        clean_worktrees.append({"path": path, "branch": branch})
+        reclaimable_worktrees.append(
+            {"path": path, "branch": branch, "merge_proof": merge_proof}
+        )
 
     remote_branches = []
     rescue_remote_branches = []
@@ -530,12 +571,17 @@ def build_janitor_plan(
         "destructive_actions": [],
         "candidates": {
             "local_branches": local_branches,
-            "worktrees": clean_worktrees,
+            "worktrees": reclaimable_worktrees,
             "orphaned_worktrees": orphaned_worktrees,
             "remote_branches": remote_branches,
             "remote_branches_requiring_rescue": rescue_remote_branches,
             "old_stashes": old_stashes,
         },
+        # Top-level reclaim view: present-but-merged worktrees that are safe to
+        # reclaim (with the proof that qualified each), kept distinct from
+        # orphaned_worktrees (missing checkouts handled by `worktree prune`).
+        "reclaimable_worktrees": reclaimable_worktrees,
+        "orphaned_worktrees": orphaned_worktrees,
         "skipped": skipped,
         "prune_candidates": prune_candidates,
         "active_leases_respected": sorted(active_resources),
@@ -559,6 +605,7 @@ def janitor_report(
     )
     plan["mode"] = "report-only"
     plan["stale_merged_branches"] = [item["branch"] for item in plan["candidates"]["local_branches"]]
+    plan["reclaimable_worktrees"] = plan["candidates"]["worktrees"]
     plan["orphaned_worktrees"] = plan["candidates"]["orphaned_worktrees"]
     plan["old_stashes"] = [item["line"] for item in plan["candidates"]["old_stashes"]]
     return plan
@@ -611,9 +658,13 @@ def janitor_apply(
     )
 
     apply_git(["worktree", "prune"], {"artifact": "worktree", "action": "prune_metadata"})
-    for worktree in plan["candidates"]["worktrees"]:
+    reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
+    for worktree in reclaimable:
+        remove_errors_before = len(errors)
+        # Never --force / --ignore-locked: a worktree that turned dirty or locked
+        # since planning must fail the remove and keep its branch intact.
         apply_git(["worktree", "remove", worktree["path"]], {"artifact": "worktree", "action": "remove", **worktree})
-        if not errors or errors[-1].get("action") != "remove" or errors[-1].get("path") != worktree["path"]:
+        if len(errors) == remove_errors_before:
             apply_git(["branch", "-d", worktree["branch"]], {"artifact": "local_branch", "action": "delete_after_worktree_remove", "branch": worktree["branch"]})
     for branch in plan["candidates"]["local_branches"]:
         apply_git(["branch", "-d", branch["branch"]], {"artifact": "local_branch", "action": "delete", **branch})
