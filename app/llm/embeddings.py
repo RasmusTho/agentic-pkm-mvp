@@ -17,42 +17,6 @@ logger = logging.getLogger(__name__)
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _MOCK_EMBED_MODEL = "mock-embedding"
 
-# Default character budget for a single embedding input. nomic-embed-text has an
-# ~8k token context window; at a conservative ~4 chars/token that is ~32k chars.
-# We truncate below that so an oversized note never 500s the provider and aborts
-# the whole retrieval index build (#2110). Override with EMBED_MAX_INPUT_CHARS;
-# set to 0 (or negative) to disable truncation entirely.
-DEFAULT_EMBED_MAX_INPUT_CHARS = 24000
-
-
-def _embed_max_input_chars() -> int:
-    raw = os.getenv("EMBED_MAX_INPUT_CHARS")
-    if raw is None or not raw.strip():
-        return DEFAULT_EMBED_MAX_INPUT_CHARS
-    try:
-        value = int(raw.strip())
-    except ValueError:
-        return DEFAULT_EMBED_MAX_INPUT_CHARS
-    return value
-
-
-def _truncate_for_context(text: str) -> str:
-    """Cap embedding input to the configured context-window budget.
-
-    Returns the text unchanged when truncation is disabled (budget <= 0) or the
-    text already fits. Truncation is a bounded, deterministic head slice — the
-    `vault-test` fixture has no oversized notes, so its behavior is unchanged.
-    """
-    budget = _embed_max_input_chars()
-    if budget <= 0 or len(text) <= budget:
-        return text
-    logger.warning(
-        "embedding input truncated to context budget: %d -> %d chars",
-        len(text),
-        budget,
-    )
-    return text[:budget]
-
 
 def _extract_error_detail(response: httpx.Response) -> str | None:
     try:
@@ -195,6 +159,64 @@ def _ollama_openai_fallback(text: str, model: str, dim: int, timeout: float) -> 
     return _parse_vector(data, provider="ollama", model=model, expected_dim=dim)
 
 
+def _embedding_max_input_chars() -> int:
+    """Character budget per embedding request, bounding text to the embedding
+    model's context window.
+
+    ``nomic-embed-text`` has a ~2048-token window. Sending a whole oversized
+    note returns HTTP 500 ("the input length exceeds the context length"),
+    which aborts the entire embed batch and the retrieval index build for the
+    whole vault (#2110). A conservative character budget keeps each request in
+    window; oversized notes are split and mean-pooled rather than truncated, so
+    no tail content is dropped from retrieval. Set ``EMBED_MAX_INPUT_CHARS=0``
+    to disable chunking.
+    """
+    raw = os.getenv("EMBED_MAX_INPUT_CHARS")
+    if raw is None:
+        return 6000
+    try:
+        value = int(raw)
+    except ValueError:
+        return 6000
+    return max(0, value)
+
+
+def _chunk_for_embedding(text: str, max_chars: int) -> List[str]:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return [text]
+    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
+
+
+def _mean_pool(vectors: List[tuple[float, ...]], dim: int) -> tuple[float, ...]:
+    if not vectors:
+        return tuple(0.0 for _ in range(dim))
+    if len(vectors) == 1:
+        return vectors[0]
+    count = len(vectors)
+    summed = [0.0] * dim
+    for vec in vectors:
+        for i in range(dim):
+            summed[i] += vec[i]
+    return tuple(value / count for value in summed)
+
+
+def _ollama_embed_one(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+    try:
+        return _ollama_embed_api(text, model, dim, timeout)
+    except httpx.HTTPError as primary_exc:
+        try:
+            return _ollama_openai_fallback(text, model, dim, timeout)
+        except httpx.HTTPError as fallback_exc:
+            raise RuntimeError(
+                f"Ollama embedding requests failed (model={model}, expected_dim={dim}). "
+                f"Primary error: {primary_exc}; fallback: {fallback_exc}"
+            ) from fallback_exc
+    except ValueError as exc:
+        raise ValueError(
+            f"Ollama embedding parsing failed (model={model}, expected_dim={dim}): {exc}"
+        ) from exc
+
+
 @lru_cache(maxsize=2048)
 def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> tuple[float, ...]:
     if dim is None:
@@ -208,23 +230,13 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
 
     if provider == "ollama":
         timeout = float(os.getenv("LLM_TIMEOUT", "60"))
-        # Cap input to the model context window so an oversized note does not
-        # 500 the provider and abort the whole retrieval index build (#2110).
-        text = _truncate_for_context(text)
-        try:
-            return _ollama_embed_api(text, model, dim, timeout)
-        except httpx.HTTPError as primary_exc:
-            try:
-                return _ollama_openai_fallback(text, model, dim, timeout)
-            except httpx.HTTPError as fallback_exc:
-                raise RuntimeError(
-                    f"Ollama embedding requests failed (model={model}, expected_dim={dim}). "
-                    f"Primary error: {primary_exc}; fallback: {fallback_exc}"
-                ) from fallback_exc
-        except ValueError as exc:
-            raise ValueError(
-                f"Ollama embedding parsing failed (model={model}, expected_dim={dim}): {exc}"
-            ) from exc
+        chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
+        if len(chunks) == 1:
+            return _ollama_embed_one(text, model, dim, timeout)
+        # Oversized note: embed each in-window chunk and mean-pool. A single long
+        # note must not 500 the request and abort the whole index build (#2110).
+        vectors = [_ollama_embed_one(chunk, model, dim, timeout) for chunk in chunks]
+        return _mean_pool(vectors, dim)
 
     raise ValueError(f"Unsupported embedding provider: {provider}")
 
@@ -267,10 +279,11 @@ def embed_texts(
                 embed_text(text, provider=provider, model=model, dim=dim_val, normalize=normalize)
             )
         except (httpx.HTTPError, RuntimeError) as exc:
-            # Degrade a single oversized/failing item to a zero vector instead of
-            # aborting the whole batch, so one bad note cannot take down the
-            # entire retrieval index build (#2110). The zero vector preserves
-            # expected_dim and contributes no similarity signal.
+            # Chunking keeps each request in-window, but degrade any still-failing
+            # item to a zero vector instead of aborting the whole batch, so one
+            # bad note cannot take down the entire retrieval index build (#2110).
+            # The zero vector preserves expected_dim and contributes no similarity
+            # signal.
             logger.warning(
                 "embedding skipped for item %d (len=%d): %s; substituting zero vector",
                 index,
