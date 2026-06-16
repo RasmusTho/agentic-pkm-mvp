@@ -1,6 +1,5 @@
 from app.events.types import CURATION_REVIEW_DONE
 
-import os
 from pathlib import Path
 import pytest
 
@@ -11,12 +10,13 @@ from app.agents.citation_checker.agent import run as citation_run
 from app.agents.reviewer.agent import run as review_run
 from app.components.reasoning.facade import ReviewResult
 
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
 
-
-def test_reviewer_returns_structure(tmp_path: Path) -> None:
-    os.environ["LLM_PROVIDER"] = "mock"
-    os.environ["LLM_MOCK_RESPONSE"] = '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'
+def test_reviewer_returns_structure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv(
+        "LLM_MOCK_RESPONSE",
+        '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}',
+    )
 
     missing_src = tmp_path / "missing.md"
     clean_src = tmp_path / "clean.md"

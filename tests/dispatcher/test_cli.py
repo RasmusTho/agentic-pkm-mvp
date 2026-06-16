@@ -7,7 +7,6 @@ No GitHub API access required.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -23,14 +22,21 @@ from app.dispatcher.store import SqliteStore
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def tmp_env(tmp_path: Path) -> dict[str, str]:
-    """Env vars pointing to a temporary state directory."""
+def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Env vars pointing to a temporary state directory.
+
+    Applied to the process env via monkeypatch (function-scoped, auto-restored)
+    and also returned so callers can pass the dict to load_paths(...).
+    """
     state_dir = tmp_path / "dispatcher"
-    return {
+    env = {
         "DISPATCHER_STATE_DIR": str(state_dir),
         "DISPATCHER_DB_PATH": str(state_dir / "dispatcher.sqlite3"),
         "DISPATCHER_EVENTS_PATH": str(state_dir / "events.jsonl"),
     }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return env
 
 
 @pytest.fixture()
@@ -43,20 +49,18 @@ def store(tmp_env: dict[str, str]) -> SqliteStore:
     return s
 
 
-def _run(argv: list[str], env: dict[str, str]) -> tuple[int, dict]:
-    """Run the CLI with the given argv in the given env and parse JSON output."""
-    old = os.environ.copy()
-    os.environ.update(env)
-    try:
-        import io
-        from contextlib import redirect_stdout
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            code = main(argv)
-        output = buf.getvalue().strip()
-    finally:
-        os.environ.clear()
-        os.environ.update(old)
+def _run(argv: list[str]) -> tuple[int, dict]:
+    """Run the CLI with the given argv and parse JSON output.
+
+    The dispatcher env (DISPATCHER_*) is applied by the ``tmp_env`` fixture via
+    monkeypatch, so callers pass only argv here.
+    """
+    import io
+    from contextlib import redirect_stdout
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        code = main(argv)
+    output = buf.getvalue().strip()
     return code, json.loads(output) if output else {}
 
 
@@ -77,7 +81,7 @@ def test_all_required_commands_present():
 # ---------------------------------------------------------------------------
 
 def test_next_compact_output(tmp_env, store):
-    code, data = _run(["next", "--agent", "test-agent", "--json"], tmp_env)
+    code, data = _run(["next", "--agent", "test-agent", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert data["empty"] is True
@@ -87,7 +91,7 @@ def test_next_compact_output(tmp_env, store):
 def test_next_compact_output_with_task(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     seed_tasks(store)
-    code, data = _run(["next", "--agent", "test-agent", "--json"], tmp_env)
+    code, data = _run(["next", "--agent", "test-agent", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert data["task"] is not None
@@ -110,7 +114,6 @@ def test_claim_json_output(tmp_env, store):
 
     code, data = _run(
         ["claim", ready.task_id, "--agent", "codex", "--ttl-minutes", "30", "--json"],
-        tmp_env,
     )
     assert code == 0
     assert data["ok"] is True
@@ -125,8 +128,8 @@ def test_claim_conflict_returns_error(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
-    code, data = _run(["claim", ready.task_id, "--agent", "other-agent", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    code, data = _run(["claim", ready.task_id, "--agent", "other-agent", "--json"])
     assert code == 1
     assert data["ok"] is False
     assert "error" in data
@@ -142,8 +145,8 @@ def test_heartbeat_json_output(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
-    code, data = _run(["heartbeat", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    code, data = _run(["heartbeat", ready.task_id, "--agent", "codex", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert "lease" in data
@@ -155,7 +158,7 @@ def test_heartbeat_no_lease_error(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    code, data = _run(["heartbeat", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    code, data = _run(["heartbeat", ready.task_id, "--agent", "codex", "--json"])
     assert code == 1
     assert data["ok"] is False
     assert "error" in data
@@ -171,8 +174,8 @@ def test_release_json_output(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
-    code, data = _run(["release", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    code, data = _run(["release", ready.task_id, "--agent", "codex", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert data["task"]["status"] == "ready"
@@ -191,7 +194,6 @@ def test_block_json_output(tmp_env, store):
 
     code, data = _run(
         ["block", ready.task_id, "--reason", "waiting for upstream", "--json"],
-        tmp_env,
     )
     assert code == 0
     assert data["ok"] is True
@@ -208,9 +210,9 @@ def test_events_json_output(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
 
-    code, data = _run(["events", "--tail", "20", "--json"], tmp_env)
+    code, data = _run(["events", "--tail", "20", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert "events" in data
@@ -231,12 +233,12 @@ def test_json_output_compact(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     seed_tasks(store)
 
-    code, data = _run(["queue", "--json"], tmp_env)
+    code, data = _run(["queue", "--json"])
     assert code == 0
     for task in data.get("tasks", []):
         assert "sync_state" not in task, "sync_state must not appear in compact output"
 
-    code, data = _run(["next", "--agent", "codex", "--json"], tmp_env)
+    code, data = _run(["next", "--agent", "codex", "--json"])
     assert code == 0
     if data.get("task"):
         assert "sync_state" not in data["task"]
@@ -247,7 +249,7 @@ def test_json_output_compact(tmp_env, store):
 # ---------------------------------------------------------------------------
 
 def test_init_returns_paths(tmp_env):
-    code, data = _run(["init", "--json"], tmp_env)
+    code, data = _run(["init", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert "state_dir" in data
@@ -258,14 +260,14 @@ def test_init_returns_paths(tmp_env):
 def test_show_returns_task(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)
-    code, data = _run(["show", tasks[0].task_id, "--json"], tmp_env)
+    code, data = _run(["show", tasks[0].task_id, "--json"])
     assert code == 0
     assert data["ok"] is True
     assert data["task"]["task_id"] == tasks[0].task_id
 
 
 def test_show_not_found(tmp_env, store):
-    code, data = _run(["show", "nonexistent-task-id", "--json"], tmp_env)
+    code, data = _run(["show", "nonexistent-task-id", "--json"])
     assert code == 1
     assert data["ok"] is False
 
@@ -276,7 +278,6 @@ def test_update_status(tmp_env, store):
     ready = next(t for t in tasks if t.status == "ready")
     code, data = _run(
         ["update", ready.task_id, "--status", "in_progress", "--json"],
-        tmp_env,
     )
     assert code == 0
     assert data["ok"] is True
@@ -287,25 +288,24 @@ def test_update_clears_blocked_reason_on_non_blocked_status(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
-    _run(["block", ready.task_id, "--reason", "upstream dep", "--json"], tmp_env)
+    _run(["block", ready.task_id, "--reason", "upstream dep", "--json"])
 
     code, data = _run(
         ["update", ready.task_id, "--status", "ready", "--json"],
-        tmp_env,
     )
     assert code == 0
     assert data["task"]["status"] == "ready"
     assert data["task"]["blocked_reason"] is None
 
-    next_code, next_data = _run(["next", "--agent", "codex", "--json"], tmp_env)
+    next_code, next_data = _run(["next", "--agent", "codex", "--json"])
     assert next_code == 0
     assert next_data["task"] is not None
     assert next_data["task"]["task_id"] == ready.task_id
 
 
 def test_status_command(tmp_env):
-    _run(["init", "--json"], tmp_env)
-    code, data = _run(["status", "--json"], tmp_env)
+    _run(["init", "--json"])
+    code, data = _run(["status", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert "db_path" in data
@@ -322,8 +322,8 @@ def test_complete_command(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
-    code, data = _run(["complete", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    code, data = _run(["complete", ready.task_id, "--agent", "codex", "--json"])
     assert code == 0
     assert data["ok"] is True
     assert data["task"]["status"] == "completed"
@@ -342,8 +342,8 @@ def test_complete_wrong_holder(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
-    code, data = _run(["complete", ready.task_id, "--agent", "other-agent", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    code, data = _run(["complete", ready.task_id, "--agent", "other-agent", "--json"])
     assert code == 1
     assert data["ok"] is False
     assert "error" in data
@@ -359,10 +359,10 @@ def test_next_skips_completed(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
-    _run(["complete", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    _run(["complete", ready.task_id, "--agent", "codex", "--json"])
 
-    code, data = _run(["next", "--agent", "codex", "--json"], tmp_env)
+    code, data = _run(["next", "--agent", "codex", "--json"])
     assert code == 0
     assert data["ok"] is True
     if data.get("task"):
@@ -379,10 +379,10 @@ def test_complete_event_emitted(tmp_env, store):
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")
 
-    _run(["claim", ready.task_id, "--agent", "codex", "--json"], tmp_env)
-    _run(["complete", ready.task_id, "--agent", "codex", "--json"], tmp_env)
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    _run(["complete", ready.task_id, "--agent", "codex", "--json"])
 
-    code, data = _run(["events", "--tail", "20", "--json"], tmp_env)
+    code, data = _run(["events", "--tail", "20", "--json"])
     assert code == 0
     assert data["ok"] is True
     events = data.get("events", [])
@@ -402,7 +402,7 @@ def test_pull_command_upserts_issues(tmp_env):
     from unittest.mock import MagicMock, patch
     from app.dispatcher.sync_github import GitHubIssueSource
 
-    _run(["init", "--json"], tmp_env)
+    _run(["init", "--json"])
 
     # Mock the GitHub source to avoid real API calls
     mock_source = MagicMock(spec=GitHubIssueSource)
@@ -427,7 +427,7 @@ def test_pull_command_upserts_issues(tmp_env):
     mock_source.get_rate_limit.return_value = {"remaining": 5000, "reset": "2026-04-25T10:00:00Z"}
 
     with patch("app.dispatcher.cli.GhCliIssueSource", return_value=mock_source):
-        code, data = _run(["pull", "--repo", "test/repo", "--json"], tmp_env)
+        code, data = _run(["pull", "--repo", "test/repo", "--json"])
 
     assert code == 0
     assert data["ok"] is True
@@ -435,7 +435,7 @@ def test_pull_command_upserts_issues(tmp_env):
     assert data["provider"] == "github"
 
     # Verify tasks were actually stored (2 real issues + 1 sync metadata record)
-    code, queue_data = _run(["queue", "--json"], tmp_env)
+    code, queue_data = _run(["queue", "--json"])
     assert code == 0
     assert len(queue_data["tasks"]) >= 2
     # Verify at least the expected issues are there
@@ -453,7 +453,7 @@ def test_pull_command_upserts_issues(tmp_env):
 def test_guard_missing_db(tmp_env):
     """Commands requiring a DB exit 1 with clear error when DB is missing."""
     # Don't initialize, so DB is missing
-    code, data = _run(["next", "--agent", "test-agent", "--json"], tmp_env)
+    code, data = _run(["next", "--agent", "test-agent", "--json"])
     assert code == 1
     assert data["ok"] is False
     assert "not initialised" in data["error"]
