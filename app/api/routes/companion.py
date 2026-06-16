@@ -52,6 +52,10 @@ from app.config.paths import (
     resolve_optional_vault_root,
     resolve_vault_root,
 )
+from app.domain.commitments import (
+    CommitmentRecord,
+    query_next_and_waiting_commitments,
+)
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -74,6 +78,7 @@ from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_a
 from app.relevance import collect_now_moments
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
+from app.services.commitment_persistence import load_commitments
 from app.tts.cache import TTSUnsafeCacheRootError, audio_path
 from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
@@ -663,6 +668,42 @@ class VaultNoteListResponse(BaseModel):
     total_count: int
 
 
+# Commitments are surfaced from durable vault artefacts (slice 1, #2073), not from any
+# ephemeral AgentState. The surface is read/proposal-only: it carries an explicit
+# read-only marker and never triggers a commitment write or state transition.
+COMMITMENT_SURFACE_SOURCE = "vault.commitment_artefacts"
+
+
+class CommitmentSurfaceItem(BaseModel):
+    commitment_id: str
+    kind: str
+    state: str
+    summary: str | None = None
+    target_ref: str | None = None
+    source_goal: str | None = None
+
+
+class CommitmentSurfaceState(BaseModel):
+    """Read-only projection of active commitments (next_action / waiting / review_return).
+
+    Mirrors the read-only projection style of the other companion read models
+    (``WorkspaceOrientationGuards`` / ``WorkspaceOrientationMemory``): an explicit
+    ``read_only`` marker plus an ``authority_role`` of ``derived``. The surface degrades
+    honestly — if the durable read fails it reports ``degraded`` with a reason rather than
+    a confident empty list that would contradict the durable source (cross-task invariant
+    CI-2).
+    """
+
+    next: list[CommitmentSurfaceItem] = Field(default_factory=list)
+    waiting: list[CommitmentSurfaceItem] = Field(default_factory=list)
+    review_return: list[CommitmentSurfaceItem] = Field(default_factory=list)
+    read_only: bool = True
+    authority_role: str = "derived"
+    source: str = COMMITMENT_SURFACE_SOURCE
+    degraded: bool = False
+    degraded_reason: str | None = None
+
+
 class RuntimeState(BaseModel):
     environment_label: str
     api_base_url_label: str
@@ -670,6 +711,7 @@ class RuntimeState(BaseModel):
     vault_identity: VaultIdentityState
     reorient: dict[str, list[dict[str, str | bool]]] = Field(default_factory=dict)
     resurface: dict[str, list[dict[str, str | list[str]]]] = Field(default_factory=dict)
+    commitments: CommitmentSurfaceState = Field(default_factory=CommitmentSurfaceState)
 
 
 class CanvasState(BaseModel):
@@ -1437,6 +1479,59 @@ def _workspace_update_capability(
         state="available",
         reason="explicit_dev_config" if explicit else "canvas_inherited",
         config_mode="explicit" if explicit else "inherited",
+    )
+
+
+def _commitment_surface_item(record: CommitmentRecord) -> CommitmentSurfaceItem:
+    return CommitmentSurfaceItem(
+        commitment_id=record.commitment_id,
+        kind=record.commitment_kind,
+        state=record.state,
+        summary=record.summary,
+        target_ref=record.target_ref,
+        source_goal=record.source_goal,
+    )
+
+
+def _commitment_surface_state(vault_root: Path) -> CommitmentSurfaceState:
+    """Read-only commitment surface for the companion workspace state (#2074).
+
+    Reads exclusively from the durable vault artefacts (slice 1's ``load_commitments``),
+    never from ephemeral ``AgentState``, and projects active commitments through the
+    domain query ``query_next_and_waiting_commitments`` for next/waiting. The
+    ``review_return`` bucket is surfaced by commitment *kind* among still-active
+    (non-``done``) records, because ``review_return`` is a commitment kind rather than a
+    state in the query projection.
+
+    Degrades honestly: any failure to read the durable source returns a surface marked
+    ``degraded`` with a reason instead of a confident empty list (cross-task invariant
+    CI-2). Strictly read-only — no write or state transition is triggered here.
+    """
+    context = VaultContext(
+        status="selected",
+        active_vault_id=os.getenv("VAULT_ID") or None,
+        active_vault_name=vault_root.name,
+        active_vault_path=str(vault_root),
+    )
+    try:
+        records = load_commitments(vault_context=context)
+    except Exception as exc:  # durable read failed — degrade, never claim "no commitments"
+        logger.warning("commitment surface degraded: durable read failed: %s", exc)
+        return CommitmentSurfaceState(
+            degraded=True,
+            degraded_reason="durable_read_failed",
+        )
+
+    projection = query_next_and_waiting_commitments(records)
+    review_return = [
+        record
+        for record in records
+        if record.commitment_kind == "review_return" and record.state != "done"
+    ]
+    return CommitmentSurfaceState(
+        next=[_commitment_surface_item(record) for record in projection.next_items],
+        waiting=[_commitment_surface_item(record) for record in projection.waiting_items],
+        review_return=[_commitment_surface_item(record) for record in review_return],
     )
 
 
@@ -3124,6 +3219,7 @@ def read_companion_workspace(
             vault_identity=_vault_identity_state(vault_root),
             reorient=_reorient_state(signals=orientation_signals),
             resurface=_resurface_state(safe_note_path, signals=orientation_signals),
+            commitments=_commitment_surface_state(vault_root),
         ),
         canvas=_canvas_state(safe_note_path, vault_root, canvas_enabled),
         panel=_panel_state(identity.artifact_id, selectable_options=selectable_options),
