@@ -59,6 +59,19 @@ def _resolve_provider(value: str | None) -> tuple[str, bool, str]:
     return normalized, False, "default"
 
 
+class LLMRouteError(RuntimeError):
+    """Raised when no route can be emitted without crossing providers.
+
+    Under ``LLM_PROVIDER_ENFORCE=1`` the router fails loud rather than routing a
+    model to a provider that does not serve it (#2109).
+    """
+
+
+def _provider_enforced() -> bool:
+    raw = os.getenv("LLM_PROVIDER_ENFORCE")
+    return bool(raw) and raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _default_chat_model() -> str:
     return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
 
@@ -298,6 +311,56 @@ class LLMRouter:
             )
         return candidates
 
+    def _select_provider_compatible_route(
+        self,
+        provider: str,
+        candidates: list[LLMRoute],
+        *,
+        intent: LLMTaskIntent,
+        degraded: bool,
+        reason: str,
+        enforce: bool,
+    ) -> LLMRoute:
+        """Resolve to a candidate served by ``provider`` (the provider that will
+        execute the call) — never a cross-provider route.
+
+        The router must not emit ``provider=ollama`` with ``model=gpt-4.1-mini``
+        (#2109): that route 404s and, combined with the ``call_llm`` masking bug
+        (#2108), manufactured a false-green ASK synthesis receipt. When no
+        candidate is served by the enforced provider we fail loud under
+        ``LLM_PROVIDER_ENFORCE=1`` rather than guess a cross-provider route.
+        """
+        for cand in candidates:
+            if cand.provider == provider:
+                route_reason = f"enforced-provider:{provider}" if enforce else cand.reason
+                return LLMRoute(
+                    provider=provider,
+                    model=cand.model,
+                    mode=cand.mode,
+                    reason=reason if degraded else route_reason,
+                    degraded=cand.degraded or degraded,
+                )
+        if provider == "mock":
+            # mock ignores the model entirely; a self-consistent deterministic route.
+            return LLMRoute(
+                provider="mock",
+                model="mock",
+                mode=_default_mode(intent.task_kind),
+                reason=reason if degraded else ("enforced-provider:mock" if enforce else "fallback"),
+                degraded=degraded,
+            )
+        if enforce:
+            served = ", ".join(f"{c.provider}/{c.model}" for c in candidates) or "<none>"
+            raise LLMRouteError(
+                f"LLM_PROVIDER_ENFORCE=1 with provider={provider!r}, but no routing candidate "
+                f"for task {intent.task_kind!r} is served by it (candidates: {served}). "
+                f"Refusing to emit a cross-provider route; configure a {provider}-served model "
+                "for this task or change LLM_PROVIDER."
+            )
+        # Not enforcing and no compatible candidate: return the primary candidate
+        # as-is (self-consistent) rather than forcing a cross-provider route.
+        return candidates[0]
+
     def route(self, intent: LLMTaskIntent) -> LLMRoute:
         if not isinstance(intent, LLMTaskIntent):
             raise TypeError("intent must be an LLMTaskIntent")
@@ -342,16 +405,23 @@ class LLMRouter:
                     )
         routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
         has_explicit_task_policy = bool(routing and intent.task_kind in routing.tasks)
-        if self._llm_provider_env is not None and intent.task_kind != "embed" and not has_explicit_task_policy:
-            provider, degraded, reason = _resolve_provider(self._llm_provider_env)
-            selected = candidates[0]
-            return LLMRoute(
-                provider=provider,
-                model=selected.model,
-                mode=selected.mode,
-                reason=reason if degraded else selected.reason,
-                degraded=selected.degraded or degraded,
-            )
+        if self._llm_provider_env is not None and intent.task_kind != "embed":
+            enforce = _provider_enforced()
+            # When a provider is set it must run the call. Under enforcement this
+            # binds every chat task (including explicit task policies, e.g. qa);
+            # otherwise it binds the env-default path (no explicit policy). Either
+            # way the resolved route must run on that provider with a model it
+            # serves — never a cross-provider route (#2109).
+            if enforce or not has_explicit_task_policy:
+                provider, degraded, reason = _resolve_provider(self._llm_provider_env)
+                return self._select_provider_compatible_route(
+                    provider,
+                    candidates,
+                    intent=intent,
+                    degraded=degraded,
+                    reason=reason,
+                    enforce=enforce,
+                )
         return candidates[0]
 
     def default_routes(self, intents: Iterable[LLMTaskIntent]) -> dict[str, LLMRoute]:
@@ -431,4 +501,4 @@ class LLMRouter:
         return {intent.task_kind: self.describe_intent(intent) for intent in intents}
 
 
-__all__ = ["LLMTaskIntent", "LLMRoute", "LLMRouter"]
+__all__ = ["LLMTaskIntent", "LLMRoute", "LLMRouteError", "LLMRouter"]

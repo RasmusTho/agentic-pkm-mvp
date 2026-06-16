@@ -55,7 +55,9 @@ def test_reasoning_single_note_trace_has_non_empty_response_preview(monkeypatch:
     _setup_trace_env(monkeypatch, trace_path)
 
     fake_json = _fake_reasoning_json("OBJ-SINGLE")
-    monkeypatch.setattr("app.services.llm._deterministic_llm_response", lambda: fake_json)
+    # call_llm no longer masks real-provider errors with a canned stub (#2108);
+    # simulate a successful ollama call so the trace records a real response.
+    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: fake_json)
 
     deliberation_agent = get_deliberation_agent()
     ri = ReasoningInput(object_uuid="OBJ-SINGLE", text="Note A about testing.", metadata={"trace_id": "T-single"}, relations=[])
@@ -74,8 +76,18 @@ def test_reasoning_single_note_trace_has_non_empty_response_preview(monkeypatch:
 def test_set_evaluator_trace_has_non_empty_response_preview(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     trace_path = tmp_path / "llm-trace.jsonl"
     _setup_trace_env(monkeypatch, trace_path)
-    fake_json = _fake_reasoning_json("OBJ-SET")
-    monkeypatch.setattr("app.services.llm._deterministic_llm_response", lambda: fake_json)
+
+    def _fake_ranking_chat(system, user, *args, **kwargs):
+        import re
+
+        uuids = list(dict.fromkeys(re.findall(r"[0-9a-fA-F-]{36}", user)))
+        ranking = [
+            {"object_uuid": u, "score": max(0.1, 1.0 - 0.05 * i), "reason": f"ranked {u}"}
+            for i, u in enumerate(uuids)
+        ]
+        return json.dumps({"ranking": ranking})
+
+    monkeypatch.setattr("app.services.llm._ollama_chat", _fake_ranking_chat)
 
     reset_store_backends()
     store = get_object_store()
