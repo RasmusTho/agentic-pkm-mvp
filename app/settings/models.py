@@ -227,6 +227,7 @@ DEFAULT_ASK_SYSTEM_PROMPT = (
     '- Prefer items in the "hot" zone over "warm", and both over "cold"/unspecified.\n'
     "- When multiple sources agree, synthesize them.\n"
     "- When sources disagree, say that they disagree and summarize the main positions.\n"
+    "- When a source directly contains the answer (a definition, list, or stated fact), give it in full and enumerate the items; do not abstain when the content is present.\n"
     "- If the answer is not clearly supported by the sources, explicitly say you are unsure.\n"
     "Keep answers concise but not cryptic. Use clear, direct language and avoid filler."
 )
@@ -243,6 +244,7 @@ def build_ask_system_prompt(owner_name: Optional[str] = None) -> str:
         '- Prefer items in the "hot" zone over "warm", and both over "cold"/unspecified.\n'
         "- When multiple sources agree, synthesize them.\n"
         "- When sources disagree, say that they disagree and summarize the main positions.\n"
+        "- When a source directly contains the answer (a definition, list, or stated fact), give it in full and enumerate the items; do not abstain when the content is present.\n"
         "- If the answer is not clearly supported by the sources, explicitly say you are unsure.\n"
         "Keep answers concise but not cryptic. Use clear, direct language and avoid filler."
     )

@@ -60,7 +60,11 @@ def score_hit(hit: dict[str, Any]) -> float:
 
 def _collect_hit_text(hit: dict[str, Any]) -> str:
     payload = hit.get("payload") or {}
-    text_fields = [hit.get("snippet"), payload.get("text"), payload.get("raw_text"), hit.get("text")]
+    # Prefer the full note body for grounding; the keyword-window snippet is a
+    # display artefact and only a last resort here. Preferring the snippet
+    # truncates synthesis input to ~300 chars and starves the LLM of content
+    # that lives outside the match window (the cause of weak ASK grounding).
+    text_fields = [hit.get("text"), payload.get("text"), payload.get("raw_text"), hit.get("snippet")]
     for candidate in text_fields:
         if candidate:
             return str(candidate)
