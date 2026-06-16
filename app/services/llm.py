@@ -316,6 +316,29 @@ def call_llm(
         else:
             response_text = _deterministic_response_for_kind()
         response_payload = {"content": response_text}
+
+        # Deterministic stub backfill is confined to provider == "mock" (#2108).
+        # Only the deterministic provider may substitute a canned response when
+        # the (mock) content is empty or the reasoning/ranking shape is missing.
+        # Real providers must never be silently replaced by a stub — a swallowed
+        # provider error that returns canned text manufactures a false-green
+        # synthesis receipt and defeats the fail-loud promotion caution
+        # (#1997/#1999, ASK synthesis gate #2026).
+        if str(response_text or "").strip() in {"", "{}"}:
+            response_text = _deterministic_response_for_kind()
+            response_payload = {"content": response_text}
+        parsed = _parsed(response_text)
+        if kind and "reasoning" in str(kind):
+            if not parsed or not parsed.get("claims") and not parsed.get("evidence"):
+                response_text = _deterministic_reasoning_response()
+                response_payload = {"content": response_text}
+        if kind and "ranking" in str(kind):
+            parsed = _parsed(response_text)
+            if not parsed or not parsed.get("ranking"):
+                response_text = _deterministic_ranking_response(
+                    [str(p) for p in pack.values() if isinstance(p, str)]
+                )
+                response_payload = {"content": response_text}
     elif provider == "ollama":
         try:
             response_text = with_llm_retries(
@@ -328,10 +351,11 @@ def call_llm(
                     max_tokens=max_tokens,
                 )
             )
-        except LLMError:
-            response_text = _deterministic_response_for_kind()
-        except (socket.timeout, ConnectionRefusedError, RuntimeError):
-            response_text = _deterministic_response_for_kind()
+        except (LLMError, socket.timeout, ConnectionRefusedError, RuntimeError, OSError) as exc:
+            raise LLMError(
+                f"ollama provider call failed (model={model}); refusing to substitute a "
+                f"deterministic response: {exc}"
+            ) from exc
         response_payload = {"content": response_text}
     elif provider == "openai":
         try:
@@ -351,9 +375,11 @@ def call_llm(
                 timeout=float(os.getenv("LLM_TIMEOUT", "60")),
                 max_tokens=max_tokens,
             )
-        except Exception:
-            response_text = _deterministic_response_for_kind()
-            response_payload = {"content": response_text}
+        except Exception as exc:
+            raise LLMError(
+                f"openai provider call failed (model={model}); refusing to substitute a "
+                f"deterministic response: {exc}"
+            ) from exc
     elif provider == "deepseek":
         try:
             api_key = os.environ["DEEPSEEK_API_KEY"]
@@ -368,27 +394,17 @@ def call_llm(
                 timeout=float(os.getenv("LLM_TIMEOUT", "60")),
                 max_tokens=max_tokens,
             )
-        except Exception:
-            response_text = _deterministic_response_for_kind()
-            response_payload = {"content": response_text}
+        except Exception as exc:
+            raise LLMError(
+                f"deepseek provider call failed (model={model}); refusing to substitute a "
+                f"deterministic response: {exc}"
+            ) from exc
     else:
-        response_text = _deterministic_response_for_kind()
-        response_payload = {"content": response_text}
-
-    if str(response_text or "").strip() in {"", "{}"}:
-        response_text = _deterministic_response_for_kind()
-        response_payload = {"content": response_text}
-    # Enforce deterministic reasoning/ranking shape when upstream returns non-JSON or empty content.
-    parsed = _parsed(response_text)
-    if kind and "reasoning" in str(kind):
-        if not parsed or not parsed.get("claims") and not parsed.get("evidence"):
-            response_text = _deterministic_reasoning_response()
-            response_payload = {"content": response_text}
-            parsed = _parsed(response_text)
-    if kind and "ranking" in str(kind):
-        if not parsed or not parsed.get("ranking"):
-            response_text = _deterministic_ranking_response([str(p) for p in pack.values() if isinstance(p, str)])
-            response_payload = {"content": response_text}
+        # Unknown/real provider: deterministic responses require provider == "mock".
+        raise LLMError(
+            f"unsupported LLM provider {provider!r}; deterministic stub responses are "
+            "confined to provider == 'mock'"
+        )
 
     log_llm_call(
         provider=provider or "unknown",
