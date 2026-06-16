@@ -48,6 +48,9 @@ runtime/dispatcher/
 runtime/orientation/
 runtime/panel/
 runtime/agent_memory/
+# Promotion-plan receipts are local ops artifacts, not repo truth (#2081).
+# Scoped to ops/promotions/ only — tracked ops/** siblings (benchmarks, observability, quality) stay tracked.
+ops/promotions/
 verification_report.md
 
 # Local hygiene artifacts
