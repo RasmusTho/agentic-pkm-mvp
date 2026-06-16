@@ -781,11 +781,373 @@ def test_janitor_dry_run_integration_with_temp_repo(tmp_path) -> None:
     assert {
         "path": str(tmp_path / "clean-wt"),
         "branch": "codex/merged-branch",
+        "merge_proof": "ancestor_of_origin_main",
     } in report["candidates"]["worktrees"]
+    # The same enriched candidate is surfaced under the canonical reclaim key.
+    assert {
+        "path": str(tmp_path / "clean-wt"),
+        "branch": "codex/merged-branch",
+        "merge_proof": "ancestor_of_origin_main",
+    } in report["reclaimable_worktrees"]
     assert any(item["branch"] == "codex/missing" for item in report["candidates"]["orphaned_worktrees"])
     assert any(
         item["artifact"] == "worktree" and item["branch"] == "codex/dirty" and item["reason"] == "dirty_worktree"
         for item in report["skipped"]
+    )
+
+
+def _reclaim_run_git(tmp_path, worktrees_porcelain: str, local_refs: str):
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["branch", "--show-current"]:
+            return "main"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["worktree", "list", "--porcelain"]:
+            return worktrees_porcelain
+        if args == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return local_refs
+        if args == ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"]:
+            return ""
+        if args == ["stash", "list", "--date=unix"]:
+            return ""
+        if args == ["worktree", "prune", "--dry-run"]:
+            return ""
+        if args == ["remote", "prune", "origin", "--dry-run"]:
+            return ""
+        raise AssertionError(f"unexpected git command: {args}")
+
+    return fake_run_git
+
+
+def test_report_emits_reclaimable_worktrees_distinct_from_orphaned(
+    tmp_path, monkeypatch
+) -> None:
+    """AC1: --mode report surfaces reclaimable_worktrees (present-but-merged,
+    clean, non-lease, non-root), distinct from orphaned_worktrees."""
+    clean_wt = tmp_path / "clean-wt"
+    clean_wt.mkdir()
+    missing_wt = tmp_path / "missing-wt"
+
+    porcelain = (
+        f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/main\n\n"
+        f"worktree {clean_wt}\nHEAD def\nbranch refs/heads/deliver/foo\n\n"
+        f"worktree {missing_wt}\nHEAD ghi\nbranch refs/heads/codex/gone\n\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        _reclaim_run_git(tmp_path, porcelain, "main\ndeliver/foo\ncodex/gone"),
+    )
+    # deliver/foo is an ancestor of origin/main (fast-forward merge).
+    monkeypatch.setattr(
+        git_hygiene,
+        "_is_ancestor",
+        lambda _cwd, ancestor, descendant: ancestor == "deliver/foo"
+        and descendant == "origin/main",
+    )
+    monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda _path: False)
+
+    report = git_hygiene.janitor_report(tmp_path)
+
+    assert "reclaimable_worktrees" in report
+    assert "orphaned_worktrees" in report
+    reclaim_paths = {item["path"] for item in report["reclaimable_worktrees"]}
+    orphaned_paths = {item["path"] for item in report["orphaned_worktrees"]}
+    # The present-but-merged worktree is reclaimable.
+    assert str(clean_wt) in reclaim_paths
+    # The missing worktree is orphaned, not reclaimable — the two lists are distinct.
+    assert str(missing_wt) in orphaned_paths
+    assert reclaim_paths.isdisjoint(orphaned_paths)
+    foo = next(item for item in report["reclaimable_worktrees"] if item["path"] == str(clean_wt))
+    assert foo["branch"] == "deliver/foo"
+    assert foo["merge_proof"] == "ancestor_of_origin_main"
+
+
+def test_reclaimable_gates_on_merge_state_not_codex_prefix_squash_via_pr(
+    tmp_path, monkeypatch
+) -> None:
+    """AC2: candidacy gates on merge state, not codex/ prefix; squash-merged
+    branches (not ancestors) are caught via MERGED/CLOSED PR state."""
+    squash_wt = tmp_path / "deliver-squash"
+    squash_wt.mkdir()
+    docs_wt = tmp_path / "docs-merged"
+    docs_wt.mkdir()
+
+    porcelain = (
+        f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/main\n\n"
+        f"worktree {squash_wt}\nHEAD def\nbranch refs/heads/deliver/squashed\n\n"
+        f"worktree {docs_wt}\nHEAD ghi\nbranch refs/heads/docs/note\n\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        _reclaim_run_git(
+            tmp_path, porcelain, "main\ndeliver/squashed\ndocs/note"
+        ),
+    )
+    # Neither branch is an ancestor of origin/main (squash merge rewrites history).
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_args: False)
+    monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda _path: False)
+
+    report = git_hygiene.build_janitor_plan(
+        tmp_path,
+        pr_states={
+            "deliver/squashed": {"state": "MERGED", "isDraft": False, "number": 11},
+            "docs/note": {"state": "CLOSED", "isDraft": False, "number": 12},
+        },
+    )
+
+    reclaim = {item["path"]: item for item in report["reclaimable_worktrees"]}
+    # Non-codex branches that are not ancestors are still reclaimable via PR state.
+    assert str(squash_wt) in reclaim
+    assert reclaim[str(squash_wt)]["merge_proof"] == "merged_pr"
+    assert str(docs_wt) in reclaim
+    assert reclaim[str(docs_wt)]["merge_proof"] == "closed_pr"
+    # No worktree was skipped for a branch-prefix reason.
+    assert not any(
+        item.get("artifact") == "worktree" and item.get("reason") == "non_codex_branch"
+        for item in report["skipped"]
+    )
+
+
+def test_reclaimable_skips_dirty_lease_open_pr_and_root_with_reasons(
+    tmp_path, monkeypatch
+) -> None:
+    """AC4: dirty, lease-held, open-PR, and root worktrees are skipped with
+    explicit reasons."""
+    dirty_wt = tmp_path / "dirty"
+    dirty_wt.mkdir()
+    leased_wt = tmp_path / "leased"
+    leased_wt.mkdir()
+    openpr_wt = tmp_path / "open-pr"
+    openpr_wt.mkdir()
+
+    porcelain = (
+        f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/main\n\n"
+        f"worktree {dirty_wt}\nHEAD d1\nbranch refs/heads/feat/dirty\n\n"
+        f"worktree {leased_wt}\nHEAD d2\nbranch refs/heads/feat/leased\n\n"
+        f"worktree {openpr_wt}\nHEAD d3\nbranch refs/heads/feat/open\n\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        _reclaim_run_git(
+            tmp_path, porcelain, "main\nfeat/dirty\nfeat/leased\nfeat/open"
+        ),
+    )
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_args: True)
+    monkeypatch.setattr(
+        git_hygiene,
+        "_worktree_dirty",
+        lambda path: path == str(dirty_wt),
+    )
+
+    report = git_hygiene.build_janitor_plan(
+        tmp_path,
+        active_leases=[
+            {
+                "resource_id": f"worktree:{leased_wt}",
+                "execution_id": "agent-x",
+                "expires_at": 3000000000,
+            }
+        ],
+        pr_states={
+            "feat/dirty": {"state": "MERGED", "isDraft": False},
+            "feat/open": {"state": "OPEN", "isDraft": False},
+        },
+        now=2000000000,
+    )
+
+    reasons = {
+        item["path"]: item["reason"]
+        for item in report["skipped"]
+        if item.get("artifact") == "worktree"
+    }
+    assert reasons[str(tmp_path)] == "root_worktree"
+    assert reasons[str(dirty_wt)] == "dirty_worktree"
+    assert reasons[str(leased_wt)] == "active_lease"
+    assert reasons[str(openpr_wt)] == "open_or_draft_pr"
+    # None of the skipped worktrees leaked into reclaimable.
+    reclaim_paths = {item["path"] for item in report["reclaimable_worktrees"]}
+    assert reclaim_paths.isdisjoint(
+        {str(tmp_path), str(dirty_wt), str(leased_wt), str(openpr_wt)}
+    )
+
+
+def test_reclaimable_unknown_merge_state_is_skipped_not_reclaimed(
+    tmp_path, monkeypatch
+) -> None:
+    """A clean non-root worktree that is neither an ancestor nor PR-confirmed
+    merged/closed is held back as unknown merge state, never reclaimed."""
+    unknown_wt = tmp_path / "unknown"
+    unknown_wt.mkdir()
+
+    porcelain = (
+        f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/main\n\n"
+        f"worktree {unknown_wt}\nHEAD d1\nbranch refs/heads/feat/unknown\n\n"
+    )
+    monkeypatch.setattr(
+        git_hygiene,
+        "run_git",
+        _reclaim_run_git(tmp_path, porcelain, "main\nfeat/unknown"),
+    )
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_args: False)
+    monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda _path: False)
+
+    # pr_states present but missing this branch -> _pr_state returns "unknown".
+    report = git_hygiene.build_janitor_plan(tmp_path, pr_states={})
+
+    assert report["reclaimable_worktrees"] == []
+    assert any(
+        item.get("artifact") == "worktree"
+        and item["path"] == str(unknown_wt)
+        and item["reason"] == "unknown_merge_state"
+        for item in report["skipped"]
+    )
+
+
+def test_janitor_apply_removes_reclaimable_worktree_and_branch(
+    tmp_path, monkeypatch
+) -> None:
+    """AC3: --mode apply removes a verified-reclaimable worktree + its local
+    branch without --force."""
+    commands: list[list[str]] = []
+
+    def fake_run_git_result(args: list[str], _cwd: Path):
+        commands.append(args)
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", fake_run_git_result)
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *args, **kwargs: {
+            "mode": "report",
+            "remote_policy": "merged-and-closed-with-rescue",
+            "destructive_actions": [],
+            "candidates": {
+                "local_branches": [],
+                "worktrees": [],
+                "remote_branches": [],
+                "remote_branches_requiring_rescue": [],
+                "old_stashes": [],
+            },
+            "reclaimable_worktrees": [
+                {
+                    "path": str(tmp_path / "deliver-foo"),
+                    "branch": "deliver/foo",
+                    "merge_proof": "merged_pr",
+                }
+            ],
+            "orphaned_worktrees": [],
+            "skipped": [],
+            "prune_candidates": {"worktree": [], "remote": []},
+            "active_leases_respected": [],
+        },
+    )
+
+    report = git_hygiene.janitor_apply(tmp_path, pr_states={"deliver/foo": {"state": "MERGED"}})
+
+    assert report["ok"] is True
+    assert ["worktree", "remove", str(tmp_path / "deliver-foo")] in commands
+    assert ["branch", "-d", "deliver/foo"] in commands
+    # Never --force / -D.
+    assert not any("--force" in cmd or "-D" in cmd for cmd in commands)
+
+
+def test_janitor_apply_skips_branch_delete_when_worktree_remove_fails(
+    tmp_path, monkeypatch
+) -> None:
+    """If the worktree remove fails (e.g. became dirty), do not delete the branch."""
+    commands: list[list[str]] = []
+    target = str(tmp_path / "deliver-foo")
+
+    def fake_run_git_result(args: list[str], _cwd: Path):
+        commands.append(args)
+        if args == ["worktree", "remove", target]:
+            return subprocess.CompletedProcess(["git", *args], 1, "", "is dirty")
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", fake_run_git_result)
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *args, **kwargs: {
+            "mode": "report",
+            "remote_policy": "merged-and-closed-with-rescue",
+            "destructive_actions": [],
+            "candidates": {
+                "local_branches": [],
+                "worktrees": [],
+                "remote_branches": [],
+                "remote_branches_requiring_rescue": [],
+                "old_stashes": [],
+            },
+            "reclaimable_worktrees": [
+                {"path": target, "branch": "deliver/foo", "merge_proof": "merged_pr"}
+            ],
+            "orphaned_worktrees": [],
+            "skipped": [],
+            "prune_candidates": {"worktree": [], "remote": []},
+            "active_leases_respected": [],
+        },
+    )
+
+    report = git_hygiene.janitor_apply(tmp_path, pr_states={"deliver/foo": {"state": "MERGED"}})
+
+    assert report["ok"] is False
+    assert ["branch", "-d", "deliver/foo"] not in commands
+
+
+def test_janitor_apply_worktree_reclaim_is_idempotent(tmp_path) -> None:
+    """AC3 idempotency: a second apply over an already-reclaimed worktree is a
+    no-op (nothing left to remove)."""
+    # A real bare remote (not the repo itself) so the worktree-reclaim path is
+    # isolated from the out-of-scope remote-branch cleanup: only `main` is
+    # published, so the local `deliver/foo` is never seen as a merged remote ref.
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "--initial-branch=main", remote], check=True)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--initial-branch=main", repo], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "file.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    # Non-codex branch, fast-forward merged into main (ancestor of origin/main).
+    subprocess.run(["git", "checkout", "-b", "deliver/foo"], cwd=repo, check=True)
+    (repo / "foo.txt").write_text("foo\n", encoding="utf-8")
+    subprocess.run(["git", "add", "foo.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "foo"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "merge", "--ff-only", "deliver/foo"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "fetch", "origin"], cwd=repo, check=True)
+    clean_wt = tmp_path / "deliver-foo-wt"
+    subprocess.run(["git", "worktree", "add", str(clean_wt), "deliver/foo"], cwd=repo, check=True)
+
+    pr_states = {"deliver/foo": {"state": "MERGED"}}
+
+    first = git_hygiene.janitor_apply(repo, pr_states=pr_states)
+    assert first["ok"] is True
+    # The worktree was removed (no --force) and its local branch deleted.
+    assert not clean_wt.exists()
+    assert "deliver/foo" not in git_hygiene._local_branches(repo)
+    assert any(
+        action.get("artifact") == "worktree"
+        and action.get("action") == "remove"
+        and action.get("path") == str(clean_wt)
+        for action in first["destructive_actions"]
+    )
+
+    # Re-run: the worktree and branch are gone, so there is nothing to reclaim.
+    second = git_hygiene.janitor_apply(repo, pr_states=pr_states)
+    assert second["ok"] is True
+    assert second["reclaimable_worktrees"] == []
+    assert not any(
+        action.get("artifact") == "worktree" and action.get("action") == "remove"
+        for action in second["destructive_actions"]
     )
 
 
