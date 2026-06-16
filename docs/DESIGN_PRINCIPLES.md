@@ -78,6 +78,7 @@ It exists to keep high-level design work systematic:
 - Interaction, cognition, execution, memory, and governance are distinct layers.
 - A layer should have one primary responsibility and a clear contract with adjacent layers.
 - A layer may depend on another layer’s contract, but should not absorb its authority.
+- Changed (2026-06-16): the code-level projection of these layers onto `app.*` packages — a directional, forward-only import-dependency contract with the interaction layer import-protected — is governed by `docs/adr/ADR-0013-code-dependency-direction.md` and enforced (non-blocking) by `importlinter.ini`.
 
 ### 4. Explicit Mutation Authority
 

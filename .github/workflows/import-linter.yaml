@@ -1,0 +1,30 @@
+---
+name: import-linter
+
+# Non-blocking import-boundary check. Runs the directional import contract
+# (importlinter.ini, governed by docs/adr/ADR-0013-code-dependency-direction.md)
+# on every PR. continue-on-error keeps it informational — it reports boundary
+# drift without gating merges. Promotion to a required check is deferred
+# (ADR-0013, Out of scope) until the known violations are fixed.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  import-linter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install import-linter
+        run: |
+          python -m pip install --upgrade pip
+          pip install import-linter==2.11
+      - name: Lint imports (non-blocking)
+        continue-on-error: true
+        run: lint-imports --config importlinter.ini

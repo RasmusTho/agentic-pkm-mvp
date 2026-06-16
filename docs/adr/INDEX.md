@@ -17,3 +17,4 @@ State: Index (historical). ADRs are design records and may be partially outdated
 - [ADR 0010: BuilderOps Vault authority and promotion boundary (accepted, docs/governance)](./ADR-0010-builderops-vault-authority-boundary.md)
 - [ADR 0011: Orientation push and ambient resurfacing boundary (accepted, docs/governance)](./ADR-0011-orientation-push-ambient-resurfacing.md)
 - [ADR 0012: Orientation multi-agent reads boundary (accepted, docs/governance)](./ADR-0012-orientation-multiagent-reads.md)
+- [ADR 0013: Code dependency direction — directional import-boundary contract (accepted, pending merge via #2070)](./ADR-0013-code-dependency-direction.md)
