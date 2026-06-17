@@ -45,8 +45,9 @@ Current state:
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
 - Embedding fallback is blocked unless the fallback preserves the resolved embedding identity.
 - Endpoint repair is operational and separate from provider substitution.
+- The router never emits a route whose `model` belongs to a different provider than the one that will execute the call. When `LLM_PROVIDER` is set it must run the call, so the resolved route uses a candidate (primary or fallback) that provider actually serves — e.g. an `ollama`-enforced chat task with a cloud-primary policy resolves to the local `ollama` fallback model, not the cloud model. When `LLM_PROVIDER_ENFORCE=1` and no candidate is served by the enforced provider, the router fails loud (`LLMRouteError`) rather than guessing a cross-provider route. The model swap is surfaced via `LLMRoute.reason` (`enforced-provider:<provider>`).
 
-Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`
+Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`, `tests/components/llm/test_router_enforced_provider.py`
 
 ## Supported environment variables
 
@@ -56,6 +57,7 @@ Core routing:
 - `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` — embedding model name for embed routes.
 - `LLM_FORCE_PROVIDER` — hard override for router provider (all tasks).
 - `LLM_FORCE_MODEL` — hard override for router model (all tasks).
+- `LLM_PROVIDER_ENFORCE` — when truthy (`1`/`true`/`yes`/`on`), require `LLM_PROVIDER` to be set and bind every chat task to that provider; the router resolves to a model the provider serves or fails loud rather than emitting a cross-provider route.
 
 Compiled routing settings:
 - `vault/@Settings/llm_routing.md`
