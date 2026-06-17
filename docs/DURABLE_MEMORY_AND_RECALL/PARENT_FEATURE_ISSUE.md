@@ -66,7 +66,7 @@ lives in `docs/DURABLE_MEMORY_AND_RECALL/`.
 
 ## Suggested Validation
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory`
+- `pytest -q tests/agent_memory`
 - `rg -n "Verify:" docs/DURABLE_MEMORY_AND_RECALL/*.md`
 
 ## Source Docs

@@ -53,8 +53,8 @@ Capture is where task-manager posture would creep in (due dates, states, nagging
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_capture_inbox_api.py` (issue a)
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_capture_modal.py` (issue b)
+- `pytest -q tests/api/test_capture_inbox_api.py` (issue a)
+- `pytest -q tests/companion_ui/test_capture_modal.py` (issue b)
 - `ruff check app tests`
 
 ## Out of Scope

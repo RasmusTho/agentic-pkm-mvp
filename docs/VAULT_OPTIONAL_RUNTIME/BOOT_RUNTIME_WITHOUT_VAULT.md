@@ -58,7 +58,7 @@ exists to prevent.
 
 ## How to Verify (Pre-Merge)
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+pytest -q \
   tests/watcher/test_watcher_idle_without_vault.py \
   tests/runtime/test_start_full_system_no_vault.py \
   tests/ops/test_channel_preflight.py

@@ -55,8 +55,8 @@ Preferences are the easiest place for authority creep: one preference write that
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_settings_drawer.py tests/companion_ui/test_display_preferences.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_tts_readback.py`
+- `pytest -q tests/companion_ui/test_settings_drawer.py tests/companion_ui/test_display_preferences.py`
+- `pytest -q tests/companion_ui/test_tts_readback.py`
 - `ruff check app tests`
 
 ## Out of Scope

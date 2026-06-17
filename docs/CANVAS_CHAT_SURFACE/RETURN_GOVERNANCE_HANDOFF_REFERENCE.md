@@ -68,7 +68,7 @@ Without a returned reference the UI can only show a generic "routed to Panel" fl
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_canvas_coauthor_api.py tests/api/test_canvas_governance_handoff.py`
+- `pytest -q tests/api/test_canvas_coauthor_api.py tests/api/test_canvas_governance_handoff.py`
 - `ruff check app tests`
 - `git diff --check`
 

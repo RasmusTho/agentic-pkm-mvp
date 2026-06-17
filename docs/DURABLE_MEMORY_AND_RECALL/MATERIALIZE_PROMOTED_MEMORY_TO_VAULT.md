@@ -90,7 +90,7 @@ receipt → durable artifact, never silent persistence") and the writing-surface
 - Assert blocked-state path raises and leaves the vault unchanged.
 - Assert human-authored content is never overwritten (collision → new agent-promoted artifact or
   governed-merge proposal, per the companion-note contract).
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_memory_materialization.py`
+- `pytest -q tests/agent_memory/test_memory_materialization.py`
 
 ## Out of Scope
 

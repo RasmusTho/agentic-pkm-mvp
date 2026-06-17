@@ -72,8 +72,8 @@ autocorrect would transfer authorship away from the human.
 ## How to Verify (Pre-Merge)
 
 - `git diff --check`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_text_correction_proposals.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_direct_note_editor.py tests/companion_ui/test_tts_readback.py`
+- `pytest -q tests/companion_ui/test_text_correction_proposals.py`
+- `pytest -q tests/companion_ui/test_direct_note_editor.py tests/companion_ui/test_tts_readback.py`
 - `ruff check app tests`
 
 ## Out of Scope

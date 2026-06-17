@@ -29,7 +29,7 @@ No changes to `AGENTS.md` or `issue-to-code/SKILL.md` beyond what FALLBACK_POLIC
 
 ```sh
 # architecture test — verifies skill doc has correct dispatcher steps
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/architecture/test_dispatcher_skill_integration.py -v
+pytest tests/architecture/test_dispatcher_skill_integration.py -v
 # => test_skill_references_dispatcher_status PASSED
 # => test_skill_references_dispatcher_next PASSED
 # => test_skill_references_dispatcher_claim PASSED
@@ -38,7 +38,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/architecture/test_dispatcher_skill
 # => test_skill_dispatcher_steps_in_order PASSED
 
 # integration test — full agent loop against temp store
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/dispatcher/test_agent_loop.py -v
+pytest tests/dispatcher/test_agent_loop.py -v
 # => test_full_agent_loop_status_next_claim_heartbeat_complete PASSED
 # => test_full_agent_loop_fallback_event_trail PASSED
 ```
@@ -65,14 +65,14 @@ Without a static architecture test, the skill doc can drift. A developer updatin
 - [ ] `tests/dispatcher/test_agent_loop.py` exercises the full claim → heartbeat → complete loop against a temp store and asserts the event audit trail contains `task.claimed`, `task.heartbeat`, `task.completed` in order.
   Verify: `tests/dispatcher/test_agent_loop.py::test_full_agent_loop_status_next_claim_heartbeat_complete`
 - [ ] All dispatcher tests pass.
-  Verify: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/dispatcher/ tests/architecture/test_dispatcher_skill_integration.py`
+  Verify: `pytest -q tests/dispatcher/ tests/architecture/test_dispatcher_skill_integration.py`
 - [ ] Three adoption receipts posted on the parent feature issue (operator closes adoption gate).
   Verify: adoption evidence on parent feature issue body or comments
 
 ## How to Verify (Pre-Merge)
 
 ```sh
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/dispatcher/ tests/architecture/test_dispatcher_skill_integration.py
+pytest -q tests/dispatcher/ tests/architecture/test_dispatcher_skill_integration.py
 ruff check tests/dispatcher/test_agent_loop.py tests/architecture/test_dispatcher_skill_integration.py
 mypy tests/dispatcher/test_agent_loop.py
 ```

@@ -60,8 +60,8 @@ This is the visible half of the hybrid handoff. Without it the authority split e
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_chat_to_panel_handoff.py`
-- Regression: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui` (state any pre-existing unrelated failures explicitly).
+- `pytest -q tests/companion_ui/test_chat_to_panel_handoff.py`
+- Regression: `pytest -q tests/companion_ui` (state any pre-existing unrelated failures explicitly).
 - `ruff check app tests companion-ui`
 - `git diff --check`
 

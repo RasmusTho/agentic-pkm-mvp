@@ -51,7 +51,7 @@ proactivity is built on top.
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/relevance tests/companion_ui/test_now_surface.py`
+- `pytest -q tests/relevance tests/companion_ui/test_now_surface.py`
 - `ruff check app tests`
 - Post a validation receipt to the parent feature issue.
 

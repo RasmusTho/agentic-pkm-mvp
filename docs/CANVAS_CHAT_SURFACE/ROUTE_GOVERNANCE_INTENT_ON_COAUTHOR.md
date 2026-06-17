@@ -95,7 +95,7 @@ Without intent-level routing the governance handoff is dead on arrival for natur
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_canvas_coauthor_api.py tests/api/test_canvas_governance_handoff.py tests/chat/test_intent_classifier.py`
+- `pytest -q tests/api/test_canvas_coauthor_api.py tests/api/test_canvas_governance_handoff.py tests/chat/test_intent_classifier.py`
 - `ruff check app tests`
 - `git diff --check`
 

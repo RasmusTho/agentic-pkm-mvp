@@ -70,7 +70,7 @@ contract requires.
 - Add the named tests; assert the guard is invoked (not bypassed) and a receipt is produced.
 - Assert the unreviewed/inferred path yields suggestion-only authority.
 - Assert no durable write of activation state to the artifact occurs.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_guarded_recall_activation.py`
+- `pytest -q tests/agent_memory/test_guarded_recall_activation.py`
 
 ## Out of Scope
 

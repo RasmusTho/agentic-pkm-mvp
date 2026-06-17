@@ -77,7 +77,7 @@ making the queue itself durable.
   location and assert the decision is still retrievable.
 - Confirm `(vault_id, channel)` scoping via two distinct `VaultContext` values.
 - Confirm no write occurs for a candidate that is still pending.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_review_decision_store.py`
+- `pytest -q tests/agent_memory/test_review_decision_store.py`
 
 ## Out of Scope
 

@@ -50,7 +50,7 @@ The product is built for one expert who lives here daily; permanent explanatory 
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_guidance_layer.py`
+- `pytest -q tests/companion_ui/test_guidance_layer.py`
 - `ruff check app tests`
 
 ## Out of Scope

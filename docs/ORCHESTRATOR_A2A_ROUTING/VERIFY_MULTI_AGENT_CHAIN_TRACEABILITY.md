@@ -29,7 +29,7 @@ Lock the routed A2A capability into the repo with integration coverage that prov
 ## Concretely
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+pytest -q \
   tests/orchestrator/test_orchestrator_runs_steps.py \
   tests/orchestrator/test_multi_step_chain_traceability.py \
   tests/orchestration/v2/test_orchestrator_integration.py -m "not pg"
@@ -55,7 +55,7 @@ The capability is not actually delivered when only the single-step happy path wo
 ## How to Verify (Pre-Merge)
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+pytest -q \
   tests/orchestrator/test_orchestrator_runs_steps.py \
   tests/orchestrator/test_multi_step_chain_traceability.py \
   tests/orchestration/v2/test_orchestrator_integration.py -m "not pg"

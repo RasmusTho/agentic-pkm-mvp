@@ -60,8 +60,8 @@ Each child proves its slice; nothing else proves the composition. The gallery ha
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_entry_state_gallery.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/` (full surface suite stays green)
+- `pytest -q tests/companion_ui/test_entry_state_gallery.py`
+- `pytest -q tests/companion_ui/` (full surface suite stays green)
 - `ruff check app tests`
 
 ## Out of Scope

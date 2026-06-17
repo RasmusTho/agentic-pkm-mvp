@@ -50,7 +50,7 @@ Then run a targeted smoke check in a **temporary separate worktree** to avoid to
 ```bash
 MERGE_WORKTREE=$(mktemp -d)
 git worktree add --detach "$MERGE_WORKTREE" refs/merge_validation
-(cd "$MERGE_WORKTREE" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/<relevant_test_file>.py -k "<key_test>")
+(cd "$MERGE_WORKTREE" && pytest -q tests/<relevant_test_file>.py -k "<key_test>")
 git worktree remove --force "$MERGE_WORKTREE"
 ```
 

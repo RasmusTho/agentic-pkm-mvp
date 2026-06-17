@@ -102,13 +102,13 @@ The session log is the provenance contract. Without it, co-authored notes have n
 - [ ] `close_session` records a final closure line with the total summary.
   - Verify: `tests/chat/test_session_log_writer.py::test_close_session_appends_closure_line`
 - [ ] The writer does not require Docker or Postgres (pure file-system operation).
-  - Verify: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/test_session_log_writer.py -m "not pg" -q` passes.
+  - Verify: `pytest tests/chat/test_session_log_writer.py -m "not pg" -q` passes.
 
 ## How to Verify (Pre-Merge)
 
 ```bash
 # Unit tests — no PG, no Docker
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/test_session_log_writer.py -m "not pg" -q
+pytest tests/chat/test_session_log_writer.py -m "not pg" -q
 
 # Smoke: create a session log manually
 python -c "

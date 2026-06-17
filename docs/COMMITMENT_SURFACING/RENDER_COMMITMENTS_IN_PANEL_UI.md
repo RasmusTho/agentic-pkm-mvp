@@ -43,8 +43,8 @@ The render is where the capability becomes real for the human; everything upstre
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_commitment_surface.py` — runs the render, distinction, and degraded-render assertions.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api tests/companion_ui -k commitment` — broader commitment-surfacing sweep (matches #1960's Suggested Validation).
+- `pytest -q tests/companion_ui/test_commitment_surface.py` — runs the render, distinction, and degraded-render assertions.
+- `pytest -q tests/api tests/companion_ui -k commitment` — broader commitment-surfacing sweep (matches #1960's Suggested Validation).
 - `ruff check app tests` and `mypy app` (code-affecting change).
 - If the companion UI renders via the pure `render_index_html` path, render to static HTML and visually confirm the next-action vs review-cycle distinction (per the companion UI local UAT pattern).
 

@@ -81,7 +81,7 @@ Without this task the canvas API stays a write-pipe with no author. Every higher
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/chat/test_coauthoring_cognition.py tests/api/test_canvas_coauthor_api.py`
+- `pytest -q tests/chat/test_coauthoring_cognition.py tests/api/test_canvas_coauthor_api.py`
 - `ruff check app tests`
 - `git diff --check`
 - Manual: with `CANVAS_ENABLED=1`, open a session, POST a co-author intent, confirm the note body changes in place and the `.chats/` log records the intent.

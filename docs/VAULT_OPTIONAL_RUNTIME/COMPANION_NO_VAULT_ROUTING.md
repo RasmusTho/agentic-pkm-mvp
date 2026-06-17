@@ -54,7 +54,7 @@ Switching/registering is the multi-vault half of the owner decision.
 
 ## How to Verify (Pre-Merge)
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_companion_vault_routing.py
+pytest -q tests/api/test_companion_vault_routing.py
 ```
 CI: companion API tests run in-process (`TestClient(app)`, `STORE_BACKEND=memory`), no Docker —
 same shape as `tests/uat/test_golden_path_integrated_runtime.py`.

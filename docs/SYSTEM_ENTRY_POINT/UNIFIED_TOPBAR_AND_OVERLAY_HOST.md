@@ -53,8 +53,8 @@ Without a shared host, each overlay re-implements dismissal and routing, and rou
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_overlay_host.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_workspace_layout.py tests/companion_ui/test_workspace_responsive.py`
+- `pytest -q tests/companion_ui/test_overlay_host.py`
+- `pytest -q tests/companion_ui/test_workspace_layout.py tests/companion_ui/test_workspace_responsive.py`
 - `ruff check app tests`
 
 ## Out of Scope
