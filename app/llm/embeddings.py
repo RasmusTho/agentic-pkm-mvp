@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from functools import lru_cache
 from typing import List, Mapping, Optional
@@ -11,8 +12,46 @@ from app.config.llm import get_provider
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
 from app.llm.endpoints import require_ollama_base_url
 
+logger = logging.getLogger(__name__)
+
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _MOCK_EMBED_MODEL = "mock-embedding"
+
+# Default character budget for a single embedding input. nomic-embed-text has an
+# ~8k token context window; at a conservative ~4 chars/token that is ~32k chars.
+# We truncate below that so an oversized note never 500s the provider and aborts
+# the whole retrieval index build (#2110). Override with EMBED_MAX_INPUT_CHARS;
+# set to 0 (or negative) to disable truncation entirely.
+DEFAULT_EMBED_MAX_INPUT_CHARS = 24000
+
+
+def _embed_max_input_chars() -> int:
+    raw = os.getenv("EMBED_MAX_INPUT_CHARS")
+    if raw is None or not raw.strip():
+        return DEFAULT_EMBED_MAX_INPUT_CHARS
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return DEFAULT_EMBED_MAX_INPUT_CHARS
+    return value
+
+
+def _truncate_for_context(text: str) -> str:
+    """Cap embedding input to the configured context-window budget.
+
+    Returns the text unchanged when truncation is disabled (budget <= 0) or the
+    text already fits. Truncation is a bounded, deterministic head slice — the
+    `vault-test` fixture has no oversized notes, so its behavior is unchanged.
+    """
+    budget = _embed_max_input_chars()
+    if budget <= 0 or len(text) <= budget:
+        return text
+    logger.warning(
+        "embedding input truncated to context budget: %d -> %d chars",
+        len(text),
+        budget,
+    )
+    return text[:budget]
 
 
 def _extract_error_detail(response: httpx.Response) -> str | None:
@@ -169,6 +208,9 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
 
     if provider == "ollama":
         timeout = float(os.getenv("LLM_TIMEOUT", "60"))
+        # Cap input to the model context window so an oversized note does not
+        # 500 the provider and abort the whole retrieval index build (#2110).
+        text = _truncate_for_context(text)
         try:
             return _ollama_embed_api(text, model, dim, timeout)
         except httpx.HTTPError as primary_exc:
@@ -217,7 +259,26 @@ def embed_texts(
     dim: int | None = None,
     normalize: bool = True,
 ) -> List[List[float]]:
-    return [embed_text(text, provider=provider, model=model, dim=dim, normalize=normalize) for text in texts]
+    dim_val = dim or get_embed_dim()
+    vectors: List[List[float]] = []
+    for index, text in enumerate(texts):
+        try:
+            vectors.append(
+                embed_text(text, provider=provider, model=model, dim=dim_val, normalize=normalize)
+            )
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # Degrade a single oversized/failing item to a zero vector instead of
+            # aborting the whole batch, so one bad note cannot take down the
+            # entire retrieval index build (#2110). The zero vector preserves
+            # expected_dim and contributes no similarity signal.
+            logger.warning(
+                "embedding skipped for item %d (len=%d): %s; substituting zero vector",
+                index,
+                len(text),
+                exc,
+            )
+            vectors.append([0.0 for _ in range(dim_val)])
+    return vectors
 
 
 __all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider", "get_embed_model"]

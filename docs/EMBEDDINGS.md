@@ -55,6 +55,10 @@ comes from the compiled task policy; env vars supply defaults only when the poli
 - `EMBED_NORMALIZE`
   - Default behavior is to return **normalized** vectors unless explicitly disabled.
   - Changing normalization changes the embedding identity and requires rebuilding the vector index.
+- `EMBED_MAX_INPUT_CHARS`
+  - Character budget for a single embedding input. The embedding layer truncates input above this budget before calling the provider so an oversized note cannot exceed the model context window and 500 the request (see *Oversized input handling*).
+  - Default: `24000` (`DEFAULT_EMBED_MAX_INPUT_CHARS` in `app/llm/embeddings.py`) — a conservative head budget for `nomic-embed-text`'s ~8k-token context window.
+  - Set to `0` (or a negative value) to disable truncation entirely. Truncation does **not** change the embedding identity; it only bounds input length.
 
 ## Query vs Document embeddings (RAG invariant)
 
@@ -161,6 +165,15 @@ If embedding fails (provider error, timeout, or dimension mismatch):
   - error string
 
 This event is the canonical signal to operators that the embedding chain is misconfigured or has drifted.
+
+### Oversized input handling
+
+A single note must never abort the whole index build (#2110). The embedding layer applies two bounded defenses, in order:
+
+1. **Truncation to context budget.** Before each provider call, input longer than `EMBED_MAX_INPUT_CHARS` (default `24000`) is truncated to that head budget. This keeps an oversized note within the model's context window so the provider does not return HTTP 500 ("input length exceeds the context length"). Truncation does not change the embedding identity.
+2. **Per-item degradation.** When a single item still fails at the provider (e.g. truncation disabled, or another transient provider/HTTP error), `embed_texts` skips that item — it logs a warning and substitutes a zero vector of the correct `expected_dim` — instead of raising and aborting the remaining batch. The zero vector preserves the dimension guardrail and contributes no similarity signal.
+
+Together these ensure an index build over a corpus containing one oversized or pathological note completes and the rest of the corpus embeds normally.
 
 ## Storage: VectorIndex
 
