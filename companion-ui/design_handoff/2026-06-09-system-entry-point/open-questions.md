@@ -83,3 +83,21 @@ Settings exposes a quiet-hours control and the design states the context lane *n
 
 ### Q20. Read-back scope.
 The prototype reads the document body. The spec should confirm what is read-back-eligible (body only? resurfaced cards? proposals?) and that mixed-language / missing-provider warnings surface before playback per `LOCAL_FIRST_TTS_CONTRACT.md`. *(defer-to-implementation-issue)*
+
+---
+
+## Added in v3 (entry-point unreachable / remote-access flow — design review for #2123)
+
+Source: Claude Design full-flow review of #2123 (2026-06-17). The bounded #2123 fix (classify HTTP 503 `runtime_unavailable` and render the designed "Vault unreachable" state, suppress the setup form) proceeds independently; the questions below are the flow-level deltas surfaced by that review and are explicitly **not** Crossing-B blockers.
+
+### Q21. "Service down" vs. "wrong device" are the same 503 to the UI but different problems to the human.
+A remote browser (LAN/Tailscale, e.g. `http://100.113.104.116:8111/`) whose JS calls the API's localhost bind (`127.0.0.1:18001`) produces the *same* 503 `runtime_unavailable` shape as a genuinely-down runtime. The UI cannot today distinguish them, so it shows one message for two causes. The spec should decide how the entry point disambiguates — proposal: when `window.location.hostname` is not localhost and the orientation call fails at transport level, render a distinct "different device / API not exposed on this network" state (remote-access guidance + local-only continuation) rather than the plain "Vault unreachable" card. *(resolve-in-normalized-spec)*
+
+### Q22. Should the UI server proxy API calls so remote access works transparently?
+Root-cause option behind Q21: rather than the browser calling the API origin directly, the companion UI server could proxy `/api/companion/*` to the runtime so a single reachable origin serves both. This removes the wrong-device failure mode entirely and is the durable fix; it is an architecture decision (UI↔runtime boundary), not a visual one, so it routes to an owner-doc/runtime issue rather than this design package. *(defer-to-implementation-issue — runtime/architecture)*
+
+### Q23. Technical provenance is opt-in, not headline.
+The raw API JSON (`trace_id`, `contract_version`, `error_kind`) must never be the headline of an error state. The headline is human-readable ("Can't connect right now"); the provenance line and trace ID belong in an expandable "Details" disclosure. Applies to every entry-point error state, not only the 503. *(defer-to-implementation-issue — folds into the #2123 render)*
+
+### Q24. Setup-form suppression generalizes beyond the 503.
+The vault-setup form is a false affordance whenever the runtime cannot process it: it must be suppressed in both the unreachable (503) and degraded-without-vault cases, and the operator/power-user surface (role selector, handoff/asset/template folders, settings flags) belongs in Settings, not on the first-contact entry screen. The entry point should ask one question — "where is your vault" — via a file picker, not a raw text input plus a wall of config. *(resolve-in-normalized-spec)*
