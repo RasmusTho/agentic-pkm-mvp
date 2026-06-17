@@ -64,7 +64,10 @@ def test_reasoning_single_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) -
         captured.append(kwargs)
 
     monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
-    monkeypatch.setattr("app.services.llm._deterministic_llm_response", lambda: fake_json)
+    # call_llm no longer masks real-provider errors with a canned stub (#2108);
+    # simulate a successful ollama call so logging is exercised on a real
+    # response rather than the removed error->deterministic fallback.
+    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: fake_json)
 
     deliberation_agent = get_deliberation_agent()
     note_text = "Note about safety and alignment."
@@ -93,7 +96,7 @@ def test_reasoning_multi_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) ->
         captured.append(kwargs)
 
     monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
-    monkeypatch.setattr("app.services.llm._deterministic_llm_response", lambda: fake_json)
+    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: fake_json)
 
     reset_store_backends()
     store = get_object_store()
@@ -112,7 +115,6 @@ def test_reasoning_multi_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_set_evaluator_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_reasoning_env(monkeypatch)
-    fake_json = _fake_reasoning_json("OBJ-SET")
 
     captured: list[dict] = []
 
@@ -120,7 +122,18 @@ def test_set_evaluator_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
         captured.append(kwargs)
 
     monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
-    monkeypatch.setattr("app.services.llm._deterministic_llm_response", lambda: fake_json)
+
+    def _fake_ranking_chat(system, user, *args, **kwargs):
+        import re
+
+        uuids = list(dict.fromkeys(re.findall(r"[0-9a-fA-F-]{36}", user)))
+        ranking = [
+            {"object_uuid": u, "score": max(0.1, 1.0 - 0.05 * i), "reason": f"ranked {u}"}
+            for i, u in enumerate(uuids)
+        ]
+        return json.dumps({"ranking": ranking})
+
+    monkeypatch.setattr("app.services.llm._ollama_chat", _fake_ranking_chat)
 
     store = get_object_store()
     c1 = str(UUID(int=1))
