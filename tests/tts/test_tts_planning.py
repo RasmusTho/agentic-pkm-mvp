@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+from app.tts.cache import cache_key_for
 from app.tts.config import TTSConfig
 from app.tts.planning import build_tts_plan, tts_config_warnings
 from app.tts.providers import resolve_voice
@@ -150,6 +151,35 @@ def test_voice_policy_selects_configured_local_voice_without_models_in_ci(tmp_pa
     overridden = replace(config, sv_voice="sv_SE-nst-medium", en_us_voice="af_heart")
     assert resolve_voice(overridden, "sv-SE").voice_id == "sv_SE-nst-medium"
     assert resolve_voice(overridden, "en-US").voice_id == "af_heart"
+
+
+def test_single_language_plan_unchanged(tmp_path: Path) -> None:
+    # Per-segment routing (#2114) must not change single-language behaviour:
+    # one voice, and the same cache key as the pre-#2114 canonical payload.
+    config = _config(tmp_path)
+    text = "Hej världen, nu läser vi."
+
+    plan = build_tts_plan(text=text, config=config)
+
+    assert plan["mixed_language"] is False
+    assert len(plan["segments"]) == 1
+    assert plan["segments"][0]["language"] == "sv-SE"
+    assert plan["provider"] == "piper"
+    assert plan["voice_id"] == "sv_SE-lisa-medium"
+
+    # The cache key for a single-language request is byte-for-byte identical to
+    # the canonical payload (no segment_voices key added).
+    expected_key = cache_key_for(
+        {
+            "text": plan["normalized_text"],
+            "language": "sv-SE",
+            "voice_id": "sv_SE-lisa-medium",
+            "provider": "piper",
+            "rate": 1.0,
+            "local_only": True,
+        }
+    )
+    assert plan["cache_key"] == expected_key
 
 
 def test_companion_mixed_fixture_corpus_plans_without_raw_markdown(tmp_path: Path) -> None:

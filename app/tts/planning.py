@@ -51,6 +51,15 @@ def build_tts_plan(
     segments = segment_by_language(normalized_text, requested=language)
     mixed = len({str(segment["language"]) for segment in segments}) > 1
     voice = resolve_voice(config, detected_language)
+    # Per-segment voice/language routing (#2114): resolve each sentence's own
+    # voice so a non-dominant-language passage is read in its own voice rather
+    # than the single overall voice. Sub-sentence/term switching stays out of
+    # scope — granularity is the sentence segment from ``segment_by_language``.
+    for segment in segments:
+        segment_voice = resolve_voice(config, str(segment["language"]))
+        segment["voice_id"] = segment_voice.voice_id
+        segment["provider"] = segment_voice.provider
+        segment["provider_available"] = segment_voice.available
     warnings = tts_config_warnings(config) + tts_normalization_warnings(text)
     if mixed:
         warnings.append("uncertain mixed-language text")
@@ -64,6 +73,19 @@ def build_tts_plan(
         "rate": rate,
         "local_only": config.local_only,
     }
+    if mixed:
+        # Only mixed plans extend the cache key with the per-segment voice plan.
+        # Single-language requests keep the exact payload above, so their cache
+        # key is byte-for-byte identical to pre-#2114 behaviour.
+        payload["segment_voices"] = [
+            {
+                "index": segment["index"],
+                "language": segment["language"],
+                "voice_id": segment["voice_id"],
+                "provider": segment["provider"],
+            }
+            for segment in segments
+        ]
     cache_key = cache_key_for(payload)
     ensure_cache_dirs(config)
 

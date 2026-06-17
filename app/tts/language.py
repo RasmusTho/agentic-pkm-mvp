@@ -32,13 +32,13 @@ def detect_language(text: str, requested: str | None = None) -> str:
     return "en-US"
 
 
-def segment_by_language(text: str, requested: str | None = None) -> list[dict[str, str | int]]:
+def segment_by_language(text: str, requested: str | None = None) -> list[dict[str, object]]:
     forced = normalize_language(requested)
     parts = [match.group(0).strip() for match in _SENTENCE_RE.finditer(text) if match.group(0).strip()]
     if not parts and text.strip():
         parts = [text.strip()]
 
-    segments: list[dict[str, str | int]] = []
+    segments: list[dict[str, object]] = []
     for index, part in enumerate(parts):
         language = forced or detect_language(part)
         segments.append({"index": index, "text": part, "language": language})

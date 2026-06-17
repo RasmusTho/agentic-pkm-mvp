@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: code + local runtime setup
 Last reviewed: 2026-06-17
-Last verified against: `app/tts/**`, `tests/tts/test_tts_planning.py`, `tests/tts/test_tts_cache.py`, `tests/api/test_companion_tts_api.py`, `tests/companion_ui/test_tts_readback.py`
+Last verified against: `app/tts/**`, `tests/tts/test_tts_planning.py`, `tests/tts/test_tts_synthesis_mixed.py`, `tests/tts/test_tts_cache.py`, `tests/api/test_companion_tts_api.py`, `tests/companion_ui/test_tts_readback.py`
 
 # Local-First TTS Contract
 
@@ -34,6 +34,11 @@ The synthesize endpoint first checks the audio cache. If cached audio exists, it
 audio URL without invoking a provider. If audio is not cached, it invokes a local provider only when
 `TTS_ENABLED=true`, `TTS_LOCAL_ONLY=true`, local model files exist, and the provider command is
 available.
+
+For mixed-language notes the synthesize endpoint routes per sentence segment: each `segments[]`
+entry is synthesized with its own language's resolved voice and the per-segment WAVs are
+concatenated into one audio artifact (see Provider Selection). Single-language notes are unchanged —
+one voice, one provider call, and the same cache key as before.
 
 The audio route serves only cache-key-addressed WAV files from `TTS_CACHE_DIR`. It does not expose
 absolute filesystem paths.
@@ -100,6 +105,18 @@ Provisioning runbook: `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
 - `sv-SE` uses Piper voice `sv_SE-lisa-medium`.
 - `en-US` uses Kokoro voice `bf_isabella`.
 - `en-GB` uses Kokoro voice `bf_isabella`.
+
+Voice selection is per sentence segment (#2114). The plan detects language per sentence
+(`segment_by_language`) and resolves each segment's own voice; the plan's top-level `language` /
+`provider` / `voice_id` describe the overall-dominant voice, while each `segments[]` entry carries
+its own `language` / `provider` / `voice_id`. On synthesis, a mixed-language note is rendered by
+synthesizing each segment with its segment voice and concatenating the per-segment WAVs into one
+artifact. Because providers emit different sample rates (Piper 22050 Hz, Kokoro 24000 Hz),
+concatenation upsamples every segment to a single common rate (the maximum source rate) so playback
+is not corrupted. Granularity is the sentence segment only — embedded sub-sentence foreign terms
+stay in the host-sentence voice (no term/word-level switching). Single-language notes keep one voice
+and the same cache key; only mixed plans extend the cache key with the per-segment voice plan, so it
+stays stable for identical normalized multi-segment requests.
 
 Voices are configurable via `TTS_SV_VOICE`, `TTS_EN_US_VOICE`, and `TTS_EN_GB_VOICE` (defaults
 above, accepted in the 2026-06-17 operator dogfood, #1702). The runtime selects the configured voice
