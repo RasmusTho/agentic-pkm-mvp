@@ -1,60 +1,62 @@
 from __future__ import annotations
 
-import httpx
-
-import app.llm.embeddings as emb
-from app.llm.embeddings import embed_text
-
-
-def _clear_cache() -> None:
-    emb._embed_single.cache_clear()
+from app.llm import embeddings as emb
 
 
 def test_oversized_text_is_chunked_not_raised(monkeypatch) -> None:
-    """A note longer than the model context window must not raise.
+    """A text longer than the embedding model's context window is chunked into
+    in-window requests, not sent whole.
 
-    Regression for #2110: previously the whole note text was sent to the
-    embeddings provider with no length check, so an oversized note returned
-    HTTP 500 ("input length exceeds the context length") and aborted the
-    entire embed batch. The embedding path must truncate/chunk the input
-    down to a bounded budget before calling the provider.
+    Sending the whole note returns HTTP 500 ("input length exceeds the context
+    length") and aborts the entire embed batch / index build (#2110). With
+    chunking, each request stays in window so the call never raises.
     """
-    for key in ("OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_HOST", "https://ollama.local:11434/")
-    monkeypatch.setenv("EMBED_DIM", "3")
-    monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")
-    # Small, explicit budget so the test is deterministic and fast.
-    monkeypatch.setenv("EMBED_MAX_INPUT_CHARS", "100")
+    dim = 8
+    max_chars = 100
+    monkeypatch.setenv("EMBED_MAX_INPUT_CHARS", str(max_chars))
+    monkeypatch.setenv("LLM_TIMEOUT", "5")
 
-    captured: dict[str, object] = {}
+    calls: list[int] = []
 
-    class DummyResponse:
-        is_error = False
-        status_code = 200
-
-        def json(self) -> dict[str, object]:
-            return {"embeddings": [[1, 2, 3]]}
-
-    def fake_post(url: str, json: dict[str, object], timeout: float) -> DummyResponse:
-        # The model would 500 on an over-budget prompt; assert we never send one.
-        prompt = json.get("prompt") or json.get("input")
-        assert isinstance(prompt, str)
-        if len(prompt) > 100:
-            raise httpx.HTTPStatusError(
-                "input length exceeds the context length",
-                request=httpx.Request("POST", url),
-                response=httpx.Response(500, request=httpx.Request("POST", url)),
+    def fake_embed_api(text, model, d, timeout):
+        calls.append(len(text))
+        if len(text) > max_chars:
+            raise RuntimeError(
+                "Ollama /api/embeddings returned HTTP 500: the input length exceeds the context length"
             )
-        captured["prompt_len"] = len(prompt)
-        return DummyResponse()
+        return tuple(0.1 for _ in range(d))
 
-    monkeypatch.setattr("app.llm.embeddings.httpx.post", fake_post)
-    _clear_cache()
+    monkeypatch.setattr(emb, "_ollama_embed_api", fake_embed_api)
+    emb._embed_single.cache_clear()
 
-    oversized = "word " * 5000  # ~25k chars, far over the 100-char budget
-    vector = embed_text(oversized, provider="ollama", normalize=False)
+    oversized = "x" * 1000  # 10x the configured window
+    vector = emb.embed_text(
+        oversized, provider="ollama", model="nomic-embed-text:latest", dim=dim, normalize=False
+    )
 
-    assert vector == [1.0, 2.0, 3.0]
-    assert captured["prompt_len"] <= 100
+    assert len(vector) == dim
+    assert len(calls) > 1, "oversized text should be chunked into multiple in-window requests"
+    assert all(n <= max_chars for n in calls), f"a chunk exceeded the window: {calls}"
+    emb._embed_single.cache_clear()
+
+
+def test_in_window_text_is_unchanged(monkeypatch) -> None:
+    """A note within the window is sent as a single request (deterministic
+    vault-test behavior is unchanged — no spurious chunking)."""
+    dim = 8
+    monkeypatch.setenv("EMBED_MAX_INPUT_CHARS", "6000")
+    monkeypatch.setenv("LLM_TIMEOUT", "5")
+
+    calls: list[int] = []
+
+    def fake_embed_api(text, model, d, timeout):
+        calls.append(len(text))
+        return tuple(0.2 for _ in range(d))
+
+    monkeypatch.setattr(emb, "_ollama_embed_api", fake_embed_api)
+    emb._embed_single.cache_clear()
+
+    emb.embed_text("a short vault note", provider="ollama", model="nomic-embed-text:latest", dim=dim)
+
+    assert len(calls) == 1
+    emb._embed_single.cache_clear()
