@@ -4683,7 +4683,28 @@ def _error_detail(error: str) -> dict:
     return detail if isinstance(detail, dict) else {}
 
 
-def _render_error_section(error: str, *, entry_state: str = "") -> str:
+def _is_remote_page_origin(hostname: str) -> bool:
+    """True when the page was loaded from a non-localhost origin (#2124).
+
+    ``hostname`` is the host the *browser* used to load the page (the request
+    ``Host`` header, minus any port). It is a client/page fact, never a runtime
+    signal — the server still declares the runtime class. An empty hostname (no
+    signal) is treated as local so the safe #2123 "Vault unreachable" state
+    remains the default and never regresses.
+    """
+    host = (hostname or "").strip().lower()
+    if not host:
+        return False
+    # Strip a trailing port if one slipped through (Host is "name:port").
+    if host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    host = host.strip("[]")  # bare IPv6 brackets
+    return host not in ("localhost", "127.0.0.1", "::1", "")
+
+
+def _render_error_section(
+    error: str, *, entry_state: str = "", page_origin_hostname: str = ""
+) -> str:
     """Render a visible error state using Yggdrasil destructive tokens.
 
     When the resolved entry state is ``no_vault`` (#1783) the error state
@@ -4692,6 +4713,13 @@ def _render_error_section(error: str, *, entry_state: str = "") -> str:
     fabricated. Beside retry, the calm system-map affordance (#1787, SEP-05;
     spec §Resolved Q4) keeps the whole legible even when the runtime is
     unreachable — pull-based, opened only by this explicit `map.open`.
+
+    When the runtime is unreachable *and* the page was loaded from a remote
+    (non-localhost) origin, the unreachable state is the "wrong device" variant
+    (#2124): the same 503 shape has two causes (down runtime vs. a browser on
+    another device hitting the API's localhost bind), and a human on the wrong
+    device needs different guidance. The distinction is derived purely from the
+    page origin (``page_origin_hostname``), not from a new runtime state.
     """
     retry_html = (
         '\n    <a class="error-retry" href="/" data-intent="entry.retry"'
@@ -4724,12 +4752,24 @@ def _render_error_section(error: str, *, entry_state: str = "") -> str:
     # the raw JSON body or showing a vault-setup form the runtime cannot process
     # (#2123; edge-states.md §No vault — runtime unreachable; open-questions
     # Q23 — provenance behind a Details disclosure; Q24 — suppress the form).
-    if error_kind == "runtime_unavailable" or error.lower().startswith("http 503"):
-        return _render_vault_unreachable_state(error, retry_html=retry_html)
+    lowered = error.lower()
+    contract_unavailable = error_kind == "runtime_unavailable" or lowered.startswith("http 503")
     runtime_unavailable = any(
-        marker in error.lower()
+        marker in lowered
         for marker in ("connection refused", "timed out", "timeout", "network")
     )
+    # #2124 — same 503/transport shape, two causes. From a remote page origin
+    # the likely cause is "wrong device" (the browser hit the API's localhost
+    # bind, unreachable from that device), so render the distinct remote-access
+    # state instead. A localhost (or unknown) origin keeps the unchanged states
+    # below: #2123's "Vault unreachable" for the 503 contract error, and the
+    # pre-existing generic/transport card otherwise.
+    if (contract_unavailable or runtime_unavailable) and _is_remote_page_origin(
+        page_origin_hostname
+    ):
+        return _render_wrong_device_state(retry_html=retry_html)
+    if contract_unavailable:
+        return _render_vault_unreachable_state(error, retry_html=retry_html)
     runtime_label = "Runtime unavailable" if runtime_unavailable else "API Error"
     runtime_marker = (
         '<span data-testid="workspace-runtime-unavailable-state"></span>'
@@ -4774,6 +4814,42 @@ def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:
         <code class="error-provenance"
           data-testid="workspace-error-provenance">runtime_unavailable · /api/companion/orientation · 503</code>
       </details>
+    </div>
+  </div>"""
+
+
+def _render_wrong_device_state(*, retry_html: str) -> str:
+    """Render the "different device / API not exposed" entry state (#2124).
+
+    The page was loaded from a remote (non-localhost) origin, so the unreachable
+    runtime is most likely a *wrong-device* situation: the browser's API origin
+    is the runtime's localhost bind, which is not reachable from this device.
+    This is a distinct human problem from a genuinely-down runtime and needs
+    distinct guidance — remote-access help plus a local-only continuation —
+    while (like #2123) suppressing the vault-setup form the runtime cannot
+    process. The remote-vs-local signal is the page origin only; the runtime
+    class is still server-declared (open-questions Q21).
+    """
+    return f"""
+  <div class="error-state wrong-device-state"
+    data-testid="workspace-wrong-device-state"
+    data-error-kind="runtime-unavailable">
+    <span class="error-glyph" aria-hidden="true">⚠</span>
+    <div class="wrong-device-body">
+      <span class="error-label wrong-device-heading">Companion runtime is on a different device</span>
+      <p class="wrong-device-reassurance">
+        This page loaded over the network, but the companion runtime's API is
+        only exposed on its own machine by default, so this browser can't reach
+        it from here. Your vault — the durable source of truth — is unaffected.
+      </p>
+      <div class="wrong-device-affordances">{retry_html}</div>
+      <p class="wrong-device-guidance" data-testid="workspace-wrong-device-guidance">
+        To use the companion from this device, expose the runtime API on the
+        network (or open it on the machine running the runtime).
+      </p>
+      <a class="wrong-device-local-continuation"
+        data-testid="workspace-wrong-device-local-continuation"
+        href="/" data-intent="entry.retry">Continue on the runtime's own device</a>
     </div>
   </div>"""
 
@@ -6944,6 +7020,7 @@ def render_index_html(
     production_profile: bool = False,
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
+    page_origin_hostname: str = "",
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -6981,7 +7058,11 @@ def render_index_html(
 
     content_section = ""
     if error:
-        content_section = _render_error_section(error, entry_state=entry_resolution.state)
+        content_section = _render_error_section(
+            error,
+            entry_state=entry_resolution.state,
+            page_origin_hostname=page_origin_hostname,
+        )
     elif fields is not None:
         content_section = _render_note_section(fields)
     # Live co-authoring wiring is gated by the server-declared canvas flag,
@@ -10419,6 +10500,7 @@ def handle_get(
     client: WorkspaceHttpClient,
     api_base_url: str,
     production_profile: bool = False,
+    page_origin_host: str = "",
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
@@ -10493,6 +10575,7 @@ def handle_get(
         production_profile=production_profile,
         diagnostics=diagnostics,
         ambient_refresh_enabled=orientation_ambient_refresh_enabled(),
+        page_origin_hostname=page_origin_host,
     )
 
 
@@ -10808,6 +10891,10 @@ def make_handler(
                 client=self._client,
                 api_base_url=self._api_base_url,
                 production_profile=self._production_profile,
+                # Page origin (the Host the browser used) drives the #2124
+                # remote-vs-local disambiguation — a client/page fact, not a
+                # runtime signal.
+                page_origin_host=self.headers.get("Host", ""),
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

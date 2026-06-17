@@ -126,3 +126,57 @@ class TestVaultUnreachableEntryState:
 
         # Setup form is suppressed: no first-contact vault-config affordances.
         assert 'data-testid="workspace-vault-setup-form"' not in html
+
+
+def _render_error_with_origin(error: str, page_origin_hostname: str) -> str:
+    """Render the error-page surface with an explicit page-origin hostname.
+
+    ``page_origin_hostname`` is the host the browser used to load the page
+    (the request ``Host`` header on the server). It is a client/page fact, not
+    a runtime-state signal — the server still declares the runtime class.
+    """
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        fields=None,
+        error=error,
+        page_origin_hostname=page_origin_hostname,
+    )
+
+
+class TestRemoteAccessDisambiguation:
+    """#2124 — distinguish a wrong-device 503 from a genuinely-down runtime."""
+
+    def test_remote_origin_renders_wrong_device_state(self) -> None:
+        # Page served over LAN/Tailscale; the browser's API origin is the
+        # API's localhost bind, unreachable from the remote device.
+        html = _render_error_with_origin(_RUNTIME_UNAVAILABLE_503, "100.113.104.116")
+
+        # Distinct "different device / API not exposed" state, not the plain
+        # "Vault unreachable" card.
+        assert 'data-testid="workspace-wrong-device-state"' in html
+        assert 'data-testid="workspace-vault-unreachable-state"' not in html
+        assert "different device" in html.lower()
+
+        # Remote-access guidance + a local-only continuation affordance.
+        assert 'data-testid="workspace-wrong-device-local-continuation"' in html
+
+        # Like #2123: no raw JSON dump, no generic API Error, no setup form.
+        assert "API Error" not in html
+        assert "trace-abc" not in html
+        assert 'data-testid="workspace-vault-setup-form"' not in html
+
+    def test_localhost_origin_renders_vault_unreachable_state(self) -> None:
+        # Same 503 from a localhost page origin → unchanged #2123 state.
+        for hostname in ("localhost", "127.0.0.1"):
+            html = _render_error_with_origin(_RUNTIME_UNAVAILABLE_503, hostname)
+            assert 'data-testid="workspace-vault-unreachable-state"' in html
+            assert 'data-testid="workspace-wrong-device-state"' not in html
+            assert "Vault unreachable" in html
+
+    def test_default_origin_keeps_vault_unreachable_state(self) -> None:
+        # No page-origin signal (default) must not regress #2123: the local
+        # "Vault unreachable" state remains the safe default.
+        html = _render_error(_RUNTIME_UNAVAILABLE_503)
+        assert 'data-testid="workspace-vault-unreachable-state"' in html
+        assert 'data-testid="workspace-wrong-device-state"' not in html
