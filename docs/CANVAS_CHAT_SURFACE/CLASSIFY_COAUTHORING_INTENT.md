@@ -84,7 +84,7 @@ If intent class is read from the generated body, the gate is unreachable through
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/chat/test_intent_classifier.py`
+- `pytest -q tests/chat/test_intent_classifier.py`
 - `ruff check app tests`
 - `git diff --check`
 

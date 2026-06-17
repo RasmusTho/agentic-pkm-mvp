@@ -86,13 +86,13 @@ Without this surface, the canvas write path is only usable in tests and internal
 - [ ] `python -m app.cli canvas open / edit / close` round-trip works against `vault-test/`.
   - Verify: `tests/cli/test_canvas_cli.py::test_canvas_cli_open_edit_close_roundtrip`
 - [ ] Existing routes and tests are not broken.
-  - Verify: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"` passes.
+  - Verify: `pytest -q -m "not pg"` passes.
 
 ## How to Verify (Pre-Merge)
 
 ```bash
 # Full canvas test suite
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/ tests/api/test_canvas_api.py tests/cli/test_canvas_cli.py -m "not pg" -q
+pytest tests/chat/ tests/api/test_canvas_api.py tests/cli/test_canvas_cli.py -m "not pg" -q
 
 # CLI smoke against vault-test
 SESSION=$(python -m app.cli canvas open vault-test/notes/test-note.md --label smoke | grep session_id | awk '{print $2}')

@@ -56,8 +56,8 @@ Without receipt reflection the user must leave the canvas context and hunt the P
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_handoff_receipt_reflection.py`
-- Regression: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui` (state any pre-existing unrelated failures explicitly).
+- `pytest -q tests/companion_ui/test_handoff_receipt_reflection.py`
+- Regression: `pytest -q tests/companion_ui` (state any pre-existing unrelated failures explicitly).
 - `ruff check app tests companion-ui`
 - `git diff --check`
 

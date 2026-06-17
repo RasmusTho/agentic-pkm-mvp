@@ -30,7 +30,7 @@ Make `agent_call` steps useful for supported targets by routing them through an 
 ## Concretely
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+pytest -q \
   tests/orchestrator/test_agent_config_enforcement.py \
   tests/orchestrator/test_orchestrator_a2a_errors.py \
   tests/orchestrator/test_orchestrator_runs_steps.py -m "not pg"
@@ -52,7 +52,7 @@ The repo already models multi-step plans with `agent_call` steps, but supported 
 ## How to Verify (Post-Merge)
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+pytest -q \
   tests/orchestrator/test_agent_config_enforcement.py \
   tests/orchestrator/test_orchestrator_a2a_errors.py \
   tests/orchestrator/test_orchestrator_runs_steps.py -m "not pg"

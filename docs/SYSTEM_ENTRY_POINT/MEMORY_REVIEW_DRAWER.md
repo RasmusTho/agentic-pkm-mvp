@@ -55,8 +55,8 @@ Without a governed review surface, pending candidates either rot (the seam emits
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_memory_review_queue_api.py tests/api/test_orientation_memory_seam.py` (issue a)
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_memory_review_drawer.py` (issue b)
+- `pytest -q tests/api/test_memory_review_queue_api.py tests/api/test_orientation_memory_seam.py` (issue a)
+- `pytest -q tests/companion_ui/test_memory_review_drawer.py` (issue b)
 - `ruff check app tests`
 
 ## Out of Scope

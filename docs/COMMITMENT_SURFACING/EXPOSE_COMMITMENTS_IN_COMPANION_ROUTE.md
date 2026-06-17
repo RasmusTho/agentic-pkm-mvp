@@ -58,8 +58,8 @@ The route is the single seam between the durable source and the human-facing UI.
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_companion_commitments.py tests/api/test_arch_commitment_and_canvas.py` — runs the new surface tests and confirms the architecture guard now passes.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api tests/companion_ui -k commitment` — broader commitment-surfacing sweep (matches #1960's Suggested Validation).
+- `pytest -q tests/api/test_companion_commitments.py tests/api/test_arch_commitment_and_canvas.py` — runs the new surface tests and confirms the architecture guard now passes.
+- `pytest -q tests/api tests/companion_ui -k commitment` — broader commitment-surfacing sweep (matches #1960's Suggested Validation).
 - `ruff check app tests` and `mypy app` (code-affecting change).
 - Confirm the new field follows the read-only projection style of the existing companion read models (`read_only: True`, `authority_role: "derived"`).
 

@@ -63,7 +63,7 @@ This is the task that makes the capability demonstrable. Without it the agent ex
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_canvas_coauthoring_surface.py`
+- `pytest -q tests/companion_ui/test_canvas_coauthoring_surface.py`
 - `ruff check app tests companion-ui`
 - `git diff --check`
 - Manual (dev shell, `CANVAS_ENABLED=1`): open a note, enter an intent, confirm the body re-renders with the applied edit and undo restores the prior body. Confirm the region is disabled when the flag is unset.

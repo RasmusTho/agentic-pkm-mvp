@@ -51,8 +51,8 @@ If the palette grew its own confirm path or proposal source it would become a fo
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_panel_command_palette.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_governance_queue_browser.py tests/companion_ui/test_act_mode_browser.py`
+- `pytest -q tests/companion_ui/test_panel_command_palette.py`
+- `pytest -q tests/companion_ui/test_governance_queue_browser.py tests/companion_ui/test_act_mode_browser.py`
 - `ruff check app tests`
 
 ## Out of Scope

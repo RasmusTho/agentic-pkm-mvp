@@ -55,7 +55,7 @@ Agents closing out a task need one unambiguous command. `update --status complet
 ## How to Verify (Pre-Merge)
 
 ```sh
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/dispatcher/
+pytest -q tests/dispatcher/
 ruff check app/dispatcher tests/dispatcher
 mypy app/dispatcher
 ```

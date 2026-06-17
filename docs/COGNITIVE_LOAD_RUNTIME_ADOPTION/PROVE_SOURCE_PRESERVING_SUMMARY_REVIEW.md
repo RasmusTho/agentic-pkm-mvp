@@ -54,8 +54,8 @@ for source review, cognitive-load support turns into authority loss.
 ## How to Verify (Pre-Merge)
 
 - `git diff --check`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_source_preserving_summary_review.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_tts_readback.py`
+- `pytest -q tests/companion_ui/test_source_preserving_summary_review.py`
+- `pytest -q tests/companion_ui/test_tts_readback.py`
 - `ruff check app tests`
 
 ## Out of Scope

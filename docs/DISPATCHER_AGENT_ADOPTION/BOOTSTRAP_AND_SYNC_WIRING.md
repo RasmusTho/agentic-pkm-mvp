@@ -63,13 +63,13 @@ Without this, every agent in a fresh worktree starts with an empty dispatcher qu
 - [ ] `dispatcher next --json` on a missing DB exits 1 with `{"ok": false, "error": "..."}`.
   Verify: `tests/dispatcher/test_cli.py::test_guard_missing_db`
 - [ ] `gh`-backed `GitHubIssueSource` implementation exists; offline unit tests remain green.
-  Verify: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/dispatcher/`
+  Verify: `pytest -q tests/dispatcher/`
 
 ## How to Verify (Pre-Merge)
 
 ```sh
 # all dispatcher tests green
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/dispatcher/
+pytest -q tests/dispatcher/
 
 # lint and types
 ruff check app/dispatcher tests/dispatcher

@@ -67,7 +67,7 @@ If commitments are not durable, the surface flickers: a commitment shown one req
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/commitments/test_commitment_persistence.py` — runs the restart-survival, WriteGuard-enforcement, and query-feed assertions above.
+- `pytest -q tests/commitments/test_commitment_persistence.py` — runs the restart-survival, WriteGuard-enforcement, and query-feed assertions above.
 - `ruff check app tests` and `mypy app` (code-affecting change).
 - Read the new persistence module side-by-side with `app/services/companion_note.py` and `app/agent_memory/materialization.py` to confirm the write path matches the established WriteGuard-before-single-file-write pattern.
 - Read the artefact frontmatter side-by-side with `docs/CONCEPTS/STATE_AXES_CONTRACT.md` to confirm no commitment state value is written into a `review_state`/`maturity` field.

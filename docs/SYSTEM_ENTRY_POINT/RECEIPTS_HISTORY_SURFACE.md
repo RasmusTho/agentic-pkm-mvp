@@ -49,8 +49,8 @@ A governed system the human cannot audit afterwards degrades into "trust me." Hi
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_receipts_history_surface.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_vault_browser_receipts.py`
+- `pytest -q tests/companion_ui/test_receipts_history_surface.py`
+- `pytest -q tests/companion_ui/test_vault_browser_receipts.py`
 - `ruff check app tests`
 
 ## Out of Scope

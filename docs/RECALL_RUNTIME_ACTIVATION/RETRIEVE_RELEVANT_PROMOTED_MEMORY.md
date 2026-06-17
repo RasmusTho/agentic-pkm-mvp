@@ -53,7 +53,7 @@ what makes recall a scarce, trustworthy signal rather than a context dump.
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_recall_retrieval.py`
+- `pytest -q tests/agent_memory/test_recall_retrieval.py`
 - `ruff check app tests` and `mypy app`
 
 ## Out of Scope

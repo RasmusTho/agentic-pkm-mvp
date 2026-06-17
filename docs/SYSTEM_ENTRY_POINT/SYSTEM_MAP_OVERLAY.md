@@ -51,8 +51,8 @@ The companion's knowledge is spread across many surfaces; without a legible inde
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_system_map_overlay.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_overlay_host.py`
+- `pytest -q tests/companion_ui/test_system_map_overlay.py`
+- `pytest -q tests/companion_ui/test_overlay_host.py`
 - `ruff check app tests`
 
 ## Out of Scope

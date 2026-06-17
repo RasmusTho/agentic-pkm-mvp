@@ -58,8 +58,8 @@ Every other task in this capability (re-entry shapes, overlay host, state-galler
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_entry_state_machine.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_workspace_layout.py tests/companion_ui/test_reentry_orientation_surface.py`
+- `pytest -q tests/companion_ui/test_entry_state_machine.py`
+- `pytest -q tests/companion_ui/test_workspace_layout.py tests/companion_ui/test_reentry_orientation_surface.py`
 - `ruff check app tests`
 
 ## Out of Scope

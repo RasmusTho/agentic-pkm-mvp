@@ -68,7 +68,7 @@ Implementation: `app/agent_memory/recall_explanation.py::render_recall_footer`, 
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_recall_surfacing.py`
+- `pytest -q tests/agent_memory/test_recall_surfacing.py`
 - `ruff check app tests`
 
 ## Out of Scope

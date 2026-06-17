@@ -113,9 +113,9 @@ Core candidate outcomes:
 
 ### Suggested Validation
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_companion_vault_browser*.py tests/api/test_capture_inbox_api.py tests/api/test_memory_review_queue_api.py tests/api/test_companion_tts_api.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/runtime/test_receipt_event_boundary.py`
+- `pytest -q tests/companion_ui/`
+- `pytest -q tests/api/test_companion_vault_browser*.py tests/api/test_capture_inbox_api.py tests/api/test_memory_review_queue_api.py tests/api/test_companion_tts_api.py`
+- `pytest -q tests/runtime/test_receipt_event_boundary.py`
 - `ruff check app tests`
 - Startup/runbook UAT against a real or representative test vault.
 - Browser runtime UAT covering normal Companion entry, route parity, governed confirm, receipt visibility, no-vault/degraded, WriteGuard blocked, and provider unavailable.
@@ -193,7 +193,7 @@ Verify state gallery, review residuals, shipped child-surface table, and owner d
   Verify: docs diff updates shipped/residual state or records no-change rationale.
 
 #### Suggested Validation
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/`
+- `pytest -q tests/companion_ui/`
 - focused state-gallery and route residual tests.
 
 ### 03 - fix(companion-ui): enforce active-control route parity for v1 surfaces

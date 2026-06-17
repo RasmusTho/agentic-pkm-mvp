@@ -58,7 +58,7 @@ reasons." It is the AC the architecture-verification fence asserts.
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_recall_in_ask.py tests/agent_memory/test_arch_recall_wiring.py`
+- `pytest -q tests/agent_memory/test_recall_in_ask.py tests/agent_memory/test_arch_recall_wiring.py`
 - `ruff check app tests` and `mypy app`
 
 ## Out of Scope

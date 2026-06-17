@@ -59,7 +59,7 @@ The capability outcome (not one PR): the Companion UI declares its entry state s
 
 ## Suggested Validation
 
-Per-child: the `How to Verify (Pre-Merge)` block of each task spec. Capability-level: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/` green, plus a live dev-shell walkthrough of the state gallery scenarios (cold, returning 2h, returning 5d, degraded, no-vault, narrow).
+Per-child: the `How to Verify (Pre-Merge)` block of each task spec. Capability-level: `pytest -q tests/companion_ui/` green, plus a live dev-shell walkthrough of the state gallery scenarios (cold, returning 2h, returning 5d, degraded, no-vault, narrow).
 
 ## Source Docs
 

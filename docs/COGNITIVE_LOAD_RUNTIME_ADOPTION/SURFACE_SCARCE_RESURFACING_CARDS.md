@@ -62,8 +62,8 @@ priority ranking would recreate the monitoring burden the feature is meant to re
 ## How to Verify (Pre-Merge)
 
 - `git diff --check`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_reentry_orientation_surface.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/api/test_companion_orientation_api.py tests/resurfacing/test_resurfacing_runtime.py`
+- `pytest -q tests/companion_ui/test_reentry_orientation_surface.py`
+- `pytest -q tests/api/test_companion_orientation_api.py tests/resurfacing/test_resurfacing_runtime.py`
 - `ruff check app tests`
 
 ## Out of Scope

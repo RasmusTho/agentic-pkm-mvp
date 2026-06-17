@@ -66,7 +66,7 @@ visibility half of the agent-memory contract's companion-UI requirements.
 - Add the named render tests (pure render-function assertions, consistent with the companion-ui test
   style — no live HTTP/DB).
 - Assert provenance fields and authority posture appear in the rendered output.
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_materialized_memory_surface.py`
+- `pytest -q tests/companion_ui/test_materialized_memory_surface.py`
 
 ## Out of Scope
 

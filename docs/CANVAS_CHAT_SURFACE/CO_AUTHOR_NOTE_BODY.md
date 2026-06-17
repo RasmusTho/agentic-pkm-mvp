@@ -85,12 +85,12 @@ The co-authoring path is the thing that makes canvas Chat feel like a collaborat
   - Verify: `tests/chat/test_canvas_writer.py::test_apply_edit_records_turn_in_session_log`
 - [ ] Writes route through `app/knowledge/write_ops.py` (KnowledgePort boundary).
   - Verify: `tests/chat/test_canvas_writer.py::test_apply_edit_uses_knowledge_port`
-- [ ] `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/test_canvas_writer.py -m "not pg" -q` passes.
+- [ ] `pytest tests/chat/test_canvas_writer.py -m "not pg" -q` passes.
 
 ## How to Verify (Pre-Merge)
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/test_canvas_writer.py -m "not pg" -q
+pytest tests/chat/test_canvas_writer.py -m "not pg" -q
 
 # Smoke: open session, apply an edit, confirm file updated, frontmatter intact
 python -c "

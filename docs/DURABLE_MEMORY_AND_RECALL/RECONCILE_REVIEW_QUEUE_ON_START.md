@@ -65,7 +65,7 @@ that the pending queue is discardable runtime state.
 
 - Add the named tests; seed the decision store, rebuild the queue, assert the pending set.
 - Confirm the pending queue is still rebuilt from observation (not loaded from a durable queue store).
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/agent_memory/test_review_queue_reconciliation.py`
+- `pytest -q tests/agent_memory/test_review_queue_reconciliation.py`
 
 ## Out of Scope
 

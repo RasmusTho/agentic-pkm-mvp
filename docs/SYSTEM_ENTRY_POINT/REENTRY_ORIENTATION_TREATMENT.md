@@ -68,8 +68,8 @@ Re-entry is the product's core anti-dashboard claim. A re-entry that enumerates,
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_reentry_orientation_treatment.py`
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_reentry_orientation_surface.py tests/companion_ui/test_entry_state_machine.py`
+- `pytest -q tests/companion_ui/test_reentry_orientation_treatment.py`
+- `pytest -q tests/companion_ui/test_reentry_orientation_surface.py tests/companion_ui/test_entry_state_machine.py`
 - `ruff check app tests`
 
 ## Out of Scope

@@ -59,7 +59,7 @@ is the foundation every other task in the capability builds on.
 
 ## How to Verify (Pre-Merge)
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/settings/test_paths_resolver.py
+pytest -q tests/settings/test_paths_resolver.py
 ```
 CI: covered by the existing unit-test job (paths resolver is store-agnostic, no Docker).
 

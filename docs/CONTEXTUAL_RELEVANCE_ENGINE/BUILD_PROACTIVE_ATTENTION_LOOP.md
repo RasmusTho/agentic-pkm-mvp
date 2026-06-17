@@ -56,7 +56,7 @@ the hard guarantees that keep it a prosthesis.
 
 ## How to Verify (Pre-Merge)
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/relevance/test_attention_loop.py`
+- `pytest -q tests/relevance/test_attention_loop.py`
 - `ruff check app tests`
 - Post a validation receipt to the parent feature issue; this slice triggers the owner-doc promotion (HUMAN-FLOWS §5 + runtime map).
 

@@ -29,7 +29,7 @@ Make the routed `agent_call` path inspectable by emitting the complete success a
 ## Concretely
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+pytest -q \
   tests/a2a/test_events.py \
   tests/orchestrator/test_orchestrator_a2a_errors.py \
   tests/orchestrator/test_orchestrator_runs_steps.py -m "not pg"
@@ -57,7 +57,7 @@ Without response and failure receipts, the orchestrator cannot prove what happen
 ## How to Verify (Pre-Merge)
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+pytest -q \
   tests/a2a/test_events.py \
   tests/orchestrator/test_orchestrator_a2a_errors.py \
   tests/orchestrator/test_orchestrator_runs_steps.py -m "not pg"

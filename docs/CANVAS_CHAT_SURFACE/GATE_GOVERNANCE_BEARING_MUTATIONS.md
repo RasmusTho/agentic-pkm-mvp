@@ -76,15 +76,15 @@ The gated-execution invariant is the core safety property of the whole system. I
   - Verify: `tests/chat/test_canvas_writer.py::test_apply_edit_rejects_frontmatter_in_body` (regression)
 - [ ] `GovernanceRouter` passes the action through `write_guard` before creating the Panel intent; if write-guard is not open, the action is rejected with a clear error.
   - Verify: `tests/chat/test_governance_router.py::test_request_respects_write_guard`
-- [ ] `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/test_governance_router.py tests/chat/test_canvas_writer.py -m "not pg" -q` passes.
+- [ ] `pytest tests/chat/test_governance_router.py tests/chat/test_canvas_writer.py -m "not pg" -q` passes.
 
 ## How to Verify (Pre-Merge)
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/ -m "not pg" -q
+pytest tests/chat/ -m "not pg" -q
 
 # Confirm CANVAS-02 regression test still passes
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/chat/test_canvas_writer.py::test_apply_edit_rejects_frontmatter_in_body -m "not pg" -q
+pytest tests/chat/test_canvas_writer.py::test_apply_edit_rejects_frontmatter_in_body -m "not pg" -q
 ```
 
 ## Out of Scope
