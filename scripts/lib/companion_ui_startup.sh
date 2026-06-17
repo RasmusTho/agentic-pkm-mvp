@@ -257,7 +257,7 @@ cui_start_ui() {
 
   if [ "${CUI_BIND_LAN:-0}" = "1" ]; then
     host="0.0.0.0"
-    cui_log "binding UI to 0.0.0.0 (LAN/Tailscale UAT)"
+    cui_log "binding UI to 0.0.0.0 (LAN/Tailscale UAT explicitly requested)"
   else
     host="127.0.0.1"
     cui_log "binding UI to 127.0.0.1 (loopback default; set CUI_BIND_LAN=1 for LAN/Tailscale UAT)"
