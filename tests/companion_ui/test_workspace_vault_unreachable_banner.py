@@ -70,3 +70,59 @@ class TestVaultUnreachableBanner:
         html = _render(vault_unreachable=True)
         assert 'data-testid="workspace-vault-retry"' in html
         assert "retry" in html
+
+
+# The HTTP 503 contract-error body the runtime returns when the orientation
+# aggregate is unreachable (companion-ui WORKSPACE_ORIENTATION_CONTRACT.md
+# §Runtime Unavailable). The workspace HTTP client wraps it as
+# ``HTTP 503: <json>`` (workspace_http_client.WorkspaceClientHTTPError).
+_RUNTIME_UNAVAILABLE_503 = (
+    'HTTP 503: {"detail": {"error": "runtime_unavailable", '
+    '"message": "The workspace orientation source could not be reached", '
+    '"trace_id": "trace-abc", "contract_version": "1"}}'
+)
+
+
+def _render_error(error: str) -> str:
+    """Render the error-page entry surface (no note anchor, no orientation)."""
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        fields=None,
+        error=error,
+    )
+
+
+class TestVaultUnreachableEntryState:
+    """#2123 — HTTP 503 runtime_unavailable renders the designed entry state."""
+
+    def test_http_503_runtime_unavailable_renders_vault_unreachable_state(self) -> None:
+        html = _render_error(_RUNTIME_UNAVAILABLE_503)
+
+        # Designed "Vault unreachable" state, not the generic JSON-dumping card.
+        assert 'data-testid="workspace-vault-unreachable-state"' in html
+        assert "Vault unreachable" in html
+        assert 'data-error-kind="runtime-unavailable"' in html
+
+        # Provenance line per the design handoff, behind a Details disclosure
+        # (open-questions Q23 — provenance is opt-in, never the headline).
+        assert "runtime_unavailable · /api/companion/orientation · 503" in html
+        assert 'data-testid="workspace-error-details"' in html
+
+        # Reassurance: durable vault truth is unaffected; companion is a client.
+        assert "durable" in html.lower()
+        assert "client" in html.lower()
+
+        # The two designed affordances: Retry connection + Open system map.
+        assert 'data-testid="workspace-entry-retry"' in html
+        assert 'data-testid="workspace-entry-map-affordance"' in html
+
+        # Must not dump the raw JSON contract body or fall through to the
+        # generic JSON-dumping "API Error" branch.
+        assert "API Error" not in html
+        assert "trace-abc" not in html  # the body's trace_id value
+        assert '"contract_version"' not in html  # the raw JSON body key
+        assert 'data-testid="workspace-error-state"' not in html  # generic card
+
+        # Setup form is suppressed: no first-contact vault-config affordances.
+        assert 'data-testid="workspace-vault-setup-form"' not in html
