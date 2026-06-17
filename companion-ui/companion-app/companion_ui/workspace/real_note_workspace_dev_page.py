@@ -1185,14 +1185,25 @@ def _commitment_item_from_raw(
     commitment_id = str(
         raw.get("commitment_id") or raw.get("id") or f"{family}-{index}"
     )
+
+    def _opt(key: str) -> str:
+        return str(raw.get(key) or "").strip()
+
     return {
         "commitment_id": commitment_id,
         "family": family,
-        "kind": str(raw.get("kind") or "").strip(),
-        "state": str(raw.get("state") or "").strip(),
+        "kind": _opt("kind"),
+        "state": _opt("state"),
         "summary": summary,
         "target_ref": target_ref,
-        "source_goal": str(raw.get("source_goal") or "").strip(),
+        "source_goal": _opt("source_goal"),
+        # Optional commitment-layer provenance — carried through verbatim. The
+        # relative form of last_reviewed is computed server-side; the render
+        # only displays it (and omits any line whose value is empty).
+        "waiting_on": _opt("waiting_on"),
+        "waiting_since": _opt("waiting_since"),
+        "review_cadence": _opt("review_cadence"),
+        "last_reviewed_relative": _opt("last_reviewed_relative"),
     }
 
 
@@ -1240,14 +1251,19 @@ def _commitment_surface_from_payload(
     )
     review_cycle_items = _bucket("review_return", "review-cycle")
 
+    # Whole-surface freshness stamp (ISO-8601 from the API), shown in the footer
+    # of healthy states. Absent/blank ⇒ the render simply omits the footer.
+    as_of = str(commitments.get("as_of") or "").strip()
+
     if not next_action_items and not review_cycle_items:
-        return {"state": "empty", "read_only": True}
+        return {"state": "empty", "read_only": True, "as_of": as_of}
 
     return {
         "state": "populated",
         "read_only": bool(commitments.get("read_only", True)),
         "next_action": next_action_items,
         "review_cycle": review_cycle_items,
+        "as_of": as_of,
     }
 
 

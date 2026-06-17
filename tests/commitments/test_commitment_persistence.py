@@ -164,6 +164,60 @@ def test_load_feeds_next_and_waiting_query(tmp_path: Path) -> None:
     assert result.operator_summary["waiting_count"] == 1
 
 
+def test_optional_provenance_fields_roundtrip(tmp_path: Path) -> None:
+    """Optional commitment-layer provenance survives a persist→restart round-trip.
+
+    ``waiting_on`` / ``waiting_since`` (waiting items) and ``review_cadence`` /
+    ``last_reviewed`` (review_return items) are written only when present and read
+    back intact. An absent value must NOT materialize as a key on disk (no
+    fabricated-data invariant).
+    """
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    ctx = _vault(vault_root)
+    guard = _allowing_guard()
+
+    waiting = CommitmentRecord(
+        commitment_id="c-wait",
+        commitment_kind="waiting",
+        state="waiting",
+        summary="Vendor to send revised quote",
+        target_ref="projects/vendor.md",
+        waiting_on="Vendor (Acme) reply",
+        waiting_since="2026-06-10",
+    )
+    review = CommitmentRecord(
+        commitment_id="c-review",
+        commitment_kind="review_return",
+        state="open",
+        summary="Re-read the architecture RFC before sign-off",
+        target_ref="docs/rfc.md",
+        review_cadence="weekly",
+        last_reviewed="2026-06-12",
+    )
+    persist_commitment(waiting, vault_context=ctx, write_guard=guard)
+    persist_commitment(review, vault_context=ctx, write_guard=guard)
+
+    loaded = {r.commitment_id: r for r in load_commitments(vault_context=ctx)}
+
+    assert loaded["c-wait"].waiting_on == "Vendor (Acme) reply"
+    assert loaded["c-wait"].waiting_since == "2026-06-10"
+    # Review-only fields are absent on a waiting record (never fabricated).
+    assert loaded["c-wait"].review_cadence is None
+    assert loaded["c-wait"].last_reviewed is None
+
+    assert loaded["c-review"].review_cadence == "weekly"
+    assert loaded["c-review"].last_reviewed == "2026-06-12"
+    assert loaded["c-review"].waiting_on is None
+    assert loaded["c-review"].waiting_since is None
+
+    # Absent values must not be written as empty frontmatter keys.
+    wait_rel = commitment_artifact_path("c-wait", vault_root)
+    wait_fm, _ = load_frontmatter((vault_root / wait_rel).read_text(encoding="utf-8"))
+    assert "review_cadence" not in wait_fm
+    assert "last_reviewed" not in wait_fm
+
+
 def test_persist_writes_full_shape_via_default_guard(tmp_path: Path) -> None:
     """Production default-guard path persists a complete artefact when writes are allowed."""
     vault_root = tmp_path / "vault"
