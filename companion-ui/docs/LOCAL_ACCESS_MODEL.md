@@ -33,9 +33,12 @@ personal use.
 
 Rules:
 
-- The Companion UI dev/test/prod channel launchers bind to `127.0.0.1` by default.
-- LAN/Tailscale UAT requires an explicit `CUI_BIND_LAN=1` operator action, which binds the UI to
-  `0.0.0.0`.
+- The Companion UI **test/prod** channel launchers bind to `127.0.0.1` by default.
+- The **dev** launcher (`make dev-ui`) binds to `0.0.0.0` by default for LAN/Tailscale UAT;
+  set `CUI_BIND_LAN=0` to force loopback-only on dev.
+- For test/prod, LAN/Tailscale UAT requires an explicit `CUI_BIND_LAN=1` operator action, which
+  binds the UI to `0.0.0.0`. The shared lib default remains `127.0.0.1`; only the dev launcher
+  pre-sets `CUI_BIND_LAN=1`.
 - `HOST` is not a Companion UI channel launcher exposure control.
 - The runtime API used by the page may still be local to the server process.
 - No token, cookie, or login is required for loopback-only personal use.
