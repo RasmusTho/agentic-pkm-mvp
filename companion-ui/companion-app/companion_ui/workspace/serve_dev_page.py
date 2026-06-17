@@ -4715,6 +4715,17 @@ def _render_error_section(error: str, *, entry_state: str = "") -> str:
       <code>{note_path}</code> — {message}. Check the runtime-relative path and load again.
     </span>
   </div>"""
+    # Application-level runtime-unavailable contract error: the runtime returns
+    # HTTP 503 with ``{"detail":{"error":"runtime_unavailable",...}}`` when the
+    # orientation aggregate itself is unreachable
+    # (WORKSPACE_ORIENTATION_CONTRACT.md §Runtime Unavailable). Server declares,
+    # UI renders: classify from the declared ``error`` kind (or a bare HTTP 503)
+    # and render the designed "Vault unreachable" entry state instead of dumping
+    # the raw JSON body or showing a vault-setup form the runtime cannot process
+    # (#2123; edge-states.md §No vault — runtime unreachable; open-questions
+    # Q23 — provenance behind a Details disclosure; Q24 — suppress the form).
+    if error_kind == "runtime_unavailable" or error.lower().startswith("http 503"):
+        return _render_vault_unreachable_state(error, retry_html=retry_html)
     runtime_unavailable = any(
         marker in error.lower()
         for marker in ("connection refused", "timed out", "timeout", "network")
@@ -4730,6 +4741,40 @@ def _render_error_section(error: str, *, entry_state: str = "") -> str:
     <span class="error-label">{runtime_label}</span>
     {runtime_marker}
     <span class="error-message"><code>{_e(error)}</code></span>{retry_html}
+  </div>"""
+
+
+def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:
+    """Render the designed "Vault unreachable" entry state (#2123).
+
+    Used when the runtime aggregate declares itself unreachable via the HTTP 503
+    ``runtime_unavailable`` contract error. The headline is human-readable; the
+    raw provenance/trace belongs in an expandable Details disclosure, never the
+    headline (open-questions Q23). The vault-setup form is suppressed because the
+    runtime cannot process it (Q24). The vault — durable truth — is unaffected;
+    the companion is only a client.
+
+    Provenance line is fixed by the design handoff:
+    ``runtime_unavailable · /api/companion/orientation · 503``.
+    """
+    return f"""
+  <div class="error-state vault-unreachable-state"
+    data-testid="workspace-vault-unreachable-state"
+    data-error-kind="runtime-unavailable">
+    <span class="error-glyph" aria-hidden="true">⚠</span>
+    <div class="vault-unreachable-body">
+      <span class="error-label vault-unreachable-heading">Vault unreachable</span>
+      <p class="vault-unreachable-reassurance">
+        Your vault — the durable source of truth — is unaffected. The companion
+        is only a client, and it can't reach the runtime right now.
+      </p>
+      <div class="vault-unreachable-affordances">{retry_html}</div>
+      <details class="error-details" data-testid="workspace-error-details">
+        <summary>Details</summary>
+        <code class="error-provenance"
+          data-testid="workspace-error-provenance">runtime_unavailable · /api/companion/orientation · 503</code>
+      </details>
+    </div>
   </div>"""
 
 
