@@ -136,17 +136,19 @@ class TestBootstrapStartContract:
     def test_make_start_test_system_target_exists(self) -> None:
         """make start-test-system is declared in the Makefile (wired for BOOTSTRAP-03).
 
-        The test vault is operator-configured (no synthetic default), so the
-        require-test-vault-root guard needs VAULT_ROOT set for the target to run.
+        No vault is configured here: the start target must NOT require one — the
+        runtime boots the no-vault idle posture (#2005) — so the dry-run resolves
+        cleanly with no VAULT_ROOT in the environment.
         """
+        env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")}
         result = subprocess.run(
             ["make", "--dry-run", "start-test-system"],
             capture_output=True,
             text=True,
-            env={**os.environ, "VAULT_ROOT": "/tmp/uat-operator-test-vault"},
+            env=env,
         )
         assert result.returncode == 0, (
-            f"make start-test-system target missing or broken: {result.stderr}"
+            f"make start-test-system must resolve without a vault (idle boot): {result.stderr}"
         )
         combined = result.stdout + result.stderr
         assert "start_full_system" in combined, (
@@ -156,8 +158,8 @@ class TestBootstrapStartContract:
     def test_make_start_test_system_threads_operator_vault_root(self) -> None:
         """start-test-system and test-up pass the operator-configured vault as VAULT_ROOT.
 
-        TEST_VAULT_ROOT defaults to VAULT_ROOT (no hardcoded vault-test name); the
-        targets thread that path through, and fail loud when it is unset.
+        TEST_VAULT_ROOT defaults from VAULT_ROOT (no hardcoded vault-test name); the
+        targets thread that path through when one is configured.
         """
         operator_vault = "/tmp/uat-operator-test-vault"
         for target in ("start-test-system", "test-up"):
@@ -177,7 +179,7 @@ class TestBootstrapStartContract:
             )
 
     def test_make_test_targets_honor_vault_root_test_override(self) -> None:
-        """The per-channel VAULT_ROOT_TEST override satisfies the guard and threads through."""
+        """The per-channel VAULT_ROOT_TEST override is honored and threads through."""
         operator_vault = "/tmp/uat-per-channel-test-vault"
         env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT")}
         env["VAULT_ROOT_TEST"] = operator_vault
@@ -194,14 +196,42 @@ class TestBootstrapStartContract:
             "Expected VAULT_ROOT_TEST to be honored as the test vault root"
         )
 
-    def test_make_start_test_system_fails_loud_without_vault_root(self) -> None:
-        """With no operator vault configured, the test targets refuse to run."""
-        env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT")}
+    def test_start_targets_boot_without_a_vault_selected(self) -> None:
+        """The runtime must start without a vault (#2005): start-test-system and
+        test-up resolve with no VAULT_ROOT and never demand one."""
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")
+        }
+        for target in ("start-test-system", "test-up"):
+            result = subprocess.run(
+                ["make", "--dry-run", target],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            combined = result.stderr + result.stdout
+            assert result.returncode == 0, (
+                f"make {target} must boot idle without a vault: {combined[:500]}"
+            )
+            assert "is required" not in combined, (
+                f"{target} must not demand a vault to start: {combined[:500]}"
+            )
+
+    def test_only_seed_flow_requires_a_vault(self) -> None:
+        """Provisioning (test-bootstrap) still guards on a vault — you cannot seed
+        UAT notes into 'no vault' — while the start paths do not."""
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")
+        }
         result = subprocess.run(
-            ["make", "--dry-run", "start-test-system"],
+            ["make", "--dry-run", "test-bootstrap"],
             capture_output=True,
             text=True,
             env=env,
         )
-        assert result.returncode != 0, "Expected failure when no test vault is configured"
+        assert result.returncode != 0, "test-bootstrap must require a vault to seed"
         assert "TEST_VAULT_ROOT is required" in (result.stderr + result.stdout)

@@ -6,8 +6,10 @@ PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python;
 # Obsidian vaults — whose name is operator-owned and never hardcoded. Honors the
 # per-channel override VAULT_ROOT_TEST first (matching derive_test_channel_env),
 # then the base VAULT_ROOT. Must be absolute so every caller binds the same vault
-# regardless of CWD (issue #1997 symptom 5). The require-test-vault-root guard
-# fails loud when none is set.
+# regardless of CWD (issue #1997 symptom 5). May be empty: the start targets
+# boot the no-vault idle posture (#2005) when it is unset. Only the provision +
+# seed flow (test-bootstrap) guards on it via require-test-vault-root, since you
+# cannot seed UAT notes into "no vault".
 TEST_VAULT_ROOT ?= $(or $(VAULT_ROOT_TEST),$(VAULT_ROOT))
 # Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
 # promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
@@ -122,7 +124,11 @@ reset-zero:
 reset-zero-force:
 	@RESET_FORCE=1 bash scripts/reset_to_zero.sh
 
-start-test-system: require-test-vault-root
+# No require-test-vault-root guard: the runtime must be able to start without a
+# vault selected (#2005). start_full_system.sh routes an unset/empty VAULT_ROOT
+# to the no-vault idle posture (picker state), and fails loud only on a
+# set-but-missing path — so requiring a vault here would defeat idle boot.
+start-test-system:
 	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" API_BASE_URL="$(TEST_API_BASE_URL)" HEALTH_ENDPOINT="$(TEST_API_BASE_URL)/healthz" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" scripts/start_full_system.sh
 
 test-bootstrap: require-test-vault-root
@@ -195,7 +201,7 @@ test-start-full: require-vault-root
 	VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=60 \
 	scripts/start_full_system.sh
 
-test-up: require-test-vault-root
+test-up:
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) up -d --build
 
 test-down:
