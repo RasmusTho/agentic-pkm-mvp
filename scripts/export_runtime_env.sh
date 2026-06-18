@@ -70,6 +70,17 @@ esac
 local_uid="${LOCAL_UID:-$(id -u)}"
 local_gid="${LOCAL_GID:-$(id -g)}"
 
+# Container-facing vault path. This file is consumed by the compose services via
+# `env_file:`, so its values become the *container* environment. The host vault
+# path (the shell `VAULT_ROOT` exported by start_full_system.sh) is needed only
+# for compose to interpolate the bind-mount *source* `${VAULT_ROOT:-./vault}` —
+# compose reads that from the shell, never from this file. Writing the host path
+# here is what made in-container `resolve_vault_root()` raise
+# VaultRootMisconfiguredError and the API 503 (issue #2141). Emit the in-container
+# mount path instead; it aligns with WATCHER_VAULT_PATH=/app/vault. The provider
+# settings loader below still reads the host `VAULT_ROOT` from the shell env.
+container_vault_root="${CONTAINER_VAULT_ROOT:-/app/vault}"
+
 if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
   echo "DATABASE_URL or DB_DSN is required to export runtime env" >&2
   exit 2
@@ -84,7 +95,7 @@ export DATABASE_URL DB_DSN
 
 cat > "$runtime_env_path" <<ENV
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
-VAULT_ROOT=$VAULT_ROOT
+VAULT_ROOT=$container_vault_root
 LOCAL_UID=$local_uid
 LOCAL_GID=$local_gid
 DATABASE_URL=$DATABASE_URL

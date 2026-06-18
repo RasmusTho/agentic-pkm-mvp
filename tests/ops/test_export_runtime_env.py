@@ -53,6 +53,47 @@ def test_export_runtime_env_emits_uid_gid(tmp_path: Path) -> None:
     assert re.search(r"^LOCAL_GID=\d+$", text, re.M)
 
 
+def test_export_runtime_env_writes_container_vault_root(tmp_path: Path) -> None:
+    """The generated runtime env must carry the in-container vault mount path.
+
+    Compose loads this file via ``env_file:`` so its values become *container*
+    environment. The host vault path is only needed for the bind-mount source,
+    which compose interpolates from the shell ``VAULT_ROOT`` — never from this
+    file. Writing the host path here makes in-container ``resolve_vault_root()``
+    raise ``VaultRootMisconfiguredError`` and the API 503s (issue #2141).
+    """
+    repo_root, out_path, env = _runtime_env_base(tmp_path)
+    host_vault = env["VAULT_ROOT"]
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert re.search(r"^VAULT_ROOT=/app/vault$", text, re.M)
+    # The host path must not leak into the container-facing env file.
+    assert f"VAULT_ROOT={host_vault}" not in text
+
+
+def test_export_runtime_env_honors_container_vault_root_override(tmp_path: Path) -> None:
+    repo_root, out_path, env = _runtime_env_base(tmp_path)
+    env["CONTAINER_VAULT_ROOT"] = "/srv/vault"
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert re.search(r"^VAULT_ROOT=/srv/vault$", text, re.M)
+
+
+def test_export_runtime_env_no_vault_omits_vault_root(tmp_path: Path) -> None:
+    """No-vault idle posture (#2005) must not write any VAULT_ROOT line."""
+    repo_root, out_path, env = _runtime_env_base(tmp_path)
+    env["NO_VAULT_MODE"] = "1"
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert not re.search(r"^VAULT_ROOT=", text, re.M)
+
+
 def test_export_runtime_env_emits_watcher_runtime_env_file(tmp_path: Path) -> None:
     repo_root, out_path, env = _runtime_env_base(tmp_path)
 
