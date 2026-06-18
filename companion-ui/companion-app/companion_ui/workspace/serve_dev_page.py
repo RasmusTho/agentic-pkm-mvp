@@ -3766,21 +3766,34 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
         </section>"""
 
 
-# Maps a commitment kind to its render styling class (the design's three
-# redundant signals — grouping, label, styling). Unknown kinds fall back to the
-# family default so an item always reads as one family or the other.
-_COMMITMENT_KIND_CLASS: dict[str, str] = {
-    "next_action": "k-next",
+# Maps the render kind to its styling class (the design's three redundant
+# signals — grouping, label, styling).
+_COMMITMENT_RENDER_KIND_CLASS: dict[str, str] = {
+    "next": "k-next",
     "waiting": "k-wait",
-    "review_return": "k-review",
-}
-_COMMITMENT_FAMILY_CLASS: dict[str, str] = {
-    "next-action": "k-next",
-    "review-cycle": "k-review",
+    "review": "k-review",
 }
 
 
-def _commitment_provenance_html(*, kind: str, item: dict) -> str:
+def _commitment_render_kind(item: dict) -> str:
+    """Derive the render kind that drives styling + provenance.
+
+    Keyed off the bucket *family* and the commitment *state* — NOT the raw
+    ``commitment_kind``. The API waiting bucket selects by state
+    (``query_next_and_waiting_commitments``), so a commitment can be *waiting* by
+    state while its kind is e.g. ``project``; it must still read as waiting
+    (dashed amber + depends-on provenance) rather than falling back to
+    next-action. The literal ``waiting`` kind is also honoured as a fallback.
+    """
+    family = str(item.get("family") or "")
+    if family == "review-cycle":
+        return "review"
+    if str(item.get("state") or "") == "waiting" or str(item.get("kind") or "") == "waiting":
+        return "waiting"
+    return "next"
+
+
+def _commitment_provenance_html(*, render_kind: str, item: dict) -> str:
     """Render the optional secondary provenance line for a commitment.
 
     Honest by omission: a line is emitted only when its server-declared value is
@@ -3788,7 +3801,7 @@ def _commitment_provenance_html(*, kind: str, item: dict) -> str:
     items show their cadence (and how long since the last review). Nothing here
     is computed or guessed in the render — relative ages arrive pre-computed.
     """
-    if kind == "waiting":
+    if render_kind == "waiting":
         waiting_on = str(item.get("waiting_on") or "").strip()
         if not waiting_on:
             return ""
@@ -3800,7 +3813,7 @@ def _commitment_provenance_html(*, kind: str, item: dict) -> str:
             '<div class="commitment-prov" data-testid="commitment-provenance">'
             f"{text}</div>"
         )
-    if kind == "review_return":
+    if render_kind == "review":
         cadence = str(item.get("review_cadence") or "").strip()
         last = str(item.get("last_reviewed_relative") or "").strip()
         if not cadence and not last:
@@ -3830,12 +3843,11 @@ def _render_commitment_item(item: dict) -> str:
     kind = str(item.get("kind") or "")
     summary = str(item.get("summary") or "")
     target_ref = str(item.get("target_ref") or "")
-    kind_class = _COMMITMENT_KIND_CLASS.get(
-        kind, _COMMITMENT_FAMILY_CLASS.get(family, "k-next")
-    )
+    render_kind = _commitment_render_kind(item)
+    kind_class = _COMMITMENT_RENDER_KIND_CLASS[render_kind]
     cyclical = (
         '<span class="commitment-cycle" aria-hidden="true">&#8635;</span>'
-        if kind == "review_return"
+        if render_kind == "review"
         else ""
     )
     summary_html = (
@@ -3858,7 +3870,7 @@ def _render_commitment_item(item: dict) -> str:
         if target_ref
         else ""
     )
-    prov_html = _commitment_provenance_html(kind=kind, item=item)
+    prov_html = _commitment_provenance_html(render_kind=render_kind, item=item)
     return f"""
             <article
               class="commitment-item {kind_class}"

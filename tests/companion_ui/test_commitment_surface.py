@@ -332,6 +332,46 @@ def test_commitment_visual_fidelity_markers() -> None:
         assert token not in lowered
 
 
+def test_waiting_by_state_with_nonwaiting_kind_reads_as_waiting() -> None:
+    """Regression (codex #2133): the API ``waiting`` bucket selects by *state*
+    (query_next_and_waiting_commitments), so a commitment can be waiting-by-state
+    while its kind is e.g. ``project``. Such an item must still read as waiting —
+    dashed-amber styling AND its depends-on provenance — not fall back to
+    next-action styling that drops the provenance the payload carries."""
+    surface = {
+        "next": [],
+        "waiting": [
+            {
+                "commitment_id": "c-proj-wait",
+                "kind": "project",  # NOT the literal "waiting" kind
+                "state": "waiting",  # but waiting by state — the bucket signal
+                "summary": "Launch blocked on vendor SOW",
+                "target_ref": "projects/launch.md",
+                "waiting_on": "Vendor (Acme) SOW",
+                "waiting_since": "2026-06-11",
+            }
+        ],
+        "review_return": [],
+        "read_only": True,
+        "authority_role": "derived",
+        "source": "vault.commitment_artefacts",
+        "degraded": False,
+        "as_of": "2026-06-18T08:00:00+00:00",
+    }
+    section = _commitments_section(_render(surface))
+    item = re.search(
+        r'<[^>]*data-testid="commitment-item"[^>]*data-commitment-id="c-proj-wait"[^>]*>',
+        section,
+    )
+    assert item is not None
+    # Waiting styling derived from state, not the raw kind.
+    assert "k-wait" in item.group(0)
+    assert "k-next" not in item.group(0)
+    # And its depends-on provenance is rendered (was dropped by the kind-only gate).
+    assert "depends on:" in section
+    assert "Vendor (Acme) SOW" in section
+
+
 def test_empty_surface_is_affirmative_not_degraded() -> None:
     """The healthy-empty state is an affirmative '0 active' with the green dot and
     an 'commitments ok' footer — confidently distinct from the amber degraded
