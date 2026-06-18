@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -10,12 +11,78 @@ from app.vault.markdown_settings import MarkdownSettingsStore
 
 APP_LOCAL_SCHEMA = "design-handoff.app-local.v1"
 
+_APP_DIR_NAME = "Agentic PKM"
+_SETTINGS_FILENAME = "app-local.md"
+# Repo-consistent, container-safe writable runtime dir. The dev/worker/watcher
+# services bind-mount the repo at /app and pre-create /app/tmp (see
+# docker-compose.yaml), so this is writable even when the container runs as a
+# host UID/GID with no passwd entry.
+_CONTAINER_RUNTIME_DIR = Path("/app/tmp")
+
+
+def _can_host(directory: Path) -> bool:
+    """True if `directory` is (or can be created as) a writable directory.
+
+    Walks up to the nearest existing ancestor: the directory is hostable when
+    that ancestor is a writable directory, so a later ``mkdir(parents=True)``
+    will succeed.
+    """
+    probe = directory
+    while True:
+        if probe.exists():
+            return probe.is_dir() and os.access(probe, os.W_OK)
+        parent = probe.parent
+        if parent == probe:
+            return False
+        probe = parent
+
+
+def _usable_home() -> Path | None:
+    """Return a usable home directory, or None when home is unusable.
+
+    Unusable means: HOME unset and no passwd entry, or home resolves to the
+    filesystem root ("/"), which happens for a hostless container UID.
+    """
+    home_env = os.getenv("HOME", "").strip()
+    if home_env:
+        candidate = Path(home_env)
+    else:
+        try:
+            candidate = Path.home()
+        except (RuntimeError, OSError):
+            return None
+    # A bare root anchor ("/") is not a usable home for app-local state.
+    if str(candidate) == candidate.anchor:
+        return None
+    return candidate
+
 
 def default_app_local_settings_path() -> Path:
     override = os.getenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / "Library" / "Application Support" / "Agentic PKM" / "app-local.md"
+
+    # Prefer an explicit XDG data home when set and writable.
+    xdg = os.getenv("XDG_DATA_HOME", "").strip()
+    if xdg:
+        base = Path(xdg).expanduser() / _APP_DIR_NAME
+        if _can_host(base):
+            return base / _SETTINGS_FILENAME
+
+    # Standard host location (macOS dev host, prod-as-root with HOME=/root).
+    home = _usable_home()
+    if home is not None:
+        base = home / "Library" / "Application Support" / _APP_DIR_NAME
+        if _can_host(base):
+            return base / _SETTINGS_FILENAME
+
+    # Hostless container UID / unwritable HOME: fall back to a writable runtime
+    # dir rather than crashing on an unwritable /Library path.
+    base = _CONTAINER_RUNTIME_DIR / "agentic-pkm"
+    if _can_host(base):
+        return base / _SETTINGS_FILENAME
+
+    return Path(tempfile.gettempdir()) / "agentic-pkm" / _SETTINGS_FILENAME
 
 
 @dataclass(frozen=True)
