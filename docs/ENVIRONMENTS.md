@@ -41,6 +41,15 @@ The four senses:
 - A **set-but-missing** content vault is a misconfiguration that fails loud (`VaultRootMisconfiguredError`), not a no-vault state.
 - Vault-settings and the test vault are unaffected by the no-vault-at-initiation contract; only the runtime binding may legitimately be absent at boot.
 
+### Host mount source vs in-container binding (containerized runtime)
+
+When the runtime runs in containers, the `VAULT_ROOT` runtime binding has **two process perspectives on the same content vault**. They must not be conflated (issue #2141); both still name one content vault, neither is a separate sense of "vault":
+
+- **Host mount source** — the path on the Docker *host* that Compose bind-mounts in as `${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault`. It is carried by `VAULT_HOST_ROOT` (exported by `scripts/start_full_system.sh` and written into the generated `tmp/runtime.env` by `scripts/export_runtime_env.sh`) and must be a path that exists *on the host*.
+- **In-container binding** — the path the running process reads via `resolve_vault_root()`. It is the in-container mount target `/app/vault` (overridable via `CONTAINER_VAULT_ROOT`), supplied to the container as `VAULT_ROOT` through the service `env_file:`. It must be a path that exists *inside the container*.
+
+Writing the host path into the container's `VAULT_ROOT` is what made `resolve_vault_root()` raise `VaultRootMisconfiguredError` and the API 503 (#2141): the host path does not exist inside the container. The no-vault idle posture omits **both** variables. `CONTAINER_VAULT_ROOT` and `VAULT_HOST_ROOT` are mount-machinery surfaces, not vault-selection surfaces — they describe *where the one bound content vault is reached from*, not *which* vault is active.
+
 ## Code vs Environment Separation
 
 Two kinds of separation govern how `dev`, `test`, and `prod` stay isolated:
