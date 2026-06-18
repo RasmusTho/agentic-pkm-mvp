@@ -4896,6 +4896,41 @@ def _render_error_section(
   </div>"""
 
 
+def _is_runtime_unreachable(error: str) -> bool:
+    """True when ``error`` denotes the runtime itself being unreachable.
+
+    Covers both the application-level ``runtime_unavailable`` / bare HTTP 503
+    contract error and a transport-level failure (connection refused / timeout /
+    network). This is the single truth used to (a) render the designed
+    "Vault unreachable" / "wrong device" entry state in ``_render_error_section``
+    and (b) suppress the vault-setup form in ``render_index_html`` — the form is
+    a false affordance the runtime cannot process while unreachable
+    (#2123 AC1; open-questions Q24). Mirrors the classification in
+    ``_render_error_section`` so the banner and the form stay in lockstep.
+    """
+    if not error:
+        return False
+    detail = _error_detail(error)
+    error_kind = str(detail.get("error") or "")
+    lowered = error.lower()
+    if error_kind == "runtime_unavailable" or lowered.startswith("http 503"):
+        return True
+    # The transport-substring fallback applies ONLY to unstructured error
+    # strings (e.g. "[Errno 61] Connection refused", which carry no JSON detail).
+    # A structured error with a declared kind is not a transport failure, so it
+    # must not be reclassified as unreachable just because its user data happens
+    # to contain a transport word — e.g. a note_not_found payload for
+    # "Network/Runbook.md" would otherwise hit the "network" marker and wrongly
+    # strip the still-usable vault-setup form. This mirrors _render_error_section,
+    # which resolves the declared error kind before any transport classification.
+    if error_kind:
+        return False
+    return any(
+        marker in lowered
+        for marker in ("connection refused", "timed out", "timeout", "network")
+    )
+
+
 def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:
     """Render the designed "Vault unreachable" entry state (#2123).
 
@@ -7177,6 +7212,16 @@ def render_index_html(
         )
     elif fields is not None:
         content_section = _render_note_section(fields)
+    # When the runtime is unreachable the error banner already carries the only
+    # truthful affordances (Retry, System map). The vault-setup form (open /
+    # initialize / recent / settings flags) is a false affordance — the runtime
+    # cannot process an open/init while it is down — so it is suppressed here to
+    # match the designed "Vault unreachable" / "wrong device" entry state
+    # (#2123 AC1, #2124; open-questions Q24). Server declares, UI renders: this
+    # gates only on the server-declared error, it does not re-classify state.
+    runtime_unreachable = _is_runtime_unreachable(error)
+    vault_settings_panel_html = "" if runtime_unreachable else vault_settings_panel_markup()
+    vault_settings_panel_js = "" if runtime_unreachable else vault_settings_panel_script()
     # Live co-authoring wiring is gated by the server-declared canvas flag,
     # matching _render_note_section's guard derivation. With no fields (error /
     # orientation) the canvas surface is absent, so the script is not emitted.
@@ -10163,7 +10208,7 @@ def render_index_html(
   {memory_review_drawer_markup()}
   {receipts_history_modal_markup()}
   {settings_drawer_markup(fields)}
-  {vault_settings_panel_markup()}
+  {vault_settings_panel_html}
   {system_map_overlay_markup(available_routes=map_available_routes)}
   {guidance_layer_style()}
 
@@ -10688,7 +10733,7 @@ def render_index_html(
   {_note_readback_script()}
   {_note_editor_script()}
   {settings_drawer_script()}
-  {vault_settings_panel_script()}
+  {vault_settings_panel_js}
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
   {_render_operator_drawer()}
