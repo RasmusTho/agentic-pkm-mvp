@@ -35,7 +35,7 @@ from companion_ui.renderer.vault_markdown_parser import (
 )
 
 
-_TOKEN_RE = re.compile(r"(`[^`\n]+`|!\[[^\]\n]*\]\([^) \n][^)\n]*\)|!\[\[[^\]\n]+?\]\]|\[\[[^\]\n]+?\]\])")
+_TOKEN_RE = re.compile(r"(`[^`\n]+`|!\[[^\]\n]*\]\( *[^)\n]+\)|!\[\[[^\]\n]+?\]\]|\[\[[^\]\n]+?\]\])")
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_-]+)?\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$")
 _EXPLICIT_ANCHOR_RE = re.compile(r"\s*\{#([A-Za-z0-9_-]+)\}\s*$")
