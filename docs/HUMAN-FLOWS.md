@@ -5,8 +5,8 @@ Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-13
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
+Last reviewed: 2026-06-18
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, and current repo state at 522acf4b on 2026-06-18
 
 
 # Human Flows — Yggdrasil / agentic-pkm-mvp
@@ -1030,6 +1030,12 @@ That direction is no longer handoff-only: a bounded implementation now exists in
 The Companion UI vault browser is the human-first navigation and orientation surface over the vault for the reorient/find/return-to-context flows. Its long-term capability contract — concepts (`VaultArtifact`, `VaultView`, `VaultQuery`, `VaultRelation`, `VaultActivity`, `VaultHealth`, `VaultAction`, `VaultProposal`, `VaultReceipt`), action-mode boundary, MLP-versus-future scope, and non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Current shipped behavior is bounded as `Vault Browser MLP v0`: read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into the Companion workspace. When a browse cap applies, the retained subset is deterministic: lexicographically smallest matching note paths are preserved. The browser is a projection layer; the vault and Markdown/frontmatter remain the human control surface. Per the topology authority decision in `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md` and #1488, current browser `zone` posture is frontmatter-preferred with path-derived fallback over the active vault; topology-derived zones remain deferred projection material until a future issue defines source, provenance, degradation, and visible ranking/filter semantics.
 
 The System Entry Point work now gives these flows a declared shell substrate: the system can render cold start, re-entry, and active-document states explicitly; return-to-context can use the latency-ladder treatment; and command/capture/memory/receipts/system-map/guidance/settings overlays return to the document anchor instead of becoming separate apps. Parent #1782 closed through #1795 validation, but this remains a composed Companion UI capability rather than a claim that every planned shell idea is shipped: source-peek presentation, posture emphasis switching, and the context lane / place band remain unshipped follow-ups.
+
+Commitment surfacing now supports the `Support commitments and action` flow as a read-only Companion
+projection: durable vault-backed commitment artifacts can be queried into the workspace and rendered
+with next-action, waiting, and review-return distinctions plus provenance/freshness cues. This is
+orientation support, not commitment execution: mutation, reminders, automatic closure, and proactive
+commitment reach-out remain governed follow-up work.
 
 ## Companion Niflheim dev UAT workspace update check
 

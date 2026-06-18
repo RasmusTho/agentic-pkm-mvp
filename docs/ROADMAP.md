@@ -5,8 +5,8 @@ Owner: Product / architecture forward line
 Temporal class: strategic
 Review cadence: biweekly
 Source of truth: mixed
-Last reviewed: 2026-06-13
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
+Last reviewed: 2026-06-18
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133/#2137/#2140/#2142, and current repo state at 522acf4b on 2026-06-18
 
 # Roadmap — Strategic Control
 
