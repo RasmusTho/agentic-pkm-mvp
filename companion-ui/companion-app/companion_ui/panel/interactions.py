@@ -142,8 +142,8 @@ class ProposalInteractionState:
 
     def request_clarification(self, question: Optional[str] = None) -> None:
         """Record that clarification is needed before this proposal can proceed."""
-        self.clarification_question = question
         self._transition("clarification-needed")
+        self.clarification_question = question
 
     @property
     def is_terminal(self) -> bool:
