@@ -5,8 +5,8 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-06-13
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948 and #1977, and current repo state at 4e642410 on 2026-06-14
+Last reviewed: 2026-06-18
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142, and current repo state at 522acf4b on 2026-06-18
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
@@ -27,6 +27,13 @@ reach-out or deliberate suppression receipt per candidate on the governed releva
 Companion "now" / glance projections plus threshold-cleared in-app nudges. It does not read external
 connectors or emit OS/system notifications; external source integration and OS-push delivery remain
 deferred follow-ons.
+
+Commitment surfacing posture: the commitment-surfacing validation line has delivered its durable
+read-side vertical slice. Commitments can persist as vault-backed system artifacts, the Companion
+workspace state exposes active commitments from that durable source as a read-only projection, and
+the Companion UI renders next-action, waiting, and review-return commitments with provenance-aware
+read-only treatment. This does not ship commitment mutation, reminders, automatic closure, or
+CRE-driven commitment reach-out.
 
 Security review note: the security architecture spine (`docs/SECURITY_ARCHITECTURE.md` plus its
 trust-boundary, data-flow, API-matrix, and STRIDE-lite companions) is now the review-routing owner
@@ -558,7 +565,7 @@ truth, not a backlog.
 | Canvas / chat co-authoring cognition | `app/chat/*`, `app/api/routes/canvas.py` | **seam — gated off** (`CANVAS_ENABLED=0` in prod → 403) | proven vertical loop + write-authority receipts |
 | Source Understanding lenses | `app/source_understanding/*` | **seam** (`/p0` route reachable, no runtime caller) | a consuming flow + admissibility |
 | Planner / next-action | `app/planner/*`, `app/orchestrator/*` | **dormant** (orchestrator imported only by CLI/smoke, not the three runtime services) | proven loop + commitment surfacing |
-| Commitment surfacing | `app/domain/commitments.py` | **dormant** (reached only via the dormant planner and a seam-status probe) | commitment runtime activation (#1960 line) |
+| Commitment surfacing | `app/domain/commitments.py`, `app/commitments/*`, Companion workspace state/API/UI | **live read-side** (durable vault-backed commitment artifacts feed a read-only Companion projection; no mutation/transition affordance) | mutation, reminders, automatic closure, and CRE reach-out remain follow-ons |
 | Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py` | **dormant** (zero external importers / zero callers) | admissibility + governed writeback |
 
 Definitions: **live** = consumed by a running service in normal operation; **seam** = built and

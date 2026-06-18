@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-13
-Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PR #1948, and current repo state at 811c9b97 on 2026-06-13
+Last reviewed: 2026-06-18
+Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, and current repo state at 522acf4b on 2026-06-18
 
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6.0 seams shipped)
 
@@ -635,7 +635,7 @@ hybrid Chat/Panel crossings are bounded by
 - The Vault Browser is the human-first navigation and orientation projection over the vault hosted in Companion UI.
 - It is a projection layer, not authority: Markdown/frontmatter remains the human control surface; stores/DB remain machine mirrors.
 - Read-only browsing, UI-only state, bounded system writes, governance writes, agent proposals, and blocked actions are kept as distinct action modes; the browser renders server-declared modes and never reclassifies locally.
-- Current shipped Companion UI behavior is `Vault Browser MLP v0` plus the System Entry Point shell substrate: server-declared entry state, latency-ladder re-entry treatments, a unified topbar/shared overlay host, and shipped overlay occupants for Panel command palette, governed capture, memory candidate review, read-only receipts history, system map, opt-in guidance, and settings. The final state-gallery validation harness closed parent #1782 through #1795; source-peek presentation, posture emphasis switching, and the context lane / place band remain unshipped follow-ups. The long-term vault-browser capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; entry/shell composition is owned by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`.
+- Current shipped Companion UI behavior is `Vault Browser MLP v0` plus the System Entry Point shell substrate: server-declared entry state, latency-ladder re-entry treatments, a unified topbar/shared overlay host, and shipped overlay occupants for Panel command palette, governed capture, memory candidate review, read-only receipts history, system map, opt-in guidance, settings, and read-only commitment surfacing. The final state-gallery validation harness closed parent #1782 through #1795; source-peek presentation, posture emphasis switching, and the context lane / place band remain unshipped follow-ups. The long-term vault-browser capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; entry/shell composition is owned by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`.
 
 ## Capability Model
 
