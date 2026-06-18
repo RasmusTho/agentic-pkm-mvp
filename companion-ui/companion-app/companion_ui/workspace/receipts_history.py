@@ -424,7 +424,10 @@ def receipts_history_script() -> str:
     function load() {{
       body.setAttribute('data-loaded', 'false');
       fetch('{RECEIPTS_HISTORY_FRAGMENT_ROUTE}', {{method: 'GET'}})
-        .then(function(r) {{ return r.text(); }})
+        .then(function(r) {{
+          if (!r.ok) {{ throw new Error(String(r.status)); }}
+          return r.text();
+        }})
         .then(function(html) {{
           body.innerHTML = html;
           body.setAttribute('data-loaded', 'true');

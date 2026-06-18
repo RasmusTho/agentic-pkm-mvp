@@ -513,6 +513,36 @@ def test_empty_history_is_honest() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Regression (#2155): the history fetch guards on response.ok before reading
+# and injecting the fragment body — a non-2xx HTML body must fall into the
+# calm unavailable .catch branch, never be written verbatim into innerHTML.
+# ---------------------------------------------------------------------------
+
+
+def test_history_fetch_guards_response_ok() -> None:
+    script = _modal_script(_render_workspace())
+
+    # The loader must check response.ok before reading the body, mirroring the
+    # sibling guard in vault_settings_panel.py: a non-2xx response throws and
+    # is handled by the existing .catch unavailable branch.
+    ok_guard = re.search(r"if\s*\(\s*!\s*\w+\.ok\s*\)\s*\{[^}]*throw", script)
+    assert ok_guard, (
+        "the receipts-history loader must throw on a non-ok response before "
+        "reading the fragment body"
+    )
+
+    # The guard must come before the body is read and injected — an error body
+    # must never reach innerHTML.
+    guard_pos = ok_guard.start()
+    text_pos = script.index(".text()")
+    inner_pos = script.index("body.innerHTML = html")
+    assert guard_pos < text_pos < inner_pos, (
+        "the response-ok guard must run before r.text() and the innerHTML "
+        "injection"
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC5: the modal dismisses to the anchor with no route reset
 # ---------------------------------------------------------------------------
 
