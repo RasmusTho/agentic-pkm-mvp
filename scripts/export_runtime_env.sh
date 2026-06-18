@@ -83,8 +83,13 @@ local_gid="${LOCAL_GID:-$(id -g)}"
 # provider settings loader below still reads the host path from the shell
 # `VAULT_ROOT`. Writing the host path into the container's VAULT_ROOT is what made
 # resolve_vault_root() raise VaultRootMisconfiguredError and the API 503.
+#
+# The container path is the fixed compose mount target (/app/vault in all three
+# services); it is intentionally not operator-overridable, because the app
+# validates VAULT_ROOT exists and a value diverging from the hardcoded mount
+# target would re-introduce the same 503.
 vault_host_root="$VAULT_ROOT"
-container_vault_root="${CONTAINER_VAULT_ROOT:-/app/vault}"
+container_vault_root="/app/vault"
 
 if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
   echo "DATABASE_URL or DB_DSN is required to export runtime env" >&2

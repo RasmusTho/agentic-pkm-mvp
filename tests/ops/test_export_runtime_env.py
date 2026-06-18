@@ -89,14 +89,20 @@ def test_export_runtime_env_writes_host_root_for_mount_interpolation(tmp_path: P
     assert re.search(rf"^VAULT_HOST_ROOT={re.escape(host_vault)}$", text, re.M)
 
 
-def test_export_runtime_env_honors_container_vault_root_override(tmp_path: Path) -> None:
+def test_export_runtime_env_container_vault_root_matches_compose_mount(tmp_path: Path) -> None:
+    """The container VAULT_ROOT must equal the fixed compose bind-mount target.
+
+    Guards against re-introducing a container VAULT_ROOT that diverges from the
+    hardcoded `/app/vault` mount target (which would regress to the #2141 503).
+    """
     repo_root, out_path, env = _runtime_env_base(tmp_path)
-    env["CONTAINER_VAULT_ROOT"] = "/srv/vault"
+    compose = (repo_root / "docker-compose.yaml").read_text(encoding="utf-8")
+    assert ":/app/vault\"" in compose  # the fixed mount target
 
     subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
 
     text = out_path.read_text(encoding="utf-8")
-    assert re.search(r"^VAULT_ROOT=/srv/vault$", text, re.M)
+    assert re.search(r"^VAULT_ROOT=/app/vault$", text, re.M)
 
 
 def test_export_runtime_env_no_vault_omits_both_vault_vars(tmp_path: Path) -> None:
