@@ -65,6 +65,16 @@ class CommitmentRecord:
     target_ref: str | None = None
     summary: str | None = None
     source_goal: str | None = None
+    # Optional commitment-layer provenance. All default ``None`` and an absent
+    # value is rendered as an omitted line — never fabricated (no-fabricated-data
+    # invariant; COMMITMENT_LAYER_CONTRACT.md). ``waiting_*`` apply to ``waiting``
+    # commitments (the actor/event a waiting item depends on, and since when);
+    # ``review_cadence`` / ``last_reviewed`` apply to ``review_return`` (the
+    # re-orientation cadence and when it was last reviewed).
+    waiting_on: str | None = None
+    waiting_since: str | None = None
+    review_cadence: str | None = None
+    last_reviewed: str | None = None
 
 
 @dataclass(frozen=True)

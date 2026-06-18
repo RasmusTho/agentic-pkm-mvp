@@ -103,6 +103,16 @@ def _render_commitment_artifact(record: CommitmentRecord) -> str:
         frontmatter["summary"] = record.summary
     if record.source_goal:
         frontmatter["source_goal"] = record.source_goal
+    # Optional commitment-layer provenance — written only when present so an
+    # absent value never materializes as an empty/fabricated field on disk.
+    if record.waiting_on:
+        frontmatter["waiting_on"] = record.waiting_on
+    if record.waiting_since:
+        frontmatter["waiting_since"] = record.waiting_since
+    if record.review_cadence:
+        frontmatter["review_cadence"] = record.review_cadence
+    if record.last_reviewed:
+        frontmatter["last_reviewed"] = record.last_reviewed
     body = record.summary or record.commitment_id
     return dump_frontmatter(frontmatter, body)
 
@@ -155,6 +165,10 @@ def _record_from_frontmatter(fm: dict[str, object]) -> CommitmentRecord | None:
         target_ref=_opt("target_ref"),
         summary=_opt("summary"),
         source_goal=_opt("source_goal"),
+        waiting_on=_opt("waiting_on"),
+        waiting_since=_opt("waiting_since"),
+        review_cadence=_opt("review_cadence"),
+        last_reviewed=_opt("last_reviewed"),
     )
 
 

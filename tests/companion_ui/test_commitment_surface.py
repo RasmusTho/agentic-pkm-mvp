@@ -126,6 +126,8 @@ def _active_surface() -> dict[str, Any]:
                 "summary": "Vendor to send revised quote",
                 "target_ref": "projects/vendor.md",
                 "source_goal": None,
+                "waiting_on": "Vendor (Acme) reply",
+                "waiting_since": "2026-06-10",
             }
         ],
         "review_return": [
@@ -136,6 +138,8 @@ def _active_surface() -> dict[str, Any]:
                 "summary": "Re-read the architecture RFC before sign-off",
                 "target_ref": "docs/rfc.md",
                 "source_goal": None,
+                "review_cadence": "weekly",
+                "last_reviewed_relative": "3d ago",
             }
         ],
         "read_only": True,
@@ -143,6 +147,7 @@ def _active_surface() -> dict[str, Any]:
         "source": "vault.commitment_artefacts",
         "degraded": False,
         "degraded_reason": None,
+        "as_of": "2026-06-17T20:00:00+00:00",
     }
 
 
@@ -276,3 +281,118 @@ def test_degraded_or_absent_commitments_render_safely() -> None:
     # The healthy-empty state is NOT the degraded/not-shown state.
     assert 'data-commitment-state="degraded"' not in empty_section
     assert 'data-commitment-state="not-shown"' not in empty_section
+
+
+def test_commitment_visual_fidelity_markers() -> None:
+    """Full-fidelity render: per-item kind marker + kind tag, the within-Next
+    waiting-vs-next_action distinction, server-provided provenance lines
+    (depends-on / cadence), group count chips, and the freshness footer.
+
+    These pin the design's three redundant family signals (grouping + label +
+    styling) plus the provenance lines — all read-only, all driven by
+    server-declared data (no fabricated values)."""
+    html = _render(_active_surface())
+    section = _commitments_section(html)
+
+    # Per-item kind marker drives the waiting-vs-next_action styling distinction.
+    next_item = re.search(
+        r'<[^>]*data-testid="commitment-item"[^>]*data-commitment-id="c-next"[^>]*>',
+        section,
+    )
+    waiting_item = re.search(
+        r'<[^>]*data-testid="commitment-item"[^>]*data-commitment-id="c-waiting"[^>]*>',
+        section,
+    )
+    assert next_item is not None and waiting_item is not None
+    assert 'data-commitment-kind="next_action"' in next_item.group(0)
+    assert 'data-commitment-kind="waiting"' in waiting_item.group(0)
+    # Styling signal: distinct kind classes (warm next vs dashed-amber waiting).
+    assert "k-next" in next_item.group(0)
+    assert "k-wait" in waiting_item.group(0)
+
+    # Explicit-label signal: a kind tag echoing the API kind verbatim.
+    assert 'data-testid="commitment-kind-tag"' in section
+    assert "next_action" in section and "review_return" in section
+
+    # Server-provided provenance lines (rendered only because the data is present).
+    assert "depends on:" in section
+    assert "Vendor (Acme) reply" in section
+    assert "cadence:" in section
+    assert "last 3d ago" in section
+
+    # Group count chips and the freshness footer.
+    assert 'data-testid="commitment-group-count-next-action"' in section
+    assert 'data-testid="commitment-group-count-review-cycle"' in section
+    assert 'data-testid="commitments-as-of"' in section
+    assert "commitments ok" in section
+
+    # Still strictly read-only — the richer render adds no mutation affordance.
+    lowered = section.lower()
+    for token in ("<button", "<input", "<form", "data-intent", "aria-disabled"):
+        assert token not in lowered
+
+
+def test_waiting_by_state_with_nonwaiting_kind_reads_as_waiting() -> None:
+    """Regression (codex #2133): the API ``waiting`` bucket selects by *state*
+    (query_next_and_waiting_commitments), so a commitment can be waiting-by-state
+    while its kind is e.g. ``project``. Such an item must still read as waiting —
+    dashed-amber styling AND its depends-on provenance — not fall back to
+    next-action styling that drops the provenance the payload carries."""
+    surface = {
+        "next": [],
+        "waiting": [
+            {
+                "commitment_id": "c-proj-wait",
+                "kind": "project",  # NOT the literal "waiting" kind
+                "state": "waiting",  # but waiting by state — the bucket signal
+                "summary": "Launch blocked on vendor SOW",
+                "target_ref": "projects/launch.md",
+                "waiting_on": "Vendor (Acme) SOW",
+                "waiting_since": "2026-06-11",
+            }
+        ],
+        "review_return": [],
+        "read_only": True,
+        "authority_role": "derived",
+        "source": "vault.commitment_artefacts",
+        "degraded": False,
+        "as_of": "2026-06-18T08:00:00+00:00",
+    }
+    section = _commitments_section(_render(surface))
+    item = re.search(
+        r'<[^>]*data-testid="commitment-item"[^>]*data-commitment-id="c-proj-wait"[^>]*>',
+        section,
+    )
+    assert item is not None
+    # Waiting styling derived from state, not the raw kind.
+    assert "k-wait" in item.group(0)
+    assert "k-next" not in item.group(0)
+    # And its depends-on provenance is rendered (was dropped by the kind-only gate).
+    assert "depends on:" in section
+    assert "Vendor (Acme) SOW" in section
+
+
+def test_empty_surface_is_affirmative_not_degraded() -> None:
+    """The healthy-empty state is an affirmative '0 active' with the green dot and
+    an 'commitments ok' footer — confidently distinct from the amber degraded
+    state, and it must not borrow degraded/absent vocabulary."""
+    empty_html = _render(
+        {
+            "next": [],
+            "waiting": [],
+            "review_return": [],
+            "read_only": True,
+            "authority_role": "derived",
+            "source": "vault.commitment_artefacts",
+            "degraded": False,
+            "degraded_reason": None,
+            "as_of": "2026-06-17T20:00:00+00:00",
+        }
+    )
+    section = _commitments_section(empty_html)
+    assert 'data-commitment-state="empty"' in section
+    assert "commitments-empty-dot" in section
+    assert "0 active" in section
+    assert "commitments ok" in section
+    # Never the unavailable/degraded vocabulary.
+    assert "unavailable" not in section.lower()

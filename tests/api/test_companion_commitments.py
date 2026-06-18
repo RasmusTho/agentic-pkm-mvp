@@ -148,6 +148,79 @@ def test_commitments_in_workspace_state(client: TestClient, vault_root: Path) ->
     assert commitments["degraded"] is False
 
 
+def test_commitment_provenance_fields_and_freshness(
+    client: TestClient, vault_root: Path
+) -> None:
+    """Optional provenance (waiting_on / waiting_since, review_cadence /
+    last_reviewed) is surfaced, ``last_reviewed`` is given a server-computed
+    relative form, and the surface carries an ``as_of`` freshness stamp.
+
+    The relative calc is server-side (so the render stays clockless); an absent
+    value stays ``None`` and is never fabricated.
+    """
+    import datetime
+
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    reviewed_3d = (today - datetime.timedelta(days=3)).isoformat()
+
+    _persist(
+        vault_root,
+        CommitmentRecord(
+            commitment_id="c-waiting",
+            commitment_kind="waiting",
+            state="waiting",
+            target_ref="projects/vendor.md",
+            summary="Awaiting vendor quote",
+            waiting_on="Vendor (Acme) reply",
+            waiting_since="2026-06-10",
+        ),
+    )
+    _persist(
+        vault_root,
+        CommitmentRecord(
+            commitment_id="c-review",
+            commitment_kind="review_return",
+            state="open",
+            target_ref="projects/weekly.md",
+            summary="Weekly review return",
+            review_cadence="weekly",
+            last_reviewed=reviewed_3d,
+        ),
+    )
+
+    commitments = _workspace(client).json()["runtime"]["commitments"]
+
+    waiting = next(i for i in commitments["waiting"] if i["commitment_id"] == "c-waiting")
+    assert waiting["waiting_on"] == "Vendor (Acme) reply"
+    assert waiting["waiting_since"] == "2026-06-10"
+    # Review-only provenance is absent on a waiting item (never fabricated).
+    assert waiting["review_cadence"] is None
+    assert waiting["last_reviewed_relative"] is None
+
+    review = next(i for i in commitments["review_return"] if i["commitment_id"] == "c-review")
+    assert review["review_cadence"] == "weekly"
+    assert review["last_reviewed"] == reviewed_3d
+    assert review["last_reviewed_relative"] == "3d ago"
+
+    # Whole-surface freshness stamp present on a healthy read.
+    assert commitments["as_of"]
+
+
+def test_degraded_surface_has_no_confident_freshness(
+    client: TestClient, vault_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A degraded read carries no ``as_of`` — freshness must not be asserted when
+    the durable source could not be read."""
+
+    def _failing_load(*, vault_context):  # type: ignore[no-untyped-def]
+        raise RuntimeError("vault read exploded")
+
+    monkeypatch.setattr(companion_module, "load_commitments", _failing_load)
+    commitments = _workspace(client).json()["runtime"]["commitments"]
+    assert commitments["degraded"] is True
+    assert commitments["as_of"] is None
+
+
 def test_commitments_surface_reads_durable_source_not_agent_state(
     client: TestClient, vault_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

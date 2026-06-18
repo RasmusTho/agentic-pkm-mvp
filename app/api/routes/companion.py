@@ -685,6 +685,16 @@ class CommitmentSurfaceItem(BaseModel):
     summary: str | None = None
     target_ref: str | None = None
     source_goal: str | None = None
+    # Optional commitment-layer provenance (mirrors the durable record). Absent
+    # values stay ``None`` and render as an omitted line — never fabricated.
+    waiting_on: str | None = None
+    waiting_since: str | None = None
+    review_cadence: str | None = None
+    last_reviewed: str | None = None
+    # Server-computed relative form of ``last_reviewed`` (e.g. "3d ago"). The
+    # relative calc lives here, server-side, so the pure HTML render stays
+    # clockless. ``None`` when ``last_reviewed`` is absent or unparseable.
+    last_reviewed_relative: str | None = None
 
 
 class CommitmentSurfaceState(BaseModel):
@@ -706,6 +716,10 @@ class CommitmentSurfaceState(BaseModel):
     source: str = COMMITMENT_SURFACE_SOURCE
     degraded: bool = False
     degraded_reason: str | None = None
+    # Read-time freshness stamp for the whole surface (ISO-8601, UTC). Drives the
+    # "as of …" provenance footer. ``None`` on a degraded read (no confident
+    # freshness when the durable source could not be read).
+    as_of: str | None = None
 
 
 class RuntimeState(BaseModel):
@@ -1486,7 +1500,31 @@ def _workspace_update_capability(
     )
 
 
-def _commitment_surface_item(record: CommitmentRecord) -> CommitmentSurfaceItem:
+def _relative_days_ago(iso_date: str | None, *, today: datetime.date) -> str | None:
+    """Render an ISO date as a short relative string (e.g. ``"3d ago"``).
+
+    Server-side so the pure HTML render stays clockless. Returns ``None`` when the
+    input is absent or unparseable — an unknown freshness is omitted, never guessed.
+    A future date (clock skew / typo) is clamped to ``"today"`` rather than shown
+    as a negative age.
+    """
+    if not iso_date:
+        return None
+    try:
+        parsed = datetime.date.fromisoformat(iso_date.strip())
+    except ValueError:
+        return None
+    days = (today - parsed).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "1d ago"
+    return f"{days}d ago"
+
+
+def _commitment_surface_item(
+    record: CommitmentRecord, *, today: datetime.date
+) -> CommitmentSurfaceItem:
     return CommitmentSurfaceItem(
         commitment_id=record.commitment_id,
         kind=record.commitment_kind,
@@ -1494,6 +1532,11 @@ def _commitment_surface_item(record: CommitmentRecord) -> CommitmentSurfaceItem:
         summary=record.summary,
         target_ref=record.target_ref,
         source_goal=record.source_goal,
+        waiting_on=record.waiting_on,
+        waiting_since=record.waiting_since,
+        review_cadence=record.review_cadence,
+        last_reviewed=record.last_reviewed,
+        last_reviewed_relative=_relative_days_ago(record.last_reviewed, today=today),
     )
 
 
@@ -1526,6 +1569,8 @@ def _commitment_surface_state(vault_root: Path) -> CommitmentSurfaceState:
             degraded_reason="durable_read_failed",
         )
 
+    now = datetime.datetime.now(datetime.timezone.utc)
+    today = now.date()
     projection = query_next_and_waiting_commitments(records)
     review_return = [
         record
@@ -1533,9 +1578,12 @@ def _commitment_surface_state(vault_root: Path) -> CommitmentSurfaceState:
         if record.commitment_kind == "review_return" and record.state != "done"
     ]
     return CommitmentSurfaceState(
-        next=[_commitment_surface_item(record) for record in projection.next_items],
-        waiting=[_commitment_surface_item(record) for record in projection.waiting_items],
-        review_return=[_commitment_surface_item(record) for record in review_return],
+        next=[_commitment_surface_item(r, today=today) for r in projection.next_items],
+        waiting=[_commitment_surface_item(r, today=today) for r in projection.waiting_items],
+        review_return=[_commitment_surface_item(r, today=today) for r in review_return],
+        # Read-time freshness for the "as of …" footer. Stamped only on a healthy
+        # read; a degraded read returns above with as_of left None.
+        as_of=now.isoformat(timespec="seconds"),
     )
 
 

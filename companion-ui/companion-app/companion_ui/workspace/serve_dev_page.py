@@ -3766,74 +3766,163 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
         </section>"""
 
 
+# Maps the render kind to its styling class (the design's three redundant
+# signals — grouping, label, styling).
+_COMMITMENT_RENDER_KIND_CLASS: dict[str, str] = {
+    "next": "k-next",
+    "waiting": "k-wait",
+    "review": "k-review",
+}
+
+
+def _commitment_render_kind(item: dict) -> str:
+    """Derive the render kind that drives styling + provenance.
+
+    Keyed off the bucket *family* and the commitment *state* — NOT the raw
+    ``commitment_kind``. The API waiting bucket selects by state
+    (``query_next_and_waiting_commitments``), so a commitment can be *waiting* by
+    state while its kind is e.g. ``project``; it must still read as waiting
+    (dashed amber + depends-on provenance) rather than falling back to
+    next-action. The literal ``waiting`` kind is also honoured as a fallback.
+    """
+    family = str(item.get("family") or "")
+    if family == "review-cycle":
+        return "review"
+    if str(item.get("state") or "") == "waiting" or str(item.get("kind") or "") == "waiting":
+        return "waiting"
+    return "next"
+
+
+def _commitment_provenance_html(*, render_kind: str, item: dict) -> str:
+    """Render the optional secondary provenance line for a commitment.
+
+    Honest by omission: a line is emitted only when its server-declared value is
+    present. Waiting items show what they depend on (and since when); review
+    items show their cadence (and how long since the last review). Nothing here
+    is computed or guessed in the render — relative ages arrive pre-computed.
+    """
+    if render_kind == "waiting":
+        waiting_on = str(item.get("waiting_on") or "").strip()
+        if not waiting_on:
+            return ""
+        since = str(item.get("waiting_since") or "").strip()
+        text = f"depends on: {_e(_cap(waiting_on))}"
+        if since:
+            text += f" &middot; since {_e(since)}"
+        return (
+            '<div class="commitment-prov" data-testid="commitment-provenance">'
+            f"{text}</div>"
+        )
+    if render_kind == "review":
+        cadence = str(item.get("review_cadence") or "").strip()
+        last = str(item.get("last_reviewed_relative") or "").strip()
+        if not cadence and not last:
+            return ""
+        parts: list[str] = []
+        if cadence:
+            parts.append(f"cadence: {_e(cadence)}")
+        if last:
+            parts.append(f"last {_e(last)}")
+        return (
+            '<div class="commitment-prov" data-testid="commitment-provenance">'
+            f"{' &middot; '.join(parts)}</div>"
+        )
+    return ""
+
+
 def _render_commitment_item(item: dict) -> str:
     """Render one read-only commitment row. No mutation affordance.
 
-    Carries the render ``family`` marker so the next-action vs review-cycle
-    distinction is observable per-item, not only via the enclosing group.
+    Carries the render ``family`` and ``kind`` markers so the next-action vs
+    review-cycle distinction — and the within-Next ``waiting`` vs ``next_action``
+    distinction — is observable per-item, not only via the enclosing group. The
+    kind tag echoes the API kind verbatim (the design's explicit-label signal).
     """
-    family = _e(str(item.get("family") or ""))
+    family = str(item.get("family") or "")
     commitment_id = _e(str(item.get("commitment_id") or ""))
     kind = str(item.get("kind") or "")
-    state = str(item.get("state") or "")
     summary = str(item.get("summary") or "")
     target_ref = str(item.get("target_ref") or "")
+    render_kind = _commitment_render_kind(item)
+    kind_class = _COMMITMENT_RENDER_KIND_CLASS[render_kind]
+    cyclical = (
+        '<span class="commitment-cycle" aria-hidden="true">&#8635;</span>'
+        if render_kind == "review"
+        else ""
+    )
     summary_html = (
         '<div class="commitment-summary" data-testid="commitment-summary">'
-        f"{_e(_cap(summary))}</div>"
+        f"{cyclical}{_e(_cap(summary))}</div>"
         if summary
+        else ""
+    )
+    kind_tag = (
+        '<span class="commitment-kind-tag" data-testid="commitment-kind-tag">'
+        f"{_e(kind)}</span>"
+        if kind
         else ""
     )
     target_html = (
         '<div class="commitment-target" data-testid="commitment-target" '
-        f'data-target-ref="{_e(target_ref)}">{_e(_cap(target_ref))}</div>'
+        f'data-target-ref="{_e(target_ref)}">'
+        f'<span class="commitment-arrow" aria-hidden="true">&#8594;</span>'
+        f"{_e(_cap(target_ref))}</div>"
         if target_ref
         else ""
     )
-    meta_bits = " &middot; ".join(
-        _e(bit) for bit in (kind, state) if bit
-    )
-    meta_html = (
-        f'<div class="commitment-meta" data-testid="commitment-meta">{meta_bits}</div>'
-        if meta_bits
-        else ""
-    )
+    prov_html = _commitment_provenance_html(render_kind=render_kind, item=item)
     return f"""
             <article
-              class="commitment-item"
+              class="commitment-item {kind_class}"
               data-testid="commitment-item"
-              data-commitment-family="{family}"
+              data-commitment-family="{_e(family)}"
+              data-commitment-kind="{_e(kind)}"
               data-commitment-id="{commitment_id}"
               data-affordance-status="read-only">
-              {summary_html}
+              <div class="commitment-item-top">
+                {summary_html}
+                {kind_tag}
+              </div>
               {target_html}
-              {meta_html}
+              {prov_html}
             </article>"""
 
 
-def _render_commitment_group(*, family: str, label: str, items: list[dict]) -> str:
+def _render_commitment_group(
+    *, family: str, label: str, sublabel: str, items: list[dict]
+) -> str:
     """Render one commitment family group (next-action or review-cycle).
 
     The group is always emitted when the surface is populated so the two
     families remain visually distinct regions even when one is momentarily
-    empty; an empty family shows a quiet read-only placeholder.
+    empty; an empty family shows a quiet read-only placeholder rather than
+    vanishing (so the absence of one family is legible, not implied). A count
+    chip surfaces how many items the family holds without an alarm semantics.
     """
+    family_class = "g-next" if family == "next-action" else "g-review"
     if items:
         body = "".join(_render_commitment_item(item) for item in items)
     else:
+        none_copy = (
+            "No next-actions or waiting items."
+            if family == "next-action"
+            else "No review-cycle returns this period."
+        )
         body = (
             '<div class="commitment-group-empty" '
             f'data-testid="commitment-group-empty-{_e(family)}">'
-            "None right now.</div>"
+            f"{none_copy}</div>"
         )
     return f"""
           <section
-            class="commitment-group"
+            class="commitment-group {family_class}"
             data-testid="commitment-group-{_e(family)}"
             data-commitment-family="{_e(family)}"
             data-affordance-status="read-only">
-            <div class="rail-state-row">
-              <span class="rail-state-label" data-testid="commitment-group-label-{_e(family)}">{_e(label)}</span>
+            <div class="commitment-group-head">
+              <span class="commitment-group-label" data-testid="commitment-group-label-{_e(family)}">{_e(label)}</span>
+              <span class="commitment-group-sub">{_e(sublabel)}</span>
+              <span class="commitment-group-count" data-testid="commitment-group-count-{_e(family)}">{len(items)}</span>
             </div>
             {body}
           </section>"""
@@ -3892,7 +3981,17 @@ def _render_commitments_mode(surface: dict | None) -> str:
         </section>"""
 
     if state == "empty":
-        return """
+        # Affirmative, confident zero — a healthy "you have none", visually
+        # distinct (vault-green dot, "0 active") from the amber degraded/absent
+        # states so the two are never confusable.
+        empty_as_of = _e(str((surface or {}).get("as_of") or "").strip())
+        empty_foot = (
+            '<div class="commitments-foot" data-testid="commitments-as-of">'
+            '<span class="commitments-foot-ok">commitments ok</span> &middot; 0 active'
+            + (f" &middot; as of {empty_as_of}" if empty_as_of else "")
+            + "</div>"
+        )
+        return f"""
         <section
           class="commitments-mode"
           data-testid="commitments-mode"
@@ -3905,8 +4004,10 @@ def _render_commitments_mode(surface: dict | None) -> str:
             <span class="rail-state-value">clear</span>
           </div>
           <div class="commitments-empty" data-testid="commitments-empty-state">
-            No active commitments right now.
+            <span class="commitments-empty-dot" aria-hidden="true"></span>
+            <span class="commitments-empty-msg">No active commitments.</span>
           </div>
+          {empty_foot}
         </section>"""
 
     # populated
@@ -3914,13 +4015,23 @@ def _render_commitments_mode(surface: dict | None) -> str:
     review_cycle_items = list((surface or {}).get("review_cycle") or [])
     next_group = _render_commitment_group(
         family="next-action",
-        label="Next — mine to do",
+        label="Next",
+        sublabel="mine to do",
         items=next_action_items,
     )
     review_group = _render_commitment_group(
         family="review-cycle",
-        label="Review — returns to me",
+        label="Review",
+        sublabel="returns to you",
         items=review_cycle_items,
+    )
+    as_of = _e(str((surface or {}).get("as_of") or "").strip())
+    foot_html = (
+        '<div class="commitments-foot" data-testid="commitments-as-of">'
+        f'as of {as_of} &middot; <span class="commitments-foot-ok">commitments ok</span>'
+        "</div>"
+        if as_of
+        else ""
     )
     return f"""
         <section
@@ -3936,6 +4047,7 @@ def _render_commitments_mode(surface: dict | None) -> str:
           </div>
           {next_group}
           {review_group}
+          {foot_html}
         </section>"""
 
 
@@ -8851,6 +8963,96 @@ def render_index_html(
     }}
     .rail-state-value, .rail-state-count {{
       color: var(--fg-2);
+    }}
+    /* ---- Commitment surface (read-only): Next (warm) / Review (cool) ---- */
+    .commitments-mode {{ display: flex; flex-direction: column; gap: 12px; }}
+    .commitment-group {{ display: flex; flex-direction: column; gap: 6px; }}
+    .commitment-group-head {{
+      display: flex; align-items: baseline; gap: 6px;
+      font-family: var(--font-mono); font-size: 10px;
+      letter-spacing: 0.08em; text-transform: uppercase;
+    }}
+    .commitment-group-label {{ white-space: nowrap; }}
+    .commitment-group.g-next .commitment-group-label {{ color: var(--accent); }}
+    .commitment-group.g-review .commitment-group-label {{ color: var(--fg-2); }}
+    .commitment-group-sub {{
+      color: var(--fg-3); white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis; min-width: 0;
+    }}
+    .commitment-group-count {{
+      margin-left: auto; color: var(--fg-3);
+      border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      padding: 0 6px;
+    }}
+    /* Review sits in a faintly recessed well — a distinct mode of attention. */
+    .commitment-group.g-review {{
+      background: rgba(122,154,184,0.035);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 8px; margin: 0 -2px;
+    }}
+    .commitment-group-empty {{
+      font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+      letter-spacing: 0.06em; padding: 2px 0 2px 10px;
+      border-left: 2px solid var(--border);
+    }}
+    .commitment-item {{
+      padding: 7px 9px; border-radius: 2px;
+      border-left: 2px solid var(--border-strong); background: transparent;
+    }}
+    .commitment-item-top {{ display: flex; align-items: baseline; gap: 8px; }}
+    .commitment-summary {{
+      flex: 1; font-size: var(--text-sm); color: var(--fg-1); line-height: 1.4;
+    }}
+    .commitment-kind-tag {{
+      flex: none; margin-top: 1px;
+      font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.06em;
+      text-transform: uppercase; padding: 1px 5px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong); color: var(--fg-3); white-space: nowrap;
+    }}
+    .commitment-target {{
+      font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+      letter-spacing: 0.06em; margin-top: 4px; display: flex; align-items: center; gap: 5px;
+    }}
+    .commitment-arrow, .commitment-cycle {{ color: var(--fg-3); }}
+    .commitment-cycle {{ font-family: var(--font-mono); font-size: 11px; margin-right: 5px; }}
+    .commitment-prov {{ font-size: 11px; margin-top: 3px; line-height: 1.4; font-style: italic; }}
+    /* next_action — warm, clearest (still calm) */
+    .commitment-item.k-next {{ border-left-color: var(--accent); }}
+    .commitment-item.k-next .commitment-summary {{ color: var(--fg-1); font-weight: 500; }}
+    .commitment-item.k-next .commitment-kind-tag {{
+      color: var(--accent); border-color: var(--accent-dim); background: var(--accent-muted);
+    }}
+    /* waiting — tracked-but-blocked: dashed, dimmer, amber */
+    .commitment-item.k-wait {{ border-left: 2px dashed var(--amber-dim); opacity: 0.92; }}
+    .commitment-item.k-wait .commitment-summary {{ color: var(--fg-2); font-weight: 400; }}
+    .commitment-item.k-wait .commitment-kind-tag {{
+      color: var(--amber); border-color: var(--amber-dim); background: var(--amber-muted);
+    }}
+    .commitment-item.k-wait .commitment-prov {{ color: var(--amber); }}
+    /* review_return — cool, cyclical, metacognitive */
+    .commitment-item.k-review {{ border-left-color: var(--fg-3); }}
+    .commitment-item.k-review .commitment-summary {{ color: var(--fg-1); font-weight: 400; }}
+    .commitment-item.k-review .commitment-kind-tag {{ color: var(--fg-2); border-color: var(--border-strong); }}
+    .commitment-item.k-review .commitment-prov {{ color: var(--fg-3); }}
+    /* empty-but-healthy — affirmative vault-green zero */
+    .commitments-empty {{ display: flex; align-items: center; gap: 8px; padding: 8px 0; }}
+    .commitments-empty-dot {{
+      width: 6px; height: 6px; border-radius: 50%; background: var(--vault); flex: none;
+    }}
+    .commitments-empty-msg {{ font-size: var(--text-sm); color: var(--fg-2); }}
+    /* freshness / provenance footer */
+    .commitments-foot {{
+      font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+      letter-spacing: 0.06em; margin-top: 4px; padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }}
+    .commitments-foot-ok {{ color: var(--vault); }}
+    /* degraded / not-shown — amber, unmistakably NOT the green empty state */
+    .commitments-mode[data-commitment-state="degraded"] .commitments-notice,
+    .commitments-mode[data-commitment-state="not-shown"] .commitments-notice {{
+      border: 1px solid var(--amber-dim); background: var(--amber-muted);
+      border-radius: var(--radius-sm); padding: 8px;
+      font-size: var(--text-sm); color: var(--fg-2); line-height: 1.4;
     }}
     .rail-alert {{
       border-radius: var(--radius-md);
