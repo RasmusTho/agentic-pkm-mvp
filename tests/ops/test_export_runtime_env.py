@@ -54,13 +54,12 @@ def test_export_runtime_env_emits_uid_gid(tmp_path: Path) -> None:
 
 
 def test_export_runtime_env_writes_container_vault_root(tmp_path: Path) -> None:
-    """The generated runtime env must carry the in-container vault mount path.
+    """The container-facing ``VAULT_ROOT`` must be the in-container mount path.
 
-    Compose loads this file via ``env_file:`` so its values become *container*
-    environment. The host vault path is only needed for the bind-mount source,
-    which compose interpolates from the shell ``VAULT_ROOT`` — never from this
-    file. Writing the host path here makes in-container ``resolve_vault_root()``
-    raise ``VaultRootMisconfiguredError`` and the API 503s (issue #2141).
+    Compose loads this file via service ``env_file:`` so its values become the
+    *container* environment read by ``resolve_vault_root()``. Writing the host
+    path here makes in-container resolution raise ``VaultRootMisconfiguredError``
+    and the API 503s (issue #2141).
     """
     repo_root, out_path, env = _runtime_env_base(tmp_path)
     host_vault = env["VAULT_ROOT"]
@@ -69,8 +68,25 @@ def test_export_runtime_env_writes_container_vault_root(tmp_path: Path) -> None:
 
     text = out_path.read_text(encoding="utf-8")
     assert re.search(r"^VAULT_ROOT=/app/vault$", text, re.M)
-    # The host path must not leak into the container-facing env file.
+    # The host path must not be the container's VAULT_ROOT.
     assert f"VAULT_ROOT={host_vault}" not in text
+
+
+def test_export_runtime_env_writes_host_root_for_mount_interpolation(tmp_path: Path) -> None:
+    """The host path is preserved under ``VAULT_HOST_ROOT`` for compose to
+    interpolate the bind-mount source ``${VAULT_HOST_ROOT:-...}:/app/vault``.
+
+    Wrappers (cold_boot.sh, verify_runtime_stack.sh) pass this file as
+    ``docker compose --env-file`` without exporting a shell ``VAULT_ROOT``, so
+    the host path must live in the file under a distinct name (issue #2141).
+    """
+    repo_root, out_path, env = _runtime_env_base(tmp_path)
+    host_vault = env["VAULT_ROOT"]
+
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=str(repo_root), env=env)
+
+    text = out_path.read_text(encoding="utf-8")
+    assert re.search(rf"^VAULT_HOST_ROOT={re.escape(host_vault)}$", text, re.M)
 
 
 def test_export_runtime_env_honors_container_vault_root_override(tmp_path: Path) -> None:
@@ -83,8 +99,8 @@ def test_export_runtime_env_honors_container_vault_root_override(tmp_path: Path)
     assert re.search(r"^VAULT_ROOT=/srv/vault$", text, re.M)
 
 
-def test_export_runtime_env_no_vault_omits_vault_root(tmp_path: Path) -> None:
-    """No-vault idle posture (#2005) must not write any VAULT_ROOT line."""
+def test_export_runtime_env_no_vault_omits_both_vault_vars(tmp_path: Path) -> None:
+    """No-vault idle posture (#2005) writes neither VAULT_ROOT nor VAULT_HOST_ROOT."""
     repo_root, out_path, env = _runtime_env_base(tmp_path)
     env["NO_VAULT_MODE"] = "1"
 
@@ -92,6 +108,26 @@ def test_export_runtime_env_no_vault_omits_vault_root(tmp_path: Path) -> None:
 
     text = out_path.read_text(encoding="utf-8")
     assert not re.search(r"^VAULT_ROOT=", text, re.M)
+    assert not re.search(r"^VAULT_HOST_ROOT=", text, re.M)
+
+
+def test_compose_volume_source_uses_host_root_var() -> None:
+    """Every vault bind mount must source from VAULT_HOST_ROOT first.
+
+    Guards the issue #2141 contract: the mount source is the host path
+    (VAULT_HOST_ROOT), independent of the container-facing VAULT_ROOT=/app/vault
+    that the same runtime env file carries.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    compose = (repo_root / "docker-compose.yaml").read_text(encoding="utf-8")
+    mount_lines = [
+        line.strip()
+        for line in compose.splitlines()
+        if line.strip().endswith(':/app/vault"')
+    ]
+    assert mount_lines, "expected at least one /app/vault bind mount"
+    for line in mount_lines:
+        assert "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault" in line
 
 
 def test_export_runtime_env_emits_watcher_runtime_env_file(tmp_path: Path) -> None:

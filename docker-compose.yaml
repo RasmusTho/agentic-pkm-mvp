@@ -34,7 +34,11 @@ services:
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
-      - "${VAULT_ROOT:-./vault}:/app/vault"
+      # Bind-mount source is the HOST vault path. VAULT_HOST_ROOT (from
+      # tmp/runtime.env / start_full_system.sh) carries it so the container's
+      # own VAULT_ROOT can be the in-container mount path /app/vault without
+      # corrupting this source (issue #2141). VAULT_ROOT/./vault kept as fallback.
+      - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
       # External-SSD TTS store (models/cache/logs) bind-mounted to a fixed container path.
       # Host root is machine-local (${TTS_HOST_ROOT} in .env.prod.local); defaults to a dev scratch dir.
       - "${TTS_HOST_ROOT:-./tmp/tts}:/data/tts"
@@ -76,7 +80,7 @@ services:
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
-      - "${VAULT_ROOT:-./vault}:/app/vault"
+      - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.workers.outbox_worker"]
     environment:
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
@@ -106,7 +110,7 @@ services:
         required: false
     volumes:
       - ./:/app
-      - "${VAULT_ROOT:-./vault}:/app/vault"
+      - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli watcher run"]
     environment:
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}

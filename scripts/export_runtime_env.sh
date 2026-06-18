@@ -70,15 +70,20 @@ esac
 local_uid="${LOCAL_UID:-$(id -u)}"
 local_gid="${LOCAL_GID:-$(id -g)}"
 
-# Container-facing vault path. This file is consumed by the compose services via
-# `env_file:`, so its values become the *container* environment. The host vault
-# path (the shell `VAULT_ROOT` exported by start_full_system.sh) is needed only
-# for compose to interpolate the bind-mount *source* `${VAULT_ROOT:-./vault}` —
-# compose reads that from the shell, never from this file. Writing the host path
-# here is what made in-container `resolve_vault_root()` raise
-# VaultRootMisconfiguredError and the API 503 (issue #2141). Emit the in-container
-# mount path instead; it aligns with WATCHER_VAULT_PATH=/app/vault. The provider
-# settings loader below still reads the host `VAULT_ROOT` from the shell env.
+# This file is consumed by compose two ways, which need two *different* vault
+# paths (issue #2141):
+#   1. as the service `env_file:` — its values become the *container* environment
+#      read by resolve_vault_root(); that must be the in-container mount path.
+#   2. as the CLI `--env-file` (start_full_system.sh, cold_boot.sh,
+#      verify_runtime_stack.sh) — used to interpolate the bind-mount *source*
+#      `${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault`; that must be the
+#      *host* path, or the wrappers bind a non-existent host dir.
+# So emit both: VAULT_HOST_ROOT carries the host path for mount-source
+# interpolation; VAULT_ROOT carries the container mount path for the app. The
+# provider settings loader below still reads the host path from the shell
+# `VAULT_ROOT`. Writing the host path into the container's VAULT_ROOT is what made
+# resolve_vault_root() raise VaultRootMisconfiguredError and the API 503.
+vault_host_root="$VAULT_ROOT"
 container_vault_root="${CONTAINER_VAULT_ROOT:-/app/vault}"
 
 if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
@@ -95,6 +100,7 @@ export DATABASE_URL DB_DSN
 
 cat > "$runtime_env_path" <<ENV
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
+VAULT_HOST_ROOT=$vault_host_root
 VAULT_ROOT=$container_vault_root
 LOCAL_UID=$local_uid
 LOCAL_GID=$local_gid

@@ -785,6 +785,7 @@ if [ "$NO_VAULT_MODE" -eq 1 ]; then
   # or ask-verify is attempted — those resume when a vault is opened.
   echo "Vault env: VAULT_ROOT=<unset> — no-vault idle posture (open a vault to activate)"
   unset VAULT_ROOT
+  unset VAULT_HOST_ROOT
   export WATCHER_VAULT_PATH=""
 else
   if [ ! -d "$vault_host_path" ]; then
@@ -793,6 +794,10 @@ else
   fi
   vault_host_path="$(cd "$vault_host_path" && pwd)"
   export VAULT_ROOT="$vault_host_path"
+  # Distinct host-path var for the compose bind-mount source. The generated
+  # runtime env sets the container's VAULT_ROOT to /app/vault, so the mount
+  # source must come from VAULT_HOST_ROOT, not VAULT_ROOT (issue #2141).
+  export VAULT_HOST_ROOT="$vault_host_path"
   apply_start_full_system_vault_defaults "$vault_host_path"
 fi
 
