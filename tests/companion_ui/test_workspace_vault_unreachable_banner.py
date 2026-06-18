@@ -125,7 +125,13 @@ class TestVaultUnreachableEntryState:
         assert 'data-testid="workspace-error-state"' not in html  # generic card
 
         # Setup form is suppressed: no first-contact vault-config affordances.
-        assert 'data-testid="workspace-vault-setup-form"' not in html
+        # (Asserted against the form's real testids — the runtime cannot process
+        # an open/init while unreachable, so the whole panel is a false
+        # affordance; #2123 AC1, open-questions Q24.)
+        assert 'data-testid="vault-settings-actions"' not in html
+        assert 'data-testid="vault-open-form"' not in html
+        assert 'data-testid="vault-init-form"' not in html
+        assert "No vault selected" not in html
 
 
 def _render_error_with_origin(error: str, page_origin_hostname: str) -> str:
@@ -164,7 +170,8 @@ class TestRemoteAccessDisambiguation:
         # Like #2123: no raw JSON dump, no generic API Error, no setup form.
         assert "API Error" not in html
         assert "trace-abc" not in html
-        assert 'data-testid="workspace-vault-setup-form"' not in html
+        assert 'data-testid="vault-open-form"' not in html
+        assert "No vault selected" not in html
 
     def test_localhost_origin_renders_vault_unreachable_state(self) -> None:
         # Same 503 from a localhost page origin → unchanged #2123 state.
@@ -180,3 +187,55 @@ class TestRemoteAccessDisambiguation:
         html = _render_error(_RUNTIME_UNAVAILABLE_503)
         assert 'data-testid="workspace-vault-unreachable-state"' in html
         assert 'data-testid="workspace-wrong-device-state"' not in html
+
+
+_FORM_MARKERS = (
+    'data-testid="vault-settings-actions"',
+    'data-testid="vault-open-form"',
+    'data-testid="vault-init-form"',
+    "No vault selected",
+    "Open existing vault",
+)
+
+
+class TestVaultSetupFormSuppression:
+    """The vault-setup form is suppressed whenever the runtime is unreachable.
+
+    Regression guard for the gap behind #2123 AC1 / #2124: the error *banner*
+    was restyled, but the vault-setup form is rendered by a separate layer
+    (``vault_settings_panel_markup`` in ``render_index_html``) that was not
+    gated on the unreachable state, so the form kept rendering on the live page.
+    These assert the full page output, not the banner function in isolation.
+    """
+
+    def test_form_suppressed_on_http_503_local(self) -> None:
+        html = _render_error(_RUNTIME_UNAVAILABLE_503)
+        for marker in _FORM_MARKERS:
+            assert marker not in html, marker
+        # The panel's wiring script is suppressed too (no orphan handlers).
+        assert "vault-settings-panel" not in html or 'data-testid="vault-open-form"' not in html
+
+    def test_form_suppressed_on_remote_wrong_device(self) -> None:
+        html = _render_error_with_origin(_RUNTIME_UNAVAILABLE_503, "100.113.104.116")
+        for marker in _FORM_MARKERS:
+            assert marker not in html, marker
+
+    def test_form_suppressed_on_transport_connection_refused(self) -> None:
+        # The transport-level failure shape from the screenshot (Errno 61) must
+        # suppress the form just like the 503 contract error.
+        html = _render_error("[Errno 61] Connection refused")
+        for marker in _FORM_MARKERS:
+            assert marker not in html, marker
+
+    def test_form_present_when_runtime_healthy_no_vault(self) -> None:
+        # The legitimate first-contact case: runtime up, no vault bound yet.
+        # The setup form is the whole point here and MUST render.
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            note_path="",
+            fields=None,
+            error="",
+        )
+        assert 'data-testid="vault-settings-actions"' in html
+        assert 'data-testid="vault-open-form"' in html
+        assert "No vault selected" in html
