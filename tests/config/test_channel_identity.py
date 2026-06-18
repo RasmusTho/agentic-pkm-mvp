@@ -44,13 +44,15 @@ class TestChannelIdentityContract:
     def test_dev_channel_properties(self) -> None:
         dev = CHANNELS[CHANNEL_DEV]
         assert dev.db_name == "pkm_dev"
-        assert dev.vault_root == "vault-dev"
+        # vault_root is operator-configured (one of the operator's Obsidian
+        # vaults); the placeholder is inspectable but never a hardcoded name.
+        assert dev.vault_root == "<operator-configured>"
         assert dev.runtime_artifact_dir == "tmp-dev"
 
     def test_test_channel_properties(self) -> None:
         test = CHANNELS[CHANNEL_TEST]
         assert test.db_name == "pkm_test"
-        assert test.vault_root == "vault-test"
+        assert test.vault_root == "<operator-configured>"
         assert test.runtime_artifact_dir == "tmp-test"
 
     def test_all_three_channels_present(self) -> None:

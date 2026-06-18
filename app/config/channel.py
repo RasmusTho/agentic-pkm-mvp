@@ -54,8 +54,10 @@ class ChannelIdentity:
 
 
 # Canonical channel definitions.
-# vault_root for stable is operator-configured (VAULT_ROOT env var); the default
-# placeholder makes the identity inspectable before operator configuration.
+# vault_root is operator-configured for every channel (the VAULT_ROOT env var):
+# the vault that backs a channel is one of the operator's own Obsidian vaults
+# (e.g. dev/test/prod), whose names can change and must never be hardcoded. The
+# placeholder only makes the identity inspectable before operator configuration.
 STABLE = ChannelIdentity(
     channel=CHANNEL_STABLE,
     code_ref="stable",
@@ -68,7 +70,7 @@ DEV = ChannelIdentity(
     channel=CHANNEL_DEV,
     code_ref="main",
     db_name="pkm_dev",
-    vault_root="vault-dev",
+    vault_root="<operator-configured>",
     runtime_artifact_dir="tmp-dev",
 )
 
@@ -76,7 +78,7 @@ TEST = ChannelIdentity(
     channel=CHANNEL_TEST,
     code_ref="<worktree>",
     db_name="pkm_test",
-    vault_root="vault-test",
+    vault_root="<operator-configured>",
     runtime_artifact_dir="tmp-test",
 )
 

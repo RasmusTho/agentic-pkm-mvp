@@ -45,10 +45,6 @@ TEST_DB_HOST_PORT = "15434"
 #: entrypoint writes to. Kept aligned with docker-compose.test.yml.
 _CHANNEL_ENV_KEYS = ("PKM_ENVIRONMENT", "PKM_CHANNEL", "ENVIRONMENT", "CHANNEL")
 
-#: Bare prod vault fragment (a ``vault`` path with no ``-test`` / ``-dev``
-#: suffix). Mirrors CHANNEL_SPECS in channel_isolation_preflight.
-_BARE_PROD_VAULT = re.compile(r"(?<![/\w-])vault(?![-_/\w])")
-
 _SUPPORTED_CHANNELS = ("test",)
 
 
@@ -253,30 +249,25 @@ def _check_vault_root(env: Mapping[str, str], violations: list[ChannelEnvViolati
         violations.append(
             ChannelEnvViolation(
                 var="VAULT_ROOT",
-                expected="an absolute test-vault path (…/vault-test)",
+                expected="an absolute operator-configured test-vault path",
                 actual=None,
                 reason="unset; refusing the ambient ./vault fallback",
             )
         )
-    else:
-        if not _is_absolute(vault_root):
-            violations.append(
-                ChannelEnvViolation(
-                    var="VAULT_ROOT",
-                    expected="an absolute path",
-                    actual=vault_root,
-                    reason="relative paths resolve against CWD and diverge between callers",
-                )
+    elif not _is_absolute(vault_root):
+        violations.append(
+            ChannelEnvViolation(
+                var="VAULT_ROOT",
+                expected="an absolute path",
+                actual=vault_root,
+                reason="relative paths resolve against CWD and diverge between callers",
             )
-        if "vault-test" not in vault_root and _BARE_PROD_VAULT.search(vault_root):
-            violations.append(
-                ChannelEnvViolation(
-                    var="VAULT_ROOT",
-                    expected="a test vault (…/vault-test), never the operator vault",
-                    actual=vault_root,
-                    reason="looks like the bare operator vault; test channel must use vault-test",
-                )
-            )
+        )
+    # The vault that backs the test channel is operator-configured (one of the
+    # operator's own Obsidian vaults). Its name is intentionally not pinned here:
+    # isolation is the operator's responsibility (point test at a non-prod vault),
+    # so this preflight only enforces that the path is absolute and consistent
+    # with VAULT_ROOT_TEST — never that it matches a hardcoded ``vault-test`` name.
 
     vault_root_test = _clean(env.get("VAULT_ROOT_TEST"))
     if vault_root_test is None:

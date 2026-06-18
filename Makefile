@@ -1,11 +1,12 @@
 .PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
-# Absolute, canonical test vault root. $(CURDIR) is make's own absolute working
-# directory (unlike $(PWD), which is an inherited env var that can be stale).
-# Issue #1997 symptom 5: TEST_VAULT_ROOT must be absolute so every caller binds
-# the same vault regardless of CWD.
-TEST_VAULT_ROOT ?= $(CURDIR)/vault-test
+# Operator-configured test vault root. There is no synthetic default: the test
+# channel binds whatever vault the operator points it at (VAULT_ROOT) — one of
+# their own Obsidian vaults — whose name is operator-owned and never hardcoded.
+# Must be absolute so every caller binds the same vault regardless of CWD (issue
+# #1997 symptom 5). The require-test-vault-root guard fails loud when it is unset.
+TEST_VAULT_ROOT ?= $(VAULT_ROOT)
 # Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
 # promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
 # the in-container `db:5432` address is unreachable from the host (issue #1997
@@ -119,10 +120,10 @@ reset-zero:
 reset-zero-force:
 	@RESET_FORCE=1 bash scripts/reset_to_zero.sh
 
-start-test-system:
+start-test-system: require-test-vault-root
 	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" API_BASE_URL="$(TEST_API_BASE_URL)" HEALTH_ENDPOINT="$(TEST_API_BASE_URL)/healthz" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" scripts/start_full_system.sh
 
-test-bootstrap:
+test-bootstrap: require-test-vault-root
 	@$(TEST_COMPOSE_ENV) RESET_FORCE=1 bash scripts/reset_to_zero.sh
 	@bash scripts/init_test_vault.sh
 	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" API_BASE_URL="$(TEST_API_BASE_URL)" HEALTH_ENDPOINT="$(TEST_API_BASE_URL)/healthz" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=30 scripts/start_full_system.sh
@@ -192,7 +193,7 @@ test-start-full: require-vault-root
 	VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=60 \
 	scripts/start_full_system.sh
 
-test-up:
+test-up: require-test-vault-root
 	@VAULT_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) up -d --build
 
 test-down:
@@ -253,10 +254,13 @@ install-skills:
 	@bash scripts/install_skills.sh
 
 
-.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e alpha-rebuild require-vault-root
+.PHONY: alpha alpha-up alpha-up-ollama alpha-bootstrap alpha-doctor alpha-down alpha-status alpha-smoke alpha-e2e alpha-rebuild require-vault-root require-test-vault-root
 
 require-vault-root:
 	@: $(if $(strip $(VAULT_ROOT)),,$(error VAULT_ROOT is required. Example: export VAULT_ROOT="/path/to/your/vault"))
+
+require-test-vault-root:
+	@: $(if $(strip $(TEST_VAULT_ROOT)),,$(error TEST_VAULT_ROOT is required: point the test channel at the operator's test vault, e.g. export VAULT_ROOT="/path/to/Bifröst". No synthetic vault-test default exists.))
 
 alpha: require-vault-root
 	@$(MAKE) alpha-up

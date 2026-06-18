@@ -69,7 +69,10 @@ def test_bootstrap_is_idempotent_no_drift(tmp_path: Path) -> None:
 
 
 def test_derived_env_kills_the_six_symptoms(tmp_path: Path) -> None:
-    env = derive_test_channel_env(repo_root=tmp_path, environ={})
+    # The vault is operator-configured (no synthetic default); supply one.
+    env = derive_test_channel_env(
+        repo_root=tmp_path, environ={}, vault_root=tmp_path / "operator-test-vault"
+    )
 
     # 1. vault init is run by bootstrap (covered above); here: channel identity.
     assert env["PKM_ENVIRONMENT"] == "test"
@@ -102,8 +105,27 @@ def test_derived_env_kills_the_six_symptoms(tmp_path: Path) -> None:
 
 def test_explicit_vault_root_override_is_absolute(tmp_path: Path) -> None:
     # A relative override is resolved to an absolute path (no CWD leakage).
-    env = derive_test_channel_env(repo_root=tmp_path, environ={}, vault_root="vault-test")
+    env = derive_test_channel_env(repo_root=tmp_path, environ={}, vault_root="some-vault")
     assert Path(env["VAULT_ROOT"]).is_absolute()
+
+
+def test_unset_vault_root_fails_loud_no_synthetic_default(tmp_path: Path) -> None:
+    # The synthetic 'vault-test' default was removed: with no vault_root and no
+    # VAULT_ROOT* in the environ, derivation must fail loud rather than invent one.
+    import pytest
+
+    with pytest.raises(ValueError, match="vault root is unset"):
+        derive_test_channel_env(repo_root=tmp_path, environ={})
+
+
+def test_vault_root_read_from_environ_when_not_explicit(tmp_path: Path) -> None:
+    # Operator config flows through VAULT_ROOT when no explicit arg is given.
+    operator_vault = tmp_path / "Bifröst"
+    env = derive_test_channel_env(
+        repo_root=tmp_path, environ={"VAULT_ROOT": str(operator_vault)}
+    )
+    assert env["VAULT_ROOT"] == str(operator_vault.resolve())
+    assert env["VAULT_ROOT"] == env["VAULT_ROOT_TEST"] == env["TEST_VAULT_ROOT"]
 
 
 def test_bootstrap_does_not_touch_operator_last_active_vault() -> None:
