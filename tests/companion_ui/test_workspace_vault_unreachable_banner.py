@@ -227,6 +227,18 @@ class TestVaultSetupFormSuppression:
         for marker in _FORM_MARKERS:
             assert marker not in html, marker
 
+    def test_form_present_for_structured_non_runtime_error_with_transport_word(self) -> None:
+        # Regression (Codex P2 on #2135): a structured note_not_found error for a
+        # path containing a transport word ("Network/…") must NOT be misread as
+        # runtime-unreachable. The runtime is up, so the vault-setup form stays.
+        note_not_found = (
+            'HTTP 404: {"detail": {"error": "note_not_found", '
+            '"note_path": "Network/Runbook.md", "message": "No note exists"}}'
+        )
+        html = _render_error(note_not_found)
+        assert 'data-testid="vault-settings-actions"' in html
+        assert 'data-testid="vault-open-form"' in html
+
     def test_form_present_when_runtime_healthy_no_vault(self) -> None:
         # The legitimate first-contact case: runtime up, no vault bound yet.
         # The setup form is the whole point here and MUST render.

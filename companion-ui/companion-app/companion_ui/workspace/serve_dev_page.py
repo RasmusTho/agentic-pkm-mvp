@@ -4803,6 +4803,16 @@ def _is_runtime_unreachable(error: str) -> bool:
     lowered = error.lower()
     if error_kind == "runtime_unavailable" or lowered.startswith("http 503"):
         return True
+    # The transport-substring fallback applies ONLY to unstructured error
+    # strings (e.g. "[Errno 61] Connection refused", which carry no JSON detail).
+    # A structured error with a declared kind is not a transport failure, so it
+    # must not be reclassified as unreachable just because its user data happens
+    # to contain a transport word — e.g. a note_not_found payload for
+    # "Network/Runbook.md" would otherwise hit the "network" marker and wrongly
+    # strip the still-usable vault-setup form. This mirrors _render_error_section,
+    # which resolves the declared error kind before any transport classification.
+    if error_kind:
+        return False
     return any(
         marker in lowered
         for marker in ("connection refused", "timed out", "timeout", "network")
