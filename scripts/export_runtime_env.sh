@@ -70,6 +70,27 @@ esac
 local_uid="${LOCAL_UID:-$(id -u)}"
 local_gid="${LOCAL_GID:-$(id -g)}"
 
+# This file is consumed by compose two ways, which need two *different* vault
+# paths (issue #2141):
+#   1. as the service `env_file:` — its values become the *container* environment
+#      read by resolve_vault_root(); that must be the in-container mount path.
+#   2. as the CLI `--env-file` (start_full_system.sh, cold_boot.sh,
+#      verify_runtime_stack.sh) — used to interpolate the bind-mount *source*
+#      `${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault`; that must be the
+#      *host* path, or the wrappers bind a non-existent host dir.
+# So emit both: VAULT_HOST_ROOT carries the host path for mount-source
+# interpolation; VAULT_ROOT carries the container mount path for the app. The
+# provider settings loader below still reads the host path from the shell
+# `VAULT_ROOT`. Writing the host path into the container's VAULT_ROOT is what made
+# resolve_vault_root() raise VaultRootMisconfiguredError and the API 503.
+#
+# The container path is the fixed compose mount target (/app/vault in all three
+# services); it is intentionally not operator-overridable, because the app
+# validates VAULT_ROOT exists and a value diverging from the hardcoded mount
+# target would re-introduce the same 503.
+vault_host_root="$VAULT_ROOT"
+container_vault_root="/app/vault"
+
 if [ -z "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
   echo "DATABASE_URL or DB_DSN is required to export runtime env" >&2
   exit 2
@@ -84,7 +105,8 @@ export DATABASE_URL DB_DSN
 
 cat > "$runtime_env_path" <<ENV
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
-VAULT_ROOT=$VAULT_ROOT
+VAULT_HOST_ROOT=$vault_host_root
+VAULT_ROOT=$container_vault_root
 LOCAL_UID=$local_uid
 LOCAL_GID=$local_gid
 DATABASE_URL=$DATABASE_URL
