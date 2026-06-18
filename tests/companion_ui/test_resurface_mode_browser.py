@@ -227,3 +227,59 @@ def test_resurface_degraded_state_is_visible() -> None:
     assert 'data-testid="resurface-degraded-state"' in html
     assert 'data-affordance-status="unavailable"' in html
     assert "runtime reported degraded guard state" in html
+
+
+def _resurface_section(html: str) -> str:
+    """Isolate the resurface-mode <section> so assertions about the surface are
+    scoped to it, not the whole page (other surfaces legitimately use the same
+    affordance attribute values)."""
+    start = html.find('data-testid="resurface-mode"')
+    assert start != -1, "resurface-mode must be present"
+    open_tag = html.rfind("<section", 0, start)
+    assert open_tag != -1, "resurface-mode must be a <section>"
+    end = html.find("</section>", start)
+    assert end != -1, "resurface-mode <section> must close"
+    return html[open_tag : end + len("</section>")]
+
+
+def test_resurface_css_hook_present_on_populated_rail() -> None:
+    """The visual treatment is keyed off these classes/affordance hooks; pin them
+    so a regression that drops the styling class is caught (#2: the surface
+    previously shipped with zero CSS)."""
+    section = _resurface_section(_render_resurface())
+    assert 'class="resurface-mode"' in section
+    assert 'data-affordance-status="read-only"' in section
+    # The why-now relation marker and the source pointer are styled via these classes.
+    assert 'class="resurface-why"' in section
+    assert 'class="resurface-source"' in section
+
+
+def test_resurface_empty_and_degraded_are_distinguishable() -> None:
+    """Empty (healthy / green) and degraded (amber / "can't say") must never
+    collapse into one visual. The CSS keys the two treatments off distinct
+    testids plus the section affordance status, so pin that they stay distinct."""
+    empty = _resurface_section(_render_empty_resurface())
+    degraded = _resurface_section(_render_empty_resurface(degraded=True))
+
+    assert 'data-testid="resurface-empty-state"' in empty
+    assert 'data-testid="resurface-degraded-state"' not in empty
+    assert 'data-affordance-status="read-only"' in empty
+    # Healthy-empty must NOT carry the unavailable hook the degraded CSS paints amber.
+    assert 'data-affordance-status="unavailable"' not in empty
+
+    assert 'data-testid="resurface-degraded-state"' in degraded
+    assert 'data-testid="resurface-empty-state"' not in degraded
+    assert 'data-affordance-status="unavailable"' in degraded
+
+
+def test_resurface_visual_pass_enables_no_action() -> None:
+    """The CSS pass must not enable any disabled action. Every resurface intent
+    button stays disabled (the hover-active CSS is gated behind
+    :not([disabled])), and nothing claims write-back persistence."""
+    section = _resurface_section(_render_resurface())
+    for intent in ("dismiss", "snooze", "pin"):
+        assert f'data-testid="resurface-action-{intent}"' in section
+    # All three action buttons are unavailable + aria-disabled; none enabled.
+    assert section.count('data-affordance-status="unavailable"') >= 3
+    assert 'aria-disabled="true"' in section
+    assert 'data-persistence-backed="true"' not in section

@@ -9099,6 +9099,254 @@ def render_index_html(
       border-radius: var(--radius-sm); padding: 8px;
       font-size: var(--text-sm); color: var(--fg-2); line-height: 1.4;
     }}
+    /* ---- Resurface surface (read-only): Claude-Design visual treatment.
+       Source (annotated): design handoff resurface-implementation/resurface.css ---- */
+    .resurface-mode {{
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      padding: 14px 14px 16px;
+      font-family: var(--font-ui);
+      color: var(--fg-2);
+    }}
+
+    .resurface-mode .rail-state-row {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 1px;
+    }}
+    .resurface-mode .rail-state-label {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--fg-2);
+    }}
+    .resurface-mode .rail-state-value {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.03em;
+      color: var(--fg-3);
+    }}
+
+    .resurface-candidate {{
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 13px;
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      transition: border-color 150ms ease, background-color 150ms ease;
+    }}
+    .resurface-candidate:hover {{
+      border-color: var(--border-strong);
+      background: var(--bg-surface);
+    }}
+
+    .resurface-title {{
+      font-size: var(--text-sm);
+      line-height: 1.35;
+      font-weight: 500;
+      letter-spacing: 0.004em;
+      color: var(--fg-1);
+    }}
+
+    .resurface-why {{
+      position: relative;
+      padding-left: 16px;
+      font-size: var(--text-sm);
+      line-height: 1.4;
+      color: var(--fg-2);
+    }}
+    .resurface-why::before {{
+      content: "◇"; 
+      position: absolute;
+      left: 0;
+      top: 0.06em;
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--cyan-dim);
+    }}
+
+    .resurface-relation {{
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      line-height: 1.45;
+      color: var(--fg-3);
+    }}
+
+    .resurface-source {{
+      display: inline-flex;
+      align-items: baseline;
+      gap: 5px;
+      align-self: flex-start;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--fg-2);
+      text-decoration: none;
+      transition: color 150ms ease;
+    }}
+    .resurface-source::before {{
+      content: "→"; 
+      color: var(--fg-3);
+      transition: color 150ms ease;
+    }}
+    .resurface-source:hover,
+    .resurface-source:hover::before {{
+      color: var(--cyan);
+    }}
+    .resurface-source:focus-visible {{
+      outline: 2px solid var(--border-focus);
+      outline-offset: 2px;
+      border-radius: var(--radius-sm);
+    }}
+
+    .resurface-signals {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 1px;
+    }}
+    .resurface-signal {{
+      font-family: var(--font-mono);
+      font-size: 10px;
+      line-height: 1;
+      letter-spacing: 0.02em;
+      color: var(--fg-3);
+      padding: 3px 7px;
+      background: color-mix(in srgb, var(--bg-raised) 55%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }}
+
+    .resurface-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 4px;
+      opacity: 0.5;
+      transition: opacity 150ms ease;
+    }}
+    .resurface-candidate:hover .resurface-actions,
+    .resurface-candidate:focus-within .resurface-actions {{
+      opacity: 1;
+    }}
+    .resurface-action {{
+      font-family: var(--font-mono);
+      font-size: 10px;
+      line-height: 1.2;
+      letter-spacing: 0.02em;
+      text-align: left;
+      color: var(--fg-3);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      padding: 4px 7px;
+      cursor: pointer;
+      transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+    }}
+    .resurface-action:not([disabled]):not([aria-disabled="true"]):hover {{
+      color: var(--fg-1);
+      border-color: var(--border-strong);
+      background: var(--bg-raised);
+    }}
+    .resurface-action:focus-visible {{
+      outline: 2px solid var(--border-focus);
+      outline-offset: 1px;
+    }}
+
+    .resurface-action[disabled],
+    .resurface-action[aria-disabled="true"] {{
+      color: var(--fg-3);
+      opacity: 0.75;
+      cursor: default;
+    }}
+
+    .resurface-candidate[data-pinned="true"] {{
+      background: var(--bg-surface);
+      border-color: color-mix(in srgb, var(--cyan-dim) 45%, var(--border));
+    }}
+    .resurface-candidate[data-pinned="true"] .resurface-title {{
+      padding-right: 46px;
+    }}
+    .resurface-candidate[data-pinned="true"]::after {{
+      content: "pinned";
+      position: absolute;
+      top: 11px;
+      right: 12px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      opacity: 0.85;
+    }}
+
+    .resurface-empty[data-testid="resurface-empty-state"] {{
+      position: relative;
+      padding: 12px 13px 12px 30px;
+      font-size: var(--text-sm);
+      line-height: 1.5;
+      color: var(--fg-2);
+      background: color-mix(in srgb, var(--vault-muted) 55%, var(--bg-base));
+      border: 1px solid color-mix(in srgb, var(--vault-dim) 32%, var(--border));
+      border-radius: var(--radius-md);
+    }}
+    .resurface-empty[data-testid="resurface-empty-state"]::before {{
+      content: "";
+      position: absolute;
+      left: 13px;
+      top: 1.05em;
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--vault);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--vault) 16%, transparent);
+    }}
+
+    .resurface-mode[data-affordance-status="unavailable"] .rail-state-value {{
+      color: var(--amber);
+    }}
+    .resurface-empty[data-testid="resurface-degraded-state"] {{
+      position: relative;
+      padding: 11px 13px 11px 31px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      line-height: 1.55;
+      color: var(--fg-2);
+      background: var(--amber-muted);
+      border: 1px solid color-mix(in srgb, var(--amber-dim) 55%, var(--border));
+      border-left: 2px solid var(--amber);
+      border-radius: var(--radius-md);
+    }}
+    .resurface-empty[data-testid="resurface-degraded-state"]::before {{
+      content: "⚠"; 
+      position: absolute;
+      left: 11px;
+      top: 0.72em;
+      font-size: 12px;
+      line-height: 1;
+      color: var(--amber);
+    }}
+
+    @media (prefers-reduced-motion: reduce) {{
+      .resurface-candidate,
+      .resurface-actions,
+      .resurface-action,
+      .resurface-source,
+      .resurface-source::before {{
+        transition: none;
+      }}
+    }}
+
     .rail-alert {{
       border-radius: var(--radius-md);
       font-family: var(--font-mono);

@@ -126,7 +126,11 @@ Current shipped runtime truth is owned by:
   inspect, dismiss, snooze, or pin when those actions are explicitly scoped. No alert, badge,
   notification inbox, focus stealing, or persistent monitoring stream is implied by this mode.
 - Current-state caveat: minimal resurfacing runtime seams exist; full product-surface suggestion
-  orchestration remains target-state.
+  orchestration remains target-state. The read-only card surface now carries a low-pressure
+  visual treatment (Claude-Design pass: scarce bordered cards, provenance-first why-now, a single
+  cool relation glyph, source pointer, receded disabled actions, and a settled-green empty that is
+  unmistakable from the amber degraded state); the dismiss/snooze/pin actions remain disabled
+  pending persistence, and the underlying suggestion/ranking orchestration is still target-state.
 
 ### 4) Act
 
