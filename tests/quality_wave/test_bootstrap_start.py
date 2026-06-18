@@ -176,6 +176,24 @@ class TestBootstrapStartContract:
                 f"make --dry-run {target}; got: {combined[:500]}"
             )
 
+    def test_make_test_targets_honor_vault_root_test_override(self) -> None:
+        """The per-channel VAULT_ROOT_TEST override satisfies the guard and threads through."""
+        operator_vault = "/tmp/uat-per-channel-test-vault"
+        env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT")}
+        env["VAULT_ROOT_TEST"] = operator_vault
+        result = subprocess.run(
+            ["make", "--dry-run", "test-up"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            f"make --dry-run test-up failed with VAULT_ROOT_TEST set: {result.stderr}"
+        )
+        assert operator_vault in (result.stdout + result.stderr), (
+            "Expected VAULT_ROOT_TEST to be honored as the test vault root"
+        )
+
     def test_make_start_test_system_fails_loud_without_vault_root(self) -> None:
         """With no operator vault configured, the test targets refuse to run."""
         env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT")}

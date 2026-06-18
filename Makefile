@@ -2,11 +2,13 @@
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 # Operator-configured test vault root. There is no synthetic default: the test
-# channel binds whatever vault the operator points it at (VAULT_ROOT) — one of
-# their own Obsidian vaults — whose name is operator-owned and never hardcoded.
-# Must be absolute so every caller binds the same vault regardless of CWD (issue
-# #1997 symptom 5). The require-test-vault-root guard fails loud when it is unset.
-TEST_VAULT_ROOT ?= $(VAULT_ROOT)
+# channel binds whatever vault the operator points it at — one of their own
+# Obsidian vaults — whose name is operator-owned and never hardcoded. Honors the
+# per-channel override VAULT_ROOT_TEST first (matching derive_test_channel_env),
+# then the base VAULT_ROOT. Must be absolute so every caller binds the same vault
+# regardless of CWD (issue #1997 symptom 5). The require-test-vault-root guard
+# fails loud when none is set.
+TEST_VAULT_ROOT ?= $(or $(VAULT_ROOT_TEST),$(VAULT_ROOT))
 # Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
 # promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
 # the in-container `db:5432` address is unreachable from the host (issue #1997

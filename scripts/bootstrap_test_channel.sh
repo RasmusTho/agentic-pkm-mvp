@@ -36,7 +36,7 @@ done
 # present, otherwise a repo-local ephemeral scratch vault (gitignored). This keeps
 # the zero-manual-env-exports property for CI without hardcoding a vault name in
 # product code. The scratch vault is a throwaway CI/local fixture, never a real vault.
-BOOTSTRAP_VAULT_ROOT="${VAULT_ROOT:-${VAULT_ROOT_TEST:-${TEST_VAULT_ROOT:-${ROOT}/vault-test}}}"
+BOOTSTRAP_VAULT_ROOT="${VAULT_ROOT_TEST:-${TEST_VAULT_ROOT:-${VAULT_ROOT:-${ROOT}/vault-test}}}"
 
 # ── [1/4] vault init + canonical env + fail-loud preflight ────────────────────
 # `ops bootstrap-test-channel --print-env` runs `vault init`, derives the
