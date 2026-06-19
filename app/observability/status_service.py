@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
 from app.config.environment import active_environment
 from app.events.types import PROMOTE_INTENT_CREATED, PROMOTE_DONE
@@ -979,37 +978,38 @@ def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
     )
 
 
-def _check_v6_seams() -> dict[str, str]:
-    """Check importability of v6 feature seam modules.
+# v6.0 feature-seam probe provider.
+#
+# The probe imports interaction-layer modules (app.api.routes.*) and downward
+# capabilities (app.resurfacing, app.domain.commitments). Doing that import from
+# this Foundation (observability) module is an upward/backward dependency that
+# ADR-0013 forbids and that import-linter cannot see when done via a runtime
+# importlib string. The probe therefore lives in the interaction layer
+# (app.api.v6_seams.check_v6_seams) and registers itself here through this
+# provider hook. When no provider is registered (e.g. a Foundation-only process
+# that never wired the API/CLI), _get_v6_seams returns None and the seam field is
+# simply omitted — Foundation stays upward-free and statically enforceable.
+_V6SeamsProvider = Callable[[], dict[str, str]]
+_v6_seams_provider: Optional[_V6SeamsProvider] = None
 
-    Lives here (observability layer) so both observability.status_service and
-    cli.health can call it without creating an upward import cycle.
+
+def register_v6_seams_provider(provider: _V6SeamsProvider) -> None:
+    """Register the interaction-layer v6.0 seam probe.
+
+    Called by the interaction layer (app.api / app.cli) so this Foundation
+    status service can report seam state without importing the interaction layer.
     """
 
-    def _seam(module: str) -> str:
-        try:
-            importlib.import_module(module)
-            return "enabled"
-        except Exception:
-            return "disabled"
-
-    canvas_gate_on = os.getenv("CANVAS_ENABLED", "0").strip().lower() in _TRUE_VALUES
-    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
-    # Canvas is only truly "enabled" when both the gate is on AND the router imports.
-    # If the gate is on but the import fails, surface "disabled" so the misleading
-    # appearance of an active route does not mask the broken-import case.
-    canvas_state = "enabled" if (canvas_gate_on and canvas_importable) else "disabled"
-    return {
-        "orientation": _seam("app.api.routes.orientation"),
-        "resurfacing": _seam("app.resurfacing"),
-        "commitments": _seam("app.domain.commitments"),
-        "canvas": canvas_state,
-    }
+    global _v6_seams_provider
+    _v6_seams_provider = provider
 
 
 def _get_v6_seams() -> dict | None:
+    provider = _v6_seams_provider
+    if provider is None:
+        return None
     try:
-        return _check_v6_seams()
+        return provider()
     except Exception:
         return None
 
