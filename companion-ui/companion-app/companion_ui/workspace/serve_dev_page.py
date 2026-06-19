@@ -369,8 +369,11 @@ def _render_workspace_breadcrumb(
     §7.3 / #1337: replaces the chip strip (path · artifact · hash) with a
     single breadcrumb line; artifact id and hash move inside the disclosure.
     """
-    # Path segments — keep raw slashes as separators for readability
-    path_segments = note_path.replace("&amp;", "&").split("/")
+    # Path segments — keep raw slashes as separators for readability. The
+    # incoming note_path is already HTML-escaped, so fully unescape before
+    # re-escaping each segment once; only reversing &amp; would double-escape
+    # every other metacharacter (e.g. an apostrophe -> literal "&#x27;").
+    path_segments = _html.unescape(note_path).split("/")
     path_html = " / ".join(_e(p) for p in path_segments if p)
 
     # Pull up to 2 inline meta items from frontmatter (kind + review_state)
@@ -422,7 +425,10 @@ def _render_workspace_breadcrumb(
             f'<div class="breadcrumb-identity-chips">{artifact_chip}{hash_chip}</div>'
         )
 
-    raw_path = note_path.replace("&amp;", "&")
+    # Fully unescape the already-escaped note_path so the data attribute is
+    # escaped exactly once; JS reads data-note-path as the real path (line ~1291),
+    # so a double-escaped value would hand JS the wrong path.
+    raw_path = _html.unescape(note_path)
     return (
         f'<div class="workspace-breadcrumb" data-testid="workspace-breadcrumb" data-note-path="{_e(raw_path)}">'
         f'<span class="breadcrumb-path">{path_html}</span>'
@@ -3425,7 +3431,9 @@ def _render_suggestion_flow_region(fields: dict) -> str:
 def _render_portrait_sheet(sheet: dict) -> str:
     if not sheet:
         return ""
-    visible = "true" if sheet.get("is_visible") else "false"
+    # ARIA defines only the lowercase tokens true/false; emit them directly
+    # rather than stringifying a Python bool (which yields "True"/"False").
+    hidden = "false" if sheet.get("is_visible") else "true"
     return f"""
     <aside
       class="portrait-sheet"
@@ -3439,7 +3447,7 @@ def _render_portrait_sheet(sheet: dict) -> str:
       data-forbidden-auto-snap="{_e(sheet.get("forbidden_auto_snap", ""))}"
       data-touch-target-min-height="{_e(sheet.get("touch_target_min_height", ""))}"
       data-receipts-strip-position="{_e(sheet.get("receipts_strip_position", ""))}"
-      aria-hidden="{visible == "false"}">
+      aria-hidden="{hidden}">
     </aside>"""
 
 
@@ -4807,10 +4815,14 @@ def _is_remote_page_origin(hostname: str) -> bool:
     host = (hostname or "").strip().lower()
     if not host:
         return False
-    # Strip a trailing port if one slipped through (Host is "name:port").
-    if host.count(":") == 1:
+    # Strip a trailing port if one slipped through (Host is "name:port"). A
+    # bracketed IPv6 literal ("[::1]" / "[::1]:port") has >=2 colons, so the
+    # single-colon guard would miss its port — parse the bracket form first.
+    if host.startswith("["):
+        end = host.find("]")
+        host = host[1:end] if end != -1 else host.strip("[]")
+    elif host.count(":") == 1:
         host = host.rsplit(":", 1)[0]
-    host = host.strip("[]")  # bare IPv6 brackets
     return host not in ("localhost", "127.0.0.1", "::1", "")
 
 
@@ -5377,7 +5389,7 @@ def _render_orientation_resurface(
           data-authority="read-only-projection">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Resurface</div>
-            <span class="orientation-count">{len(rows)}</span>
+            <span class="orientation-count">{len(capped_candidates)}</span>
           </div>
           {reason_html}
           {body}
