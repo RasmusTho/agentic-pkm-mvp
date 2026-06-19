@@ -168,6 +168,17 @@ def test_unterminated_quoted_scalar_still_malformed() -> None:
     )
 
 
+def test_apostrophe_led_token_after_space_no_parse_error() -> None:
+    # #2181 — an apostrophe-led token following an internal space is a valid
+    # unquoted scalar, not an unterminated quoted scalar.
+    for value in ("The week 'twas before", "the 'thing", "Reading 'The Hobbit' notes"):
+        document = parse_vault_markdown(f"---\ntitle: {value}\n---\nBody.\n")
+        assert not any(
+            diagnostic.code == "frontmatter_parse_error"
+            for diagnostic in document.diagnostics
+        ), f"valid frontmatter value {value!r} must not be flagged malformed"
+
+
 def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
     document = parse_vault_markdown(
         "````markdown\n"

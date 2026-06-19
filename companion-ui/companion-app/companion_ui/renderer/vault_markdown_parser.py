@@ -122,12 +122,15 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
         if not line.startswith((" ", "\t", "-")) and ":" not in line:
             return True
         # A YAML scalar quote cannot span lines in this simplistic model, so
-        # quote state is tracked per line and reset at end-of-line. A quote is
-        # only treated as a string delimiter when it begins a value (the first
-        # non-space character after the "key:"), so a lone apostrophe inside an
-        # unquoted value (e.g. "title: Rasmus's note") is not mistaken for an
-        # unterminated quoted scalar. A genuinely unterminated quoted scalar on
-        # a single line (e.g. 'title: "oops') is still flagged.
+        # quote state is tracked per line and reset at end-of-line. A quote
+        # opens a string scalar ONLY when it is the first non-space character of
+        # the value (right after the first "key:" separator, or at the start of
+        # a list/scalar line). Whitespace is transparent and does not re-arm the
+        # value start, so an apostrophe anywhere inside an unquoted value — the
+        # possessive "Rasmus's note" or an apostrophe-led token after a space,
+        # "title: The week 'twas before" — is not mistaken for an unterminated
+        # quoted scalar. A genuinely unterminated quoted scalar (the value in
+        # 'title: "oops') is still flagged.
         quote: str | None = None
         at_value_start = True
         for char in line:
@@ -135,15 +138,24 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
                 if char == quote:
                     quote = None
                 continue
-            if char in {"'", '"'} and at_value_start:
-                quote = char
+            if char in {" ", "\t"}:
+                continue  # transparent: preserves the current value-start state
+            if char in {"'", '"'}:
+                if at_value_start:
+                    quote = char
+                at_value_start = False
             elif char in {"[", "{"}:
                 stack.append(char)
+                at_value_start = False
             elif char in bracket_pairs:
                 if not stack or stack[-1] != bracket_pairs[char]:
                     return True
                 stack.pop()
-            at_value_start = char in {" ", "\t", ":"}
+                at_value_start = False
+            elif char == ":":
+                at_value_start = True  # next non-space char begins the value
+            else:
+                at_value_start = False
         if quote:
             return True
 
