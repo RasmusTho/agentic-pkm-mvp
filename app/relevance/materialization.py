@@ -19,7 +19,7 @@ from app.knowledge.write_ops import write_note_relative
 from app.relevance.schema import Moment
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import render_markdown_settings
-from app.vault.paths import get_vault_system_dir_rel
+from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 MOMENT_MATERIALIZE_ACTION = "moment.materialize"
@@ -51,7 +51,10 @@ def materialize_moment(
     """Write the moment artifact via the write guard and emit a receipt."""
 
     vault_root = _vault_root(vault_context)
-    system_dir = get_vault_system_dir_rel(vault_root)
+    # Degrade gracefully so the default-on CRE tick can materialize moments on a
+    # vault created by ``initialize_vault`` that has no layout note /
+    # system-settings.yaml yet (only ``settings/*.md``).
+    system_dir = resolve_vault_system_dir_rel_or_default(vault_root)
     artifact_path = f"{system_dir}/moments/{moment.uuid}.md"
     receipt_id = uuid4().hex
     trace_id = uuid4().hex

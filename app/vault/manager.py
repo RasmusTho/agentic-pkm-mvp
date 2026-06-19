@@ -260,6 +260,16 @@ class VaultManager:
             gitignore_path.write_text(LOCAL_GITIGNORE, encoding="utf-8")
             created.append(str(gitignore_path.relative_to(expanded)))
 
+        # NOTE: initialize_vault deliberately does NOT pre-write a
+        # ``vault.layout.md`` here. Bootstrapping a default layout at init time
+        # changed the established capture-scoped layout for seed/UAT flows
+        # (regressing the watcher scope_glob and the channel-bootstrap settings
+        # layout). The CRE path is instead made crash-proof at the read side:
+        # ``resolve_vault_system_dir_rel_or_default`` (used by the relevance
+        # evaluator and materialization) degrades to the packaged default system
+        # folder on an init-only vault, so the default-on tick still materializes
+        # without forcing a layout note here.
+
         context = self.select_vault(expanded, remember=remember)
         return VaultInitializationResult(
             context=context,

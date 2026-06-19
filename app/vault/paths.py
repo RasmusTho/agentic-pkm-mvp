@@ -224,6 +224,52 @@ def get_vault_system_dir_rel(vault_root: Path | None = None) -> str:
     return resolve_vault_system_dir_rel(root).value
 
 
+def _default_system_dir_rel() -> str:
+    """The packaged default system folder name.
+
+    Used as a graceful fallback for runtime paths that must keep working on a
+    vault that was created by ``initialize_vault`` and carries only
+    ``settings/*.md`` (no ``vault.layout.md`` / ``system-settings.yaml``).
+    Importing lazily avoids a hard dependency on the layout/settings packages at
+    module import time.
+    """
+
+    try:
+        from app.settings.default_vault_layout import load_default_vault_layout
+
+        payload = load_default_vault_layout()
+        layout = payload.get("layout")
+        if isinstance(layout, dict):
+            value = layout.get("system_folder")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        paths = payload.get("paths")
+        if isinstance(paths, dict):
+            value = paths.get("system_dir_rel")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    except Exception:
+        pass
+    return "_system"
+
+
+def resolve_vault_system_dir_rel_or_default(vault_root: Path | None = None) -> str:
+    """Resolve the vault system dir, degrading to the packaged default.
+
+    The deterministic resolver raises when a vault carries no layout note,
+    ``system-settings.yaml``, or env override. The Contextual Relevance Engine
+    runs on a default-on background tick that must not raise on a freshly
+    ``initialize_vault``-created vault, so it resolves through this helper and
+    falls back to the packaged default system folder instead of raising.
+    """
+
+    root = _resolve_vault_root(vault_root)
+    try:
+        return resolve_vault_system_dir_rel(root).value
+    except FileNotFoundError:
+        return _default_system_dir_rel()
+
+
 def get_vault_runtime_dir_rel(vault_root: Path | None = None) -> str:
     root = _resolve_vault_root(vault_root)
     return resolve_vault_runtime_dir_rel(root).value
@@ -240,4 +286,5 @@ __all__ = [
     "resolve_vault_inbox_dir_rel",
     "resolve_vault_runtime_dir_rel",
     "resolve_vault_system_dir_rel",
+    "resolve_vault_system_dir_rel_or_default",
 ]

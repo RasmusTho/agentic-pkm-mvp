@@ -12,6 +12,7 @@ from app.vault.paths import (
     get_vault_inbox_dir_rel,
     get_vault_runtime_dir_rel,
     get_vault_system_dir_rel,
+    resolve_vault_system_dir_rel_or_default,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -214,6 +215,40 @@ def test_paths_do_not_fallback_to_other_vault_settings(monkeypatch, tmp_path: Pa
         get_vault_runtime_dir_rel(target_vault)
     with pytest.raises(FileNotFoundError):
         get_vault_system_dir_rel(target_vault)
+
+
+def _write_layout_note(path: Path, *, system_folder: str, inbox_folder: str = "Inbox") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        f"system_folder: {system_folder}\n"
+        f"inbox_folder: {inbox_folder}\n"
+        "desk_folder: Desk\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+
+def test_system_dir_default_only_handles_missing_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+
+    assert resolve_vault_system_dir_rel_or_default(tmp_path) == "⚙️ System"
+
+
+def test_system_dir_default_does_not_mask_ambiguous_layout_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+
+    _write_layout_note(tmp_path / "A" / "vault.layout.md", system_folder="A")
+    _write_layout_note(tmp_path / "B" / "vault.layout.md", system_folder="B")
+
+    with pytest.raises(ValueError, match="Multiple vault.layout.md"):
+        resolve_vault_system_dir_rel_or_default(tmp_path)
 
 
 def _init_vault_with_handoff(vault_root: Path, handoff: str) -> "VaultManager":
