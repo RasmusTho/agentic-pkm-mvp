@@ -11,8 +11,15 @@ from __future__ import annotations
 
 from html import escape
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
 
 _REF_LINK_CLASS = "moment-ref"
+
+# Vault refs are free-form, vault-derived strings. HTML-escaping neutralizes
+# attribute breakout but NOT a dangerous URL scheme, so an href is only emitted
+# for a vault-relative path (no scheme) or an explicit http/https URL. Anything
+# else (javascript:, data:, file:, vbscript:, ...) is rendered as inert text.
+_SAFE_REF_SCHEMES = frozenset({"http", "https"})
 
 
 def render_now_surface_html(moments: Sequence[Mapping[str, Any]] | None = None) -> str:
@@ -55,9 +62,13 @@ def _render_moment_card(moment: Mapping[str, Any]) -> str:
     authority = escape(str(moment.get("authority", "non-authoritative")))
     nudge_html = _render_in_app_nudge(moment)
 
-    refs_html = "\n".join(
-        _render_ref(ref) for ref in moment.get("surfaced_refs", []) or []
-    )
+    refs = moment.get("surfaced_refs", []) or []
+    # Only emit the <ul> when there is at least one ref; a ref-less moment must
+    # not inject an empty list node into the DOM / accessibility tree.
+    refs_block = ""
+    if refs:
+        refs_html = "\n".join(_render_ref(ref) for ref in refs)
+        refs_block = f'      <ul class="moment-refs">\n{refs_html}\n      </ul>\n'
     return (
         f'    <li class="moment-card" data-moment-id="{moment_id}" '
         f'data-urgency="{band}" data-authority="{authority}">\n'
@@ -65,7 +76,7 @@ def _render_moment_card(moment: Mapping[str, Any]) -> str:
         f'      <p class="moment-meta"><span class="moment-urgency">{band}</span> · '
         f'<span class="moment-basis">{basis}</span></p>\n'
         f"{nudge_html}"
-        f'      <ul class="moment-refs">\n{refs_html}\n      </ul>\n'
+        f"{refs_block}"
         "    </li>"
     )
 
@@ -102,15 +113,25 @@ def _render_in_app_nudge(moment: Mapping[str, Any]) -> str:
     )
 
 
+def _ref_target_is_safe(target: str) -> bool:
+    """True for a vault-relative path (no scheme) or an http/https URL."""
+    scheme = urlsplit(target.strip()).scheme.lower()
+    return scheme == "" or scheme in _SAFE_REF_SCHEMES
+
+
 def _render_ref(ref: Mapping[str, Any]) -> str:
     target = str(ref.get("ref", ""))
-    href = escape(target.replace(" ", "%20"), quote=True)
     label = escape(target)
     why = escape(str(ref.get("why", "")))
-    return (
-        f'        <li><a class="{_REF_LINK_CLASS}" href="{href}">{label}</a>'
-        f" — {why}</li>"
-    )
+    if _ref_target_is_safe(target):
+        href = escape(target.replace(" ", "%20"), quote=True)
+        link = f'<a class="{_REF_LINK_CLASS}" href="{href}">{label}</a>'
+    else:
+        # Unsafe scheme — show the label as inert text, never an executable href.
+        link = (
+            f'<span class="{_REF_LINK_CLASS}" data-blocked-ref="true">{label}</span>'
+        )
+    return f"        <li>{link} — {why}</li>"
 
 
 __all__ = ["render_now_surface_html"]
