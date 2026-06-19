@@ -138,8 +138,12 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
                 if char == quote:
                     quote = None
                 continue
-            if char in {" ", "\t"}:
-                continue  # transparent: preserves the current value-start state
+            if char in {" ", "\t", "-"}:
+                # Whitespace and a leading list-item dash are transparent: they
+                # preserve the value-start state, so an opening quote right after
+                # "- " (an unterminated list scalar like '- "oops') is still
+                # flagged, while an apostrophe-led token mid-value is not.
+                continue
             if char in {"'", '"'}:
                 if at_value_start:
                     quote = char

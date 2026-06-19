@@ -179,6 +179,17 @@ def test_apostrophe_led_token_after_space_no_parse_error() -> None:
         ), f"valid frontmatter value {value!r} must not be flagged malformed"
 
 
+def test_unterminated_list_item_scalar_still_malformed() -> None:
+    # #2181 — detection must survive for indented list items: an unterminated
+    # quoted scalar after "- " is still flagged, like the key/value case.
+    document = parse_vault_markdown('---\ntags:\n  - "oops\n---\nBody.\n')
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
 def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
     document = parse_vault_markdown(
         "````markdown\n"
