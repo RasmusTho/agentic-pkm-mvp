@@ -222,6 +222,23 @@ def test_valid_flow_lists_are_not_flagged() -> None:
         ), f"valid flow list {value!r} must not be flagged malformed"
 
 
+def test_nested_list_marker_unterminated_scalar_still_malformed() -> None:
+    # #2181 — each leading "- " is transparent, including nested markers, so an
+    # unterminated scalar after a nested "- - " is still flagged.
+    document = parse_vault_markdown('---\ntags:\n  - - "oops\n---\nBody.\n')
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+    # A well-formed nested list is not flagged.
+    ok = parse_vault_markdown("---\ntags:\n  - - alpha\n---\nBody.\n")
+    assert not any(
+        diagnostic.code == "frontmatter_parse_error" for diagnostic in ok.diagnostics
+    )
+
+
 def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
     document = parse_vault_markdown(
         "````markdown\n"

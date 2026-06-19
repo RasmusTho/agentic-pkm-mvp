@@ -133,7 +133,7 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
         # 'title: "oops') is still flagged.
         quote: str | None = None
         at_value_start = True
-        seen_content = False
+        in_marker_prefix = True  # leading indentation + nested "- " list markers
         for idx, char in enumerate(line):
             if quote:
                 if char == quote:
@@ -141,20 +141,19 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
                 continue
             if char in {" ", "\t"}:
                 continue  # whitespace is transparent; preserves value-start state
-            # A leading "- " is a YAML list marker (a hyphen is only a marker
-            # when it is the first content and is followed by whitespace); it is
-            # transparent so the value after it keeps value-start, e.g. an
-            # unterminated list scalar '- "oops' is still flagged. A hyphen
-            # anywhere else (e.g. the scalar "-'foo") is ordinary value content.
+            # Each leading "- " (dash followed by whitespace) is a YAML list
+            # marker — possibly nested ("- - value") — and stays transparent
+            # until actual scalar content starts, so an unterminated list scalar
+            # like '- "oops' is still flagged. A hyphen that is not a leading
+            # marker (e.g. the scalar "-'foo") is ordinary value content.
             if (
-                char == "-"
-                and not seen_content
+                in_marker_prefix
+                and char == "-"
                 and idx + 1 < len(line)
                 and line[idx + 1] in " \t"
             ):
-                seen_content = True
                 continue
-            seen_content = True
+            in_marker_prefix = False
             if char in {"'", '"'}:
                 if at_value_start:
                     quote = char
