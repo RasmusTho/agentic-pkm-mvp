@@ -731,6 +731,17 @@ done
 
 check_startup_disk_space
 
+if [ "${BUILDEROPS_BOOTSTRAP:-1}" = "1" ] && [ "${PKM_ENVIRONMENT:-}" = "dev" ]; then
+  set_phase "builderops_bootstrap"
+  if ! scripts/start_builderops_services.sh \
+    --repo "${BUILDEROPS_BOOTSTRAP_REPO:-RasmusTho/agentic-pkm-mvp}" \
+    --startup-status-path "$startup_status_path" \
+    --status-output "$ROOT/tmp/builderops_startup_status.json"; then
+    echo "WARNING: BuilderOps bootstrap failed unexpectedly; continuing runtime startup in degraded BuilderOps mode" >&2
+  fi
+  mark_phase_ok "builderops_bootstrap"
+fi
+
 flight_recorder_log_path="$ROOT/tmp/flightrecorder-$(date -u +"%Y%m%d-%H%M%S").log"
 flight_recorder_pid=""
 if [ "$START_FLIGHT_RECORDER" -eq 1 ]; then

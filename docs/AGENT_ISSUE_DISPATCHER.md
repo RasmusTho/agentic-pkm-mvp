@@ -261,6 +261,31 @@ python -m app.dispatcher status --json   # verify db_exists: true
 make dispatcher-sync          # runs: python -m app.dispatcher pull --repo <repo> only
 ```
 
+### Dev startup bootstrap
+
+`make dev-start-full` runs `scripts/start_full_system.sh` with `PKM_ENVIRONMENT=dev`. During that
+dev/runtime startup path, `scripts/start_full_system.sh` invokes
+`scripts/start_builderops_services.sh` before Compose services are started.
+
+The bootstrap is idempotent and operational-only:
+- it verifies dispatcher status and initializes the local dispatcher database when missing;
+- it verifies BuilderOps Vault readiness through `scripts/builderops_cli.sh`, the supported
+  standalone wrapper around the BuilderOps CLI;
+- it attempts dispatcher GitHub pull-sync only when `gh` is installed, authenticated, and the core
+  REST rate limit is above the startup safety threshold;
+- if GitHub access is unavailable, unauthenticated, rate-limited, or sync fails, startup continues
+  and records a degraded BuilderOps bootstrap reason instead of failing the runtime stack.
+
+The structured receipt is written to `tmp/builderops_startup_status.json` and merged under
+`builderops_bootstrap` in `tmp/startup_status.json`. The receipt is operational coordination state:
+GitHub Issues/PRs/CI remain durable delivery truth, dispatcher state remains a local lease/queue
+surface, and GitHub Project remains an optional projection.
+
+GitHub Project v2 / GraphQL reconciliation stays out of dispatcher `next`, `claim`, `heartbeat`,
+and `complete`. Low-frequency/batched projection repair is exposed separately through
+`scripts/reconcile_builderops_project_status.sh`, which delegates to the existing project
+reconciliation helper.
+
 ### Setup on each agent machine
 
 Install a wrapper script that proxies dispatcher commands over SSH:

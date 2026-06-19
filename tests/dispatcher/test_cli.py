@@ -444,6 +444,27 @@ def test_pull_command_upserts_issues(tmp_env):
     assert 102 in task_ids
 
 
+def test_pull_command_reports_sync_source_failure(tmp_env):
+    """pull command surfaces adapter-recorded source failures in its receipt."""
+    from unittest.mock import MagicMock, patch
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    _run(["init", "--json"])
+
+    mock_source = MagicMock(spec=GitHubIssueSource)
+    mock_source.list_issues.side_effect = RuntimeError("network error")
+    mock_source.get_rate_limit.return_value = None
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=mock_source):
+        code, data = _run(["pull", "--repo", "test/repo", "--json"])
+
+    assert code == 1
+    assert data["ok"] is False
+    assert data["provider"] == "github"
+    assert data["sync_result"] == "error"
+    assert "network error" in data["error"]
+
+
 # ---------------------------------------------------------------------------
 # AC: dispatcher next --json on a missing DB exits 1 with
 #     {"ok": false, "error": "...dispatcher not initialised..."}
