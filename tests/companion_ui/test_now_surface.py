@@ -90,6 +90,20 @@ def test_ref_href_blocks_dangerous_scheme() -> None:
     assert 'href="Projects/Contextual%20Relevance%20Engine.md"' in html
 
 
+def test_ref_href_malformed_url_renders_inert() -> None:
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [{"ref": "http://[bad", "why": "malformed"}],
+    }
+
+    html = render_now_surface_html([moment])
+
+    assert "http://[bad" in html
+    assert 'href="http://[bad"' not in html
+    assert 'data-blocked-ref="true"' in html
+
+
 def test_empty_refs_omits_ul() -> None:
     """#2163 — a moment with no surfaced_refs renders no empty <ul>."""
     no_refs = {"moment_id": "m1", "title": "Moment", "surfaced_refs": []}

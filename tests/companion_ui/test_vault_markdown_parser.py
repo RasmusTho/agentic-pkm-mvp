@@ -154,6 +154,21 @@ def test_apostrophe_value_no_parse_error() -> None:
     )
 
 
+def test_unquoted_quote_after_mid_value_space_no_parse_error() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        'title: Notes about "PKM\n'
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert document.frontmatter is not None
+    assert not any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
 def test_unterminated_quoted_scalar_still_malformed() -> None:
     document = parse_vault_markdown(
         "---\n"
@@ -212,6 +227,21 @@ def test_unterminated_flow_list_scalar_still_malformed() -> None:
     )
 
 
+def test_unterminated_quoted_indented_value_still_malformed() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        "description:\n"
+        '  "oops\n'
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
 def test_valid_flow_lists_are_not_flagged() -> None:
     # #2181 — well-formed flow arrays (plain and quoted entries) parse cleanly.
     for value in ("[alpha, beta, gamma]", "['a', 'b']", '["x", "y"]'):
@@ -236,6 +266,21 @@ def test_nested_list_marker_unterminated_scalar_still_malformed() -> None:
     ok = parse_vault_markdown("---\ntags:\n  - - alpha\n---\nBody.\n")
     assert not any(
         diagnostic.code == "frontmatter_parse_error" for diagnostic in ok.diagnostics
+    )
+
+
+def test_sequence_item_mid_value_quote_no_parse_error() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        "tags:\n"
+        '  - notes about "PKM\n'
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert not any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
     )
 
 
