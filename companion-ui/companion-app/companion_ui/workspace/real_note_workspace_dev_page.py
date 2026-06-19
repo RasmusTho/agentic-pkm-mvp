@@ -1196,11 +1196,13 @@ def _commitment_item_from_raw(
         return None
     summary = str(raw.get("summary") or "").strip()
     target_ref = str(raw.get("target_ref") or "").strip()
-    # A commitment with neither a summary nor a target reference is not
-    # renderable as a meaningful read-only projection; skip it rather than
-    # emitting an empty row.
-    if not summary and not target_ref:
-        return None
+    # An id-only commitment (no summary, no target reference) is still a real
+    # active commitment the durable read returned. Dropping it here can collapse
+    # a non-empty surface into a false ``empty`` "nothing here" state, which is
+    # the one place a confident zero is legitimate — so it must never be implied
+    # by a render-normalization skip. Render it as a fallback row keyed on its
+    # commitment_id/kind/state instead of returning ``None``; the downstream
+    # renderer already omits the absent summary/target sub-elements gracefully.
     commitment_id = str(
         raw.get("commitment_id") or raw.get("id") or f"{family}-{index}"
     )

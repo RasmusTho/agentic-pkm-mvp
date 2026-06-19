@@ -3858,12 +3858,23 @@ def _render_commitment_item(item: dict) -> str:
         if render_kind == "review"
         else ""
     )
-    summary_html = (
-        '<div class="commitment-summary" data-testid="commitment-summary">'
-        f"{cyclical}{_e(_cap(summary))}</div>"
-        if summary
-        else ""
-    )
+    if summary:
+        summary_html = (
+            '<div class="commitment-summary" data-testid="commitment-summary">'
+            f"{cyclical}{_e(_cap(summary))}</div>"
+        )
+    elif not target_ref:
+        # Id-only commitment (no summary, no target_ref): still a real active
+        # commitment the durable read returned, so it must remain a legible
+        # keyed row rather than collapsing the surface into a false ``empty``
+        # state. Surface its identifier so the row is not visually blank.
+        summary_html = (
+            '<div class="commitment-summary commitment-summary-fallback" '
+            'data-testid="commitment-summary-fallback">'
+            f"{cyclical}{commitment_id}</div>"
+        )
+    else:
+        summary_html = ""
     kind_tag = (
         '<span class="commitment-kind-tag" data-testid="commitment-kind-tag">'
         f"{_e(kind)}</span>"
