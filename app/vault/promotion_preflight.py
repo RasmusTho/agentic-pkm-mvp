@@ -37,7 +37,8 @@ def vault_settings_preflight(vault_path: Path | str) -> VaultSettingsPreflight:
     """
 
     path = Path(vault_path).expanduser()
-    context = VaultManager().validate_vault(path)
+    manager = VaultManager()
+    context = manager.validate_vault(path)
     status = context.status
     detail = context.validation_error or ""
     initialized = status == "selected"
@@ -45,6 +46,15 @@ def vault_settings_preflight(vault_path: Path | str) -> VaultSettingsPreflight:
     blocking = not initialized
     if status == "uninitialized":
         remedy = f"python -m app.cli vault init --path {path}"
+    elif initialized and not manager.permissions_for_context(context).enable_vault_watcher:
+        # A `selected` vault whose settings/local.md disables the watcher still
+        # fail-exits the runtime at startup (app/watcher/config.py:92-93), so
+        # prepare-promotion must treat it as blocking rather than green-lighting a
+        # vault that cannot boot. Distinct from `uninitialized`: the settings exist
+        # but disable the watcher, so the remedy is the settings file, not init.
+        blocking = True
+        detail = detail or "settings/local.md disables the vault watcher (enableVaultWatcher: false)"
+        remedy = f"set enableVaultWatcher: true in {path / 'settings' / 'local.md'}"
     return VaultSettingsPreflight(
         vault_path=str(path),
         status=status,

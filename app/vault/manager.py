@@ -347,17 +347,28 @@ class VaultManager:
 
     def _remember_context(self, context: VaultContext, vault_path: Path) -> None:
         ref = f"path:{vault_path.expanduser()}"
-        self.app_local_store.upsert_known_vault(
-            KnownVaultRef(
-                ref=ref,
-                path=str(vault_path.expanduser()),
-                vault_id=context.active_vault_id,
-                vault_name=context.active_vault_name,
-                local_instance_id=context.local_instance_id,
-                last_opened_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            ),
-            make_active=True,
+        known = KnownVaultRef(
+            ref=ref,
+            path=str(vault_path.expanduser()),
+            vault_id=context.active_vault_id,
+            vault_name=context.active_vault_name,
+            local_instance_id=context.local_instance_id,
+            last_opened_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         )
+        try:
+            self.app_local_store.upsert_known_vault(known, make_active=True)
+        except (OSError, MarkdownSettingsError):
+            # A corrupt app-local registry (Git conflict markers, malformed
+            # frontmatter) must not 500 picker recovery: selecting/initializing a
+            # vault with remember=True over a corrupt registry should still
+            # succeed. Back up the unreadable file and re-seed a fresh registry so
+            # the selection is remembered instead of re-raising. (#2185)
+            logger.warning(
+                "app-local registry unreadable while remembering vault; backing up and re-seeding",
+                exc_info=True,
+            )
+            self.app_local_store.backup_corrupt_and_reset()
+            self.app_local_store.upsert_known_vault(known, make_active=True)
 
     def _emit_changed(self, previous: VaultContext, next_context: VaultContext) -> None:
         event = VaultChangedEvent(

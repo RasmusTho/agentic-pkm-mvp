@@ -16,7 +16,7 @@ import click
 from app.vault.manager import get_vault_manager
 from app.vault.promotion_preflight import vault_settings_preflight
 
-_ROLES = ["primary", "automationNode", "testNode", "readOnlySatellite"]
+_ROLES = ["primary", "satellite", "automationNode", "testNode", "readOnlySatellite"]
 
 
 @click.group(help="Vault settings management.")

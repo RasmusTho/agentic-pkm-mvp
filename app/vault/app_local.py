@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -172,6 +173,27 @@ class AppLocalSettingsStore:
             settings.last_active_vault_ref = item.ref
         self.save(settings)
         return settings
+
+    def backup_corrupt_and_reset(self) -> Path | None:
+        """Move an unreadable registry aside so a fresh one can be written.
+
+        A corrupt app-local registry (Git conflict markers, malformed
+        frontmatter) makes ``load()`` raise, which would otherwise 500 picker
+        recovery. Rename the bad file to a timestamped ``.corrupt-*`` sibling so
+        the next ``save()`` writes a clean registry while preserving the original
+        for forensics. Returns the backup path, or ``None`` when there is no file
+        to back up. (#2185)
+        """
+        if not self.path.exists():
+            return None
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}")
+        suffix = 1
+        while backup.exists():
+            backup = self.path.with_name(f"{self.path.name}.corrupt-{stamp}-{suffix}")
+            suffix += 1
+        os.replace(self.path, backup)
+        return backup
 
 
 def _optional_str(value: object) -> str | None:
