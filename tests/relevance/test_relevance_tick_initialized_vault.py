@@ -76,24 +76,24 @@ def _initialized_vault(tmp_path: Path) -> tuple[VaultManager, Path, object]:
     return manager, vault, context
 
 
-def test_initialize_vault_bootstraps_layout_so_resolver_resolves(
+def test_initialize_vault_resolver_degrades_to_default(
     tmp_path: Path, clear_layout_env: None
 ) -> None:
-    """initialize_vault bootstraps vault.layout.md; the strict resolver no longer raises.
+    """On an init-only vault the CRE path resolves via the graceful default.
 
-    Pre-fix, ``get_vault_system_dir_rel`` raised ``FileNotFoundError`` here
-    because only ``settings/*.md`` existed.
+    initialize_vault intentionally does not pre-write ``vault.layout.md`` (that
+    regressed the capture-scoped seed/UAT layout). Instead the read-side helper
+    the CRE evaluator/materialization use, ``resolve_vault_system_dir_rel_or_default``,
+    returns the packaged default system folder rather than raising, so the
+    default-on relevance tick never crashes on a freshly initialized vault.
     """
 
     _manager, vault, _context = _initialized_vault(tmp_path)
 
-    # A layout note exists (the legacy bridge runtime helpers read).
-    assert list(vault.rglob("vault.layout.md")), "initialize_vault must bootstrap vault.layout.md"
-
-    # The strict resolver resolves rather than raising.
-    system_dir = get_vault_system_dir_rel(vault)
+    # The graceful resolver (used on the production CRE path) returns a usable
+    # default system dir even though no layout note / system-settings.yaml exists.
+    system_dir = resolve_vault_system_dir_rel_or_default(vault)
     assert system_dir
-    assert (vault / system_dir).is_dir()
 
 
 def test_relevance_tick_materializes_on_initialized_vault(
@@ -116,7 +116,7 @@ def test_relevance_tick_materializes_on_initialized_vault(
     )
 
     assert summary["materialized"] >= 1, summary
-    system_dir = get_vault_system_dir_rel(vault)
+    system_dir = resolve_vault_system_dir_rel_or_default(vault)
     moments = list((vault / system_dir / "moments").glob("*.md"))
     assert moments, "the tick must write a moment artifact under the resolved system dir"
 

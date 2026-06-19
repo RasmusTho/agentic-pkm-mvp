@@ -260,19 +260,16 @@ class VaultManager:
             gitignore_path.write_text(LOCAL_GITIGNORE, encoding="utf-8")
             created.append(str(gitignore_path.relative_to(expanded)))
 
-        # Bootstrap the legacy layout note so runtime helpers that read
-        # ``vault.layout.md`` (e.g. the deterministic CRE path resolver) work on a
-        # freshly initialized vault. Without this, ``settings/*.md`` exists but no
-        # ``vault.layout.md`` / ``system-settings.yaml`` does, so
-        # ``resolve_vault_system_dir_rel`` raises and the default-on relevance tick
-        # materializes nothing. Best-effort: never fail vault init on a layout
-        # bootstrap error (the CRE resolvers degrade gracefully on their own).
-        try:
-            from app.vault.layout import ensure_vault_layout
-
-            ensure_vault_layout(expanded)
-        except Exception:  # pragma: no cover - defensive bootstrap
-            logger.warning("vault layout bootstrap during initialize_vault failed", exc_info=True)
+        # NOTE: initialize_vault deliberately does NOT pre-write a
+        # ``vault.layout.md`` here. Bootstrapping a default layout at init time
+        # changed the established capture-scoped layout for seed/UAT flows
+        # (regressing the watcher scope_glob and the channel-bootstrap settings
+        # layout). The CRE path is instead made crash-proof at the read side:
+        # ``resolve_vault_system_dir_rel_or_default`` (used by the relevance
+        # evaluator and materialization) degrades to the packaged default system
+        # folder on an init-only vault, so the default-on tick still materializes
+        # without forcing a layout note here. Proactive layout bootstrap remains a
+        # bounded follow-up (issue #2183 / review thread on PR #1998).
 
         context = self.select_vault(expanded, remember=remember)
         return VaultInitializationResult(
