@@ -113,7 +113,6 @@ def _validate_frontmatter(frontmatter: str, raw_markdown: str) -> list[MarkdownD
 
 def _frontmatter_looks_malformed(frontmatter: str) -> bool:
     stack: list[str] = []
-    quote: str | None = None
     bracket_pairs = {"]": "[", "}": "{"}
 
     for line in frontmatter.splitlines():
@@ -122,12 +121,21 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
             continue
         if not line.startswith((" ", "\t", "-")) and ":" not in line:
             return True
+        # A YAML scalar quote cannot span lines in this simplistic model, so
+        # quote state is tracked per line and reset at end-of-line. A quote is
+        # only treated as a string delimiter when it begins a value (the first
+        # non-space character after the "key:"), so a lone apostrophe inside an
+        # unquoted value (e.g. "title: Rasmus's note") is not mistaken for an
+        # unterminated quoted scalar. A genuinely unterminated quoted scalar on
+        # a single line (e.g. 'title: "oops') is still flagged.
+        quote: str | None = None
+        at_value_start = True
         for char in line:
             if quote:
                 if char == quote:
                     quote = None
                 continue
-            if char in {"'", '"'}:
+            if char in {"'", '"'} and at_value_start:
                 quote = char
             elif char in {"[", "{"}:
                 stack.append(char)
@@ -135,8 +143,11 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
                 if not stack or stack[-1] != bracket_pairs[char]:
                     return True
                 stack.pop()
+            at_value_start = char in {" ", "\t", ":"}
+        if quote:
+            return True
 
-    return bool(stack or quote)
+    return bool(stack)
 
 
 def _iter_non_fenced_spans(body_markdown: str, body_offset: int) -> Iterator[tuple[str, int]]:
