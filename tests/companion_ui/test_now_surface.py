@@ -105,3 +105,36 @@ def test_empty_refs_omits_ul() -> None:
         "surfaced_refs": [{"ref": "Notes/x.md", "why": "linked"}],
     }
     assert '<ul class="moment-refs">' in render_now_surface_html([with_ref])
+
+
+def test_protocol_relative_ref_is_not_live_href() -> None:
+    """#2180 — a protocol-relative ref (//host) must not render a live external href."""
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [
+            {"ref": "//evil.com/pwn", "why": "open-redirect"},
+            {"ref": "/\\evil.com/pwn", "why": "backslash variant"},
+        ],
+    }
+    html = render_now_surface_html([moment])
+    hrefs = re.findall(r'href="([^"]*)"', html)
+
+    # No live external href to the host; the ref is rendered inert instead.
+    assert not any("evil.com" in href for href in hrefs)
+    assert 'data-blocked-ref="true"' in html
+
+
+def test_ref_href_allows_vault_relative_and_http() -> None:
+    """#2180 — genuine relative paths and http/https refs still render a working href."""
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [
+            {"ref": "Projects/Plan.md", "why": "vault"},
+            {"ref": "https://example.com/doc", "why": "external https"},
+        ],
+    }
+    html = render_now_surface_html([moment])
+    assert 'href="Projects/Plan.md"' in html
+    assert 'href="https://example.com/doc"' in html
