@@ -92,9 +92,16 @@ Parallel claim is allowed only when all are true:
 If any parallel worker stalls, fails claim, loses branch/worktree truth, or discovers contract drift, release or reclassify that issue before claiming replacements.
 
 If a sub-agent starts pickup and finds an existing claim receipt or lifecycle claim that does not match
-the dispatching coordinator, it must stop and report the collision instead of implementing. Do not
-rationalize a foreign claim as belonging to the current dispatch; the coordinator must reconcile,
-release, or choose a different issue before work continues.
+the dispatching coordinator, scope the collision check to the active/latest unreleased lease before
+deciding. Because an Issue can be claimed, released, closed, and re-Readied over its lifetime, only the
+most recent lease that is still open governs pickup. A non-matching receipt counts as a real collision
+only when it is the latest lease and has not been released or superseded — i.e. the Issue is currently
+`In Progress` / not `agent:ready`, and no later release/superseded receipt or re-Ready transition has
+reclaimed it. Stale receipts from a prior, already-released lease on a re-Readied Issue (the Issue is
+back to `Ready` + `agent:ready` with no live foreign lease) do not block valid pickup; treat them as
+historical and proceed. When the latest lease is a genuine foreign claim, stop and report the collision
+instead of implementing — do not rationalize a live foreign claim as belonging to the current dispatch;
+the coordinator must reconcile, release, or choose a different issue before work continues.
 
 Delivery mode is complete only when every in-scope issue is either:
 
