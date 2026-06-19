@@ -418,11 +418,19 @@ def _route_governance_bearing(
         note_path=safe_note_path,
     )
     gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
-    pending = gov.request_governance_action(
-        session,
-        action_type,
-        _governance_intent_payload(original_request, classification),
-    )
+    try:
+        pending = gov.request_governance_action(
+            session,
+            action_type,
+            _governance_intent_payload(original_request, classification),
+        )
+    except WritesBlockedError as exc:
+        # The system write-guard is closed (health/maintenance lock). Routing a
+        # governance-bearing intent stages a proposal and appends a session-log
+        # turn — both are governed writes. Reject cleanly with the same
+        # structured/retryable 409 the body-edit paths use, rather than letting
+        # the WritesBlockedError surface as a 500 (#2188).
+        raise _writeguard_blocked_http(exc) from exc
     return GovernanceHandoffRef(
         intent_id=pending.intent_id,
         action_type=pending.action_type.value,
@@ -644,7 +652,12 @@ def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResp
         note_path=safe_note_path,
     )
     gov = GovernanceRouter(panel_pipeline=pipeline, session_log_writer=log_writer)
-    pending = gov.request_governance_action(session, action_type, req.payload)
+    try:
+        pending = gov.request_governance_action(session, action_type, req.payload)
+    except WritesBlockedError as exc:
+        # Direct governance endpoint: a closed write-guard must surface the same
+        # structured/retryable 409 as the body-edit paths, not a 500 (#2188).
+        raise _writeguard_blocked_http(exc) from exc
     return GovernanceResponse(
         intent_id=pending.intent_id,
         session_id=pending.session_id,

@@ -739,7 +739,10 @@ class PanelConfirmationService:
                 events_emitted=["panel.action.blocked"],
             )
             self._idempotency.set(request.idempotency_key, resp)
-            self._proposals.remove(request.proposal_id)
+            # A WriteGuard block is transient (health/maintenance lock), not a
+            # terminal decision: keep the proposal staged (in-memory + DB) so a
+            # post-reopen retry resolves the proposal instead of failing as
+            # unknown_proposal. Only reject/execution outcomes drop the staging.
             return resp
 
         if request.action == "reject":
