@@ -99,7 +99,14 @@ def _recall_receipt_path() -> Path:
 
 
 def _active_recall_vault_root() -> Path | None:
-    context = get_vault_manager().context
+    manager = get_vault_manager()
+    context = manager.context
+    if not (context.status == "selected" and context.active_vault_path):
+        # After an API restart the manager boots with an empty no-vault context;
+        # the persisted last-active vault is only materialized on demand. Lazily
+        # load it so ASK recall resolves source artifacts from the same vault the
+        # rest of the runtime uses, instead of silently falling back to VAULT_ROOT.
+        context = manager.load_last_active()
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser().resolve()
     env_root = os.getenv("VAULT_ROOT")

@@ -111,7 +111,15 @@ def build_ask_context(
         parts.append("")
         if remaining is not None:
             remaining -= len(snippet)
-    return "\n".join(parts).strip()
+    assembled = "\n".join(parts).strip()
+    # The per-block budget above only bounds body/source text; the framing lines
+    # ([SOURCE n]/[RECALLED MEMORY n]/why_now/authority_limits/Question) are not
+    # counted, so a note that consumes the full budget overflows by the framing
+    # bytes (16082 vs 16000 reproduced). Apply a final cap to the assembled
+    # string so the prompt honors the max_context_chars contract.
+    if max_chars > 0 and len(assembled) > max_chars:
+        assembled = assembled[:max_chars]
+    return assembled
 
 
 def llm_answer(question: str, context: str, ask_settings: AskSettings) -> tuple[str | None, dict[str, Any] | None]:
