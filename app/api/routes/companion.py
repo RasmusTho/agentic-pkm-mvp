@@ -523,12 +523,55 @@ def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
     )
 
 
+class NoVaultBoundError(RuntimeError):
+    """Raised when no vault is selected and ``VAULT_ROOT`` is unset.
+
+    Distinct from :class:`VaultRootMisconfiguredError` (a *set-but-missing*
+    vault root, #1757): here nothing is configured at all, so the companion
+    boundary must route to the no-vault picker instead of silently defaulting
+    to the CWD-relative ``./vault`` (#2006 / no-vault idle-boot invariant).
+    """
+
+
 def _active_companion_vault_root() -> Path:
     manager = get_vault_manager()
     context = _companion_vault_context_with_lazy_last_active(manager)
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser()
-    return resolve_vault_root()
+    # Route through the *optional* resolver so an unset VAULT_ROOT reports the
+    # explicit no-vault state instead of falling through to ./vault. A
+    # set-but-missing root still raises VaultRootMisconfiguredError unchanged.
+    root = resolve_optional_vault_root()
+    if root is None:
+        raise NoVaultBoundError("no vault is bound and VAULT_ROOT is unset")
+    return root
+
+
+def _active_companion_vault_root_or_picker(
+    *,
+    requested_note_path: str | None = None,
+    trace_id: str | None = None,
+) -> Path | VaultSelectionRequiredResponse:
+    """Resolve the active vault root, or the picker state when none is bound.
+
+    Shared no-vault routing for the companion read boundaries: a set-but-missing
+    ``VAULT_ROOT`` yields the ``vault_root_misconfigured`` picker state and an
+    unset / no-vault selection yields the ``no_vault_bound`` picker state. Both
+    return 200, never a 500 and never a silent ``./vault`` default.
+    """
+    try:
+        return _active_companion_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(
+            exc,
+            requested_note_path=requested_note_path,
+            trace_id=trace_id,
+        )
+    except NoVaultBoundError:
+        return _no_vault_selection_required_response(
+            requested_note_path=requested_note_path,
+            trace_id=trace_id,
+        )
 
 
 def _companion_vault_context_with_lazy_last_active(manager: Any) -> VaultContext:
@@ -1285,10 +1328,9 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
 def list_vault_notes(
     q: str = Query("", description="Optional search filter by title or path"),
 ) -> VaultNoteListResponse | VaultSelectionRequiredResponse:
-    try:
-        vault_root = _active_companion_vault_root()
-    except VaultRootMisconfiguredError as exc:
-        return _vault_selection_required_response(exc)
+    vault_root = _active_companion_vault_root_or_picker()
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     notes = _list_vault_notes(vault_root, q=q)
     return VaultNoteListResponse(
         notes=notes,
@@ -1766,11 +1808,12 @@ def _orientation_leave_point(
     *,
     frame_label: str | None,
     identity: VaultIdentityState,
+    vault_root: Path,
 ) -> WorkspaceOrientationLeavePoint:
     projection = latest_leave_point_projection(
         vault_id=identity.vault_name,
         channel=identity.channel,
-        vault_root=_active_companion_vault_root(),
+        vault_root=vault_root,
         derived_label=frame_label,
         derived_at=_orientation_iso(signals.ingestion.last_run_at),
     )
@@ -1970,8 +2013,8 @@ def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
     )
 
 
-def _orientation_identity() -> VaultIdentityState:
-    return _vault_identity_state(_active_companion_vault_root())
+def _orientation_identity(vault_root: Path) -> VaultIdentityState:
+    return _vault_identity_state(vault_root)
 
 
 def _orientation_error(trace_id: str, message: str) -> HTTPException:
@@ -2792,7 +2835,10 @@ def _compose_note_with_preserved_frontmatter(*, original_content: str, new_body:
     return new_body if new_body.endswith("\n") else f"{new_body}\n"
 
 
-@router.get("/vault-browser", response_model=VaultBrowserStateResponse)
+@router.get(
+    "/vault-browser",
+    response_model=VaultBrowserStateResponse | VaultSelectionRequiredResponse,
+)
 def read_companion_vault_browser(
     q: str = Query("", description="Case-insensitive path/title filter"),
     limit: int = Query(250, ge=1, le=1000),
@@ -2808,7 +2854,9 @@ def read_companion_vault_browser(
     # identity, and explicit empty / error / identity-unavailable states.
     # Hidden / dot-prefixed folders are excluded.
     # Metadata filters (kind, zone, review_state, trust) added in #1254.
-    vault_root = _active_companion_vault_root()
+    vault_root = _active_companion_vault_root_or_picker()
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     effective_limit = min(limit, _safe_vault_browse_max_notes())
     active_filters: dict[str, list[str]] = {}
     if kind:
@@ -2885,13 +2933,18 @@ def _collect_vault_note_paths(vault_root: Path, *, limit: int) -> tuple[list[str
     return paths, truncated
 
 
-@router.get("/vault-link-index", response_model=VaultLinkIndexResponse)
-def read_companion_vault_link_index() -> VaultLinkIndexResponse:
+@router.get(
+    "/vault-link-index",
+    response_model=VaultLinkIndexResponse | VaultSelectionRequiredResponse,
+)
+def read_companion_vault_link_index() -> VaultLinkIndexResponse | VaultSelectionRequiredResponse:
     # #1431 — complete read-only note-path listing so the Companion UI can seed
     # VaultLinkResolver and resolve vault-internal wikilinks end-to-end. Mirrors
     # the vault browser's read-only posture (no mutation, no write path); the UI
     # must not read the filesystem directly (UI_RUNTIME_BOUNDARIES).
-    vault_root = _active_companion_vault_root()
+    vault_root = _active_companion_vault_root_or_picker()
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     note_paths, truncated = _collect_vault_note_paths(
         vault_root, limit=_safe_vault_link_index_max()
     )
@@ -2909,7 +2962,10 @@ def read_companion_vault_link_index() -> VaultLinkIndexResponse:
     )
 
 
-@router.get("/vault-related", response_model=VaultRelatedResponse)
+@router.get(
+    "/vault-related",
+    response_model=VaultRelatedResponse | VaultSelectionRequiredResponse,
+)
 def read_companion_vault_related(
     note_path: str | None = Query(
         default=None,
@@ -2920,7 +2976,7 @@ def read_companion_vault_related(
         description="Artifact UUID to use as the Find scope.",
     ),
     limit: int = Query(10, ge=1, le=50),
-) -> VaultRelatedResponse:
+) -> VaultRelatedResponse | VaultSelectionRequiredResponse:
     """Return deterministic, read-only related artifacts for one vault artifact.
 
     This intentionally does not reuse ``/search`` because that route is text /
@@ -2941,7 +2997,11 @@ def read_companion_vault_related(
         else None
     )
     safe_artifact_uuid = artifact_uuid.strip() if artifact_uuid else None
-    vault_root = _active_companion_vault_root()
+    vault_root = _active_companion_vault_root_or_picker(
+        requested_note_path=safe_note_path,
+    )
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     notes = _collect_relation_notes(vault_root)
     target = _resolve_related_scope(
         notes,
@@ -2980,10 +3040,9 @@ def queue_vault_browser_review(
         else None
     )
     safe_artifact_uuid = req.artifact_uuid.strip() if req.artifact_uuid else None
-    try:
-        vault_root = _active_companion_vault_root()
-    except VaultRootMisconfiguredError as exc:
-        return _vault_selection_required_response(exc, requested_note_path=safe_note_path)
+    vault_root = _active_companion_vault_root_or_picker(requested_note_path=safe_note_path)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     target = _resolve_vault_action_scope(
         _collect_relation_notes(vault_root),
         note_path=safe_note_path,
@@ -3016,14 +3075,20 @@ def queue_vault_browser_review(
     )
 
 
-@router.get("/orientation", response_model=WorkspaceOrientationResponse)
-def read_companion_orientation() -> WorkspaceOrientationResponse:
+@router.get(
+    "/orientation",
+    response_model=WorkspaceOrientationResponse | VaultSelectionRequiredResponse,
+)
+def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     generated_at = datetime.datetime.now(datetime.timezone.utc)
     stale_after = generated_at + datetime.timedelta(seconds=ORIENTATION_STALE_AFTER_SECONDS)
 
     try:
-        identity = _orientation_identity()
+        vault_root = _active_companion_vault_root_or_picker(trace_id=trace_id)
+        if isinstance(vault_root, VaultSelectionRequiredResponse):
+            return vault_root
+        identity = _orientation_identity(vault_root)
         orientation_signals = get_orientation_signals()
     except HTTPException:
         raise
@@ -3046,6 +3111,7 @@ def read_companion_orientation() -> WorkspaceOrientationResponse:
             orientation_signals,
             frame_label=frame.explanation.leave_point,
             identity=identity,
+            vault_root=vault_root,
         )
         open_loops = _orientation_open_loops(frame.explanation.open_items)
         notable_changes = _orientation_notable_changes(
@@ -3221,14 +3287,12 @@ def read_companion_workspace(
 ) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     safe_note_path = _validate_workspace_note_path(note_path)
-    try:
-        vault_root = _active_companion_vault_root()
-    except VaultRootMisconfiguredError as exc:
-        return _vault_selection_required_response(
-            exc,
-            requested_note_path=safe_note_path,
-            trace_id=trace_id,
-        )
+    vault_root = _active_companion_vault_root_or_picker(
+        requested_note_path=safe_note_path,
+        trace_id=trace_id,
+    )
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     artifact_path = _find_workspace_note(vault_root, safe_note_path)
     if artifact_path is None:
         raise HTTPException(
@@ -3303,10 +3367,13 @@ def read_companion_workspace(
     )
 
 
-@router.post("/workspace/update", response_model=WorkspaceBodyUpdateResponse)
+@router.post(
+    "/workspace/update",
+    response_model=WorkspaceBodyUpdateResponse | VaultSelectionRequiredResponse,
+)
 def update_companion_workspace_note_body(
     req: WorkspaceBodyUpdateRequest,
-) -> WorkspaceBodyUpdateResponse:
+) -> WorkspaceBodyUpdateResponse | VaultSelectionRequiredResponse:
     safe_active_note_path = _validate_workspace_markdown_note_path(req.active_note_path)
     safe_target_note_path = _validate_workspace_markdown_note_path(req.target_note_path)
     if safe_active_note_path != safe_target_note_path:
@@ -3321,7 +3388,11 @@ def update_companion_workspace_note_body(
             },
         )
 
-    vault_root = _active_companion_vault_root()
+    vault_root = _active_companion_vault_root_or_picker(
+        requested_note_path=safe_active_note_path,
+    )
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     note_path = _find_workspace_note(vault_root, safe_active_note_path)
     if note_path is None:
         raise HTTPException(
@@ -3414,8 +3485,11 @@ class BodyUpdateResponse(BaseModel):
     content_hash: str
 
 
-@router.post("/workspace/body", response_model=BodyUpdateResponse)
-def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse:
+@router.post(
+    "/workspace/body",
+    response_model=BodyUpdateResponse | VaultSelectionRequiredResponse,
+)
+def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultSelectionRequiredResponse:
     if not _truthy_env("WORKSPACE_UPDATE_FLOW_ENABLED", default=False):
         raise HTTPException(
             status_code=403,
@@ -3430,7 +3504,11 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse:
         ) from exc
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
-    vault_root = _active_companion_vault_root()
+    vault_root = _active_companion_vault_root_or_picker(
+        requested_note_path=safe_note_path,
+    )
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(
@@ -3479,8 +3557,11 @@ class NoteSaveResponse(BaseModel):
     content_hash: str
 
 
-@router.post("/note/save", response_model=NoteSaveResponse)
-def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
+@router.post(
+    "/note/save",
+    response_model=NoteSaveResponse | VaultSelectionRequiredResponse,
+)
+def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionRequiredResponse:
     """Human-initiated direct edit of the active note body.
 
     This is a first-class human operation over the user's own vault. It is
@@ -3513,7 +3594,11 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse:
         pass
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
-    vault_root = _active_companion_vault_root()
+    vault_root = _active_companion_vault_root_or_picker(
+        requested_note_path=safe_note_path,
+    )
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     note_path = _find_workspace_note(vault_root, safe_note_path)
     if note_path is None:
         raise HTTPException(

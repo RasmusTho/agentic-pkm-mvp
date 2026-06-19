@@ -84,7 +84,9 @@ def test_vault_misconfigured_error_caught_at_request_boundary(
         raise VaultRootMisconfiguredError("VAULT_ROOT", missing_root)
 
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: _manager(tmp_path))
-    monkeypatch.setattr(companion_module, "resolve_vault_root", _raise_misconfigured)
+    # The companion boundary now resolves through resolve_optional_vault_root
+    # (#2184), so the misconfigured-error catch must be proven on that call path.
+    monkeypatch.setattr(companion_module, "resolve_optional_vault_root", _raise_misconfigured)
 
     resp = client.get(
         "/api/companion/workspace",
