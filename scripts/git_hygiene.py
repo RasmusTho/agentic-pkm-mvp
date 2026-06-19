@@ -338,6 +338,7 @@ def _worktree_reclaim_reason(
     *,
     current_worktree: str,
     active_resources: set[str],
+    protected_branches: set[str],
     pr_states: dict[str, dict[str, Any]] | None,
     cwd: Path,
 ) -> tuple[str | None, str | None]:
@@ -353,9 +354,16 @@ def _worktree_reclaim_reason(
     non-lease, non-open-PR worktree whose branch is an ancestor of ``origin/main``
     OR has a merged/closed PR is reclaimable. Squash-merged branches are not
     ancestors, so PR state is required to catch them.
+
+    Protected branches (``stable``/``develop``/etc.) are never reclaimed even
+    when checked out in a non-root worktree: reclaiming would ``git branch -d``
+    the protected ref and bypass the same protections the local/remote branch
+    cleanup already honours.
     """
     if Path(path).resolve() == Path(current_worktree).resolve():
         return "root_worktree", None
+    if branch in protected_branches:
+        return "protected_branch", None
     if f"worktree:{path}" in active_resources or _branch_has_active_lease(
         branch, active_resources
     ):
@@ -516,6 +524,7 @@ def build_janitor_plan(
             branch,
             current_worktree=current_worktree,
             active_resources=active_resources,
+            protected_branches=protected,
             pr_states=pr_states,
             cwd=cwd,
         )
@@ -665,7 +674,17 @@ def janitor_apply(
         # since planning must fail the remove and keep its branch intact.
         apply_git(["worktree", "remove", worktree["path"]], {"artifact": "worktree", "action": "remove", **worktree})
         if len(errors) == remove_errors_before:
-            apply_git(["branch", "-d", worktree["branch"]], {"artifact": "local_branch", "action": "delete_after_worktree_remove", "branch": worktree["branch"]})
+            # Squash/closed-PR-proven branches are not ancestors of origin/main,
+            # so `git branch -d` refuses them and the branch would be skipped
+            # forever. The merge_proof already establishes safe-to-delete, so use
+            # -D for merged_pr/closed_pr; keep the conservative -d for branches
+            # proven by ancestry.
+            delete_flag = (
+                "-D"
+                if worktree.get("merge_proof") in {"merged_pr", "closed_pr"}
+                else "-d"
+            )
+            apply_git(["branch", delete_flag, worktree["branch"]], {"artifact": "local_branch", "action": "delete_after_worktree_remove", "branch": worktree["branch"]})
     for branch in plan["candidates"]["local_branches"]:
         apply_git(["branch", "-d", branch["branch"]], {"artifact": "local_branch", "action": "delete", **branch})
     for remote in plan["candidates"]["remote_branches"]:
