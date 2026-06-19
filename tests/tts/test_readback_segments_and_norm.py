@@ -152,6 +152,8 @@ def test_normalize_strips_underscore_emphasis() -> None:
     assert normalize_tts_text("__strong__") == "strong"
     assert normalize_tts_text("read _this_ aloud") == "read this aloud"
     assert normalize_tts_text("a __bold__ word") == "a bold word"
+    assert normalize_tts_text("runtime_env_path") == "runtime_env_path"
+    assert normalize_tts_text("snake_case and _em_") == "snake_case and em"
     # Existing asterisk behaviour is preserved.
     assert normalize_tts_text("*em* and **strong**") == "em and strong"
 
@@ -185,6 +187,8 @@ def test_fetch_tts_models_honours_custom_sv_voice(tmp_path: Path) -> None:
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "TTS_SV_VOICE": voice_id,
+        "PIPER_SV_ONNX_URL": "https://example.invalid/sv_SE-nst-medium.onnx",
+        "PIPER_SV_JSON_URL": "https://example.invalid/sv_SE-nst-medium.onnx.json",
     }
     subprocess.run(
         ["bash", str(script), str(dest)],
@@ -218,6 +222,26 @@ def test_fetch_tts_models_honours_custom_sv_voice(tmp_path: Path) -> None:
     voice = resolve_voice(config, "sv-SE")
     assert voice.model_path == expected_dir / f"{voice_id}.onnx"
     assert voice.available is True
+
+
+def test_fetch_tts_models_rejects_custom_sv_voice_without_matching_urls(tmp_path: Path) -> None:
+    script = REPO_ROOT / "scripts" / "fetch_tts_models.sh"
+    dest = tmp_path / "models"
+
+    result = subprocess.run(
+        ["bash", str(script), str(dest)],
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "TTS_SV_VOICE": "sv_SE-nst-medium",
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "requires PIPER_SV_ONNX_URL and PIPER_SV_JSON_URL" in result.stderr
+    assert not (dest / "piper" / "sv_SE-nst-medium").exists()
 
 
 # --- AC5: TTS_ENABLED is forwarded into the API container -------------------

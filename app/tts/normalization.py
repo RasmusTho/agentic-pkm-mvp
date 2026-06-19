@@ -9,7 +9,7 @@ _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 _LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 _INLINE_CODE_RE = re.compile(r"`+([^`]*)`+")
 _EMPHASIS_RE = re.compile(r"\*{1,3}([^*]+)\*{1,3}")
-_UNDERSCORE_EMPHASIS_RE = re.compile(r"_{1,2}([^_]+)_{1,2}")
+_UNDERSCORE_EMPHASIS_RE = re.compile(r"(?<!\w)_{1,2}([^_]+?)_{1,2}(?!\w)")
 _MARKDOWN_SYNTAX_RE = re.compile(r"(^|\s)(#{1,6}|[-*]{1,3}|>{1,3})\s*", re.MULTILINE)
 
 
