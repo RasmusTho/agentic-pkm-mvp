@@ -154,6 +154,21 @@ def test_apostrophe_value_no_parse_error() -> None:
     )
 
 
+def test_unquoted_quote_after_mid_value_space_no_parse_error() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        'title: Notes about "PKM\n'
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert document.frontmatter is not None
+    assert not any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
 def test_unterminated_quoted_scalar_still_malformed() -> None:
     document = parse_vault_markdown(
         "---\n"
