@@ -37,9 +37,13 @@ degradation; they are not a new product bundle authority.
 Execution:
 - Normal companion UI test runs skip browser-runtime tests unless explicitly enabled.
 - Local opt-in command:
-  `COMPANION_UI_BROWSER_TESTS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_mermaid_browser.py`
-- CI runs the browser suite in `.github/workflows/browser-runtime.yml` as a separate non-blocking
-  job. The existing smoke gates must not install browser binaries or depend on this job.
+  `COMPANION_UI_BROWSER_TESTS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_runtime_unavailable_browser.py tests/companion_ui/test_mermaid_browser.py`
+- CI runs these in `.github/workflows/browser-runtime.yml`: the deterministic, fully offline
+  `test_runtime_unavailable_browser.py` runs as a **blocking** gate, while `test_mermaid_browser.py`
+  stays advisory (step-level `continue-on-error`) so its heavier-ESM flakiness cannot block a PR.
+  The existing smoke gates must not install browser binaries or depend on this job.
+- Live UI smoke (`tests/companion_ui/test_companion_ui_live_smoke.py`) is a separate opt-in check
+  against a *running* gateway; it skips unless `COMPANION_UI_SMOKE_URL` is set, so it never gates a PR.
 
 ## Panel Read-Mode Checkbox Projection Coverage
 
