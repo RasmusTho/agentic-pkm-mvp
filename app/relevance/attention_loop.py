@@ -128,6 +128,20 @@ class AttentionLoop:
                 suppressed=effect.suppressed,
                 writes_blocked=writes_blocked,
             )
+            # Defer-not-drop: a deferred moment is a recorded state, not a removal.
+            # Persist the durable ``deferred`` lifecycle into the materialized
+            # artifact so the glance projection no longer shows it as ``proposed``
+            # (it gains a retry/audit state). Skip when durable writes are blocked.
+            #
+            # This MUST run before the dedup ``continue`` below: on a no-new-receipt
+            # tick the moment is re-materialized fresh (lifecycle defaults to
+            # ``proposed``), so a prior ``deferred`` artifact gets clobbered back to
+            # ``proposed`` every tick. Re-applying the deferred lifecycle here keeps
+            # the artifact at ``deferred`` across dedup ticks. ``_persist_deferred_lifecycle``
+            # is idempotent (no-op once already ``deferred``), so the receipt-deduped
+            # path stays cheap.
+            if outcome == "defer" and not writes_blocked:
+                self._persist_deferred_lifecycle(moment)
             if _matches_latest_reachout(
                 latest_by_moment.get(moment.uuid),
                 outcome=outcome,
@@ -147,12 +161,6 @@ class AttentionLoop:
                 applied=effect.applied,
                 reason=reason,
             )
-            # Defer-not-drop: a deferred moment is a recorded state, not a removal.
-            # Persist the durable ``deferred`` lifecycle into the materialized
-            # artifact so the glance projection no longer shows it as ``proposed``
-            # (it gains a retry/audit state). Skip when durable writes are blocked.
-            if outcome == "defer" and not writes_blocked:
-                self._persist_deferred_lifecycle(moment)
             latest_by_moment[moment.uuid] = {
                 "outcome": outcome,
                 "rung": rung,
