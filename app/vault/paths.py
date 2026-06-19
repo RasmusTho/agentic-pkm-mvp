@@ -228,10 +228,10 @@ def _default_system_dir_rel() -> str:
     """The packaged default system folder name.
 
     Used as a graceful fallback for runtime paths that must keep working on a
-    vault that was created by ``initialize_vault`` before it bootstrapped a
-    layout note (only ``settings/*.md`` present, no ``vault.layout.md`` /
-    ``system-settings.yaml``). Importing lazily avoids a hard dependency on the
-    layout/settings packages at module import time.
+    vault that was created by ``initialize_vault`` and carries only
+    ``settings/*.md`` (no ``vault.layout.md`` / ``system-settings.yaml``).
+    Importing lazily avoids a hard dependency on the layout/settings packages at
+    module import time.
     """
 
     try:

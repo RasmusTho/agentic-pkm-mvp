@@ -268,8 +268,7 @@ class VaultManager:
         # ``resolve_vault_system_dir_rel_or_default`` (used by the relevance
         # evaluator and materialization) degrades to the packaged default system
         # folder on an init-only vault, so the default-on tick still materializes
-        # without forcing a layout note here. Proactive layout bootstrap remains a
-        # bounded follow-up (issue #2183 / review thread on PR #1998).
+        # without forcing a layout note here.
 
         context = self.select_vault(expanded, remember=remember)
         return VaultInitializationResult(

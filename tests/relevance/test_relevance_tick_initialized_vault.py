@@ -11,9 +11,9 @@ These tests exercise the production path
 (``VaultManager.initialize_vault`` -> ``run_relevance_tick``) with the
 layout-folder env defaults cleared, so they reproduce the true init-only state
 the autouse ``default_vault_layout_env`` fixture would otherwise mask. They fail
-against pre-fix code (resolver raises) and pass after:
+against pre-fix code (resolver raises) and pass after the CRE path resolves the
+system dir gracefully:
 
-- ``initialize_vault`` bootstraps ``vault.layout.md`` (app/vault/manager.py).
 - The CRE evaluator and materialization resolve the system dir gracefully
   (app/relevance/evaluator.py, app/relevance/materialization.py).
 """
@@ -126,9 +126,9 @@ def test_evaluator_degrades_on_legacy_init_only_vault(
 ) -> None:
     """A pre-fix vault on disk (settings/*.md only, no layout note) still ticks.
 
-    Simulates a vault created before initialize_vault bootstrapped the layout:
-    the strict resolver raises, but the CRE evaluator must degrade gracefully in
-    ``__init__`` instead of crashing the default-on tick.
+    Simulates a settings-only vault with no layout note: the strict resolver
+    raises, but the CRE evaluator must degrade gracefully in ``__init__``
+    instead of crashing the default-on tick.
     """
 
     vault = tmp_path / "legacy"
