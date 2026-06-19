@@ -20,9 +20,9 @@ Top to bottom, the `cold_start` threshold renders:
    - `Find a note` → `data-intent="vault.open"` → `vaultBrowser.focus()` (the declared `cold_start → shell_active` path)
    - `Jot something down` → `data-intent="capture.open"` → `overlayHost.mount('capture')`
    - `See the map` → `data-intent="map.open"` → `overlayHost.mount('map')` (the only opener; pull-only)
-   - **No "Reorient" verb** — no trajectory exists to reorient into.
+   - **No "Reorient" verb** — the threshold does not rehydrate an old trajectory inline; returning users resume through Find, Map, or the optional recents-anchor.
 4. **Inline capture field** — a single unadorned line "Leave a note for future-you…" that on focus / `⌘N` mounts the shipped governed `capture` occupant verbatim. The caret is the one element allowed warmth (single-saturated-element rule); doors stay monochrome until hover.
-5. **Provenance line** — one mono line in `fg-3`: `leave_point: absent · read-only · server-declared`.
+5. **Provenance line** — one mono line in `fg-3`: first contact renders `leave_point: absent · read-only · server-declared`; cold trajectory renders `trajectory: cold (>14d) · leave_point: present · read-only · server-declared`. Do not render cold trajectories as absent leave-points.
 6. **(Optional, operator-adopted) Recents-anchor** — if the runtime declares a most-recently-edited target on the cold payload, the Find verb carries a labeled sub-affordance "Open your most recent note" routing via `/workspace?note_path=…`. Omitted when the field is absent.
 
 No `<details>` overflow, no "+N more", no zeroed collection anywhere on the surface.
