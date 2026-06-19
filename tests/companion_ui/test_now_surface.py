@@ -139,3 +139,19 @@ def test_ref_href_allows_vault_relative_and_http() -> None:
     html = render_now_surface_html([moment])
     assert 'href="Projects/Plan.md"' in html
     assert 'href="https://example.com/doc"' in html
+
+
+def test_unparseable_ref_fails_closed_without_crashing() -> None:
+    """#2180 — a ref that breaks urlsplit (invalid IPv6 literal) renders inert,
+    never aborting the whole surface."""
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [
+            {"ref": "/\\[bad", "why": "malformed"},
+            {"ref": "Notes/ok.md", "why": "valid alongside"},
+        ],
+    }
+    html = render_now_surface_html([moment])  # must not raise
+    assert 'data-blocked-ref="true"' in html  # the malformed ref is inert
+    assert 'href="Notes/ok.md"' in html  # the valid sibling still renders

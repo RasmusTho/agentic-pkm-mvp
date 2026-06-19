@@ -121,7 +121,12 @@ def _ref_target_is_safe(target: str) -> bool:
     Backslashes are normalized first because browsers treat them as "/", so
     "\\\\host" / "/\\host" would otherwise slip past as empty-scheme.
     """
-    split = urlsplit(target.strip().replace("\\", "/"))
+    try:
+        split = urlsplit(target.strip().replace("\\", "/"))
+    except ValueError:
+        # Unparseable target (e.g. an invalid IPv6 literal like "//[bad") — fail
+        # closed: treat as unsafe and render inert rather than aborting the page.
+        return False
     scheme = split.scheme.lower()
     if scheme == "":
         # No scheme: safe only when there is also no host (a real relative path).
