@@ -71,6 +71,8 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
           pip install pytest-xdist
+          pip install pytest-timeout==2.3.1
+          python -c "import pytest_timeout"
 
       - name: Lint (ruff)
         run: |
@@ -146,6 +148,8 @@ jobs:
       - name: Pytest Quality Wave smoke (memory, fail-fast)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 8
+        env:
+          PYTEST_ADDOPTS: "-p pytest_timeout --timeout=120 --timeout-method=thread"
         run: |
           pytest -c /dev/null -m "not pg and not alpha_llm" \
             tests/quality_wave/test_uat_harness.py \
