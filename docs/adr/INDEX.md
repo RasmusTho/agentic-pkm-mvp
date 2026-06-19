@@ -18,3 +18,4 @@ State: Index (historical). ADRs are design records and may be partially outdated
 - [ADR 0011: Orientation push and ambient resurfacing boundary (accepted, docs/governance)](./ADR-0011-orientation-push-ambient-resurfacing.md)
 - [ADR 0012: Orientation multi-agent reads boundary (accepted, docs/governance)](./ADR-0012-orientation-multiagent-reads.md)
 - [ADR 0013: Code dependency direction — directional import-boundary contract (accepted, pending merge via #2070)](./ADR-0013-code-dependency-direction.md)
+- [ADR 0014: Path-injection posture for the operator-chosen vault path (accepted, accept-and-dismiss)](./ADR-0014-vault-path-injection-posture.md)
