@@ -231,6 +231,24 @@ def test_missing_image_still_uses_partial_alongside_existing_asset() -> None:
     assert "nonexistent-image.png" in rendered.html
 
 
+def test_image_with_leading_space_renders_img() -> None:
+    # #2158 — the parser's _ASSET_RE records '![alt]( url)' (leading space inside
+    # the parens) as an asset, so the renderer's inline token must match it too
+    # and resolve the trimmed target, not escape it as literal text.
+    rendered = render_vault_markdown(
+        f"![Pattern fixture]( {UAT_IMAGE_PATH})",
+        note_path="Companion_UI_Markdown_Feature_UAT.md",
+        asset_resolver=_uat_asset_resolver(),
+    )
+
+    assert '<img class="vault-image"' in rendered.html
+    assert 'data-asset-state="allowed"' in rendered.html
+    assert f'src="{UAT_IMAGE_SRC}"' in rendered.html
+    assert 'alt="Pattern fixture"' in rendered.html
+    # The escaped literal markdown must not leak through.
+    assert "![Pattern fixture]" not in rendered.html
+
+
 def _wikilink_resolver() -> VaultLinkResolver:
     # Stub resolver seeded with a single existing note (#1345). A real workspace
     # request seeds the same shape from the active-vault link index.
