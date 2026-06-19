@@ -202,6 +202,26 @@ def test_hyphen_led_scalar_is_not_a_list_marker() -> None:
         ), f"valid hyphen-led scalar {body!r} must not be flagged malformed"
 
 
+def test_unterminated_flow_list_scalar_still_malformed() -> None:
+    # #2181 — an unterminated quoted scalar inside a flow-style array is flagged.
+    document = parse_vault_markdown('---\ntags: [alpha, "oops]\n---\nBody.\n')
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
+def test_valid_flow_lists_are_not_flagged() -> None:
+    # #2181 — well-formed flow arrays (plain and quoted entries) parse cleanly.
+    for value in ("[alpha, beta, gamma]", "['a', 'b']", '["x", "y"]'):
+        document = parse_vault_markdown(f"---\ntags: {value}\n---\nBody.\n")
+        assert not any(
+            diagnostic.code == "frontmatter_parse_error"
+            for diagnostic in document.diagnostics
+        ), f"valid flow list {value!r} must not be flagged malformed"
+
+
 def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
     document = parse_vault_markdown(
         "````markdown\n"

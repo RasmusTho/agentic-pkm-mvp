@@ -161,12 +161,18 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
                 at_value_start = False
             elif char in {"[", "{"}:
                 stack.append(char)
-                at_value_start = False
+                at_value_start = True  # first flow-collection entry is a value
             elif char in bracket_pairs:
                 if not stack or stack[-1] != bracket_pairs[char]:
                     return True
                 stack.pop()
                 at_value_start = False
+            elif char == ",":
+                # Inside a flow collection ([...] / {...}) a comma separates
+                # entries, so the next non-space char begins a new value (e.g.
+                # the quote in 'tags: [a, "oops]'). Outside brackets a comma is
+                # ordinary scalar content.
+                at_value_start = bool(stack)
             elif char == ":":
                 at_value_start = True  # next non-space char begins the value
             else:
