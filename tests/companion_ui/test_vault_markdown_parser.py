@@ -139,6 +139,35 @@ def test_malformed_frontmatter_diagnostic() -> None:
     )
 
 
+def test_apostrophe_value_no_parse_error() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        "title: Rasmus's note\n"
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert document.frontmatter is not None
+    assert not any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
+def test_unterminated_quoted_scalar_still_malformed() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        'title: "oops\n'
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
 def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
     document = parse_vault_markdown(
         "````markdown\n"
