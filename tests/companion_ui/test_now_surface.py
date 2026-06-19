@@ -105,3 +105,58 @@ def test_empty_refs_omits_ul() -> None:
         "surfaced_refs": [{"ref": "Notes/x.md", "why": "linked"}],
     }
     assert '<ul class="moment-refs">' in render_now_surface_html([with_ref])
+
+
+def test_protocol_relative_ref_is_not_live_href() -> None:
+    """#2180 — network-path refs (//host, ///host, backslash variants) must not
+    render a live external href."""
+    blocked = [
+        "//evil.com/pwn",  # protocol-relative
+        "/\\evil.com/pwn",  # backslash variant -> //evil.com
+        "///evil.com/pwn",  # triple-slash network-path
+        "/\\/evil.com/pwn",  # backslash triple-slash variant
+        "/etc/passwd",  # absolute path is not a relative vault ref
+    ]
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [{"ref": ref, "why": "blocked"} for ref in blocked],
+    }
+    html = render_now_surface_html([moment])
+    hrefs = re.findall(r'href="([^"]*)"', html)
+
+    # Every network-path / absolute ref renders inert (no href at all) — asserted
+    # structurally rather than by fragile URL-substring matching.
+    assert hrefs == []
+    assert html.count('data-blocked-ref="true"') == len(blocked)
+
+
+def test_ref_href_allows_vault_relative_and_http() -> None:
+    """#2180 — genuine relative paths and http/https refs still render a working href."""
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [
+            {"ref": "Projects/Plan.md", "why": "vault"},
+            {"ref": "https://example.com/doc", "why": "external https"},
+        ],
+    }
+    html = render_now_surface_html([moment])
+    assert 'href="Projects/Plan.md"' in html
+    assert 'href="https://example.com/doc"' in html
+
+
+def test_unparseable_ref_fails_closed_without_crashing() -> None:
+    """#2180 — a ref that breaks urlsplit (invalid IPv6 literal) renders inert,
+    never aborting the whole surface."""
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [
+            {"ref": "/\\[bad", "why": "malformed"},
+            {"ref": "Notes/ok.md", "why": "valid alongside"},
+        ],
+    }
+    html = render_now_surface_html([moment])  # must not raise
+    assert 'data-blocked-ref="true"' in html  # the malformed ref is inert
+    assert 'href="Notes/ok.md"' in html  # the valid sibling still renders

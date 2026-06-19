@@ -114,9 +114,26 @@ def _render_in_app_nudge(moment: Mapping[str, Any]) -> str:
 
 
 def _ref_target_is_safe(target: str) -> bool:
-    """True for a vault-relative path (no scheme) or an http/https URL."""
-    scheme = urlsplit(target.strip()).scheme.lower()
-    return scheme == "" or scheme in _SAFE_REF_SCHEMES
+    """True for a vault-relative path or an http/https URL.
+
+    A vault ref is a RELATIVE path (e.g. "Projects/Note.md") and never starts
+    with a slash. So an empty-scheme target is safe only when it has no host and
+    does not start with "/" — this rejects protocol-relative ("//host"),
+    network-path ("///host"), and absolute ("/x") forms that a browser would
+    resolve away from a relative ref. Backslashes are normalized first because
+    browsers treat them as "/".
+    """
+    cleaned = target.strip().replace("\\", "/")
+    try:
+        split = urlsplit(cleaned)
+    except ValueError:
+        # Unparseable target (e.g. an invalid IPv6 literal like "//[bad") — fail
+        # closed: treat as unsafe and render inert rather than aborting the page.
+        return False
+    scheme = split.scheme.lower()
+    if scheme == "":
+        return split.netloc == "" and not cleaned.startswith("/")
+    return scheme in _SAFE_REF_SCHEMES
 
 
 def _render_ref(ref: Mapping[str, Any]) -> str:
