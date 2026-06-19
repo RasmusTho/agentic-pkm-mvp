@@ -225,7 +225,6 @@ def test_watcher_registry_uses_full_system_layout_scope_for_uat_seed(
     system_rel = "config"
     (vault_root / system_rel).mkdir(parents=True, exist_ok=True)
     (vault_root / "notes").mkdir(parents=True, exist_ok=True)
-    _initialize_design_handoff_vault(vault_root, tmp_path / "app-local.md")
     (vault_root / system_rel / "vault.layout.md").write_text(
         dedent(
             f"""\
@@ -238,6 +237,7 @@ def test_watcher_registry_uses_full_system_layout_scope_for_uat_seed(
         ),
         encoding="utf-8",
     )
+    _initialize_design_handoff_vault(vault_root, tmp_path / "app-local.md")
 
     seed_vault_test_notes(vault_root=vault_root, target_subdir=inbox_rel)
 

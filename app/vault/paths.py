@@ -266,7 +266,7 @@ def resolve_vault_system_dir_rel_or_default(vault_root: Path | None = None) -> s
     root = _resolve_vault_root(vault_root)
     try:
         return resolve_vault_system_dir_rel(root).value
-    except (ValueError, FileNotFoundError):
+    except FileNotFoundError:
         return _default_system_dir_rel()
 
 
