@@ -10833,6 +10833,18 @@ def render_index_html(
           var message = detail.message || detail.error || 'queue_review staging failed';
           throw new Error(message);
         }}
+        // A 200 vault_selection_required payload is the no-vault / missing-vault
+        // picker state, NOT a staged review. Route the human to the vault picker
+        // instead of masquerading it as a pending_intent receipt (#2184).
+        if (result.data && result.data.state === 'vault_selection_required') {{
+          action.removeAttribute('data-submitting');
+          action.setAttribute('data-affordance-status', 'vault_selection_required');
+          action.setAttribute('data-pending-state', 'vault_selection_required');
+          action.setAttribute('data-vault-selection-required', 'true');
+          // Re-resolve the entry state so the vault picker surfaces.
+          window.location.reload();
+          return;
+        }}
         action.removeAttribute('data-submitting');
         action.setAttribute('data-affordance-status', 'pending_intent');
         action.setAttribute('data-intent-id', result.data.intent_id || '');

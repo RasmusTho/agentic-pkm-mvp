@@ -787,6 +787,13 @@ if [ "$NO_VAULT_MODE" -eq 1 ]; then
   unset VAULT_ROOT
   unset VAULT_HOST_ROOT
   export WATCHER_VAULT_PATH=""
+  # No vault to watch: force the watcher off so startup does not wait on a
+  # watcher heartbeat that never arrives. The generated runtime env already
+  # writes WATCHER_ENABLE=0, and `watcher run` raises before emitting a
+  # heartbeat, so START_WATCHERS=1 (the runtime default decided above) would
+  # hang the no-vault idle boot until WATCHER_HEARTBEAT_TIMEOUT (#2184). The
+  # watcher resumes when a vault is opened and the stack is re-armed.
+  START_WATCHERS=0
 else
   if [ ! -d "$vault_host_path" ]; then
     echo "ERROR: Vault root is missing: $vault_host_path" >&2

@@ -4,7 +4,8 @@ Covers:
 - vault_identity field present in runtime response
 - vault_name derived from last path component of VAULT_ROOT
 - channel read from PKM_ENVIRONMENT, CHANNEL, PKM_CHANNEL (in that order)
-- provenance="env" when VAULT_ROOT is set and used, "default" when absent
+- provenance="env" when VAULT_ROOT is set and used; no-vault (unset, none
+  selected) routes to the vault picker instead of a ./vault default (#2184)
 - provenance="fallback" when VAULT_ROOT is invalid and runtime falls back
 - vault paths containing spaces (iCloud Mobile Documents)
 """
@@ -138,9 +139,13 @@ def test_vault_provenance_env_when_vault_root_set(
     assert identity["provenance"] == "env"
 
 
-def test_vault_provenance_default_when_vault_root_absent(
+def test_no_vault_root_routes_to_picker_not_default_vault(
     client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # No vault selected and VAULT_ROOT unset must route the human into the vault
+    # picker (#2184 / no-vault idle-boot invariant) instead of silently
+    # defaulting to a CWD-relative ./vault. A ./vault on disk must NOT be picked
+    # up implicitly.
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("VAULT_ROOT", raising=False)
     default_vault = Path("vault").resolve()
@@ -152,8 +157,12 @@ def test_vault_provenance_default_when_vault_root_absent(
     )
     resp = _workspace(client)
     assert resp.status_code == 200
-    identity = resp.json()["runtime"]["vault_identity"]
-    assert identity["provenance"] == "default"
+    data = resp.json()
+    assert data["state"] == "vault_selection_required"
+    assert data["reason"] == "no_vault_bound"
+    assert data["configured_vault_root"] is None
+    # Must not have masqueraded the CWD ./vault as a selected/default vault.
+    assert "runtime" not in data
 
 
 def test_vault_root_invalid_returns_selection_required_state(

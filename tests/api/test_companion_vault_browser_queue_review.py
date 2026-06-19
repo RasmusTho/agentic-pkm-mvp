@@ -200,7 +200,19 @@ def test_queue_review_accepts_matching_note_path_and_uuid(
     assert _proposal_count() == 1
 
 
-def test_queue_review_rejects_missing_scope() -> None:
+def test_queue_review_rejects_missing_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Bind a real vault so the scope-required rejection is tested in isolation.
+    # A no-vault posture now short-circuits to the vault picker (#2184) before
+    # scope is evaluated, so this case must run against a bound vault to exercise
+    # the 400 artifact_scope_required contract rather than the picker path.
+    vault = tmp_path / "vault"
+    _write_note(vault, "notes/present.md", uuid="present-uuid")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
         json={},

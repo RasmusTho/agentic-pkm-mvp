@@ -523,12 +523,55 @@ def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
     )
 
 
+class NoVaultBoundError(RuntimeError):
+    """Raised when no vault is selected and ``VAULT_ROOT`` is unset.
+
+    Distinct from :class:`VaultRootMisconfiguredError` (a *set-but-missing*
+    vault root, #1757): here nothing is configured at all, so the companion
+    boundary must route to the no-vault picker instead of silently defaulting
+    to the CWD-relative ``./vault`` (#2006 / no-vault idle-boot invariant).
+    """
+
+
 def _active_companion_vault_root() -> Path:
     manager = get_vault_manager()
     context = _companion_vault_context_with_lazy_last_active(manager)
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser()
-    return resolve_vault_root()
+    # Route through the *optional* resolver so an unset VAULT_ROOT reports the
+    # explicit no-vault state instead of falling through to ./vault. A
+    # set-but-missing root still raises VaultRootMisconfiguredError unchanged.
+    root = resolve_optional_vault_root()
+    if root is None:
+        raise NoVaultBoundError("no vault is bound and VAULT_ROOT is unset")
+    return root
+
+
+def _active_companion_vault_root_or_picker(
+    *,
+    requested_note_path: str | None = None,
+    trace_id: str | None = None,
+) -> Path | VaultSelectionRequiredResponse:
+    """Resolve the active vault root, or the picker state when none is bound.
+
+    Shared no-vault routing for the companion read boundaries: a set-but-missing
+    ``VAULT_ROOT`` yields the ``vault_root_misconfigured`` picker state and an
+    unset / no-vault selection yields the ``no_vault_bound`` picker state. Both
+    return 200, never a 500 and never a silent ``./vault`` default.
+    """
+    try:
+        return _active_companion_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(
+            exc,
+            requested_note_path=requested_note_path,
+            trace_id=trace_id,
+        )
+    except NoVaultBoundError:
+        return _no_vault_selection_required_response(
+            requested_note_path=requested_note_path,
+            trace_id=trace_id,
+        )
 
 
 def _companion_vault_context_with_lazy_last_active(manager: Any) -> VaultContext:
@@ -1285,10 +1328,9 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
 def list_vault_notes(
     q: str = Query("", description="Optional search filter by title or path"),
 ) -> VaultNoteListResponse | VaultSelectionRequiredResponse:
-    try:
-        vault_root = _active_companion_vault_root()
-    except VaultRootMisconfiguredError as exc:
-        return _vault_selection_required_response(exc)
+    vault_root = _active_companion_vault_root_or_picker()
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     notes = _list_vault_notes(vault_root, q=q)
     return VaultNoteListResponse(
         notes=notes,
@@ -2980,10 +3022,9 @@ def queue_vault_browser_review(
         else None
     )
     safe_artifact_uuid = req.artifact_uuid.strip() if req.artifact_uuid else None
-    try:
-        vault_root = _active_companion_vault_root()
-    except VaultRootMisconfiguredError as exc:
-        return _vault_selection_required_response(exc, requested_note_path=safe_note_path)
+    vault_root = _active_companion_vault_root_or_picker(requested_note_path=safe_note_path)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     target = _resolve_vault_action_scope(
         _collect_relation_notes(vault_root),
         note_path=safe_note_path,
@@ -3221,14 +3262,12 @@ def read_companion_workspace(
 ) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     safe_note_path = _validate_workspace_note_path(note_path)
-    try:
-        vault_root = _active_companion_vault_root()
-    except VaultRootMisconfiguredError as exc:
-        return _vault_selection_required_response(
-            exc,
-            requested_note_path=safe_note_path,
-            trace_id=trace_id,
-        )
+    vault_root = _active_companion_vault_root_or_picker(
+        requested_note_path=safe_note_path,
+        trace_id=trace_id,
+    )
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
     artifact_path = _find_workspace_note(vault_root, safe_note_path)
     if artifact_path is None:
         raise HTTPException(
