@@ -19,14 +19,20 @@ enablement — which cannot live in the repo.
 - TTS stays **off** until a host sets `TTS_ENABLED=true`, so a merged mechanism cannot 503 prod.
 
 ## Provisioning steps (on the runtime host, e.g. Demerzel)
+0. Export the SSD root into the shell so the steps below can use it (it is not yet in any auto-loaded
+   env file at this point):
+   `export TTS_HOST_ROOT=/path/to/ssd`
 1. Create the SSD layout:
    `mkdir -p "$TTS_HOST_ROOT"/{models/piper,models/kokoro,cache/audio,cache/plans,logs}`
 2. Fetch models: `scripts/fetch_tts_models.sh "$TTS_HOST_ROOT/models"`
    (confirm upstream URLs/checksums on first run).
 3. Set `~/workspace-prod/.env.prod.local`: `TTS_HOST_ROOT=...`, `TTS_ENABLED=true`.
 4. Deploy (prod overlay pattern — cherry-pick the merged commit, do NOT `git pull`; see
-   project demerzel prod ops):
-   `docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod up -d --build api`
+   project demerzel prod ops). Pass `--env-file .env.prod.local` so Compose picks up `TTS_HOST_ROOT`
+   / `TTS_ENABLED` for host-side interpolation (Compose only auto-loads `.env`, not `.env.prod.local`;
+   without this, `${TTS_HOST_ROOT:-./tmp/tts}` in `docker-compose.yaml` falls back to the dev scratch
+   dir and the SSD models from step 2 are never mounted at `/data/tts`):
+   `docker compose --env-file .env.prod.local -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod up -d --build api`
    — validate the engine builds on the host arch (linux/arm64 on Apple silicon); if a pinned wheel
    lacks an arm64 build, swap to a system `piper` binary and set `TTS_PIPER_COMMAND`.
 5. Verify: `curl -s http://127.0.0.1:18000/api/companion/tts/status | jq '.environment, .providers'`

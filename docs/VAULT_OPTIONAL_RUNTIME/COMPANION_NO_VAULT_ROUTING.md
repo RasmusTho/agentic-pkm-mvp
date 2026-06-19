@@ -24,8 +24,8 @@ not rebuild.
   **no-vault** case (the optional resolver from task 1 returns no vault), not only when it
   catches `VaultRootMisconfiguredError`. The existing `_vault_selection_required_response`
   (offering `/vault/select` and `/vault/initialize`) is reused.
-- The `known_vaults` recent list is surfaced in the selection-required payload so the picker
-  can show registered vaults to switch between.
+- The recent list (payload field `recent_vaults`, fed from the `known_vaults` registry) is
+  surfaced in the selection-required payload so the picker can show registered vaults to switch between.
 - End-to-end verification: select vault A, then switch to vault B (both registered in
   `known_vaults`), confirming in-process re-resolution and persisted last-active (#1895). Any
   gap found (e.g. an explicit "register/forget vault" affordance) is closed minimally here.
@@ -34,7 +34,7 @@ not rebuild.
 ```bash
 # No vault bound -> picker state (200), not 500, not an empty ./vault note list.
 curl -fsS http://127.0.0.1:18000/api/companion/vault/context
-# {"state":"vault_selection_required", "known_vaults":[...], "actions":[{"endpoint":"/api/companion/vault/select"},...]}
+# {"state":"vault_selection_required", "recent_vaults":[...], "actions":[{"endpoint":"/api/companion/vault/select"},...]}
 
 # Open vault A, then switch to vault B; last-active persists across re-resolution.
 curl -fsS -X POST .../vault/select -d '{"path":"/vaults/A"}'
@@ -48,7 +48,7 @@ Switching/registering is the multi-vault half of the owner decision.
 
 ## Acceptance Criteria
 - [ ] With no vault bound, `/api/companion/vault/context` returns `vault_selection_required` (200), not 500 and not an empty default-vault note list. Verify: `tests/api/test_companion_vault_routing.py::test_no_vault_returns_selection_required`
-- [ ] The selection-required payload includes the `known_vaults` recent list for switching. Verify: `tests/api/test_companion_vault_routing.py::test_selection_required_lists_known_vaults`
+- [ ] The selection-required payload includes the `recent_vaults` list (from the `known_vaults` registry) for switching. Verify: `tests/api/test_companion_vault_routing.py::test_selection_required_lists_known_vaults`
 - [ ] Selecting a vault re-resolves in-process and subsequent reads render full note bodies (no restart). Verify: `tests/api/test_companion_vault_routing.py::test_select_vault_reresolves_in_process`
 - [ ] Switching between two registered vaults persists the last-active pointer. Verify: `tests/api/test_companion_vault_routing.py::test_switch_between_known_vaults_persists_last_active`
 

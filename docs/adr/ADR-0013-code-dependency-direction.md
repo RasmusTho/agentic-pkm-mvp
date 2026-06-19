@@ -1,4 +1,10 @@
 State: Accepted (owner decision 2026-06-16) - pending merge via #2070. Defines code import-dependency direction as a directional, contract-based projection of DESIGN_PRINCIPLES §3 system layers onto `app.*` packages. v1 enforces one invariant — the interaction layer is import-protected — via a module-level import-linter `forbidden` contract, run non-blocking on PRs.
+Doc role: Decision record (ADR)
+Authority: Authoritative for code import-dependency direction; the governing rule for `importlinter.ini`.
+Owner: Architecture
+Temporal class: Durable decision (supersede via a new ADR, do not edit in place)
+Review cadence: On change to the layer model or the enforced contract
+Source of truth: This ADR (with `importlinter.ini` as the machine projection)
 
 # ADR-0013: Code Dependency Direction
 
@@ -105,7 +111,7 @@ rg -n "interaction-protected|app\.api|app\.chat" importlinter.ini
 lint-imports --config importlinter.ini
 
 # Backward-import cross-check matches the reported violations:
-rg -nE '^\s*from app\.(api|chat|cli|web)' app/ | rg -v '^app/(api|chat|cli|web)/'
+rg -n '^\s*from app\.(api|chat|cli|web)' app/ | rg -v '^app/(api|chat|cli|web)/'
 
 # The PR gate runs non-blocking:
 rg -n "pull_request|continue-on-error" .github/workflows/import-linter.yaml

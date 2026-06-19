@@ -48,7 +48,7 @@ Embeddings are handled by `app/llm/embeddings.py`.
 - Model:
   - `OLLAMA_EMBED_MODEL` or `EMBED_MODEL` (default: `nomic-embed-text:latest`)
 - Dimensions:
-  - `EMBED_DIM` (default: `1536` from `DEFAULT_EMBED_DIM`/`settings.embed_dim`, pulled from settings when available). This is the configured guardrail dimension; `nomic-embed-text`'s native dimension is `768`. The runtime requests `EMBED_DIM` via the `dimensions` payload field so the returned vector is sized to the configured value, not the raw `768`. See `docs/EMBEDDINGS.md` for the identity/guardrail contract.
+  - `EMBED_DIM` (default: `1536` from `DEFAULT_EMBED_DIM`/`settings.embed_dim`, pulled from settings when available). This is the configured guardrail dimension; `nomic-embed-text`'s native dimension is `768`. The runtime includes a `dimensions` payload field, but the legacy `/api/embeddings` endpoint (the primary call below) ignores it — only `/api/embed` honors `dimensions` — so the vector keeps the model's native size and `EMBED_DIM` must be set to match it; it does not resize the vector. See `docs/EMBEDDINGS.md` for the identity/guardrail contract.
   - `OLLAMA_EMBED_DIMENSIONS` controls whether we include `dimensions` in the payload (default: included).
 - Endpoint:
   - Primary: `${OLLAMA_URL}/api/embeddings`

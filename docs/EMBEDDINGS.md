@@ -47,7 +47,7 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - Example (default local): `nomic-embed-text:latest`
 - `EMBED_DIM`
   - Runtime guardrail default: `1536` (`DEFAULT_EMBED_DIM` in `app/embedding_config.py`, mirrored by `settings.embed_dim`). This is the **configured/requested** dimension the runtime asserts against.
-  - Relationship to the model's native dimension: `nomic-embed-text` emits `768` natively. The runtime requests the configured `EMBED_DIM` by sending it as the `dimensions` field in the Ollama payload (see Call graph), so the returned vector is sized to `EMBED_DIM` rather than the raw `768`. The guardrail then asserts the returned vector matches the configured dim.
+  - Relationship to the model's native dimension: `nomic-embed-text` emits `768` natively. The runtime includes a `dimensions` field in the Ollama payload (see Call graph), but the **legacy** `/api/embeddings` endpoint ignores it (only `/api/embed` honors `dimensions`), so the returned vector stays at the model's native size. The guardrail asserts the returned length matches `EMBED_DIM`, so `EMBED_DIM` must be set to the model's native dimension (`768` for `nomic-embed-text`) — it does **not** resize the vector. A mismatch (e.g. native `768` vs the runtime default `1536`) fails indexing for that object.
   - Used as a **guardrail**. If the provider returns a vector whose length differs from `EMBED_DIM`, indexing fails for that object and an error event is emitted.
 
 ### Optional env vars
@@ -56,9 +56,9 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - Default behavior is to return **normalized** vectors unless explicitly disabled.
   - Changing normalization changes the embedding identity and requires rebuilding the vector index.
 - `EMBED_MAX_INPUT_CHARS`
-  - Character budget for a single embedding input. The embedding layer truncates input above this budget before calling the provider so an oversized note cannot exceed the model context window and 500 the request (see *Oversized input handling*).
-  - Default: `24000` (`DEFAULT_EMBED_MAX_INPUT_CHARS` in `app/llm/embeddings.py`) — a conservative head budget for `nomic-embed-text`'s ~8k-token context window.
-  - Set to `0` (or a negative value) to disable truncation entirely. Truncation does **not** change the embedding identity; it only bounds input length.
+  - Character budget for a single embedding request. The embedding layer splits input above this budget into in-budget chunks, embeds each, and mean-pools the chunk vectors before storing, so an oversized note cannot exceed the model context window and 500 the request and **no tail content is dropped** from retrieval (see *Oversized input handling*).
+  - Default: `6000` (inline default in `_embedding_max_input_chars`, `app/llm/embeddings.py`) — a conservative budget for `nomic-embed-text`'s ~2k-token context window. (The former `DEFAULT_EMBED_MAX_INPUT_CHARS` constant was removed in #2113.)
+  - Set to `0` (or a negative value) to disable chunking entirely.
 
 ## Query vs Document embeddings (RAG invariant)
 
@@ -170,7 +170,7 @@ This event is the canonical signal to operators that the embedding chain is misc
 
 A single note must never abort the whole index build (#2110). The embedding layer applies two bounded defenses, in order:
 
-1. **Truncation to context budget.** Before each provider call, input longer than `EMBED_MAX_INPUT_CHARS` (default `24000`) is truncated to that head budget. This keeps an oversized note within the model's context window so the provider does not return HTTP 500 ("input length exceeds the context length"). Truncation does not change the embedding identity.
+1. **Chunking + mean-pooling to context budget.** Before each provider call, input longer than `EMBED_MAX_INPUT_CHARS` (default `6000`) is split into in-budget chunks; each chunk is embedded and the chunk vectors are mean-pooled into a single vector. This keeps every request within the model's context window so the provider does not return HTTP 500 ("input length exceeds the context length"), while preserving tail content rather than truncating it. Set `EMBED_MAX_INPUT_CHARS=0` to disable chunking.
 2. **Per-item degradation.** When a single item still fails at the provider (e.g. truncation disabled, or another transient provider/HTTP error), `embed_texts` skips that item — it logs a warning and substitutes a zero vector of the correct `expected_dim` — instead of raising and aborting the remaining batch. The zero vector preserves the dimension guardrail and contributes no similarity signal.
 
 Together these ensure an index build over a corpus containing one oversized or pathological note completes and the rest of the corpus embeds normally.
