@@ -453,6 +453,7 @@ def check_compose_channel_isolation(
     channel: str,
     base_compose_path: Path | None = None,
     environ: Mapping[str, str] | None = None,
+    load_dotenv: bool = True,
 ) -> PreflightResult:
     """Check that *compose_path* overlay binds correctly for *channel*.
 
@@ -471,6 +472,12 @@ def check_compose_channel_isolation(
     interpolation environment for env_file path expressions (default:
     ``os.environ``, matching how compose is invoked).
 
+    *load_dotenv* controls whether a ``.env`` next to the compose files is read
+    as an interpolation default (compose's normal behaviour). Set it to
+    ``False`` to make resolution hermetic from any repo-root ``.env`` — e.g. a
+    test that asserts the *committed* env_file fallback, where a stray ``.env``
+    on the runner would otherwise inject a winning layer and mask config drift.
+
     Returns a :class:`PreflightResult`; call ``.ok`` to test pass/fail.
     Raises ``ValueError`` if *channel* is unknown.
     """
@@ -486,7 +493,7 @@ def check_compose_channel_isolation(
 
     lookup = _make_var_lookup(
         os.environ if environ is None else environ,
-        _load_dotenv(compose_dir),
+        _load_dotenv(compose_dir) if load_dotenv else {},
     )
 
     base_compose = base_compose_path or (compose_dir / BASE_COMPOSE_FILENAME)

@@ -871,6 +871,11 @@ tick_log_path="${_container_tmp_dir}/watcher_tick-$(date -u +"%Y%m%d-%H%M%S").js
 printf "WATCHER_TICK_LOG_PATH=%s\n" "$tick_log_path" >> "$runtime_env_path"
 export WATCHER_TICK_LOG_PATH="$tick_log_path"
 printf "%s\n" "$tick_log_path" > "$latest_tick_log_path"
+# Channel-correct container path for the watcher heartbeat artifact. For pkm-test
+# it is /app/tmp-test/; reading the hardcoded /app/tmp/watcher_heartbeat.json
+# would falsely report a missing heartbeat for the test stack (issue #1997
+# symptom 3). Prod/dev keep /app/tmp/ — no runtime change.
+container_watcher_heartbeat_path="${_container_tmp_dir}/watcher_heartbeat.json"
 unset _container_tmp_dir
 
 if [ "$NO_VAULT_MODE" -eq 1 ]; then
@@ -1847,14 +1852,14 @@ if [ "$START_WATCHERS" -eq 1 ]; then
   watcher_ready=0
   watcher_deadline=$((SECONDS + WATCHER_HEARTBEAT_TIMEOUT))
   while [ $SECONDS -lt $watcher_deadline ]; do
-    if run_docker_compose exec -T watcher sh -c 'test -s /app/tmp/watcher_heartbeat.json' >/dev/null 2>&1; then
+    if run_docker_compose exec -T watcher sh -c "test -s ${container_watcher_heartbeat_path}" >/dev/null 2>&1; then
       watcher_ready=1
       break
     fi
     sleep 2
   done
   if [ "$watcher_ready" -ne 1 ]; then
-    echo "ERROR: watcher heartbeat not detected at /app/tmp/watcher_heartbeat.json after $WATCHER_HEARTBEAT_TIMEOUT seconds" >&2
+    echo "ERROR: watcher heartbeat not detected at ${container_watcher_heartbeat_path} after $WATCHER_HEARTBEAT_TIMEOUT seconds" >&2
     exit 1
   fi
 fi

@@ -32,6 +32,18 @@ def desired_status(action: str, draft: bool | None) -> str:
     raise ValueError(f"unsupported pull request action: {action}")
 
 
+# Actions whose terminal projection must be re-derived from the LIVE PR state by
+# the reconcile script rather than forced via an explicit `--status` override.
+#
+# A `closed` webhook can arrive after the PR has already been re-opened (the
+# close->reopen race): forcing `--status Done` would slam a now-OPEN PR card to
+# Done. For `closed` we therefore pass NO explicit status and let
+# reconcile_project_status.desired_pr_status read the live `pr.state` — which
+# yields Done only for a still-merged/closed PR, and In Progress/Review for a
+# reopened one (PR #2055 review residual).
+_LIVE_STATE_DERIVED_ACTIONS = frozenset({"closed"})
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True, help="owner/repo")
@@ -41,6 +53,8 @@ def main() -> int:
     args = parser.parse_args()
 
     draft = None if args.draft is None else parse_bool(args.draft)
+    # Validate the action maps to a status (raises on unsupported actions) even
+    # when we will not forward an explicit override.
     status = desired_status(args.action, draft)
     cmd = [
         sys.executable,
@@ -49,9 +63,9 @@ def main() -> int:
         args.repo,
         "--pr",
         str(args.pr),
-        "--status",
-        status,
     ]
+    if args.action not in _LIVE_STATE_DERIVED_ACTIONS:
+        cmd += ["--status", status]
     subprocess.run(cmd, check=True)
     return 0
 
