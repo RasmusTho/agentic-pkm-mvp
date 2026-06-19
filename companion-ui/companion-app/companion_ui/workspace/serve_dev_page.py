@@ -1106,8 +1106,8 @@ def _note_readback_script() -> str:
       var segments = Array.isArray(plan.segments) ? plan.segments : [];
       var segmentRows = segments.map(function (segment) {
         return '<li>' + escapeHtml(segment.language || plan.language || 'unknown') +
-          ' / ' + escapeHtml(plan.provider || 'unknown') +
-          ' / ' + escapeHtml(plan.voice_id || 'unknown') +
+          ' / ' + escapeHtml(segment.provider || plan.provider || 'unknown') +
+          ' / ' + escapeHtml(segment.voice_id || plan.voice_id || 'unknown') +
           ' / ' + escapeHtml(cacheStatus(plan)) +
           ': ' + escapeHtml(segment.text || '') + '</li>';
       }).join('');
@@ -1158,9 +1158,6 @@ def _note_readback_script() -> str:
       postJson('/api/companion/tts/plan', {text: normalized, rate: rate()})
         .then(function (plan) {
           renderSpeechPlan(plan);
-          if (!plan.cached && plan.mixed_language) {
-            throw new Error('Local TTS stopped: uncertain mixed-language text.');
-          }
           if (!plan.cached && plan.provider_available === false) {
             throw new Error(plan.provider_reason || 'Local TTS provider/model unavailable.');
           }

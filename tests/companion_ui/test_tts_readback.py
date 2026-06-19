@@ -194,14 +194,19 @@ def test_readback_fetches_plan_before_synthesis() -> None:
     synthesize_index = script.index("postJson('/api/companion/tts/synthesize'")
     assert plan_index < synthesize_index
     assert "renderSpeechPlan(plan)" in script
-    assert "if (!plan.cached && plan.mixed_language)" in script
+    # Mixed-language plans are no longer hard-blocked before synthesis (#2189);
+    # mixed synthesis is supported, so the UI must let the request proceed.
+    assert "Local TTS stopped: uncertain mixed-language text." not in script
 
 
-def test_readback_preserves_cached_playback_when_provider_unavailable() -> None:
+def test_readback_does_not_block_uncached_mixed_language() -> None:
+    # The read-back UI must let an uncached mixed-language plan reach synthesis
+    # now that per-segment mixed synthesis is supported (#2189).
     html = _html()
     script = _readback_script(html)
 
-    assert "if (!plan.cached && plan.mixed_language)" in script
+    assert "Local TTS stopped: uncertain mixed-language text." not in script
+    # The provider-unavailable guard is retained.
     assert "if (!plan.cached && plan.provider_available === false)" in script
 
 

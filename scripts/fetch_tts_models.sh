@@ -7,10 +7,15 @@
 #
 # Override sources via env if upstream paths change:
 #   PIPER_SV_ONNX_URL, PIPER_SV_JSON_URL, KOKORO_ONNX_URL, KOKORO_VOICES_URL
+# Override the Swedish Piper voice id (must match TTS_SV_VOICE used by the app):
+#   TTS_SV_VOICE=sv_SE-nst-medium scripts/fetch_tts_models.sh <models-dir>
 set -euo pipefail
 
 DEST="${1:?usage: fetch_tts_models.sh <models-dir>}"
-PIPER_DIR="$DEST/piper/sv_SE-lisa-medium"
+# Swedish Piper voice id — mirrors TTS_SV_VOICE / TTSConfig.sv_voice so a custom
+# voice lands exactly where resolve_voice() probes: <models>/piper/<id>/<id>.onnx.
+PIPER_SV_VOICE="${TTS_SV_VOICE:-sv_SE-lisa-medium}"
+PIPER_DIR="$DEST/piper/$PIPER_SV_VOICE"
 KOKORO_DIR="$DEST/kokoro"
 
 PIPER_SV_ONNX_URL="${PIPER_SV_ONNX_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/lisa/medium/sv_SE-lisa-medium.onnx}"
@@ -28,8 +33,8 @@ fetch() { # url out
 }
 
 mkdir -p "$PIPER_DIR" "$KOKORO_DIR"
-fetch "$PIPER_SV_ONNX_URL" "$PIPER_DIR/sv_SE-lisa-medium.onnx"
-fetch "$PIPER_SV_JSON_URL" "$PIPER_DIR/sv_SE-lisa-medium.onnx.json"
+fetch "$PIPER_SV_ONNX_URL" "$PIPER_DIR/$PIPER_SV_VOICE.onnx"
+fetch "$PIPER_SV_JSON_URL" "$PIPER_DIR/$PIPER_SV_VOICE.onnx.json"
 fetch "$KOKORO_ONNX_URL"   "$KOKORO_DIR/kokoro-v1.0.int8.onnx"
 fetch "$KOKORO_VOICES_URL" "$KOKORO_DIR/voices-v1.0.bin"
 
