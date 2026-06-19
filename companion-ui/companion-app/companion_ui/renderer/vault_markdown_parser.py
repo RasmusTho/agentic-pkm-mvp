@@ -133,17 +133,28 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
         # 'title: "oops') is still flagged.
         quote: str | None = None
         at_value_start = True
-        for char in line:
+        seen_content = False
+        for idx, char in enumerate(line):
             if quote:
                 if char == quote:
                     quote = None
                 continue
-            if char in {" ", "\t", "-"}:
-                # Whitespace and a leading list-item dash are transparent: they
-                # preserve the value-start state, so an opening quote right after
-                # "- " (an unterminated list scalar like '- "oops') is still
-                # flagged, while an apostrophe-led token mid-value is not.
+            if char in {" ", "\t"}:
+                continue  # whitespace is transparent; preserves value-start state
+            # A leading "- " is a YAML list marker (a hyphen is only a marker
+            # when it is the first content and is followed by whitespace); it is
+            # transparent so the value after it keeps value-start, e.g. an
+            # unterminated list scalar '- "oops' is still flagged. A hyphen
+            # anywhere else (e.g. the scalar "-'foo") is ordinary value content.
+            if (
+                char == "-"
+                and not seen_content
+                and idx + 1 < len(line)
+                and line[idx + 1] in " \t"
+            ):
+                seen_content = True
                 continue
+            seen_content = True
             if char in {"'", '"'}:
                 if at_value_start:
                     quote = char

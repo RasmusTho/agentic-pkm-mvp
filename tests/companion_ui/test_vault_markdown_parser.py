@@ -190,6 +190,18 @@ def test_unterminated_list_item_scalar_still_malformed() -> None:
     )
 
 
+def test_hyphen_led_scalar_is_not_a_list_marker() -> None:
+    # #2181 — a hyphen is a list marker only when followed by whitespace.
+    # "title: -'foo" and "- -'foo" are valid plain scalars, not list items, so
+    # the quote must not be treated as an opening delimiter.
+    for body in ("title: -'foo", "tags:\n  - -'foo"):
+        document = parse_vault_markdown(f"---\n{body}\n---\nBody.\n")
+        assert not any(
+            diagnostic.code == "frontmatter_parse_error"
+            for diagnostic in document.diagnostics
+        ), f"valid hyphen-led scalar {body!r} must not be flagged malformed"
+
+
 def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
     document = parse_vault_markdown(
         "````markdown\n"
