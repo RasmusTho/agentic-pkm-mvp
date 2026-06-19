@@ -7,6 +7,7 @@ reach-out (no notification / push / alert affordance).
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 
@@ -65,3 +66,42 @@ def test_now_surface_renders_vault_native_moments_pull_only(
     lowered = html.lower()
     for token in ("notification", "push", "alert", "<button"):
         assert token not in lowered, f"glance surface must not include a {token} affordance"
+
+
+def test_ref_href_blocks_dangerous_scheme() -> None:
+    """#2153 — a dangerous URL scheme on a ref must never reach the rendered href."""
+    moment = {
+        "moment_id": "m1",
+        "title": "Moment",
+        "surfaced_refs": [
+            {"ref": "javascript:alert(1)", "why": "evil"},
+            {"ref": "Projects/Contextual Relevance Engine.md", "why": "safe"},
+        ],
+    }
+    html = render_now_surface_html([moment])
+    hrefs = re.findall(r'href="([^"]*)"', html)
+
+    # The dangerous scheme must not survive into any href (latent stored XSS).
+    assert 'href="javascript' not in html.lower()
+    assert not any("javascript:" in href.lower() for href in hrefs)
+    # The label is still shown as inert text, just without a clickable href.
+    assert "alert(1)" in html
+    # A normal vault-relative ref still produces a working, space-encoded href.
+    assert 'href="Projects/Contextual%20Relevance%20Engine.md"' in html
+
+
+def test_empty_refs_omits_ul() -> None:
+    """#2163 — a moment with no surfaced_refs renders no empty <ul>."""
+    no_refs = {"moment_id": "m1", "title": "Moment", "surfaced_refs": []}
+    absent = {"moment_id": "m2", "title": "Moment"}
+
+    assert '<ul class="moment-refs">' not in render_now_surface_html([no_refs])
+    assert '<ul class="moment-refs">' not in render_now_surface_html([absent])
+
+    # When refs DO exist, the list is still rendered.
+    with_ref = {
+        "moment_id": "m3",
+        "title": "Moment",
+        "surfaced_refs": [{"ref": "Notes/x.md", "why": "linked"}],
+    }
+    assert '<ul class="moment-refs">' in render_now_surface_html([with_ref])
