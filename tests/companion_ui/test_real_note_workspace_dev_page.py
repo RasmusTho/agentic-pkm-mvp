@@ -571,3 +571,58 @@ def test_workspace_update_flow_disabled_state_is_non_mutating() -> None:
     assert 'data-update-state="disabled"' in html
     assert 'data-testid="workspace-canvas-body-edit-unavailable"' in html
     assert 'data-testid="workspace-canvas-body-edit-composer"' not in html
+
+
+def test_acknowledge_recovery_respects_workspace_update_gate() -> None:
+    # #2152 — runtime allows canvas edits (can_edit_body True) but the
+    # workspace_update capability is unavailable (disabled by config). load()
+    # therefore disables editing; acknowledging a conflict must NOT re-enable it,
+    # or the UI gate would diverge from the server-declared capability.
+    resp = _workspace_response(
+        canvas={
+            "session_state": "active",
+            "session_persistence": "in_memory",
+            "can_edit_body": True,
+            "recovery_needed": True,
+        },
+        guards={
+            "canvas_enabled": True,
+            "writeguard_status": "ok",
+            "workspace_update": {
+                "available": False,
+                "state": "disabled",
+                "reason": "disabled_by_config",
+                "scope": "active_note_body",
+                "governance_actions_enabled": False,
+                "config_mode": "explicit",
+            },
+        },
+    )
+    page = _loaded_page(response=resp)
+
+    # Preconditions: runtime would allow editing, but the capability is off and a
+    # conflict is detected, so load() correctly disables the body editor.
+    assert page.state.canvas_runtime_can_edit_body is True
+    assert page.state.guard_workspace_update_available is False
+    assert page.state.canvas_conflict_detected is True
+    assert page.state.canvas_can_edit_body is False
+
+    page.acknowledge_canvas_recovery(note_path=page.state.shell.note_path)
+
+    assert page.state.canvas_recovery_acknowledged is True
+    assert page.state.canvas_conflict_detected is False
+    # The fix: editing stays disabled because workspace_update is unavailable.
+    assert page.state.canvas_can_edit_body is False
+
+
+def test_non_dict_runtime_body_yields_error_state() -> None:
+    # #2154 — a 200 response whose JSON body is not an object (null, list,
+    # string) must degrade to a graceful error state, not raise AttributeError.
+    for bad_body in (None, ["not", "a", "dict"], "oops"):
+        mock_resp = _mock_get_response(bad_body)
+        with patch("httpx.get", return_value=mock_resp):
+            client = WorkspaceHttpClient(base_url="http://localhost:18001")
+            page = RealNoteWorkspaceDevPage(client)
+            state = page.load(NoteLoadIntent(note_path="notes/research.md"))
+        assert state.error is not None
+        assert "Malformed workspace payload" in state.error

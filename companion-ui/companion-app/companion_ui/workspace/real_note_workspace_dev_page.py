@@ -226,6 +226,17 @@ class RealNoteWorkspaceDevPage:
             self.state = DevPageState(error=str(exc))
             return self.state
 
+        # The runtime contract is a JSON object; a non-dict 200 body (null,
+        # array, string) would raise AttributeError on the .get() calls below
+        # and propagate as a 500/blank page. Degrade to the graceful error
+        # state used for every other failure mode instead.
+        if not isinstance(raw, dict):
+            self._trusted_hash_refresh_notes.discard(intent.note_path)
+            self.state = DevPageState(
+                error="Malformed workspace payload (expected a JSON object)."
+            )
+            return self.state
+
         artifact = raw.get("artifact") or {}
         canvas = raw.get("canvas") or {}
         panel = raw.get("panel") or {}
@@ -786,7 +797,15 @@ class RealNoteWorkspaceDevPage:
             )
             self.state.canvas_recovery_acknowledged = True
             self.state.canvas_conflict_detected = False
-            self.state.canvas_can_edit_body = self.state.canvas_runtime_can_edit_body
+            # Re-enable editing with the SAME conjunction load() uses: clearing
+            # the conflict is not enough — the workspace_update capability must
+            # still be available, otherwise the UI gate would diverge from the
+            # server-declared capability and let apply_canvas_edit POST edits
+            # the load path forbids.
+            self.state.canvas_can_edit_body = (
+                self.state.canvas_runtime_can_edit_body
+                and self.state.guard_workspace_update_available
+            )
         return self.state
 
     def undo_last_canvas_edit(
