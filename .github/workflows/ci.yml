@@ -28,6 +28,9 @@ jobs:
           pip install -r dev-requirements.txt
       - name: Run not-pg unit tests
         shell: bash
+        timeout-minutes: 22
+        env:
+          PYTEST_ADDOPTS: "--timeout=1200 --timeout-method=thread"
         run: |
           set -o pipefail
           pytest -q -m "not pg" | tee pytest-not-pg.log
