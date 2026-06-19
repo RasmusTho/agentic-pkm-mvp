@@ -151,25 +151,15 @@ async def _run_index_preflight() -> None:
 
 
 def _log_v6_seam_status() -> None:
-    def _seam(module: str) -> str:
-        try:
-            import importlib
-            importlib.import_module(module)
-            return "enabled"
-        except Exception:
-            return "disabled"
+    from app.api.v6_seams import check_v6_seams
 
-    orientation = _seam("app.api.routes.orientation")
-    resurfacing = _seam("app.resurfacing")
-    commitments = _seam("app.domain.commitments")
-    canvas_importable = _seam("app.api.routes.canvas") == "enabled"
-    canvas = "enabled" if (_truthy_env("CANVAS_ENABLED") and canvas_importable) else "disabled"
+    seams = check_v6_seams()
     logger.info(
         "v6.0 seams: orientation=%s, resurfacing=%s, commitments=%s, canvas=%s",
-        orientation,
-        resurfacing,
-        commitments,
-        canvas,
+        seams.get("orientation"),
+        seams.get("resurfacing"),
+        seams.get("commitments"),
+        seams.get("canvas"),
     )
 
 

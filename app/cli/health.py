@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import httpx
 
-from app.observability.status_service import _check_v6_seams
+from app.api.v6_seams import check_v6_seams
 from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
 from app.services.companion_diagnostics import companion_diagnostics_summary
 from app.config.environment import active_environment
@@ -650,5 +650,5 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
-    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": _check_v6_seams(), "authority_spine": _check_authority_spine()}
+    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": check_v6_seams(), "authority_spine": _check_authority_spine()}
 __all__ = ["run_health"]
