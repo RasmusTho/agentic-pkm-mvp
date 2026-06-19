@@ -108,22 +108,27 @@ def test_empty_refs_omits_ul() -> None:
 
 
 def test_protocol_relative_ref_is_not_live_href() -> None:
-    """#2180 — a protocol-relative ref (//host) must not render a live external href."""
+    """#2180 — network-path refs (//host, ///host, backslash variants) must not
+    render a live external href."""
+    blocked = [
+        "//evil.com/pwn",  # protocol-relative
+        "/\\evil.com/pwn",  # backslash variant -> //evil.com
+        "///evil.com/pwn",  # triple-slash network-path
+        "/\\/evil.com/pwn",  # backslash triple-slash variant
+        "/etc/passwd",  # absolute path is not a relative vault ref
+    ]
     moment = {
         "moment_id": "m1",
         "title": "Moment",
-        "surfaced_refs": [
-            {"ref": "//evil.com/pwn", "why": "open-redirect"},
-            {"ref": "/\\evil.com/pwn", "why": "backslash variant"},
-        ],
+        "surfaced_refs": [{"ref": ref, "why": "blocked"} for ref in blocked],
     }
     html = render_now_surface_html([moment])
     hrefs = re.findall(r'href="([^"]*)"', html)
 
-    # Both protocol-relative refs render inert (no href at all) — asserted
+    # Every network-path / absolute ref renders inert (no href at all) — asserted
     # structurally rather than by fragile URL-substring matching.
     assert hrefs == []
-    assert html.count('data-blocked-ref="true"') == 2
+    assert html.count('data-blocked-ref="true"') == len(blocked)
 
 
 def test_ref_href_allows_vault_relative_and_http() -> None:
