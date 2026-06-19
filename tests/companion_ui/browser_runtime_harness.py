@@ -95,6 +95,60 @@ def serve_rendered_workspace(body: str) -> Iterator[str]:
         server.server_close()
 
 
+@contextmanager
+def serve_rendered_error_page(
+    error: str, *, page_origin_hostname: str = ""
+) -> Iterator[str]:
+    """Serve a ``render_index_html`` ERROR page (no fields) on localhost.
+
+    Mirrors :func:`serve_rendered_workspace` but exercises the entry error
+    states (runtime-unavailable / vault-unreachable / wrong-device, #2123/#2124)
+    instead of a healthy note. ``note_path`` is intentionally empty so
+    ``resolve_entry_state`` yields ``no_vault`` and the page carries the Retry +
+    System map affordances. Non-``/`` GETs return benign empty JSON so any stray
+    same-origin fetch on load cannot emit a console error and corrupt the
+    console-clean assertion.
+    """
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        fields=None,
+        error=error,
+        page_origin_hostname=page_origin_hostname,
+    ).encode("utf-8")
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path == "/":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                self.wfile.write(html)
+                return
+            payload = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def install_offline_esm_routes(context: object) -> list[str]:
     """Route browser module imports to repo-local stubs and record leaks."""
 

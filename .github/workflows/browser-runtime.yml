@@ -14,7 +14,6 @@ jobs:
   companion-ui-browser-runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     env:
       PYTHONPATH: ${{ github.workspace }}
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
@@ -38,6 +37,15 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      - name: Run Companion UI browser-runtime tests
+      # Deterministic, fully offline (rendered HTML + ESM stubs, no live vault):
+      # this is a real regression gate, so it is NOT continue-on-error.
+      - name: Run deterministic Companion UI browser-runtime tests
+        run: |
+          pytest -q tests/companion_ui/test_runtime_unavailable_browser.py
+
+      # Mermaid runtime rendering depends on heavier vendored ESM and is kept
+      # advisory (step-level continue-on-error) so its flakiness cannot block a PR.
+      - name: Run mermaid browser-runtime test (advisory)
+        continue-on-error: true
         run: |
           pytest -q tests/companion_ui/test_mermaid_browser.py
