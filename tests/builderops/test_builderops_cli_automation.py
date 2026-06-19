@@ -293,6 +293,12 @@ exit 1
     ]
 
 
+def test_builderops_wrapper_resolves_repo_venv(tmp_path: Path) -> None:
+    """Issue #2215 verify target: wrapper resolves the repo venv from a worktree."""
+
+    test_builderops_wrapper_finds_canonical_venv_from_codex_worktree(tmp_path)
+
+
 def test_builderops_wrapper_missing_venv_message(tmp_path: Path) -> None:
     """Missing repo venvs fail with an actionable message instead of host Python fallback."""
     canonical_root = tmp_path / "code" / "agentic-pkm-mvp"

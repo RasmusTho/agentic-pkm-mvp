@@ -20,7 +20,12 @@ from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
-from app.dispatcher.sync_github import GhCliIssueSource, PullSyncAdapter
+from app.dispatcher.sync_github import (
+    PROVIDER_IDENTITY,
+    GhCliIssueSource,
+    PullSyncAdapter,
+    get_sync_meta,
+)
 
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
@@ -253,12 +258,28 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
     adapter = PullSyncAdapter(store=store, source=source)
     try:
         upserted = adapter.pull(repo)
+        sync_meta = get_sync_meta(store, PROVIDER_IDENTITY) or {}
+        if sync_meta.get("sync_result") == "error":
+            sync_note = sync_meta.get("sync_note") or "dispatcher pull source failed"
+            _emit({
+                "ok": False,
+                "error": f"pull failed: {sync_note}",
+                "upserted": len(upserted),
+                "reconciled": getattr(adapter, "last_reconciled_count", 0),
+                "skipped": 0,
+                "provider": "github",
+                "sync_result": "error",
+                "sync_note": sync_note,
+            }, args.json)
+            return 1
         _emit({
             "ok": True,
             "upserted": len(upserted),
             "reconciled": getattr(adapter, "last_reconciled_count", 0),
             "skipped": 0,
             "provider": "github",
+            "sync_result": sync_meta.get("sync_result"),
+            "sync_note": sync_meta.get("sync_note"),
         }, args.json)
         return 0
     except Exception as exc:
