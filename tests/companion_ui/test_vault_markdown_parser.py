@@ -168,6 +168,77 @@ def test_unterminated_quoted_scalar_still_malformed() -> None:
     )
 
 
+def test_apostrophe_led_token_after_space_no_parse_error() -> None:
+    # #2181 — an apostrophe-led token following an internal space is a valid
+    # unquoted scalar, not an unterminated quoted scalar.
+    for value in ("The week 'twas before", "the 'thing", "Reading 'The Hobbit' notes"):
+        document = parse_vault_markdown(f"---\ntitle: {value}\n---\nBody.\n")
+        assert not any(
+            diagnostic.code == "frontmatter_parse_error"
+            for diagnostic in document.diagnostics
+        ), f"valid frontmatter value {value!r} must not be flagged malformed"
+
+
+def test_unterminated_list_item_scalar_still_malformed() -> None:
+    # #2181 — detection must survive for indented list items: an unterminated
+    # quoted scalar after "- " is still flagged, like the key/value case.
+    document = parse_vault_markdown('---\ntags:\n  - "oops\n---\nBody.\n')
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
+def test_hyphen_led_scalar_is_not_a_list_marker() -> None:
+    # #2181 — a hyphen is a list marker only when followed by whitespace.
+    # "title: -'foo" and "- -'foo" are valid plain scalars, not list items, so
+    # the quote must not be treated as an opening delimiter.
+    for body in ("title: -'foo", "tags:\n  - -'foo"):
+        document = parse_vault_markdown(f"---\n{body}\n---\nBody.\n")
+        assert not any(
+            diagnostic.code == "frontmatter_parse_error"
+            for diagnostic in document.diagnostics
+        ), f"valid hyphen-led scalar {body!r} must not be flagged malformed"
+
+
+def test_unterminated_flow_list_scalar_still_malformed() -> None:
+    # #2181 — an unterminated quoted scalar inside a flow-style array is flagged.
+    document = parse_vault_markdown('---\ntags: [alpha, "oops]\n---\nBody.\n')
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
+def test_valid_flow_lists_are_not_flagged() -> None:
+    # #2181 — well-formed flow arrays (plain and quoted entries) parse cleanly.
+    for value in ("[alpha, beta, gamma]", "['a', 'b']", '["x", "y"]'):
+        document = parse_vault_markdown(f"---\ntags: {value}\n---\nBody.\n")
+        assert not any(
+            diagnostic.code == "frontmatter_parse_error"
+            for diagnostic in document.diagnostics
+        ), f"valid flow list {value!r} must not be flagged malformed"
+
+
+def test_nested_list_marker_unterminated_scalar_still_malformed() -> None:
+    # #2181 — each leading "- " is transparent, including nested markers, so an
+    # unterminated scalar after a nested "- - " is still flagged.
+    document = parse_vault_markdown('---\ntags:\n  - - "oops\n---\nBody.\n')
+
+    assert any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+    # A well-formed nested list is not flagged.
+    ok = parse_vault_markdown("---\ntags:\n  - - alpha\n---\nBody.\n")
+    assert not any(
+        diagnostic.code == "frontmatter_parse_error" for diagnostic in ok.diagnostics
+    )
+
+
 def test_long_fence_keeps_inner_shorter_fence_literal() -> None:
     document = parse_vault_markdown(
         "````markdown\n"

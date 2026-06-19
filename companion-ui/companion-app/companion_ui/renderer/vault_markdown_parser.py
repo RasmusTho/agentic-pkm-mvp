@@ -122,28 +122,60 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
         if not line.startswith((" ", "\t", "-")) and ":" not in line:
             return True
         # A YAML scalar quote cannot span lines in this simplistic model, so
-        # quote state is tracked per line and reset at end-of-line. A quote is
-        # only treated as a string delimiter when it begins a value (the first
-        # non-space character after the "key:"), so a lone apostrophe inside an
-        # unquoted value (e.g. "title: Rasmus's note") is not mistaken for an
-        # unterminated quoted scalar. A genuinely unterminated quoted scalar on
-        # a single line (e.g. 'title: "oops') is still flagged.
+        # quote state is tracked per line and reset at end-of-line. A quote
+        # opens a string scalar ONLY when it is the first non-space character of
+        # the value (right after the first "key:" separator, or at the start of
+        # a list/scalar line). Whitespace is transparent and does not re-arm the
+        # value start, so an apostrophe anywhere inside an unquoted value — the
+        # possessive "Rasmus's note" or an apostrophe-led token after a space,
+        # "title: The week 'twas before" — is not mistaken for an unterminated
+        # quoted scalar. A genuinely unterminated quoted scalar (the value in
+        # 'title: "oops') is still flagged.
         quote: str | None = None
         at_value_start = True
-        for char in line:
+        in_marker_prefix = True  # leading indentation + nested "- " list markers
+        for idx, char in enumerate(line):
             if quote:
                 if char == quote:
                     quote = None
                 continue
-            if char in {"'", '"'} and at_value_start:
-                quote = char
+            if char in {" ", "\t"}:
+                continue  # whitespace is transparent; preserves value-start state
+            # Each leading "- " (dash followed by whitespace) is a YAML list
+            # marker — possibly nested ("- - value") — and stays transparent
+            # until actual scalar content starts, so an unterminated list scalar
+            # like '- "oops' is still flagged. A hyphen that is not a leading
+            # marker (e.g. the scalar "-'foo") is ordinary value content.
+            if (
+                in_marker_prefix
+                and char == "-"
+                and idx + 1 < len(line)
+                and line[idx + 1] in " \t"
+            ):
+                continue
+            in_marker_prefix = False
+            if char in {"'", '"'}:
+                if at_value_start:
+                    quote = char
+                at_value_start = False
             elif char in {"[", "{"}:
                 stack.append(char)
+                at_value_start = True  # first flow-collection entry is a value
             elif char in bracket_pairs:
                 if not stack or stack[-1] != bracket_pairs[char]:
                     return True
                 stack.pop()
-            at_value_start = char in {" ", "\t", ":"}
+                at_value_start = False
+            elif char == ",":
+                # Inside a flow collection ([...] / {...}) a comma separates
+                # entries, so the next non-space char begins a new value (e.g.
+                # the quote in 'tags: [a, "oops]'). Outside brackets a comma is
+                # ordinary scalar content.
+                at_value_start = bool(stack)
+            elif char == ":":
+                at_value_start = True  # next non-space char begins the value
+            else:
+                at_value_start = False
         if quote:
             return True
 
