@@ -41,9 +41,28 @@ jobs:
 
       - name: Install system deps (ffmpeg, ripgrep)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
+        timeout-minutes: 5
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg ripgrep
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if sudo apt-get \
+                -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 \
+                -o Acquire::https::Timeout=30 \
+                update && \
+              sudo apt-get \
+                -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 \
+                -o Acquire::https::Timeout=30 \
+                install -y ffmpeg ripgrep; then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Install Python deps
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
