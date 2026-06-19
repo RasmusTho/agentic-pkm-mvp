@@ -220,6 +220,66 @@ def _reentry_card(html: str) -> str:
     return html.split('data-region="reentry-card"', 1)[1].split("</section>", 1)[0]
 
 
+def test_reentry_orientation_regions_do_not_duplicate_heading_and_body_without_leave_label() -> None:
+    payload = _orientation_payload(gap=_GAP_LONG_MIST)
+    assert payload["leave_point"] is not None
+    payload["leave_point"].pop("label", None)
+    payload["open_loops"][0]["label"] = payload["open_loops"][0]["artifact_ref"]["title"]
+    payload["notable_changes"][0]["label"] = payload["notable_changes"][0]["artifact_ref"][
+        "title"
+    ]
+    payload["resurface"]["candidates"][0]["label"] = payload["resurface"]["candidates"][0][
+        "artifact_ref"
+    ]["title"]
+
+    html = _render(orientation=payload)
+
+    leave_section = html.split('data-testid="workspace-orientation-leave-point"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert leave_section.count("Resume plan") == 1
+    assert 'data-testid="workspace-orientation-leave-link"' in leave_section
+    assert "Open artifact" in leave_section
+
+    card = _reentry_card(html)
+    assert card.count("Resume plan") == 1
+    assert 'data-testid="reentry-stop-link"' in card
+    assert "Open artifact" in card
+
+    whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
+    assert whisper.count("Resume plan") == 1
+
+    open_loop = html.split('data-testid="workspace-orientation-open-loop"', 1)[1].split(
+        "</article>", 1
+    )[0]
+    assert open_loop.count("Loop 0") == 1
+    assert 'data-testid="workspace-orientation-open-loop-link"' in open_loop
+    assert "Open artifact" in open_loop
+
+    notable_change = html.split(
+        'data-testid="workspace-orientation-notable-change"', 1
+    )[1].split("</article>", 1)[0]
+    assert notable_change.count("Change 0") == 1
+    assert 'data-testid="workspace-orientation-notable-change-link"' in notable_change
+    assert "Open artifact" in notable_change
+
+    resurface = html.split(
+        'data-testid="workspace-orientation-resurface-candidate"', 1
+    )[1].split("</article>", 1)[0]
+    assert resurface.count("Candidate 0") == 1
+    assert 'data-testid="workspace-orientation-resurface-link"' in resurface
+    assert "Open artifact" in resurface
+
+    soft_payload = _orientation_payload(gap=_GAP_SOFT_MIST)
+    assert soft_payload["leave_point"] is not None
+    soft_payload["leave_point"].pop("label", None)
+    soft_html = _render(orientation=soft_payload)
+    peripheral = soft_html.split('data-region="reentry-peripheral-line"', 1)[1].split(
+        "</p>", 1
+    )[0]
+    assert peripheral.count("Resume plan") == 1
+
+
 _OVERLAY_MARKERS = (
     'data-region="reentry-card"',
     'data-region="delta-strip"',
