@@ -339,7 +339,11 @@ class ActivationPosture(BaseModel):
     admissibility_declared: bool = False
     loop_precondition_green: bool = False
     reversible_write_path: bool = False
-    observable: bool = True
+    # Fail-closed: observability must be explicitly declared green. An undeclared
+    # posture is treated as not-observable and blocks activation
+    # (REASON_NOT_OBSERVABLE), consistent with the other gate inputs that default
+    # False.
+    observable: bool = False
     scope: Optional[str] = None
 
 
@@ -390,7 +394,15 @@ def evaluate_activation(
         scope=posture.scope,
     )
     evaluated = [evaluate_admissibility(c, consuming) for c in candidates]
-    admitted_ids = [d.artifact_id for d in evaluated if d.admitted]
+    # Require admission AT the declared authority's tier, not merely any non-NONE
+    # tier: a candidate admitted only at a lower tier (e.g. READ) must not satisfy
+    # a GOVERNED_EXECUTION (ACTION) activation. Fail-closed at the declared ceiling.
+    declared_ceiling = _CONSUMER_CEILING[posture.declared_authority]
+    admitted_ids = [
+        d.artifact_id
+        for d in evaluated
+        if d.admitted and _TIER_RANK[d.admitted_tier] >= _TIER_RANK[declared_ceiling]
+    ]
 
     blocked: list[str] = []
     if not posture.admissibility_declared:
