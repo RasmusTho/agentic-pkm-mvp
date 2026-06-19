@@ -273,7 +273,14 @@ def embed_texts(
 ) -> List[List[float]]:
     dim_val = dim or get_embed_dim()
     vectors: List[List[float]] = []
+    degraded_indices: list[int] = []
+    embeddable_count = 0
     for index, text in enumerate(texts):
+        # Empty inputs deterministically embed to a zero vector (see
+        # _embed_single); they are not provider failures and must not count
+        # toward outage detection.
+        if text:
+            embeddable_count += 1
         try:
             vectors.append(
                 embed_text(text, provider=provider, model=model, dim=dim_val, normalize=normalize)
@@ -290,7 +297,23 @@ def embed_texts(
                 len(text),
                 exc,
             )
+            if text:
+                degraded_indices.append(index)
             vectors.append([0.0 for _ in range(dim_val)])
+
+    # Per-item degradation tolerates the occasional un-embeddable note. But when
+    # every embeddable item in the batch degrades, the failure is provider-wide
+    # (missing OLLAMA_HOST, Ollama down, model unavailable), not a per-note
+    # context-length problem. Silently returning an all-zero batch would let the
+    # caller build a semantically dead retrieval index (#2190). Fail loud so the
+    # outage surfaces instead of being absorbed into zero vectors.
+    if embeddable_count and len(degraded_indices) == embeddable_count:
+        raise RuntimeError(
+            "embedding provider degraded every embeddable item in the batch "
+            f"({len(degraded_indices)}/{embeddable_count}); refusing to return an "
+            "all-zero semantic index. Check provider availability (OLLAMA_HOST / "
+            "Ollama reachability / embedding model)."
+        )
     return vectors
 
 
