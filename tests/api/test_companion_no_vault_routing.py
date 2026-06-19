@@ -9,8 +9,8 @@ than a staged review.
 
 Three production-path assertions, one per acceptance criterion:
 
-1. ``/vault/notes`` and ``/workspace`` return the ``no_vault_bound`` picker
-   state (200) when no vault is bound and ``VAULT_ROOT`` is unset — never a
+1. Active-vault read boundaries return the ``no_vault_bound`` picker state
+   (200) when no vault is bound and ``VAULT_ROOT`` is unset — never a
    silent ``./vault`` default and never a 500
    (``app/api/routes/companion.py`` shared resolution).
 2. ``scripts/start_full_system.sh`` forces ``START_WATCHERS=0`` in
@@ -74,13 +74,22 @@ def no_vault_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> VaultMa
     return mgr
 
 
-# --- AC1: shared no-vault resolution on /vault/notes and /workspace ----------
+# --- AC1: shared no-vault resolution on active-vault read boundaries --------
 
 
 def _no_vault_picker_endpoints() -> list[tuple[str, str, str, str | None]]:
     """(id, method, url, expected_requested_note_path)."""
     note_path = "notes/x.md"
     return [
+        ("orientation", "GET", "/api/companion/orientation", None),
+        ("vault_browser", "GET", "/api/companion/vault-browser", None),
+        ("vault_link_index", "GET", "/api/companion/vault-link-index", None),
+        (
+            "vault_related",
+            "GET",
+            f"/api/companion/vault-related?note_path={note_path}",
+            note_path,
+        ),
         ("vault_notes", "GET", "/api/companion/vault/notes", None),
         (
             "workspace",
