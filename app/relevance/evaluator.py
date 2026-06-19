@@ -28,7 +28,7 @@ from app.relevance.schema import (
     SurfacedRef,
     UrgencyBand,
 )
-from app.vault.paths import get_vault_system_dir_rel
+from app.vault.paths import resolve_vault_system_dir_rel_or_default
 
 EVALUATOR_ID = "relevance-evaluator@deterministic-fallback"
 PRODUCED_BY = "relevance-evaluator-contract/v0:deterministic-fallback"
@@ -61,7 +61,11 @@ class DeterministicRelevanceEvaluator:
         self.daily_dir = daily_dir
         self._now = now or datetime.now(timezone.utc)
         self.today = today or self._now.date()
-        self._system_dir = get_vault_system_dir_rel(self.vault_root)
+        # Degrade gracefully: a vault created by ``initialize_vault`` may carry
+        # only ``settings/*.md`` (no layout note / system-settings.yaml), so the
+        # strict resolver would raise and the default-on CRE tick would fail to
+        # materialize anything. Fall back to the packaged default system folder.
+        self._system_dir = resolve_vault_system_dir_rel_or_default(self.vault_root)
 
     def evaluate(self) -> list[Moment]:
         """Read vault-native inputs and return candidate moments (may be empty)."""

@@ -260,6 +260,20 @@ class VaultManager:
             gitignore_path.write_text(LOCAL_GITIGNORE, encoding="utf-8")
             created.append(str(gitignore_path.relative_to(expanded)))
 
+        # Bootstrap the legacy layout note so runtime helpers that read
+        # ``vault.layout.md`` (e.g. the deterministic CRE path resolver) work on a
+        # freshly initialized vault. Without this, ``settings/*.md`` exists but no
+        # ``vault.layout.md`` / ``system-settings.yaml`` does, so
+        # ``resolve_vault_system_dir_rel`` raises and the default-on relevance tick
+        # materializes nothing. Best-effort: never fail vault init on a layout
+        # bootstrap error (the CRE resolvers degrade gracefully on their own).
+        try:
+            from app.vault.layout import ensure_vault_layout
+
+            ensure_vault_layout(expanded)
+        except Exception:  # pragma: no cover - defensive bootstrap
+            logger.warning("vault layout bootstrap during initialize_vault failed", exc_info=True)
+
         context = self.select_vault(expanded, remember=remember)
         return VaultInitializationResult(
             context=context,
