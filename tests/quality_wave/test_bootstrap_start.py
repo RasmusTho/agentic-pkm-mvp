@@ -16,6 +16,7 @@ Spec: docs/LOCAL_TEST_BOOTSTRAP/START_FULL_SYSTEM.md :: BOOTSTRAP-03
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -133,32 +134,104 @@ class TestBootstrapStartContract:
         ), f"Script rejected an existing VAULT_ROOT as missing: {stderr[:500]}"
 
     def test_make_start_test_system_target_exists(self) -> None:
-        """make start-test-system is declared in the Makefile (wired for BOOTSTRAP-03)."""
+        """make start-test-system is declared in the Makefile (wired for BOOTSTRAP-03).
+
+        No vault is configured here: the start target must NOT require one — the
+        runtime boots the no-vault idle posture (#2005) — so the dry-run resolves
+        cleanly with no VAULT_ROOT in the environment.
+        """
+        env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")}
         result = subprocess.run(
             ["make", "--dry-run", "start-test-system"],
             capture_output=True,
             text=True,
+            env=env,
         )
         assert result.returncode == 0, (
-            f"make start-test-system target missing or broken: {result.stderr}"
+            f"make start-test-system must resolve without a vault (idle boot): {result.stderr}"
         )
         combined = result.stdout + result.stderr
         assert "start_full_system" in combined, (
             f"Expected start_full_system.sh in dry-run output; got: {combined[:500]}"
         )
 
-    def test_make_start_test_system_uses_test_vault_root(self) -> None:
-        """make start-test-system and make test-up both pass TEST_VAULT_ROOT as VAULT_ROOT."""
+    def test_make_start_test_system_threads_operator_vault_root(self) -> None:
+        """start-test-system and test-up pass the operator-configured vault as VAULT_ROOT.
+
+        TEST_VAULT_ROOT defaults from VAULT_ROOT (no hardcoded vault-test name); the
+        targets thread that path through when one is configured.
+        """
+        operator_vault = "/tmp/uat-operator-test-vault"
         for target in ("start-test-system", "test-up"):
             result = subprocess.run(
                 ["make", "--dry-run", target],
                 capture_output=True,
                 text=True,
+                env={**os.environ, "VAULT_ROOT": operator_vault},
             )
             assert result.returncode == 0, (
                 f"make --dry-run {target} failed: {result.stderr}"
             )
             combined = result.stdout + result.stderr
-            assert "vault-test" in combined, (
-                f"Expected vault-test path in make --dry-run {target} output; got: {combined[:500]}"
+            assert operator_vault in combined, (
+                f"Expected operator VAULT_ROOT {operator_vault} threaded through "
+                f"make --dry-run {target}; got: {combined[:500]}"
             )
+
+    def test_make_test_targets_honor_vault_root_test_override(self) -> None:
+        """The per-channel VAULT_ROOT_TEST override is honored and threads through."""
+        operator_vault = "/tmp/uat-per-channel-test-vault"
+        env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT")}
+        env["VAULT_ROOT_TEST"] = operator_vault
+        result = subprocess.run(
+            ["make", "--dry-run", "test-up"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (
+            f"make --dry-run test-up failed with VAULT_ROOT_TEST set: {result.stderr}"
+        )
+        assert operator_vault in (result.stdout + result.stderr), (
+            "Expected VAULT_ROOT_TEST to be honored as the test vault root"
+        )
+
+    def test_start_targets_boot_without_a_vault_selected(self) -> None:
+        """The runtime must start without a vault (#2005): start-test-system and
+        test-up resolve with no VAULT_ROOT and never demand one."""
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")
+        }
+        for target in ("start-test-system", "test-up"):
+            result = subprocess.run(
+                ["make", "--dry-run", target],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            combined = result.stderr + result.stdout
+            assert result.returncode == 0, (
+                f"make {target} must boot idle without a vault: {combined[:500]}"
+            )
+            assert "is required" not in combined, (
+                f"{target} must not demand a vault to start: {combined[:500]}"
+            )
+
+    def test_only_seed_flow_requires_a_vault(self) -> None:
+        """Provisioning (test-bootstrap) still guards on a vault — you cannot seed
+        UAT notes into 'no vault' — while the start paths do not."""
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")
+        }
+        result = subprocess.run(
+            ["make", "--dry-run", "test-bootstrap"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode != 0, "test-bootstrap must require a vault to seed"
+        assert "TEST_VAULT_ROOT is required" in (result.stderr + result.stdout)

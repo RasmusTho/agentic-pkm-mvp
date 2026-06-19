@@ -1194,6 +1194,22 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
             provenance="settings",
         )
 
+    # In the container the vault is bound at /app/vault, so neither VAULT_ROOT's
+    # basename nor the selected-context name (also derived from /app/vault)
+    # recovers the operator's real vault name — both collapse to the generic
+    # "vault". VAULT_HOST_ROOT carries the real host path (e.g. …/Niflheim),
+    # written by export_runtime_env.sh to survive that divergence (issue #2141),
+    # so prefer its basename before falling back to path-derived identity.
+    host_root_raw = os.getenv("VAULT_HOST_ROOT", "").strip()
+    if host_root_raw:
+        host_name = Path(host_root_raw).name
+        if host_name and host_name != "vault":
+            return VaultIdentityState(
+                vault_name=host_name,
+                channel=channel,
+                provenance="host_root",
+            )
+
     try:
         context = get_vault_manager().context
     except Exception:
@@ -1216,7 +1232,8 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
                 provenance="selected",
             )
 
-    # No configured name: infer identity from the VAULT_ROOT path as before.
+    # No configured name and no host-root hint: infer identity from the
+    # VAULT_ROOT path as before.
     vault_root_raw = os.getenv("VAULT_ROOT", "").strip()
     vault_name = vault_root.name or str(vault_root)
     if not vault_root_raw:

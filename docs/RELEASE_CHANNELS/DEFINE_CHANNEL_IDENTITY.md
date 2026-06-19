@@ -29,8 +29,9 @@ This task produces the channel-identity contract as a docs artifact under `docs/
 The contract this task establishes:
 
 - **stable channel**: code ref = `stable` (git tag or branch pointer); DB = `pkm_prod`; vault root = the operator's real vault (configured, not hard-coded); runtime artifacts = `tmp/`.
-- **dev channel**: code ref = `main` or a feature branch (no pin); DB = `pkm_dev`; vault root = `vault-dev/`; runtime artifacts = `tmp-dev/`.
-- **test channel**: code ref = current worktree (whatever `make test-bootstrap` runs against); DB = `pkm_test` (dropped/recreated by bootstrap); vault root = `vault-test/`; runtime artifacts = `tmp-test/`.
+- **dev channel**: code ref = `main` or a feature branch (no pin); DB = `pkm_dev`; vault root = the operator's dev vault (configured, not hard-coded); runtime artifacts = `tmp-dev/`.
+- **test channel**: code ref = current worktree (whatever `make test-bootstrap` runs against); DB = `pkm_test` (dropped/recreated by bootstrap); vault root = the operator's test vault (configured, not hard-coded — distinct from the prod vault); runtime artifacts = `tmp-test/`.
+- **Vault names are operator-owned**: every channel's vault is one of the operator's own Obsidian vaults, configured via `VAULT_ROOT` (and the per-channel `VAULT_ROOT_DEV` / `VAULT_ROOT_TEST` overrides). The names can change at any time and are never hardcoded; isolation is the operator's responsibility (point a channel at a vault that is not the prod vault). The channel identity carries `<operator-configured>` as an inspectable placeholder, not a literal path.
 - **Resolution point**: channel identity resolves through `app.config.environment` + a new channel-aware extension that exposes the four properties coherently. No scattered env-var soup.
 - **Inspection surface**: `python -m app.cli status` and `python -m app.cli settings-explain` must report the active channel including all four properties.
 

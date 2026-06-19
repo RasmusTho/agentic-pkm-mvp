@@ -78,6 +78,24 @@ def test_vault_name_derived_from_vault_root_basename(
     assert identity["vault_name"] == tmp_path.name
 
 
+def test_vault_name_prefers_host_root_over_container_path(
+    client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In the container VAULT_ROOT is /app/vault; the real operator vault name
+    comes from VAULT_HOST_ROOT (issue #2141), so a correctly-mounted Niflheim
+    must not be mislabeled "vault"."""
+    monkeypatch.delenv("PKM_ENVIRONMENT", raising=False)
+    monkeypatch.setenv(
+        "VAULT_HOST_ROOT",
+        "/Users/op/Library/Mobile Documents/iCloud~md~obsidian/Documents/Niflheim",
+    )
+    resp = _workspace(client)
+    assert resp.status_code == 200
+    identity = resp.json()["runtime"]["vault_identity"]
+    assert identity["vault_name"] == "Niflheim"
+    assert identity["provenance"] == "host_root"
+
+
 def test_vault_channel_from_pkm_environment(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

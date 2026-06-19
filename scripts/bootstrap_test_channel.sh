@@ -30,13 +30,21 @@ for arg in "$@"; do
   esac
 done
 
+# Vault root for this self-verifying harness. The product layer
+# (derive_test_channel_env) is intentionally fail-loud with no synthetic default,
+# so the harness supplies an explicit vault: the configured operator vault when
+# present, otherwise a repo-local ephemeral scratch vault (gitignored). This keeps
+# the zero-manual-env-exports property for CI without hardcoding a vault name in
+# product code. The scratch vault is a throwaway CI/local fixture, never a real vault.
+BOOTSTRAP_VAULT_ROOT="${VAULT_ROOT_TEST:-${TEST_VAULT_ROOT:-${VAULT_ROOT:-${ROOT}/vault-test}}}"
+
 # ── [1/4] vault init + canonical env + fail-loud preflight ────────────────────
 # `ops bootstrap-test-channel --print-env` runs `vault init`, derives the
 # canonical (absolute, channel-correct, host-reachable) env, runs the F2
 # preflight, and exits non-zero if the channel is inconsistent. We capture its
 # KEY=VALUE output and export it — no manual env exports required anywhere.
 echo "==> [1/4] vault init + canonical channel env + fail-loud preflight"
-bootstrap_env="$("${PYTHON}" -m app.cli ops bootstrap-test-channel --print-env)"
+bootstrap_env=$("${PYTHON}" -m app.cli ops bootstrap-test-channel --vault-root "${BOOTSTRAP_VAULT_ROOT}" --print-env)
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   export "$line"

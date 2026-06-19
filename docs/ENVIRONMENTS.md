@@ -33,7 +33,7 @@ The four senses:
 - **`VAULT_ROOT` runtime binding** — the env/runtime binding that points the running process at a content vault at boot (resolved by `resolve_vault_root` / `resolve_optional_vault_root` in `app/config/paths.py`).
   - *Invariants*: this binding is the boot-time *pointer*, not the data. The unset behavior is **resolver-specific** and the two resolvers differ: `resolve_optional_vault_root()` treats an **unset/unbound** `VAULT_ROOT` as an explicit no-vault state (`None`) with no silent fallback — this is the resolver the no-vault-at-initiation path uses. The legacy `resolve_vault_root()` still falls back to the CWD-relative `_DEFAULT_VAULT` (`./vault`) when `VAULT_ROOT` is unset; migrating its remaining call sites onto the optional/no-vault contract is the remaining no-vault boot work (parent #2003, hardening #2029) and is **not** yet complete. Both resolvers agree on the other cases: a **set-but-missing** `VAULT_ROOT` (path configured but absent) fails loud with `VaultRootMisconfiguredError` — missing data is an error, not a no-vault state — and a **bound, existing** root resolves to that path, environment-scoped when requested. Per-environment overrides (`VAULT_ROOT_DEV`, `VAULT_ROOT_TEST`) and a CLI override take precedence over the base binding.
 
-- **Test vault** — the deterministic, throwaway fixture vault that the local `test` bootstrap/UAT harness provisions (`vault-test/` by default, overridable via `VAULT_ROOT_TEST`; see §Canonical Local Test Bootstrap).
+- **Test vault** — the operator-configured vault the local `test` bootstrap/UAT harness binds (set via `VAULT_ROOT_TEST` / `VAULT_ROOT`; there is no synthetic default — the harness fails loud if unset; see §Canonical Local Test Bootstrap).
   - *Invariants*: it is resettable and reproducible, not persistent — the `test` bootstrap resets and re-initializes it from a clean start, and repeatability matters more than durability. It must remain isolated from the `dev` and `prod` content vaults so deterministic UAT does not depend on live or leftover state. Making the *test* vault optional or non-deterministic would break the canonical verification path and is out of scope for any "vault optional" work.
 
 **Which sense "no vault at initiation" refers to.** "No vault at initiation" refers specifically to the **`VAULT_ROOT` runtime-binding** sense: the process boots with `VAULT_ROOT` (and any env-scoped variant) **unset/unbound**, so `resolve_optional_vault_root` reports the explicit no-vault state. It does **not** mean the content vault was deleted, the vault-settings are absent, or the test vault is skipped:
@@ -61,9 +61,10 @@ Two kinds of separation govern how `dev`, `test`, and `prod` stay isolated:
 
 **Environment separation** — which data and config each process touches:
 - The runtime resolves environment-specific vault roots, DB names, and runtime-artifact paths through `PKM_ENVIRONMENT` (see §Runtime Control Surface).
-- `prod`: `vault/`, `app` DB, `tmp/` artifacts.
-- `dev`: `vault-dev/`, `app_dev` DB, `tmp-dev/` artifacts.
-- `test`: `vault-test/`, `app_test` DB, `tmp-test/` artifacts.
+- `prod`: operator-configured prod vault, `app` DB, `tmp/` artifacts.
+- `dev`: operator-configured dev vault, `app_dev` DB, `tmp-dev/` artifacts.
+- `test`: operator-configured test vault, `app_test` DB, `tmp-test/` artifacts.
+- Vault roots are operator-configured (`VAULT_ROOT` and the per-channel `VAULT_ROOT_DEV`/`VAULT_ROOT_TEST` overrides) — each channel binds one of the operator's own Obsidian vaults; the names are operator-owned, can change at any time, and are never hardcoded. The DB names and `tmp*` artifact dirs remain the fixed per-channel separators.
 - Environment separation is enforced by configuration, not by code path differences.
 
 **The two are orthogonal.** The environment selector controls *what data is touched*; the code ref controls *what code is running*. Both must be correct for a safe prod runtime.
@@ -139,12 +140,12 @@ Environment separation MUST be explicit across the following surfaces.
 ### Vaults and Human-Facing Files
 - `prod` must operate on the operator's real vault and its associated continuity artifacts.
 - `dev` should use a separate fixture, test, or otherwise intentionally non-production vault when environment-specific experimentation or validation is being performed.
-- `test` must use a separate clean vault dedicated to the repo-supported bootstrap/UAT path. The canonical local target is `vault-test/` when following `make test-bootstrap`.
+- `test` must use a separate vault dedicated to the repo-supported bootstrap/UAT path, distinct from the prod vault. The operator configures it via `VAULT_ROOT`/`VAULT_ROOT_TEST` (e.g. a dedicated test Obsidian vault); `make test-bootstrap` fails loud if no test vault is configured rather than fabricating one.
 - `dev`, `test`, and `prod` must not implicitly share the same writable vault surface when the purpose is environment isolation.
 
 **Implementation Status (Issues #266, #848)**:
 - Vault paths are now environment-scoped via `app.config.paths.resolve_vault_root()`.
-- Default behavior: `prod` uses `vault/`, `dev` uses `vault-dev/`, `test` uses `vault-test/`.
+- Vault roots are operator-configured per channel — there are no synthetic `vault/`, `vault-dev/`, `vault-test/` defaults baked into the channel identity; each channel binds the operator's configured vault and fails loud when unset.
 - Per-environment overrides honour `VAULT_ROOT_DEV` and `VAULT_ROOT_TEST`; the local bootstrap path also continues to honour `TEST_VAULT_ROOT` as the documented operator surface.
 - Custom overrides via CLI flags bypass environment scoping.
 

@@ -73,10 +73,12 @@ def derive_test_channel_env(
 ) -> dict[str, str]:
     """Return the canonical, absolute, channel-correct test-channel host env.
 
-    Pure and deterministic: the same inputs always yield the same env. An
-    explicit ``vault_root`` (or ``VAULT_ROOT_TEST`` in ``environ``) wins;
-    otherwise the vault is ``<repo_root>/vault-test``. All paths are resolved to
-    absolute form so callers never depend on CWD.
+    Pure and deterministic: the same inputs always yield the same env. The test
+    vault is operator-configured — an explicit ``vault_root`` wins, otherwise it
+    is read from ``VAULT_ROOT_TEST`` / ``TEST_VAULT_ROOT`` / ``VAULT_ROOT`` in
+    ``environ``. There is no synthetic default vault name: if none is supplied
+    this fails loud rather than inventing a ``vault-test`` directory. All paths
+    are resolved to absolute form so callers never depend on CWD.
     """
     env = os.environ if environ is None else environ
     root = _repo_root(repo_root)
@@ -85,8 +87,15 @@ def derive_test_channel_env(
         vault_root
         or env.get("VAULT_ROOT_TEST")
         or env.get("TEST_VAULT_ROOT")
-        or (root / "vault-test")
+        or env.get("VAULT_ROOT")
     )
+    if not chosen_vault:
+        raise ValueError(
+            "test-channel vault root is unset: provide vault_root or set "
+            "VAULT_ROOT_TEST / TEST_VAULT_ROOT / VAULT_ROOT to the operator's "
+            "test vault. The synthetic 'vault-test' default was removed so the "
+            "channel never silently targets a fabricated vault."
+        )
     vault_abs = Path(chosen_vault).expanduser().resolve()
     tmp_test = root / "tmp-test"
 
