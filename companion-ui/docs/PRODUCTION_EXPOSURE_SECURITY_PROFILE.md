@@ -22,9 +22,11 @@ This profile defines how to reason about Companion UI exposure before production
 It records posture and review inputs only. It does not implement auth, TLS, CORS, CSRF, renderer
 changes, deployment automation, or runtime behavior.
 
-The current system is personal/local-first. Companion UI channel launchers bind to loopback by
-default; LAN and Tailscale require explicit operator opt-in through `CUI_BIND_LAN=1`, while
-public-internet scenarios remain unsupported unless a separate hardening contract accepts them.
+The current system is personal/local-first. Companion UI `test-ui` and `prod-ui` launchers bind to
+loopback by default; LAN and Tailscale require explicit operator opt-in through `CUI_BIND_LAN=1`.
+The `dev-ui` launcher is the UAT exception and binds to `0.0.0.0` by default unless forced to
+loopback with `CUI_BIND_LAN=0`. Public-internet scenarios remain unsupported unless a separate
+hardening contract accepts them.
 
 ## Exposure posture
 
