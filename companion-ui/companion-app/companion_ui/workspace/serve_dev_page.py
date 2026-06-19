@@ -5039,22 +5039,36 @@ def _orientation_str(value: object, fallback: str = "") -> str:
     return text if text else fallback
 
 
-def _orientation_artifact_link(artifact_ref: object, *, testid: str) -> str:
+def _same_orientation_display_text(left: str, right: str) -> bool:
+    return " ".join(left.split()) == " ".join(right.split())
+
+
+def _orientation_artifact_link(
+    artifact_ref: object,
+    *,
+    testid: str,
+    suppress_when_text: str = "",
+) -> str:
     artifact = _orientation_dict(artifact_ref)
     note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
     title = _orientation_str(artifact.get("title"), note_path or "Artifact")
     artifact_id = _orientation_str(artifact.get("artifact_id") or artifact.get("artifact_uuid"))
+    link_text = (
+        "Open artifact"
+        if suppress_when_text and _same_orientation_display_text(title, suppress_when_text)
+        else title
+    )
     if not note_path:
         return (
             f'<span class="orientation-artifact-link orientation-artifact-link--empty" '
             f'data-testid="{testid}" data-artifact-id="{_e(artifact_id)}">'
-            f"{_e(title)}</span>"
+            f"{_e(link_text)}</span>"
         )
     href = "/workspace?note_path=" + quote(note_path, safe="")
     return (
         f'<a class="orientation-artifact-link" data-testid="{testid}" '
         f'data-note-path="{_e(note_path)}" data-artifact-id="{_e(artifact_id)}" '
-        f'href="{_e(href)}">{_e(title)}</a>'
+        f'href="{_e(href)}">{_e(link_text)}</a>'
     )
 
 
@@ -5160,7 +5174,7 @@ def _render_orientation_leave_point(leave_point: object) -> str:
           <div class="orientation-section-kicker">Leave point</div>
           <h1 class="orientation-title">{_e(label)}</h1>
           <div class="orientation-artifact-row">
-            {_orientation_artifact_link(leave.get("artifact_ref"), testid="workspace-orientation-leave-link")}
+            {_orientation_artifact_link(leave.get("artifact_ref"), testid="workspace-orientation-leave-link", suppress_when_text=label)}
           </div>
           <div class="orientation-meta-row">
             <span>Last signal: {_e(last_seen)}</span>
@@ -5206,14 +5220,15 @@ def _render_orientation_open_loops(open_loops: object, *, meta: object | None = 
     )
 
     def _row(loop: dict, *, testid: str, visible_default: bool) -> str:
+        label = _orientation_str(loop.get("label"), "Open loop")
         return f"""
             <article class="orientation-item" data-testid="{testid}"
               data-visible-by-default="{str(visible_default).lower()}"
               data-loop-status="{_e(_orientation_str(loop.get("status"), "unknown"))}"
               data-handoff-hint="{_e(_orientation_str(loop.get("handoff_hint"), "none"))}">
               <div class="orientation-item-main">
-                <h3>{_e(_orientation_str(loop.get("label"), "Open loop"))}</h3>
-                {_orientation_artifact_link(loop.get("artifact_ref"), testid="workspace-orientation-open-loop-link")}
+                <h3>{_e(label)}</h3>
+                {_orientation_artifact_link(loop.get("artifact_ref"), testid="workspace-orientation-open-loop-link", suppress_when_text=label)}
               </div>
               <div class="orientation-badges">
                 <span>{_e(_orientation_str(loop.get("status"), "unknown"))}</span>
@@ -5267,15 +5282,16 @@ def _render_orientation_notable_changes(changes: object, *, meta: object | None 
     )
 
     def _row(change: dict, *, testid: str, visible_default: bool) -> str:
+        label = _orientation_str(change.get("label"), "Notable change")
         summary = _orientation_str(change.get("summary"))
         changed_at = _orientation_str(change.get("changed_at"), "time unknown")
         return f"""
             <article class="orientation-item" data-testid="{testid}"
               data-visible-by-default="{str(visible_default).lower()}">
               <div class="orientation-item-main">
-                <h3>{_e(_orientation_str(change.get("label"), "Notable change"))}</h3>
+                <h3>{_e(label)}</h3>
                 <p>{_e(summary)}</p>
-                {_orientation_artifact_link(change.get("artifact_ref"), testid="workspace-orientation-notable-change-link")}
+                {_orientation_artifact_link(change.get("artifact_ref"), testid="workspace-orientation-notable-change-link", suppress_when_text=label)}
               </div>
               <div class="orientation-meta-row">Changed: {_e(changed_at)}</div>
               {_orientation_provenance(change, testid="workspace-orientation-notable-change-provenance")}
@@ -5338,6 +5354,7 @@ def _render_orientation_resurface(
     )
 
     def _candidate_row(candidate: dict, *, testid: str, visible_default: bool) -> str:
+        label = _orientation_str(candidate.get("label"), "Resurface candidate")
         signals = "".join(
             f'<span class="orientation-signal">{_e(_orientation_str(signal))}</span>'
             for signal in _orientation_list(candidate.get("signal_labels"))
@@ -5347,11 +5364,11 @@ def _render_orientation_resurface(
               data-testid="{testid}"
               data-visible-by-default="{str(visible_default).lower()}">
               <div class="orientation-item-main">
-                <h3>{_e(_orientation_str(candidate.get("label"), "Resurface candidate"))}</h3>
+                <h3>{_e(label)}</h3>
                 <p class="orientation-why" data-testid="workspace-orientation-resurface-why-now">
                   {_e(_orientation_str(candidate.get("why_now")))}
                 </p>
-                {_orientation_artifact_link(candidate.get("artifact_ref"), testid="workspace-orientation-resurface-link")}
+                {_orientation_artifact_link(candidate.get("artifact_ref"), testid="workspace-orientation-resurface-link", suppress_when_text=label)}
               </div>
               <div class="orientation-signals">{signals}</div>
               {_orientation_provenance(candidate, testid="workspace-orientation-resurface-provenance")}
@@ -5598,6 +5615,7 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
     """
     leave = _orientation_dict(orientation.get("leave_point"))
     counts = _reentry_counts(orientation)
+    leave_label = _reentry_leave_label(leave)
     traj_state = _reentry_traj_state(leave)
     delta_strip = _render_reentry_delta_strip(orientation) if shape == "long_mist" else ""
     if _orientation_str(leave.get("status")) == "artifact_missing":
@@ -5611,7 +5629,9 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
         )
     else:
         artifact_link = _orientation_artifact_link(
-            leave.get("artifact_ref"), testid="reentry-stop-link"
+            leave.get("artifact_ref"),
+            testid="reentry-stop-link",
+            suppress_when_text=leave_label,
         )
     inspect_onclick = "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
     return f"""
@@ -5627,7 +5647,7 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
       <ol class="reentry-questions">
         <li class="reentry-q" data-reentry-question="doing">
           <span class="reentry-q-label">What was I doing</span>
-          <span class="reentry-q-body">{_e(_reentry_leave_label(leave))}</span>
+          <span class="reentry-q-body">{_e(leave_label)}</span>
         </li>
         <li class="reentry-q" data-reentry-question="stopped">
           <span class="reentry-q-label">Where did momentum stop</span>
