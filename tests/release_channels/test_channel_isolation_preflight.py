@@ -1028,14 +1028,18 @@ def test_real_prod_compose_passes_preflight() -> None:
       becomes ``required`` and resolves to the missing ``./tmp/runtime.env``,
       making the binding unverifiable).
 
-    ``environ={}`` keeps the resolution hermetic: a runner that happens to
-    export ``WATCHER_RUNTIME_ENV_FILE`` cannot inject a winning layer and turn
-    this guard vacuous.
+    ``environ={}`` plus ``load_dotenv=False`` keeps the resolution hermetic: a
+    runner that happens to export ``WATCHER_RUNTIME_ENV_FILE`` — or that has a
+    repo-root ``.env`` carrying it — cannot inject a winning layer and turn this
+    guard vacuous. Without ``load_dotenv=False`` a committed/local ``.env`` is
+    still read (compose interpolation default), so ``environ={}`` alone does not
+    isolate this test from a ``.env``-supplied ``WATCHER_RUNTIME_ENV_FILE``.
     """
     result = check_compose_channel_isolation(
         PROD_COMPOSE,
         "prod",
         environ={},
+        load_dotenv=False,
     )
 
     assert result.ok, (

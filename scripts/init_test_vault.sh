@@ -8,14 +8,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VAULT_TEST="vault-test"
+# Seed the operator-configured test vault, honoring the same precedence as the
+# bootstrap harness and derive_test_channel_env (per-channel override first), and
+# falling back to the repo-local ephemeral scratch vault only when nothing is
+# configured. This must match the root the bootstrap exports and that
+# `uat-run-vault-test --vault-root` later reads, or the seed folder goes missing.
+VAULT_TEST="${VAULT_ROOT_TEST:-${TEST_VAULT_ROOT:-${VAULT_ROOT:-vault-test}}}"
 SYSTEM_CONFIG="${VAULT_TEST}/System/Config"
 TEST_DIR="${VAULT_TEST}/Test"
 PYTHON="${PYTHON:-$(if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; else command -v python; fi)}"
 
 # ── Directory structure ───────────────────────────────────────────────────────
 
-echo "==> Creating vault-test/ directory structure"
+echo "==> Creating ${VAULT_TEST}/ directory structure"
 mkdir -p "${SYSTEM_CONFIG}"
 mkdir -p "${TEST_DIR}"
 
@@ -52,7 +57,7 @@ VAULT_ROOT="${VAULT_TEST}" "${PYTHON}" -m app.cli uat-seed-vault-test \
 
 # ── Verify structure ──────────────────────────────────────────────────────────
 
-echo "==> Verifying vault-test/ structure"
+echo "==> Verifying ${VAULT_TEST}/ structure"
 
 errors=0
 
@@ -87,12 +92,12 @@ if [ "${uat_count}" -eq 0 ]; then
 fi
 
 if [ "${errors}" -gt 0 ]; then
-  echo "FAIL: vault-test/ structure incomplete (${errors} error(s))" >&2
+  echo "FAIL: ${VAULT_TEST}/ structure incomplete (${errors} error(s))" >&2
   exit 1
 fi
 
 cat <<SUMMARY
-SUCCESS: vault-test/ initialized
+SUCCESS: ${VAULT_TEST}/ initialized
   System/Config/panel-action-wiring.yaml  ✓
   Test/                                    ✓ (${uat_count} UAT note(s))
   Idempotent: run again to verify no drift
