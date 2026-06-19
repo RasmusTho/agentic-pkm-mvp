@@ -120,9 +120,10 @@ def test_protocol_relative_ref_is_not_live_href() -> None:
     html = render_now_surface_html([moment])
     hrefs = re.findall(r'href="([^"]*)"', html)
 
-    # No live external href to the host; the ref is rendered inert instead.
-    assert not any("evil.com" in href for href in hrefs)
-    assert 'data-blocked-ref="true"' in html
+    # Both protocol-relative refs render inert (no href at all) — asserted
+    # structurally rather than by fragile URL-substring matching.
+    assert hrefs == []
+    assert html.count('data-blocked-ref="true"') == 2
 
 
 def test_ref_href_allows_vault_relative_and_http() -> None:
