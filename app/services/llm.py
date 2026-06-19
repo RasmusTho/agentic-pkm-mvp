@@ -263,7 +263,16 @@ def _http_chat(
     )
     resp.raise_for_status()
     data = resp.json()
-    return _extract_openai_content(data), data
+    content = _extract_openai_content(data)
+    # An HTTP 200 with no content is a silent provider failure: a truncated or
+    # empty completion would otherwise propagate as an empty answer and
+    # manufacture a false-green synthesis receipt (#2190). Fail loud instead.
+    if not str(content or "").strip():
+        raise LLMError(
+            f"real provider returned an empty response on HTTP {resp.status_code} "
+            f"(model={model}); refusing to treat a blank completion as success"
+        )
+    return content, data
 
 
 def call_llm(
@@ -356,6 +365,15 @@ def call_llm(
                 f"ollama provider call failed (model={model}); refusing to substitute a "
                 f"deterministic response: {exc}"
             ) from exc
+        # An HTTP 200 with no message content yields an empty string here. Treating
+        # a blank completion as a successful answer manufactures a false-green
+        # synthesis receipt (#2190); fail loud so the empty real-provider response
+        # surfaces instead of propagating downstream.
+        if not str(response_text or "").strip():
+            raise LLMError(
+                f"ollama provider returned an empty response (model={model}); "
+                "refusing to treat a blank completion as success"
+            )
         response_payload = {"content": response_text}
     elif provider == "openai":
         try:
