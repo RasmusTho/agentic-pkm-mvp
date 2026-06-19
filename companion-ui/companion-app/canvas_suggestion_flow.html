@@ -409,6 +409,12 @@ tags: [arch, q2-planning]
     }[s] || 'Message Hugin…';
 
     console.log('[canvas-shell] state →', s);
+
+    // auto-snap the portrait bottom-sheet when a proposal arrives (onProposalArrived
+    // only touches sheet geometry; it must never call setState or we recurse)
+    if (s === 'suggestion-staged:body' || s === 'suggestion-staged:gov') {
+      onProposalArrived();
+    }
   }
 
   function logTurn(kind, fields) {
@@ -668,14 +674,7 @@ tags: [arch, q2-planning]
     }
   }
 
-  // hook proposal arrival to auto-snap
-  const _origSetState = setState;
-  function setState(s) {
-    _origSetState(s);
-    if (s === 'suggestion-staged:body' || s === 'suggestion-staged:gov') {
-      onProposalArrived();
-    }
-  }
+  // proposal-arrival auto-snap is folded into setState() above.
 
   initSheet();
 

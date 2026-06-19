@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+_CANVAS_PROTOTYPE_HTML = (
+    Path(__file__).resolve().parents[2]
+    / "companion-ui"
+    / "companion-app"
+    / "canvas_suggestion_flow.html"
+)
 
 from companion_ui.canvas_suggestion_flow.rail_state_machine import (
     CanvasRailStateMachine,
@@ -103,3 +111,18 @@ def test_unknown_suggestion_state_falls_back_to_idle() -> None:
 
     assert 'data-testid="workspace-suggestion-flow"' in html
     assert 'data-suggestion-state="idle"' in html
+
+
+def test_prototype_has_single_setstate_declaration() -> None:
+    """Guard against the duplicate-setState recursion regression (#2151).
+
+    Two ``function setState(`` declarations in one IIFE let JS hoisting make the
+    later wrapper win, so ``const _origSetState = setState`` aliased the wrapper
+    itself and ``_origSetState(s)`` recursed forever — the prototype died on load
+    (``setTab('body')`` at init triggers it). There must be exactly one
+    ``setState`` definition and no ``_origSetState`` alias.
+    """
+    source = _CANVAS_PROTOTYPE_HTML.read_text(encoding="utf-8")
+
+    assert source.count("function setState(") == 1
+    assert "_origSetState" not in source
