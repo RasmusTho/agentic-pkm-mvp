@@ -332,3 +332,93 @@ def test_reconcile_issue_stops_when_project_listing_fails_before_mutation(
     with pytest.raises(subprocess.CalledProcessError):
         reconcile_issue(args, "RasmusTho", {"number": 1}, "field", {"Ready": "opt"})
     assert add_calls == []
+
+
+def test_reconcile_pr_soft_fails_on_transient_project_add_failure(
+    monkeypatch, capsys
+) -> None:
+    add_calls = []
+    edit_calls = []
+
+    def fake_run_gh(*args: str) -> str:
+        if args[:3] == ("project", "item-list", "1"):
+            return reconcile_project_status.json.dumps({"items": [], "totalCount": 0})
+        if args and args[0] == "project":
+            edit_calls.append(args)
+            return ""
+        raise AssertionError(f"unexpected gh command: {args}")
+
+    def transient_add_failure(*_args) -> None:
+        add_calls.append(_args)
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["gh", "project", "item-add"],
+            stderr="GraphQL: API rate limit exceeded",
+        )
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "add_item_to_project",
+        transient_add_failure,
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_pr",
+        lambda _repo, _number: {
+            "number": 2140,
+            "state": "OPEN",
+            "isDraft": False,
+            "mergedAt": None,
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/pull/2140",
+        },
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda _repo, _number: {
+            "number": 2144,
+            "state": "OPEN",
+            "labels": [{"name": "agent:ready"}],
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/2144",
+        },
+    )
+
+    pr_args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp",
+        pr=2140,
+        dry_run=False,
+        status=None,
+    )
+    issue_args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp",
+        issue=2144,
+        dry_run=False,
+        status=None,
+    )
+
+    assert (
+        reconcile_pr(
+            pr_args,
+            "RasmusTho",
+            {"number": 1, "title": "Agent Delivery Control Plane"},
+            "field",
+            {"Review": "opt"},
+        )
+        == 0
+    )
+    assert (
+        reconcile_issue(
+            issue_args,
+            "RasmusTho",
+            {"number": 1, "title": "Agent Delivery Control Plane"},
+            "field",
+            {"Ready": "opt"},
+        )
+        == 0
+    )
+    assert len(add_calls) == 2
+    assert edit_calls == []
+    output = capsys.readouterr().out
+    assert 'soft-fail pr #2140: failed to add to project "Agent Delivery Control Plane"' in output
+    assert 'soft-fail issue #2144: failed to add to project "Agent Delivery Control Plane"' in output

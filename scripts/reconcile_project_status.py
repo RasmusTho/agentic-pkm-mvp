@@ -179,6 +179,21 @@ def add_item_to_project(owner: str, project_number: int, url: str) -> None:
     run_gh_project(owner, "item-add", str(project_number), "--url", url)
 
 
+def soft_fail_project_add(
+    kind: str,
+    number: int,
+    project_title: str,
+    exc: Exception | None = None,
+) -> int:
+    print(
+        f"soft-fail {kind} #{number}: failed to add to project "
+        f'"{project_title}" after bounded retry; content truth remains authoritative'
+    )
+    if exc is not None:
+        print(f"detail: {exc}")
+    return 0
+
+
 def set_project_status(
     owner: str,
     project_id: str,
@@ -221,13 +236,18 @@ def reconcile_issue(
     if item is None:
         print(f'add issue #{args.issue} to project "{project["title"]}"')
         if not args.dry_run:
-            add_item_to_project(owner, project["number"], issue["url"])
+            try:
+                add_item_to_project(owner, project["number"], issue["url"])
+            except subprocess.CalledProcessError as exc:
+                if _should_retry_gh_error(exc):
+                    return soft_fail_project_add("issue", args.issue, project["title"], exc)
+                raise
             items = list_project_items(owner, project["number"])
             item = find_item_by_number(items, "Issue", args.issue)
         if item is None and args.dry_run:
             return 0
         if item is None:
-            raise RuntimeError(f"Failed to add issue #{args.issue} to project")
+            return soft_fail_project_add("issue", args.issue, project["title"])
 
     current = item.get("status")
     if current == desired:
@@ -262,13 +282,18 @@ def reconcile_pr(
     if item is None:
         print(f'add pr #{args.pr} to project "{project["title"]}"')
         if not args.dry_run:
-            add_item_to_project(owner, project["number"], pr["url"])
+            try:
+                add_item_to_project(owner, project["number"], pr["url"])
+            except subprocess.CalledProcessError as exc:
+                if _should_retry_gh_error(exc):
+                    return soft_fail_project_add("pr", args.pr, project["title"], exc)
+                raise
             items = list_project_items(owner, project["number"])
             item = find_item_by_number(items, "PullRequest", args.pr)
         if item is None and args.dry_run:
             return 0
         if item is None:
-            raise RuntimeError(f"Failed to add pr #{args.pr} to project")
+            return soft_fail_project_add("pr", args.pr, project["title"])
 
     current = item.get("status")
     if current == desired:

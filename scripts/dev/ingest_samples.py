@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, os, sys, uuid
+import hashlib, json, sys, uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,7 +116,7 @@ def main():
         print(f"Samples path not found: {samples_root}", file=sys.stderr)
         sys.exit(2)
 
-    settings = yaml.safe_load(SETTINGS.read_text(encoding="utf-8"))
+    _settings = yaml.safe_load(SETTINGS.read_text(encoding="utf-8"))
     trace_id = uuid.uuid4().hex
     count = 0
     for src in samples_root.rglob("*"):
