@@ -159,6 +159,22 @@ class TestBlockedAndClarification:
         assert s.state == "clarification-needed"
         assert s.clarification_question == "Which folder?"
 
+    def test_request_clarification_rejected_leaves_no_stale_question(self) -> None:
+        # From a non-staged state, request_clarification is an illegal transition.
+        # It must validate BEFORE mutating, so no stale question is left behind and
+        # the state is unchanged (mirrors correct()'s guard-before-mutate ordering).
+        s = ProposalInteractionState(proposal_id="p1", state="confirming")
+        with pytest.raises(ValueError, match="Illegal Panel interaction transition"):
+            s.request_clarification("Which folder?")
+        assert not s.clarification_question
+        assert s.state == "confirming"
+
+        # The legal staged path still sets the question and transitions.
+        ok = ProposalInteractionState(proposal_id="p2")
+        ok.request_clarification("Which folder?")
+        assert ok.state == "clarification-needed"
+        assert ok.clarification_question == "Which folder?"
+
 
 class TestPanelInteractionSession:
     def test_artifact_id_required(self) -> None:
