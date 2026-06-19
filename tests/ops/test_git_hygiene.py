@@ -1010,7 +1010,10 @@ def test_janitor_apply_removes_reclaimable_worktree_and_branch(
     tmp_path, monkeypatch
 ) -> None:
     """AC3: --mode apply removes a verified-reclaimable worktree + its local
-    branch without --force."""
+    branch. An ancestor-proven branch keeps the conservative ``git branch -d`` and
+    the worktree remove never uses --force. (Force-delete for PR-proven
+    non-ancestor branches is covered in tests/scripts/test_git_hygiene_reclaim.py.)
+    """
     commands: list[list[str]] = []
 
     def fake_run_git_result(args: list[str], _cwd: Path):
@@ -1036,7 +1039,7 @@ def test_janitor_apply_removes_reclaimable_worktree_and_branch(
                 {
                     "path": str(tmp_path / "deliver-foo"),
                     "branch": "deliver/foo",
-                    "merge_proof": "merged_pr",
+                    "merge_proof": "ancestor_of_origin_main",
                 }
             ],
             "orphaned_worktrees": [],
@@ -1050,9 +1053,12 @@ def test_janitor_apply_removes_reclaimable_worktree_and_branch(
 
     assert report["ok"] is True
     assert ["worktree", "remove", str(tmp_path / "deliver-foo")] in commands
+    # Ancestor-proven branch keeps the conservative -d.
     assert ["branch", "-d", "deliver/foo"] in commands
-    # Never --force / -D.
-    assert not any("--force" in cmd or "-D" in cmd for cmd in commands)
+    # The worktree remove never uses --force, and an ancestor branch is never
+    # force-deleted.
+    assert not any("--force" in cmd for cmd in commands)
+    assert ["branch", "-D", "deliver/foo"] not in commands
 
 
 def test_janitor_apply_skips_branch_delete_when_worktree_remove_fails(
