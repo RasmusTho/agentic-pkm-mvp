@@ -49,6 +49,7 @@ Once the prod baseline is stable, the promotion workflow (prepare → execute �
 - the `promote-to-test` and `promote-test-to-prod` staged workflows
 - automated migration reversal classification
 - operator acknowledgement receipts for forward-only migrations
+- CI/UAT-as-test for the test channel: today `.github/workflows/harness-selfverify.yml` only runs the harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) and writes **no** receipt, and `ops/test-promotions/` does not exist. The current test-channel gate is therefore **harness self-verification only**; CI/UAT cannot yet substitute for a live test run because `promote-to-test` still requires a durable machine-readable receipt naming the candidate SHA, channel config, and passing check suite (see `.codex/skills/promote-to-test/SKILL.md` §"CI/UAT as substitute for a live test run"). This stays future hardening until CI emits that candidate-SHA receipt.
 
 The absence of these does not block establishing a prod baseline. Operators should not wait for promotion hardening to run prod.
 

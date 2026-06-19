@@ -19,8 +19,12 @@ Last verified against: app/stores/pg.py (2026-06-15)
   `vector_index_meta`). These are created at runtime, **not** by Alembic.
 - `app/services/outbox.py` (`bootstrap()`) defines the **DB outbox** table (canonical queue) at runtime.
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
-  (`objects`/`chunks`/`embeddings`/...) lineage only; see "Historical migration lineage" below. The
-  active runtime does not depend on these tables.
+  (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
+  these are historical-only, **but `objects` and `decisions` remain on the active runtime path**: vault
+  ingest writes `objects` via `app/stores/postgres.py` (`PgObjects.upsert`, reached through
+  `app/ingest/vault_root.py` → `get_stores()`), and `app/services/decisions.py` reads/writes
+  `decisions`. `chunks`/`embeddings`/`membership` are touched by the backfill job
+  (`app/jobs/backfill.py`) and `app/store/membership_store.py` rather than purely historical.
 
 This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. The
 runtime store shape is mirrored from `app/stores/pg.py`; if you change the store schema there, update
@@ -129,9 +133,12 @@ They remain mirror/projection surfaces and do not hold semantic authority over t
 ## Historical migration lineage (legacy AMG-core)
 
 The tables below are the legacy AMG-core schema defined by Alembic migrations under
-`app/alembic/versions/`. They are retained as historical lineage only; the active runtime store is the
-`store_*` set above and does not depend on these tables. Do not read these shapes as the current
-contract. Note there is no `search_vector` column anywhere in the schema (active or legacy).
+`app/alembic/versions/`. The primary runtime store is the `store_*` set above, but **`objects` and
+`decisions` from this set are still on the active runtime path** (vault ingest upserts `objects` via
+`app/stores/postgres.py`; `app/services/decisions.py` reads/writes `decisions`), and
+`chunks`/`embeddings`/`membership` are exercised by the backfill job and `membership_store`. The
+remaining shapes here are historical lineage. Do not read these shapes as the current contract. Note
+there is no `search_vector` column anywhere in the schema (active or legacy).
 
 ### `objects` (legacy)
 - `id` (`uuid`, PK)
@@ -201,11 +208,13 @@ Interpretation:
 - but the event payload is still an operational artifact layer rather than the whole domain model.
 
 ## Explicit Deltas / Known Gaps
-- The active runtime store is the `store_*` set defined by runtime DDL in `app/stores/pg.py`
-  (`_ensure_tables()`). The AMG-core `objects`/`chunks`/`embeddings`/... tables under
-  `app/alembic/versions/` are legacy lineage and are not on the active runtime path; an earlier
-  revision of this doc mis-attributed the store tables to Alembic and listed a fabricated
-  `search_vector` column, both corrected here.
+- The primary runtime store is the `store_*` set defined by runtime DDL in `app/stores/pg.py`
+  (`_ensure_tables()`). The AMG-core tables under `app/alembic/versions/` are mostly legacy lineage,
+  **except `objects` and `decisions`, which are still on the active runtime path** (vault ingest →
+  `PgObjects.upsert` INSERTs into `objects`; `app/services/decisions.py` reads/writes `decisions`);
+  `chunks`/`embeddings`/`membership` are touched by the backfill job and `membership_store`. An earlier
+  revision of this doc mis-attributed the store tables to Alembic, listed a fabricated `search_vector`
+  column, and over-broadly claimed none of the AMG-core tables were active — all corrected here.
 - This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.
 - Companion-note and identity-history tables described in forward-line docs may not yet exist in
   the current physical schema; where absent, read them as forward-line schema direction rather than
