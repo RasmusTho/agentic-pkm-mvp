@@ -56,6 +56,11 @@ services:
       TTS_MODEL_DIR: /data/tts/models
       TTS_CACHE_DIR: /data/tts/cache
       TTS_LOG_DIR: /data/tts/logs
+      # Read-back master switch. Compose interpolation only sees shell vars, a
+      # default .env, or the --env-file passed by the start wrappers; the source
+      # tmp/runtime.env is populated from .env by export_runtime_env.sh so an
+      # operator's TTS_ENABLED=true actually reaches load_tts_config() (#2189).
+      TTS_ENABLED: ${TTS_ENABLED:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

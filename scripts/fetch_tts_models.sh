@@ -7,14 +7,30 @@
 #
 # Override sources via env if upstream paths change:
 #   PIPER_SV_ONNX_URL, PIPER_SV_JSON_URL, KOKORO_ONNX_URL, KOKORO_VOICES_URL
+# Override the Swedish Piper voice id (must match TTS_SV_VOICE used by the app):
+#   TTS_SV_VOICE=sv_SE-nst-medium scripts/fetch_tts_models.sh <models-dir>
 set -euo pipefail
 
 DEST="${1:?usage: fetch_tts_models.sh <models-dir>}"
-PIPER_DIR="$DEST/piper/sv_SE-lisa-medium"
+DEFAULT_PIPER_SV_VOICE="sv_SE-lisa-medium"
+DEFAULT_PIPER_SV_ONNX_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/lisa/medium/sv_SE-lisa-medium.onnx"
+DEFAULT_PIPER_SV_JSON_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/lisa/medium/sv_SE-lisa-medium.onnx.json"
+
+# Swedish Piper voice id — mirrors TTS_SV_VOICE / TTSConfig.sv_voice so a custom
+# voice lands exactly where resolve_voice() probes: <models>/piper/<id>/<id>.onnx.
+PIPER_SV_VOICE="${TTS_SV_VOICE:-$DEFAULT_PIPER_SV_VOICE}"
+PIPER_DIR="$DEST/piper/$PIPER_SV_VOICE"
 KOKORO_DIR="$DEST/kokoro"
 
-PIPER_SV_ONNX_URL="${PIPER_SV_ONNX_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/lisa/medium/sv_SE-lisa-medium.onnx}"
-PIPER_SV_JSON_URL="${PIPER_SV_JSON_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/sv/sv_SE/lisa/medium/sv_SE-lisa-medium.onnx.json}"
+if [[ "$PIPER_SV_VOICE" != "$DEFAULT_PIPER_SV_VOICE" ]]; then
+  if [[ -z "${PIPER_SV_ONNX_URL:-}" || -z "${PIPER_SV_JSON_URL:-}" ]]; then
+    echo "ERROR: custom TTS_SV_VOICE=$PIPER_SV_VOICE requires PIPER_SV_ONNX_URL and PIPER_SV_JSON_URL" >&2
+    exit 1
+  fi
+fi
+
+PIPER_SV_ONNX_URL="${PIPER_SV_ONNX_URL:-$DEFAULT_PIPER_SV_ONNX_URL}"
+PIPER_SV_JSON_URL="${PIPER_SV_JSON_URL:-$DEFAULT_PIPER_SV_JSON_URL}"
 KOKORO_ONNX_URL="${KOKORO_ONNX_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx}"
 KOKORO_VOICES_URL="${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}"
 
@@ -28,8 +44,8 @@ fetch() { # url out
 }
 
 mkdir -p "$PIPER_DIR" "$KOKORO_DIR"
-fetch "$PIPER_SV_ONNX_URL" "$PIPER_DIR/sv_SE-lisa-medium.onnx"
-fetch "$PIPER_SV_JSON_URL" "$PIPER_DIR/sv_SE-lisa-medium.onnx.json"
+fetch "$PIPER_SV_ONNX_URL" "$PIPER_DIR/$PIPER_SV_VOICE.onnx"
+fetch "$PIPER_SV_JSON_URL" "$PIPER_DIR/$PIPER_SV_VOICE.onnx.json"
 fetch "$KOKORO_ONNX_URL"   "$KOKORO_DIR/kokoro-v1.0.int8.onnx"
 fetch "$KOKORO_VOICES_URL" "$KOKORO_DIR/voices-v1.0.bin"
 

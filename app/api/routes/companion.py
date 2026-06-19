@@ -133,6 +133,8 @@ class CompanionTTSSegment(BaseModel):
     index: int
     text: str
     language: str
+    provider: str | None = None
+    voice_id: str | None = None
 
 
 class CompanionTTSPlanResponse(BaseModel):
