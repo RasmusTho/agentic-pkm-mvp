@@ -89,6 +89,7 @@ from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.manager import MachineRole, VaultContext, get_vault_manager
+from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.settings_service import (
     SettingDefinition,
     SettingsService,
@@ -2031,6 +2032,12 @@ def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
     )
 
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
 def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecentsAnchor | None:
     """Return the server-declared most-recently-edited Find/recency projection.
 
@@ -2042,9 +2049,27 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
     This is a Find/recency projection only — NOT a leave_point and NOT a
     continuity claim.  The display_label is derived from the note's first H1
     heading or its filename stem.
+
+    Human-notes only: files under the system directory (VAULT_SYSTEM_DIR_REL,
+    which contains companion notes and other machine-generated artefacts) are
+    excluded.  Notes whose only available label is a bare UUID stem (no H1
+    heading) are also excluded — a UUID is an internal identity marker, not a
+    human-meaningful label.
     """
+    system_dir_rel = resolve_vault_system_dir_rel_or_default(vault_root)
+    system_dir_abs = vault_root / system_dir_rel
+
+    def _is_human_note(path: Path) -> bool:
+        # Exclude anything inside the system directory (companions, logs, etc.)
+        try:
+            path.relative_to(system_dir_abs)
+            return False
+        except ValueError:
+            pass
+        return True
+
     try:
-        md_files = [p for p in vault_root.rglob("*.md") if p.is_file()]
+        md_files = [p for p in vault_root.rglob("*.md") if p.is_file() and _is_human_note(p)]
     except Exception:
         return None
     if not md_files:
@@ -2068,6 +2093,10 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
         label = _extract_title(body, fallback=best.stem)
     except Exception:
         label = best.stem
+    # Omit the anchor when the only available label is a bare UUID — a UUID is
+    # not a human-readable title and must not be surfaced to the user.
+    if _UUID_RE.match(label):
+        return None
     note_path = str(best.relative_to(vault_root))
     return WorkspaceOrientationRecentsAnchor(note_path=note_path, display_label=label)
 

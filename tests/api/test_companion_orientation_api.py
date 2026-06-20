@@ -270,6 +270,60 @@ def test_runtime_unavailable_returns_503(
     assert detail["contract_version"] == "workspace_orientation.v1"
 
 
+def test_recents_anchor_excludes_system_dir_and_uuid_only_label(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_orientation_recents_anchor must not surface system-dir files or bare-UUID labels.
+
+    Covers two ACs from #2239:
+    1. Files under VAULT_SYSTEM_DIR_REL are excluded from the recency projection.
+    2. When the only candidate produces a bare-UUID display label (no H1, UUID stem),
+       the anchor is omitted rather than surfaced with the UUID.
+    """
+    import time
+
+    from app.api.routes.companion import _orientation_recents_anchor
+
+    system_dir = "⚙️ System"
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", system_dir)
+
+    # Create a system-dir note with a recent mtime
+    sys_note = tmp_path / system_dir / "companions" / "952d5491-e098-43a2-85db-a01ee1fb34fe.md"
+    sys_note.parent.mkdir(parents=True, exist_ok=True)
+    sys_note.write_text("---\nuuid: 952d5491-e098-43a2-85db-a01ee1fb34fe\n---\n")
+
+    # Give system note a later mtime than any human note so it would win without filtering
+    time.sleep(0.01)
+    sys_note.touch()
+
+    # AC1: system-dir file is excluded even when it has the latest mtime — result is None
+    # (vault has no human notes yet)
+    result = _orientation_recents_anchor(tmp_path)
+    assert result is None, "system-dir file must not surface as recents anchor"
+
+    # AC2: a UUID-only human note (no H1, UUID stem) must also be omitted
+    uuid_stem = "952d5491-e098-43a2-85db-a01ee1fb34fe"
+    uuid_note = tmp_path / f"{uuid_stem}.md"
+    uuid_note.write_text("---\nuuid: 952d5491-e098-43a2-85db-a01ee1fb34fe\n---\n")
+    time.sleep(0.01)
+    uuid_note.touch()  # newest mtime
+
+    result = _orientation_recents_anchor(tmp_path)
+    assert result is None, "bare-UUID-only note must not surface as recents anchor"
+
+    # Sanity: a real human note with an H1 must surface correctly
+    human_note = tmp_path / "My Project.md"
+    human_note.write_text("# My Project\n\nSome content.\n")
+    time.sleep(0.01)
+    human_note.touch()  # newest mtime
+
+    result = _orientation_recents_anchor(tmp_path)
+    assert result is not None, "human note with H1 must surface as recents anchor"
+    assert result.display_label == "My Project"
+    assert result.note_path == "My Project.md"
+
+
 def test_orientation_payload_includes_recent_target_with_deterministic_tiebreak(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
