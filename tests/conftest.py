@@ -230,3 +230,22 @@ def pytest_addoption(parser) -> None:
 
 def pytest_configure(config) -> None:
     config.addinivalue_line("markers", "pg: marks tests requiring Postgres")
+
+    # Fail loud if a non-zero --timeout was requested but the real pytest-timeout
+    # plugin is not active. Otherwise the no-op stub above silently absorbs the
+    # flag and the suite runs with NO per-test timeout — exactly the failure mode
+    # behind the intermittent 22-min CI hangs (#2259): a hung test then has no
+    # safety net at all. A missing/incompatible pytest-timeout must break the
+    # build, not quietly disarm the watchdog.
+    requested = getattr(config.option, "timeout", None)
+    plugins = config.pluginmanager
+    has_real_timeout = plugins.hasplugin("timeout") or plugins.hasplugin(
+        "pytest_timeout"
+    )
+    if requested and not has_real_timeout:
+        raise pytest.UsageError(
+            f"--timeout={requested} was requested but the pytest-timeout plugin "
+            "is not active; the per-test hang watchdog is disarmed. Install "
+            "pytest-timeout (see dev-requirements.txt) or remove the --timeout "
+            "flag. Refusing to run unguarded — see #2259."
+        )
