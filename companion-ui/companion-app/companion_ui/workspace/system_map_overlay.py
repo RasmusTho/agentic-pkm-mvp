@@ -62,7 +62,9 @@ PARKED_SURFACES: tuple[str, ...] = ("context_lane", "place_band")
 
 # The declared intents routable nodes emit — all existing spec vocabulary
 # (§Intent vocabulary); the map introduces none. The Panel rail routes by
-# focusing the shipped pane and therefore emits no intent.
+# focusing the shipped pane and therefore emits no intent. The governance
+# index node routes via receipts.open (its counts live on the receipts surface,
+# #2246, TELEMETRY_RELOCATION-02).
 ROUTE_INTENTS: dict[str, str] = {
     "anchor": "overlay.dismiss",
     "vault": "vault.open",
@@ -70,6 +72,7 @@ ROUTE_INTENTS: dict[str, str] = {
     "memory": "memory.open",
     "capture": "capture.open",
     "receipts": "receipts.open",
+    "governance": "receipts.open",
     "settings": "settings.open",
 }
 
@@ -82,6 +85,7 @@ _ROUTABLE_SURFACE_IDS: tuple[str, ...] = (
     "memory",
     "capture",
     "receipts",
+    "governance",
     "settings",
 )
 
@@ -288,6 +292,16 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         returns="dismisses to anchor",
         status="shipped",
         status_note="shipped (#1794, SEP-10) — runtime receipts rendered verbatim, never invented",
+        routable=True,
+    ),
+    MapNode(
+        surface_id="governance",
+        name="Governance counts",
+        modes=("act", "reorient"),
+        reached="receipts surface (receipts.open) — counts header row on the receipts modal",
+        returns="dismisses to anchor via receipts surface",
+        status="shipped",
+        status_note="shipped (#2246, TELEMETRY_RELOCATION-02) — projection index; routes via receipts.open",
         routable=True,
     ),
     MapNode(
@@ -602,6 +616,7 @@ def system_map_overlay_script() -> str:
         if (id === 'memory') { window.overlayHost.mount('memory'); return; }
         if (id === 'capture') { window.overlayHost.mount('capture'); return; }
         if (id === 'receipts') { window.overlayHost.mount('receipts'); return; }
+        if (id === 'governance') { window.overlayHost.mount('receipts'); return; }
         if (id === 'settings') { window.overlayHost.mount('settings'); return; }
       }
     };
