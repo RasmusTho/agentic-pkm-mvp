@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Installed to ~/Library/LaunchAgents/ by install.sh, which replaces __RUN__
+     with the absolute path to run_gateway.sh. Keeps the gateway alive 24/7. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yggdrasil.llm-gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__RUN__</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/yggdrasil-llm-gateway.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/yggdrasil-llm-gateway.err</string>
+</dict>
+</plist>
