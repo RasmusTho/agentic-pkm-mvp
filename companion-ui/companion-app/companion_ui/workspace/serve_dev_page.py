@@ -6139,6 +6139,14 @@ def _render_orientation_index_html(
       </div>
       <p class="cold-start-provenance">{_cold_provenance}</p>
     </div>"""
+
+    vault_unreachable_threshold_html = (
+        '<div class="vault-unreachable-threshold" data-testid="workspace-vault-unreachable-threshold">'
+        '<span class="vault-unreachable-threshold-copy">The runtime is unreachable. Nothing was lost.</span>'
+        "</div>"
+        if is_no_vault
+        else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6644,9 +6652,7 @@ def _render_orientation_index_html(
     {reentry_overlay_html}
     {whisper_html}
     {cold_start_threshold_html}
-    {"""<div class="vault-unreachable-threshold" data-testid="workspace-vault-unreachable-threshold">
-      <span class="vault-unreachable-threshold-copy">The runtime is unreachable. Nothing was lost.</span>
-    </div>""" if is_no_vault else ""}
+    {vault_unreachable_threshold_html}
     <div class="orientation-grid">
       {"" if (is_cold or is_no_vault) else f'''<div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"))}
