@@ -133,13 +133,21 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
         # 'title: "oops') is still flagged.
         quote: str | None = None
         at_value_start = True
+        closed_quoted_scalar = False
+        spaced_after_closed_quoted_scalar = False
         in_marker_prefix = True  # leading indentation + nested "- " list markers
         for idx, char in enumerate(line):
             if quote:
                 if char == quote:
+                    if quote == '"' and _is_escaped_double_quote(line, idx):
+                        continue
                     quote = None
+                    closed_quoted_scalar = True
+                    spaced_after_closed_quoted_scalar = False
                 continue
             if char in {" ", "\t"}:
+                if closed_quoted_scalar:
+                    spaced_after_closed_quoted_scalar = True
                 continue  # whitespace is transparent; preserves value-start state
             # Each leading "- " (dash followed by whitespace) is a YAML list
             # marker — possibly nested ("- - value") — and stays transparent
@@ -155,31 +163,54 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
                 continue
             in_marker_prefix = False
             if char in {"'", '"'}:
+                if closed_quoted_scalar and spaced_after_closed_quoted_scalar:
+                    return True
                 if at_value_start:
                     quote = char
+                closed_quoted_scalar = False
+                spaced_after_closed_quoted_scalar = False
                 at_value_start = False
             elif char in {"[", "{"}:
                 stack.append(char)
+                closed_quoted_scalar = False
+                spaced_after_closed_quoted_scalar = False
                 at_value_start = True  # first flow-collection entry is a value
             elif char in bracket_pairs:
                 if not stack or stack[-1] != bracket_pairs[char]:
                     return True
                 stack.pop()
+                closed_quoted_scalar = False
+                spaced_after_closed_quoted_scalar = False
                 at_value_start = False
             elif char == ",":
                 # Inside a flow collection ([...] / {...}) a comma separates
                 # entries, so the next non-space char begins a new value (e.g.
                 # the quote in 'tags: [a, "oops]'). Outside brackets a comma is
                 # ordinary scalar content.
+                closed_quoted_scalar = False
+                spaced_after_closed_quoted_scalar = False
                 at_value_start = bool(stack)
             elif char == ":":
+                closed_quoted_scalar = False
+                spaced_after_closed_quoted_scalar = False
                 at_value_start = True  # next non-space char begins the value
             else:
+                closed_quoted_scalar = False
+                spaced_after_closed_quoted_scalar = False
                 at_value_start = False
         if quote:
             return True
 
     return bool(stack)
+
+
+def _is_escaped_double_quote(line: str, quote_idx: int) -> bool:
+    backslash_count = 0
+    cursor = quote_idx - 1
+    while cursor >= 0 and line[cursor] == "\\":
+        backslash_count += 1
+        cursor -= 1
+    return backslash_count % 2 == 1
 
 
 def _iter_non_fenced_spans(body_markdown: str, body_offset: int) -> Iterator[tuple[str, int]]:

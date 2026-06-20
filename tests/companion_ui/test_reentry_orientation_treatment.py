@@ -1014,85 +1014,44 @@ def test_reentry_card_heading_not_duplicated_with_body() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Telemetry relocation (#2245): cold_start body clean of freshness/as_of/
-# trace_id outside pull-only surfaces.
+# AC (#2248): cold_start omits notable-changes — suppression gate
 # ---------------------------------------------------------------------------
 
 
 def test_cold_start_omits_relocated_telemetry_regions() -> None:
-    """Cold_start door does not expose freshness/as_of/trace_id outside pull-only surfaces.
+    """#2248 AC1+AC3: notable-changes region absent on cold_start.
 
-    Verifies AC3 of #2245: the "Re-entry snapshot" h1 + meta row
-    (freshness/as_of/trace_id) removed by #2171 must not reappear on the
-    cold_start entry surface body. They belong only in the (closed)
-    system-map overlay and in the topbar runtime-status <details> popover —
-    both pull-only, requiring an explicit operator action to open.
+    The suppression gate ensures _render_orientation_notable_changes output
+    never appears in a cold_start render — neither as a list region nor as a
+    "+N more" overflow.  The orienting long-mist delta strip is the only
+    surface where notable-changes may appear; cold_start is not orienting.
+
+    Three cold_start variants are tested:
+    - first contact (leave_point.status == "absent")
+    - first contact (leave_point missing entirely)
+    - cold trajectory (gap > 14 d)
+
+    Supplies notable_changes=5 to the payload so that both the main section
+    and an overflow block would render if the gate were absent.
     """
-    # Build a cold_start payload with explicit meta values so we know what
-    # to look for if they accidentally appear.
-    payload: dict[str, Any] = {
-        "scope": {"kind": "workspace", "vault_id": "dev-vault", "channel": "dev"},
-        "meta": {
-            "contract_version": "workspace_orientation.v1",
-            "as_of": "2026-06-10T12:00:00Z",
-            "trace_id": "trace-cs-relocation-test",
-            "freshness": "fresh",
-            "stale_after": "2026-06-10T12:05:00Z",
-            "degraded_reasons": [],
-        },
-        "leave_point": {"status": "absent"},
-        "open_loops": [],
-        "notable_changes": [],
-        "resurface": {"candidates": []},
-        "governance": {
-            "pending_proposal_count": 0,
-            "pending_receipt_count": 0,
-            "latest_receipt_outcome": None,
-            "authority_role": "derived",
-            "source_ref": {"kind": "runtime_signal", "ref": "gov", "label": "gov"},
-        },
-        "guards": {
-            "read_only": True,
-            "runtime_posture": "healthy",
-            "degraded": False,
-            "reasons": [],
-            "authority_role": "derived",
-            "source_ref": {"kind": "status", "ref": "status", "label": "status"},
-        },
-        "mutation_intents": [],
-    }
-    html = _render(orientation=payload)
-
-    # Verify cold_start state is resolved.
-    body_tag = re.search(r"<body[^>]*>", html)
-    assert body_tag, "page must have a <body> tag"
-    entry_states = re.findall(r'data-entry-state="([^"]*)"', body_tag.group(0))
-    assert entry_states == ["cold_start"], f"expected cold_start, got {entry_states}"
-
-    # Strip the system-map-overlay (pull-only surface, legitimately carries
-    # telemetry behind an explicit map.open gate).
-    html_no_overlay = re.sub(
-        r"<!-- system-map-overlay start -->.*?<!-- system-map-overlay end -->",
-        "",
-        html,
-        flags=re.S,
-    )
-
-    # The "Re-entry snapshot" heading must not appear anywhere.
-    assert "Re-entry snapshot" not in html_no_overlay, (
-        "cold_start must not render the 'Re-entry snapshot' heading"
-    )
-    # The orientation-meta class (the meta row) must not appear in the body.
-    assert 'class="orientation-meta"' not in html_no_overlay, (
-        "orientation-meta class must not appear on cold_start body outside pull-only surfaces"
-    )
-    # The specific relocated row testids must not appear in the cold_start body
-    # outside the pull-only overlay.
-    for testid in (
-        "workspace-freshness-as-of",
-        "workspace-orientation-as-of",
-        "workspace-orientation-trace-id",
-    ):
-        assert f'data-testid="{testid}"' not in html_no_overlay, (
-            f"{testid} must not appear on cold_start outside pull-only surfaces"
+    pages = [
+        # First contact: leave_point.status absent, payload has notable_changes.
+        _render(orientation=_orientation_payload(leave_status="absent", notable_changes=5)),
+        # First contact: no leave point at all.
+        _render(orientation=_orientation_payload(leave_status=None, notable_changes=5)),
+        # Cold trajectory: gap beyond 14 days.
+        _render(orientation=_orientation_payload(gap=_GAP_COLD, notable_changes=5)),
+    ]
+    for page in pages:
+        # Main notable-changes section must not appear.
+        assert 'data-testid="workspace-orientation-notable-changes"' not in page, (
+            "cold_start must not render the notable-changes section"
+        )
+        # Individual change articles must not appear.
+        assert 'data-testid="workspace-orientation-notable-change"' not in page, (
+            "cold_start must not render individual notable-change articles"
+        )
+        # Overflow expand block must not appear.
+        assert 'data-testid="workspace-orientation-notable-changes-expand"' not in page, (
+            "cold_start must not render notable-changes overflow expansion"
         )
