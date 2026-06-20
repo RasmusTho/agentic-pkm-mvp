@@ -13,6 +13,7 @@ set +a
 export GATEWAY_MINI_URL="http://127.0.0.1:${MINI_OLLAMA_PORT:-11434}"
 export GATEWAY_GAMING_URL="http://${GAMING_PC_HOST:?set GAMING_PC_HOST in config.env}:${GAMING_OLLAMA_PORT:-11434}"
 export GATEWAY_WARDEN_URL="http://${GAMING_PC_HOST}:${WARDEN_PORT:-9090}"
+export GATEWAY_GAMING_MODEL="${GAMING_CHAT_MODEL:-}"
 
 exec "$HERE/.venv/bin/uvicorn" llm_gateway:app \
   --app-dir "$HERE" \

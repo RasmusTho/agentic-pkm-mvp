@@ -20,6 +20,7 @@ Env (set by run_gateway.sh from config.env):
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 
@@ -33,6 +34,10 @@ GAMING = os.environ.get("GATEWAY_GAMING_URL", "").rstrip("/")
 WARDEN = os.environ.get("GATEWAY_WARDEN_URL", "").rstrip("/")
 WARDEN_TTL = float(os.environ.get("GATEWAY_WARDEN_TTL", "5"))
 CONNECT_TIMEOUT = float(os.environ.get("GATEWAY_CONNECT_TIMEOUT", "2"))
+# The gaming host serves a different model than the mini (e.g. gpt-oss:20b vs
+# llama3.1:8b). Rewrite the requested chat model to this when bursting, so the
+# gaming Ollama doesn't 404 on a model it doesn't have. Empty -> no rewrite.
+GAMING_MODEL = os.environ.get("GATEWAY_GAMING_MODEL", "")
 
 EMBED_PATHS = ("/api/embeddings", "/api/embed", "/v1/embeddings")
 CHAT_PATHS = ("/api/chat", "/api/generate", "/v1/chat/completions")
@@ -70,12 +75,27 @@ def upstream_for(path: str, gaming_ok: bool) -> str:
     return MINI
 
 
+def rewrite_model(body: bytes, model: str) -> bytes:
+    """Swap the JSON `model` field (Ollama/OpenAI chat bodies) for `model`."""
+    if not body:
+        return body
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        return body
+    if isinstance(payload, dict) and "model" in payload:
+        payload["model"] = model
+        return json.dumps(payload).encode()
+    return body
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
     return {
         "ok": True,
         "mini": MINI,
         "gaming": GAMING or None,
+        "gaming_model": GAMING_MODEL or None,
         "warden": WARDEN or None,
         "gaming_available": await gaming_available(),
     }
@@ -87,33 +107,48 @@ async def proxy(path: str, request: Request):
     is_chat = full.startswith(CHAT_PATHS)
     gaming_ok = await gaming_available() if is_chat else False
     upstream = upstream_for(full, gaming_ok)
-    body = await request.body()
+    orig_body = await request.body()
+    # Bursting chat to the gaming host: rewrite to the model it actually serves.
+    body = (
+        rewrite_model(orig_body, GAMING_MODEL)
+        if upstream == GAMING and is_chat and GAMING_MODEL
+        else orig_body
+    )
     fwd_headers = {
         k: v
         for k, v in request.headers.items()
         if k.lower() not in ("host", "content-length")
     }
 
-    async def send(base: str):
+    async def send(base: str, payload: bytes):
         req = _client.build_request(
             request.method,
             f"{base}{full}",
-            content=body,
+            content=payload,
             headers=fwd_headers,
             params=request.query_params,
         )
         return await _client.send(req, stream=True)
 
     try:
-        resp = await send(upstream)
+        resp = await send(upstream, body)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError):
         if upstream != MINI:
             try:
-                resp = await send(MINI)  # gaming box vanished mid-flight -> degrade
+                resp = await send(MINI, orig_body)  # gaming box gone -> degrade
             except Exception:
                 return JSONResponse({"error": "no ollama upstream reachable"}, 502)
         else:
             return JSONResponse({"error": "mini ollama unreachable"}, 502)
+
+    # Gaming host answered but rejected it (e.g. model-not-found 404) -> degrade
+    # to the mini with the original, un-rewritten request body.
+    if upstream != MINI and resp.status_code >= 400:
+        await resp.aclose()
+        try:
+            resp = await send(MINI, orig_body)
+        except Exception:
+            return JSONResponse({"error": "mini fallback failed"}, 502)
 
     hop = ("content-length", "transfer-encoding", "content-encoding")
     return StreamingResponse(

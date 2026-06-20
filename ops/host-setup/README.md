@@ -55,8 +55,10 @@ to the gaming PC whenever it's free.
   identity and force a full vector-index rebuild. The gateway enforces this pin.
 - **Chat/reasoning** goes to the gaming PC **only when `gpu-warden` says the GPU is
   free** (no listed game running and GPU utilization below the threshold).
-  Otherwise it serves from the mini's small model. If the gaming box disappears
-  mid-request, the gateway degrades to the mini automatically.
+  Otherwise it serves from the mini's small model. When it does burst, the gateway
+  **rewrites the request to the gaming host's model** (`GAMING_CHAT_MODEL`) so the
+  two boxes can run different models; if the gaming box disappears mid-request or
+  rejects it (e.g. model-not-found), the gateway degrades to the mini automatically.
 
 ## Tuning & options
 

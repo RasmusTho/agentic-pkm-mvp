@@ -11,8 +11,10 @@ if (-not (Test-Path $cfg)) {
   Write-Host "Created $cfg from the example — edit hosts/models/games if needed."
 }
 Get-Content $cfg | ForEach-Object {
-  if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$') {
-    Set-Variable -Name $matches[1] -Value $matches[2] -Scope Script
+  if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+    # Strip inline ` # comment` and surrounding whitespace from the value.
+    $val = ($matches[2] -replace '\s+#.*$', '').Trim()
+    Set-Variable -Name $matches[1] -Value $val -Scope Script
   }
 }
 

@@ -8,8 +8,10 @@ $Root = Split-Path -Parent $Here
 $cfg = Join-Path $Root "config.env"
 if (Test-Path $cfg) {
   Get-Content $cfg | ForEach-Object {
-    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$') {
-      [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+      # Strip inline ` # comment` and surrounding whitespace from the value.
+      $val = ($matches[2] -replace '\s+#.*$', '').Trim()
+      [Environment]::SetEnvironmentVariable($matches[1], $val, "Process")
     }
   }
 }
