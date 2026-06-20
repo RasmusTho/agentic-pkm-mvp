@@ -124,6 +124,16 @@ class BuilderOpsProjectionGenerator:
     ) -> list[dict[str, Any]]:
         selected = _selected_specs(projection_types)
         timestamp = generated_at or utc_now()
+        record_counts = {
+            spec.projection_type: len(self._store.list_records(spec.object_type))
+            for spec in selected
+        }
+        _guard_against_incomplete_projection_store(
+            output_dir=output_dir,
+            selected=selected,
+            record_counts=record_counts,
+            db_path=self._store.db_path,
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         results: list[dict[str, Any]] = []
         for spec in selected:
@@ -131,7 +141,7 @@ class BuilderOpsProjectionGenerator:
                 spec.projection_type,
                 generated_at=timestamp,
             )
-            record_count = len(self._store.list_records(spec.object_type))
+            record_count = record_counts[spec.projection_type]
             path = output_dir / spec.filename
             path.write_text(markdown, encoding="utf-8")
             results.append({
@@ -164,6 +174,79 @@ def _selected_specs(
     if not selected:
         return [PROJECTION_SPECS[key] for key in sorted(PROJECTION_SPECS)]
     return selected
+
+
+def _guard_against_incomplete_projection_store(
+    *,
+    output_dir: Path,
+    selected: Iterable[BuilderOpsProjectionSpec],
+    record_counts: Mapping[str, int],
+    db_path: Path,
+) -> None:
+    if not output_dir.exists():
+        return
+
+    violations: list[str] = []
+    for spec in selected:
+        path = output_dir / spec.filename
+        existing_record_count = _read_existing_projection_record_count(
+            path,
+            projection_type=spec.projection_type,
+        )
+        if existing_record_count is None or existing_record_count <= 0:
+            continue
+        new_record_count = record_counts[spec.projection_type]
+        if new_record_count < existing_record_count:
+            violations.append(
+                f"{spec.projection_type} ({path}): existing record count "
+                f"{existing_record_count}, selected store record count {new_record_count}"
+            )
+
+    if not violations:
+        return
+
+    detail = "; ".join(violations)
+    raise BuilderOpsValidationError(
+        "refusing to overwrite existing BuilderOps projections because the selected "
+        f"store appears incomplete: {detail}. Selected store: {db_path}. Select the "
+        "intended BuilderOps store before regenerating projections by setting "
+        "BUILDEROPS_DB_PATH, BUILDEROPS_STATE_DIR, or --db-path, and prefer the "
+        "supported scripts/builderops_cli.sh wrapper from the repo root or worktree. "
+        "Generated projections are non-authoritative views; do not hand-edit them."
+    )
+
+
+def _read_existing_projection_record_count(
+    path: Path,
+    *,
+    projection_type: str,
+) -> int | None:
+    if not path.is_file():
+        return None
+
+    markdown = path.read_text(encoding="utf-8")
+    if (
+        "State: Generated projection" not in markdown
+        or "Source of truth: BuilderOps Vault" not in markdown
+    ):
+        return None
+
+    existing_projection_type: str | None = None
+    existing_record_count: int | None = None
+    for raw_line in markdown.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Projection type:"):
+            existing_projection_type = line.removeprefix("Projection type:").strip()
+        elif line.startswith("Record count:"):
+            raw_count = line.removeprefix("Record count:").strip()
+            try:
+                existing_record_count = int(raw_count)
+            except ValueError:
+                return None
+
+    if existing_projection_type != projection_type:
+        return None
+    return existing_record_count
 
 
 def _render_projection(

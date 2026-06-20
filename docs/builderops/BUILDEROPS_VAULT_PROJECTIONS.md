@@ -62,6 +62,15 @@ The command writes only the generated projection files in the requested output d
 not migrate `docs/learning-log.md`, `docs/DOCS_INDEX.md`, or `docs/ROADMAP.md`, and it does not
 publish projections automatically in CI.
 
+When the target output directory already contains generated BuilderOps projections with records, the
+generator fails before writing if the selected store would shrink those projections. This catches
+automation worktrees that accidentally point at an empty or incomplete local BuilderOps DB. Select
+the intended store with `BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, or `--db-path`, and prefer
+`scripts/builderops_cli.sh builderops generate-projections --output-dir docs/generated/builderops`
+from the repo root or worktree so the supported virtualenv and store selection are used. Generated
+projection files remain non-authoritative views over BuilderOps Vault records; do not hand-edit them
+to repair a failed regeneration.
+
 ## Default Output Names
 
 | Projection type | BuilderOps object type | Filename |

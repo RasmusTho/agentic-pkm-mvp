@@ -88,6 +88,12 @@ Override mechanisms:
 The default path is repo-local runtime state and is ignored by Git via `runtime/builderops/`. It is
 not `$CODEX_HOME`, not local hidden memory, not repo authority, and not a reviewed docs surface.
 
+Projection regeneration reads from the selected store path using the same mechanisms. Automation
+worktrees that regenerate checked-in projection views should set the intended store explicitly with
+`BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, or `--db-path`; otherwise the guard in the projection
+generator may fail loud before overwriting existing generated projections with records from an empty
+or incomplete worktree-local store.
+
 ## CLI
 
 Examples:
