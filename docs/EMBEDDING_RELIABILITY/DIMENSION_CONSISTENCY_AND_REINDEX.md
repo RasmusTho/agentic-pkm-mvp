@@ -39,7 +39,7 @@ The existing dim-mismatch and identity-drift detection (`app/index/doctor.py` li
 
 **Implementation note:** query `SELECT provider, model, dim, normalize, COUNT(*) FROM store_vector_index GROUP BY provider, model, dim, normalize` and flag when the result set has more than one row.
 
-**(c) Reconcile / re-index migration.** Add an `index reconcile` subcommand to the existing `index` Click group (registered in `app/cli/index_rebuild.py`). The subcommand re-embeds any vector whose `provider` differs from the current primary identity's provider, under the primary identity, and upserts the result in place.
+**(c) Reconcile / re-index migration.** Add an `index reconcile` subcommand to the existing `index` Click group (registered in `app/cli/index_rebuild.py`). The subcommand re-embeds any vector whose full identity `(provider, model, dim, normalize)` differs from the current primary identity (not just a differing `provider` — same-provider model/normalize drift such as an Ollama model swap at the same dim must also be reconciled, per CTI-1), under the primary identity, and upserts the result in place.
 
 CLI signature:
 ```

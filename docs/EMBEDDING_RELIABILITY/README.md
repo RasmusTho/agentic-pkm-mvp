@@ -37,10 +37,13 @@ Ordered, independently mergeable slices. `→` denotes a hard dependency.
 2. [EMBEDDING_EXECUTION_QUEUE.md](EMBEDDING_EXECUTION_QUEUE.md) — bounded-concurrency + backoff + per-object dead-letter execution primitive. *Independent; highest reliability value; can run parallel with (3).*
 3. [PLUGGABLE_PROVIDER_REGISTRY.md](PLUGGABLE_PROVIDER_REGISTRY.md) — formalize the provider registry behind `EmbeddingClientProtocol` + primary/fallback selection config. *Independent; parallel with (2).*
 4. [GOOGLE_GEMINI_ADAPTER.md](GOOGLE_GEMINI_ADAPTER.md) — Gemini `gemini-embedding-001` with `output_dimensionality=768` adapter + secret handling. *→ (3).*
-5. [PROVIDER_FALLBACK_ORCHESTRATION.md](PROVIDER_FALLBACK_ORCHESTRATION.md) — wire Ollama-primary → Gemini-fallback into the queue path, with identity tagging of fallback writes. *→ (2), (3), (4).*
-6. [DIMENSION_CONSISTENCY_AND_REINDEX.md](DIMENSION_CONSISTENCY_AND_REINDEX.md) — per-vector identity recording, mixed-identity detection in `index doctor`, reconcile/re-index migration, and the `docs/EMBEDDINGS.md` fallback-rule update. *→ (5).*
+5. **Per-vector identity schema + upsert-guard relaxation** (the schema half of [DIMENSION_CONSISTENCY_AND_REINDEX.md](DIMENSION_CONSISTENCY_AND_REINDEX.md), section (a)) — add the per-row `(provider, model, normalize)` columns and relax `PgVectorIndex.upsert()`'s index-level identity guard so a reconcilable fallback vector can be written. **This is a prerequisite of fallback orchestration, not a follow-up:** `PgVectorIndex.upsert()` currently rejects a Gemini vector in an Ollama-identity index (see PROVIDER_FALLBACK_ORCHESTRATION §4), so without this first, a pg fallback write fails closed. *→ (3).*
+6. [PROVIDER_FALLBACK_ORCHESTRATION.md](PROVIDER_FALLBACK_ORCHESTRATION.md) — wire Ollama-primary → Gemini-fallback into the queue path, with per-vector identity tagging of fallback writes. *→ (2), (3), (4), (5).*
+7. [DIMENSION_CONSISTENCY_AND_REINDEX.md](DIMENSION_CONSISTENCY_AND_REINDEX.md) — the detection + convergence half: mixed-identity detection in `index doctor`, the `index reconcile` migration, and the `docs/EMBEDDINGS.md` fallback-rule update. *→ (6).* (Section (a)'s schema/guard work lands earlier as step 5; this step builds on it.)
 
-Parallelizable pairs: {1}, {2,3} together, then {4}, then {5}, then {6}.
+Parallelizable pairs: {1}, {2,3} together, then {4}, then {5} (identity schema/guard precursor), then {6} (fallback), then {7} (doctor + reconcile).
+
+> **Slice-ordering note (Codex review):** EMBEDREL-06 is split — its per-vector identity *schema + guard relaxation* (step 5) is pulled **ahead** of fallback orchestration because the fallback write depends on it; its *doctor + reconcile* half (step 7) stays after fallback. The capability can also keep EMBEDREL-06 as one issue if the implementing agent lands the schema/guard change as the first commit and gates fallback wiring on it — the invariant is "fallback writes are never attempted before the per-vector identity guard exists."
 
 ## Cross-Task Invariants / Interaction Safety
 
