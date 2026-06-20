@@ -134,6 +134,50 @@ def test_source_links_present() -> None:
     assert "runtime:orientation#open-loops" in html
 
 
+def test_reorient_source_links_have_controlled_targets() -> None:
+    html = _render_reorient()
+
+    assert 'data-testid="reorient-source-link"' in html
+    assert 'href="#"' not in html
+    assert 'data-source-link="runtime:orientation#leave-point"' in html
+    assert 'data-affordance-status="unavailable"' in html
+
+
+def test_runtime_reorient_source_ref_is_not_inert_anchor() -> None:
+    runtime_html = _render_reorient()
+
+    assert '<a\n                  class="reorient-source"' not in runtime_html
+    assert 'aria-disabled="true"' in runtime_html
+    assert 'data-disabled-reason="runtime source ref is not browser-navigable"' in runtime_html
+
+    artifact_html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/reorient.md",
+        fields={
+            "title": "Reorient Note",
+            "note_path": "Notes/reorient.md",
+            "artifact_id": "art-1141",
+            "content_hash": "hash-reorient",
+            "body": "# Reorient Note",
+            "panel_rail": "Panel ready",
+            "reorient_sections": {
+                "facts": [
+                    {
+                        "label": "Related note can be opened.",
+                        "source_link": "Notes/source.md",
+                    }
+                ]
+            },
+            "guard_canvas_enabled": True,
+            "guard_writeguard_status": "ok",
+        },
+    )
+
+    assert 'data-testid="reorient-source-link"' in artifact_html
+    assert 'href="/workspace?note_path=Notes%2Fsource.md"' in artifact_html
+    assert 'data-affordance-status="read-only"' in artifact_html
+
+
 def test_panel_handoff() -> None:
     html = _render_reorient()
 
