@@ -1019,13 +1019,23 @@ def test_reentry_card_heading_not_duplicated_with_body() -> None:
 
 
 def test_cold_start_omits_relocated_telemetry_regions() -> None:
-    """#2248 AC1+AC3 + #2249 AC1: notable-changes and resurface regions absent on cold_start.
+    """#2248 AC1+AC3 + #2249 AC1 + #2250 AC1: notable-changes, resurface, and
+    _reentry_counts aggregate absent on cold_start.
 
     The suppression gate ensures _render_orientation_notable_changes and
     _render_orientation_resurface output never appears in a cold_start render.
     The orienting long-mist delta strip is the only surface where
     notable-changes may appear; cold_start is not orienting.  Resurface
     candidates move to the shell resurface rail mode (not the orientation grid).
+
+    #2250: _reentry_counts aggregates (open_loops, notable_changes,
+    resurface_candidates, staged, memory_candidates counts) must not appear in
+    cold_start as a grid cell, badge, or +N overflow.  The reentry card
+    (data-region="reentry-card") is the only surface that renders these counts;
+    cold_start is not orienting so the card never renders.  The explicit
+    suppression assertion here is the enforcement gate: a future refactor that
+    moves the _reentry_counts call site will trip this test before silent
+    re-appearance on cold_start.
 
     Three cold_start variants are tested:
     - first contact (leave_point.status == "absent")
@@ -1090,4 +1100,20 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
         # it must not appear on the cold_start orientation substrate.
         assert 'data-region="panel-rail-open-loops"' not in page, (
             "cold_start must not render the panel-rail-open-loops badge (#2247)"
+        )
+        # #2250 AC1: _reentry_counts aggregate must not appear on cold_start — not as a
+        # grid cell, not as a badge, not as a +N overflow.  The reentry card
+        # (data-region="reentry-card") is the sole renderer of these counts; since the card
+        # is suppressed by the is_cold/shape gate, its count-bearing testid markers must
+        # also be absent.  These assertions form the explicit suppression gate for the
+        # _reentry_counts helper output so any future refactor that moves the call site
+        # trips here before silent re-appearance on cold_start.
+        assert 'data-region="reentry-card"' not in page, (
+            "cold_start must not render the reentry-card (counts imply a trajectory cold_start cannot back) (#2250)"
+        )
+        assert 'data-testid="reentry-unresolved-counts"' not in page, (
+            "cold_start must not render the _reentry_counts unresolved-counts display (#2250)"
+        )
+        assert 'data-testid="reentry-changed-count"' not in page, (
+            "cold_start must not render the _reentry_counts changed-count display (#2250)"
         )
