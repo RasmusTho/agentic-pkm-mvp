@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,51 @@ _MAX_TRANSIENT_RETRY_ATTEMPTS = 3
 # many attempts is treated as poison rather than transient, which prevents the
 # `processed_total=0` head-of-line stall observed on dev+prod (#2252).
 _MAX_DISPATCH_ATTEMPTS = 5
+_TRANSIENT_OS_ERRNOS = {
+    errno.ECONNABORTED,
+    errno.ECONNREFUSED,
+    errno.ECONNRESET,
+    errno.EHOSTDOWN,
+    errno.EHOSTUNREACH,
+    errno.ENETDOWN,
+    errno.ENETRESET,
+    errno.ENETUNREACH,
+    errno.ETIMEDOUT,
+}
+_TRANSIENT_DB_ERROR_NAMES = {
+    "AdminShutdown",
+    "CannotConnectNow",
+    "ConnectionDoesNotExist",
+    "ConnectionException",
+    "ConnectionFailure",
+    "CrashShutdown",
+    "DatabaseDropped",
+    "InterfaceError",
+    "OperationalError",
+    "ProtocolViolation",
+    "QueryCanceled",
+    "SQLClientUnableToEstablishSQLConnection",
+    "SQLServerRejectedEstablishmentOfSQLConnection",
+    "TransactionResolutionUnknown",
+}
+_TRANSIENT_NETWORK_ERROR_NAMES = {
+    "ConnectError",
+    "ConnectTimeout",
+    "ConnectionError",
+    "MaxRetryError",
+    "NetworkError",
+    "NewConnectionError",
+    "PoolTimeout",
+    "ProxyError",
+    "ReadError",
+    "ReadTimeout",
+    "Timeout",
+    "TimeoutException",
+    "TransportError",
+    "WriteError",
+}
+_TRANSIENT_NETWORK_MODULE_PREFIXES = ("httpx", "requests", "urllib3")
+_TRANSIENT_HTTP_STATUS_CODES = {408, 429}
 
 
 def _resolve_max_dispatch_attempts() -> int:
@@ -69,6 +115,67 @@ def _resolve_max_dispatch_attempts() -> int:
     except (TypeError, ValueError):
         return _MAX_DISPATCH_ATTEMPTS
     return value if value >= 1 else _MAX_DISPATCH_ATTEMPTS
+
+
+def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _matches_error_name(
+    exc: BaseException,
+    *,
+    module_prefixes: tuple[str, ...],
+    names: set[str],
+) -> bool:
+    for cls in type(exc).__mro__:
+        module = getattr(cls, "__module__", "")
+        name = getattr(cls, "__name__", "")
+        if name in names and module.startswith(module_prefixes):
+            return True
+    return False
+
+
+def _http_status_code(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    raw_status = getattr(response, "status_code", None)
+    try:
+        return int(raw_status)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_transient_dispatch_error(exc: BaseException) -> bool:
+    """Return true for retryable infra outages that must not spend poison budget."""
+    for current in _iter_exception_chain(exc):
+        if isinstance(current, TransientRetryEnqueueError):
+            return True
+        if isinstance(current, (ConnectionError, TimeoutError)):
+            return True
+        if isinstance(current, OSError) and current.errno in _TRANSIENT_OS_ERRNOS:
+            return True
+        if _matches_error_name(
+            current,
+            module_prefixes=("psycopg",),
+            names=_TRANSIENT_DB_ERROR_NAMES,
+        ):
+            return True
+        if _matches_error_name(
+            current,
+            module_prefixes=_TRANSIENT_NETWORK_MODULE_PREFIXES,
+            names=_TRANSIENT_NETWORK_ERROR_NAMES,
+        ):
+            return True
+        status_code = _http_status_code(current)
+        is_network_module = type(current).__module__.startswith(_TRANSIENT_NETWORK_MODULE_PREFIXES)
+        if status_code is not None and is_network_module:
+            if status_code >= 500 or status_code in _TRANSIENT_HTTP_STATUS_CODES:
+                return True
+    return False
 
 
 class TransientRetryEnqueueError(RuntimeError):
@@ -904,6 +1011,15 @@ def run(
                             trace_id,
                             handler_note_path or "-",
                         )
+                        if _is_transient_dispatch_error(handler_exc):
+                            logger.warning(
+                                "worker transient handler failure; keeping outbox row pending "
+                                "topic=%s id=%s error=%s",
+                                topic,
+                                message.get("id"),
+                                type(handler_exc).__name__,
+                            )
+                            raise
                         # Bound retries per row so a single un-handleable (poison) event
                         # cannot crash-loop the worker at the head of the queue and
                         # block every following row (the processed_total=0 stall, #2252).
