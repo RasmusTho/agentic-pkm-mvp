@@ -274,4 +274,4 @@ Receipts for mutations must name the issue number, labels, Project Status, comma
 
 ## Capturing Learning
 
-If during this work you notice a divergence from plan, a stale upstream workflow artifact, or a repeated readiness failure that a stable upstream artifact could absorb, route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
