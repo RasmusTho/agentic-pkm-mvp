@@ -227,6 +227,7 @@ Issue guidance:
 - every AC on every issue carries a `Verify:` marker, matching the parent task spec: test pointer for behavioral ACs, doc/receipt target for non-behavioral ACs
 - point back to the parent feature issue in `Context`
 - reference the task specification: "Implements {CAPABILITY}/{TASK_NAME}"
+- persist the per-child TCD capability recommendation (model family + reasoning effort + a one-line rationale) into the issue body `Context`, so the implementing `issue-to-code` agent reads it from the canonical task contract — not only from the breakdown response. It is a non-binding hint: `issue-to-code` still re-derives capability per `AGENTS.md :: Total Cost of Development` from the issue's risk and artifact class, so the route never silently drops at the handoff.
 - do not make one issue responsible for the entire capability acceptance path
 - one task specification may produce multiple issues if the implementation is large
 
