@@ -19,12 +19,22 @@ def _vector_norm(vector: Iterable[float]) -> float:
     return math.sqrt(sum(float(v) * float(v) for v in vector))
 
 
-def _probe(texts: Iterable[str], profile: str, override_model: str | None) -> None:
-    client = get_embedding_client(profile=profile, override_model=override_model)
+def _probe(texts: Iterable[str], profile: str, override_model: str | None, override_provider: str | None = None) -> None:
+    client = get_embedding_client(profile=profile, override_model=override_model, override_provider=override_provider)
     dims: set[int] = set()
     identity = client.identity
     for text in texts:
-        vector = client.embed_text(text)
+        try:
+            vector = client.embed_text(text)
+        except Exception as exc:
+            # Report cleanly instead of crashing with a traceback — e.g. probing
+            # `--provider gemini` with no API key surfaces GeminiUnavailableError here.
+            click.echo(
+                f"Provider unavailable or failed: provider={identity.provider} model={identity.model} "
+                f"error={type(exc).__name__}: {exc}",
+                err=True,
+            )
+            raise SystemExit(1) from exc
         dims.add(len(vector))
         norm = _vector_norm(vector)
         suffix = f" norm={norm:.4f}" if identity.normalize else ""
@@ -44,9 +54,14 @@ def _probe(texts: Iterable[str], profile: str, override_model: str | None) -> No
 @click.command(help="Probe the embedding provider for model, dimension, and normalization sanity checks.")
 @click.option("--profile", default="default", show_default=True, help="Embedding profile (default, deterministic, etc.)")
 @click.option("--model", "override_model", default=None, help="Override embedding model for this probe run")
-def embed_probe(profile: str, override_model: str | None) -> None:
-    os.environ.setdefault("LLM_PROVIDER", "mock")
-    _probe(_DEFAULT_TEXTS, profile, override_model)
+@click.option("--provider", "override_provider", default=None, help="Override embedding provider for this probe run (e.g. gemini, ollama, mock)")
+def embed_probe(profile: str, override_model: str | None, override_provider: str | None) -> None:
+    # Only default to the mock provider when the caller hasn't explicitly chosen one;
+    # otherwise `--provider gemini` would silently validate mock (there is no built-in
+    # `gemini` profile, so a bare `--profile gemini` falls back to the default provider).
+    if override_provider is None:
+        os.environ.setdefault("LLM_PROVIDER", "mock")
+    _probe(_DEFAULT_TEXTS, profile, override_model, override_provider)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry

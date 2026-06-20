@@ -23,7 +23,7 @@ Note: `text-embedding-004` was retired (deprecated January 14, 2026); the active
 2. Registers the adapter under the `"gemini"` provider name in the provider registry (EMBEDREL-03) with the `GeminiEmbeddingAdapter` class implementing `EmbeddingClientProtocol` from `app/components/embeddings.py`.
 3. Adds `"gemini"` to `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings.py` (line 14).
 4. Wires `"gemini"` into `_embed_single` in `app/llm/embeddings.py` (or the equivalent registry dispatch introduced by EMBEDREL-03) so that `embed_text(provider="gemini", ...)` routes to the adapter.
-5. Makes the Gemini provider probeable via `app/cli/embed_probe.py` — `embed-probe --profile gemini` (or `--provider gemini` if EMBEDREL-03 introduces that flag) should reach the adapter; with no key set it should report unavailable rather than crash.
+5. Makes the Gemini provider probeable via `app/cli/embed_probe.py` — `embed-probe --provider gemini` (the `--provider` flag selects the adapter directly; there is no built-in `gemini` profile) should reach the adapter; with no key set it should report unavailable rather than crash.
 6. Adds `tests/llm/test_gemini_embeddings.py` — all tests mock httpx; no real network calls or real key required in CI.
 
 This task does NOT wire the Ollama-primary → Gemini-fallback decision path; that is EMBEDREL-05 (`PROVIDER_FALLBACK_ORCHESTRATION.md`).
@@ -33,7 +33,7 @@ This task does NOT wire the Ollama-primary → Gemini-fallback decision path; th
 ### Happy path — key configured
 
 ```
-GEMINI_API_KEY=<real-key> EMBED_DIM=768 embed-probe --profile gemini
+GEMINI_API_KEY=<real-key> EMBED_DIM=768 embed-probe --provider gemini
 Sample 'Hello world': provider=gemini model=gemini-embedding-001 dim=768 normalize=True norm=1.0000
 Sample 'Det här är ett svenskt exempel': provider=gemini model=gemini-embedding-001 dim=768 normalize=True norm=1.0000
 Sample 'Agentic PKM system': provider=gemini model=gemini-embedding-001 dim=768 normalize=True norm=1.0000
@@ -43,7 +43,7 @@ Provider profile=gemini provider=gemini model=gemini-embedding-001 dim=768 norma
 ### Override model via env
 
 ```
-GEMINI_API_KEY=<real-key> EMBED_GEMINI_MODEL=gemini-embedding-001 embed-probe --profile gemini
+GEMINI_API_KEY=<real-key> EMBED_GEMINI_MODEL=gemini-embedding-001 embed-probe --provider gemini
 # identical output — EMBED_GEMINI_MODEL default is gemini-embedding-001, so this is a no-op override
 ```
 
@@ -51,7 +51,7 @@ GEMINI_API_KEY=<real-key> EMBED_GEMINI_MODEL=gemini-embedding-001 embed-probe --
 
 ```
 # GEMINI_API_KEY and GOOGLE_API_KEY both unset
-embed-probe --profile gemini
+embed-probe --provider gemini
 # exits with a clear error: "gemini unavailable: no API key configured (set GEMINI_API_KEY or GOOGLE_API_KEY)"
 # does NOT crash the worker; the fallback orchestrator (EMBEDREL-05) treats this as UNAVAILABLE, not TRANSIENT
 ```
@@ -88,7 +88,7 @@ The operator chose Gemini as the auto-fallback provider specifically to handle O
   - Verify: `tests/llm/test_gemini_embeddings.py::test_embed_gemini_model_env_override` — sets `EMBED_GEMINI_MODEL=custom-model`, asserts request uses that model; `test_gemini_base_url_override` — sets `GEMINI_BASE_URL`, asserts httpx.post targets that base.
 - [ ] The API key is NEVER written to any log line, event payload, or exception message. Note content (the `text` argument) is NEVER logged beyond existing provenance fields.
   - Verify: `tests/llm/test_gemini_embeddings.py::test_key_not_logged` — captures `logging` output during a mock adapter call (happy path, transient error, auth error) and asserts the key value does not appear in any log record; `test_text_not_logged` — asserts the text argument value does not appear in log records.
-- [ ] `embed-probe --profile gemini` (or the equivalent provider-override flag introduced by EMBEDREL-03) reaches the adapter when a key is set and exits non-zero with a clear "unavailable" message when no key is set.
+- [ ] `embed-probe --provider gemini` reaches the adapter when a key is set and exits non-zero with a clear "unavailable" message when no key is set.
   - Verify: `tests/cli/test_embed_probe.py::test_probe_gemini_provider_no_key` — invokes the probe CLI with the gemini provider and both key env vars unset; asserts exit code != 0 and stderr contains "gemini unavailable".
 
 ## How to Verify (Pre-Merge)

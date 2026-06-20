@@ -497,3 +497,19 @@ def test_gemini_provider_identity_honors_profile_gemini_model() -> None:
     assert _resolve_embedding_model("gemini", None, "nomic-embed-text:latest") == "gemini-embedding-001"
     # override (gemini) still wins over a profile model
     assert _resolve_embedding_model("gemini", "gemini-embedding-001", "gemini-embedding-2") == "gemini-embedding-001"
+
+
+def test_embed_probe_provider_override_reaches_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`embed-probe --provider gemini` selects the Gemini adapter (not the forced mock
+    default) — with no key it reports unavailable and exits non-zero rather than silently
+    validating mock or crashing with a traceback (Codex P2, #2302)."""
+    from click.testing import CliRunner
+    from app.cli.embed_probe import embed_probe
+
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    _unset_keys(monkeypatch)
+    monkeypatch.setenv("EMBED_DIM", "768")
+    result = CliRunner(mix_stderr=True).invoke(embed_probe, ["--provider", "gemini"])
+    assert result.exit_code != 0, result.output
+    assert "provider=gemini" in result.output  # reached the gemini adapter, not mock
+    assert "unavailable" in result.output.lower()

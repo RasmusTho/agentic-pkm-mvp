@@ -328,6 +328,11 @@ def embed_text(
         model_val = model
     elif provider_val == "mock":
         model_val = _MOCK_EMBED_MODEL
+    elif provider_val == "gemini":
+        # Gemini-only config (GEMINI_API_KEY/EMBED_GEMINI_MODEL, no Ollama EMBED_MODEL):
+        # resolve the Gemini default here instead of get_embed_model(), which would raise
+        # "EMBED_MODEL is required" before the adapter is reached.
+        model_val = os.getenv("EMBED_GEMINI_MODEL", "").strip() or "gemini-embedding-001"
     else:
         model_val = get_embed_model()
     dim_val = dim or get_embed_dim()
