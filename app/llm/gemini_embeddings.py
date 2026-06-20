@@ -254,12 +254,16 @@ def embed_gemini_text(
 def _gemini_embed_one(text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]:
     """ProviderAdapter-shaped wrapper for the Gemini adapter.
 
-    Resolves ``EMBED_GEMINI_MODEL`` (default ``gemini-embedding-001``) and
-    ``GEMINI_BASE_URL`` (optional override) from the environment and delegates to
-    ``embed_gemini_text``.  Registered in ``PROVIDER_REGISTRY["gemini"]`` by
-    ``app/llm/embeddings.py``.
+    The Gemini adapter must always request a **Gemini** model. When gemini is
+    selected through the registry from a non-gemini profile (e.g. the default
+    Ollama profile), ``_embed_single`` passes the index's generic embedding model
+    (such as ``nomic-embed-text:latest``) as ``model`` — sending that to Gemini
+    would target ``/models/nomic-embed-text:latest:embedContent`` and fail. So we
+    honor ``model`` only when it is explicitly a Gemini model, otherwise fall back
+    to the configured Gemini model (``EMBED_GEMINI_MODEL`` / ``gemini-embedding-001``).
+    Registered in ``PROVIDER_REGISTRY["gemini"]`` by ``app/llm/embeddings.py``.
     """
-    effective_model = model or _get_model()
+    effective_model = model if (model and "gemini" in model.lower()) else _get_model()
     return embed_gemini_text(
         text,
         model=effective_model,

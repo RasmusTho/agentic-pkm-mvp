@@ -428,3 +428,31 @@ def test_gemini_auth_and_unavailable_not_transient() -> None:
 
     assert _is_transient_embed_error(GeminiAuthError("Gemini embedContent HTTP 403")) is False
     assert _is_transient_embed_error(GeminiUnavailableError("no key")) is False
+
+
+def test_gemini_embed_one_ignores_non_gemini_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the registry passes the index's generic model (e.g. nomic-embed-text)
+    because gemini was selected from a non-gemini profile, the adapter must still
+    request a Gemini model, not /models/nomic-embed-text:latest (Codex P1, #2302)."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("EMBED_GEMINI_MODEL", raising=False)  # default gemini-embedding-001
+    captured = {}
+
+    def fake_embed(text, *, model, dim, timeout, base_url=None):
+        captured["model"] = model
+        return tuple([0.0] * dim)
+
+    monkeypatch.setattr("app.llm.gemini_embeddings.embed_gemini_text", fake_embed)
+    _gemini_embed_one("hello", model="nomic-embed-text:latest", dim=_DIM, timeout=_TIMEOUT)
+    assert captured["model"] == "gemini-embedding-001"
+
+    # An explicit gemini model IS honored:
+    captured.clear()
+    _gemini_embed_one("hello", model="gemini-embedding-2", dim=_DIM, timeout=_TIMEOUT)
+    assert captured["model"] == "gemini-embedding-2"
+
+    # EMBED_GEMINI_MODEL override is used when a non-gemini model is passed:
+    captured.clear()
+    monkeypatch.setenv("EMBED_GEMINI_MODEL", "gemini-embedding-001")
+    _gemini_embed_one("hello", model="", dim=_DIM, timeout=_TIMEOUT)
+    assert captured["model"] == "gemini-embedding-001"
