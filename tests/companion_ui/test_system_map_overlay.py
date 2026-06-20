@@ -270,6 +270,7 @@ def test_map_renders_composition_table_nodes() -> None:
         "tts",
         "capture",
         "receipts",
+        "resurface_rail",
         "guidance",
     }, "exactly the composition-table surfaces (parked rows excluded)"
     for node in MAP_SURFACES:
@@ -281,7 +282,7 @@ def test_map_renders_composition_table_nodes() -> None:
     by_id = {node.surface_id: node for node in MAP_SURFACES}
     for shipped in ("orientation", "anchor", "vault", "panel", "palette",
                     "suggestions", "memory", "peek", "tts", "capture",
-                    "receipts", "settings", "map", "guidance"):
+                    "receipts", "settings", "map", "guidance", "resurface_rail"):
         assert by_id[shipped].status == "shipped", shipped
     for partial in ("chat_rail",):
         assert by_id[partial].status == "partial", partial
@@ -693,7 +694,42 @@ def test_relocated_map_counts_are_read_only_projection_without_zero_state() -> N
     Verifies AC4 of #2245: the map center node and topbar popover must not
     render a placeholder or empty row when the orientation payload does not
     supply the relocated telemetry fields.
+
+    Also verifies #2249 ACs 2+3: the resurface_rail MapNode is present in
+    MAP_SURFACES with mode=("resurface",) and status="shipped"; it is inert
+    (routable=False — the rail is navigated in shell, not via overlayHost.mount).
     """
+    # --- Resurface MapNode: index entry present, inert, no overlayHost route ---
+    from companion_ui.workspace.system_map_overlay import MAP_SURFACES
+
+    resurface_nodes = [n for n in MAP_SURFACES if n.surface_id == "resurface_rail"]
+    assert resurface_nodes, "resurface_rail MapNode must appear in MAP_SURFACES (#2249)"
+    rn = resurface_nodes[0]
+    assert rn.modes == ("resurface",), (
+        "resurface_rail node must carry product mode 'resurface'"
+    )
+    assert rn.status == "shipped", "resurface_rail node must have status='shipped'"
+    assert not rn.routable, (
+        "resurface_rail node must be inert (routable=False); "
+        "the rail is navigated in shell, not via overlayHost.mount"
+    )
+    # Node must render without an overlayHost.mount route.
+    frag = system_map_overlay_markup(available_routes=())
+    resurface_section = re.search(
+        r'data-surface-id="resurface_rail"[^>]*>.*?(?=data-surface-id=|</div>)',
+        frag,
+        re.S,
+    )
+    assert resurface_section, "resurface_rail node must render in system map HTML"
+    assert 'data-routable="false"' in frag, (
+        "resurface_rail node must render as data-routable=false (inert)"
+    )
+    # No overlayHost.mount call for resurface in the map script.
+    script_html = frag[frag.find("/* system-map-controller */"):]
+    assert "resurface" not in script_html or "mount('resurface" not in script_html, (
+        "system map controller must not mount resurface via overlayHost"
+    )
+
     # --- Map center node (pure function, no orientation meta) ---
     fragment_empty = system_map_overlay_markup(available_routes=("vault",))
     assert 'data-testid="map-entry-point-freshness"' not in fragment_empty, (

@@ -291,6 +291,15 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         routable=True,
     ),
     MapNode(
+        surface_id="resurface_rail",
+        name="Resurface candidates",
+        modes=("resurface",),
+        reached="shell resurface rail mode (_render_resurface_mode); navigated in shell, not via overlayHost.mount",
+        returns="stays in shell",
+        status="shipped",
+        status_note="shipped (#2249) — read-only index node; rail is navigated in shell, never via overlay route",
+    ),
+    MapNode(
         surface_id="guidance",
         name="Guidance layer",
         modes=(),
