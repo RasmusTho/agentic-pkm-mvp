@@ -560,10 +560,15 @@ class NoVaultBoundError(RuntimeError):
 _READABLE_SELECTED_STATUSES: frozenset[str] = frozenset({"selected", "uninitialized"})
 
 
-def _active_companion_vault_root() -> Path:
+def _active_companion_vault_root(*, require_initialized: bool = False) -> Path:
     manager = get_vault_manager()
     context = _companion_vault_context_with_lazy_last_active(manager)
-    if context.status in _READABLE_SELECTED_STATUSES and context.active_vault_path:
+    # Writes require a fully-initialized vault (status ``selected``); reads also
+    # accept a selected-but-``uninitialized`` directory (#2309). An uninitialized
+    # vault is readable but never writable (Codex #2325 P1): the human must
+    # initialize it before a write boundary will resolve its root.
+    allowed = frozenset({"selected"}) if require_initialized else _READABLE_SELECTED_STATUSES
+    if context.status in allowed and context.active_vault_path:
         return Path(context.active_vault_path).expanduser()
     # No vault is selected. Per the no-vault idle-boot invariant (#2005/#2006)
     # and the Option-2 decision (2026-06-20, #2309), the configured VAULT_ROOT
@@ -580,16 +585,21 @@ def _active_companion_vault_root_or_picker(
     *,
     requested_note_path: str | None = None,
     trace_id: str | None = None,
+    require_initialized: bool = False,
 ) -> Path | VaultSelectionRequiredResponse:
     """Resolve the active vault root, or the picker state when none is bound.
 
-    Shared no-vault routing for the companion read boundaries: a set-but-missing
+    Shared no-vault routing for the companion boundaries: a set-but-missing
     ``VAULT_ROOT`` yields the ``vault_root_misconfigured`` picker state and an
     unset / no-vault selection yields the ``no_vault_bound`` picker state. Both
     return 200, never a 500 and never a silent ``./vault`` default.
+
+    ``require_initialized=True`` (write boundaries) additionally routes a
+    selected-but-``uninitialized`` vault to the picker, so a write never lands
+    on a vault that has not been initialized (Codex #2325 P1).
     """
     try:
-        return _active_companion_vault_root()
+        return _active_companion_vault_root(require_initialized=require_initialized)
     except VaultRootMisconfiguredError as exc:
         return _vault_selection_required_response(
             exc,
@@ -3516,6 +3526,7 @@ def update_companion_workspace_note_body(
 
     vault_root = _active_companion_vault_root_or_picker(
         requested_note_path=safe_active_note_path,
+        require_initialized=True,
     )
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
@@ -3632,6 +3643,7 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultS
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
     vault_root = _active_companion_vault_root_or_picker(
         requested_note_path=safe_note_path,
+        require_initialized=True,
     )
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
@@ -3722,6 +3734,7 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
     vault_root = _active_companion_vault_root_or_picker(
         requested_note_path=safe_note_path,
+        require_initialized=True,
     )
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
