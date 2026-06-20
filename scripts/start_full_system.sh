@@ -1844,9 +1844,9 @@ fi
 
 reset_runtime_state="${RESET_RUNTIME_STATE:-1}"
 if [ "$reset_runtime_state" -eq 1 ] && { [ "$START_WATCHERS" -eq 1 ] || [ "$START_WORKER" -eq 1 ]; }; then
-  run_docker_compose exec -T api sh -c 'rm -f /app/tmp/index-outbox.jsonl /app/tmp/watcher_heartbeat.json /app/tmp/worker_heartbeat.json'
+  run_docker_compose exec -T api sh -c "rm -f /app/tmp/index-outbox.jsonl /app/tmp/worker_heartbeat.json ${container_watcher_heartbeat_path}"
   if [ "$START_WATCHERS" -eq 1 ]; then
-    run_docker_compose exec -T watcher sh -c 'rm -f /app/tmp/watcher_heartbeat.json' || true
+    run_docker_compose exec -T watcher sh -c "rm -f ${container_watcher_heartbeat_path}" || true
   fi
 fi
 

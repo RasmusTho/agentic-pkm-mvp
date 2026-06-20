@@ -36,6 +36,7 @@ from scripts import project_status
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INIT_TEST_VAULT = REPO_ROOT / "scripts" / "init_test_vault.sh"
 START_FULL_SYSTEM = REPO_ROOT / "scripts" / "start_full_system.sh"
+MAKEFILE = REPO_ROOT / "Makefile"
 HARNESS_SELFVERIFY = REPO_ROOT / ".github" / "workflows" / "harness-selfverify.yml"
 FAULT_INJECTION = REPO_ROOT / "scripts" / "ci" / "harness_gate_fault_injection.sh"
 PROD_COMPOSE = REPO_ROOT / "docker-compose.prod.yml"
@@ -56,7 +57,7 @@ def _extract_shell_assignment(script: Path, var: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# AC1 — init_test_vault.sh seeds the SELECTED test vault, not the repo default.
+# AC1 — init_test_vault.sh seeds the selected test vault, not an operator vault.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -66,18 +67,21 @@ def _extract_shell_assignment(script: Path, var: str) -> str:
         ({"VAULT_ROOT_TEST": "/srv/a", "TEST_VAULT_ROOT": "/srv/b", "VAULT_ROOT": "/srv/c"}, "/srv/a"),
         # TEST_VAULT_ROOT is next.
         ({"TEST_VAULT_ROOT": "/srv/b", "VAULT_ROOT": "/srv/c"}, "/srv/b"),
-        # Base VAULT_ROOT after that.
-        ({"VAULT_ROOT": "/srv/c"}, "/srv/c"),
+        # Plain VAULT_ROOT is operator state and must not select the test vault.
+        ({"VAULT_ROOT": "/srv/c"}, "vault-test"),
         # Nothing configured -> repo-local scratch fallback.
         ({}, "vault-test"),
     ],
 )
-def test_init_test_vault_honors_configured_root(env: dict[str, str], expected: str) -> None:
-    """The committed VAULT_TEST expression resolves the operator-selected root.
+def test_init_test_vault_ignores_plain_vault_root(
+    env: dict[str, str], expected: str
+) -> None:
+    """The committed VAULT_TEST expression isolates test-vault selection.
 
     Evaluates the actual parameter-expansion from init_test_vault.sh in a clean
-    shell with each env combination, proving precedence
-    VAULT_ROOT_TEST -> TEST_VAULT_ROOT -> VAULT_ROOT -> vault-test.
+    shell with each env combination, proving precedence VAULT_ROOT_TEST ->
+    TEST_VAULT_ROOT -> vault-test. A caller-exported plain VAULT_ROOT may point
+    at the operator vault and must not redirect test-vault seeding.
     """
     rhs = _extract_shell_assignment(INIT_TEST_VAULT, "VAULT_TEST")
     proc = subprocess.run(
@@ -93,9 +97,23 @@ def test_init_test_vault_honors_configured_root(env: dict[str, str], expected: s
 def test_init_test_vault_has_no_hardcoded_vault_test_assignment() -> None:
     """Regression guard: the bare `VAULT_TEST="vault-test"` hard-coding is gone."""
     text = INIT_TEST_VAULT.read_text(encoding="utf-8")
+    rhs = _extract_shell_assignment(INIT_TEST_VAULT, "VAULT_TEST")
     assert 'VAULT_TEST="vault-test"' not in text
     # The committed assignment must honor the per-channel override first.
-    assert "VAULT_ROOT_TEST" in _extract_shell_assignment(INIT_TEST_VAULT, "VAULT_TEST")
+    assert "VAULT_ROOT_TEST" in rhs
+    assert "TEST_VAULT_ROOT" in rhs
+    assert "${VAULT_ROOT:-" not in rhs
+
+
+def test_makefile_test_vault_root_ignores_plain_vault_root() -> None:
+    """Make targets must not reintroduce plain VAULT_ROOT as test-vault input."""
+    text = MAKEFILE.read_text(encoding="utf-8")
+    assignment = next(
+        line for line in text.splitlines() if line.startswith("TEST_VAULT_ROOT ?=")
+    )
+    assert "$(VAULT_ROOT_TEST)" in assignment
+    assert "$(VAULT_ROOT)" not in assignment
+    assert assignment.endswith("vault-test)")
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +177,20 @@ def test_start_full_system_readiness_probe_uses_channel_variable() -> None:
     )
     # No surviving hard-coded probe against the prod/dev tmp path in the loop.
     assert "test -s /app/tmp/watcher_heartbeat.json" not in text
+
+
+def test_start_full_system_clears_channel_specific_watcher_heartbeat() -> None:
+    """Runtime reset must clear the same heartbeat path later probed.
+
+    For COMPOSE_PROJECT_NAME=pkm-test that path resolves to
+    /app/tmp-test/watcher_heartbeat.json. Clearing only /app/tmp leaves stale
+    test-channel heartbeat files visible through the bind mount and can make a
+    newly started watcher look ready before it has emitted a heartbeat.
+    """
+    text = START_FULL_SYSTEM.read_text(encoding="utf-8")
+    assert "container_watcher_heartbeat_path=" in text
+    assert "rm -f ${container_watcher_heartbeat_path}" in text
+    assert "rm -f /app/tmp/watcher_heartbeat.json' || true" not in text
 
 
 # ---------------------------------------------------------------------------
