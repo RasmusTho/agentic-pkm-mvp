@@ -1011,3 +1011,47 @@ def test_reentry_card_heading_not_duplicated_with_body() -> None:
     assert whisper_doing_text != artifact_title, (
         f"whisper column 'doing' text is identical to artifact title {artifact_title!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC (#2248): cold_start omits notable-changes — suppression gate
+# ---------------------------------------------------------------------------
+
+
+def test_cold_start_omits_relocated_telemetry_regions() -> None:
+    """#2248 AC1+AC3: notable-changes region absent on cold_start.
+
+    The suppression gate ensures _render_orientation_notable_changes output
+    never appears in a cold_start render — neither as a list region nor as a
+    "+N more" overflow.  The orienting long-mist delta strip is the only
+    surface where notable-changes may appear; cold_start is not orienting.
+
+    Three cold_start variants are tested:
+    - first contact (leave_point.status == "absent")
+    - first contact (leave_point missing entirely)
+    - cold trajectory (gap > 14 d)
+
+    Supplies notable_changes=5 to the payload so that both the main section
+    and an overflow block would render if the gate were absent.
+    """
+    pages = [
+        # First contact: leave_point.status absent, payload has notable_changes.
+        _render(orientation=_orientation_payload(leave_status="absent", notable_changes=5)),
+        # First contact: no leave point at all.
+        _render(orientation=_orientation_payload(leave_status=None, notable_changes=5)),
+        # Cold trajectory: gap beyond 14 days.
+        _render(orientation=_orientation_payload(gap=_GAP_COLD, notable_changes=5)),
+    ]
+    for page in pages:
+        # Main notable-changes section must not appear.
+        assert 'data-testid="workspace-orientation-notable-changes"' not in page, (
+            "cold_start must not render the notable-changes section"
+        )
+        # Individual change articles must not appear.
+        assert 'data-testid="workspace-orientation-notable-change"' not in page, (
+            "cold_start must not render individual notable-change articles"
+        )
+        # Overflow expand block must not appear.
+        assert 'data-testid="workspace-orientation-notable-changes-expand"' not in page, (
+            "cold_start must not render notable-changes overflow expansion"
+        )
