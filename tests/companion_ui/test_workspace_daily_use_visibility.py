@@ -279,8 +279,10 @@ class TestVaultBrowserFiltering:
         )
         assert m, "vault-browser-provenance must be present"
         label = m.group(1).strip()
-        assert label == "read-only fallback · filesystem index", (
-            f"calm provenance label must be 'read-only fallback · filesystem index', got {label!r}"
+        # "read-only" appears in the badge (workspace-vault-browser-read-only), not
+        # the provenance label — the de-duplication rule (#2240-a) drops it from here.
+        assert label == "fallback · filesystem index", (
+            f"calm provenance label must be 'fallback · filesystem index' (read-only is in badge), got {label!r}"
         )
 
     def test_raw_provenance_in_data_attribute(self) -> None:
