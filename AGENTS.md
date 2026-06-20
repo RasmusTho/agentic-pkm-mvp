@@ -244,10 +244,11 @@ tcd_retrospective:
 
 ## Communicating with the owner
 
-The owner is the operator and decision-maker. Optimize answers for fast decision support and low running cost, not for narrating how you got there.
+The owner is the operator and decision-maker. Human-first means optimizing for the owner's time **and cognitive load**: fast decision support, low running cost, and the fewest things he must hold in his head — not narrating how you got there. Cognitive load is a real cost (part of C_human), not just clock-time.
 
-- Lead with next steps. Keep answers concise; do not include a verbose reasoning trace.
-- When a decision is the owner's to make, present it as: clear **Problem → Options → Consequences** (the consequences of each choice matter most). Surface every open decision explicitly rather than burying it.
+- Lead with next steps and the answer. Keep responses concise and scannable; do not include a verbose reasoning trace.
+- **Minimize cognitive load.** Bundle coherent work into one PR/thread instead of scattering it; collapse options to a recommendation plus the one fork that is genuinely the owner's; never make him reconstruct context or track machinery he does not need.
+- When a decision is the owner's to make, present it as: clear **Problem → Options → Consequences** (the consequences of each choice matter most). Surface the decisions that are genuinely his explicitly rather than burying them — without manufacturing choices he should not have to make.
 - Keep durable audit artifacts complete but separate from the human-facing summary: BuilderOps receipts, `Verify:` markers, and traceability live in the record, not in the lead. Do not add machinery whose only purpose is to capture reasoning for audit.
 
 ## Docs authoring lane
