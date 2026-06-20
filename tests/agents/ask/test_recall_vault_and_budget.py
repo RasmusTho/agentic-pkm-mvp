@@ -7,7 +7,7 @@ Two residuals from the 2026-06-18 terminal review-thread audit (#2148):
    empty no-vault context; the persisted last-active vault is materialized only
    on demand. So ASK recall silently fell back to ``VAULT_ROOT`` (or ``None``)
    instead of the vault the rest of the runtime uses. Fix: lazily call
-   ``load_last_active()`` before the env fallback.
+   ``load_last_active()`` when there is no explicit env-bound vault.
 
 2. ``build_ask_context`` (app/agents/ask/utils.py) counted only body/source text
    against ``max_context_chars``; the framing lines ([SOURCE n] / Question / …)
@@ -27,7 +27,7 @@ from app.vault.manager import VaultContext, no_vault_context
 
 
 # --------------------------------------------------------------------------- #
-# AC1: lazy-load the persisted active vault before ASK recall
+# AC1: resolve the active recall vault without crossing channel boundaries
 # --------------------------------------------------------------------------- #
 
 
@@ -58,17 +58,19 @@ def _selected(root: Path) -> VaultContext:
 
 
 def test_recall_vault_lazily_loads_persisted_vault_after_restart(tmp_path: Path, monkeypatch) -> None:
-    """After a restart, recall resolves the persisted vault, not VAULT_ROOT.
+    """After a restart with no env binding, recall resolves the persisted vault.
 
     Fail-before: with only ``manager.context`` consulted, the empty no-vault
-    context falls through to the ``VAULT_ROOT`` env fallback. Pass-after: the
-    persisted vault is lazily loaded and wins over the env fallback.
+    context falls through to ``None``. Pass-after: the persisted vault is lazily
+    loaded and used when there is no explicit env/channel vault binding.
     """
     persisted_root = tmp_path / "persisted-vault"
-    env_root = tmp_path / "env-vault"
     persisted_root.mkdir()
-    env_root.mkdir()
-    monkeypatch.setenv("VAULT_ROOT", str(env_root))
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    monkeypatch.delenv("PKM_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("PKM_SETTINGS_PROFILE", raising=False)
 
     manager = _RestartedVaultManager(_selected(persisted_root))
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
@@ -77,7 +79,45 @@ def test_recall_vault_lazily_loads_persisted_vault_after_restart(tmp_path: Path,
 
     assert manager.load_last_active_calls == 1
     assert resolved == persisted_root.resolve()
-    assert resolved != env_root.resolve()
+
+
+def test_recall_vault_prefers_explicit_env_over_last_active(tmp_path: Path, monkeypatch) -> None:
+    """An explicit channel vault binding must outrank stale last-active state."""
+    persisted_root = tmp_path / "persisted-vault"
+    env_root = tmp_path / "env-vault"
+    persisted_root.mkdir()
+    env_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+    monkeypatch.setenv("VAULT_ROOT", str(env_root))
+
+    manager = _RestartedVaultManager(_selected(persisted_root))
+    monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
+
+    resolved = ask_graph._active_recall_vault_root()
+
+    assert manager.load_last_active_calls == 0
+    assert resolved == env_root.resolve()
+    assert resolved != persisted_root.resolve()
+
+
+def test_recall_vault_prefers_scoped_test_env_over_last_active(tmp_path: Path, monkeypatch) -> None:
+    """A scoped test-channel binding must also outrank stale last-active state."""
+    persisted_root = tmp_path / "persisted-vault"
+    scoped_root = tmp_path / "scoped-test-vault"
+    persisted_root.mkdir()
+    scoped_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "test")
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(scoped_root))
+
+    manager = _RestartedVaultManager(_selected(persisted_root))
+    monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
+
+    resolved = ask_graph._active_recall_vault_root()
+
+    assert manager.load_last_active_calls == 0
+    assert resolved == scoped_root.resolve()
+    assert resolved != persisted_root.resolve()
 
 
 def test_recall_vault_does_not_reload_when_already_selected(tmp_path: Path, monkeypatch) -> None:
@@ -106,6 +146,7 @@ def test_recall_vault_falls_back_to_env_when_no_persisted_vault(tmp_path: Path, 
     """No selected and no persisted vault -> env fallback still applies."""
     env_root = tmp_path / "env-vault"
     env_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
     monkeypatch.setenv("VAULT_ROOT", str(env_root))
 
     class _NoVaultManager:
