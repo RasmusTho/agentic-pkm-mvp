@@ -1077,3 +1077,17 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
         assert 'data-testid="governance-counts-row"' not in page, (
             "cold_start must not render the governance-counts row outside pull-only surfaces"
         )
+        # #2247 AC4: open-loops list/section and _render_orientation_open_loops output
+        # must not appear on cold_start body (suppressed by the is_cold orientation grid
+        # gate; confirmed by TELEMETRY_RELOCATION-03 cross-task invariant).
+        assert 'data-testid="workspace-orientation-open-loops"' not in page, (
+            "cold_start must not render the open-loops orientation section (#2247)"
+        )
+        assert 'data-testid="workspace-orientation-open-loop"' not in page, (
+            "cold_start must not render individual open-loop articles (#2247)"
+        )
+        # The panel-rail-open-loops badge is only for shell_active (a note is open);
+        # it must not appear on the cold_start orientation substrate.
+        assert 'data-region="panel-rail-open-loops"' not in page, (
+            "cold_start must not render the panel-rail-open-loops badge (#2247)"
+        )
