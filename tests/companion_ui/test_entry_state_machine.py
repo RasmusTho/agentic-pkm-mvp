@@ -342,6 +342,51 @@ def test_cold_start_shows_no_reentry_overlay() -> None:
 
 
 # ---------------------------------------------------------------------------
+# AC: cold_start suppresses all dashboard/orientation sections (#2225)
+# ---------------------------------------------------------------------------
+
+_COLD_DASHBOARD_MARKERS = (
+    # Anti-dashboard posture: these sections must not appear on cold_start.
+    # SYSTEM_ENTRY_POINT_SPEC.md §Anti-dashboard; REENTRY_ORIENTATION_TREATMENT.md §Cold.
+    'data-testid="workspace-orientation-leave-point"',
+    'data-testid="workspace-orientation-open-loops"',
+    'data-testid="workspace-orientation-notable-changes"',
+    'data-testid="workspace-orientation-governance"',
+    'data-testid="workspace-orientation-resurface"',
+    "Re-entry snapshot",
+)
+
+
+def test_cold_start_shows_no_dashboard_sections() -> None:
+    pages = [
+        _render(orientation=_orientation_payload(leave_status="absent")),
+        _render(orientation=_orientation_payload(leave_status=None)),
+        _render(orientation=_orientation_payload(leave_status="present", gap=timedelta(days=20))),
+    ]
+    for page in pages:
+        assert _entry_state(page) == "cold_start"
+        for marker in _COLD_DASHBOARD_MARKERS:
+            assert marker not in page, f"cold_start must not render: {marker!r}"
+
+
+def test_cold_start_shows_vault_and_map_affordances() -> None:
+    page = _render(orientation=_orientation_payload(leave_status="absent"))
+    assert _entry_state(page) == "cold_start"
+    assert 'data-intent="map.open"' in page
+    assert 'data-testid="workspace-orientation-ambient-refresh"' in page
+
+
+def test_orienting_still_renders_dashboard_sections() -> None:
+    page = _render(
+        orientation=_orientation_payload(leave_status="present", gap=timedelta(hours=5))
+    )
+    assert _entry_state(page) == "orienting"
+    assert 'data-testid="workspace-orientation-leave-point"' in page
+    assert 'data-testid="workspace-orientation-governance"' in page
+    assert "Re-entry snapshot" in page
+
+
+# ---------------------------------------------------------------------------
 # AC: orientation HTTP 503 → no_vault, retry affordance, nothing fabricated
 # ---------------------------------------------------------------------------
 

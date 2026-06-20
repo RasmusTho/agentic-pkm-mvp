@@ -5867,6 +5867,10 @@ def _render_orientation_index_html(
     # Latency-ladder re-entry treatment (#1784, SEP-02). The shape is the
     # server-resolved SEP-01 attribute; no client-side gap computation.
     shape = entry_resolution.reentry_shape if entry_resolution.state == "orienting" else None
+    # cold_start (first contact / >14d cold) is the anti-dashboard posture:
+    # no re-entry overlay, no orientation sections, just vault + map affordances
+    # (SYSTEM_ENTRY_POINT_SPEC.md §Anti-dashboard; REENTRY_ORIENTATION_TREATMENT.md §Cold).
+    is_cold = entry_resolution.state == "cold_start"
     reentry_overlay_html = ""
     whisper_html = ""
     rail_fade_attr = ""
@@ -6416,21 +6420,21 @@ def _render_orientation_index_html(
     data-ambient-refresh="{'enabled' if ambient_refresh_enabled else 'disabled'}"{rail_fade_attr}>
     <header class="orientation-header">
       <div class="orientation-eyebrow">Workspace orientation</div>
-      <h1 class="orientation-heading">Re-entry snapshot</h1>
-      <div class="orientation-meta">
+      {"" if is_cold else '<h1 class="orientation-heading">Re-entry snapshot</h1>'}
+      {"" if is_cold else f'''<div class="orientation-meta">
         <span>vault: {_e(_orientation_str(scope.get("vault_id"), "unknown"))}</span>
         <span>channel: {_e(_orientation_str(scope.get("channel"), "unknown"))}</span>
         <span>freshness: {_e(freshness)}</span>
         <span>as of: {_e(as_of or "unknown")}</span>
         <span>trace: {_e(trace_id)}</span>
-      </div>
+      </div>'''}
     </header>
     {refresh_html}
     {degraded_html}
     {reentry_overlay_html}
     {whisper_html}
     <div class="orientation-grid">
-      <div class="orientation-column">
+      {"" if is_cold else f'''<div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"))}
         {_render_orientation_open_loops(orientation.get("open_loops"), meta=meta)}
         {_render_orientation_notable_changes(orientation.get("notable_changes"), meta=meta)}
@@ -6442,7 +6446,7 @@ def _render_orientation_index_html(
             meta=meta,
             degraded_reasons=reasons,
         )}
-      </div>
+      </div>'''}
       {vault_entry_html}
     </div>
   </main>
