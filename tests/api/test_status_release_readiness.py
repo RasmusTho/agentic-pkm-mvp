@@ -183,3 +183,18 @@ def test_source_understanding_reports_api_only(monkeypatch, tmp_path: Path) -> N
     assert source_understanding["tier"] == "optional"
     assert source_understanding["state"] == "enabled"
     assert any("API-only" in reason for reason in source_understanding["reasons"])
+
+
+def test_source_understanding_reports_unavailable_when_api_route_unregistered(monkeypatch, tmp_path: Path) -> None:
+    saved = status_service._source_understanding_availability_provider
+    try:
+        status_service.register_source_understanding_availability_provider(lambda: False)
+
+        matrix = _status_body(monkeypatch, tmp_path)["integrated_runtime_v1"]
+
+        source_understanding = matrix["source_understanding"]
+        assert source_understanding["tier"] == "optional"
+        assert source_understanding["state"] == "unavailable"
+        assert any("route registration is owned by the API assembly" in reason for reason in source_understanding["reasons"])
+    finally:
+        status_service.register_source_understanding_availability_provider(saved)

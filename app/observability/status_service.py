@@ -993,6 +993,8 @@ def _get_watcher_lifecycle_status() -> WatcherLifecycleStatus | None:
 # simply omitted — Foundation stays upward-free and statically enforceable.
 _V6SeamsProvider = Callable[[], dict[str, str]]
 _v6_seams_provider: Optional[_V6SeamsProvider] = None
+_SourceUnderstandingAvailabilityProvider = Callable[[], bool]
+_source_understanding_availability_provider: Optional[_SourceUnderstandingAvailabilityProvider] = None
 
 
 def register_v6_seams_provider(provider: _V6SeamsProvider) -> None:
@@ -1006,6 +1008,15 @@ def register_v6_seams_provider(provider: _V6SeamsProvider) -> None:
     _v6_seams_provider = provider
 
 
+def register_source_understanding_availability_provider(
+    provider: _SourceUnderstandingAvailabilityProvider | None,
+) -> None:
+    """Register API-owned source-understanding route availability."""
+
+    global _source_understanding_availability_provider
+    _source_understanding_availability_provider = provider
+
+
 def _get_v6_seams() -> dict | None:
     provider = _v6_seams_provider
     if provider is None:
@@ -1014,6 +1025,16 @@ def _get_v6_seams() -> dict | None:
         return provider()
     except Exception:
         return None
+
+
+def _source_understanding_available() -> bool:
+    provider = _source_understanding_availability_provider
+    if provider is None:
+        return False
+    try:
+        return bool(provider())
+    except Exception:
+        return False
 
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
@@ -1026,14 +1047,6 @@ def _env_flag(name: str, *, default: bool = False) -> bool:
     if value in _FALSE_VALUES:
         return False
     return default
-
-
-def _module_importable(name: str) -> bool:
-    try:
-        __import__(name)
-    except Exception:
-        return False
-    return True
 
 
 def _db_outbox_ready(
@@ -1194,8 +1207,8 @@ def _integrated_runtime_v1_matrix(
         ),
         "source_understanding": cap(
             "optional",
-            "enabled" if _module_importable("app.api.routes.source_understanding") else "unavailable",
-            "API-only P0 projection; no Companion UI affordance or governed apply path is claimed",
+            "enabled" if _source_understanding_available() else "unavailable",
+            "API-only P0 projection is shipped; route registration is owned by the API assembly",
             "outputs are non-authoritative and do not write memory, index, vault notes, or receipts",
         ),
         "canvas_chat": cap(

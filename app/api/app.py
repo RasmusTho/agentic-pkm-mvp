@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.index.doctor import diagnose_index
 from app.middleware.trace import TraceIdMiddleware
 from app.observability import configure_metrics
+from app.observability.status_service import register_source_understanding_availability_provider
 
 try:
     from app.api.routes.ingest import router as ingest_router
@@ -107,6 +108,8 @@ try:
     from app.api.routes.source_understanding import router as source_understanding_router
 except ImportError:
     source_understanding_router = None
+
+register_source_understanding_availability_provider(lambda: source_understanding_router is not None)
 
 try:
     from app.api.routes.capture import router as capture_router
