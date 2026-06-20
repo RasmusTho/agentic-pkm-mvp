@@ -1019,28 +1019,30 @@ def test_reentry_card_heading_not_duplicated_with_body() -> None:
 
 
 def test_cold_start_omits_relocated_telemetry_regions() -> None:
-    """#2248 AC1+AC3: notable-changes region absent on cold_start.
+    """#2248 AC1+AC3 + #2249 AC1: notable-changes and resurface regions absent on cold_start.
 
-    The suppression gate ensures _render_orientation_notable_changes output
-    never appears in a cold_start render — neither as a list region nor as a
-    "+N more" overflow.  The orienting long-mist delta strip is the only
-    surface where notable-changes may appear; cold_start is not orienting.
+    The suppression gate ensures _render_orientation_notable_changes and
+    _render_orientation_resurface output never appears in a cold_start render.
+    The orienting long-mist delta strip is the only surface where
+    notable-changes may appear; cold_start is not orienting.  Resurface
+    candidates move to the shell resurface rail mode (not the orientation grid).
 
     Three cold_start variants are tested:
     - first contact (leave_point.status == "absent")
     - first contact (leave_point missing entirely)
     - cold trajectory (gap > 14 d)
 
-    Supplies notable_changes=5 to the payload so that both the main section
-    and an overflow block would render if the gate were absent.
+    Supplies notable_changes=5 and resurface_candidates=5 to the payload so
+    that both the main sections and overflow blocks would render if the gates
+    were absent.
     """
     pages = [
-        # First contact: leave_point.status absent, payload has notable_changes.
-        _render(orientation=_orientation_payload(leave_status="absent", notable_changes=5)),
+        # First contact: leave_point.status absent, payload has notable_changes + resurface.
+        _render(orientation=_orientation_payload(leave_status="absent", notable_changes=5, resurface_candidates=5)),
         # First contact: no leave point at all.
-        _render(orientation=_orientation_payload(leave_status=None, notable_changes=5)),
+        _render(orientation=_orientation_payload(leave_status=None, notable_changes=5, resurface_candidates=5)),
         # Cold trajectory: gap beyond 14 days.
-        _render(orientation=_orientation_payload(gap=_GAP_COLD, notable_changes=5)),
+        _render(orientation=_orientation_payload(gap=_GAP_COLD, notable_changes=5, resurface_candidates=5)),
     ]
     for page in pages:
         # Main notable-changes section must not appear.
@@ -1054,4 +1056,14 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
         # Overflow expand block must not appear.
         assert 'data-testid="workspace-orientation-notable-changes-expand"' not in page, (
             "cold_start must not render notable-changes overflow expansion"
+        )
+        # #2249 AC1: resurface candidates region must not appear on cold_start (#2171 gate).
+        assert 'data-testid="workspace-orientation-resurface"' not in page, (
+            "cold_start must not render the orientation resurface region"
+        )
+        assert 'data-testid="workspace-orientation-resurface-candidate"' not in page, (
+            "cold_start must not render individual resurface candidates"
+        )
+        assert 'data-testid="workspace-orientation-resurface-overflow-candidate"' not in page, (
+            "cold_start must not render the +N resurface overflow"
         )
