@@ -4916,7 +4916,11 @@ def _is_remote_page_origin(hostname: str) -> bool:
 
 
 def _render_error_section(
-    error: str, *, entry_state: str = "", page_origin_hostname: str = ""
+    error: str,
+    *,
+    entry_state: str = "",
+    page_origin_hostname: str = "",
+    route_error: bool = False,
 ) -> str:
     """Render a visible error state using Yggdrasil destructive tokens.
 
@@ -4944,6 +4948,13 @@ def _render_error_section(
         if entry_state == "no_vault"
         else ""
     )
+    if route_error:
+        return f"""
+  <div class="error-state" data-testid="workspace-error-state"
+    data-error-kind="route-not-found" data-route-error="unknown-document-route">
+    <span class="error-label">Route not found</span>
+    <span class="error-message"><code>{_e(error)}</code></span>
+  </div>"""
     detail = _error_detail(error)
     error_kind = str(detail.get("error") or "")
     if error_kind == "note_not_found":
@@ -7454,6 +7465,7 @@ def render_index_html(
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
     page_origin_hostname: str = "",
+    route_error: bool = False,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -7469,13 +7481,20 @@ def render_index_html(
     orientation/workspace branch below: the resolved state is declared on the
     shell root (`<body data-entry-state=…>`) and the UI never re-derives it.
     """
-    entry_resolution = resolve_entry_state(
-        note_path=note_path,
-        note_loaded=fields is not None,
-        error=error,
-        orientation=orientation,
-        orientation_error=orientation_error,
-    )
+    if route_error:
+        entry_resolution = EntryStateResolution(
+            state="shell_active",
+            degraded=True,
+            degraded_reasons=("unknown_document_route",),
+        )
+    else:
+        entry_resolution = resolve_entry_state(
+            note_path=note_path,
+            note_loaded=fields is not None,
+            error=error,
+            orientation=orientation,
+            orientation_error=orientation_error,
+        )
     if orientation is not None and fields is None and not error:
         return _render_orientation_index_html(
             api_base_url=api_base_url,
@@ -7495,6 +7514,7 @@ def render_index_html(
             error,
             entry_state=entry_resolution.state,
             page_origin_hostname=page_origin_hostname,
+            route_error=route_error,
         )
     elif fields is not None:
         content_section = _render_note_section(fields)
@@ -7506,8 +7526,9 @@ def render_index_html(
     # (#2123 AC1, #2124; open-questions Q24). Server declares, UI renders: this
     # gates only on the server-declared error, it does not re-classify state.
     runtime_unreachable = _is_runtime_unreachable(error)
-    vault_settings_panel_html = "" if runtime_unreachable else vault_settings_panel_markup()
-    vault_settings_panel_js = "" if runtime_unreachable else vault_settings_panel_script()
+    suppress_vault_settings = runtime_unreachable or route_error
+    vault_settings_panel_html = "" if suppress_vault_settings else vault_settings_panel_markup()
+    vault_settings_panel_js = "" if suppress_vault_settings else vault_settings_panel_script()
     # Live co-authoring wiring is gated by the server-declared canvas flag,
     # matching _render_note_section's guard derivation. With no fields (error /
     # orientation) the canvas surface is absent, so the script is not emitted.
@@ -11460,6 +11481,23 @@ def make_handler(
             self.end_headers()
             self.wfile.write(response.content)
 
+        def _send_html(self, status_code: int, body: str) -> None:
+            encoded = body.encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def _send_unknown_document_route(self) -> None:
+            body = render_index_html(
+                api_base_url=self._api_base_url,
+                error="Unknown Companion UI route",
+                production_profile=self._production_profile,
+                route_error=True,
+            )
+            self._send_html(404, body)
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/help":
@@ -11684,6 +11722,12 @@ def make_handler(
                     self._proxy_error(exc)
                     return
                 self._send_json(200, data)
+                return
+            if parsed.path.startswith("/api/"):
+                self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
+                return
+            if parsed.path not in {"/", "/workspace"}:
+                self._send_unknown_document_route()
                 return
             body = handle_get(
                 query_string=parsed.query,
