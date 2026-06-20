@@ -67,6 +67,9 @@ scripts/builderops_cli.sh builderops list --type LearningSignal --json
 scripts/builderops_cli.sh builderops create-learning-signal \
   --summary "..." --content "..." --signal-type workflow \
   --source-ref github_issue:#1234 --json
+BUILDEROPS_DB_PATH=/path/to/intended/builderops.sqlite3 \
+  scripts/builderops_cli.sh builderops generate-projections \
+  --output-dir docs/generated/builderops --json
 
 # Option 2 — explicit venv python from the repo root or a worktree:
 .venv/bin/python3 -m app.builderops builderops list --type LearningSignal --json
@@ -88,6 +91,12 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 Do not require agents to install deps globally or bypass the venv.  Do not fall
 back to `docs/learning-log.md` as a substitute for BuilderOps CLI unavailability;
 fix the Python interpreter instead.
+
+For projection regeneration from recurring automations or Codex app worktrees, select the intended
+BuilderOps store explicitly before writing generated projection files. If the target directory
+already contains generated projections with records and the selected store would shrink them, the CLI
+fails before writing; fix the store selection (`BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, or
+`--db-path`) rather than hand-editing `docs/generated/builderops/*.md`.
 
 ## BuilderOps adoption checks
 
