@@ -1746,11 +1746,14 @@ cli.add_command(vault_watcher_daemon)
 @cli.command(name="embed-probe", help="Sanity-check embeddings provider model + dimension.")
 @click.option("--profile", default="default", show_default=True, help="Embedding profile (default or deterministic/test)")
 @click.option("--model", "override_model", default=None, help="Override embedding model via env")
-def embed_probe_cli(profile: str, override_model: str | None) -> None:
+@click.option("--provider", "override_provider", default=None, help="Override embedding provider (e.g. gemini, ollama, mock)")
+def embed_probe_cli(profile: str, override_model: str | None, override_provider: str | None) -> None:
     from app.cli.embed_probe import embed_probe as _embed_probe
     args = [f"--profile={profile}"]
     if override_model:
         args.append(f"--model={override_model}")
+    if override_provider:
+        args.append(f"--provider={override_provider}")
     _embed_probe.main(args=args, prog_name="embed-probe")
 
 if __name__ == "__main__":

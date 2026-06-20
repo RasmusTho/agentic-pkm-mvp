@@ -36,12 +36,21 @@ logger = logging.getLogger(__name__)
 
 
 def _is_transient_embed_error(exc: BaseException) -> bool:
-    """Delegate to the worker's transient classification without a module-level import.
+    """Classify an embed error as transient (retry-eligible) or not.
 
-    The import is deferred to avoid the circular dependency:
-    embed_queue → outbox_worker → consumer → embed_queue.
-    The logic is never duplicated — we always call the worker's predicate.
+    First honor an explicit ``is_transient = True`` marker on the exception (or its
+    cause/context). Provider adapters raise app-local transient errors — e.g.
+    ``GeminiTransientError`` for HTTP 429/5xx — that carry no httpx response or chain,
+    so the worker's httpx/status-based classifier would otherwise miss them and the
+    queue would dead-letter an advertised-transient provider response without retry.
+
+    Otherwise delegate to the worker's classifier (httpx/network/psycopg/5xx/EOF). The
+    import is deferred to avoid the circular dependency
+    embed_queue → outbox_worker → consumer → embed_queue; the logic is never duplicated.
     """
+    for current in (exc, getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
+        if current is not None and getattr(current, "is_transient", None) is True:
+            return True
     from app.workers.outbox_worker import _is_transient_dispatch_error  # noqa: PLC0415
     return _is_transient_dispatch_error(exc)
 

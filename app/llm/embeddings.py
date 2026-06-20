@@ -263,11 +263,12 @@ def _ollama_embed_one(text: str, *, model: str, dim: int, timeout: float) -> tup
 # Registry mapping provider name -> adapter callable.
 # Each adapter has signature: (text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]
 # To add a new provider, register it here — no changes to _embed_single required.
+from app.llm.gemini_embeddings import _gemini_embed_one  # noqa: E402
+
 PROVIDER_REGISTRY: dict[str, ProviderAdapter] = {
     "mock": _mock_embed_one,
     "ollama": _ollama_embed_one,
-    # Gemini adapter registered here by EMBEDREL-04:
-    # "gemini": _gemini_embed_one,
+    "gemini": _gemini_embed_one,
 }
 
 
@@ -327,6 +328,11 @@ def embed_text(
         model_val = model
     elif provider_val == "mock":
         model_val = _MOCK_EMBED_MODEL
+    elif provider_val == "gemini":
+        # Gemini-only config (GEMINI_API_KEY/EMBED_GEMINI_MODEL, no Ollama EMBED_MODEL):
+        # resolve the Gemini default here instead of get_embed_model(), which would raise
+        # "EMBED_MODEL is required" before the adapter is reached.
+        model_val = os.getenv("EMBED_GEMINI_MODEL", "").strip() or "gemini-embedding-001"
     else:
         model_val = get_embed_model()
     dim_val = dim or get_embed_dim()
