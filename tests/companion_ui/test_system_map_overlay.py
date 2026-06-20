@@ -813,6 +813,74 @@ def test_relocated_map_counts_are_read_only_projection_without_zero_state() -> N
     assert 'data-testid="workspace-orientation-as-of"' not in popover_html2
     assert 'data-testid="workspace-orientation-trace-id"' not in popover_html2
 
+    # --- #2247 Open-loops count on memory map node: read-only projection, no zero-state ---
+    # Zero count: annotation must not render (no zero-state).
+    frag_no_loops = system_map_overlay_markup(available_routes=(), open_loops_count=0)
+    assert 'data-testid="map-memory-node-open-loops-count"' not in frag_no_loops, (
+        "open-loops count annotation must not render when count is zero (no zero-state)"
+    )
+    # Non-zero count: annotation must render with correct attributes.
+    frag_with_loops = system_map_overlay_markup(
+        available_routes=("memory",), open_loops_count=3
+    )
+    mem_node_start = frag_with_loops.find('data-surface-id="memory"')
+    assert mem_node_start >= 0, "memory node must render in system map"
+    # Find the closing tag of the memory node to extract its inner content.
+    # Window is 1100 chars — wide enough to cover the full memory node including
+    # the open-loops annotation appended after the status/unavailable paragraphs.
+    mem_node_html = frag_with_loops[mem_node_start:mem_node_start + 1100]
+    assert 'data-testid="map-memory-node-open-loops-count"' in mem_node_html, (
+        "open-loops count annotation must render on the memory node when count is non-zero"
+    )
+    assert 'data-authority="read-only-projection"' in mem_node_html, (
+        "open-loops count annotation must carry data-authority='read-only-projection'"
+    )
+    assert "3 open loops" in mem_node_html, (
+        "open-loops count annotation must display the count number"
+    )
+    # No list of loop items — counts-not-tiles only.
+    # The annotation is a count paragraph, no article/list elements for individual loops.
+    assert '<article' not in mem_node_html or "orientation-item" not in mem_node_html, (
+        "memory map node must not render individual loop items (counts-not-tiles)"
+    )
+    # Singular form when count is 1.
+    frag_one_loop = system_map_overlay_markup(available_routes=(), open_loops_count=1)
+    mem_node_start_one = frag_one_loop.find('data-surface-id="memory"')
+    mem_node_html_one = frag_one_loop[mem_node_start_one:mem_node_start_one + 1100]
+    assert "1 open loop" in mem_node_html_one, (
+        "open-loops count annotation must use singular form when count is 1"
+    )
+    assert "1 open loops" not in mem_node_html_one, (
+        "open-loops count annotation must not use plural for a count of 1"
+    )
+
+    # --- #2247 Panel rail open-loops badge in shell_active: non-zero shows, zero omits ---
+    # With non-zero orientation_open_loops_count in fields: badge renders.
+    html_with_loops = _render_workspace(orientation_open_loops_count=4)
+    assert 'data-region="panel-rail-open-loops"' in html_with_loops, (
+        "panel-rail-open-loops region must render in shell_active when open_loops count is non-zero"
+    )
+    assert 'data-authority="read-only-projection"' in html_with_loops, (
+        "panel-rail-open-loops badge must carry data-authority='read-only-projection'"
+    )
+    assert 'data-intent="memory.open"' in html_with_loops, (
+        "panel-rail-open-loops badge must carry data-intent='memory.open'"
+    )
+    assert "4 open loops" in html_with_loops, (
+        "panel-rail-open-loops badge must display the open-loops count"
+    )
+    # No list of loop items — counts-not-tiles only.
+    badge_start = html_with_loops.find('data-region="panel-rail-open-loops"')
+    badge_snippet = html_with_loops[badge_start:badge_start + 600]
+    assert "orientation-item" not in badge_snippet, (
+        "panel-rail-open-loops badge must not render individual loop items (counts-not-tiles)"
+    )
+    # Zero count: badge must not render (no zero-state).
+    html_no_loops = _render_workspace()  # no orientation_open_loops_count → defaults to 0
+    assert 'data-region="panel-rail-open-loops"' not in html_no_loops, (
+        "panel-rail-open-loops badge must not render when open_loops count is zero or absent"
+    )
+
 
 def test_cold_start_omits_relocated_telemetry_regions() -> None:
     """Cold_start door does not render freshness/as_of/trace_id outside pull-only surfaces.

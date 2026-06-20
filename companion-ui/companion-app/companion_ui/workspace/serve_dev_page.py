@@ -1726,6 +1726,22 @@ def _render_note_section(fields: dict) -> str:
     panel_message = _e(panel_message_raw)
     proposal_count = int(fields.get("panel_proposal_count", 0) or 0)
     panel_proposals = fields.get("panel_proposals") or []
+    # Relocated open-loops count badge on the panel rail (#2247,
+    # TELEMETRY_RELOCATION-03): visible only in shell_active (a note is open);
+    # omitted when zero or absent (no zero-state). Routes to memory.open.
+    # data-authority="read-only-projection" — projection only, no mutation.
+    _open_loops_count = int(fields.get("orientation_open_loops_count") or 0)
+    panel_rail_open_loops_html = (
+        f'<div class="panel-rail-open-loops" data-region="panel-rail-open-loops" '
+        f'data-testid="panel-rail-open-loops" data-authority="read-only-projection">'
+        f'<button type="button" class="panel-rail-open-loops-badge" '
+        f'data-intent="memory.open" '
+        f'onclick="if (window.overlayHost) {{ overlayHost.mount(\'memory\'); }}">'
+        f'{_open_loops_count} open loop{"s" if _open_loops_count != 1 else ""}</button>'
+        f'</div>'
+        if _open_loops_count > 0
+        else ""
+    )
     writeguard_status = _e(fields.get("guard_writeguard_status", "ok"))
     writeguard_blocked = writeguard_status.lower() == "blocked"
     canvas_enabled = bool(fields.get("guard_canvas_enabled", True))
@@ -2200,6 +2216,7 @@ def _render_note_section(fields: dict) -> str:
       </div>
       {rail_posture_html}
       {rail_body_html}
+      {panel_rail_open_loops_html}
     </aside>
     <div class="workspace-panel-peek" data-testid="workspace-panel-peek"
       data-layout-visible="1100-1299"
@@ -6026,6 +6043,7 @@ def _render_orientation_index_html(
             orientation_freshness=freshness if freshness not in ("unknown", "") else "",
             orientation_as_of=as_of,
             orientation_trace_id=trace_id if trace_id != "unknown" else "",
+            open_loops_count=len(_orientation_list(orientation.get("open_loops"))),
         )
         # Capture modal (#1791, SEP-08b): the inline capture field on the
         # cold_start threshold and the `Jot something down` verb both route to
@@ -10703,6 +10721,7 @@ def render_index_html(
     orientation_freshness=str((fields or {}).get("orientation_freshness") or ""),
     orientation_as_of=str((fields or {}).get("orientation_as_of") or ""),
     orientation_trace_id=str((fields or {}).get("orientation_trace_id") or ""),
+    open_loops_count=int((fields or {}).get("orientation_open_loops_count") or 0),
   )}
   {guidance_layer_style()}
 

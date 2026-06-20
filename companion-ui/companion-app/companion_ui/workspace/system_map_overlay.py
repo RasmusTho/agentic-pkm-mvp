@@ -334,13 +334,24 @@ def _e(value: object) -> str:
     return _html.escape(str(value if value is not None else ""), quote=True)
 
 
-def _node_html(node: MapNode, *, available: bool) -> str:
+def _node_html(
+    node: MapNode,
+    *,
+    available: bool,
+    open_loops_count: int = 0,
+) -> str:
     """Render one surface node.
 
     Routable nodes whose route is live on this page render as buttons that
     route through the controller; everything else renders as a plainly
     non-interactive article carrying its truthful reach and status — present,
     legible, inert.
+
+    ``open_loops_count`` — when non-zero and the node is the memory surface,
+    renders a read-only index count annotation (data-testid=
+    "map-memory-node-open-loops-count", data-authority="read-only-projection").
+    Omitted when zero or absent (no zero-state — open loops belong to a
+    trajectory; legitimately none on first contact).
     """
     mode = _e(node.mode_attr)
     reach = (
@@ -355,6 +366,17 @@ def _node_html(node: MapNode, *, available: bool) -> str:
         f'<span class="map-node-name">{_e(node.name)}</span>'
         f'<span class="map-node-mode">{mode}</span>'
     )
+    # Relocated open-loops index count on the memory map node (#2247,
+    # TELEMETRY_RELOCATION-03): omit when zero or absent (no zero-state).
+    # data-authority="read-only-projection" — projection only, no mutation.
+    open_loops_html = (
+        f'<p class="map-node-open-loops-count" '
+        f'data-testid="map-memory-node-open-loops-count" '
+        f'data-authority="read-only-projection">'
+        f'{open_loops_count} open loop{"s" if open_loops_count != 1 else ""}</p>'
+        if node.surface_id == "memory" and open_loops_count > 0
+        else ""
+    )
     if node.routable and available:
         intent = ROUTE_INTENTS.get(node.surface_id)
         intent_attr = f' data-intent="{intent}"' if intent else ""
@@ -363,7 +385,8 @@ def _node_html(node: MapNode, *, available: bool) -> str:
             f'data-surface-id="{node.surface_id}" data-mode="{mode}" '
             f'data-status="{node.status}" data-routable="true"{intent_attr} '
             f"onclick=\"systemMap.route('{node.surface_id}')\">"
-            f'<span class="map-node-head">{head}</span>{reach}{status}</button>'
+            f'<span class="map-node-head">{head}</span>{reach}{status}'
+            f'{open_loops_html}</button>'
         )
     unavailable = (
         '<p class="map-node-unavailable" data-testid="system-map-node-unavailable">'
@@ -377,7 +400,8 @@ def _node_html(node: MapNode, *, available: bool) -> str:
         f'data-surface-id="{node.surface_id}" data-mode="{mode}" '
         f'data-status="{node.status}" data-routable="false"{current} '
         f'aria-disabled="true">'
-        f'<span class="map-node-head">{head}</span>{reach}{status}{unavailable}</article>'
+        f'<span class="map-node-head">{head}</span>{reach}{status}'
+        f'{unavailable}{open_loops_html}</article>'
     )
 
 
@@ -387,6 +411,7 @@ def system_map_overlay_markup(
     orientation_freshness: str = "",
     orientation_as_of: str = "",
     orientation_trace_id: str = "",
+    open_loops_count: int = 0,
 ) -> str:
     """The system map overlay markup — closed by default, never unbidden.
 
@@ -401,6 +426,10 @@ def system_map_overlay_markup(
     row (#2171/#2245). When present and non-empty they render as a read-only
     projection row in the entry-point center node. When absent nothing renders
     — no placeholder, no zero-state row.
+
+    ``open_loops_count`` — when non-zero, renders a read-only index count
+    annotation on the memory map node (#2247, TELEMETRY_RELOCATION-03).
+    Omitted when zero or absent (no zero-state).
     """
     declared = routable_surface_ids()
     for surface_id in available_routes:
@@ -410,7 +439,7 @@ def system_map_overlay_markup(
             )
     available = frozenset(available_routes)
     nodes = "".join(
-        _node_html(node, available=node.surface_id in available)
+        _node_html(node, available=node.surface_id in available, open_loops_count=open_loops_count)
         for node in MAP_SURFACES
     )
     parked = " ".join(PARKED_SURFACES)
@@ -513,6 +542,10 @@ def system_map_overlay_markup(
     .map-node-status[data-status="shipped"] {{ color: var(--cyan, #00d4e8); }}
     .map-node-unavailable {{
       color: var(--amber, #f09030); font-size: 10px; margin: 4px 0 0;
+    }}
+    .map-node-open-loops-count {{
+      color: var(--cyan, #00d4e8); font-family: var(--font-mono, monospace);
+      font-size: 10px; margin: 4px 0 0;
     }}
     .system-map-parked {{
       border-top: 1px dashed var(--border, #152030);
