@@ -177,6 +177,11 @@ class DevPageState:
     vault_browser_active_filters: dict[str, Any] = field(default_factory=dict)
     vault_browser_pagination: dict[str, Any] = field(default_factory=dict)
     is_loaded: bool = False
+    # When the runtime reports no selected vault, the workspace endpoint returns
+    # a `vault_selection_required` picker payload (200) instead of an artifact.
+    # The page renders the vault picker rather than a blank note (#2309).
+    vault_selection_required: bool = False
+    vault_selection_payload: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +239,18 @@ class RealNoteWorkspaceDevPage:
             self._trusted_hash_refresh_notes.discard(intent.note_path)
             self.state = DevPageState(
                 error="Malformed workspace payload (expected a JSON object)."
+            )
+            return self.state
+
+        # No vault is selected: the runtime returns the `vault_selection_required`
+        # picker payload (200) instead of an artifact. Surface it as the picker
+        # state rather than a successfully-loaded empty note (#2309). The page
+        # server renders the vault picker; selecting a vault re-resolves reads.
+        if raw.get("state") == "vault_selection_required":
+            self._trusted_hash_refresh_notes.discard(intent.note_path)
+            self.state = DevPageState(
+                vault_selection_required=True,
+                vault_selection_payload=raw,
             )
             return self.state
 

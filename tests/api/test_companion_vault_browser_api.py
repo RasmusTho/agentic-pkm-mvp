@@ -20,6 +20,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 def _write_note(path: Path, *, title: str, body: str = "Body.\n") -> None:
@@ -30,8 +31,7 @@ def _write_note(path: Path, *, title: str, body: str = "Body.\n") -> None:
 def test_vault_browser_lists_markdown_notes_for_active_dev_vault(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     _write_note(tmp_path / "notes" / "Companion UI UAT.md", title="Companion UI UAT")
     _write_note(tmp_path / "projects" / "Roadmap.md", title="Roadmap")
     (tmp_path / "notes" / "ignore.txt").write_text("nope", encoding="utf-8")
@@ -53,8 +53,7 @@ def test_vault_browser_lists_markdown_notes_for_active_dev_vault(
 def test_vault_browser_filters_by_title_or_path(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     _write_note(tmp_path / "notes" / "Companion UI UAT.md", title="Companion UI UAT")
     _write_note(tmp_path / "logs" / "journal.md", title="Daily Journal")
     _write_note(tmp_path / "projects" / "plan.md", title="Project Plan")
@@ -72,8 +71,7 @@ def test_vault_browser_filters_by_title_or_path(
 def test_vault_browser_excludes_hidden_and_system_folders(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     _write_note(tmp_path / "notes" / "visible.md", title="Visible")
     _write_note(tmp_path / ".obsidian" / "hidden.md", title="ObsidianHidden")
     _write_note(tmp_path / ".git" / "git_hidden.md", title="GitHidden")
@@ -98,8 +96,7 @@ def test_vault_browser_excludes_hidden_and_system_folders(
 def test_vault_browser_is_read_only(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     note_path = tmp_path / "notes" / "immutable.md"
     _write_note(note_path, title="Immutable", body="Original.\n")
     before = note_path.read_text(encoding="utf-8")
@@ -115,8 +112,7 @@ def test_vault_browser_is_read_only(
 
 
 def test_vault_browser_cap_preserves_lexicographic_subset(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     monkeypatch.setenv("VAULT_BROWSE_MAX_NOTES", "2")
     _write_note(tmp_path / "z" / "late.md", title="Late")
     _write_note(tmp_path / "a" / "first.md", title="First")
@@ -126,8 +122,7 @@ def test_vault_browser_cap_preserves_lexicographic_subset(tmp_path: Path, monkey
 
 
 def test_vault_browser_returns_pagination_metadata(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     _write_note(tmp_path / "a" / "first.md", title="First")
     _write_note(tmp_path / "b" / "second.md", title="Second")
     _write_note(tmp_path / "c" / "third.md", title="Third")
@@ -156,8 +151,7 @@ def test_vault_browser_returns_pagination_metadata(tmp_path: Path, monkeypatch) 
 def test_vault_browser_pagination_composes_with_metadata_filters(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     for relative, title, kind in (
         ("a/alpha.md", "Alpha", "human_note"),
         ("b/companion.md", "Companion", "companion_note"),
@@ -198,8 +192,7 @@ def test_vault_browser_pagination_composes_with_metadata_filters(
 def test_vault_browser_pagination_exposes_previous_cursor_for_later_pages(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     for relative in ("a/first.md", "b/second.md", "c/third.md", "d/fourth.md"):
         _write_note(tmp_path / relative, title=Path(relative).stem)
 
@@ -220,8 +213,7 @@ def test_vault_browser_pagination_exposes_previous_cursor_for_later_pages(
 
 
 def test_vault_browser_pagination_is_read_only(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     first = tmp_path / "a" / "first.md"
     second = tmp_path / "b" / "second.md"
     _write_note(first, title="First")
@@ -246,8 +238,7 @@ def test_vault_browser_datetime_frontmatter_serializes_stably(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     note_path = tmp_path / "notes" / "timestamped.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
     note_path.write_text(
@@ -273,8 +264,7 @@ def test_vault_browser_accepts_iso_timestamp_variants(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     note_path = tmp_path / "notes" / "timestamp-strings.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
     note_path.write_text(
@@ -302,8 +292,7 @@ def test_vault_browser_preserves_non_utc_timestamp_offsets(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     note_path = tmp_path / "notes" / "offset-timestamp.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
     note_path.write_text(
@@ -329,8 +318,6 @@ def test_vault_browser_includes_receipts_from_outbox_projection(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     outbox = tmp_path / "index-outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
 
@@ -341,6 +328,7 @@ def test_vault_browser_includes_receipts_from_outbox_projection(
         f"---\ntitle: Receipt Note\nuuid: {note_uuid}\n---\n\nBody.\n",
         encoding="utf-8",
     )
+    bind_selected_vault(monkeypatch, tmp_path / "vault")
     outbox.write_text(
         json.dumps(
             {
@@ -397,10 +385,9 @@ def test_vault_browser_omits_receipts_when_receipt_source_unavailable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "missing-outbox.jsonl"))
     _write_note(tmp_path / "vault" / "notes" / "no-source.md", title="No Source")
+    bind_selected_vault(monkeypatch, tmp_path / "vault")
 
     resp = TestClient(app).get("/api/companion/vault-browser")
 

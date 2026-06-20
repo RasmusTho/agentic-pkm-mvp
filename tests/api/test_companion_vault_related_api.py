@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 def _write_note(
@@ -43,8 +44,7 @@ def test_vault_related_returns_read_only_artifact_scoped_signals(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     target_uuid = "00000000-0000-0000-0000-000000001282"
     related_uuid = "00000000-0000-0000-0000-000000001283"
     tag_only_uuid = "00000000-0000-0000-0000-000000001284"
@@ -116,8 +116,7 @@ def test_vault_related_accepts_artifact_uuid_scope(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     target_uuid = "00000000-0000-0000-0000-000000001286"
     _write_note(
         tmp_path / "notes" / "current.md",
@@ -148,8 +147,7 @@ def test_vault_related_exposes_link_relation_provenance_for_inspector(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     _write_note(
         tmp_path / "notes" / "current.md",
         title="Current",
@@ -179,8 +177,7 @@ def test_vault_related_exposes_link_relation_provenance_for_inspector(
 
 
 def test_vault_related_requires_artifact_scope(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
 
     resp = TestClient(app).get("/api/companion/vault-related")
 
@@ -189,8 +186,7 @@ def test_vault_related_requires_artifact_scope(tmp_path: Path, monkeypatch) -> N
 
 
 def test_vault_related_is_read_only(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     note_path = tmp_path / "notes" / "current.md"
     _write_note(
         note_path,

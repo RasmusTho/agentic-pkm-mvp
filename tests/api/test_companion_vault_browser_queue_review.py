@@ -10,6 +10,7 @@ import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.components.settings.panel_actions_loader import load_panel_action_catalog
 from app.write_guard import WritesBlockedError
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 @pytest.fixture(autouse=True)
@@ -74,8 +75,7 @@ def test_queue_review_stages_panel_proposal_and_returns_pending_intent(
     note = _write_note(vault, "notes/review.md", uuid="uuid-1472")
     before = note.read_text(encoding="utf-8")
     outbox = tmp_path / "index-outbox.jsonl"
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
 
     resp = TestClient(app).post(
@@ -124,8 +124,7 @@ def test_queue_review_stages_pending_panel_governance_proposal(
     """
     vault = tmp_path / "vault"
     _write_note(vault, "notes/governed.md", uuid="uuid-gov")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
@@ -166,8 +165,7 @@ def test_queue_review_accepts_artifact_uuid_only(
 ) -> None:
     vault = tmp_path / "vault"
     _write_note(vault, "notes/by-uuid.md", uuid="uuid-only-1472")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
@@ -187,8 +185,7 @@ def test_queue_review_accepts_matching_note_path_and_uuid(
 ) -> None:
     vault = tmp_path / "vault"
     _write_note(vault, "notes/matching.md", uuid="matching-1472")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
@@ -210,8 +207,7 @@ def test_queue_review_rejects_missing_scope(
     # the 400 artifact_scope_required contract rather than the picker path.
     vault = tmp_path / "vault"
     _write_note(vault, "notes/present.md", uuid="present-uuid")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
@@ -259,8 +255,7 @@ def test_queue_review_rejects_unknown_note_in_valid_vault(
     """
     vault = tmp_path / "vault"
     _write_note(vault, "notes/present.md", uuid="present-uuid")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
@@ -278,8 +273,7 @@ def test_queue_review_rejects_unknown_artifact_uuid(
 ) -> None:
     vault = tmp_path / "vault"
     _write_note(vault, "notes/known.md", uuid="known-uuid")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
@@ -298,8 +292,7 @@ def test_queue_review_rejects_mismatched_scope(
     vault = tmp_path / "vault"
     _write_note(vault, "notes/a.md", uuid="uuid-a")
     _write_note(vault, "notes/b.md", uuid="uuid-b")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
@@ -319,8 +312,7 @@ def test_queue_review_writeguard_block_does_not_stage_or_mutate(
     note = _write_note(vault, "notes/blocked.md", uuid="blocked-1472")
     before = note.read_text(encoding="utf-8")
     outbox = tmp_path / "index-outbox.jsonl"
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, vault)
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
 
     def _blocked(action: str) -> None:

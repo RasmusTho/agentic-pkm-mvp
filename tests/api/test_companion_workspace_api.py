@@ -16,6 +16,7 @@ from app.chat.session_log import SessionLog
 from app.events.panel import NoteRef, PanelInfo, PanelIntentEvent, PanelIntentPayload
 from app.panel.confirmation import StagedProposal
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
+from tests.api._vault_test_helpers import bind_initialized_vault, bind_selected_vault
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +37,7 @@ def _clear_runtime_state() -> None:
 
 @pytest.fixture()
 def vault_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path)
     monkeypatch.delenv("CANVAS_ENABLED", raising=False)
     note = tmp_path / "notes" / "note.md"
     note.parent.mkdir(parents=True, exist_ok=True)
@@ -235,10 +236,10 @@ def test_workspace_artifact_id_uses_frontmatter_uuid(client: TestClient, vault_n
 def test_workspace_missing_uuid_heals_eligible_note_without_hash_identity(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     note = tmp_path / "notes" / "uuidless.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("---\ntitle: UUIDless\n---\n\n# UUIDless\n\nBody.\n", encoding="utf-8")
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     resp = _workspace(client, "notes/uuidless.md")
 
@@ -254,10 +255,10 @@ def test_workspace_missing_uuid_heals_eligible_note_without_hash_identity(
 def test_workspace_missing_uuid_unresolved_state_has_no_hash_artifact_id(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     note = tmp_path / "notes" / "blocked.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("# Blocked\n\nBody.\n", encoding="utf-8")
+    bind_selected_vault(monkeypatch, tmp_path)
 
     def _blocked(_path: Path, *, vault_root: Path) -> str:
         raise WritesBlockedError("blocked", "write guard active", "ensure uuid")
@@ -278,7 +279,6 @@ def test_workspace_missing_uuid_unresolved_state_has_no_hash_artifact_id(
 def test_workspace_companion_note_has_no_path_hash_identity(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     note_uuid = "note-uuid-1"
     companion = tmp_path / "⚙️ System" / "companions" / f"{note_uuid}.md"
     companion.parent.mkdir(parents=True, exist_ok=True)
@@ -290,6 +290,7 @@ def test_workspace_companion_note_has_no_path_hash_identity(
         "---\n",
         encoding="utf-8",
     )
+    bind_selected_vault(monkeypatch, tmp_path)
 
     resp = _workspace(client, f"⚙️ System/companions/{note_uuid}.md")
 
@@ -306,7 +307,6 @@ def test_workspace_companion_note_has_no_path_hash_identity(
 def test_workspace_legacy_companion_note_has_companion_identity(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     note_uuid = "legacy-note-uuid-1"
     companion = tmp_path / "_system" / "companions" / f"{note_uuid}.md"
     companion.parent.mkdir(parents=True, exist_ok=True)
@@ -318,6 +318,7 @@ def test_workspace_legacy_companion_note_has_companion_identity(
         "---\n",
         encoding="utf-8",
     )
+    bind_selected_vault(monkeypatch, tmp_path)
 
     resp = _workspace(client, f"_system/companions/{note_uuid}.md")
 
@@ -334,7 +335,6 @@ def test_workspace_legacy_companion_note_has_companion_identity(
 def test_workspace_panel_counts_canvas_origin_proposals_by_uuid(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("CANVAS_ENABLED", "1")
     note = tmp_path / "notes" / "canvas.md"
     note.parent.mkdir(parents=True, exist_ok=True)
@@ -342,6 +342,7 @@ def test_workspace_panel_counts_canvas_origin_proposals_by_uuid(
         "---\nuuid: note-uuid-canvas-workspace\n---\n\n# Canvas\n\nBody.\n",
         encoding="utf-8",
     )
+    bind_selected_vault(monkeypatch, tmp_path)
 
     open_resp = client.post(
         "/api/canvas/sessions",
@@ -417,7 +418,7 @@ def test_workspace_update_capability_does_not_enable_governance_actions(
 def test_workspace_note_not_found(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path)
 
     resp = _workspace(client, "missing.md")
 

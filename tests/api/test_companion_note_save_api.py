@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 
 def _write_note(path: Path, *, frontmatter: str, body: str) -> None:
@@ -30,11 +31,10 @@ def _clear_gates(monkeypatch) -> None:
 
 
 def test_human_save_round_trip_without_canvas_or_flow_env(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     _clear_gates(monkeypatch)
     note = tmp_path / "notes" / "My Note.md"
     _write_note(note, frontmatter="title: My Note\nuuid: abc-123", body="Original body.\n")
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     client = TestClient(app)
     resp = client.post(
@@ -52,10 +52,9 @@ def test_human_save_round_trip_without_canvas_or_flow_env(tmp_path: Path, monkey
 
 
 def test_frontmatter_in_body_rejected(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     _clear_gates(monkeypatch)
     _write_note(tmp_path / "n.md", frontmatter="title: N", body="b\n")
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     client = TestClient(app)
     resp = client.post(
@@ -67,10 +66,9 @@ def test_frontmatter_in_body_rejected(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_stale_content_hash_conflicts(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     _clear_gates(monkeypatch)
     _write_note(tmp_path / "n.md", frontmatter="title: N", body="b\n")
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     client = TestClient(app)
     resp = client.post(
@@ -82,11 +80,10 @@ def test_stale_content_hash_conflicts(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_matching_content_hash_saves(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     _clear_gates(monkeypatch)
     note = tmp_path / "n.md"
     _write_note(note, frontmatter="title: N", body="b\n")
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     client = TestClient(app)
     # First save returns the current hash; reuse it as the expected token.
@@ -103,11 +100,10 @@ def test_matching_content_hash_saves(tmp_path: Path, monkeypatch) -> None:
 def test_url_fragment_in_note_path_normalized_to_canonical_note(tmp_path: Path, monkeypatch) -> None:
     # #1447 — a leaked URL section anchor (#...) must not turn a valid edit into a
     # 404; the fragment is stripped and the canonical note is written.
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     _clear_gates(monkeypatch)
     note = tmp_path / "Inbox" / "Note.md"
     _write_note(note, frontmatter="title: N", body="old\n")
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     client = TestClient(app)
     resp = client.post(
@@ -120,9 +116,8 @@ def test_url_fragment_in_note_path_normalized_to_canonical_note(tmp_path: Path, 
 
 
 def test_missing_note_is_404(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     _clear_gates(monkeypatch)
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     client = TestClient(app)
     resp = client.post(
@@ -142,9 +137,8 @@ def test_symlink_escape_rejected_before_save(tmp_path: Path, monkeypatch) -> Non
         link.symlink_to(outside)
     except OSError as exc:
         pytest.skip(f"symlink unavailable: {exc}")
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     _clear_gates(monkeypatch)
+    bind_initialized_vault(monkeypatch, vault)
 
     resp = TestClient(app).post(
         "/api/companion/note/save",

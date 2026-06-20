@@ -467,14 +467,20 @@ def _no_vault_selection_required_response(
     *,
     requested_note_path: str | None = None,
     trace_id: str | None = None,
+    configured_vault_root: Path | None = None,
 ) -> VaultSelectionRequiredResponse:
     return VaultSelectionRequiredResponse(
         reason="no_vault_bound",
         message=(
-            "No vault is bound. Open an existing vault, choose a recent vault, "
-            "or create a new vault to continue."
+            "No vault is selected. Open the configured vault, choose a recent "
+            "vault, or create a new vault to continue."
+            if configured_vault_root is not None
+            else "No vault is bound. Open an existing vault, choose a recent "
+            "vault, or create a new vault to continue."
         ),
-        configured_vault_root=None,
+        configured_vault_root=str(configured_vault_root)
+        if configured_vault_root is not None
+        else None,
         context=_vault_context_response(VaultContext(status="none")),
         recent_vaults=_recent_vaults_response(),
         actions=[
@@ -528,27 +534,46 @@ def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
 
 
 class NoVaultBoundError(RuntimeError):
-    """Raised when no vault is selected and ``VAULT_ROOT`` is unset.
+    """Raised when no vault is selected.
 
     Distinct from :class:`VaultRootMisconfiguredError` (a *set-but-missing*
-    vault root, #1757): here nothing is configured at all, so the companion
-    boundary must route to the no-vault picker instead of silently defaulting
-    to the CWD-relative ``./vault`` (#2006 / no-vault idle-boot invariant).
+    vault root, #1757). Per the Option-2 decision (2026-06-20, #2309) a
+    configured ``VAULT_ROOT`` is no longer silently adopted as the active
+    vault: when nothing is selected the companion boundary routes to the
+    no-vault picker instead of reading the configured root or defaulting to
+    ``./vault`` (#2006 / no-vault idle-boot invariant). The configured-but-
+    unselected root (if any) is carried on ``configured_path`` so the picker
+    can offer it as a one-click open rather than reading it.
     """
+
+    def __init__(self, message: str, *, configured_path: Path | None = None) -> None:
+        super().__init__(message)
+        self.configured_path = configured_path
+
+
+# Vault statuses whose selected directory is an existing, readable vault root.
+# Reads work for a *selected* vault even before it is fully initialized
+# (Design-Handoff settings present); writes/permissions still require the
+# ``selected`` status via :meth:`VaultManager.permissions_for_context`. A
+# ``none`` / ``missing`` / ``invalid`` context has no readable selected
+# directory and routes to the picker.
+_READABLE_SELECTED_STATUSES: frozenset[str] = frozenset({"selected", "uninitialized"})
 
 
 def _active_companion_vault_root() -> Path:
     manager = get_vault_manager()
     context = _companion_vault_context_with_lazy_last_active(manager)
-    if context.status == "selected" and context.active_vault_path:
+    if context.status in _READABLE_SELECTED_STATUSES and context.active_vault_path:
         return Path(context.active_vault_path).expanduser()
-    # Route through the *optional* resolver so an unset VAULT_ROOT reports the
-    # explicit no-vault state instead of falling through to ./vault. A
-    # set-but-missing root still raises VaultRootMisconfiguredError unchanged.
-    root = resolve_optional_vault_root()
-    if root is None:
-        raise NoVaultBoundError("no vault is bound and VAULT_ROOT is unset")
-    return root
+    # No vault is selected. Per the no-vault idle-boot invariant (#2005/#2006)
+    # and the Option-2 decision (2026-06-20, #2309), the configured VAULT_ROOT
+    # is NOT silently read as the active vault — selection is the only source
+    # of truth. A set-but-missing VAULT_ROOT still surfaces as
+    # VaultRootMisconfiguredError; a set-and-present root is offered to the
+    # picker as a one-click open (``configured_path``) but never read until the
+    # human selects it.
+    configured = resolve_optional_vault_root()  # raises on set-but-missing
+    raise NoVaultBoundError("no vault is selected", configured_path=configured)
 
 
 def _active_companion_vault_root_or_picker(
@@ -571,10 +596,11 @@ def _active_companion_vault_root_or_picker(
             requested_note_path=requested_note_path,
             trace_id=trace_id,
         )
-    except NoVaultBoundError:
+    except NoVaultBoundError as exc:
         return _no_vault_selection_required_response(
             requested_note_path=requested_note_path,
             trace_id=trace_id,
+            configured_vault_root=exc.configured_path,
         )
 
 

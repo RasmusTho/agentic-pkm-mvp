@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +42,7 @@ def _clear_runtime_state() -> None:
 
 @pytest.fixture()
 def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_initialized_vault(monkeypatch, tmp_path)
     monkeypatch.setenv("WORKSPACE_UPDATE_FLOW_ENABLED", "1")
     return tmp_path
 

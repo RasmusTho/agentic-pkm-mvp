@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 @pytest.fixture(autouse=True)
@@ -49,8 +50,7 @@ def client() -> TestClient:
 
 @pytest.fixture()
 def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
     return tmp_path
 
 
@@ -216,7 +216,7 @@ def test_vault_path_with_spaces(
     vault_dir = tmp_path / "Mobile Documents" / "iCloud~md~obsidian" / "Documents" / "Niflheim"
     vault_dir.mkdir(parents=True)
     _note(vault_dir, "notes/spacenote.md", "# Space Note\n\nBody.\n")
-    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    bind_selected_vault(monkeypatch, vault_dir)
     resp = _get_notes(client)
     assert resp.status_code == 200
     paths = [n["path"] for n in resp.json()["notes"]]
@@ -243,6 +243,9 @@ def test_invalid_browse_max_notes_env_falls_back(
     import app.api.routes.companion as companion_module
 
     importlib.reload(companion_module)
+    # Reload re-binds the module's ``get_vault_manager``; re-select the vault so
+    # the active-vault resolver still sees a selected vault after the reload.
+    bind_selected_vault(monkeypatch, vault)
     resp = _get_notes(client)
     assert resp.status_code == 200
     assert resp.json()["total_count"] == 2
@@ -257,6 +260,9 @@ def test_non_positive_browse_max_notes_env_falls_back(
     import app.api.routes.companion as companion_module
 
     importlib.reload(companion_module)
+    # Reload re-binds the module's ``get_vault_manager``; re-select the vault so
+    # the active-vault resolver still sees a selected vault after the reload.
+    bind_selected_vault(monkeypatch, vault)
     resp = _get_notes(client)
     assert resp.status_code == 200
     assert resp.json()["total_count"] == 1
@@ -364,8 +370,7 @@ def test_cap_limits_notes_returned(
     """The endpoint respects the _BROWSE_MAX_NOTES cap (avoids full scan before limit)."""
     import app.api.routes.companion as companion_module
 
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    bind_selected_vault(monkeypatch, tmp_path)
 
     # Create more notes than the cap
     cap = 3
