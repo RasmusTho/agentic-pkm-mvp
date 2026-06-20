@@ -4,6 +4,11 @@ services:
       POSTGRES_DB: app_dev
     ports: !override
       - "15433:5432"
+    # Named volume so app_dev data survives container recreation (issue #2254).
+    # Without this, `docker compose up --force-recreate db` wipes store_objects
+    # and watcher mtime saturation prevents re-population via normal watch ticks.
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
 
   api:
     ports: !override
@@ -24,3 +29,6 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+
+volumes:
+  pgdata-dev:
