@@ -173,7 +173,7 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | `settings.reset` | Settings | reset display preferences to canonical | no |
 | `tts.read` | document / map | open the read-back SpeechPlan (`POST /api/companion/tts/plan`) | no (read; only after human action) |
 | `tts.play` | read-back popover | synthesize + play (`POST /api/companion/tts/synthesize`) | no (read-only; never a mutation endpoint) |
-| `capture.open` | shell (`⌘N`) / map | open Capture modal | no |
+| `capture.open` | shell (`⌘N`) / entry / map | open Capture modal | no |
 | `capture.save` | Capture | append the capture to the vault inbox | **yes — governed write (§Resolved Q17)** |
 | `receipts.open` | shell / map | open the read-only receipts/history surface | no |
 

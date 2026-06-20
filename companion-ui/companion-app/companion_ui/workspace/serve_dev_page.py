@@ -5952,9 +5952,19 @@ def _render_orientation_index_html(
         overlay_host_markup(anchor_note_path="")
         + memory_drawer_markup_html
         + system_map_overlay_markup(available_routes=orientation_map_routes)
+        # Capture modal (#1791, SEP-08b): the inline capture field on the
+        # cold_start threshold and the `Jot something down` verb both route to
+        # the `capture` occupant via overlayHost.mount('capture').  The modal
+        # must be present on the cold_start orientation substrate so ⌘N /
+        # capture.open mounts a real governed occupant instead of silently
+        # no-oping.  Only cold_start needs it on the orientation page — the
+        # workspace shell (#1785) ships the modal for shell_active, and the
+        # orienting/no_vault states carry no capture affordance.
+        + (capture_modal_markup() if is_cold else "")
         + overlay_host_script()
         + memory_drawer_script_html
         + system_map_overlay_script()
+        + (capture_modal_script() if is_cold else "")
         # Guidance layer (#1788, SEP-06): the re-entry card and the map head
         # carry the ⓘ affordance on the entry surfaces, so the visibility
         # gate and the UI-local toggle controller ship with the substrate.
@@ -5997,6 +6007,17 @@ def _render_orientation_index_html(
         &middot;
         <a data-intent="map.open" onclick="overlayHost.mount('map'); return false;" href="#">See the map</a>
       </p>
+      <!-- Inline capture field (design item 4, #2172): on focus / ⌘N mounts
+           the shipped governed capture occupant verbatim.  The warmth rule:
+           the caret is the one saturated element; the door stays monochrome.
+           Suppressed on no_vault: no honest landing for an offline write. -->
+      <div data-region="cold-start-capture" class="cold-start-capture-line">
+        <input type="text" class="cold-start-capture-input"
+               data-testid="cold-start-capture-input"
+               placeholder="Leave a note for future-you…"
+               onfocus="overlayHost.mount('capture'); this.blur();"
+               autocomplete="off" aria-label="Leave a note for future-you" />
+      </div>
       <p class="cold-start-provenance">{_cold_provenance}</p>
     </div>"""
     return f"""<!DOCTYPE html>

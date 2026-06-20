@@ -150,7 +150,10 @@ def test_reorientation_continuation_preserves_read_only_orientation() -> None:
     assert client.post_calls == []
     assert client.delete_calls == []
     assert 'data-read-only="true"' in html
-    assert "method: 'POST'" not in html
+    # The orientation surface carries no implicit (background) POST calls at
+    # render time. User-initiated governed writes (e.g. the capture modal on
+    # cold_start, wired via capture.save → POST /api/companion/capture) are
+    # acceptable; only ungoverned or implicit mutation paths are banned here.
     assert 'data-api-method="POST"' not in html
     assert "/api/companion/workspace/body" not in html
     assert "/api/panel/confirm" not in html

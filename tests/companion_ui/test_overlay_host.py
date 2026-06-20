@@ -502,3 +502,87 @@ def test_narrow_mode_preserves_critical_affordances() -> None:
     assert not re.search(
         r"\.workspace-anchor-pill[^{]*\{[^}]*display:\s*none", html
     ), "the document anchor pill must stay reachable in narrow mode"
+
+
+# ---------------------------------------------------------------------------
+# AC (#2172): capture.open / ⌘N mounts the capture occupant on cold_start
+# ---------------------------------------------------------------------------
+
+
+def _cold_start_orientation() -> dict:
+    """Minimal orientation payload that resolves to cold_start (absent leave_point)."""
+    return {
+        "scope": {"kind": "workspace", "vault_id": "dev-vault", "channel": "dev"},
+        "meta": {
+            "contract_version": "workspace_orientation.v1",
+            "as_of": "2026-06-20T10:00:00Z",
+            "trace_id": "trace-cold",
+            "freshness": "fresh",
+            "stale_after": "2026-06-20T10:05:00Z",
+            "degraded_reasons": [],
+        },
+        "leave_point": {"status": "absent"},
+        "open_loops": [],
+        "notable_changes": [],
+        "resurface": {"candidates": []},
+        "governance": {
+            "pending_proposal_count": 0,
+            "pending_receipt_count": 0,
+            "latest_receipt_outcome": None,
+            "authority_role": "derived",
+            "source_ref": {"kind": "status", "ref": "status", "label": "status"},
+        },
+        "guards": {
+            "read_only": True,
+            "runtime_posture": "healthy",
+            "degraded": False,
+            "reasons": [],
+            "authority_role": "derived",
+            "source_ref": {"kind": "status", "ref": "status", "label": "status"},
+        },
+        "mutation_intents": [],
+    }
+
+
+def test_capture_open_mounts_capture_on_entry_surface() -> None:
+    """capture.open / ⌘N mounts the capture occupant on the cold_start surface.
+
+    Before #2172 the orientation overlay substrate omitted the capture modal
+    markup and script, so overlayHost.mount('capture') was a silent no-op on
+    the entry surface.  This test confirms the occupant is now registered.
+    """
+    # Pure model: capture.open mounts the capture occupant (unchanged
+    # contract; this was already true in the pure model; the bug was in the
+    # rendered substrate not including the modal/script).
+    assert "capture" in SHIPPED_OVERLAY_OCCUPANTS
+    assert KEYBOARD_MAP["meta+n"] == "capture.open"
+    state = apply_intent(_state(), "capture.open")
+    assert state.stack == ("capture",)
+
+    # Rendered cold_start substrate: the capture modal occupant must be present
+    # so that overlayHost.mount('capture') is no longer a silent no-op.
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_start_orientation(),
+    )
+    assert 'data-entry-state="cold_start"' in html
+
+    # The capture modal DOM element ships with the orientation substrate.
+    assert 'data-region="capture-modal"' in html
+    assert 'data-region="capture-input"' in html
+
+    # The capture controller registers the occupant on the host so ⌘N mounts
+    # a real governed surface, not a silent no-op.
+    assert "overlayHost.register('capture'" in html
+
+    # The verb-line capture.open link routes through the host mount.
+    assert "overlayHost.mount('capture')" in html
+
+    # The host's ⌘N handler is present (unchanged from the workspace shell).
+    host_script_m = re.search(
+        r"/\* overlay-host-controller \*/(.*?)/\* /overlay-host-controller \*/",
+        html,
+        re.S,
+    )
+    assert host_script_m, "overlay-host-controller script must render"
+    assert "'capture'" in host_script_m.group(1)
