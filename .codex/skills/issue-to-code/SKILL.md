@@ -58,20 +58,9 @@ Conditional / maintenance path:
 ## BuilderOps routing checkpoint
 
 Before editing and again before PR handoff, decide whether the work produced BuilderOps material.
-This is a required workflow checkpoint, not an optional memory aid.
-
-- Raw handoff/recovery notes or temporary evidence that should survive the turn -> create an
-  `AgentWorklog`.
-- Plan/doc/skill/issue divergence that names an upstream artifact -> invoke `capture-learning` and
-  create a `LearningSignal` immediately.
-- Docs freshness observations or review queues -> create a `DocsFreshnessRecord`.
-- Roadmap execution movement, active blockers, shipped refs, or issue movement that is operational
-  rather than strategic roadmap truth -> create a `RoadmapExecutionItem`.
-- Material that should cross into GitHub, PR, ADR, owner-doc, skill/AGENTS, generated projection, or
-  discard handling -> create a `PromotionIntent` and leave the authority crossing to the normal
-  reviewed path.
-- Completed projections, transitions, promotions, supersessions, or discards -> create or cite a
-  `BuilderOpsReceipt`.
+This is a required workflow checkpoint, not an optional memory aid. Route each record type per
+`.codex/skills/README.md :: BuilderOps Vault routing` (the canonical record-to-trigger map), and name
+a `LearningSignal` through `capture-learning` for any plan divergence.
 
 If no BuilderOps record is needed, record `BuilderOps routing: none` with the reason in the PR
 handoff. Never append to `docs/learning-log.md` except as an explicit compatibility fallback when a

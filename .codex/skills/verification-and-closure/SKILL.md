@@ -136,18 +136,11 @@ When all prerequisites are met:
 
 ## BuilderOps Closure Checkpoint
 
-Before merging or writing the delivery receipt, resolve BuilderOps routing:
-
-- `LearningSignal` exists for any workflow divergence noticed during delivery, or the PR receipt
-  states no divergence was found.
-- `DocsFreshnessRecord` exists for high-churn docs freshness findings that should not become
-  direct `DOCS_INDEX` edits.
-- `RoadmapExecutionItem` exists for operational roadmap movement that should not become strategic
-  `ROADMAP.md` truth.
-- `PromotionIntent` exists for any proposed authority crossing that is not already represented by
-  a GitHub Issue, PR, ADR, or owner-doc change.
-- `BuilderOpsReceipt` exists or is cited when the work processed BuilderOps records, generated
-  projections, promoted material, superseded material, or discarded material.
+Before merging or writing the delivery receipt, resolve BuilderOps routing: for each record type in
+`.codex/skills/README.md :: BuilderOps Vault routing`, confirm the matching record exists (or the
+receipt states none) for any divergence, docs-freshness finding, operational roadmap movement,
+proposed authority crossing, or processed/promoted/superseded/discarded material noticed during
+delivery.
 
 If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. On Tier 1
 PRs (`docs/development/GOVERNANCE_PROPORTIONALITY.md`), an absent `## BuilderOps Routing` section is
