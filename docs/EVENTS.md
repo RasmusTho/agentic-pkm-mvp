@@ -81,6 +81,9 @@ Current consumer expectations:
 - Transient note-read failures in ingest and panel-scan handlers are requeued with
   `_worker_retry_count`, `_worker_retry_reason`, and `_worker_retry_enqueued_at` metadata up to the
   bounded retry limit.
+- Dispatch-level infrastructure failures classified by the worker as transient (for example DB,
+  network, or provider-throttling outages) keep the original DB outbox row pending for supervised
+  retry and do not spend the poison-row dispatch-attempt budget.
 - There is no dedicated DLQ service in the active runtime. When retry attempts are exhausted, the
   worker emits `outbox.event.dead_lettered` as a non-retry diagnostic event. When retry enqueueing
   fails before exhaustion, the worker logs the failure and leaves the condition observable through
@@ -177,16 +180,25 @@ Payload (minimum contract):
 ### `outbox.event.dead_lettered`
 
 Emitted by the outbox worker when a transient retryable ingest or panel-scan event reaches the
-bounded retry limit and will not be requeued. This is a diagnostic dead-letter signal, not an
-automatic replay request, and it must not be consumed as the original event topic.
+bounded retry limit and will not be requeued, or when an unclassified poison dispatch failure spends
+the configured DB-row dispatch-attempt budget. This is a diagnostic dead-letter signal, not an
+automatic replay request, and it must not be consumed as the original event topic. Classified
+dispatch-level infrastructure transients do not emit this event; they leave the original DB outbox
+row pending for supervised retry.
 
-Payload (minimum contract):
+Shared payload fields:
 - `original_topic` (`string`): topic that exhausted retries.
 - `original_event_id` (`string`): original event id when available, otherwise empty.
+- `reason` (`string`): worker retry reason or dispatch poison marker.
+
+Retry-exhaustion payload fields:
 - `note_path` (`string`): note path associated with the failed work.
-- `reason` (`string`): worker retry reason such as `missing_or_unstable_note`, `file_unstable`, or
-  `missing_uuid`.
 - `retry_count` (`int`): retry count at exhaustion.
+
+Dispatch-poison payload fields:
+- `outbox_id` (`string`): DB outbox row id that exhausted dispatch attempts.
+- `attempts` (`int`): DB-row dispatch attempt count at exhaustion.
+- `error` (`string`): final handler error string recorded for operator triage.
 
 Operator visibility:
 - inspect via `GET /api/events/tail?event_prefix=outbox.event` or `events-doctor` against

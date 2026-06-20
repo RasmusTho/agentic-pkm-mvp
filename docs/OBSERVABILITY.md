@@ -52,6 +52,11 @@ Logs are the primary tracing surface; no external APM is required for the curren
   failures are requeued with retry metadata, duplicate `event_id` values are skipped, and exhausted
   retry paths emit `outbox.event.dead_lettered` to the events visibility path before being dropped.
   Failed retry enqueue paths remain observable through worker logs plus undelivered DB outbox rows.
+  Dispatch-level infrastructure transients (DB/network/provider-style outages classified by the
+  worker) also remain visible as pending DB outbox rows and worker warnings; they are not poison
+  dead letters and do not spend the dispatch-attempt budget. Unclassified poison handler failures
+  spend that DB-row dispatch-attempt budget and emit `outbox.event.dead_lettered` only at the
+  configured bound.
   Missing-object `index.embedding.requested` events are logged as warnings and recorded with
   `index.embedding.failed` receipts rather than crashing the worker.
   The active runtime does not claim a dedicated DLQ service.
