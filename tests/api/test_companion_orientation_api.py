@@ -268,3 +268,59 @@ def test_runtime_unavailable_returns_503(
     detail = resp.json()["detail"]
     assert detail["error"] == "runtime_unavailable"
     assert detail["contract_version"] == "workspace_orientation.v1"
+
+
+def test_orientation_payload_includes_recent_target_with_deterministic_tiebreak(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """recents_anchor is present with correct path when vault has notes;
+    tiebreak is path-sort (ascending) when multiple notes share the same mtime.
+    """
+    monkeypatch.setattr(companion_module, "get_orientation_signals", lambda: _signals())
+    vault = tmp_path
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+
+    # Create two notes with identical mtime — path sort must resolve the tie.
+    note_a = vault / "A-first.md"
+    note_b = vault / "Z-second.md"
+    note_a.write_text("# Alpha Note\n\nBody.", encoding="utf-8")
+    note_b.write_text("# Zeta Note\n\nBody.", encoding="utf-8")
+    # Force identical mtime so only path-sort distinguishes them.
+    import os, time as _time
+    shared_ts = _time.time() + 100  # future so they're clearly "most recent"
+    os.utime(note_a, (shared_ts, shared_ts))
+    os.utime(note_b, (shared_ts, shared_ts))
+
+    resp = _orientation(client)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    anchor = data.get("recents_anchor")
+    assert anchor is not None, "recents_anchor must be present when vault has notes"
+    # Path-sort tiebreak: A-first.md < Z-second.md → A-first.md wins.
+    assert anchor["note_path"] == "A-first.md"
+    assert anchor["display_label"] == "Alpha Note"
+    # Explicitly NOT a leave_point: the field must not appear in leave_point.
+    assert "recents_anchor" not in data.get("leave_point", {})
+    # Must be a browser-safe relative path (no absolute filesystem path).
+    assert not anchor["note_path"].startswith("/")
+
+
+def test_orientation_payload_omits_recents_anchor_when_vault_empty(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """recents_anchor is absent (None) when the vault has no markdown files."""
+    monkeypatch.setattr(companion_module, "get_orientation_signals", lambda: _signals())
+    vault = tmp_path
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    # No .md files in the vault.
+
+    resp = _orientation(client)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("recents_anchor") is None

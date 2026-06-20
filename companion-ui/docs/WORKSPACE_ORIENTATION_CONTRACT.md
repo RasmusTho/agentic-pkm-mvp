@@ -535,6 +535,38 @@ When an item refers to an artifact, it uses `artifact_ref`.
 | `note_path` | Browser-safe runtime-relative note path for deep linking to `/workspace?note_path=...`; never an absolute vault path. |
 | `title` | Display title supplied by the runtime; not raw body content. |
 
+### `recents_anchor`
+
+`recents_anchor` is an optional server-declared **Find/recency projection** — the most recently edited vault note at the time the orientation snapshot was generated.
+
+It is explicitly **NOT** a `leave_point` and carries **NO** continuity semantics. The field is omitted (`null`) when the vault is empty, unreadable, or the runtime chooses not to declare it.
+
+Rules:
+
+- Declared by the runtime only. The UI must not derive this field via a local filesystem `mtime` probe; that would violate the "no direct vault I/O from the UI" invariant and re-open the host-vs-container mount hazard (ADR-0014, #2141).
+- The UI renders it as a labeled sub-affordance ("Open your most recent note") on the `cold_start` threshold's Find verb, routing via the existing `/workspace?note_path=…` path.
+- The UI must **never** auto-open this path on mount; it is an affordance only.
+- The UI must **omit the sub-affordance entirely** when the field is absent.
+- Deterministic tiebreak: when multiple notes share the same `mtime`, the lexicographically first path (ascending) wins, ensuring stable server-side resolution.
+
+Shape:
+
+| Field | Rule |
+|---|---|
+| `note_path` | Browser-safe runtime-relative note path; never an absolute vault path. Used to form the `/workspace?note_path=…` deep-link. |
+| `display_label` | Display label derived from the note's first H1 heading, or its filename stem when no heading is present. Not raw body content. |
+
+Example:
+
+```json
+"recents_anchor": {
+  "note_path": "Projects/current-work.md",
+  "display_label": "Current Work"
+}
+```
+
+Governing issue: #2176. Operator decision to adopt: Q1 in `companion-ui/design_handoff/2026-06-19-cold-start-threshold/open-questions.md`.
+
 ## Mutation Intents
 
 `mutation_intents` is present so the payload shape can carry handoff hints

@@ -5990,6 +5990,23 @@ def _render_orientation_index_html(
             _cold_headline = "Re-entry is through the vault."
             _cold_provenance = "trajectory: cold (&gt;14d) · leave_point: present · read-only · server-declared"
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
+        # Recents-anchor sub-affordance (§6, design_handoff/implementation-contracts.md).
+        # Rendered only when the runtime declares the server-side recents_anchor field.
+        # NEVER auto-opens; omitted entirely when the field is absent.
+        # Consumes ONLY the server-declared field — no UI-side filesystem mtime probe.
+        _cold_recents = _orientation_dict(orientation.get("recents_anchor"))
+        _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
+        _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
+        if _cold_recents_path and _cold_recents_label:
+            _cold_recents_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
+            _cold_recents_html = (
+                f'<br><span class="cold-start-recents-anchor" data-testid="cold-start-recents-anchor">'
+                f'<a data-intent="recents.open" href="{_e(_cold_recents_href)}">'
+                f"Open your most recent note: {_e(_cold_recents_label)}"
+                f"</a></span>"
+            )
+        else:
+            _cold_recents_html = ""
         cold_start_threshold_html = f"""
     <div data-region="cold-start-threshold">
       <div class="cold-start-vault-chip">
@@ -6006,6 +6023,7 @@ def _render_orientation_index_html(
         <a data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;" href="#">Jot something down</a>
         &middot;
         <a data-intent="map.open" onclick="overlayHost.mount('map'); return false;" href="#">See the map</a>
+        {_cold_recents_html}
       </p>
       <!-- Inline capture field (design item 4, #2172): on focus / ⌘N mounts
            the shipped governed capture occupant verbatim.  The warmth rule:

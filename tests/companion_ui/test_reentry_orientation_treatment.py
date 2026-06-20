@@ -114,6 +114,7 @@ def _orientation_payload(
     notable_changes: int = 2,
     resurface_candidates: int = 1,
     staged_proposals: int = 1,
+    recents_anchor: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     reasons = degraded_reasons or []
     leave_point: dict[str, Any] | None = None
@@ -127,7 +128,7 @@ def _orientation_payload(
             "authority_role": "operational_trace_pointer",
             "source_ref": {"kind": "artifact_activation", "trace_id": "trace-leave"},
         }
-    return {
+    payload: dict[str, Any] = {
         "scope": {"kind": "workspace", "vault_id": "dev-vault", "channel": "dev"},
         "meta": {
             "contract_version": "workspace_orientation.v1",
@@ -165,6 +166,9 @@ def _orientation_payload(
         },
         "mutation_intents": [],
     }
+    if recents_anchor is not None:
+        payload["recents_anchor"] = recents_anchor
+    return payload
 
 
 def _workspace_fields() -> dict[str, Any]:
@@ -688,3 +692,91 @@ def test_cold_start_threshold_provenance_line() -> None:
     assert "trajectory: cold" in cold_traj
     assert "leave_point: present" in cold_traj
     assert "read-only · server-declared" in cold_traj
+
+
+# ---------------------------------------------------------------------------
+# AC (#2176): recents-anchor sub-affordance on the cold_start threshold
+# ---------------------------------------------------------------------------
+
+
+def test_cold_start_recents_anchor_renders_when_present_and_omits_when_absent() -> None:
+    """AC: recents-anchor sub-affordance renders when present; omits when absent.
+
+    When the server declares recents_anchor on the orientation payload the
+    cold_start threshold must render a labeled "Open your most recent note"
+    link routing via /workspace?note_path=…  When the field is absent the
+    link must not appear and the threshold must still render correctly.
+    """
+    anchor = {"note_path": "Notes/recent.md", "display_label": "My Recent Note"}
+
+    # --- Present case ---
+    with_anchor = _render(
+        orientation=_orientation_payload(leave_status="absent", recents_anchor=anchor)
+    )
+
+    # The labeled sub-affordance must be present.
+    assert "data-testid=\"cold-start-recents-anchor\"" in with_anchor
+    assert "Open your most recent note" in with_anchor
+    assert "My Recent Note" in with_anchor
+    # Must route via /workspace?note_path= (URL-encoded).
+    assert "/workspace?note_path=" in with_anchor
+    assert "Notes%2Frecent.md" in with_anchor
+    # Must carry data-intent="recents.open".
+    assert 'data-intent="recents.open"' in with_anchor
+    # The threshold itself must still render correctly.
+    assert 'data-region="cold-start-threshold"' in with_anchor
+    assert 'data-region="cold-start-verbs"' in with_anchor
+    assert 'data-intent="vault.open"' in with_anchor
+    # NEVER auto-opens: no redirect, no location.href, no window.open on mount.
+    assert "location.href" not in with_anchor.split('data-intent="recents.open"')[1].split("</a>")[0]
+
+    # Cold-trajectory variant also renders the anchor.
+    cold_with_anchor = _render(
+        orientation=_orientation_payload(gap=_GAP_COLD, recents_anchor=anchor)
+    )
+    assert 'data-testid="cold-start-recents-anchor"' in cold_with_anchor
+
+    # --- Absent case ---
+    without_anchor = _render(orientation=_orientation_payload(leave_status="absent"))
+
+    assert "data-testid=\"cold-start-recents-anchor\"" not in without_anchor
+    assert "Open your most recent note" not in without_anchor
+    # Threshold still renders correctly without the anchor.
+    assert 'data-region="cold-start-threshold"' in without_anchor
+    assert 'data-region="cold-start-verbs"' in without_anchor
+    assert 'data-intent="vault.open"' in without_anchor
+
+
+def test_recents_anchor_uses_server_payload_without_ui_filesystem_probe() -> None:
+    """AC: UI renders server-declared field; no client-side vault mtime probe.
+
+    The recents_anchor in the payload is the single source of truth.  The
+    rendered page must carry exactly the note_path and display_label from the
+    server field.  A different payload with a different path must render that
+    different path — proving the renderer consumes the server fact, not a
+    local filesystem mtime scan.
+    """
+    anchor_a = {"note_path": "Projects/alpha.md", "display_label": "Alpha Project"}
+    anchor_b = {"note_path": "Archive/beta.md", "display_label": "Beta Archive"}
+
+    html_a = _render(
+        orientation=_orientation_payload(leave_status="absent", recents_anchor=anchor_a)
+    )
+    html_b = _render(
+        orientation=_orientation_payload(leave_status="absent", recents_anchor=anchor_b)
+    )
+
+    # Each render carries exactly the server-declared path, not the other.
+    assert "Projects%2Falpha.md" in html_a
+    assert "Alpha Project" in html_a
+    assert "Projects%2Falpha.md" not in html_b
+    assert "Alpha Project" not in html_b
+
+    assert "Archive%2Fbeta.md" in html_b
+    assert "Beta Archive" in html_b
+    assert "Archive%2Fbeta.md" not in html_a
+    assert "Beta Archive" not in html_a
+
+    # No filesystem I/O marker: the rendered link text comes from the server
+    # display_label, not from any local path computation (confirmed by the
+    # two renders above differing only by payload, not by worktree state).
