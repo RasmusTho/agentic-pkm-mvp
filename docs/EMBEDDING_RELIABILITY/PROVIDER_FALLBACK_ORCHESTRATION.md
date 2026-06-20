@@ -286,9 +286,13 @@ rankings across different embedding spaces. Both are enforced here.
   attempts are exhausted). Fallback is never consulted on the first transient
   error from the primary.
   Verify: `tests/llm/test_provider_fallback.py::test_fallback_only_after_primary_retry_exhausted`
-  — configures `EMBED_RETRY_MAX=2`, patches the primary embed stub to fail
-  twice then succeed, asserts the Gemini adapter is never called (primary
-  succeeded on retry 2 before `EmbedDeadLetterError` was raised).
+  — `EMBED_RETRY_MAX` is the **total attempt count** (per `EMBEDDING_EXECUTION_QUEUE.md`),
+  so configure `EMBED_RETRY_MAX=3` and patch the primary embed stub to fail twice then
+  succeed on the 3rd attempt; assert the Gemini adapter is never called (primary
+  succeeded before `EmbedDeadLetterError` was raised). A companion case configures
+  `EMBED_RETRY_MAX=2` with the primary failing on both attempts and asserts the gate
+  IS consulted (fallback attempted) — proving fallback fires exactly when the primary
+  attempt budget is exhausted, with no off-by-one.
 
 - [ ] **AC11 — Neither primary nor fallback succeeds: object dead-lettered,
   ingest continues (CTI-6).** When the primary is exhausted AND the fallback
@@ -355,28 +359,38 @@ OLLAMA_HOST=http://127.0.0.1:19999 \
 **Option B — in-process seed (no pg required):**
 
 ```python
-# smoke_fallback.py — seed two DomainObjects into the memory store,
-# then run the ingest in the same process so the fallback path exercises
-# real embedding calls.
-import os, asyncio
-from app.stores.memory import MemoryObjectStore
-from app.domain.objects import DomainObject
-from app.indexer.consumer import run_ingest_from_store
+# smoke_fallback.py — seed two objects into the in-process memory store, then run
+# `index rebuild` in the SAME process so the seeded store is visible and the fallback
+# path exercises real embedding calls. Uses the actual repo APIs
+# (app.objects.ObjectStore / DomainObject; app.cli `index rebuild`), matching the
+# pattern in tests/cli/test_index_rebuild_resilience.py.
+import os
+from datetime import datetime, timezone
+from click.testing import CliRunner
+from app.objects import DomainObject, ObjectStore
 
-store = MemoryObjectStore()
-store.save(DomainObject(id="obj-1", text="Hello world"))
-store.save(DomainObject(id="obj-2", text="Agentic PKM system"))
-
-# Point Ollama at a bad address to force fallback:
+os.environ["STORE_BACKEND"] = "memory"
+# Force the primary (Ollama) to fail so fallback is consulted; configure Gemini:
 os.environ["OLLAMA_HOST"] = "http://127.0.0.1:19999"
 os.environ["GEMINI_API_KEY"] = "<real-key>"
 os.environ["EMBED_FALLBACK_PROVIDER"] = "gemini"
 os.environ["EMBED_RETRY_MAX"] = "1"
 os.environ["EMBED_RETRY_BASE_BACKOFF_S"] = "0.1"
 
-result = asyncio.run(run_ingest_from_store(store))
-print(result)
-# Expected: processed=2, outbox JSONL shows fallback_used=true for both objects.
+store = ObjectStore()
+for i, text in enumerate(["Hello world", "Agentic PKM system"], start=1):
+    store.save_object(
+        DomainObject(uuid=f"00000000-0000-0000-0000-00000000000{i}", kind="note",
+                     payload={"text": text, "content": text}, source_ref=f"vault/n{i}.md",
+                     created_at=datetime.now(timezone.utc)),
+        emit_outbox=False, trace_id="smoke-fallback",
+    )
+
+from app.cli import cli
+result = CliRunner().invoke(cli, ["index", "rebuild", "--backend", "memory", "--json"])
+print(result.output)
+# Expected: processed=2; outbox JSONL shows provenance.provider="gemini" and
+# meta.fallback_used=true for both objects.
 ```
 
 Run one of the above and verify:
