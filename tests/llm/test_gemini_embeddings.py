@@ -513,3 +513,20 @@ def test_embed_probe_provider_override_reaches_gemini(monkeypatch: pytest.Monkey
     assert result.exit_code != 0, result.output
     assert "provider=gemini" in result.output  # reached the gemini adapter, not mock
     assert "unavailable" in result.output.lower()
+
+
+def test_cli_group_embed_probe_forwards_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The canonical `python -m app.cli embed-probe --provider gemini` wrapper forwards
+    --provider to the probe (Codex P2, #2302) — without it the documented path 500s on
+    an unknown option."""
+    from click.testing import CliRunner
+    from app.cli import cli
+
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    _unset_keys(monkeypatch)
+    monkeypatch.setenv("EMBED_DIM", "768")
+    result = CliRunner(mix_stderr=True).invoke(cli, ["embed-probe", "--provider", "gemini"])
+    # The option is accepted (not a usage error) and reaches the gemini adapter:
+    assert "no such option" not in result.output.lower()
+    assert "provider=gemini" in result.output
+    assert result.exit_code != 0  # no key → unavailable
