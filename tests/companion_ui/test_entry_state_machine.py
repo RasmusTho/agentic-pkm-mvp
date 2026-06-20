@@ -543,3 +543,88 @@ def test_rendered_entry_states_never_leave_the_enum() -> None:
     ]
     for page in pages:
         assert _entry_state(page) in ENTRY_STATES
+
+
+# ---------------------------------------------------------------------------
+# AC: both no_vault paths render quiet-threshold copy with no grid/capture
+# ---------------------------------------------------------------------------
+
+
+def test_no_vault_paths_render_quiet_threshold_without_grid_or_capture() -> None:
+    """Both no_vault render paths use quiet-register copy and suppress grid/capture.
+
+    Primary path: orientation=None + error set → _render_error_section →
+      _render_vault_unreachable_state.
+    Second path: _orientation_unavailable_frame (orientation_error set, vault
+      browser reachable) → _render_orientation_index_html with state=no_vault.
+
+    Both must:
+    - declare entry state no_vault
+    - render the quiet-register copy ("The runtime is unreachable. Nothing was lost.")
+    - carry NO Find verb (data-intent="vault.open") or Jot verb (data-intent="capture.open")
+    - carry NO inline capture field (data-region="cold-start-threshold")
+    - carry NO re-entry overlay (data-region="reentry-card")
+    - carry NO orientation grid sections (leave-point, open-loops, governance etc.)
+    """
+    # --- Primary path: error without orientation → _render_vault_unreachable_state ---
+    primary = _render(error='HTTP 503: {"detail": {"error": "runtime_unavailable"}}')
+    assert _entry_state(primary) == "no_vault"
+    assert "The runtime is unreachable. Nothing was lost." in primary
+    # No Find or Jot verbs.
+    assert 'data-intent="vault.open"' not in primary
+    assert 'data-intent="capture.open"' not in primary
+    # No capture field, no re-entry overlay.
+    assert 'data-region="cold-start-threshold"' not in primary
+    assert 'data-region="reentry-card"' not in primary
+    # No orientation grid sections.
+    assert 'data-testid="workspace-orientation-leave-point"' not in primary
+    assert 'data-testid="workspace-orientation-open-loops"' not in primary
+    assert 'data-testid="workspace-orientation-governance"' not in primary
+
+    # --- Second path: orientation_unavailable_frame via handle_get ---
+    # orientation fetch fails but vault browser succeeds → _orientation_unavailable_frame
+    # is used; render_index_html gets orientation=<frame> + orientation_error set.
+    second = handle_get(
+        query_string="",
+        client=_FakeClient(orientation_error=WorkspaceClientHTTPError(503, _RUNTIME_503_BODY)),  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+    assert _entry_state(second) == "no_vault"
+    assert "The runtime is unreachable. Nothing was lost." in second
+    # No inline capture field or Jot verb (capture has no honest offline landing).
+    assert 'data-intent="capture.open"' not in second
+    # No inline capture field region (cold-start threshold).
+    assert 'data-region="cold-start-threshold"' not in second
+    # No re-entry overlay.
+    assert 'data-region="reentry-card"' not in second
+    # No orientation grid sections (leave-point, open-loops, governance).
+    assert 'data-testid="workspace-orientation-leave-point"' not in second
+    assert 'data-testid="workspace-orientation-open-loops"' not in second
+    assert 'data-testid="workspace-orientation-governance"' not in second
+
+
+# ---------------------------------------------------------------------------
+# AC: primary no_vault path keeps Retry + System map with inert map nodes
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_unavailable_keeps_retry_and_inert_map_affordance() -> None:
+    """Primary no_vault path keeps Retry (entry.retry) + System map (map.open).
+
+    The map overlay is rendered with inert map nodes (available_routes=())
+    so no vault route is offered on the error surface.
+    """
+    # Primary path: runtime unavailable → _render_vault_unreachable_state.
+    html = _render(error='HTTP 503: {"detail": {"error": "runtime_unavailable"}}')
+    assert _entry_state(html) == "no_vault"
+    # Retry affordance with the declared intent.
+    assert 'data-intent="entry.retry"' in html
+    assert 'data-testid="workspace-entry-retry"' in html
+    # System map affordance.
+    assert 'data-intent="map.open"' in html
+    assert 'data-testid="workspace-entry-map-affordance"' in html
+    # Map overlay is present (so the map.open affordance has a target).
+    assert 'data-testid="system-map-overlay"' in html
+    # Inert map nodes: vault node must not be a live routable button on the
+    # error surface — available_routes=() means all map nodes render inert.
+    assert 'data-surface-id="vault" data-mode="live" data-status="shipped" data-routable="true"' not in html

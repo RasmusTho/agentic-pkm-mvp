@@ -99,9 +99,10 @@ class TestVaultUnreachableEntryState:
     def test_http_503_runtime_unavailable_renders_vault_unreachable_state(self) -> None:
         html = _render_error(_RUNTIME_UNAVAILABLE_503)
 
-        # Designed "Vault unreachable" state, not the generic JSON-dumping card.
+        # Designed "Vault unreachable" state (#2173 restyle: quiet-register copy),
+        # not the generic JSON-dumping card.
         assert 'data-testid="workspace-vault-unreachable-state"' in html
-        assert "Vault unreachable" in html
+        assert "The runtime is unreachable. Nothing was lost." in html
         assert 'data-error-kind="runtime-unavailable"' in html
 
         # Provenance line per the design handoff, behind a Details disclosure
@@ -174,12 +175,13 @@ class TestRemoteAccessDisambiguation:
         assert "No vault selected" not in html
 
     def test_localhost_origin_renders_vault_unreachable_state(self) -> None:
-        # Same 503 from a localhost page origin → unchanged #2123 state.
+        # Same 503 from a localhost page origin → unchanged #2123 state
+        # (#2173 restyle: heading is now quiet-register copy).
         for hostname in ("localhost", "127.0.0.1"):
             html = _render_error_with_origin(_RUNTIME_UNAVAILABLE_503, hostname)
             assert 'data-testid="workspace-vault-unreachable-state"' in html
             assert 'data-testid="workspace-wrong-device-state"' not in html
-            assert "Vault unreachable" in html
+            assert "The runtime is unreachable. Nothing was lost." in html
 
     def test_default_origin_keeps_vault_unreachable_state(self) -> None:
         # No page-origin signal (default) must not regress #2123: the local
