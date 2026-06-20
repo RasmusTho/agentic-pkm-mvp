@@ -44,7 +44,7 @@ def ops_channel_preflight(channel: str | None, context: str) -> None:
     "bootstrap-test-channel",
     help="Idempotently bring up the test-channel config (vault init + canonical env + preflight).",
 )
-@click.option("--vault-root", "vault_root", default=None, help="The operator's test vault root (else read from VAULT_ROOT_TEST/TEST_VAULT_ROOT/VAULT_ROOT; required — no synthetic default).")
+@click.option("--vault-root", "vault_root", default=None, help="The test vault root (else VAULT_ROOT_TEST/TEST_VAULT_ROOT, then repo-local vault-test).")
 @click.option("--print-env", "print_env", is_flag=True, help="Print the canonical env as KEY=VALUE lines (for `eval`/`source`).")
 @click.option("--json", "as_json", is_flag=True, help="Emit a machine-readable JSON receipt.")
 def ops_bootstrap_test_channel(vault_root: str | None, print_env: bool, as_json: bool) -> None:

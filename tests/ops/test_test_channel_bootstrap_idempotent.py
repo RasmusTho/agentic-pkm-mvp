@@ -69,7 +69,7 @@ def test_bootstrap_is_idempotent_no_drift(tmp_path: Path) -> None:
 
 
 def test_derived_env_kills_the_six_symptoms(tmp_path: Path) -> None:
-    # The vault is operator-configured (no synthetic default); supply one.
+    # An explicit test vault remains supported and resolves to an absolute path.
     env = derive_test_channel_env(
         repo_root=tmp_path, environ={}, vault_root=tmp_path / "operator-test-vault"
     )
@@ -109,22 +109,21 @@ def test_explicit_vault_root_override_is_absolute(tmp_path: Path) -> None:
     assert Path(env["VAULT_ROOT"]).is_absolute()
 
 
-def test_unset_vault_root_fails_loud_no_synthetic_default(tmp_path: Path) -> None:
-    # The synthetic 'vault-test' default was removed: with no vault_root and no
-    # VAULT_ROOT* in the environ, derivation must fail loud rather than invent one.
-    import pytest
+def test_unset_vault_root_uses_repo_local_vault_test(tmp_path: Path) -> None:
+    env = derive_test_channel_env(repo_root=tmp_path, environ={})
 
-    with pytest.raises(ValueError, match="vault root is unset"):
-        derive_test_channel_env(repo_root=tmp_path, environ={})
+    assert env["VAULT_ROOT"] == str((tmp_path / "vault-test").resolve())
+    assert env["VAULT_ROOT"] == env["VAULT_ROOT_TEST"] == env["TEST_VAULT_ROOT"]
 
 
-def test_vault_root_read_from_environ_when_not_explicit(tmp_path: Path) -> None:
-    # Operator config flows through VAULT_ROOT when no explicit arg is given.
+def test_plain_vault_root_is_ignored_when_not_explicit(tmp_path: Path) -> None:
+    # Plain VAULT_ROOT may point at the operator/prod vault; test selection uses
+    # test-channel selectors or the repo-local scratch vault instead.
     operator_vault = tmp_path / "Bifröst"
     env = derive_test_channel_env(
         repo_root=tmp_path, environ={"VAULT_ROOT": str(operator_vault)}
     )
-    assert env["VAULT_ROOT"] == str(operator_vault.resolve())
+    assert env["VAULT_ROOT"] == str((tmp_path / "vault-test").resolve())
     assert env["VAULT_ROOT"] == env["VAULT_ROOT_TEST"] == env["TEST_VAULT_ROOT"]
 
 

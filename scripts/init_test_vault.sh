@@ -8,12 +8,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# Seed the operator-configured test vault, honoring the same precedence as the
-# bootstrap harness and derive_test_channel_env (per-channel override first), and
-# falling back to the repo-local ephemeral scratch vault only when nothing is
-# configured. This must match the root the bootstrap exports and that
-# `uat-run-vault-test --vault-root` later reads, or the seed folder goes missing.
-VAULT_TEST="${VAULT_ROOT_TEST:-${TEST_VAULT_ROOT:-${VAULT_ROOT:-vault-test}}}"
+# Seed the selected test vault, honoring only test-channel selectors. Plain
+# VAULT_ROOT may point at the operator/prod vault and must not redirect test
+# seeding; bootstrap_test_channel.sh exports VAULT_ROOT_TEST/TEST_VAULT_ROOT
+# before calling this helper. Fall back to the repo-local scratch vault only when
+# no test-channel selector is configured.
+VAULT_TEST="${VAULT_ROOT_TEST:-${TEST_VAULT_ROOT:-vault-test}}"
 SYSTEM_CONFIG="${VAULT_TEST}/System/Config"
 TEST_DIR="${VAULT_TEST}/Test"
 PYTHON="${PYTHON:-$(if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; else command -v python; fi)}"

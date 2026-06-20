@@ -155,11 +155,12 @@ class TestBootstrapStartContract:
             f"Expected start_full_system.sh in dry-run output; got: {combined[:500]}"
         )
 
-    def test_make_start_test_system_threads_operator_vault_root(self) -> None:
-        """start-test-system and test-up pass the operator-configured vault as VAULT_ROOT.
+    def test_make_start_test_system_ignores_plain_vault_root(self) -> None:
+        """start-test-system and test-up do not select from plain VAULT_ROOT.
 
-        TEST_VAULT_ROOT defaults from VAULT_ROOT (no hardcoded vault-test name); the
-        targets thread that path through when one is configured.
+        Plain VAULT_ROOT may point at the operator/prod vault. The test-channel
+        targets use TEST_VAULT_ROOT / VAULT_ROOT_TEST or the repo-local
+        vault-test scratch fallback instead.
         """
         operator_vault = "/tmp/uat-operator-test-vault"
         for target in ("start-test-system", "test-up"):
@@ -173,9 +174,13 @@ class TestBootstrapStartContract:
                 f"make --dry-run {target} failed: {result.stderr}"
             )
             combined = result.stdout + result.stderr
-            assert operator_vault in combined, (
-                f"Expected operator VAULT_ROOT {operator_vault} threaded through "
+            assert operator_vault not in combined, (
+                f"Plain operator VAULT_ROOT must not select test vault for "
                 f"make --dry-run {target}; got: {combined[:500]}"
+            )
+            assert 'VAULT_ROOT="vault-test"' in combined, (
+                f"Expected repo-local vault-test fallback in make --dry-run "
+                f"{target}; got: {combined[:500]}"
             )
 
     def test_make_test_targets_honor_vault_root_test_override(self) -> None:
@@ -219,9 +224,8 @@ class TestBootstrapStartContract:
                 f"{target} must not demand a vault to start: {combined[:500]}"
             )
 
-    def test_only_seed_flow_requires_a_vault(self) -> None:
-        """Provisioning (test-bootstrap) still guards on a vault — you cannot seed
-        UAT notes into 'no vault' — while the start paths do not."""
+    def test_seed_flow_uses_repo_local_vault_test_fallback(self) -> None:
+        """Provisioning can seed the repo-local test scratch vault by default."""
         env = {
             k: v
             for k, v in os.environ.items()
@@ -233,5 +237,10 @@ class TestBootstrapStartContract:
             text=True,
             env=env,
         )
-        assert result.returncode != 0, "test-bootstrap must require a vault to seed"
-        assert "TEST_VAULT_ROOT is required" in (result.stderr + result.stdout)
+        combined = result.stderr + result.stdout
+        assert result.returncode == 0, (
+            f"test-bootstrap should dry-run with repo-local vault-test fallback: "
+            f"{combined[:500]}"
+        )
+        assert 'VAULT_ROOT="vault-test"' in combined
+        assert '--vault-root "vault-test"' in combined

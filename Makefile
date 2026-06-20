@@ -1,16 +1,11 @@
 .PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
-# Operator-configured test vault root. There is no synthetic default: the test
-# channel binds whatever vault the operator points it at — one of their own
-# Obsidian vaults — whose name is operator-owned and never hardcoded. Honors the
-# per-channel override VAULT_ROOT_TEST first (matching derive_test_channel_env),
-# then the base VAULT_ROOT. Must be absolute so every caller binds the same vault
-# regardless of CWD (issue #1997 symptom 5). May be empty: the start targets
-# boot the no-vault idle posture (#2005) when it is unset. Only the provision +
-# seed flow (test-bootstrap) guards on it via require-test-vault-root, since you
-# cannot seed UAT notes into "no vault".
-TEST_VAULT_ROOT ?= $(or $(VAULT_ROOT_TEST),$(VAULT_ROOT))
+# Test vault root. Honors an explicit TEST_VAULT_ROOT make/env override first,
+# then VAULT_ROOT_TEST, then the repo-local scratch vault. Plain VAULT_ROOT is a
+# runtime binding and may point at the operator/prod vault, so it must not select
+# the test seed vault implicitly.
+TEST_VAULT_ROOT ?= $(or $(VAULT_ROOT_TEST),vault-test)
 # Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
 # promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
 # the in-container `db:5432` address is unreachable from the host (issue #1997
@@ -268,7 +263,7 @@ require-vault-root:
 	@: $(if $(strip $(VAULT_ROOT)),,$(error VAULT_ROOT is required. Example: export VAULT_ROOT="/path/to/your/vault"))
 
 require-test-vault-root:
-	@: $(if $(strip $(TEST_VAULT_ROOT)),,$(error TEST_VAULT_ROOT is required: point the test channel at the operator's test vault, e.g. export VAULT_ROOT="/path/to/Bifröst". No synthetic vault-test default exists.))
+	@: $(if $(strip $(TEST_VAULT_ROOT)),,$(error TEST_VAULT_ROOT is empty: set TEST_VAULT_ROOT or VAULT_ROOT_TEST to a test vault, or allow the repo-local vault-test fallback.))
 
 alpha: require-vault-root
 	@$(MAKE) alpha-up

@@ -66,11 +66,17 @@ export COMPANION_UI_URL="http://127.0.0.1:18002"
 explicitly into `make test-start-full`), so the all-in-one path needs no shell exports.
 The **standalone** steps below, however, read the caller's process env — `channel-preflight`,
 `make test-start-full` run on their own, and Leg-1 `settings explain` all require the channel
-env to be present in the shell. To seed a clean shell for those steps, either keep the
-reference exports above, or eval the canonical env that the bootstrap derives:
+env to be exported in the shell before those child processes start.
+
+<!-- standalone host env seed -->
+To seed a clean shell for those standalone host commands, either keep the reference exports
+above, or export the canonical env that the bootstrap derives:
 
 ```bash
-eval "$(python -m app.cli ops bootstrap-test-channel --print-env)"
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  export "$line"
+done < <(python -m app.cli ops bootstrap-test-channel --print-env)
 ```
 
 To validate the live env at any point, run the fail-loud channel preflight (run it in a
