@@ -122,6 +122,7 @@ def embed_with_retry(
     object_id: str | None = None,
     embed_callable: "Callable[[], List[float]] | None" = None,
     dead_letter_on_exhaustion: bool = True,
+    max_attempts: int | None = None,
     _sleep: bool = True,
 ) -> List[float]:
     """Embed ``text`` with exponential backoff on transient failures.
@@ -167,7 +168,9 @@ def embed_with_retry(
         vector = list(_embed_single(text, provider_val, model_val, dim_val))
         return l2_normalize(vector) if normalize else vector
 
-    retry_max = _get_retry_max()
+    # Callers (e.g. `index rebuild --max-retries`) may pin the attempt budget;
+    # otherwise fall back to the EMBED_RETRY_MAX env default.
+    retry_max = max(max_attempts, 1) if max_attempts is not None else _get_retry_max()
     base_backoff = _get_base_backoff()
     max_backoff = _get_max_backoff()
 

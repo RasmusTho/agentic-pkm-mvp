@@ -67,6 +67,7 @@ def test_rebuild_completes_with_one_bad_note(monkeypatch, tmp_path):
         object_id=None,
         embed_callable=None,
         dead_letter_on_exhaustion=True,
+        max_attempts=None,
         _sleep=True,
     ):
         nonlocal call_count
@@ -138,5 +139,40 @@ def test_rebuild_deterministic_profile_uses_resolved_client(monkeypatch):
     assert summary["total_objects"] == 2
     assert summary["processed"] == 2, f"deterministic rebuild should embed all objects, got {summary}"
     assert summary["error_count"] == 0, f"deterministic rebuild produced embed failures: {summary.get('errors')}"
+
+    legacy_store._MEMORY_STORE.clear()
+
+
+def test_rebuild_max_retries_wires_embed_attempt_budget(monkeypatch):
+    """`index rebuild --max-retries N` must control embed attempts (N+1), not just
+    upsert — embed_with_retry receives max_attempts. Regression guard for the Codex
+    review on PR #2298 (rebuild retry options ignored for embeddings)."""
+    reset_store_backends()
+    legacy_store._MEMORY_STORE.clear()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "8")
+    # EMBED_RETRY_MAX would say 5, but --max-retries 0 must win (=> 1 attempt).
+    monkeypatch.setenv("EMBED_RETRY_MAX", "5")
+
+    _seed_object("retry-budget note", source_ref="vault/r.md")
+
+    seen: list = []
+
+    def capture_embed(text, **kwargs):
+        seen.append(kwargs.get("max_attempts"))
+        return [0.1] * 8
+
+    from app.cli import cli
+
+    with patch("app.cli.index_rebuild.embed_with_retry", side_effect=capture_embed):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["index", "rebuild", "--backend", "memory", "--json", "--max-retries", "0"],
+        )
+
+    assert result.exit_code == 0, f"CLI exited non-zero: {result.output}\n{result.exception}"
+    assert seen == [1], f"--max-retries 0 should pass max_attempts=1 to embed_with_retry, got {seen}"
 
     legacy_store._MEMORY_STORE.clear()
