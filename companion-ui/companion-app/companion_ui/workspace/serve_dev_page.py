@@ -5519,6 +5519,19 @@ def _reentry_leave_label(leave: dict) -> str:
     )
 
 
+def _reentry_doing_label(leave: dict) -> str:
+    """Human-readable heading for the re-entry 'doing' question and whisper column.
+
+    When the runtime declares an explicit ``label`` on the leave_point, use it
+    verbatim.  When absent (v1 contract), falling through to ``artifact.title``
+    would render the 'doing' heading identically to the 'stopped' artifact-link
+    text (issue #2241).  Return a distinct generic cue instead so the card
+    never shows the same string in both slots.
+    """
+    declared = _orientation_str(leave.get("label"))
+    return declared if declared else "Where you left off"
+
+
 def _reentry_traj_state(leave: dict) -> str:
     """Server-declared trajectory state for the re-entry card pill.
 
@@ -5622,6 +5635,7 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
     leave = _orientation_dict(orientation.get("leave_point"))
     counts = _reentry_counts(orientation)
     leave_label = _reentry_leave_label(leave)
+    doing_label = _reentry_doing_label(leave)
     traj_state = _reentry_traj_state(leave)
     delta_strip = _render_reentry_delta_strip(orientation) if shape == "long_mist" else ""
     if _orientation_str(leave.get("status")) == "artifact_missing":
@@ -5634,10 +5648,16 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
             f"{_e(_orientation_str(artifact.get('title'), 'Artifact'))}</span>"
         )
     else:
+        # Pass doing_label (not leave_label) as the suppress guard: when the
+        # runtime supplied an explicit label, doing_label == leave_label and the
+        # artifact link is suppressed to "Open artifact" when they match.  When
+        # the label is absent, doing_label is "Where you left off" which will
+        # never match the artifact title, so the link renders the title instead
+        # (issue #2241 — heading and body must not be the same string).
         artifact_link = _orientation_artifact_link(
             leave.get("artifact_ref"),
             testid="reentry-stop-link",
-            suppress_when_text=leave_label,
+            suppress_when_text=doing_label,
         )
     inspect_onclick = "if (window.overlayHost) { overlayHost.mount('memory'); return false; }"
     return f"""
@@ -5653,7 +5673,7 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
       <ol class="reentry-questions">
         <li class="reentry-q" data-reentry-question="doing">
           <span class="reentry-q-label">What was I doing</span>
-          <span class="reentry-q-body">{_e(leave_label)}</span>
+          <span class="reentry-q-body">{_e(doing_label)}</span>
         </li>
         <li class="reentry-q" data-reentry-question="stopped">
           <span class="reentry-q-label">Where did momentum stop</span>
@@ -5720,7 +5740,7 @@ def _render_reentry_whisper_column(orientation: dict) -> str:
     aria-hidden="true">
     <div class="reentry-whisper" data-whisper-item="doing">
       <span class="reentry-whisper-label">doing</span>
-      <span class="reentry-whisper-text">{_e(_reentry_leave_label(leave))}</span>
+      <span class="reentry-whisper-text">{_e(_reentry_doing_label(leave))}</span>
     </div>
     <div class="reentry-whisper" data-whisper-item="unresolved">
       <span class="reentry-whisper-label">unresolved</span>
