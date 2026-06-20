@@ -154,6 +154,13 @@ def _http_status_code(exc: BaseException) -> int | None:
 def _is_transient_dispatch_error(exc: BaseException) -> bool:
     """Return true for retryable infra outages that must not spend poison budget."""
     for current in _iter_exception_chain(exc):
+        # Provider adapters mark app-local transient errors (e.g. GeminiTransientError for
+        # HTTP 429/5xx, re-raised from the consumer path with dead_letter_on_exhaustion=False)
+        # with `is_transient = True`. These carry no httpx response/chain, so without this the
+        # worker would poison-count and dead-letter a transient provider outage instead of
+        # keeping the row pending for retry (at-least-once durability).
+        if getattr(current, "is_transient", None) is True:
+            return True
         if isinstance(current, TransientRetryEnqueueError):
             return True
         if isinstance(current, (ConnectionError, TimeoutError)):

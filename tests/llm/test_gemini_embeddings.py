@@ -530,3 +530,18 @@ def test_cli_group_embed_probe_forwards_provider(monkeypatch: pytest.MonkeyPatch
     assert "no such option" not in result.output.lower()
     assert "provider=gemini" in result.output
     assert result.exit_code != 0  # no key → unavailable
+
+
+def test_outbox_worker_classifies_gemini_transient_as_transient() -> None:
+    """The OUTBOX WORKER classifier (not just the queue's) must honor is_transient, so a
+    GeminiTransientError re-raised from the consumer path keeps the outbox row pending for
+    retry instead of being poison-counted and dead-lettered (Codex P1 durability, #2302)."""
+    from app.workers.outbox_worker import _is_transient_dispatch_error
+
+    assert _is_transient_dispatch_error(GeminiTransientError("HTTP 503")) is True
+    # chained form
+    wrapped = RuntimeError("dispatch failed")
+    wrapped.__cause__ = GeminiTransientError("HTTP 429")
+    assert _is_transient_dispatch_error(wrapped) is True
+    # non-transient gemini errors are NOT kept pending (they are poison)
+    assert _is_transient_dispatch_error(GeminiAuthError("HTTP 403")) is False
