@@ -24,7 +24,7 @@ from app.services.indexer import handle_ingest_object_created
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
-from app.services.outbox import ack_outbox, append_jsonl_outbox_event, bootstrap, poll_outbox_one, write_outbox_event
+from app.services.outbox import ack_outbox, append_jsonl_outbox_event, bootstrap, bump_outbox_attempts, poll_outbox_one, write_outbox_event
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.events.models import new_event
@@ -51,6 +51,24 @@ def _resolve_instance_id() -> str:
     except Exception:
         return _UNKNOWN_INSTANCE
 _MAX_TRANSIENT_RETRY_ATTEMPTS = 3
+
+# Upper bound on how many times the worker will crash-and-retry a single outbox row
+# whose handler raises before that row is dead-lettered (acked + audited) so it can
+# no longer block the head of the queue. A row that genuinely needs more than this
+# many attempts is treated as poison rather than transient, which prevents the
+# `processed_total=0` head-of-line stall observed on dev+prod (#2252).
+_MAX_DISPATCH_ATTEMPTS = 5
+
+
+def _resolve_max_dispatch_attempts() -> int:
+    raw = os.getenv("WORKER_MAX_DISPATCH_ATTEMPTS")
+    if raw is None:
+        return _MAX_DISPATCH_ATTEMPTS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _MAX_DISPATCH_ATTEMPTS
+    return value if value >= 1 else _MAX_DISPATCH_ATTEMPTS
 
 
 class TransientRetryEnqueueError(RuntimeError):
@@ -341,6 +359,55 @@ def _emit_retry_dead_letter(
     append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
     if _use_db_outbox():
         write_outbox_event(event)
+
+
+def _dead_letter_outbox_message(
+    topic: str | None,
+    payload: Mapping[str, Any],
+    *,
+    message_id: str,
+    reason: str,
+    attempts: int,
+    trace_id: str | None,
+    error: str,
+) -> None:
+    """Audit a poison outbox row that exceeded the dispatch-attempt budget.
+
+    Writes an ``outbox.event.dead_lettered`` record to the JSONL audit sink (and the
+    DB outbox when enabled) so the drop is observable. Best-effort: a failure here must
+    not re-block the queue, so exceptions are swallowed after logging.
+    """
+    try:
+        event = make_outbox_event(
+            OUTBOX_EVENT_DEAD_LETTERED,
+            source="worker",
+            trace_id=trace_id or str(payload.get("trace_id") or "") or None,
+            payload={
+                "original_topic": topic,
+                "original_event_id": _original_event_id(payload, None),
+                "outbox_id": message_id,
+                "reason": reason,
+                "attempts": attempts,
+                "error": error,
+            },
+        )
+        append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
+        if _use_db_outbox():
+            write_outbox_event(event)
+        logger.warning(
+            "worker dead-lettered poison outbox row topic=%s id=%s reason=%s attempts=%s",
+            topic,
+            message_id,
+            reason,
+            attempts,
+        )
+    except Exception:
+        logger.exception(
+            "worker dead-letter audit failed topic=%s id=%s reason=%s",
+            topic,
+            message_id,
+            reason,
+        )
 
 
 def _queue_transient_retry(
@@ -830,13 +897,40 @@ def run(
                             handle_note_move_workbench(payload, trace_id=trace_id)
                         else:
                             logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
-                    except Exception:
+                    except Exception as handler_exc:
                         logger.exception(
                             "worker handler failed topic=%s trace_id=%s note_path=%s",
                             topic,
                             trace_id,
                             handler_note_path or "-",
                         )
+                        # Bound retries per row so a single un-handleable (poison) event
+                        # cannot crash-loop the worker at the head of the queue and
+                        # block every following row (the processed_total=0 stall, #2252).
+                        attempts = 0
+                        try:
+                            attempts = bump_outbox_attempts(message["id"])
+                        except Exception:
+                            logger.exception(
+                                "worker failed to record dispatch attempt topic=%s id=%s",
+                                topic,
+                                message.get("id"),
+                            )
+                        if attempts and attempts >= _resolve_max_dispatch_attempts():
+                            errors_total += 1
+                            _dead_letter_outbox_message(
+                                topic,
+                                payload,
+                                message_id=str(message.get("id") or ""),
+                                reason=f"dispatch_failed:{type(handler_exc).__name__}",
+                                attempts=attempts,
+                                trace_id=None if trace_id == "-" else trace_id,
+                                error=str(handler_exc),
+                            )
+                            ack_outbox(message["id"])
+                            continue
+                        # Below the poison threshold: treat as transient and re-raise so
+                        # the supervised worker restarts and retries (at-least-once).
                         raise
 
                 ack_outbox(message["id"])

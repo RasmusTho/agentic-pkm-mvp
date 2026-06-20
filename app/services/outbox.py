@@ -311,6 +311,48 @@ def poll_outbox_one(
             conn.close()
 
 
+def bump_outbox_attempts(*args, **kwargs) -> int:
+    """Increment ``attempts`` for an undelivered row and return the new count.
+
+    Supports the same calling conventions as :func:`ack_outbox`::
+
+        bump_outbox_attempts(conn, msg_id)
+        bump_outbox_attempts(msg_id)
+
+    Returns the post-increment attempt count, or ``0`` when the row is missing or
+    already delivered. This lets the worker bound retries on a poison row instead of
+    crash-looping on it forever (head-of-line blocking).
+    """
+    if len(args) == 2:
+        conn, msg_id = args
+        close = False
+    elif len(args) == 1:
+        msg_id = args[0]
+        conn, close = _use_conn(None)
+    else:
+        conn = kwargs.get("conn")
+        msg_id = kwargs["msg_id"]
+        conn, close = _use_conn(conn)
+
+    try:
+        cur = _exec(
+            conn,
+            "update outbox set attempts = attempts + 1 where id = %s and delivered_at is null returning attempts",
+            (msg_id,),
+        )
+        if hasattr(cur, "fetchone"):
+            row = cur.fetchone()
+            if row:
+                try:
+                    return int(row[0])
+                except (TypeError, ValueError):
+                    return 0
+        return 0
+    finally:
+        if close:
+            conn.close()
+
+
 def ack_outbox(*args, **kwargs) -> bool:
     """
     Stödjer:
@@ -345,6 +387,7 @@ __all__ = [
     "insert_object_and_outbox",
     "poll_outbox_one",
     "ack_outbox",
+    "bump_outbox_attempts",
     "bootstrap",
     "event_source_name",
     "event_payload_dict",
