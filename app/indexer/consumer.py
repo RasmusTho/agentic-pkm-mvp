@@ -8,6 +8,7 @@ from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import coerce_floats
+from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
 from app.objects import ObjectStore
@@ -106,8 +107,33 @@ def process_event(evt: Dict[str, Any]) -> None:
     text = _extract_text(obj_payload)
 
     embedder = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
-    embedding = embedder.embed_text(text)
     identity = get_embedding_identity(client=embedder)
+    trace_id = str(evt.get("trace_id") or "").strip() or None
+
+    try:
+        embedding = embed_with_retry(
+            text,
+            provider=identity.provider,
+            model=identity.model,
+            dim=identity.dim,
+            normalize=identity.normalize,
+            object_id=object_id_raw,
+        )
+    except EmbedDeadLetterError as exc:
+        logger.warning(
+            "index consumer embed dead-lettered object_id=%s error=%s",
+            object_id_raw,
+            exc,
+        )
+        outbox_events.emit_index_embedding_failed(
+            object_id=object_id_raw,
+            trace_id=trace_id,
+            error=str(exc),
+            provider=identity.provider,
+            model=identity.model,
+            expected_dim=identity.dim,
+        )
+        return
 
     idx = get_vector_index()
     _purge_vectors(idx, obj_uuid)
@@ -121,7 +147,6 @@ def process_event(evt: Dict[str, Any]) -> None:
         identity=identity,
     )
 
-    trace_id = str(evt.get("trace_id") or "").strip() or None
     outbox_events.emit_index_embedding_created(object_id=obj_uuid, trace_id=trace_id)
 
 

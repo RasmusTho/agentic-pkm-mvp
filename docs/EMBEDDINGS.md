@@ -59,6 +59,20 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - Character budget for a single embedding request. The embedding layer splits input above this budget into in-budget chunks, embeds each, and mean-pools the chunk vectors before storing, so an oversized note cannot exceed the model context window and 500 the request and **no tail content is dropped** from retrieval (see *Oversized input handling*).
   - Default: `6000` (inline default in `_embedding_max_input_chars`, `app/llm/embeddings.py`) — a conservative budget for `nomic-embed-text`'s ~2k-token context window. (The former `DEFAULT_EMBED_MAX_INPUT_CHARS` constant was removed in #2113.)
   - Set to `0` (or a negative value) to disable chunking entirely.
+- `EMBED_RETRY_MAX`
+  - Maximum number of attempts per object when transient embed failures occur (HTTP 5xx, EOF, connection-reset, timeout, 408, 429).
+  - Default: `3`. Identical across dev, test, and prod — no environment-conditional branching.
+- `EMBED_RETRY_BASE_BACKOFF_S`
+  - Base sleep in seconds for exponential backoff between retry attempts. The sleep before attempt *n* is `min(base * 2^(n-1), EMBED_RETRY_MAX_BACKOFF_S)`.
+  - Default: `1.0`. At default settings the sleeps are approximately 1 s and 2 s before the second and third attempts.
+- `EMBED_RETRY_MAX_BACKOFF_S`
+  - Cap on the backoff sleep in seconds.
+  - Default: `30.0`.
+- `EMBED_QUEUE_CONCURRENCY`
+  - `ThreadPoolExecutor` bound for batch callers such as `index rebuild`. `1` means serial (safe for a memory-constrained shared Ollama). Set higher only on provisioned hardware.
+  - Default: `1`.
+
+Per-object transient failures are retried with exponential **backoff** before `index.embedding.failed` is emitted. A single object failure never aborts the ingest of the remaining objects (see *Embedding Execution Queue*, `app/llm/embed_queue.py`).
 
 ## Query vs Document embeddings (RAG invariant)
 

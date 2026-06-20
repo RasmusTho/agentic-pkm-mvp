@@ -11,6 +11,7 @@ from uuid import UUID
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
+from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry, _get_retry_max
 from app.store import object_store as legacy_store
 from app.stores import get_vector_index, resolve_store_backend
 
@@ -270,20 +271,38 @@ def rebuild(
             summary["skipped"] = int(summary["skipped"]) + 1
             continue
 
-        embedding, embed_attempts, embed_exc, embed_retryable = _attempt_with_retries(
-            lambda: client.embed_text(text),
-            retry_limit,
-        )
-        if embed_exc is not None:
+        embedding: list | None = None
+        try:
+            embedding = embed_with_retry(
+                text,
+                provider=identity.provider,
+                model=identity.model,
+                dim=identity.dim,
+                normalize=identity.normalize,
+                object_id=str(domain_obj.uuid),
+            )
+        except EmbedDeadLetterError as _dead_exc:
             _record_failure(
                 summary,
                 path,
                 identity_info,
                 domain_obj,
                 "embed",
-                embed_exc,
-                embed_attempts,
-                embed_retryable,
+                _dead_exc,
+                _get_retry_max(),
+                True,
+            )
+            continue
+        except Exception as _embed_exc:
+            _record_failure(
+                summary,
+                path,
+                identity_info,
+                domain_obj,
+                "embed",
+                _embed_exc,
+                1,
+                False,
             )
             continue
 
