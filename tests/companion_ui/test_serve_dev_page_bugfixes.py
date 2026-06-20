@@ -2,15 +2,49 @@
 
 from __future__ import annotations
 
+import threading
+from http.server import HTTPServer
 from types import SimpleNamespace
+from typing import Any
+
+import httpx
 
 from companion_ui.workspace.serve_dev_page import (
     _e,
     _is_remote_page_origin,
+    make_handler,
     _render_orientation_resurface,
     _render_portrait_sheet,
     _render_workspace_breadcrumb,
 )
+
+
+class _RouteFallbackClient:
+    def __init__(self) -> None:
+        self.get_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        self.get_calls.append((url, params))
+        if url == "/api/companion/orientation":
+            return {
+                "scope": {"kind": "workspace", "artifact_ref": None, "vault_id": "dev"},
+                "meta": {"freshness": "fresh", "degraded_reasons": []},
+            }
+        if url == "/api/companion/vault-browser":
+            return {"notes": [], "total_notes": 0, "filtered_notes": 0, "read_only": True}
+        return {}
+
+    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+
+def _start_route_fallback_server() -> tuple[HTTPServer, int, _RouteFallbackClient]:
+    client = _RouteFallbackClient()
+    handler = make_handler(client=client, api_base_url="http://127.0.0.1:18001")
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, int(server.server_address[1]), client
 
 
 def test_portrait_sheet_aria_hidden_lowercase() -> None:
@@ -75,3 +109,37 @@ def test_bracketed_ipv6_loopback_with_port_is_local() -> None:
     assert _is_remote_page_origin("example.com") is True
     assert _is_remote_page_origin("example.com:443") is True
     assert _is_remote_page_origin("[2001:db8::1]:443") is True
+
+
+def test_unknown_document_route_renders_controlled_fallback() -> None:
+    server, port, client = _start_route_fallback_server()
+    try:
+        response = httpx.get(f"http://127.0.0.1:{port}/definitely-not-a-route")
+    finally:
+        server.shutdown()
+
+    assert response.status_code == 404
+    assert "Unknown Companion UI route" in response.text
+    assert 'data-testid="workspace-error-state"' in response.text
+    assert 'data-error-kind="route-not-found"' in response.text
+    assert 'data-entry-state="no_vault"' not in response.text
+    assert 'data-testid="workspace-entry-retry"' not in response.text
+    assert 'data-testid="vault-settings-panel"' not in response.text
+    assert client.get_calls == []
+
+
+def test_unknown_document_route_is_distinguishable_from_orientation() -> None:
+    server, port, client = _start_route_fallback_server()
+    try:
+        unknown = httpx.get(f"http://127.0.0.1:{port}/definitely-not-a-route")
+        root = httpx.get(f"http://127.0.0.1:{port}/")
+        workspace = httpx.get(f"http://127.0.0.1:{port}/workspace?note_path=Some%2FNote.md")
+    finally:
+        server.shutdown()
+
+    assert unknown.status_code == 404
+    assert 'data-route-error="unknown-document-route"' in unknown.text
+    assert root.status_code == 200
+    assert "Unknown Companion UI route" not in root.text
+    assert workspace.status_code == 200
+    assert any(call == ("/api/companion/workspace", {"note_path": "Some/Note.md"}) for call in client.get_calls)
