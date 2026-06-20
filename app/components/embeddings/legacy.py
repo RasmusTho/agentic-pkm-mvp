@@ -14,7 +14,7 @@ from typing import Iterable, Iterator, Protocol, Sequence
 
 from app.embedding_config import get_embed_dim
 from app.index import embeddings as _index_embeddings
-from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provider
+from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provider, get_primary_provider
 from app.settings.runtime import get_settings_bundle
 
 _MOCK_EMBED_MODEL = "mock-embedding"
@@ -196,9 +196,17 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         cfg = profiles_map.get(low)
         if not cfg:
             continue
-        # Precedence: override_provider > profile.primary_provider > profile.provider > env
+        # Precedence: override_provider > EMBED_PRIMARY_PROVIDER (env) > profile.primary_provider
+        # > profile.provider > LLM_PROVIDER. The env override must win over the legacy
+        # profile.provider default ("mock"), otherwise EMBED_PRIMARY_PROVIDER is inert for
+        # profiled clients (Codex P2). When the env is unset, profile fields are honored as
+        # before (no regression).
+        env_primary = os.getenv("EMBED_PRIMARY_PROVIDER", "").strip().lower() or None
         profile_provider = (
-            getattr(cfg, "primary_provider", None) or cfg.provider or get_embedding_provider()
+            env_primary
+            or getattr(cfg, "primary_provider", None)
+            or cfg.provider
+            or get_embedding_provider()
         )
         provider = _resolve_embedding_provider_name(override_provider or profile_provider)
         model = _resolve_embedding_model(provider, override_model, cfg.model)
@@ -206,7 +214,8 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         normalize = cfg.normalize if cfg.normalize is not None else True
         return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize)
 
-    provider = _resolve_embedding_provider_name(override_provider or get_embedding_provider())
+    # No profile matched: honor EMBED_PRIMARY_PROVIDER (env) > LLM_PROVIDER (Codex P2).
+    provider = _resolve_embedding_provider_name(override_provider or get_primary_provider())
     model = _resolve_embedding_model(provider, override_model)
     dim = get_embed_dim()
     return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=True)

@@ -324,6 +324,55 @@ def test_resolve_embedding_identity_prefers_primary_provider_field(monkeypatch) 
     assert identity2.provider == "mock"
 
 
+def test_embed_text_default_dispatch_honors_primary_provider(monkeypatch) -> None:
+    """embed_text(provider=None) routes through EMBED_PRIMARY_PROVIDER, not just
+    LLM_PROVIDER (Codex P2). With EMBED_PRIMARY_PROVIDER=mock and LLM_PROVIDER=ollama
+    (no OLLAMA_URL), the default dispatch must embed via mock — if it fell through to
+    LLM_PROVIDER=ollama it would raise for a missing base URL."""
+    from app.config import llm as llm_config
+
+    for key in ("OLLAMA_BASE_URL", "OLLAMA_URL", "OLLAMA_HOST", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "8")
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+    embeddings._embed_single.cache_clear()
+
+    text = "primary-provider-default-dispatch"
+    result = embeddings.embed_text(text, normalize=False)
+    assert tuple(result) == tuple(_mock_vector(text, dim=8))
+
+
+def test_resolve_identity_env_overrides_profiled_mock(monkeypatch) -> None:
+    """EMBED_PRIMARY_PROVIDER (env) overrides a profiled client whose provider
+    defaults to 'mock' and whose primary_provider is unset (Codex P2). Without the
+    fix, profile.provider='mock' shadows the env and the override is inert."""
+    from unittest.mock import MagicMock
+
+    from app.components.embeddings import resolve_embedding_identity
+    from app.settings import runtime as settings_runtime
+    from app.settings.models import EmbeddingProfile, EmbeddingProfiles
+
+    profile = EmbeddingProfile(provider="mock", model="nomic-embed-text:latest", dim=4)
+    profiles = EmbeddingProfiles(default_profile="default", profiles={"default": profile})
+    bundle = MagicMock()
+    bundle.embedding_profiles = profiles
+    bundle.global_ = MagicMock()
+    bundle.global_.profile = None
+
+    monkeypatch.setenv("EMBED_DIM", "4")
+    monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    monkeypatch.delenv("EMBED_PROFILE", raising=False)
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "ollama")
+    monkeypatch.setattr(settings_runtime, "_CURRENT", bundle)
+
+    identity = resolve_embedding_identity(profile="default")
+    assert identity.provider == "ollama", (
+        f"EMBED_PRIMARY_PROVIDER=ollama must override profiled provider='mock', got {identity.provider!r}"
+    )
+
+
 def test_gemini_name_not_normalized_to_mock() -> None:
     """_resolve_embedding_provider_name('gemini') returns 'gemini', not 'mock'."""
     from app.components.embeddings.legacy import _resolve_embedding_provider_name

@@ -311,7 +311,10 @@ def embed_text(
     dim: int | None = None,
     normalize: bool = True,
 ) -> List[float]:
-    provider_val = provider or _provider()
+    # Default dispatch honors EMBED_PRIMARY_PROVIDER (falling back to LLM_PROVIDER);
+    # otherwise setting EMBED_PRIMARY_PROVIDER while LLM_PROVIDER=mock would still
+    # embed via mock (Codex P2). Explicit provider= callers are unaffected.
+    provider_val = provider or get_primary_provider()
     if model:
         model_val = model
     elif provider_val == "mock":
