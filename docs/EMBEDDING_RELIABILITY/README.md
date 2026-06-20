@@ -24,7 +24,7 @@ This capability does **not** change the renderer, retrieval ranking, or the obje
 See [OPERATOR_EGRESS_DECISION.md](OPERATOR_EGRESS_DECISION.md). The operator chose **Ollama-primary + Google Gemini auto-fallback** (over local-only-Colima-bump and Gemini-primary):
 
 - Ollama stays primary. Gemini is tried **only when the Ollama path fails after retries**.
-- Gemini is pinned to a **dimension-matched** model: `text-embedding-004` @ **768** to match the existing index dim. Mixed dims are forbidden.
+- Gemini is pinned to a **dimension-matched** model: `gemini-embedding-001` with `output_dimensionality=768` (L2-renormalized) to match the existing index dim. Mixed dims are forbidden.
 - Real vault note content egresses to Google **only on fallback** (when Ollama is down). A local-only configuration stays viable (no Gemini key set ⇒ no egress, fallback is a no-op).
 - A fallback-written index is **mixed-identity** and must be reconciled by a re-index under the primary identity once Ollama recovers. Auto-fallback is a *bridge for ingest progress*, not a permanent split.
 - The Colima 4→8 GB local fix was evaluated and **not chosen** (it restarts the shared dev+prod VM); it is recorded as the rejected alternative, not executed.
@@ -36,7 +36,7 @@ Ordered, independently mergeable slices. `→` denotes a hard dependency.
 1. [OPERATOR_EGRESS_DECISION.md](OPERATOR_EGRESS_DECISION.md) — record the egress/provider-default decision (docs/ADR). *No code deps; land first as the governing decision the rest reference.*
 2. [EMBEDDING_EXECUTION_QUEUE.md](EMBEDDING_EXECUTION_QUEUE.md) — bounded-concurrency + backoff + per-object dead-letter execution primitive. *Independent; highest reliability value; can run parallel with (3).*
 3. [PLUGGABLE_PROVIDER_REGISTRY.md](PLUGGABLE_PROVIDER_REGISTRY.md) — formalize the provider registry behind `EmbeddingClientProtocol` + primary/fallback selection config. *Independent; parallel with (2).*
-4. [GOOGLE_GEMINI_ADAPTER.md](GOOGLE_GEMINI_ADAPTER.md) — Gemini `text-embedding-004` @ 768 adapter + secret handling. *→ (3).*
+4. [GOOGLE_GEMINI_ADAPTER.md](GOOGLE_GEMINI_ADAPTER.md) — Gemini `gemini-embedding-001` with `output_dimensionality=768` adapter + secret handling. *→ (3).*
 5. [PROVIDER_FALLBACK_ORCHESTRATION.md](PROVIDER_FALLBACK_ORCHESTRATION.md) — wire Ollama-primary → Gemini-fallback into the queue path, with identity tagging of fallback writes. *→ (2), (3), (4).*
 6. [DIMENSION_CONSISTENCY_AND_REINDEX.md](DIMENSION_CONSISTENCY_AND_REINDEX.md) — per-vector identity recording, mixed-identity detection in `index doctor`, reconcile/re-index migration, and the `docs/EMBEDDINGS.md` fallback-rule update. *→ (5).*
 
@@ -47,7 +47,7 @@ Parallelizable pairs: {1}, {2,3} together, then {4}, then {5}, then {6}.
 These hold *across* tasks and name the partial-failure seams.
 
 - **CTI-1 — One steady-state identity per index.** At rest, every vector in an index shares one `EmbeddingIdentity (provider, model, dim, normalize)`. The dim guardrail (`EMBED_DIM=768`) is enforced for *every* provider (Ollama and Gemini) — a provider returning a non-768 vector fails that object (existing `assert_embed_dim` behavior), never silently resizes or mixes dims.
-- **CTI-2 — Fallback is non-terminal.** A Gemini-fallback write produces a vector tagged with the **Gemini identity**, which differs from the Ollama primary identity even at equal dim (nomic and text-embedding-004 occupy different vector spaces; cosine scores across them are meaningless). The index is therefore **mixed** after any fallback. A fallback write is recorded as **reconcilable**, not done. The seam: *task 5 may write a fallback vector that task 6 must later re-embed under the primary identity.* If task 6 never runs, retrieval over fallback-written notes is degraded — task 6 owns convergence and `index doctor` surfaces the drift loudly.
+- **CTI-2 — Fallback is non-terminal.** A Gemini-fallback write produces a vector tagged with the **Gemini identity**, which differs from the Ollama primary identity even at equal dim (nomic and gemini-embedding-001 occupy different vector spaces; cosine scores across them are meaningless). The index is therefore **mixed** after any fallback. A fallback write is recorded as **reconcilable**, not done. The seam: *task 5 may write a fallback vector that task 6 must later re-embed under the primary identity.* If task 6 never runs, retrieval over fallback-written notes is degraded — task 6 owns convergence and `index doctor` surfaces the drift loudly.
 - **CTI-3 — Query uses the primary identity.** The ASK/retrieval path always embeds the query with the **primary** identity, never the fallback. Fallback-written document vectors are knowingly-degraded matches until reconciled; this is acceptable as a temporary availability bridge and must be visible (doctor/preflight), never silent.
 - **CTI-4 — Secret-gated egress.** Gemini is available only when its key (`GEMINI_API_KEY` / `GOOGLE_API_KEY`) is present. Absent key ⇒ Gemini provider is unavailable ⇒ fallback is a no-op that surfaces `index.embedding.failed` for that object (never crashes the worker, never logs the key or note content beyond existing provenance fields). This keeps a local-only deployment fully viable.
 - **CTI-5 — Backpressure precedes fallback.** The queue exhausts bounded retry-with-backoff against the **primary** provider before declaring a primary failure and consulting fallback. Backoff (not just concurrency=1) is what lets a crashed Ollama runner reload between attempts. Fallback is the last resort, not the first retry.
@@ -59,7 +59,7 @@ If these invariants cannot be stated for a re-cut of the slices, the slice bound
 
 - [ ] A full ~63-note vault ingest completes with the local Ollama primary + queue (bounded concurrency + backoff) without aborting the ingest, even when individual embeds transiently fail.
   - Verify: runtime receipt on the parent issue — `index rebuild` / ingest output showing processed >= 1 and the corpus embedded; failing-object count surfaced rather than aborting.
-- [ ] With a Gemini key configured, an induced Ollama failure routes the affected objects to Gemini (`text-embedding-004` @ 768) and the ingest still completes; without a key, fallback is a no-op and the run degrades gracefully (no crash, `index.embedding.failed` emitted).
+- [ ] With a Gemini key configured, an induced Ollama failure routes the affected objects to Gemini (`gemini-embedding-001` with `output_dimensionality=768`, L2-renormalized) and the ingest still completes; without a key, fallback is a no-op and the run degrades gracefully (no crash, `index.embedding.failed` emitted).
   - Verify: `tests/llm/test_provider_fallback*.py` (behavioral) + runtime receipt.
 - [ ] Dimension consistency is enforced across providers and mixed-identity indexes are detectable and reconcilable.
   - Verify: `tests/.../test_dimension_consistency*.py` + `index doctor` mixed-identity detection test + `docs/EMBEDDINGS.md` fallback-rule update anchor.

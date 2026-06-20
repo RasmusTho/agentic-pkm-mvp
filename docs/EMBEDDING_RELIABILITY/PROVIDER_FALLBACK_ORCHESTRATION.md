@@ -132,22 +132,28 @@ joins those already-shipped primitives.
 ### Happy path — Ollama down, Gemini key configured
 
 Preconditions: `GEMINI_API_KEY` set, `EMBED_FALLBACK_PROVIDER=gemini`,
-`EMBED_DIM=768`, Ollama unreachable or OOM-crashed.
+`EMBED_DIM=768`, Ollama unreachable or OOM-crashed, pg backend populated with
+at least one object (or use the in-process seed approach — see `## How to Verify`).
 
 ```
 $ OLLAMA_HOST=http://127.0.0.1:19999 GEMINI_API_KEY=<key> \
     EMBED_FALLBACK_PROVIDER=gemini EMBED_RETRY_MAX=1 \
     EMBED_RETRY_BASE_BACKOFF_S=0.1 \
-    python -m app.cli.entrypoint index rebuild --backend memory --json
+    python -m app.cli.entrypoint index rebuild --backend pg --json
 ```
 
+Note: `--backend memory` loads an **empty** in-memory object store in a fresh
+process and exits with `processed=0` before any embedding call is made — it
+cannot exercise the fallback path. Use `--backend pg` with a populated object
+store, or the in-process seed script described in `## How to Verify`.
+
 Expected observable properties:
-- `processed=N` (all objects embedded, ingest not aborted).
+- `processed >= 1` (objects embedded, ingest not aborted).
 - Outbox JSONL contains `index.object.embedded` records with
   `provenance.provider="gemini"` and `meta.fallback_used=true` for every
   object that hit fallback.
 - VectorIndex rows for those objects carry `identity.provider="gemini"`,
-  `identity.model="text-embedding-004"`, `identity.dim=768`,
+  `identity.model="gemini-embedding-001"`, `identity.dim=768`,
   `tags.reconcile="pending"` (the RECONCILABLE marker).
 - Log lines: `embed_with_fallback: primary exhausted, trying fallback provider=gemini object_id=<uuid>`
   for each fallback invocation.
@@ -242,7 +248,7 @@ rankings across different embedding spaces. Both are enforced here.
 
 - [ ] **AC6 — Fallback vector tagged with Gemini identity in upsert.**
   When fallback succeeds, `vector_index.upsert` is called with
-  `identity.provider="gemini"`, `identity.model="text-embedding-004"`,
+  `identity.provider="gemini"`, `identity.model="gemini-embedding-001"`,
   `identity.dim=768` — not the primary (Ollama) identity.
   Verify: `tests/indexer/test_provider_fallback_indexer.py::test_fallback_upsert_uses_gemini_identity`
   — asserts the `identity` kwarg passed to the mock `vector_index.upsert` has
@@ -321,23 +327,62 @@ pytest tests/indexer/test_embed_queue_consumer.py -x
 
 **Integration smoke (local, requires Ollama and a Gemini key):**
 
+The `--backend memory` flag loads an empty in-memory object store in a fresh process, so `index rebuild` exits with `processed=0` before any embedding call — it cannot exercise the fallback path or produce `index.object.embedded` records. Use one of the following alternatives instead:
+
+**Option A — pg backend (populated object store):**
+
 ```bash
-# Induce Ollama failure via bad URL; confirm fallback routes to Gemini and
-# ingest completes without crash; check outbox JSONL for fallback_used=true:
+# Requires a running pg instance with objects already ingested (e.g. from a
+# prior 'index rebuild --backend pg' run that wrote to store_objects).
+# Induce Ollama failure via bad URL; confirm fallback routes to Gemini:
 OLLAMA_HOST=http://127.0.0.1:19999 GEMINI_API_KEY=<real-key> \
   EMBED_FALLBACK_PROVIDER=gemini EMBED_RETRY_MAX=1 \
   EMBED_RETRY_BASE_BACKOFF_S=0.1 \
-  python -m app.cli.entrypoint index rebuild --backend memory --json
-# Expected: JSON summary processed=0 (empty memory backend), no exception,
-#   outbox JSONL contains index.object.embedded with provenance.provider="gemini"
+  python -m app.cli.entrypoint index rebuild --backend pg --json
+# Expected: JSON summary processed >= 1 (at least one object from store_objects),
+#   outbox JSONL contains index.object.embedded records with
+#   provenance.provider="gemini" and meta.fallback_used=true for each
+#   object that hit fallback; no exception raised.
 
 # No-key path: confirm graceful dead-letter with no Gemini egress:
 OLLAMA_HOST=http://127.0.0.1:19999 \
   EMBED_FALLBACK_PROVIDER=gemini EMBED_RETRY_MAX=1 \
-  python -m app.cli.entrypoint index rebuild --backend memory --json
-# Expected: JSON summary with error_count = total_objects, no exception,
-#   outbox JSONL contains index.embedding.failed for each object
+  python -m app.cli.entrypoint index rebuild --backend pg --json
+# Expected: JSON summary processed=0, error_count >= 1, no exception,
+#   outbox JSONL contains index.embedding.failed for each object.
 ```
+
+**Option B — in-process seed (no pg required):**
+
+```python
+# smoke_fallback.py — seed two DomainObjects into the memory store,
+# then run the ingest in the same process so the fallback path exercises
+# real embedding calls.
+import os, asyncio
+from app.stores.memory import MemoryObjectStore
+from app.domain.objects import DomainObject
+from app.indexer.consumer import run_ingest_from_store
+
+store = MemoryObjectStore()
+store.save(DomainObject(id="obj-1", text="Hello world"))
+store.save(DomainObject(id="obj-2", text="Agentic PKM system"))
+
+# Point Ollama at a bad address to force fallback:
+os.environ["OLLAMA_HOST"] = "http://127.0.0.1:19999"
+os.environ["GEMINI_API_KEY"] = "<real-key>"
+os.environ["EMBED_FALLBACK_PROVIDER"] = "gemini"
+os.environ["EMBED_RETRY_MAX"] = "1"
+os.environ["EMBED_RETRY_BASE_BACKOFF_S"] = "0.1"
+
+result = asyncio.run(run_ingest_from_store(store))
+print(result)
+# Expected: processed=2, outbox JSONL shows fallback_used=true for both objects.
+```
+
+Run one of the above and verify:
+- `processed >= 1` (objects embedded, ingest not aborted).
+- Outbox JSONL contains `index.object.embedded` with `provenance.provider="gemini"` and `meta.fallback_used=true` for fallback-routed objects.
+- Log lines include `embed_with_fallback: primary exhausted, trying fallback provider=gemini object_id=<uuid>`.
 
 **CI gate:**
 

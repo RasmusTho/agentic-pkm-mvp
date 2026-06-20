@@ -10,7 +10,7 @@ The ingest/index substrate was repaired (#2242 children #2252/#2253/#2254), but 
 
 ## Scope
 
-Outcome boundary (not one PR): a bounded-concurrency embedding queue with backpressure + retry-with-backoff + per-object dead-letter; a formalized pluggable provider registry; a Google Gemini adapter (`text-embedding-004` @ 768) with env-only secrets; Ollama→Gemini fallback orchestration; and dimension-consistency + mixed-identity detection + a reconcile/re-index migration. See the specification directory `docs/EMBEDDING_RELIABILITY/`.
+Outcome boundary (not one PR): a bounded-concurrency embedding queue with backpressure + retry-with-backoff + per-object dead-letter; a formalized pluggable provider registry; a Google Gemini adapter (`gemini-embedding-001` with `output_dimensionality=768`, L2-renormalized) with env-only secrets; Ollama→Gemini fallback orchestration; and dimension-consistency + mixed-identity detection + a reconcile/re-index migration. See the specification directory `docs/EMBEDDING_RELIABILITY/`.
 
 ## Source Anchors
 - `docs/EMBEDDING_RELIABILITY/README.md :: Capability boundary`
@@ -27,7 +27,7 @@ Outcome boundary (not one PR): a bounded-concurrency embedding queue with backpr
 ## Acceptance Criteria
 - [ ] A full ~63-note vault ingest completes under Ollama primary + queue without aborting, surfacing failed-object counts instead of crashing.
   - Verify: runtime receipt on this issue — `index rebuild` output showing processed >= 1 and corpus embedded.
-- [ ] With a Gemini key, induced Ollama failure routes affected objects to Gemini (768) and the ingest completes; without a key, fallback is a graceful no-op (no crash, `index.embedding.failed` emitted).
+- [ ] With a Gemini key, induced Ollama failure routes affected objects to Gemini (`gemini-embedding-001` with `output_dimensionality=768`, L2-renormalized) and the ingest completes; without a key, fallback is a graceful no-op (no crash, `index.embedding.failed` emitted).
   - Verify: `tests/llm/test_provider_fallback.py` + `tests/indexer/test_provider_fallback_indexer.py` (behavioral) + runtime receipt.
 - [ ] Dimension consistency enforced across providers; mixed-identity indexes are detectable (`index doctor`) and reconcilable (re-index).
   - Verify: `tests/cli/test_index_reconcile.py` + `tests/indexer/test_mixed_identity_detection.py` + `docs/EMBEDDINGS.md :: Fallback rule` anchor.

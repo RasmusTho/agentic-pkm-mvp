@@ -25,7 +25,7 @@ Adds this decision record and updates the embedding owner doc to reflect the cho
 
 - Ollama (`nomic-embed-text:latest`, dim 768) stays the **primary** embedding provider.
 - Google **Gemini** is invoked **only when the Ollama path fails after the queue's bounded retry-with-backoff**.
-- Gemini is pinned to a **dimension-matched** model — `text-embedding-004` @ **768** — to match the existing index dim. Mixing dims is forbidden (it corrupts the vector index).
+- Gemini is pinned to a **dimension-matched** model — `gemini-embedding-001` with `output_dimensionality=768` (L2-renormalized) — to match the existing index dim. Mixing dims is forbidden (it corrupts the vector index). Note: `text-embedding-004` was retired (deprecated January 14, 2026); the active model is `gemini-embedding-001`, which defaults to 3072 dims but supports `output_dimensionality` down to 128 — this capability pins it at 768 via that parameter.
 - Data egress boundary: real vault note content is sent to Google **only on fallback** (when Ollama is unavailable). Steady-state, embeddings stay local.
 - **Local-only stays viable:** if no Gemini key is configured, the Gemini provider is unavailable and fallback is a no-op (the object surfaces `index.embedding.failed`; nothing egresses).
 - A fallback-written index is **mixed-identity** and must be reconciled by a re-index under the primary identity once Ollama recovers (see [DIMENSION_CONSISTENCY_AND_REINDEX.md](DIMENSION_CONSISTENCY_AND_REINDEX.md)).
