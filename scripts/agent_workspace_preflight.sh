@@ -52,4 +52,10 @@ if [[ "$ALLOW_DIRTY" -eq 1 ]]; then
   ARGS+=(--allow-dirty)
 fi
 
+# Parallel-agent safety: refuse to run in the shared root worktree by default
+# (AGENTS.md :: Parallel-agent execution). Set PKM_ALLOW_SHARED_ROOT=1 for deliberate solo work in the root.
+if [[ "${PKM_ALLOW_SHARED_ROOT:-0}" != "1" ]]; then
+  ARGS+=(--require-dedicated-worktree)
+fi
+
 python3 scripts/git_hygiene_preflight.py "${ARGS[@]}"

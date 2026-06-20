@@ -1366,3 +1366,77 @@ def test_preflight_require_dedicated_worktree_passes_in_linked_worktree(
 
     assert report["ok"] is True
     assert report["checks"]["shared_root_worktree"] is False
+
+
+# ---------------------------------------------------------------------------
+# CLI exit-code tests for --require-dedicated-worktree
+# ---------------------------------------------------------------------------
+
+
+def _make_clean_fake_run_git(tmp_path, git_dir):
+    """Minimal fake_run_git for a clean worktree with no branch/worktree args expected."""
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["status", "--porcelain"]:
+            return ""
+        if args == ["branch", "--show-current"]:
+            return "feature/z"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["rev-parse", "--git-dir"]:
+            return str(git_dir)
+        raise AssertionError(f"unexpected git command: {args}")
+
+    return fake_run_git
+
+
+def test_cli_require_dedicated_worktree_nonzero_in_shared_root(
+    tmp_path, monkeypatch
+) -> None:
+    """main() returns a non-zero exit code when --require-dedicated-worktree is
+    passed and in_shared_root() is True (simulates running in the shared root)."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _make_clean_fake_run_git(tmp_path, git_dir))
+    monkeypatch.setattr(git_hygiene, "in_shared_root", lambda *_a, **_kw: True)
+
+    exit_code = git_hygiene.main(
+        ["--cwd", str(tmp_path), "preflight", "--require-dedicated-worktree"]
+    )
+
+    assert exit_code != 0, "Expected non-zero exit when in the shared root worktree"
+
+
+def test_cli_require_dedicated_worktree_zero_in_linked_worktree(
+    tmp_path, monkeypatch
+) -> None:
+    """main() returns 0 when --require-dedicated-worktree is passed but
+    in_shared_root() returns False (linked/dedicated worktree)."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _make_clean_fake_run_git(tmp_path, git_dir))
+    monkeypatch.setattr(git_hygiene, "in_shared_root", lambda *_a, **_kw: False)
+
+    exit_code = git_hygiene.main(
+        ["--cwd", str(tmp_path), "preflight", "--require-dedicated-worktree"]
+    )
+
+    assert exit_code == 0, "Expected zero exit when in a dedicated worktree"
+
+
+def test_cli_without_require_flag_zero_even_if_in_shared_root(
+    tmp_path, monkeypatch
+) -> None:
+    """When --require-dedicated-worktree is absent, main() returns 0 regardless
+    of whether the cwd is the shared root (library default stays off)."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    monkeypatch.setattr(git_hygiene, "run_git", _make_clean_fake_run_git(tmp_path, git_dir))
+    monkeypatch.setattr(git_hygiene, "in_shared_root", lambda *_a, **_kw: True)
+
+    exit_code = git_hygiene.main(["--cwd", str(tmp_path), "preflight"])
+
+    assert exit_code == 0, "Expected zero exit when flag is absent (library default is off)"
