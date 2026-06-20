@@ -51,13 +51,24 @@ class GeminiUnavailableError(RuntimeError):
     a no-op rather than a retryable failure.
     """
 
+    is_transient = False
+
 
 class GeminiTransientError(RuntimeError):
-    """Raised for HTTP 429, 5xx, or network-level errors (retry-eligible)."""
+    """Raised for HTTP 429, 5xx, or network-level errors (retry-eligible).
+
+    Carries the ``is_transient = True`` marker so the embedding queue's
+    ``_is_transient_embed_error`` retries/backs-off these even though this is an
+    app-local class with no httpx response/chain (HTTP 429/5xx path).
+    """
+
+    is_transient = True
 
 
 class GeminiAuthError(RuntimeError):
     """Raised for HTTP 4xx auth / bad-key responses (non-transient)."""
+
+    is_transient = False
 
 
 # ---------------------------------------------------------------------------

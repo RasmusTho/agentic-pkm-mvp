@@ -403,3 +403,28 @@ def test_gemini_embed_one_no_key_raises_unavailable(monkeypatch: pytest.MonkeyPa
     _unset_keys(monkeypatch)
     with pytest.raises(GeminiUnavailableError):
         _gemini_embed_one("text", model=_MODEL, dim=_DIM, timeout=_TIMEOUT)
+
+
+# ---------------------------------------------------------------------------
+# Queue transient-classification integration (Codex review on PR #2302)
+# ---------------------------------------------------------------------------
+
+def test_gemini_transient_error_classified_transient_by_queue() -> None:
+    """GeminiTransientError (HTTP 429/5xx — no httpx chain) must be recognized as
+    transient by the embedding queue, so it is retried/backed-off rather than
+    dead-lettered. Guards the adapter↔queue integration."""
+    from app.llm.embed_queue import _is_transient_embed_error
+
+    assert _is_transient_embed_error(GeminiTransientError("Gemini embedContent HTTP 503")) is True
+    # Chained form (e.g. wrapped) is also recognized via __cause__.
+    wrapped = RuntimeError("outer")
+    wrapped.__cause__ = GeminiTransientError("HTTP 429")
+    assert _is_transient_embed_error(wrapped) is True
+
+
+def test_gemini_auth_and_unavailable_not_transient() -> None:
+    """Auth/unavailable errors are non-transient — the queue must not retry them."""
+    from app.llm.embed_queue import _is_transient_embed_error
+
+    assert _is_transient_embed_error(GeminiAuthError("Gemini embedContent HTTP 403")) is False
+    assert _is_transient_embed_error(GeminiUnavailableError("no key")) is False
