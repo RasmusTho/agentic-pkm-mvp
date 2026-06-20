@@ -24,7 +24,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Acceptance Criteria must carry `Verify:` markers:
      - The primary behavioral AC ("bug no longer reproduces") points to a regression test the fix will add: `Verify: \`tests/<path>::test_<bug_name>\`` — the test should fail against current code and go green after the fix.
      - Any non-behavioral AC (doc clarifications, roadmap/status wording) points to its observable target.
-     - If the bug cannot yet be expressed as a failing test (e.g., the repro is environment-dependent or requires instrumentation that does not exist), mark `agent:needs-human` rather than `agent:ready`.
+     - If the bug is real, bounded, and reversible but hard to express as a failing test, that escalates the test-strategy *effort* (higher reasoning per `AGENTS.md :: Total Cost of Development`), not the agent state — keep `agent:ready` and let the implementing agent design the regression test. Reserve `agent:needs-human` only for a repro that genuinely cannot be exercised without a human decision or external access the agent lacks (per `AGENTS.md :: Agency default`).
 4. Labels:
    - Always add `type:bug`.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.

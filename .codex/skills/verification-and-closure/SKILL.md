@@ -207,7 +207,7 @@ Lead with the human summary; include later sections only when they have content,
 
 AC-by-AC resolution: state whether each `Verify:` target resolves green and why.
 
-Alongside the AC-by-AC verdict, emit a `tcd_review` block (fields per `AGENTS.md :: Total Cost of Development`): verdict, risk_level, blocking vs non-blocking issues, missing tests, residual risk, and under/over-modeling. Use the same policy for when to escalate verification depth versus stay on the hot path; do not restate the triggers or any model matrix here.
+For Tier-2/Tier-3 work, alongside the AC-by-AC verdict, emit a `tcd_review` block (fields per `AGENTS.md :: Total Cost of Development`): verdict, risk_level, blocking vs non-blocking issues, missing tests, residual risk, and under/over-modeling. On Tier-1 / trivial / docs-only verifications a one-line capability + residual-risk note suffices — do not pay a fixed audit-block tax on cheap work. Use the same policy for when to escalate verification depth versus stay on the hot path; do not restate the triggers or any model matrix here.
 
 ### 3. State Changes Executed
 
