@@ -456,3 +456,31 @@ def test_gemini_embed_one_ignores_non_gemini_model(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("EMBED_GEMINI_MODEL", "gemini-embedding-001")
     _gemini_embed_one("hello", model="", dim=_DIM, timeout=_TIMEOUT)
     assert captured["model"] == "gemini-embedding-001"
+
+
+def test_error_classification_408_is_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HTTP 408 (request timeout) is retryable, matching the shared transient
+    classifier — not a non-transient auth error (Codex P2, #2302)."""
+    _set_key(monkeypatch)
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _make_error_response(408))
+    with pytest.raises(GeminiTransientError):
+        embed_gemini_text("text", model=_MODEL, dim=_DIM, timeout=_TIMEOUT)
+
+
+def test_gemini_provider_identity_uses_gemini_model() -> None:
+    """When provider=gemini, the resolved embedding model is a Gemini model — never
+    the index's generic EMBED_MODEL — so the persisted identity matches the vector
+    actually produced (Codex P1 provenance, #2302)."""
+    from app.components.embeddings.legacy import _resolve_embedding_model
+
+    # generic/index model passed in → replaced with the Gemini default
+    assert _resolve_embedding_model("gemini", None, "nomic-embed-text:latest") == "gemini-embedding-001"
+    # explicit Gemini override honored
+    assert _resolve_embedding_model("gemini", "gemini-embedding-2", None) == "gemini-embedding-2"
+
+
+def test_gemini_provider_identity_respects_embed_gemini_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.components.embeddings.legacy import _resolve_embedding_model
+
+    monkeypatch.setenv("EMBED_GEMINI_MODEL", "gemini-embedding-001")
+    assert _resolve_embedding_model("gemini", None, "nomic-embed-text:latest") == "gemini-embedding-001"

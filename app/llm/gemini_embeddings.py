@@ -207,7 +207,9 @@ def embed_gemini_text(
         summary = f"Gemini embedContent HTTP {status}"
         if detail:
             summary = f"{summary}: {detail}"
-        if status == 429 or status >= 500:
+        if status in (408, 429) or status >= 500:
+            # 408 (request timeout) and 429 (rate limit) are retryable, matching the
+            # shared transient classifier (app/workers/outbox_worker.py).
             raise GeminiTransientError(summary)
         # 401, 403, 400 (bad key), and any other 4xx → auth / config error
         raise GeminiAuthError(summary)

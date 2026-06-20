@@ -136,6 +136,16 @@ def _resolve_embedding_provider_name(value: str | None) -> str:
 def _resolve_embedding_model(provider: str, override_model: str | None, configured_model: str | None = None) -> str:
     if provider == "mock":
         return _MOCK_EMBED_MODEL
+    if provider == "gemini":
+        # When gemini is selected (EMBED_PRIMARY_PROVIDER=gemini or the fallback path),
+        # the identity MUST carry a Gemini model, not the index's generic EMBED_MODEL
+        # (e.g. nomic-embed-text). Otherwise the vector is produced by gemini-embedding-001
+        # but upserted/emitted under the wrong model, corrupting provenance for
+        # mixed-identity detection + reconcile (CTI-1 / EMBEDREL-06). Honor an explicit
+        # Gemini override; else EMBED_GEMINI_MODEL; else the gemini-embedding-001 default.
+        if override_model and "gemini" in override_model.lower():
+            return override_model
+        return _normalize_name(os.getenv("EMBED_GEMINI_MODEL")) or "gemini-embedding-001"
     if override_model:
         return override_model
     if configured_model:
