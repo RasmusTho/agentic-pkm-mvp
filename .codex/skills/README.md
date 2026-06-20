@@ -166,3 +166,26 @@ lease check, then keep the rest of execution local and deterministic.
 - `scripts/git_hygiene_janitor.py` (a report-first entrypoint to `scripts/git_hygiene.py`) is the
   cold-path cleanup helper. It must respect active leases and must not perform destructive cleanup
   automatically in v1. This is a script, not a skill.
+
+## Cross-cutting invariant: Total Cost of Development (capability routing)
+
+Capability routing across the whole chain follows `AGENTS.md :: Total Cost of Development`: each
+stage picks the cheapest *acceptable* capability (workflow/skill + model + reasoning effort + context
+discipline + tools + verification + review gate) for the lowest expected total cost per accepted
+delivery — human time at 100 USD/hour is the dominant term, and x5 Codex/Claude budget pressure is
+medium-low but not zero. Choose model and reasoning effort actively. The escalation/de-escalation
+triggers and the Claude/Codex model-and-reasoning policy live once in `AGENTS.md`, not in each skill.
+
+The policy attaches to the stages that actually choose capability; it does not change the chain:
+
+- Decompose / plan (`feature-breakdown`, `deliver-issue-set`): emit a `tcd_plan` and route the
+  serial-vs-parallel sub-agent decision by expected total cost.
+- Implement (`agentic-pkm`, `issue-to-code`): pick model, reasoning, and escalation from the plan's
+  risk, artifact class, and environment/channel risk.
+- Integrate / verify (`pr-integration`, `verification-and-closure`): scale review and verification
+  depth to risk, and emit a `tcd_review`.
+- Retrospect (`learning-retrospective`): emit a `tcd_retrospective` when a learning cluster shows a
+  routing mistake, and feed the fix back into `AGENTS.md`.
+
+Mechanical, deterministic, or operator-gated skills (publication, promotion and rollback, issue/bug/
+learning intake, docs and backlog maintenance) do not choose capability and carry no TCD block.

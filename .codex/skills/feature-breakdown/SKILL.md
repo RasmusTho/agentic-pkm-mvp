@@ -274,6 +274,7 @@ Branch-truth gate (mandatory, same canonical gate as every lane) [branch-truth-g
 7. Evidence Surface
 8. Execution Order
 9. GitHub Receipts
+10. TCD Plan — emit a `tcd_plan` (fields and policy per `AGENTS.md :: Total Cost of Development`; do not restate them here). Tie complexity, verification difficulty, defect blast radius, parallelization (`can_parallelize_with`), and review gate to the slice cuts and per-AC verification depth decided above, and record the cheapest acceptable capability per child task so downstream `issue-to-code` routes model and reasoning honestly.
 
 When creating issues, include:
 

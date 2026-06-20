@@ -107,6 +107,120 @@ Before editing, classify the change:
 - Do not turn `AGENTS.md` or `CLAUDE.md` into architecture, index, roadmap, or historical recordkeeping files.
 - Keep builder-agent guidance separate from runtime/system-agent documentation.
 
+## Total Cost of Development (capability routing)
+
+TCD is the standard principle for all agentic development work in this repo. Every workflow chooses a *capability* — not just a model — to minimize the expected **total cost per accepted delivery**, not the cost of the cheapest single model run. Existing repo-local skills stay the primary workflow entrypoints; this policy chooses capability *within* them. Skills reference this section as `AGENTS.md :: Total Cost of Development`; they must not restate it.
+
+Capability = workflow/skill + model + reasoning effort + context discipline + tool choice + verification level + review gate. Choose model **and** reasoning effort actively; never leave both on default.
+
+TCD = C_model + C_reasoning + C_context + C_tools + C_parallelization + C_human + C_rework + C_defect + C_delay + C_coordination.
+
+Human time is the dominant term: **R_human = 100 USD/hour** (1 min ≈ 1.67 USD; 10 min ≈ 16.7 USD; 15 min ≈ 25 USD). The owner runs x5 Codex and x5 Claude subscriptions, so budget pressure is **medium-low but not zero**.
+
+Decision rule — spend more capability (stronger model, higher reasoning, more specialized workflow, deeper review) when:
+
+`ΔC_AI_capability  <  100 · ΔT_human(hours)  +  ΔC_rework  +  ΔC_defect  +  ΔC_delay  +  ΔC_coordination`
+
+- Do not under-model: a too-weak model or too-low reasoning is *expensive* through extra iterations and human steering.
+- Do not over-model: Opus/xhigh on trivial, locally verifiable work burns budget and latency for no gain.
+- Optimize for accepted delivery, not the cheapest single run.
+
+Primary optimization order: 1) cut human time, 2) cut rework, 3) cut hidden defects, 4) cut interruptions/delay, 5) cut unnecessary model/reasoning spend.
+
+Model + reasoning policy — Claude:
+
+- **Haiku / low effort** — mechanical, low-risk, trivial transforms, easily verifiable output. Never for architecture, unclear requirements, or hidden correctness risk.
+- **Sonnet / medium effort** — DEFAULT for normal development: implementation, refactor, normal debugging, test creation, normal review, docs where quality matters.
+- **Sonnet / high effort** — multiple files, real design choices, unclear test strategy, review with non-trivial risk, or a prior attempt failed.
+- **Opus / high–xhigh effort** — architecture, unclear requirements, high defect cost, hard bugs, risk review, system/agent/workflow design, complex dependencies, or when human review would otherwise be expensive.
+- **Opus + Ultra Code / xhigh–max effort** — complex orchestration, repo-wide design, and security / data / migration / auth / concurrency / payments / external-API work, where the wrong direction costs more than the extra model spend.
+
+Model + reasoning policy — Codex: read the actual repo/session/config for the current Codex model and reasoning level; do not assume hardcoded values. Normal coding = standard Codex model + **medium** reasoning. Reasoning ladder: **minimal** (strict mechanics, search/replace, formatting, auto-tested output) · **low** (simple local low-risk) · **medium** (default interactive coding, test fixes, small refactors) · **high** (hard debugging, multi-file/multi-layer, test strategy, design trade-offs, risky review) · **xhigh** (architecture, migrations, auth/security/data, concurrency, external APIs, long autonomous tasks, complex workflow design, or when human steering would likely exceed 10–15 min). Propose a Codex model/reasoning change only when TCD justifies it.
+
+Escalation triggers (raise model and/or reasoning, or route to a more specialized skill) — any of:
+
+- two failed attempts, or a reviewer reject twice
+- requirements unclear; tests missing or hard to interpret
+- output would need more than ~10 minutes of human steering
+- multiple layers, hidden invariants, or high defect blast radius
+- auth / security / data / migration / concurrency / payments / external API touched
+- non-trivial CI failure; residual risk hard to assess.
+
+De-escalation triggers (lower model/reasoning, narrow context) — when:
+
+- the plan is clear and decomposed into mechanical steps
+- the change is local and a test verifies the output
+- risk is low, output is quickly reviewable, and no hidden correctness risk remains.
+
+Budget posture: when usage limits are not near, prefer the stronger model/reasoning if it saves human time or cuts defect risk. When limits are near, reserve strong capability for planning and review, run mechanical execution on cheaper/lower-reasoning capability, cut context, split work into focused steps, and avoid sub-agent fan-out.
+
+Tools & GitHub: use shell, `gh`/REST, CI data, Issues, and PR context when they lower TCD — allowed *and* appropriate *and* necessary — not merely because they are available. Always read `git status` before changes and review `git diff` before reporting a code change. Do not push, force-push, delete branches/tags, release, or publish unless the task requires it. Propose CI/GitHub Actions improvements when they reduce TCD; when CI/test results already exist locally or on GitHub, use them as the verification source.
+
+### TCD output blocks
+
+Planning/decomposition, review/verification, and retrospective skills reference these blocks by name instead of restating the policy. Emit only the block a skill calls for, and fill only the fields that skill's own output already implies.
+
+`tcd_plan` — planning / decomposition:
+
+```yaml
+tcd_plan:
+  task_summary:
+  assumptions:
+  complexity: low|medium|high|very_high
+  risk: low|medium|high|critical
+  verification_difficulty: easy|moderate|hard
+  human_review_burden: low|medium|high
+  defect_blast_radius: low|medium|high|critical
+  budget_pressure: low|medium|high
+  recommended_capability:
+    workflow_or_skill:
+    model_family:
+    reasoning_effort:
+    tools:
+    github_context_required: true|false
+  cheapest_acceptable_path:
+  escalation_triggers:
+  deescalation_triggers:
+  review_gate:
+```
+
+`tcd_review` — review / verification, or any skill that produces or gates a code change:
+
+```yaml
+tcd_review:
+  verdict: accept|reject|accept_with_risk
+  risk_level: low|medium|high|critical
+  model_used:
+  reasoning_effort_used:
+  under_modeling_detected: true|false
+  over_modeling_detected: true|false
+  blocking_issues:
+  non_blocking_issues:
+  missing_tests:
+  hidden_defect_risks:
+  recommended_fixes:
+  recommended_model_for_fix:
+  recommended_reasoning_for_fix:
+  residual_risk:
+```
+
+`tcd_retrospective` — retrospective:
+
+```yaml
+tcd_retrospective:
+  task:
+  chosen_route:
+  actual_iterations:
+  estimated_human_minutes:
+  model_used:
+  reasoning_effort_used:
+  under_modeling_detected: true|false
+  over_modeling_detected: true|false
+  missed_risk:
+  routing_policy_update_recommendation:
+  skill_update_recommendation:
+```
+
 ## Communicating with the owner
 
 The owner is the operator and decision-maker. Optimize answers for fast decision support and low running cost, not for narrating how you got there.

@@ -23,6 +23,7 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 1. Identify which subsystems are touched.
 2. Open relevant SoT docs and tests.
 3. Propose a short plan (files, tests, docs).
+   - Before committing to the plan, route capability per `AGENTS.md :: Total Cost of Development`: pick the cheapest acceptable model, reasoning effort, verification, and review for the task. Escalation and de-escalation triggers live there.
 4. Implement minimal changes that follow Store/Outbox/Components boundaries.
 5. Update docs and tests in the same change.
 6. Recommend focused test commands.
