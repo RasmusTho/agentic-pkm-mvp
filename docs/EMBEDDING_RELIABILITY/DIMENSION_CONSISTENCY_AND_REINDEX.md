@@ -4,12 +4,20 @@ description: Per-vector identity recording, mixed-identity detection in index do
 task_id: EMBEDREL-06
 source_anchor: docs/EMBEDDINGS.md :: Fallback rule
 parent_capability: Embedding Reliability & Pluggable Provider
-prerequisites: [EMBEDREL-05]
-depends_on: [PROVIDER_FALLBACK_ORCHESTRATION.md]
+prerequisites: [EMBEDREL-03]
+depends_on: [PLUGGABLE_PROVIDER_REGISTRY.md]
 can_parallelize_with: []
+split_ordering: "Two-phase. Phase A — section (a) per-vector identity columns + PgVectorIndex.upsert guard relaxation — is a PREREQUISITE of EMBEDREL-05 (a pg fallback write fails closed without it). Phase B — sections (b) index doctor + (c) index reconcile + (e) owner-doc update — FOLLOWS EMBEDREL-05. Do not generate a blanket dependency on EMBEDREL-05 from this file; see README execution order."
 ---
 
 # Dimension Consistency & Re-index Migration
+
+> **Two-phase ordering (see README execution order).** This task is split around EMBEDREL-05:
+> **Phase A** — section (a): the per-vector identity columns + the `PgVectorIndex.upsert` guard
+> relaxation — must land **before** EMBEDREL-05, because a pg Gemini-fallback write fails closed
+> without it (PROVIDER_FALLBACK_ORCHESTRATION §4). **Phase B** — sections (b) `index doctor`,
+> (c) `index reconcile`, (e) owner-doc update — lands **after** EMBEDREL-05. Implement Phase A as
+> a precursor commit/issue; never wire fallback writes before Phase A exists.
 
 ## Purpose
 

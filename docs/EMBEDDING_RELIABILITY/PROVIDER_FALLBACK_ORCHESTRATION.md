@@ -139,7 +139,7 @@ at least one object (or use the in-process seed approach — see `## How to Veri
 $ OLLAMA_HOST=http://127.0.0.1:19999 GEMINI_API_KEY=<key> \
     EMBED_FALLBACK_PROVIDER=gemini EMBED_RETRY_MAX=1 \
     EMBED_RETRY_BASE_BACKOFF_S=0.1 \
-    python -m app.cli.entrypoint index rebuild --backend pg --json
+    python -m app.cli index rebuild --backend pg --json
 ```
 
 Note: `--backend memory` loads an **empty** in-memory object store in a fresh
@@ -342,7 +342,7 @@ The `--backend memory` flag loads an empty in-memory object store in a fresh pro
 OLLAMA_HOST=http://127.0.0.1:19999 GEMINI_API_KEY=<real-key> \
   EMBED_FALLBACK_PROVIDER=gemini EMBED_RETRY_MAX=1 \
   EMBED_RETRY_BASE_BACKOFF_S=0.1 \
-  python -m app.cli.entrypoint index rebuild --backend pg --json
+  python -m app.cli index rebuild --backend pg --json
 # Expected: JSON summary processed >= 1 (at least one object from store_objects),
 #   outbox JSONL contains index.object.embedded records with
 #   provenance.provider="gemini" and meta.fallback_used=true for each
@@ -351,7 +351,7 @@ OLLAMA_HOST=http://127.0.0.1:19999 GEMINI_API_KEY=<real-key> \
 # No-key path: confirm graceful dead-letter with no Gemini egress:
 OLLAMA_HOST=http://127.0.0.1:19999 \
   EMBED_FALLBACK_PROVIDER=gemini EMBED_RETRY_MAX=1 \
-  python -m app.cli.entrypoint index rebuild --backend pg --json
+  python -m app.cli index rebuild --backend pg --json
 # Expected: JSON summary processed=0, error_count >= 1, no exception,
 #   outbox JSONL contains index.embedding.failed for each object.
 ```

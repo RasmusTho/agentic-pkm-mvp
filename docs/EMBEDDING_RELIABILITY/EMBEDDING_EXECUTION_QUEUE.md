@@ -236,7 +236,7 @@ pytest tests/llm/test_provider_fail_loud.py -v
 # With EMBED_RETRY_MAX=1 to shorten the wait, induce an Ollama failure by
 # pointing at a bad URL; verify rebuild completes with error_count > 0, not crash:
 OLLAMA_HOST=http://127.0.0.1:19999 EMBED_RETRY_MAX=1 EMBED_RETRY_BASE_BACKOFF_S=0.1 \
-  python -m app.cli.entrypoint index rebuild --backend memory --json
+  python -m app.cli index rebuild --backend memory --json
 # Expected: JSON summary with processed=0 (no objects in memory store), no exception
 # In a populated pg store with LLM_PROVIDER=ollama pointing at bad URL:
 # Expected: JSON summary with error_count = total_objects, no SystemExit unless --strict
