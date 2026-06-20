@@ -18,12 +18,17 @@ For the normative embedding identity + rebuild contract, see `docs/EMBEDDINGS.md
 For routing precedence and fabric behavior, see `docs/LLM_ROUTING.md`.
 
 ## Providers (Current)
-`LLM_PROVIDER` controls both chat and embeddings.
+`LLM_PROVIDER` controls chat and is the **fallback** source for the embedding provider.
+The embedding provider is selected by `EMBED_PRIMARY_PROVIDER` (env) when set, otherwise
+`LLM_PROVIDER`; see `docs/EMBEDDINGS.md :: Configuration` for the full precedence and the
+`EMBED_FALLBACK_PROVIDER` knob.
 
 - `ollama` (default): chat via Ollama `/api/chat`; embeddings via Ollama `/api/embeddings` with fallback to `/v1/embeddings`.
 - `mock`: deterministic, no network calls.
 - `openai`: chat via OpenAI-compatible Chat Completions API.
 - `deepseek`: chat via DeepSeek API.
+
+> **Planned (not yet usable):** `gemini` is a recognized embedding-provider *selection* value, but its adapter is not yet registered in `app/llm/embeddings.py::PROVIDER_REGISTRY`. Setting `EMBED_PRIMARY_PROVIDER=gemini` today fails with `Unsupported embedding provider`. The Google Gemini (`text-embedding-004`) adapter lands in the Embedding Reliability capability (issue #2292); see `docs/EMBEDDINGS.md :: Configuration` for provider selection.
 
 ## Core Environment Variables (Current Reality)
 

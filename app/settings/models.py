@@ -203,6 +203,23 @@ class EmbeddingProfile(BaseModel):
     model: str = Field(default="nomic-embed-text:latest", description="Embedding model identifier.")
     dim: int = Field(default=1536, description="Embedding dimension for this profile.")
     normalize: bool = Field(default=True, description="Apply L2 normalization when true.")
+    primary_provider: str | None = Field(
+        default=None,
+        description=(
+            "Preferred embedding provider for this profile. "
+            "Takes precedence over the 'provider' field when set. "
+            "Operator can also set EMBED_PRIMARY_PROVIDER env var (env wins over profile)."
+        ),
+    )
+    fallback_provider: str | None = Field(
+        default=None,
+        description=(
+            "Fallback embedding provider for this profile, used by EMBEDREL-05 "
+            "fallback orchestration when the primary fails after retries. "
+            "Ignored at runtime until EMBEDREL-05 is wired. "
+            "Operator can also set EMBED_FALLBACK_PROVIDER env var (env wins over profile)."
+        ),
+    )
 
 
 class EmbeddingProfiles(BaseModel):

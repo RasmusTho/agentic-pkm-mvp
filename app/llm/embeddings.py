@@ -4,7 +4,7 @@ import hashlib
 import logging
 import os
 from functools import lru_cache
-from typing import List, Mapping, Optional
+from typing import Callable, List, Mapping, Optional
 
 import httpx
 
@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _MOCK_EMBED_MODEL = "mock-embedding"
+
+# ProviderAdapter: a callable with the signature
+#   (text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]
+ProviderAdapter = Callable[..., tuple[float, ...]]
 
 
 def _extract_error_detail(response: httpx.Response) -> str | None:
@@ -65,6 +69,31 @@ def get_embedding_provider() -> str:
     return _provider()
 
 
+def get_primary_provider() -> str:
+    """Return the primary embedding provider.
+
+    Precedence: EMBED_PRIMARY_PROVIDER env var > LLM_PROVIDER (via get_provider()).
+    This is the provider used for normal embedding dispatch.
+    """
+    raw = os.getenv("EMBED_PRIMARY_PROVIDER", "").strip()
+    if raw:
+        return raw.lower()
+    return get_provider()
+
+
+def get_fallback_provider() -> str | None:
+    """Return the fallback embedding provider, or None when unset.
+
+    Reads EMBED_FALLBACK_PROVIDER env var. Returns None when unset.
+    The fallback is declared here for task-5 (fallback orchestration) to read;
+    this task does not invoke it at runtime.
+    """
+    raw = os.getenv("EMBED_FALLBACK_PROVIDER", "").strip()
+    if raw:
+        return raw.lower()
+    return None
+
+
 def _mock_vector(text: str, *, dim: int) -> List[float]:
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     vec: list[float] = []
@@ -72,6 +101,15 @@ def _mock_vector(text: str, *, dim: int) -> List[float]:
         chunk = digest[idx % len(digest)]
         vec.append(((chunk / 255.0) * 2) - 1)
     return vec
+
+
+def _mock_embed_one(text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+    """Provider adapter for the mock embedding provider.
+
+    Returns a deterministic hash-derived vector. The ``model`` and ``timeout``
+    parameters are accepted for API uniformity but are not used.
+    """
+    return tuple(_mock_vector(text, dim=dim))
 
 
 def _normalize_embedding_candidate(candidate: object | None) -> list[float] | None:
@@ -200,7 +238,12 @@ def _mean_pool(vectors: List[tuple[float, ...]], dim: int) -> tuple[float, ...]:
     return tuple(value / count for value in summed)
 
 
-def _ollama_embed_one(text: str, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+def _ollama_embed_one(text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+    """Provider adapter for the Ollama embedding provider.
+
+    Attempts /api/embeddings first; falls back to /v1/embeddings on HTTP error.
+    Matches the ProviderAdapter signature so it can be registered in PROVIDER_REGISTRY.
+    """
     try:
         return _ollama_embed_api(text, model, dim, timeout)
     except httpx.HTTPError as primary_exc:
@@ -217,6 +260,17 @@ def _ollama_embed_one(text: str, model: str, dim: int, timeout: float) -> tuple[
         ) from exc
 
 
+# Registry mapping provider name -> adapter callable.
+# Each adapter has signature: (text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]
+# To add a new provider, register it here — no changes to _embed_single required.
+PROVIDER_REGISTRY: dict[str, ProviderAdapter] = {
+    "mock": _mock_embed_one,
+    "ollama": _ollama_embed_one,
+    # Gemini adapter registered here by EMBEDREL-04:
+    # "gemini": _gemini_embed_one,
+}
+
+
 @lru_cache(maxsize=2048)
 def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> tuple[float, ...]:
     if dim is None:
@@ -225,20 +279,36 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
     if not text:
         return tuple(0.0 for _ in range(dim))
 
-    if provider == "mock":
-        return tuple(_mock_vector(text, dim=dim))
+    adapter = PROVIDER_REGISTRY.get(provider)
+    if adapter is None:
+        raise ValueError(f"Unsupported embedding provider: {provider!r}")
+
+    timeout = float(os.getenv("LLM_TIMEOUT", "60"))
 
     if provider == "ollama":
-        timeout = float(os.getenv("LLM_TIMEOUT", "60"))
+        # Oversized note: embed each in-window chunk and mean-pool so a single
+        # long note cannot 500 the request and abort the whole index build (#2110).
         chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
         if len(chunks) == 1:
-            return _ollama_embed_one(text, model, dim, timeout)
-        # Oversized note: embed each in-window chunk and mean-pool. A single long
-        # note must not 500 the request and abort the whole index build (#2110).
-        vectors = [_ollama_embed_one(chunk, model, dim, timeout) for chunk in chunks]
-        return _mean_pool(vectors, dim)
+            result = adapter(text, model=model, dim=dim, timeout=timeout)
+        else:
+            vectors = []
+            for chunk in chunks:
+                vec = adapter(chunk, model=model, dim=dim, timeout=timeout)
+                # Guard each chunk before pooling so a wrong-dim chunk reports a clean
+                # provider contract violation instead of an opaque error in _mean_pool.
+                assert_embed_dim(vec, expected=dim, name=f"{provider} embedding chunk (expected_dim={dim})")
+                vectors.append(vec)
+            result = _mean_pool(vectors, dim)
+    else:
+        result = adapter(text, model=model, dim=dim, timeout=timeout)
 
-    raise ValueError(f"Unsupported embedding provider: {provider}")
+    # CTI-1: dim guardrail — every registered adapter (including a wrapper/replacement
+    # under PROVIDER_REGISTRY["ollama"] that bypasses _parse_vector) must return a
+    # vector of the configured dim; a wrong-dim result is a provider contract violation,
+    # not a caller error. Guarded here on every return path so the registry contract holds.
+    assert_embed_dim(result, expected=dim, name=f"{provider} embedding (expected_dim={dim})")
+    return result
 
 
 def embed_text(
@@ -249,7 +319,10 @@ def embed_text(
     dim: int | None = None,
     normalize: bool = True,
 ) -> List[float]:
-    provider_val = provider or _provider()
+    # Default dispatch honors EMBED_PRIMARY_PROVIDER (falling back to LLM_PROVIDER);
+    # otherwise setting EMBED_PRIMARY_PROVIDER while LLM_PROVIDER=mock would still
+    # embed via mock (Codex P2). Explicit provider= callers are unaffected.
+    provider_val = provider or get_primary_provider()
     if model:
         model_val = model
     elif provider_val == "mock":
@@ -317,4 +390,14 @@ def embed_texts(
     return vectors
 
 
-__all__ = ["embed_text", "embed_texts", "EMBED_MODEL", "get_embedding_provider", "get_embed_model"]
+__all__ = [
+    "embed_text",
+    "embed_texts",
+    "EMBED_MODEL",
+    "get_embedding_provider",
+    "get_embed_model",
+    "get_primary_provider",
+    "get_fallback_provider",
+    "PROVIDER_REGISTRY",
+    "ProviderAdapter",
+]

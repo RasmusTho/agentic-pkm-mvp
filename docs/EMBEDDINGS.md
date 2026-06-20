@@ -40,7 +40,13 @@ comes from the compiled task policy; env vars supply defaults only when the poli
 ### Required / primary env vars
 
 - `LLM_PROVIDER`
-  - Supported: `ollama`, `mock`
+  - Supported: `ollama`, `mock` (registry providers also include `gemini`, `deterministic`).
+  - Used as the **fallback** primary-provider source when `EMBED_PRIMARY_PROVIDER` is unset.
+- `EMBED_PRIMARY_PROVIDER`
+  - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
+  - Setting this changes the embedding **identity** (provider) and therefore requires a vector-index rebuild — see *Change policy* and the re-index path.
+- `EMBED_FALLBACK_PROVIDER`
+  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). A dimension-matched fallback is required — see the disciplined-fallback / re-index path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
@@ -144,7 +150,7 @@ Normative call path:
 
 - Indexer (worker/runtime) imports `llm_embed_text` from `app.index.embeddings`
 - `app.index.embeddings.llm_embed_text(...)` routes to the provider-aware embedding implementation in `app.llm.embeddings.embed_text(...)`
-- Provider logic uses `LLM_PROVIDER` and `OLLAMA_HOST` to decide how to call the backend.
+- Provider logic resolves the embedding provider via `EMBED_PRIMARY_PROVIDER` (falling back to `LLM_PROVIDER`) and uses `OLLAMA_HOST` to decide how to call the backend. Adapters are dispatched through the registry in `app/llm/embeddings.py::PROVIDER_REGISTRY`.
 
 > **Note:** When `LLM_PROVIDER=ollama`, the runtime's **primary** embedding call is `${OLLAMA_URL}/api/embeddings` with `{model, prompt, dimensions}` (the `dimensions` field is included unless `OLLAMA_EMBED_DIMENSIONS` disables it). If that request fails, it **falls back** to the OpenAI-compatible `${OLLAMA_URL}/v1/embeddings` endpoint with `{model, input}`. This matches `app/llm/embeddings.py` and the endpoint table in `docs/LLM.md`.
 
