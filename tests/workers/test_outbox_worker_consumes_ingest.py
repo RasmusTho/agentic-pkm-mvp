@@ -114,6 +114,9 @@ class FakeOutboxConn:
     def topics(self) -> list[str]:
         return [r["topic"] for r in self.rows.values()]
 
+    def attempts_for(self, row_id: str) -> int:
+        return int(self.rows[row_id].get("attempts", 0))
+
 
 @pytest.fixture()
 def fake_conn(monkeypatch: pytest.MonkeyPatch) -> FakeOutboxConn:
@@ -286,3 +289,98 @@ def test_worker_does_not_head_of_line_block_on_poison_ingest_row(
     # The good note still made it into the store.
     stored = ObjectStore().get_object("11111111-1111-1111-1111-111111111111")
     assert stored is not None
+
+
+def _transient_error_case(kind: str):
+    if kind == "psycopg_operational":
+        error_type = type(
+            "OperationalError",
+            (RuntimeError,),
+            {"__module__": "psycopg"},
+        )
+
+        def build_error() -> Exception:
+            return error_type("database temporarily unavailable")
+
+        return error_type, build_error
+
+    if kind == "http_429":
+        error_type = type(
+            "HTTPStatusError",
+            (RuntimeError,),
+            {"__module__": "httpx"},
+        )
+
+        class _Response:
+            status_code = 429
+
+        def build_error() -> Exception:
+            exc = error_type("embedding provider throttled")
+            exc.response = _Response()
+            return exc
+
+        return error_type, build_error
+
+    raise AssertionError(f"unknown transient error kind: {kind}")
+
+
+@pytest.mark.parametrize("transient_error_kind", ["psycopg_operational", "http_429"])
+def test_transient_failures_do_not_dead_letter_legitimate_event(
+    tmp_path,
+    fake_conn: FakeOutboxConn,
+    monkeypatch: pytest.MonkeyPatch,
+    transient_error_kind: str,
+) -> None:
+    """Regression for #2257: infrastructure transients must not consume the
+    poison-row dispatch budget and dead-letter a legitimate event."""
+    vault_root, note_path = _write_note(tmp_path, name="transient.md")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("WORKER_MAX_DISPATCH_ATTEMPTS", "3")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+
+    row_id = _enqueue_ingest(note_path, trace_id="trace-transient")
+    assert row_id
+
+    # Mimic optional third-party exceptions without importing them here: the worker
+    # classifies by exception MRO module/name so no-psycopg unit environments work.
+    transient_error_type, build_transient_error = _transient_error_case(transient_error_kind)
+    real_handler = outbox_worker.handle_ingest_vault_changed
+    failures_before_recovery = 5
+    calls = 0
+
+    def transient_then_recovers(payload, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= failures_before_recovery:
+            raise build_transient_error()
+        return real_handler(payload, **kwargs)
+
+    monkeypatch.setattr(outbox_worker, "handle_ingest_vault_changed", transient_then_recovers)
+    monkeypatch.setattr(outbox_worker, "bootstrap", lambda: None)
+    monkeypatch.setattr(outbox_worker, "write_worker_heartbeat", lambda **_: None)
+    monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL", "9999")
+
+    for _ in range(failures_before_recovery + 3):
+        if fake_conn.undelivered_count() == 0:
+            break
+        outbox_worker._EVENT_DEDUP._seen.clear()
+        try:
+            outbox_worker.run(
+                interval=0.0,
+                heartbeat_interval=9999,
+                log_heartbeat_interval=None,
+                stop_after_ticks=4,
+            )
+        except transient_error_type:
+            continue
+
+    assert calls == failures_before_recovery + 1
+    assert fake_conn.undelivered_count() == 0
+    assert fake_conn.attempts_for(row_id) == 0
+    stored = ObjectStore().get_object("11111111-1111-1111-1111-111111111111")
+    assert stored is not None
+    audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert outbox_worker.OUTBOX_EVENT_DEAD_LETTERED not in audit_text
