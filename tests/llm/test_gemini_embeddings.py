@@ -484,3 +484,16 @@ def test_gemini_provider_identity_respects_embed_gemini_model(monkeypatch: pytes
 
     monkeypatch.setenv("EMBED_GEMINI_MODEL", "gemini-embedding-001")
     assert _resolve_embedding_model("gemini", None, "nomic-embed-text:latest") == "gemini-embedding-001"
+
+
+def test_gemini_provider_identity_honors_profile_gemini_model() -> None:
+    """A profile that selects a Gemini model (configured_model) is honored, while a
+    non-Gemini configured model is still discarded (Codex P2, #2302)."""
+    from app.components.embeddings.legacy import _resolve_embedding_model
+
+    # profile-set Gemini model honored
+    assert _resolve_embedding_model("gemini", None, "gemini-embedding-2") == "gemini-embedding-2"
+    # non-gemini configured model discarded → default
+    assert _resolve_embedding_model("gemini", None, "nomic-embed-text:latest") == "gemini-embedding-001"
+    # override (gemini) still wins over a profile model
+    assert _resolve_embedding_model("gemini", "gemini-embedding-001", "gemini-embedding-2") == "gemini-embedding-001"
