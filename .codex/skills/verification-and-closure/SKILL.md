@@ -89,6 +89,8 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 
 Verification owns the merge decision.
 
+For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks to go green and resolve Codex review, then merge — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch does not relax them); only the human watching is removed.
+
 Prerequisites for merge:
 
 - current SHA truth is intact

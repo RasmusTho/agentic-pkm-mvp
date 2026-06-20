@@ -156,6 +156,27 @@ Budget posture: when usage limits are not near, prefer the stronger model/reason
 
 Tools & GitHub: use shell, `gh`/REST, CI data, Issues, and PR context when they lower TCD — allowed *and* appropriate *and* necessary — not merely because they are available. Always read `git status` before changes and review `git diff` before reporting a code change. Do not push, force-push, delete branches/tags, release, or publish unless the task requires it. Propose CI/GitHub Actions improvements when they reduce TCD; when CI/test results already exist locally or on GitHub, use them as the verification source.
 
+### Agency default (minimize human time)
+
+Human time is the dominant TCD term, so the default posture is to **act**, not to ask. Skills reference this as `AGENTS.md :: Agency default`. Within the guardrails, prefer **Act** (do it, log it, let Git be the audit trail) or **agent-review** (a second agent verifies) over **ask-the-owner**.
+
+- Escalate to the human (`agent:needs-human` / "ask you") **only** for decisions that are irreversible, external-facing, or genuinely ambiguous in authority — not for work that is merely non-trivial. `agent:needs-human` on a buildable, bounded slice is usually defensive posture: classify on evidence first, and defer only when a named human decision, missing input, or authority question actually blocks the work.
+- `log + Git` is the safety net, not a human gate. Reversible, in-scope, bounded work proceeds without asking.
+- **Autonomous delivery** runs the full gate chain unattended: wait for CI green and resolve Codex review, then merge — the owner is not asked to babysit. The CI + review gate is never waived (an unprotected branch does not relax it); only the human *watching* is removed. Quality is preserved by the gate, not by the wait.
+
+This is human-first, not human-absent: the owner still owns irreversible, external, and strategic calls — agents just stop interrupting for reversible ones.
+
+### Parallel-agent execution (minimize coordination cost and error)
+
+Many agents run against this repo at once. C_coordination, C_delay, and C_rework dominate when they collide, so isolation is the default, not an upgrade. Skills reference this as `AGENTS.md :: Parallel-agent execution`.
+
+- **Dedicated worktree by default.** Any concurrent implementation or publication runs in its own `git worktree`, never the shared root worktree. Do not edit, commit, or push from the shared root checkout while other agents may be active.
+- **Never switch the shared root worktree's branch out from under a concurrent agent.** Branch switches happen in your own worktree. The shared-root HEAD thrash is a real, recurring loss — uncommitted work rides an unexpected checkout.
+- **Branch-truth before write.** Capture `EXPECTED_BRANCH` / `EXPECTED_WORKTREE` at branch creation and run the branch-truth gate before commit and before push (`_shared/BRANCH_TRUTH_GATE.md`). Proportionality never relaxes this.
+- **Smallest shared lease, then local.** Claim the issue/lane with the minimal shared handshake (`Ready -> In Progress`, remove `agent:ready`), then keep execution local and deterministic. One active lease per issue.
+- **Right-size fan-out.** Parallelize only independent issues with isolated worktrees, explicit return receipts, and an explicit token/quality rationale. Over-fanning raises C_coordination faster than it cuts C_delay — when in doubt, fewer agents.
+- **Reconcile races on evidence, do not redo.** On a claim or delivery collision, the latest unreleased lease governs; verify on `origin/main` and close your duplicate rather than re-implementing.
+
 ### TCD output blocks
 
 Planning/decomposition, review/verification, and retrospective skills reference these blocks by name instead of restating the policy. Emit only the block a skill calls for, and fill only the fields that skill's own output already implies.

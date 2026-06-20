@@ -44,7 +44,7 @@ Set `agent:ready` when all are true:
 - No unresolved decisions or missing contract inputs.
 - The bug is a real defect, not a low-signal maintenance correction that should be batched into audit or retrospective work.
 
-Force `agent:needs-human` when:
+Force `agent:needs-human` per `AGENTS.md :: Agency default` — reserve it for irreversible, external-facing, or genuinely ambiguous-authority decisions; default to `agent:ready` for buildable, bounded, reversible defects rather than deferring defensively. Specifically when:
 - a named human decision, tradeoff, missing input, or authority question is required before work can proceed
 - It is a Core Runtime ↔ Agentic Lab boundary move without explicit direction and module paths.
 - The change would alter operator-facing defaults without explicit posture and validation plan.
