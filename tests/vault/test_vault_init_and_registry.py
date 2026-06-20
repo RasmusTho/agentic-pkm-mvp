@@ -191,11 +191,17 @@ def test_remember_context_does_not_reset_valid_registry_on_write_error(tmp_path:
     registry_path = tmp_path / "app-local.md"
     markdown_store = _OneShotWriteFailingMarkdownStore()
     app_local_store = _SpyAppLocalSettingsStore(registry_path, markdown_store=markdown_store)
-    other_vault_ref = f"path:{tmp_path / 'other-vault'}"
+    previous_vault = tmp_path / "previous-vault"
+    selected_vault = tmp_path / "selected-vault"
+    prep_manager = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "prep-app-local.md"))
+    prep_manager.initialize_vault(previous_vault, remember=False)
+    prep_manager.initialize_vault(selected_vault, remember=False)
+
+    other_vault_ref = f"path:{previous_vault}"
     app_local_store.upsert_known_vault(
         KnownVaultRef(
             ref=other_vault_ref,
-            path=str(tmp_path / "other-vault"),
+            path=str(previous_vault),
             vault_id="vault-other",
             vault_name="Other Vault",
             local_instance_id="local-other",
@@ -204,8 +210,7 @@ def test_remember_context_does_not_reset_valid_registry_on_write_error(tmp_path:
         make_active=True,
     )
     manager = VaultManager(app_local_store=app_local_store)
-    selected_vault = tmp_path / "selected-vault"
-    manager.initialize_vault(selected_vault, remember=False)
+    previous_context = manager.select_vault(previous_vault, remember=False)
 
     markdown_store.fail_next_write = True
 
@@ -217,6 +222,7 @@ def test_remember_context_does_not_reset_valid_registry_on_write_error(tmp_path:
     reloaded = AppLocalSettingsStore(registry_path).load()
     assert reloaded.last_active_vault_ref == other_vault_ref
     assert sorted(reloaded.known_vaults) == [other_vault_ref]
+    assert manager.context == previous_context
 
 
 def test_initialize_remember_recovers_from_corrupt_registry(tmp_path: Path) -> None:
