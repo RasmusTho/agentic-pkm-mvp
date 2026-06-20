@@ -30,7 +30,16 @@ jobs:
         shell: bash
         timeout-minutes: 22
         env:
-          PYTEST_ADDOPTS: "--timeout=1200 --timeout-method=thread"
+          # Per-test timeout must fire well before the 22-min job wall clock,
+          # otherwise an intermittently-hanging test (a pure-Python block such
+          # as a join()/queue.get()/Event.wait() with no timeout) loses the race
+          # to the job cap and the run dies with NO diagnostics — no stack dump,
+          # no test name (only `pytest`+`tee` left as orphan processes). At 1200s
+          # (20 min) the timeout could not fire before the cap. 120s is ~20-40x
+          # the slowest legitimate single test yet leaves the whole suite (~5 min)
+          # untouched, so a hang now fails fast AND prints the offending test's
+          # nodeid + full traceback (pytest-timeout thread method). See #2259.
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
         run: |
           set -o pipefail
           pytest -q -m "not pg" | tee pytest-not-pg.log
@@ -156,6 +165,10 @@ jobs:
         run: alembic upgrade head || true
       - name: Run tests
         shell: bash
+        env:
+          # Same hang safety net as the not-pg gate: fail fast with a stack dump
+          # instead of stalling on an uninterruptible per-test block. See #2259.
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
         run: |
           set -o pipefail
           pytest -q | tee pytest.log
