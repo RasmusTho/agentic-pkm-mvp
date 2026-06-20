@@ -1209,3 +1209,160 @@ def test_default_command_entrypoint_keeps_explicit_command(monkeypatch) -> None:
 
     assert git_hygiene.main_with_default_command("janitor", ["janitor"]) == 0
     assert captured["argv"] == ["janitor"]
+
+
+# ---------------------------------------------------------------------------
+# in_shared_root() and require_dedicated_worktree preflight tests
+# ---------------------------------------------------------------------------
+
+
+def _make_subprocess_run_fake(git_dir_out: str, common_dir_out: str, returncode: int = 0):
+    """Return a fake subprocess.run that answers --git-dir and --git-common-dir queries."""
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["git", "rev-parse"]:
+            flag = args[2] if len(args) > 2 else ""
+            if flag == "--git-dir":
+                return subprocess.CompletedProcess(args, returncode, git_dir_out, "")
+            if flag == "--git-common-dir":
+                return subprocess.CompletedProcess(args, returncode, common_dir_out, "")
+        # fall through for any other subprocess calls (merge-base, etc.)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    return fake_run
+
+
+def test_in_shared_root_returns_true_in_primary_worktree(tmp_path, monkeypatch) -> None:
+    """in_shared_root() returns True when --git-dir and --git-common-dir agree."""
+    git_dir = str(tmp_path / ".git")
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _make_subprocess_run_fake(git_dir + "\n", git_dir + "\n"),
+    )
+    assert git_hygiene.in_shared_root(str(tmp_path)) is True
+
+
+def test_in_shared_root_returns_false_in_linked_worktree(tmp_path, monkeypatch) -> None:
+    """in_shared_root() returns False when --git-dir and --git-common-dir differ."""
+    # In a linked worktree --git-dir points to a per-worktree sub-dir inside
+    # .git/worktrees/<name> while --git-common-dir points to the shared .git root.
+    linked_git_dir = str(tmp_path / ".git" / "worktrees" / "linked")
+    common_dir = str(tmp_path / ".git")
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _make_subprocess_run_fake(linked_git_dir + "\n", common_dir + "\n"),
+    )
+    assert git_hygiene.in_shared_root(str(tmp_path)) is False
+
+
+def test_in_shared_root_returns_false_on_subprocess_error(tmp_path, monkeypatch) -> None:
+    """in_shared_root() returns False (never raises) when git commands fail."""
+    monkeypatch.setattr(
+        git_hygiene.subprocess,
+        "run",
+        _make_subprocess_run_fake("", "", returncode=128),
+    )
+    assert git_hygiene.in_shared_root(str(tmp_path)) is False
+
+
+def test_in_shared_root_real_repo_vs_linked_worktree(tmp_path) -> None:
+    """Integration: in_shared_root() is True in the primary repo and False in a
+    linked worktree created by ``git worktree add``."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--initial-branch=main", repo], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "file.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    linked = tmp_path / "linked"
+    subprocess.run(["git", "worktree", "add", str(linked), "-b", "wt-branch", "main"], cwd=repo, check=True)
+
+    assert git_hygiene.in_shared_root(str(repo)) is True
+    assert git_hygiene.in_shared_root(str(linked)) is False
+
+
+def test_preflight_shared_root_flag_off_is_unchanged(tmp_path, monkeypatch) -> None:
+    """When require_dedicated_worktree is False (default), behaviour is unchanged:
+    shared_root_worktree is False in the checks dict and ok is not affected."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["status", "--porcelain"]:
+            return ""
+        if args == ["branch", "--show-current"]:
+            return "feature/x"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["rev-parse", "--git-dir"]:
+            return str(git_dir)
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
+    # Even if in_shared_root would return True, the flag being False must suppress it.
+    monkeypatch.setattr(git_hygiene, "in_shared_root", lambda *_a, **_kw: True)
+
+    report = git_hygiene.preflight_report(tmp_path)
+
+    assert report["checks"]["shared_root_worktree"] is False
+    assert report["ok"] is True
+
+
+def test_preflight_require_dedicated_worktree_fails_in_shared_root(
+    tmp_path, monkeypatch
+) -> None:
+    """When require_dedicated_worktree=True and in_shared_root() returns True,
+    preflight_report must set ok=False and shared_root_worktree=True."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["status", "--porcelain"]:
+            return ""
+        if args == ["branch", "--show-current"]:
+            return "main"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["rev-parse", "--git-dir"]:
+            return str(git_dir)
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
+    monkeypatch.setattr(git_hygiene, "in_shared_root", lambda *_a, **_kw: True)
+
+    report = git_hygiene.preflight_report(tmp_path, require_dedicated_worktree=True)
+
+    assert report["ok"] is False
+    assert report["checks"]["shared_root_worktree"] is True
+
+
+def test_preflight_require_dedicated_worktree_passes_in_linked_worktree(
+    tmp_path, monkeypatch
+) -> None:
+    """When require_dedicated_worktree=True but in_shared_root() returns False
+    (we are in a linked worktree), preflight_report must not add a failure for
+    the worktree isolation check."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["status", "--porcelain"]:
+            return ""
+        if args == ["branch", "--show-current"]:
+            return "feature/y"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["rev-parse", "--git-dir"]:
+            return str(git_dir)
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
+    monkeypatch.setattr(git_hygiene, "in_shared_root", lambda *_a, **_kw: False)
+
+    report = git_hygiene.preflight_report(tmp_path, require_dedicated_worktree=True)
+
+    assert report["ok"] is True
+    assert report["checks"]["shared_root_worktree"] is False

@@ -178,6 +178,53 @@ def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
     return result.returncode == 0
 
 
+def in_shared_root(cwd: str | None = None) -> bool:
+    """Return True when *cwd* is the PRIMARY (shared root) worktree.
+
+    Detection: ``git rev-parse --git-dir`` and ``git rev-parse --git-common-dir``
+    return the SAME path in the primary worktree and DIFFER in a linked worktree
+    created by ``git worktree add``.  Both paths are normalised with
+    ``Path.resolve()`` before comparison so relative outputs (e.g. ``.git``) and
+    absolute outputs are treated identically.
+
+    Returns False on any subprocess error rather than raising, so a missing or
+    broken git repo is treated as "not the shared root" and never blocks the
+    caller.
+    """
+    run_cwd = Path(cwd) if cwd is not None else Path.cwd()
+    try:
+        git_dir_result = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=run_cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        common_dir_result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=run_cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    if git_dir_result.returncode != 0 or common_dir_result.returncode != 0:
+        return False
+    raw_git = git_dir_result.stdout.strip()
+    raw_common = common_dir_result.stdout.strip()
+    if not raw_git or not raw_common:
+        return False
+
+    def _resolve(raw: str) -> Path:
+        p = Path(raw)
+        if not p.is_absolute():
+            p = run_cwd / p
+        return p.resolve()
+
+    return _resolve(raw_git) == _resolve(raw_common)
+
+
 def preflight_report(
     cwd: Path,
     *,
@@ -189,6 +236,7 @@ def preflight_report(
     execution_id: str | None = None,
     allow_dirty: bool = False,
     now: float | None = None,
+    require_dedicated_worktree: bool = False,
 ) -> dict[str, Any]:
     active_leases = active_leases or []
     resource_ids = resource_ids or set()
@@ -198,6 +246,8 @@ def preflight_report(
     operations = _in_progress_operations(cwd)
     conflicts = lease_conflicts(active_leases, resource_ids, execution_id, now=now)
     base_status = _base_branch_status(cwd, base_branch)
+
+    shared_root = in_shared_root(str(cwd)) if require_dedicated_worktree else False
 
     checks = {
         "dirty_tree": bool(status),
@@ -211,6 +261,7 @@ def preflight_report(
         ),
         "base_branch": base_status,
         "lease_conflicts": conflicts,
+        "shared_root_worktree": shared_root,
     }
     ok = not (
         (checks["dirty_tree"] and not allow_dirty)
@@ -219,6 +270,7 @@ def preflight_report(
         or checks["worktree_mismatch"]
         or checks["base_branch"]["mismatch"]
         or checks["lease_conflicts"]
+        or (require_dedicated_worktree and shared_root)
     )
     return {"ok": ok, "checks": checks}
 
