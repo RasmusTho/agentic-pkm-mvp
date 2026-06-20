@@ -290,15 +290,23 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
         # long note cannot 500 the request and abort the whole index build (#2110).
         chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
         if len(chunks) == 1:
-            return adapter(text, model=model, dim=dim, timeout=timeout)
-        vectors = [adapter(chunk, model=model, dim=dim, timeout=timeout) for chunk in chunks]
-        return _mean_pool(vectors, dim)
+            result = adapter(text, model=model, dim=dim, timeout=timeout)
+        else:
+            vectors = []
+            for chunk in chunks:
+                vec = adapter(chunk, model=model, dim=dim, timeout=timeout)
+                # Guard each chunk before pooling so a wrong-dim chunk reports a clean
+                # provider contract violation instead of an opaque error in _mean_pool.
+                assert_embed_dim(vec, expected=dim, name=f"{provider} embedding chunk (expected_dim={dim})")
+                vectors.append(vec)
+            result = _mean_pool(vectors, dim)
+    else:
+        result = adapter(text, model=model, dim=dim, timeout=timeout)
 
-    result = adapter(text, model=model, dim=dim, timeout=timeout)
-    # CTI-1: dim guardrail — every registered adapter must return a vector of the
-    # configured dim; a wrong-dim result is a provider contract violation, not a
-    # caller error. Checked here so even adapters that bypass _parse_vector are
-    # covered by the invariant.
+    # CTI-1: dim guardrail — every registered adapter (including a wrapper/replacement
+    # under PROVIDER_REGISTRY["ollama"] that bypasses _parse_vector) must return a
+    # vector of the configured dim; a wrong-dim result is a provider contract violation,
+    # not a caller error. Guarded here on every return path so the registry contract holds.
     assert_embed_dim(result, expected=dim, name=f"{provider} embedding (expected_dim={dim})")
     return result
 

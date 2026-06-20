@@ -402,3 +402,24 @@ def test_dim_guardrail_fires_via_registry_dispatch(monkeypatch) -> None:
         PROVIDER_REGISTRY.clear()
         PROVIDER_REGISTRY.update(original)
         embeddings._embed_single.cache_clear()
+
+
+def test_dim_guardrail_fires_on_ollama_registry_path(monkeypatch) -> None:
+    """A wrapper/replacement adapter registered under PROVIDER_REGISTRY['ollama']
+    that returns the wrong dim must still trip assert_embed_dim — the ollama branch
+    is no longer exempt from the CTI-1 guard (Codex review on PR #2299)."""
+    def wrong_dim_ollama(text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+        return (0.1, 0.2)  # dim=2 regardless of requested dim
+
+    monkeypatch.setenv("EMBED_MAX_INPUT_CHARS", "0")  # force single-chunk path
+    original = dict(PROVIDER_REGISTRY)
+    try:
+        PROVIDER_REGISTRY["ollama"] = wrong_dim_ollama
+        embeddings._embed_single.cache_clear()
+
+        with pytest.raises((ValueError, RuntimeError), match="expected_dim"):
+            embeddings._embed_single("ollama-guard-text", "ollama", "model", 4)
+    finally:
+        PROVIDER_REGISTRY.clear()
+        PROVIDER_REGISTRY.update(original)
+        embeddings._embed_single.cache_clear()

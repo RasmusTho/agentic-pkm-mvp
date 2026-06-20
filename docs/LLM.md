@@ -28,7 +28,7 @@ The embedding provider is selected by `EMBED_PRIMARY_PROVIDER` (env) when set, o
 - `openai`: chat via OpenAI-compatible Chat Completions API.
 - `deepseek`: chat via DeepSeek API.
 
-> **Planned (not yet usable):** `gemini` is a recognized embedding-provider *selection* value, but its adapter is not yet registered in `app/llm/embeddings.py::PROVIDER_REGISTRY`. Setting `EMBED_PRIMARY_PROVIDER=gemini` today fails with `Unsupported embedding provider`. The Google Gemini (`text-embedding-004`) adapter lands in the Embedding Reliability capability — see `docs/EMBEDDING_RELIABILITY/`.
+> **Planned (not yet usable):** `gemini` is a recognized embedding-provider *selection* value, but its adapter is not yet registered in `app/llm/embeddings.py::PROVIDER_REGISTRY`. Setting `EMBED_PRIMARY_PROVIDER=gemini` today fails with `Unsupported embedding provider`. The Google Gemini (`text-embedding-004`) adapter lands in the Embedding Reliability capability (issue #2292); see `docs/EMBEDDINGS.md :: Configuration` for provider selection.
 
 ## Core Environment Variables (Current Reality)
 

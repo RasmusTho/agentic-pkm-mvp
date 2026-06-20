@@ -46,7 +46,7 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
   - Setting this changes the embedding **identity** (provider) and therefore requires a vector-index rebuild — see *Change policy* and the re-index path.
 - `EMBED_FALLBACK_PROVIDER`
-  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). A dimension-matched fallback is required — see the disciplined-fallback / re-index path in `docs/EMBEDDING_RELIABILITY/`.
+  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). A dimension-matched fallback is required — see the disciplined-fallback / re-index path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
