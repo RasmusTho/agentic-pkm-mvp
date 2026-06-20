@@ -11725,6 +11725,12 @@ def make_handler(
                 "/api/operator/ask",  # operator diagnostics Ask (#1758)
             }
         )
+        _FORWARDED_CLIENT_AUTH_PATHS = frozenset(
+            {
+                VAULT_SELECT_ENDPOINT,
+                VAULT_INITIALIZE_ENDPOINT,
+            }
+        )
 
         # Dynamic POST proxy paths (session id in the path). The live canvas
         # co-authoring loop (#1733) posts the user's intent here; the runtime
@@ -11775,6 +11781,21 @@ def make_handler(
             "/api/operator/ask": "/api/ask",
         }
 
+        def _forwarded_client_headers(self, path: str) -> dict[str, str]:
+            if path not in self._FORWARDED_CLIENT_AUTH_PATHS:
+                return {}
+            client_address = getattr(self, "client_address", None)
+            client_host = ""
+            if isinstance(client_address, tuple) and client_address:
+                client_host = str(client_address[0]).strip()
+            headers: dict[str, str] = {}
+            if client_host:
+                headers["X-Forwarded-For"] = client_host
+            api_key = self.headers.get("X-API-Key")
+            if api_key:
+                headers["X-API-Key"] = api_key
+            return headers
+
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             if not self._post_path_allowed(parsed.path):
@@ -11792,7 +11813,11 @@ def make_handler(
                 return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
             try:
-                data = self._client.post(runtime_path, json=payload)
+                forwarded_headers = self._forwarded_client_headers(parsed.path)
+                if forwarded_headers:
+                    data = self._client.post(runtime_path, json=payload, headers=forwarded_headers)
+                else:
+                    data = self._client.post(runtime_path, json=payload)
             except WorkspaceClientError as exc:
                 self._proxy_error(exc)
                 return

@@ -20,6 +20,7 @@ import json
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import make_handler
+from companion_ui.workspace.vault_settings_panel import VAULT_SELECT_ENDPOINT
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ class _FakeClient:
         self.delete_error = delete_error
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
         self.post_calls: list[tuple[str, dict[str, Any]]] = []
+        self.post_header_calls: list[tuple[str, dict[str, str] | None]] = []
         self.delete_calls: list[tuple[str, dict[str, Any] | None]] = []
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
@@ -53,8 +55,15 @@ class _FakeClient:
             raise self.get_error
         return self.get_responses.get(url, {})
 
-    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+    def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         self.post_calls.append((url, json))
+        self.post_header_calls.append((url, headers))
         if self.post_error:
             raise self.post_error
         return self.post_responses.get(url, {})
@@ -112,13 +121,22 @@ class _GetDriver:
 class _PostDriver:
     """Drives make_handler._Handler.do_POST without a real socket."""
 
-    def __init__(self, handler_cls: type, path: str, body: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        handler_cls: type,
+        path: str,
+        body: dict[str, Any],
+        *,
+        headers: dict[str, str] | None = None,
+        client_address: tuple[str, int] = ("127.0.0.1", 50000),
+    ) -> None:
         raw = json.dumps(body).encode("utf-8")
         self._instance = handler_cls.__new__(handler_cls)
         self._instance.path = path
         self._instance.rfile = io.BytesIO(raw)
         self._instance.wfile = io.BytesIO()
-        self._instance.headers = {"Content-Length": str(len(raw))}
+        self._instance.headers = {"Content-Length": str(len(raw)), **(headers or {})}
+        self._instance.client_address = client_address
         self.status_code: int | None = None
         self.payload: dict[str, Any] | None = None
 
@@ -328,6 +346,32 @@ def test_queue_review_post_proxied() -> None:
     assert client.post_calls[-1] == (
         "/api/companion/vault-browser/actions/queue-review",
         {"note_path": "Notes/current.md"},
+    )
+
+
+def test_vault_select_proxy_forwards_client_context_and_api_key() -> None:
+    response = {"status": "selected"}
+    client = _FakeClient(post_responses={VAULT_SELECT_ENDPOINT: response})
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    p = _PostDriver(
+        handler_cls,
+        VAULT_SELECT_ENDPOINT,
+        {"path": "/tmp/vault", "remember": True},
+        headers={"X-API-Key": "uat-secret"},
+        client_address=("203.0.113.10", 50000),
+    )
+    p.run_post()
+
+    assert p.status_code == 200
+    assert p.payload == response
+    assert client.post_calls[-1] == (
+        VAULT_SELECT_ENDPOINT,
+        {"path": "/tmp/vault", "remember": True},
+    )
+    assert client.post_header_calls[-1] == (
+        VAULT_SELECT_ENDPOINT,
+        {"X-Forwarded-For": "203.0.113.10", "X-API-Key": "uat-secret"},
     )
 
 

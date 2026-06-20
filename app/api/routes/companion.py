@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import yaml
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -45,6 +45,7 @@ from app.agent_memory.posture_projection import (
     AgentMemoryPostureTarget,
     agent_memory_posture_for_artifacts,
 )
+from app.auth import require_loopback_or_api_key
 from app.text.helpers import (
     body_contains_frontmatter as _body_contains_frontmatter,
     content_hash as _content_hash,
@@ -608,7 +609,11 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     return _vault_context_response(context)
 
 
-@router.post("/vault/select", response_model=VaultContextResponse)
+@router.post(
+    "/vault/select",
+    response_model=VaultContextResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
 def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
     context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
     return _vault_context_response(context)
@@ -632,7 +637,11 @@ def read_companion_now() -> list[dict]:
     return collect_now_moments(VaultContext(status="selected", active_vault_path=str(root)))
 
 
-@router.post("/vault/initialize", response_model=VaultInitializeResponse)
+@router.post(
+    "/vault/initialize",
+    response_model=VaultInitializeResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
 def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
     result = get_vault_manager().initialize_vault(
         Path(req.path),
