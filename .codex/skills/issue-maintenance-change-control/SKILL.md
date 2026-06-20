@@ -86,7 +86,7 @@ Before coding, ensure the Issue explicitly states:
 - Verification anchors: which SoT docs are being treated as authoritative for this change
 - Test plan: what regression/boundary tests will prove no silent default flips
 
-If any of the above is ambiguous, do not code. Keep the Issue `agent:needs-human`.
+If any of the above is missing or unclear, first try to resolve it from the SoT docs (`docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md`), the issue body, and PR reality. Keep the Issue `agent:needs-human` only when a named human decision, missing input, or authority question genuinely blocks the work — not on ambiguity alone (see `AGENTS.md` Agency default). The Core Runtime ↔ Agentic Lab boundary and operator-facing default changes are real authority gates that warrant escalation when the issue lacks an explicit direction or module path.
 
 ## Checks to perform
 
@@ -185,11 +185,11 @@ If an open implementation Issue is malformed, stale, or no longer safely executa
 
 ### Action: Issue Delivered but Still Open
 
-If delivered work is still open because traceability is ambiguous:
+If delivered work is still open and traceability is unclear, first try to resolve it from the issue body, linked PRs, and merge history. If the delivery is repo-verifiable, close and set to Done. If a named human decision or missing input actually blocks closure (e.g. no canonical PR can be identified), then:
 
-1. **Prefer `agent:needs-human`** over false `agent:ready`
+1. **Set `agent:needs-human`** rather than false `agent:ready` — but only when resolution genuinely requires human input, not on ambiguity alone (see `AGENTS.md` Agency default)
 2. **Execute label and status corrections** per "Malformed or Stale Open Issue" above
-3. **Leave a comment** explaining what action is needed for closure
+3. **Leave a comment** explaining the specific blocking question
 
 ### Parent Feature Issues
 
