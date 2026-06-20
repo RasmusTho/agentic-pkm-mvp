@@ -11,6 +11,7 @@ from uuid import UUID
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
+from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app.store import object_store as legacy_store
 from app.stores import get_vector_index, resolve_store_backend
 
@@ -270,20 +271,42 @@ def rebuild(
             summary["skipped"] = int(summary["skipped"]) + 1
             continue
 
-        embedding, embed_attempts, embed_exc, embed_retryable = _attempt_with_retries(
-            lambda: client.embed_text(text),
-            retry_limit,
-        )
-        if embed_exc is not None:
+        embedding: list | None = None
+        try:
+            embedding = embed_with_retry(
+                text,
+                dim=identity.dim,
+                object_id=str(domain_obj.uuid),
+                # Retry the resolved client so non-registry providers (deterministic/
+                # test/offline profiles) still rebuild; _embed_single only knows the
+                # PROVIDER_REGISTRY adapters and would fail every deterministic object.
+                embed_callable=lambda: client.embed_text(text),
+                # Honor the rebuild's own retry budget (--max-retries / env) for embeds,
+                # not just EMBED_RETRY_MAX. retry_limit is "retries", so attempts = +1.
+                max_attempts=retry_limit + 1,
+            )
+        except EmbedDeadLetterError as _dead_exc:
             _record_failure(
                 summary,
                 path,
                 identity_info,
                 domain_obj,
                 "embed",
-                embed_exc,
-                embed_attempts,
-                embed_retryable,
+                _dead_exc,
+                retry_limit + 1,
+                True,
+            )
+            continue
+        except Exception as _embed_exc:
+            _record_failure(
+                summary,
+                path,
+                identity_info,
+                domain_obj,
+                "embed",
+                _embed_exc,
+                1,
+                False,
             )
             continue
 

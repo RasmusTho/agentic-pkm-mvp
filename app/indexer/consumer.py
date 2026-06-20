@@ -8,6 +8,7 @@ from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import coerce_floats
+from app.llm.embed_queue import embed_with_retry
 from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
 from app.objects import ObjectStore
@@ -106,8 +107,20 @@ def process_event(evt: Dict[str, Any]) -> None:
     text = _extract_text(obj_payload)
 
     embedder = get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
-    embedding = embedder.embed_text(text)
     identity = get_embedding_identity(client=embedder)
+    trace_id = str(evt.get("trace_id") or "").strip() or None
+
+    # Consumer/worker path: retry the injected embedder for transient blips, but on
+    # exhaustion (or any non-transient error) let it propagate to the outbox worker,
+    # which keeps the row pending and retries when the provider recovers. Swallowing
+    # a transient outage here would permanently drop the object (at-least-once break).
+    embedding = embed_with_retry(
+        text,
+        dim=identity.dim,
+        object_id=object_id_raw,
+        embed_callable=lambda: embedder.embed_text(text),
+        dead_letter_on_exhaustion=False,
+    )
 
     idx = get_vector_index()
     _purge_vectors(idx, obj_uuid)
@@ -121,7 +134,6 @@ def process_event(evt: Dict[str, Any]) -> None:
         identity=identity,
     )
 
-    trace_id = str(evt.get("trace_id") or "").strip() or None
     outbox_events.emit_index_embedding_created(object_id=obj_uuid, trace_id=trace_id)
 
 

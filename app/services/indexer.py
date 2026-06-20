@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from app.components.embeddings import get_embedding_client, get_embedding_identity
+from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.objects import DomainObject, ObjectStore
@@ -87,16 +88,34 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     actual_dim: int | None = None
 
     try:
-        embedding = list(
-            llm_embed_text(
+        embedding = embed_with_retry(
+            content,
+            dim=identity.dim,
+            object_id=object_uuid,
+            # Retry the injected embedder so test doubles and the configured client
+            # stay on the path; the callable owns provider/model/dim/normalize.
+            embed_callable=lambda: llm_embed_text(
                 text=content,
                 provider=identity.provider,
                 model=identity.model,
                 dim=identity.dim,
                 normalize=identity.normalize,
-            )
+            ),
         )
         actual_dim = len(embedding)
+    except EmbedDeadLetterError as exc:
+        actual_dim = _infer_dim_from_error(exc)
+        emit_index_embedding_failed(
+            object_id=object_uuid,
+            trace_id=trace_id,
+            source_ref=domain.source_ref,
+            provider=identity.provider,
+            model=identity.model,
+            expected_dim=identity.dim,
+            actual_dim=actual_dim,
+            error=str(exc),
+        )
+        return
     except Exception as exc:
         actual_dim = _infer_dim_from_error(exc)
         emit_index_embedding_failed(
