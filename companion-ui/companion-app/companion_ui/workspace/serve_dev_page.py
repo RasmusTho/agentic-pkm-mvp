@@ -510,6 +510,9 @@ def _render_workspace_header_strip(
     workspace_update_scope: str,
     workspace_update_governance_actions_enabled: bool,
     workspace_update_config_mode: str,
+    orientation_freshness: str = "",
+    orientation_as_of: str = "",
+    orientation_trace_id: str = "",
 ) -> str:
     freshness_label, freshness_title = _workspace_header_freshness(fields)
     canvas_token = "canvas off" if not canvas_enabled else "canvas on"
@@ -627,6 +630,40 @@ def _render_workspace_header_strip(
         for row in telemetry_rows
         for testid, field, label, value in [row[:4]]
     )
+    # Relocated telemetry from the removed "Re-entry snapshot" meta row
+    # (#2171/#2245): freshness/as_of/trace_id rendered as read-only projection
+    # rows in the popover when the orientation payload supplies them.
+    # Zero-state: omit entirely when absent — no placeholder row.
+    _of = (orientation_freshness or "").strip()
+    _oa = (orientation_as_of or "").strip()
+    _ot = (orientation_trace_id or "").strip()
+    if _of:
+        telemetry_html += f"""
+          <div class="workspace-runtime-popover-row workspace-runtime-popover-row--projection"
+            data-testid="workspace-freshness-as-of"
+            data-runtime-field="orientation_freshness"
+            data-authority="read-only-projection">
+            <span class="workspace-runtime-popover-key">freshness</span>
+            <code>{_e(_of)}</code>
+          </div>"""
+    if _oa:
+        telemetry_html += f"""
+          <div class="workspace-runtime-popover-row workspace-runtime-popover-row--projection"
+            data-testid="workspace-orientation-as-of"
+            data-runtime-field="orientation_as_of"
+            data-authority="read-only-projection">
+            <span class="workspace-runtime-popover-key">as of</span>
+            <code>{_e(_oa)}</code>
+          </div>"""
+    if _ot:
+        telemetry_html += f"""
+          <div class="workspace-runtime-popover-row workspace-runtime-popover-row--projection"
+            data-testid="workspace-orientation-trace-id"
+            data-runtime-field="orientation_trace_id"
+            data-authority="read-only-projection">
+            <span class="workspace-runtime-popover-key">orientation trace</span>
+            <code>{_e(_ot)}</code>
+          </div>"""
     return f"""
       <header
         class="workspace-header-strip primary-posture posture-tone-{posture}"
@@ -1754,6 +1791,9 @@ def _render_note_section(fields: dict) -> str:
         workspace_update_scope=workspace_update_scope,
         workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
         workspace_update_config_mode=workspace_update_config_mode,
+        orientation_freshness=str(fields.get("orientation_freshness") or ""),
+        orientation_as_of=str(fields.get("orientation_as_of") or ""),
+        orientation_trace_id=str(fields.get("orientation_trace_id") or ""),
     )
     breadcrumb_html = _render_workspace_breadcrumb(
         note_path=note_path_val,
@@ -5981,7 +6021,12 @@ def _render_orientation_index_html(
     overlay_host_overlays_html = (
         overlay_host_markup(anchor_note_path="")
         + memory_drawer_markup_html
-        + system_map_overlay_markup(available_routes=orientation_map_routes)
+        + system_map_overlay_markup(
+            available_routes=orientation_map_routes,
+            orientation_freshness=freshness if freshness not in ("unknown", "") else "",
+            orientation_as_of=as_of,
+            orientation_trace_id=trace_id if trace_id != "unknown" else "",
+        )
         # Capture modal (#1791, SEP-08b): the inline capture field on the
         # cold_start threshold and the `Jot something down` verb both route to
         # the `capture` occupant via overlayHost.mount('capture').  The modal
@@ -10653,7 +10698,12 @@ def render_index_html(
   {receipts_history_modal_markup()}
   {settings_drawer_markup(fields)}
   {vault_settings_panel_html}
-  {system_map_overlay_markup(available_routes=map_available_routes)}
+  {system_map_overlay_markup(
+    available_routes=map_available_routes,
+    orientation_freshness=str((fields or {}).get("orientation_freshness") or ""),
+    orientation_as_of=str((fields or {}).get("orientation_as_of") or ""),
+    orientation_trace_id=str((fields or {}).get("orientation_trace_id") or ""),
+  )}
   {guidance_layer_style()}
 
   {note_outline_script()}

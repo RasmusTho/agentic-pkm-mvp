@@ -1011,3 +1011,88 @@ def test_reentry_card_heading_not_duplicated_with_body() -> None:
     assert whisper_doing_text != artifact_title, (
         f"whisper column 'doing' text is identical to artifact title {artifact_title!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Telemetry relocation (#2245): cold_start body clean of freshness/as_of/
+# trace_id outside pull-only surfaces.
+# ---------------------------------------------------------------------------
+
+
+def test_cold_start_omits_relocated_telemetry_regions() -> None:
+    """Cold_start door does not expose freshness/as_of/trace_id outside pull-only surfaces.
+
+    Verifies AC3 of #2245: the "Re-entry snapshot" h1 + meta row
+    (freshness/as_of/trace_id) removed by #2171 must not reappear on the
+    cold_start entry surface body. They belong only in the (closed)
+    system-map overlay and in the topbar runtime-status <details> popover —
+    both pull-only, requiring an explicit operator action to open.
+    """
+    # Build a cold_start payload with explicit meta values so we know what
+    # to look for if they accidentally appear.
+    payload: dict[str, Any] = {
+        "scope": {"kind": "workspace", "vault_id": "dev-vault", "channel": "dev"},
+        "meta": {
+            "contract_version": "workspace_orientation.v1",
+            "as_of": "2026-06-10T12:00:00Z",
+            "trace_id": "trace-cs-relocation-test",
+            "freshness": "fresh",
+            "stale_after": "2026-06-10T12:05:00Z",
+            "degraded_reasons": [],
+        },
+        "leave_point": {"status": "absent"},
+        "open_loops": [],
+        "notable_changes": [],
+        "resurface": {"candidates": []},
+        "governance": {
+            "pending_proposal_count": 0,
+            "pending_receipt_count": 0,
+            "latest_receipt_outcome": None,
+            "authority_role": "derived",
+            "source_ref": {"kind": "runtime_signal", "ref": "gov", "label": "gov"},
+        },
+        "guards": {
+            "read_only": True,
+            "runtime_posture": "healthy",
+            "degraded": False,
+            "reasons": [],
+            "authority_role": "derived",
+            "source_ref": {"kind": "status", "ref": "status", "label": "status"},
+        },
+        "mutation_intents": [],
+    }
+    html = _render(orientation=payload)
+
+    # Verify cold_start state is resolved.
+    body_tag = re.search(r"<body[^>]*>", html)
+    assert body_tag, "page must have a <body> tag"
+    entry_states = re.findall(r'data-entry-state="([^"]*)"', body_tag.group(0))
+    assert entry_states == ["cold_start"], f"expected cold_start, got {entry_states}"
+
+    # Strip the system-map-overlay (pull-only surface, legitimately carries
+    # telemetry behind an explicit map.open gate).
+    html_no_overlay = re.sub(
+        r"<!-- system-map-overlay start -->.*?<!-- system-map-overlay end -->",
+        "",
+        html,
+        flags=re.S,
+    )
+
+    # The "Re-entry snapshot" heading must not appear anywhere.
+    assert "Re-entry snapshot" not in html_no_overlay, (
+        "cold_start must not render the 'Re-entry snapshot' heading"
+    )
+    # The orientation-meta class (the meta row) must not appear in the body.
+    assert 'class="orientation-meta"' not in html_no_overlay, (
+        "orientation-meta class must not appear on cold_start body outside pull-only surfaces"
+    )
+    # The specific relocated row testids must not appear in the cold_start body
+    # outside the pull-only overlay.
+    for testid in (
+        "workspace-freshness-as-of",
+        "workspace-orientation-as-of",
+        "workspace-orientation-trace-id",
+    ):
+        assert f'data-testid="{testid}"' not in html_no_overlay, (
+            f"{testid} must not appear on cold_start outside pull-only surfaces"
+        )
