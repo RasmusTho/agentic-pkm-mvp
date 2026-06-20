@@ -5950,6 +5950,44 @@ def _render_orientation_index_html(
         + guidance_layer_style()
         + guidance_layer_script()
     )
+    # cold_start threshold body (AC2, #2171).
+    # Variant is determined server-side from the orientation payload: first
+    # contact when leave_point is absent/missing; cold trajectory when a
+    # leave_point exists but the gap exceeded 14 d.  No client-side
+    # re-derivation — the orientation payload is the server-declared source.
+    cold_start_threshold_html = ""
+    if is_cold:
+        _cold_lp = _orientation_dict(orientation.get("leave_point"))
+        _cold_lp_status = _cold_lp.get("status") if _cold_lp else None
+        _is_first_contact = (not _cold_lp) or _cold_lp_status == "absent"
+        if _is_first_contact:
+            _cold_eyebrow = "First contact"
+            _cold_headline = "Nothing is open yet."
+            _cold_provenance = "leave_point: absent · read-only · server-declared"
+        else:
+            _cold_eyebrow = "Returning after a while"
+            _cold_headline = "Re-entry is through the vault."
+            _cold_provenance = "trajectory: cold (&gt;14d) · leave_point: present · read-only · server-declared"
+        _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
+        cold_start_threshold_html = f"""
+    <div data-region="cold-start-threshold">
+      <div class="cold-start-vault-chip">
+        <span class="cold-start-vault-dot" aria-hidden="true"></span>
+        <span class="cold-start-vault-id">{_cold_vault_id}</span>
+      </div>
+      <div class="cold-start-headline-block">
+        <div class="cold-start-eyebrow">{_e(_cold_eyebrow)}</div>
+        <h1 class="cold-start-headline">{_e(_cold_headline)}</h1>
+      </div>
+      <p data-region="cold-start-verbs" class="cold-start-verbs">
+        <a data-intent="vault.open" onclick="vaultBrowser.focus(); return false;" href="#">Find a note</a>
+        &middot;
+        <a data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;" href="#">Jot something down</a>
+        &middot;
+        <a data-intent="map.open" onclick="overlayHost.mount('map'); return false;" href="#">See the map</a>
+      </p>
+      <p class="cold-start-provenance">{_cold_provenance}</p>
+    </div>"""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6433,6 +6471,7 @@ def _render_orientation_index_html(
     {degraded_html}
     {reentry_overlay_html}
     {whisper_html}
+    {cold_start_threshold_html}
     <div class="orientation-grid">
       {"" if is_cold else f'''<div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"))}
