@@ -8,6 +8,7 @@ from typing import Dict
 
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.promotion.consumer import consume_promotion_intents
+from app.settings.watcher_settings import DEFAULT_WATCHER_RUN_LOG, load_watcher_settings
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_runtime_heartbeat
 from app.watcher.vault_watcher import VaultWatcher, run_watcher_tick
@@ -70,12 +71,32 @@ class RuntimeLoopConfig:
     run_panels: bool = True
     run_promotion_consumer: bool = True
     outbox_path: Path | None = None
+    # Dedicated telemetry sink for watcher.run events (never index-outbox.jsonl).
+    # If None, resolves via WATCHER_RUN_LOG_PATH env or watcher_settings.
+    watcher_run_log_path: Path | None = None
 
 
 @dataclass
 class RuntimeRunSummary:
     watcher: Dict[str, object] = field(default_factory=dict)
     promotion: Dict[str, object] = field(default_factory=dict)
+
+
+def _resolve_watcher_run_log(path: Path | None, vault_root: Path) -> Path:
+    """Resolve the dedicated watcher.run telemetry log path.
+
+    Priority: explicit cfg.watcher_run_log_path > WATCHER_RUN_LOG_PATH env >
+    watcher_settings.paths.watcher_run_log > DEFAULT_WATCHER_RUN_LOG.
+    """
+    if path is not None:
+        return Path(path).expanduser()
+    env_value = os.getenv("WATCHER_RUN_LOG_PATH", "").strip()
+    if env_value:
+        return Path(env_value).expanduser()
+    try:
+        return load_watcher_settings(vault_root).paths.watcher_run_log
+    except Exception:
+        return Path(DEFAULT_WATCHER_RUN_LOG)
 
 
 def run_once(vault_root: Path, cfg: RuntimeLoopConfig) -> RuntimeRunSummary:
@@ -107,11 +128,13 @@ def run_once(vault_root: Path, cfg: RuntimeLoopConfig) -> RuntimeRunSummary:
         if cfg.snapshot_path is not None:
             VaultWatcher(vault_root, snapshot_path=cfg.snapshot_path).refresh_snapshot()
 
+    # Route watcher.run telemetry to the DEDICATED log, never to index-outbox.
+    telemetry_log_path = _resolve_watcher_run_log(cfg.watcher_run_log_path, vault_root)
     emit_watcher_run_event(
         watcher_summary,
         vault_root=vault_root,
         snapshot_path=watcher_summary.get("snapshot_path") or cfg.snapshot_path,
-        outbox_path=outbox_path,
+        telemetry_log_path=telemetry_log_path,
         trigger="runtime_loop",
     )
 

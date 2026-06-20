@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timezone, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -242,7 +242,11 @@ def _emit_registry_watcher_run_event(
     summary: dict[str, object],
     watcher_name: str,
 ) -> None:
-    """Emit a watcher.run event to the outbox so `status` can count registry watcher ticks."""
+    """Emit a watcher.run event to the DEDICATED telemetry log.
+
+    NOTE: uses cfg.watcher_run_log (not cfg.outbox_path / index-outbox.jsonl).
+    Per-tick watcher.run writes must not land in the index/embedding audit sink.
+    """
     try:
         run_summary = {
             "changed": summary.get("changed_in_tick", 0),
@@ -264,7 +268,7 @@ def _emit_registry_watcher_run_event(
             run_summary,
             vault_root=cfg.vault_path,
             snapshot_path=None,
-            outbox_path=cfg.outbox_path,
+            telemetry_log_path=cfg.watcher_run_log,
             trigger=f"registry:{watcher_name}",
         )
     except Exception:
@@ -447,6 +451,9 @@ class RegistryConfig:
     max_bad_ticks: int
     bad_tick_backoff_seconds: float
     specs: list[WatcherSpec]
+    # Dedicated telemetry sink for watcher.run events — separate from
+    # outbox_path (index-outbox.jsonl) so per-tick writes do not bloat it.
+    watcher_run_log: Path = field(default_factory=lambda: Path("tmp/watcher_run.jsonl"))
 
     @classmethod
     def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
@@ -483,6 +490,7 @@ class RegistryConfig:
         )
         watcher_settings = load_watcher_settings(vault_path)
         outbox_path = Path(os.getenv("INDEX_OUTBOX_PATH") or watcher_settings.paths.index_outbox)
+        watcher_run_log = Path(os.getenv("WATCHER_RUN_LOG_PATH") or watcher_settings.paths.watcher_run_log)
         state_dir = Path(os.getenv("WATCHER_STATE_DIR") or watcher_settings.paths.watcher_state.parent).expanduser()
         heartbeat_path = Path(os.getenv("WATCHER_HEARTBEAT_PATH", resolve_heartbeat_path()))
         summary_interval = _as_int(os.getenv("WATCHER_SUMMARY_INTERVAL"), fallback=60)
@@ -551,6 +559,7 @@ class RegistryConfig:
             max_bad_ticks=max_bad_ticks,
             bad_tick_backoff_seconds=bad_tick_backoff_seconds,
             specs=specs,
+            watcher_run_log=watcher_run_log,
         )
 
 

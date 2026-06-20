@@ -263,6 +263,20 @@ def compute_changes(
     return changed, deleted, current
 
 
+def _resolve_watcher_run_log(vault_root: Path) -> Path:
+    """Resolve the dedicated watcher.run telemetry log path.
+
+    Priority: WATCHER_RUN_LOG_PATH env > watcher_settings.paths.watcher_run_log.
+    """
+    env_value = os.getenv("WATCHER_RUN_LOG_PATH", "").strip()
+    if env_value:
+        return Path(env_value).expanduser()
+    try:
+        return load_watcher_settings(vault_root).paths.watcher_run_log
+    except Exception:
+        return Path("tmp/watcher_run.jsonl")
+
+
 def _emit_run_event(
     summary: Summary,
     *,
@@ -271,13 +285,18 @@ def _emit_run_event(
     outbox_path: Path | None,
     trigger: str,
 ) -> None:
-    if outbox_path is None:
-        return
+    """Emit a watcher.run event to the DEDICATED telemetry log.
+
+    NOTE: ignores outbox_path — watcher.run records must not go to
+    index-outbox.jsonl (the index/embedding audit sink).  The telemetry
+    sink is resolved from WATCHER_RUN_LOG_PATH / watcher_settings.
+    """
+    telemetry_log_path = _resolve_watcher_run_log(vault_root)
     emit_watcher_run_event(
         summary,
         vault_root=vault_root,
         snapshot_path=snapshot_path,
-        outbox_path=outbox_path,
+        telemetry_log_path=telemetry_log_path,
         trigger=trigger,
     )
 

@@ -65,7 +65,10 @@ def test_run_watcher_tick_emits_event_when_no_changes(tmp_path: Path, monkeypatc
     vault = tmp_path / "vault"
     vault.mkdir()
     outbox = tmp_path / "events.jsonl"
+    telemetry_log = tmp_path / "watcher_run.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    # Route watcher.run telemetry to a controlled tmp path (not the default tmp/ dir).
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(telemetry_log))
 
     summary, _ = run_watcher_tick(
         vault_root=vault,
@@ -79,8 +82,13 @@ def test_run_watcher_tick_emits_event_when_no_changes(tmp_path: Path, monkeypatc
     )
 
     assert summary["changed"] == 0
-    payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # watcher.run events must land in the dedicated telemetry log, not index-outbox.
+    payloads = [json.loads(line) for line in telemetry_log.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert any(ev.get("event") == "watcher.run" for ev in payloads)
+    # index-outbox must NOT contain watcher.run records.
+    if outbox.exists():
+        outbox_payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert not any(ev.get("event") == "watcher.run" for ev in outbox_payloads)
 
 
 def test_run_watcher_tick_uses_watcher_settings_default_when_env_unset(tmp_path: Path, monkeypatch) -> None:
