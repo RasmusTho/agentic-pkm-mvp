@@ -109,6 +109,45 @@ def test_transient_embedding_failure_still_retries(
         consumer.process_event(_missing_object_event(object_id=object_id, trace_id=trace_id))
 
 
+def test_transient_embedding_exhaustion_propagates_for_worker_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient embedding outage that exhausts in-call retries must PROPAGATE
+    from the consumer (not dead-letter), so the outbox worker keeps the row pending
+    and retries when the provider recovers. Dead-lettering here would permanently
+    drop the object during a brief Ollama outage (at-least-once durability break)."""
+    object_id = str(uuid4())
+    target = SimpleNamespace(
+        uuid=object_id,
+        kind="note",
+        payload={"content": "hello world"},
+        source_ref="Inbox/hello.md",
+    )
+
+    calls: list[int] = []
+
+    class FlakyEmbedder:
+        def embed_text(self, _text: str) -> list[float]:
+            calls.append(1)
+            # ConnectionError is classified transient by the worker predicate, so
+            # embed_with_retry retries it up to EMBED_RETRY_MAX, then (consumer path)
+            # re-raises the original error rather than dead-lettering.
+            raise ConnectionError("ollama briefly unreachable")
+
+    failures: list[dict] = []
+    monkeypatch.setattr(consumer.ObjectStore, "get_object", lambda self, _object_id, strict_backend=False: target)
+    monkeypatch.setattr(consumer, "get_embeddings_client", lambda _intent: FlakyEmbedder())
+    monkeypatch.setattr(consumer.outbox_events, "emit_index_embedding_failed", lambda **kwargs: failures.append(kwargs))
+    monkeypatch.setenv("EMBED_RETRY_MAX", "2")
+    monkeypatch.setenv("EMBED_RETRY_BASE_BACKOFF_S", "0")
+
+    with pytest.raises(ConnectionError, match="briefly unreachable"):
+        consumer.process_event(_missing_object_event(object_id=object_id))
+
+    assert len(calls) == 2  # retried EMBED_RETRY_MAX times before propagating
+    assert not failures  # NOT dead-lettered — left for the worker to retry
+
+
 def test_transient_object_store_failure_bubbles_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

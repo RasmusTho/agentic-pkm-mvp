@@ -90,11 +90,17 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     try:
         embedding = embed_with_retry(
             content,
-            provider=identity.provider,
-            model=identity.model,
             dim=identity.dim,
-            normalize=identity.normalize,
             object_id=object_uuid,
+            # Retry the injected embedder so test doubles and the configured client
+            # stay on the path; the callable owns provider/model/dim/normalize.
+            embed_callable=lambda: llm_embed_text(
+                text=content,
+                provider=identity.provider,
+                model=identity.model,
+                dim=identity.dim,
+                normalize=identity.normalize,
+            ),
         )
         actual_dim = len(embedding)
     except EmbedDeadLetterError as exc:

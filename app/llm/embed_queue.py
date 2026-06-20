@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import List
+from typing import Callable, List
 
 from app.llm.embeddings import _embed_single, get_embed_dim, get_embed_model, _provider
 
@@ -120,47 +120,52 @@ def embed_with_retry(
     dim: int | None = None,
     normalize: bool = True,
     object_id: str | None = None,
+    embed_callable: "Callable[[], List[float]] | None" = None,
+    dead_letter_on_exhaustion: bool = True,
     _sleep: bool = True,
 ) -> List[float]:
     """Embed ``text`` with exponential backoff on transient failures.
 
-    Wraps ``_embed_single`` (which already handles oversized-note chunking +
-    mean-pooling per #2110).  The ``normalize`` parameter is handled by the caller
-    via ``embed_text`` contract; ``_embed_single`` itself does not normalize.
+    Two embed routes:
 
-    On exhaustion of all retry attempts (all of which were transient), raises
-    ``EmbedDeadLetterError``.
+    - **Injected callable** (``embed_callable``) — used by the worker/runtime call
+      sites (``handle_ingest_object_created``, consumer ``process_event``) so the
+      configured/injected embedding client (and test doubles) stay on the path. The
+      callable owns normalization; its result is returned verbatim.
+    - **Batch route** (``embed_callable=None``) — wraps ``_embed_single`` directly
+      (which already handles oversized-note chunking + mean-pooling per #2110) and
+      applies ``normalize``. Used by the batch CLI (``index rebuild``).
 
-    Non-transient errors (``ValueError``, unsupported provider, etc.) are re-raised
-    immediately on the first attempt — no sleep, no retry.
+    Exhaustion behavior is path-dependent:
 
-    Args:
-        text: Text to embed.
-        provider: Embedding provider (default: resolved from env).
-        model: Model name (default: resolved from env).
-        dim: Expected vector dimension (default: resolved from env).
-        normalize: Whether to L2-normalise the resulting vector.
-        object_id: Optional identifier for log context.
-        _sleep: Internal toggle — set to False in tests to skip actual sleep.
+    - ``dead_letter_on_exhaustion=True`` (default, **batch** path): after all
+      transient retries fail, raise ``EmbedDeadLetterError`` so the caller can skip
+      the object and continue the batch (CTI-6) — there is no worker to retry it.
+    - ``dead_letter_on_exhaustion=False`` (**worker/consumer** path): after all
+      transient retries fail, re-raise the *original* transient error so it
+      propagates to the outbox worker, which keeps the row pending and retries
+      later. This preserves at-least-once durability — a brief Ollama outage must
+      defer objects until the provider recovers, not permanently drop them.
 
-    Returns:
-        Embedding vector as a list of floats.
-
-    Raises:
-        EmbedDeadLetterError: All retry attempts exhausted on a transient error.
-        ValueError: Non-transient dimension mismatch or unsupported provider (no retry).
-        Exception: Any other non-transient error (no retry).
+    Non-transient errors (``ValueError`` dim mismatch, unsupported provider, etc.)
+    are re-raised immediately on the first attempt — no sleep, no retry — regardless
+    of ``dead_letter_on_exhaustion``.
     """
     from app.embedding_config import l2_normalize  # local import to avoid circulars
 
-    provider_val = provider or _provider()
-    if model:
-        model_val = model
-    elif provider_val == "mock":
-        model_val = "mock-embedding"
-    else:
-        model_val = get_embed_model()
-    dim_val = dim or get_embed_dim()
+    def _embed_once() -> List[float]:
+        if embed_callable is not None:
+            return list(embed_callable())
+        provider_val = provider or _provider()
+        if model:
+            model_val = model
+        elif provider_val == "mock":
+            model_val = "mock-embedding"
+        else:
+            model_val = get_embed_model()
+        dim_val = dim or get_embed_dim()
+        vector = list(_embed_single(text, provider_val, model_val, dim_val))
+        return l2_normalize(vector) if normalize else vector
 
     retry_max = _get_retry_max()
     base_backoff = _get_base_backoff()
@@ -170,10 +175,7 @@ def embed_with_retry(
 
     for attempt in range(1, retry_max + 1):
         try:
-            vector = list(_embed_single(text, provider_val, model_val, dim_val))
-            if normalize:
-                return l2_normalize(vector)
-            return vector
+            return _embed_once()
         except Exception as exc:
             if not _is_transient_embed_error(exc):
                 # Non-transient: re-raise immediately, no retry, no sleep.
@@ -201,9 +203,14 @@ def embed_with_retry(
                     object_id or "-",
                 )
 
-    raise EmbedDeadLetterError(
-        f"embed exhausted after {retry_max} attempts (transient): {last_exc}"
-    ) from last_exc
+    if dead_letter_on_exhaustion:
+        raise EmbedDeadLetterError(
+            f"embed exhausted after {retry_max} attempts (transient): {last_exc}"
+        ) from last_exc
+    # Worker/consumer path: propagate the original transient so the outbox worker
+    # keeps the row pending and retries when the provider recovers (at-least-once).
+    assert last_exc is not None
+    raise last_exc
 
 
 __all__ = [
