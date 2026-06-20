@@ -23,6 +23,7 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 1. Identify which subsystems are touched.
 2. Open relevant SoT docs and tests.
 3. Propose a short plan (files, tests, docs).
+   - Before committing to the plan, route capability per `AGENTS.md :: Total Cost of Development`: pick the cheapest acceptable model, reasoning effort, verification, and review for the task. Escalation and de-escalation triggers live there.
 4. Implement minimal changes that follow Store/Outbox/Components boundaries.
 5. Update docs and tests in the same change.
 6. Recommend focused test commands.
@@ -42,4 +43,4 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.

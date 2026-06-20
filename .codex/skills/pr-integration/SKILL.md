@@ -62,6 +62,7 @@ If any condition fails, stop and use the relevant escalation path.
 - Do not require a separate governance/docs lane checkbox when the `Direct Repair` block already states `Type` and `Validation`.
 - Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.
 - If CI fails, review blocks, branch drifts, or the PR is large or mixed-scope, stop and read `PR_ESCALATION_PATHS.md`.
+- Integration effort and the model/reasoning to spend (cheap hot path vs. escalated investigation) follow `AGENTS.md :: Total Cost of Development` — do not duplicate it here. [tcd-routing]
 - If CI reports an unavailable pytest flag such as `-n`/`--dist`, check for `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and require an explicit `-p <plugin_name>` load before adding or changing dependencies. [plugin-load-guard]
 - After a review-fix push where GitHub's merge ref may differ from branch HEAD, fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, and run at least one targeted test against the merge-ref worktree before declaring `ready-for-verification`. [merge-ref-validation]
 
@@ -106,4 +107,4 @@ Declare exactly one outcome:
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.

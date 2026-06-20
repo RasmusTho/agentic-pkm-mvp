@@ -227,6 +227,7 @@ Issue guidance:
 - every AC on every issue carries a `Verify:` marker, matching the parent task spec: test pointer for behavioral ACs, doc/receipt target for non-behavioral ACs
 - point back to the parent feature issue in `Context`
 - reference the task specification: "Implements {CAPABILITY}/{TASK_NAME}"
+- persist the per-child TCD capability recommendation (model family + reasoning effort + a one-line rationale) into the issue body `Context`, so the implementing `issue-to-code` agent reads it from the canonical task contract — not only from the breakdown response. It is a non-binding hint: `issue-to-code` still re-derives capability per `AGENTS.md :: Total Cost of Development` from the issue's risk and artifact class, so the route never silently drops at the handoff.
 - do not make one issue responsible for the entire capability acceptance path
 - one task specification may produce multiple issues if the implementation is large
 
@@ -261,7 +262,7 @@ Branch-truth gate (mandatory, same canonical gate as every lane) [branch-truth-g
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
 
 ## Output format
 
@@ -274,6 +275,7 @@ Branch-truth gate (mandatory, same canonical gate as every lane) [branch-truth-g
 7. Evidence Surface
 8. Execution Order
 9. GitHub Receipts
+10. TCD Plan — for a non-trivial breakdown, emit a `tcd_plan` (fields and policy per `AGENTS.md :: Total Cost of Development`; do not restate them here); a single bounded task needs only a one-line capability note, not the full block. Tie complexity, verification difficulty, defect blast radius, parallelization (`can_parallelize_with`), and review gate to the slice cuts and per-AC verification depth decided above, and record the cheapest acceptable capability per child task so downstream `issue-to-code` routes model and reasoning honestly.
 
 When creating issues, include:
 

@@ -89,6 +89,8 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 
 Verification owns the merge decision.
 
+For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks to go green and resolve Codex review, then merge — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch does not relax them); only the human watching is removed.
+
 Prerequisites for merge:
 
 - current SHA truth is intact
@@ -191,7 +193,7 @@ Do not leave state updates as recommendations when you can execute them directly
 
 ## Capturing Learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
 
 ## Output Format
 
@@ -204,6 +206,8 @@ Lead with the human summary; include later sections only when they have content,
 ### 2. Delivery Verdict
 
 AC-by-AC resolution: state whether each `Verify:` target resolves green and why.
+
+For Tier-2/Tier-3 work, alongside the AC-by-AC verdict, emit a `tcd_review` block (fields per `AGENTS.md :: Total Cost of Development`): verdict, risk_level, blocking vs non-blocking issues, missing tests, residual risk, and under/over-modeling. On Tier-1 / trivial / docs-only verifications a one-line capability + residual-risk note suffices — do not pay a fixed audit-block tax on cheap work. Use the same policy for when to escalate verification depth versus stay on the hot path; do not restate the triggers or any model matrix here.
 
 ### 3. State Changes Executed
 

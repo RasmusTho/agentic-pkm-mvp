@@ -122,5 +122,4 @@ Follow-up Issue: <#n or "none">
 
 ## Capturing learning
 
-**Capturing learning:** if this work reveals a repeatable workflow gap, create a BuilderOps
-`LearningSignal`; use `docs/learning-log.md` only as an explicit compatibility fallback.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.

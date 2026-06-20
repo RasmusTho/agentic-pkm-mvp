@@ -24,7 +24,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Acceptance Criteria must carry `Verify:` markers:
      - The primary behavioral AC ("bug no longer reproduces") points to a regression test the fix will add: `Verify: \`tests/<path>::test_<bug_name>\`` — the test should fail against current code and go green after the fix.
      - Any non-behavioral AC (doc clarifications, roadmap/status wording) points to its observable target.
-     - If the bug cannot yet be expressed as a failing test (e.g., the repro is environment-dependent or requires instrumentation that does not exist), mark `agent:needs-human` rather than `agent:ready`.
+     - If the bug is real, bounded, and reversible but hard to express as a failing test, that escalates the test-strategy *effort* (higher reasoning per `AGENTS.md :: Total Cost of Development`), not the agent state — keep `agent:ready` and let the implementing agent design the regression test. Reserve `agent:needs-human` only for a repro that genuinely cannot be exercised without a human decision or external access the agent lacks (per `AGENTS.md :: Agency default`).
 4. Labels:
    - Always add `type:bug`.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.
@@ -44,11 +44,11 @@ Set `agent:ready` when all are true:
 - No unresolved decisions or missing contract inputs.
 - The bug is a real defect, not a low-signal maintenance correction that should be batched into audit or retrospective work.
 
-Force `agent:needs-human` when:
+Force `agent:needs-human` per `AGENTS.md :: Agency default` — reserve it for irreversible, external-facing, or genuinely ambiguous-authority decisions; default to `agent:ready` for buildable, bounded, reversible defects rather than deferring defensively. Specifically when:
 - a named human decision, tradeoff, missing input, or authority question is required before work can proceed
 - It is a Core Runtime ↔ Agentic Lab boundary move without explicit direction and module paths.
 - The change would alter operator-facing defaults without explicit posture and validation plan.
 
 ## Capturing learning
 
-**Capturing learning:** if during this work you notice a divergence from plan — you did something you did not expect to do, or discovered an earlier artifact was wrong — route it through `capture-learning`, which owns the invocation timing: invoke immediately only when the divergence needs upstream repair now; otherwise note the signal for `learning-retrospective`. Only log if you can name an upstream artifact that could absorb the fix.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
