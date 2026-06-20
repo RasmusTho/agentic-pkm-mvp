@@ -4961,6 +4961,13 @@ def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:
     runtime cannot process it (Q24). The vault — durable truth — is unaffected;
     the companion is only a client.
 
+    Restyle (#2173): quiet-register copy — "The runtime is unreachable. Nothing
+    was lost." — replaces the original alarm heading to align with the no_vault
+    threshold treatment (design_handoff/2026-06-19-cold-start-threshold §no_vault
+    render contract CORRECTION + restyle). Retry (entry.retry) and System map
+    (map.open) are kept; no Find or Jot verb (capture has no honest offline landing).
+    Alarm color stays confined to this state.
+
     Provenance line is fixed by the design handoff:
     ``runtime_unavailable · /api/companion/orientation · 503``.
     """
@@ -4970,10 +4977,10 @@ def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:
     data-error-kind="runtime-unavailable">
     <span class="error-glyph" aria-hidden="true">⚠</span>
     <div class="vault-unreachable-body">
-      <span class="error-label vault-unreachable-heading">Vault unreachable</span>
+      <span class="error-label vault-unreachable-heading">The runtime is unreachable. Nothing was lost.</span>
       <p class="vault-unreachable-reassurance">
         Your vault — the durable source of truth — is unaffected. The companion
-        is only a client, and it can't reach the runtime right now.
+        is only a client.
       </p>
       <div class="vault-unreachable-affordances">{retry_html}</div>
       <details class="error-details" data-testid="workspace-error-details">
@@ -5871,6 +5878,10 @@ def _render_orientation_index_html(
     # no re-entry overlay, no orientation sections, just vault + map affordances
     # (SYSTEM_ENTRY_POINT_SPEC.md §Anti-dashboard; REENTRY_ORIENTATION_TREATMENT.md §Cold).
     is_cold = entry_resolution.state == "cold_start"
+    # no_vault via the orientation-unavailable frame (orientation fetch failed,
+    # vault browser still reachable) also suppresses the orientation grid and
+    # re-entry overlay; renders quiet-register copy instead (#2173).
+    is_no_vault = entry_resolution.state == "no_vault"
     reentry_overlay_html = ""
     whisper_html = ""
     rail_fade_attr = ""
@@ -6458,8 +6469,8 @@ def _render_orientation_index_html(
     data-ambient-refresh="{'enabled' if ambient_refresh_enabled else 'disabled'}"{rail_fade_attr}>
     <header class="orientation-header">
       <div class="orientation-eyebrow">Workspace orientation</div>
-      {"" if is_cold else '<h1 class="orientation-heading">Re-entry snapshot</h1>'}
-      {"" if is_cold else f'''<div class="orientation-meta">
+      {"" if (is_cold or is_no_vault) else '<h1 class="orientation-heading">Re-entry snapshot</h1>'}
+      {"" if (is_cold or is_no_vault) else f'''<div class="orientation-meta">
         <span>vault: {_e(_orientation_str(scope.get("vault_id"), "unknown"))}</span>
         <span>channel: {_e(_orientation_str(scope.get("channel"), "unknown"))}</span>
         <span>freshness: {_e(freshness)}</span>
@@ -6472,8 +6483,11 @@ def _render_orientation_index_html(
     {reentry_overlay_html}
     {whisper_html}
     {cold_start_threshold_html}
+    {f"""<div class="vault-unreachable-threshold" data-testid="workspace-vault-unreachable-threshold">
+      <span class="vault-unreachable-threshold-copy">The runtime is unreachable. Nothing was lost.</span>
+    </div>""" if is_no_vault else ""}
     <div class="orientation-grid">
-      {"" if is_cold else f'''<div class="orientation-column">
+      {"" if (is_cold or is_no_vault) else f'''<div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"))}
         {_render_orientation_open_loops(orientation.get("open_loops"), meta=meta)}
         {_render_orientation_notable_changes(orientation.get("notable_changes"), meta=meta)}
