@@ -69,26 +69,59 @@ def _imported_modules(path: Path) -> Set[str]:
     return modules
 
 
-def _importlib_string_targets(path: Path) -> Set[str]:
-    """Collect string-literal first args to importlib.import_module / __import__.
+def _is_direct_dynamic_import_call(node: ast.Call) -> bool:
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr == "import_module":
+        return True
+    return isinstance(func, ast.Name) and func.id == "__import__"
 
-    These are the *dynamic* imports import-linter cannot see statically.
+
+def _string_literal_first_arg(node: ast.Call) -> str | None:
+    if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+        return node.args[0].value
+    return None
+
+
+def _local_import_wrapper_names(tree: ast.AST) -> Set[str]:
+    """Find local functions that wrap direct dynamic imports."""
+    functions = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+    wrappers: Set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for func in functions:
+            if func.name in wrappers:
+                continue
+            for node in ast.walk(func):
+                if not isinstance(node, ast.Call):
+                    continue
+                is_wrapper_call = isinstance(node.func, ast.Name) and node.func.id in wrappers
+                if _is_direct_dynamic_import_call(node) or is_wrapper_call:
+                    wrappers.add(func.name)
+                    changed = True
+                    break
+    return wrappers
+
+
+def _importlib_string_targets(path: Path) -> Set[str]:
+    """Collect string-literal targets for dynamic imports and local wrappers.
+
+    These are the *dynamic* imports import-linter cannot see statically, including
+    helper calls such as ``_module_importable("app.api...")`` that wrap
+    ``__import__`` or ``importlib.import_module``.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    wrapper_names = _local_import_wrapper_names(tree)
     targets: Set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        func = node.func
-        name = None
-        if isinstance(func, ast.Attribute) and func.attr == "import_module":
-            name = "import_module"
-        elif isinstance(func, ast.Name) and func.id == "__import__":
-            name = "__import__"
-        if name is None:
+        is_wrapper_call = isinstance(node.func, ast.Name) and node.func.id in wrapper_names
+        if not (_is_direct_dynamic_import_call(node) or is_wrapper_call):
             continue
-        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-            targets.add(node.args[0].value)
+        target = _string_literal_first_arg(node)
+        if target is not None:
+            targets.add(target)
     return targets
 
 
@@ -212,3 +245,19 @@ def test_status_service_consumes_seam_probe_via_provider() -> None:
             assert seams[key] in ("enabled", "disabled")
     finally:
         status_service.register_v6_seams_provider(saved)  # type: ignore[arg-type]
+
+
+def test_status_service_consumes_source_understanding_availability_via_provider() -> None:
+    """Foundation status_service consumes API route availability through a provider."""
+    from app.observability import status_service
+
+    assert hasattr(status_service, "register_source_understanding_availability_provider")
+    saved = status_service._source_understanding_availability_provider
+    try:
+        status_service.register_source_understanding_availability_provider(None)
+        assert status_service._source_understanding_available() is False
+
+        status_service.register_source_understanding_availability_provider(lambda: True)
+        assert status_service._source_understanding_available() is True
+    finally:
+        status_service.register_source_understanding_availability_provider(saved)
