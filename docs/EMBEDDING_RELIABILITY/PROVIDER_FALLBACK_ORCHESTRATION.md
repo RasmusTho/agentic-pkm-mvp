@@ -81,18 +81,43 @@ joins those already-shipped primitives.
    the vector record. Document the exact field name in `## Concretely` so
    EMBEDREL-06 has a concrete anchor.
 
-5. **Emits an observable fallback signal** — when `is_fallback=True`, the
-   `emit_index_object_embedded` call in `handle_ingest_object_created` and the
-   `emit_index_embedding_created` call in `process_event` include:
-   - `provider=actual_identity.provider` (`"gemini"`) in the existing
-     `provenance` dict of the outbox record.
-   - `meta={"fallback_used": True, "primary_provider": primary_identity.provider}`
-     appended to the event envelope.
-   This uses the existing `emit_index_object_embedded` signature's `meta=`
-   kwarg (already present in `app/outbox/events.py`, line 164) — no new event
-   type is required. Operators tailing the outbox JSONL or querying the events
-   table will see `provenance.provider="gemini"` and `meta.fallback_used=true`
-   on any fallback-routed write, making egress to Google fully visible.
+   **Blocking dependency — the Pg backend rejects mismatched identity on upsert (P1).**
+   `app/stores/pg.py::PgVectorIndex.upsert()` calls
+   `_ensure_index_identity(cur, resolved_identity, allow_create=True)` (pg.py:332),
+   which raises `RuntimeError("Embedding identity mismatch ...")` (pg.py:149) whenever
+   the requested provider/model/dim/normalize differs from the index's recorded
+   identity. A Gemini-fallback vector therefore **cannot** be upserted into an
+   Ollama-identity index as written — the write fails closed. This must be resolved
+   before fallback writes are searchable: the vector index identity model has to move
+   from **index-level single identity** to **per-vector identity with a stable index
+   primary identity**, so a fallback vector can be recorded under the Gemini identity
+   (tagged `reconcile=pending`) without tripping the index-level guard, while the
+   index's *primary* identity (used for queries, CTI-3) stays Ollama. This schema/guard
+   change is shared with EMBEDREL-06 (which records per-vector identity and detects the
+   mixed state); land it as the first step of this slice (or a small precursor) and
+   keep the dim guard intact (a dim mismatch must still fail — CTI-1). If the per-vector
+   identity change is deferred, fallback must **not** silently fail the upsert: it
+   dead-letters with `index.embedding.failed` and the object waits for the worker /
+   re-index instead (degraded availability, but never a corrupt or silently-dropped
+   write).
+
+5. **Emits an observable fallback signal** — when `is_fallback=True`, the success
+   event carries `provider=actual_identity.provider` (`"gemini"`) in `provenance`
+   and `meta={"fallback_used": True, "primary_provider": primary_identity.provider}`.
+   - `handle_ingest_object_created` already emits via `emit_index_object_embedded`,
+     whose signature accepts `provider=` and `meta=` (`app/outbox/events.py:154-184`) —
+     use them directly; no new event type is required.
+   - **Consumer path needs an extension (P2).** `process_event` currently emits
+     `emit_index_embedding_created`, whose signature is only
+     `(*, object_id, trace_id, source)` with a fixed `provenance={"model": EMBED_MODEL,
+     "version": "1.0"}` (`app/outbox/events.py:139-151`) — it cannot carry `provider`
+     or `meta`. Either (a) extend `emit_index_embedding_created` to accept
+     `provider`/`model`/`meta` (preferred — keep the event type the consumer already
+     emits), or (b) switch the consumer success emission to `emit_index_object_embedded`.
+     Do not assume the egress signal is emittable on the consumer path without this change.
+   Operators tailing the outbox JSONL or querying the events table will then see
+   `provenance.provider="gemini"` and `meta.fallback_used=true` on any fallback-routed
+   write, making egress to Google fully visible.
 
 6. **CTI-3 invariant — query path unchanged.** This task does NOT touch
    `app/components/embeddings.py::get_embedding_client`, `resolve_embedding_identity`,
