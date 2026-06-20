@@ -357,14 +357,14 @@ class VaultManager:
         )
         try:
             self.app_local_store.upsert_known_vault(known, make_active=True)
-        except (OSError, MarkdownSettingsError):
+        except MarkdownSettingsError:
             # A corrupt app-local registry (Git conflict markers, malformed
             # frontmatter) must not 500 picker recovery: selecting/initializing a
             # vault with remember=True over a corrupt registry should still
-            # succeed. Back up the unreadable file and re-seed a fresh registry so
-            # the selection is remembered instead of re-raising. (#2185)
+            # succeed. Back up only this proven parse-corruption path; write-side
+            # OSError must fail loudly without moving aside a valid registry.
             logger.warning(
-                "app-local registry unreadable while remembering vault; backing up and re-seeding",
+                "app-local registry corrupt while remembering vault; backing up and re-seeding",
                 exc_info=True,
             )
             self.app_local_store.backup_corrupt_and_reset()

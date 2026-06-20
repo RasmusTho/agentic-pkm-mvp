@@ -17,7 +17,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.cli.vault import vault as vault_cli
-from app.vault.app_local import AppLocalSettingsStore
+from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
 from app.vault.manager import VaultManager
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 from app.vault.promotion_preflight import vault_settings_preflight
@@ -125,6 +125,28 @@ _CORRUPT_REGISTRY = (
 )
 
 
+class _OneShotWriteFailingMarkdownStore(MarkdownSettingsStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_write = False
+
+    def write_frontmatter(self, path: Path, frontmatter, *, body: str | None = None) -> None:
+        if self.fail_next_write:
+            self.fail_next_write = False
+            raise OSError("simulated app-local registry write failure")
+        super().write_frontmatter(path, frontmatter, body=body)
+
+
+class _SpyAppLocalSettingsStore(AppLocalSettingsStore):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.backup_calls = 0
+
+    def backup_corrupt_and_reset(self) -> Path | None:
+        self.backup_calls += 1
+        return super().backup_corrupt_and_reset()
+
+
 def test_select_remember_recovers_from_corrupt_registry(tmp_path: Path) -> None:
     """`select_vault(remember=True)` over a corrupt registry recovers, no raise.
 
@@ -156,6 +178,45 @@ def test_select_remember_recovers_from_corrupt_registry(tmp_path: Path) -> None:
     reloaded = AppLocalSettingsStore(registry_path).load()
     assert reloaded.last_active_vault_ref is not None
     assert reloaded.last_active_vault_ref in reloaded.known_vaults
+
+
+def test_remember_context_does_not_reset_valid_registry_on_write_error(tmp_path: Path) -> None:
+    """Write-side registry failures fail loudly without corrupt-registry reset.
+
+    A valid app-local registry that loads successfully must not be backed up and
+    replaced with a single current-vault entry just because the later save hit a
+    transient filesystem error such as ENOSPC.
+    """
+
+    registry_path = tmp_path / "app-local.md"
+    markdown_store = _OneShotWriteFailingMarkdownStore()
+    app_local_store = _SpyAppLocalSettingsStore(registry_path, markdown_store=markdown_store)
+    other_vault_ref = f"path:{tmp_path / 'other-vault'}"
+    app_local_store.upsert_known_vault(
+        KnownVaultRef(
+            ref=other_vault_ref,
+            path=str(tmp_path / "other-vault"),
+            vault_id="vault-other",
+            vault_name="Other Vault",
+            local_instance_id="local-other",
+            last_opened_at="2026-06-20T00:00:00Z",
+        ),
+        make_active=True,
+    )
+    manager = VaultManager(app_local_store=app_local_store)
+    selected_vault = tmp_path / "selected-vault"
+    manager.initialize_vault(selected_vault, remember=False)
+
+    markdown_store.fail_next_write = True
+
+    with pytest.raises(OSError, match="simulated app-local registry write failure"):
+        manager.select_vault(selected_vault, remember=True)
+
+    assert app_local_store.backup_calls == 0
+    assert not list(tmp_path.glob("app-local.md.corrupt-*"))
+    reloaded = AppLocalSettingsStore(registry_path).load()
+    assert reloaded.last_active_vault_ref == other_vault_ref
+    assert sorted(reloaded.known_vaults) == [other_vault_ref]
 
 
 def test_initialize_remember_recovers_from_corrupt_registry(tmp_path: Path) -> None:
