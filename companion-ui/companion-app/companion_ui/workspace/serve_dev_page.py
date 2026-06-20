@@ -3618,6 +3618,33 @@ def _render_find_mode(candidates: list[dict], *, payload_available: bool = False
         </section>"""
 
 
+def _render_reorient_source(source_link: str) -> str:
+    source = source_link.strip()
+    source_html = _e(source or "source unavailable")
+    if source and not re.match(r"^[a-z][a-z0-9+.-]*:", source, re.I):
+        href = "/workspace?note_path=" + quote(source, safe="")
+        return f"""
+                <a
+                  class="reorient-source"
+                  data-testid="reorient-source-link"
+                  href="{_e(href)}"
+                  data-affordance-status="read-only"
+                  data-source-link="{_e(source)}">
+                  {source_html}
+                </a>"""
+    reason = "runtime source ref is not browser-navigable" if source else "source ref unavailable"
+    return f"""
+                <span
+                  class="reorient-source reorient-source-disabled"
+                  data-testid="reorient-source-link"
+                  data-affordance-status="unavailable"
+                  data-disabled-reason="{_e(reason)}"
+                  aria-disabled="true"
+                  data-source-link="{_e(source)}">
+                  {source_html}
+                </span>"""
+
+
 def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
     open_loops_count = len(sections.get("open_loops") or []) if sections else 0
     has_content = bool(sections) and any(sections.get(name) for name in sections)
@@ -3675,6 +3702,7 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
                 "open_loops": "open-loop",
             }[name]
             for item in items:
+                source = _render_reorient_source(str(item.get("source_link") or ""))
                 handoff = ""
                 if item.get("panel_handoff"):
                     handoff = (
@@ -3695,13 +3723,7 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
                 data-reorient-kind="{_e(item_kind)}">
                 <span class="reorient-kind" data-testid="reorient-kind">{_e(labels[name])}</span>
                 <span class="reorient-item-label">{_e(_cap(item.get("label", "")))}</span>
-                <a
-                  class="reorient-source"
-                  data-testid="reorient-source-link"
-                  href="#"
-                  data-source-link="{_e(item.get("source_link", ""))}">
-                  {_e(item.get("source_link", ""))}
-                </a>
+                {source}
                 {handoff}
               </li>"""
                 )
