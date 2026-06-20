@@ -8,7 +8,6 @@ import pytest
 from app.llm.embed_queue import (
     EmbedDeadLetterError,
     _get_base_backoff,
-    _get_concurrency,
     _get_max_backoff,
     _get_retry_max,
     embed_with_retry,
@@ -111,34 +110,20 @@ def test_provider_wide_outage_fails_loud(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# test_concurrency_env_configurable (AC9 subset)
-# ---------------------------------------------------------------------------
-
-def test_concurrency_env_configurable(monkeypatch):
-    """EMBED_QUEUE_CONCURRENCY is read from env; defaults to 1."""
-    monkeypatch.delenv("EMBED_QUEUE_CONCURRENCY", raising=False)
-    assert _get_concurrency() == 1
-
-    monkeypatch.setenv("EMBED_QUEUE_CONCURRENCY", "4")
-    assert _get_concurrency() == 4
-
-    monkeypatch.setenv("EMBED_QUEUE_CONCURRENCY", "bad")
-    assert _get_concurrency() == 1
-
-
-# ---------------------------------------------------------------------------
 # test_config_defaults (AC9)
 # ---------------------------------------------------------------------------
 
 def test_config_defaults(monkeypatch):
-    """All four config env vars have sane defaults when unset."""
-    for var in ("EMBED_RETRY_MAX", "EMBED_RETRY_BASE_BACKOFF_S", "EMBED_RETRY_MAX_BACKOFF_S", "EMBED_QUEUE_CONCURRENCY"):
+    """The retry/backoff config env vars have sane defaults when unset.
+
+    Embedding execution is intentionally serial (no concurrency knob); see the
+    module docstring for the rationale (memory-bound shared Ollama)."""
+    for var in ("EMBED_RETRY_MAX", "EMBED_RETRY_BASE_BACKOFF_S", "EMBED_RETRY_MAX_BACKOFF_S"):
         monkeypatch.delenv(var, raising=False)
 
     assert _get_retry_max() == 3
     assert _get_base_backoff() == pytest.approx(1.0)
     assert _get_max_backoff() == pytest.approx(30.0)
-    assert _get_concurrency() == 1
 
 
 # ---------------------------------------------------------------------------

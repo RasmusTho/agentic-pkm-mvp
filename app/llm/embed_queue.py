@@ -10,7 +10,13 @@ Env vars (identical in dev/test/prod — no environment-conditional branching):
     EMBED_RETRY_MAX          — max attempts per object (default 3)
     EMBED_RETRY_BASE_BACKOFF_S — base sleep seconds (default 1.0)
     EMBED_RETRY_MAX_BACKOFF_S  — cap on backoff sleep (default 30.0)
-    EMBED_QUEUE_CONCURRENCY  — ThreadPoolExecutor bound for batch callers (default 1)
+
+Embedding execution is intentionally **serial** (one in-flight request at a time):
+the bottleneck is a memory-bound shared Ollama, and concurrent embeds would compound
+the OOM this capability exists to prevent. Backpressure here means serialization +
+retry-with-backoff, not fan-out — so there is deliberately no concurrency knob. If a
+remote provider (e.g. Gemini) later needs batch throughput, add a bounded executor
+then, scoped to that provider.
 
 On exhaustion after all transient retries, ``EmbedDeadLetterError`` (a subclass of
 ``RuntimeError``) is raised instead of the raw provider error.  Non-transient errors
@@ -87,17 +93,6 @@ def _get_max_backoff() -> float:
     except (TypeError, ValueError):
         return 30.0
     return max(value, 0.0)
-
-
-def _get_concurrency() -> int:
-    raw = os.getenv("EMBED_QUEUE_CONCURRENCY")
-    if raw is None:
-        return 1
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return 1
-    return max(value, 1)
 
 
 def _backoff_seconds(attempt: int, base: float, cap: float) -> float:
@@ -222,5 +217,4 @@ __all__ = [
     "_get_retry_max",
     "_get_base_backoff",
     "_get_max_backoff",
-    "_get_concurrency",
 ]

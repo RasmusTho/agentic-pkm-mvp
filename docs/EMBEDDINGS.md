@@ -68,9 +68,8 @@ comes from the compiled task policy; env vars supply defaults only when the poli
 - `EMBED_RETRY_MAX_BACKOFF_S`
   - Cap on the backoff sleep in seconds.
   - Default: `30.0`.
-- `EMBED_QUEUE_CONCURRENCY`
-  - `ThreadPoolExecutor` bound for batch callers such as `index rebuild`. `1` means serial (safe for a memory-constrained shared Ollama). Set higher only on provisioned hardware.
-  - Default: `1`.
+
+Embedding execution is intentionally **serial** (one in-flight embed request at a time), including the batch `index rebuild` path. The bottleneck is a memory-bound shared Ollama, so concurrent embeds would compound the OOM this path exists to prevent; backpressure here means serialization + retry-with-backoff, not fan-out. There is deliberately **no concurrency knob**. If a remote provider later needs batch throughput, a bounded executor can be added scoped to that provider.
 
 Per-object transient failures are retried with exponential **backoff** before `index.embedding.failed` is emitted. A single object failure never aborts the ingest of the remaining objects (see *Embedding Execution Queue*, `app/llm/embed_queue.py`).
 
