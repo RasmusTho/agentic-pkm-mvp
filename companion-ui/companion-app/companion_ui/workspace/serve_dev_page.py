@@ -176,6 +176,86 @@ def _e(value: str) -> str:
     return _html.escape(str(value))
 
 
+_DOCUMENT_ENTRY_PATHS: frozenset[str] = frozenset({"/", "/workspace"})
+
+
+def _render_unknown_document_route(path: str, *, production_profile: bool = False) -> str:
+    route = path or "/"
+    dev_suffix = "" if production_profile else " [DEV]"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Companion UI - Route not found{dev_suffix}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {{
+      color-scheme: light;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f4;
+      color: #20231f;
+    }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px 20px;
+    }}
+    main {{
+      width: min(620px, 100%);
+      border: 1px solid #d7dccf;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 28px;
+      box-shadow: 0 12px 28px rgba(32, 35, 31, 0.08);
+    }}
+    .eyebrow {{
+      margin: 0 0 10px;
+      color: #5b6658;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }}
+    h1 {{
+      margin: 0 0 12px;
+      font-size: 1.7rem;
+      line-height: 1.2;
+    }}
+    p {{
+      margin: 0 0 16px;
+      line-height: 1.55;
+      color: #40483d;
+    }}
+    code {{
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      border-radius: 6px;
+      background: #eef1ea;
+      padding: 2px 6px;
+      color: #20231f;
+    }}
+    a {{
+      color: #1d5f54;
+      font-weight: 700;
+    }}
+  </style>
+</head>
+<body>
+  <main data-testid="workspace-route-not-found-state"
+    data-route-error="unknown_document_route"
+    data-request-path="{_e(route)}">
+    <p class="eyebrow">Companion UI</p>
+    <h1>Companion UI route not found</h1>
+    <p>The route <code>{_e(route)}</code> is not a Companion UI entry point.</p>
+    <p><a href="/">Return to the workspace entry point</a></p>
+  </main>
+</body>
+</html>"""
+
+
 # Canonical companion kind values from COMPANION_NOTE_CONTRACT.md.
 # Exact match only — substring checks risk false-positives on arbitrary kind strings
 # (e.g. "non_companion_attachment"). Extend this set as new companion kinds are
@@ -11684,6 +11764,20 @@ def make_handler(
                     self._proxy_error(exc)
                     return
                 self._send_json(200, data)
+                return
+            if parsed.path.startswith("/api/"):
+                self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
+                return
+            if parsed.path not in _DOCUMENT_ENTRY_PATHS:
+                body = _render_unknown_document_route(
+                    parsed.path,
+                    production_profile=self._production_profile,
+                ).encode("utf-8")
+                self.send_response(404)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             body = handle_get(
                 query_string=parsed.query,
