@@ -246,12 +246,15 @@ def test_reentry_orientation_regions_do_not_duplicate_heading_and_body_without_l
     assert "Open artifact" in leave_section
 
     card = _reentry_card(html)
-    assert card.count("Resume plan") == 1
+    # The 'doing' question now shows "Where you left off" (not the artifact title)
+    # and the 'stopped' artifact link shows the title directly (not suppressed).
+    assert "Where you left off" in card
     assert 'data-testid="reentry-stop-link"' in card
-    assert "Open artifact" in card
+    assert card.count("Resume plan") == 1  # title in stopped link, not in doing body
 
     whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
-    assert whisper.count("Resume plan") == 1
+    assert "Where you left off" in whisper
+    assert whisper.count("Resume plan") == 0  # title no longer repeated in whisper doing slot
 
     open_loop = html.split('data-testid="workspace-orientation-open-loop"', 1)[1].split(
         "</article>", 1
@@ -947,3 +950,64 @@ def test_cold_start_headline_uses_returning_copy_when_vault_nonempty() -> None:
     html_cold = _render(orientation=payload_cold_traj)
     assert "Returning after a while" in html_cold
     assert "First contact" not in html_cold
+
+
+# ---------------------------------------------------------------------------
+# AC (#2241): re-entry card heading must not duplicate artifact-link body text
+# ---------------------------------------------------------------------------
+
+
+def test_reentry_card_heading_not_duplicated_with_body() -> None:
+    """The 'doing' question body must not equal the artifact-link body text.
+
+    When the v1 leave_point has no top-level ``label`` field,
+    ``_reentry_leave_label`` previously fell through to ``artifact.get("title")``,
+    making the 'doing' question body identical to the artifact title that would
+    appear in the 'stopped' artifact link.  The fix must derive a distinct
+    human-readable heading (e.g. "Where you left off") instead of repeating
+    the title.
+
+    Authority: issue #2241.
+    """
+    payload = _orientation_payload(gap=_GAP_FULL_MIST)
+    assert payload["leave_point"] is not None
+    # v1 contract: no top-level label field
+    payload["leave_point"].pop("label", None)
+    artifact_title = payload["leave_point"]["artifact_ref"]["title"]  # "Resume plan"
+
+    html = _render(orientation=payload)
+    card = _reentry_card(html)
+
+    # Extract the 'doing' question body text.
+    doing_li = card.split('data-reentry-question="doing"', 1)[1].split("</li>", 1)[0]
+    doing_body = doing_li.split('class="reentry-q-body"', 1)[1].split("</span>", 1)[0]
+    # Strip the leading '>' from the attribute close.
+    doing_body_text = doing_body.lstrip(">").strip()
+
+    # The 'doing' heading must NOT be the raw artifact title — the title
+    # already surfaces as the artifact link in the 'stopped' question.
+    assert doing_body_text != artifact_title, (
+        f"re-entry card 'doing' body is identical to artifact title {artifact_title!r}; "
+        "expected a distinct human-readable heading when leave.label is absent"
+    )
+
+    # The heading must be non-empty (a meaningful cue, not silent).
+    assert doing_body_text, "re-entry card 'doing' body must not be empty"
+
+    # The artifact link in the 'stopped' question must still display the title
+    # (no longer suppressed to 'Open artifact' once the heading is distinct).
+    stopped_li = card.split('data-reentry-question="stopped"', 1)[1].split("</li>", 1)[0]
+    assert 'data-testid="reentry-stop-link"' in stopped_li
+
+    # long_mist whisper column 'doing' text must also be distinct from the title.
+    long_mist_payload = _orientation_payload(gap=_GAP_LONG_MIST)
+    assert long_mist_payload["leave_point"] is not None
+    long_mist_payload["leave_point"].pop("label", None)
+    long_mist_html = _render(orientation=long_mist_payload)
+
+    whisper = long_mist_html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
+    whisper_doing = whisper.split('data-whisper-item="doing"', 1)[1].split("</div>", 1)[0]
+    whisper_doing_text = whisper_doing.split('class="reentry-whisper-text"', 1)[1].split("</span>", 1)[0].lstrip(">").strip()
+    assert whisper_doing_text != artifact_title, (
+        f"whisper column 'doing' text is identical to artifact title {artifact_title!r}"
+    )
