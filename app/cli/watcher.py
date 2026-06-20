@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 
-from app.runtime.runtime_loop import OutboxPathError, resolve_outbox_path
+from app.runtime.runtime_loop import OutboxPathError, _resolve_watcher_run_log, resolve_outbox_path
 from app.settings.tiering import require_lab_profile
 from app.settings.validate import validate_settings
 from app.watcher.config import WatcherConfig
@@ -207,7 +207,7 @@ def vault_watcher_run(
             summary,
             vault_root=resolved,
             snapshot_path=summary.get("snapshot_path") or snapshot_path,
-            outbox_path=outbox_path,
+            telemetry_log_path=_resolve_watcher_run_log(None, resolved),
             trigger="vault_watcher_run",
         )
 
