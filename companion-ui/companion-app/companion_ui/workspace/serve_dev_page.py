@@ -5691,7 +5691,6 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
     """
     leave = _orientation_dict(orientation.get("leave_point"))
     counts = _reentry_counts(orientation)
-    leave_label = _reentry_leave_label(leave)
     doing_label = _reentry_doing_label(leave)
     traj_state = _reentry_traj_state(leave)
     delta_strip = _render_reentry_delta_strip(orientation) if shape == "long_mist" else ""
@@ -6645,7 +6644,7 @@ def _render_orientation_index_html(
     {reentry_overlay_html}
     {whisper_html}
     {cold_start_threshold_html}
-    {f"""<div class="vault-unreachable-threshold" data-testid="workspace-vault-unreachable-threshold">
+    {"""<div class="vault-unreachable-threshold" data-testid="workspace-vault-unreachable-threshold">
       <span class="vault-unreachable-threshold-copy">The runtime is unreachable. Nothing was lost.</span>
     </div>""" if is_no_vault else ""}
     <div class="orientation-grid">

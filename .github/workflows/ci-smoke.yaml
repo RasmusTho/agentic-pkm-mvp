@@ -76,7 +76,7 @@ jobs:
 
       - name: Lint (ruff)
         run: |
-          ruff check app tests
+          ruff check app tests companion-ui/companion-app
 
       - name: Validate settings
         run: |
