@@ -18,7 +18,7 @@ from app.llm.embeddings import EMBED_MODEL, get_embed_model, get_embedding_provi
 from app.settings.runtime import get_settings_bundle
 
 _MOCK_EMBED_MODEL = "mock-embedding"
-_SUPPORTED_EMBED_PROVIDERS = {"mock", "ollama", "openai", "deepseek", "deterministic"}
+_SUPPORTED_EMBED_PROVIDERS = {"mock", "ollama", "openai", "deepseek", "deterministic", "gemini"}
 
 
 class EmbeddingClientProtocol(Protocol):
@@ -196,7 +196,11 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         cfg = profiles_map.get(low)
         if not cfg:
             continue
-        provider = _resolve_embedding_provider_name(override_provider or cfg.provider or get_embedding_provider())
+        # Precedence: override_provider > profile.primary_provider > profile.provider > env
+        profile_provider = (
+            getattr(cfg, "primary_provider", None) or cfg.provider or get_embedding_provider()
+        )
+        provider = _resolve_embedding_provider_name(override_provider or profile_provider)
         model = _resolve_embedding_model(provider, override_model, cfg.model)
         dim = cfg.dim or get_embed_dim()
         normalize = cfg.normalize if cfg.normalize is not None else True
