@@ -96,12 +96,35 @@ Prerequisites for merge:
 - current SHA truth is intact
 - required checks are green on the current head SHA
 - no unresolved blocking review comments remain
+- the Codex review verdict is resolved (see `Reading the Codex verdict` below) — a 👍/`+1` reaction is a pass; a 👎/`-1` or any Codex review/comment with findings blocks until addressed
 - when a review-thread closure trigger applies, no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
 - no scope drift remains
 - the PR fits one of the two verification modes above
 - if issue-backed, all acceptance criteria from the governing Issue are satisfied and every AC's `Verify:` target resolves green on the current head SHA
 - if direct repair, the `Direct Repair` block and `Validation` are satisfied on the current head SHA
 - if the direct repair expands beyond bounded scope, stop and require, create, or link an issue before merge
+
+### Reading the Codex verdict 🤖
+
+Codex (`chatgpt-codex-connector[bot]`) reviews PRs in this repo automatically and often signals its
+verdict with an **emoji reaction on the PR itself**, not a formal review or comment. Checking only
+`/pulls/<n>/reviews` and `/comments` will miss it and read as "Codex hasn't reviewed yet."
+
+Resolve the verdict from all three surfaces:
+
+- Reactions (primary): `gh api repos/<owner>/<repo>/issues/<pr>/reactions --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .content'`
+  - 👍 `+1` (also `heart` ❤️, `hooray` 🎉, `rocket` 🚀, `laugh` 😄) → reviewed, no blocking findings → **pass**.
+  - 👎 `-1` or `confused` 😕 → **blocking**: treat as requested changes until addressed.
+- Reviews: `gh api repos/<owner>/<repo>/pulls/<pr>/reviews` — a `CHANGES_REQUESTED` from Codex blocks; `COMMENTED` with substantive findings blocks until each is addressed or replied to.
+- Comments: `gh api repos/<owner>/<repo>/issues/<pr>/comments` and `/pulls/<pr>/comments` — Codex posts detailed findings here when it has them.
+
+Rules:
+
+- A 👍/`+1` reaction is a sufficient Codex pass even when there is no formal review or comment.
+- Do not block indefinitely on a missing verdict: if Codex has posted no reaction, review, or comment
+  and recent sibling PRs show the same silence (a repo-wide Codex stall), surface the stall to the
+  owner as a merge-gate decision rather than waiting forever. A demonstrable outage is input, not an
+  absolute block — but the waiver is the owner's call, not a silent default.
 
 When all prerequisites are met:
 
