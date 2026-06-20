@@ -70,3 +70,8 @@ fi
 The fallback catches branch drift but, unlike the preflight, does not verify worktree isolation.
 Do not check the remote PR head SHA at the pre-commit gate — a new local commit advances HEAD past
 the remote ref before push.
+
+## Shared-root refusal
+
+`scripts/agent_workspace_preflight.sh` refuses the shared root worktree by default. Set
+`PKM_ALLOW_SHARED_ROOT=1` to override for deliberate solo work in the root.

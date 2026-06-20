@@ -62,7 +62,7 @@ Execution discipline:
 
 - When a task clearly matches a repo-local workflow skill, load that skill before workflow-boundary actions in that lane.
 - Publication actions (branch creation, commit creation, push, PR creation/update) route through `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary. This applies to every lane — implementation, feature-breakdown, docs-authoring, and governance — not only `issue-to-code`.
-- The publication boundary enforces the branch-truth gate before commit and before push via `scripts/agent_workspace_preflight.sh --allow-dirty` (branch + worktree drift detection; dirty tree is expected at publish time). In a heavily parallel multi-worktree setup, prefer a dedicated worktree so a concurrent agent switching the shared root worktree's branch cannot land a commit on the wrong branch.
+- The publication boundary enforces the branch-truth gate before commit and before push via `scripts/agent_workspace_preflight.sh --allow-dirty` (branch + worktree drift detection; dirty tree is expected at publish time). The boundary now **refuses** the shared root worktree by default — set `PKM_ALLOW_SHARED_ROOT=1` for deliberate solo work in the root.
 - Do not perform ad hoc publication flow first and retroactively map it to a skill; route through the matching skill before executing boundary actions.
 
 Workflow state model:
@@ -170,7 +170,7 @@ This is human-first, not human-absent: the owner still owns irreversible, extern
 
 Many agents run against this repo at once. C_coordination, C_delay, and C_rework dominate when they collide, so isolation is the default, not an upgrade. Skills reference this as `AGENTS.md :: Parallel-agent execution`.
 
-- **Dedicated worktree by default.** Any concurrent implementation or publication runs in its own `git worktree`, never the shared root worktree. Do not edit, commit, or push from the shared root checkout while other agents may be active.
+- **Dedicated worktree by default.** Any concurrent implementation or publication runs in its own `git worktree`, never the shared root worktree. Do not edit, commit, or push from the shared root checkout while other agents may be active. The publish/claim boundary (`scripts/agent_workspace_preflight.sh`) enforces this by default and refuses the shared root worktree — set `PKM_ALLOW_SHARED_ROOT=1` for deliberate solo work in the root.
 - **Never switch the shared root worktree's branch out from under a concurrent agent.** Branch switches happen in your own worktree. The shared-root HEAD thrash is a real, recurring loss — uncommitted work rides an unexpected checkout.
 - **Branch-truth before write.** Capture `EXPECTED_BRANCH` / `EXPECTED_WORKTREE` at branch creation and run the branch-truth gate before commit and before push (`_shared/BRANCH_TRUTH_GATE.md`). Proportionality never relaxes this.
 - **Smallest shared lease, then local.** Claim the issue/lane with the minimal shared handshake (`Ready -> In Progress`, remove `agent:ready`), then keep execution local and deterministic. One active lease per issue.

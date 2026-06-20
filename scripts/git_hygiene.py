@@ -792,6 +792,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not fail on a dirty working tree (use at the publish boundary, "
         "where uncommitted work is expected; branch/worktree drift still fails)",
     )
+    preflight.add_argument(
+        "--require-dedicated-worktree",
+        action="store_true",
+        help="Fail if run in the shared root worktree (use a dedicated git worktree for parallel work).",
+    )
 
     janitor = subparsers.add_parser("janitor")
     janitor.add_argument("--stale-after-days", type=int, default=14)
@@ -813,6 +818,7 @@ def main(argv: list[str] | None = None) -> int:
             resource_ids=set(args.resource_id),
             execution_id=args.execution_id,
             allow_dirty=args.allow_dirty,
+            require_dedicated_worktree=args.require_dedicated_worktree,
         )
         _print_json(report)
         return 0 if report["ok"] else 1
