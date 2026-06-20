@@ -143,6 +143,8 @@ def _matches_error_name(
 def _http_status_code(exc: BaseException) -> int | None:
     response = getattr(exc, "response", None)
     raw_status = getattr(response, "status_code", None)
+    if raw_status is None:
+        return None
     try:
         return int(raw_status)
     except (TypeError, ValueError):

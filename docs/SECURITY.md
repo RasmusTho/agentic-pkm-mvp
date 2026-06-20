@@ -33,6 +33,12 @@ Lightweight policy for local and CI runs.
 Current implementation:
 - API key auth is implemented via `app/auth.py` and the `X-API-Key` header
 - auth is disabled when no API key is configured
+- state-changing Companion vault selection and initialization routes preserve unauthenticated
+  loopback-local operation, but reject non-loopback requests unless `API_KEY` is configured and the
+  request supplies the matching `X-API-Key` header
+- the Companion UI same-origin proxy forwards the browser client address for those vault routes; the
+  runtime treats a forwarded non-loopback address as non-loopback even though the backend hop is
+  loopback
 - rate limiting is implemented via `slowapi` where routers apply explicit limit decorators
 
 Current configuration surface:
@@ -41,8 +47,9 @@ Current configuration surface:
 - `rate_limit_default`
 
 Operational stance:
-- default to auth disabled unless explicitly configured
-- when enabled, unauthorized requests should fail with `401`
+- default to auth disabled for loopback-local operation unless explicitly configured
+- non-loopback use of state-changing Companion vault selection/initialization requires `API_KEY`
+  and should fail with `401` when missing or invalid
 - rate limiting should protect public API surfaces without blocking internal trusted automation
 
 Remaining gaps:

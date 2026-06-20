@@ -90,11 +90,20 @@ class WorkspaceHttpClient:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
 
-    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+    def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """POST request to the runtime API. Raises WorkspaceClientError on failure."""
         full_url = self._base_url + url
         try:
-            resp = httpx.post(full_url, json=json, timeout=self._timeout)
+            request_kwargs: dict[str, Any] = {"json": json, "timeout": self._timeout}
+            if headers is not None:
+                request_kwargs["headers"] = headers
+            resp = httpx.post(full_url, **request_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(str(exc)) from exc
         if resp.status_code >= 400:
