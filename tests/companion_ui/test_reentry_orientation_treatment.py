@@ -1067,3 +1067,13 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
         assert 'data-testid="workspace-orientation-resurface-overflow-candidate"' not in page, (
             "cold_start must not render the +N resurface overflow"
         )
+        # #2246 AC4: governance grid and governance-counts row must not appear on cold_start.
+        # The is_cold gate suppresses the orientation-column--rail (which holds the
+        # governance grid); the governance-counts row must also be absent from the body
+        # since the receipts modal is closed on the entry surface.
+        assert 'data-testid="workspace-orientation-governance"' not in page, (
+            "cold_start must not render the governance 3-cell grid"
+        )
+        assert 'data-testid="governance-counts-row"' not in page, (
+            "cold_start must not render the governance-counts row outside pull-only surfaces"
+        )

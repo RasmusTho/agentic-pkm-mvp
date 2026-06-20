@@ -103,6 +103,95 @@ def _row_from_receipt(receipt: dict, *, note_path: str) -> dict[str, Any]:
     }
 
 
+def _coerce_count(value: object) -> int:
+    """Coerce an orientation count value to int; 0 on absent/invalid."""
+    if value is None:
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def governance_counts_view(governance: object) -> dict[str, Any] | None:
+    """Pure projection of an orientation payload governance object into display counts.
+
+    Returns ``None`` when the governance object is absent or all counts are
+    zero — the caller must omit the counts row entirely in that case (no
+    zero-state).
+
+    This is a read-only projection (#2246, TELEMETRY_RELOCATION-02): no
+    mutation affordance, no confirm/reject/execute, no count derived beyond
+    what the orientation payload supplies.
+
+    The orientation payload's ``governance`` object is expected to supply:
+    - ``pending_proposal_count`` (int or str)
+    - ``pending_receipt_count`` (int or str)
+    - ``latest_receipt_outcome`` (str)
+    """
+    data: dict[str, Any] = {}
+    if isinstance(governance, dict):
+        data = governance
+    elif governance is not None:
+        return None
+
+    proposals = _coerce_count(data.get("pending_proposal_count"))
+    receipts = _coerce_count(data.get("pending_receipt_count"))
+    outcome_raw = str(data.get("latest_receipt_outcome") or "")
+    outcome = outcome_raw if outcome_raw and outcome_raw not in ("none", "unknown", "") else None
+
+    # No zero-state: omit when all meaningful values are absent or zero.
+    if proposals == 0 and receipts == 0 and outcome is None:
+        return None
+
+    return {
+        "proposals": proposals,
+        "receipts": receipts,
+        "outcome": outcome,
+    }
+
+
+def governance_counts_row_html(governance: object) -> str:
+    """Server-rendered read-only governance counts row for the receipts modal head.
+
+    Returns an empty string when ``governance_counts_view`` returns ``None``
+    (absent or all-zero — no zero-state rendered).
+
+    The row carries ``data-region="governance-counts"`` and
+    ``data-authority="read-only-projection"`` as the cross-task invariant
+    (#2246). No mutation affordance is present.
+    """
+    counts = governance_counts_view(governance)
+    if counts is None:
+        return ""
+    proposals = counts["proposals"]
+    receipts = counts["receipts"]
+    outcome = counts["outcome"]
+
+    outcome_html = ""
+    if outcome is not None:
+        outcome_html = (
+            '<span class="governance-counts-item">'
+            f'<span class="governance-counts-value">{_e(outcome)}</span>'
+            '<span class="governance-counts-label">latest outcome</span></span>'
+        )
+    return (
+        '<div class="governance-counts-row" '
+        'data-testid="governance-counts-row" '
+        'data-region="governance-counts" '
+        'data-authority="read-only-projection" '
+        'data-read-only="true">'
+        '<span class="governance-counts-item">'
+        f'<span class="governance-counts-value">{_e(proposals)}</span>'
+        '<span class="governance-counts-label">pending proposals</span></span>'
+        '<span class="governance-counts-item">'
+        f'<span class="governance-counts-value">{_e(receipts)}</span>'
+        '<span class="governance-counts-label">pending receipts</span></span>'
+        f"{outcome_html}"
+        "</div>"
+    )
+
+
 def receipts_history_view(
     payload: dict, *, max_rows: int = RECEIPTS_HISTORY_MAX_ROWS
 ) -> dict[str, Any]:
@@ -461,6 +550,8 @@ __all__ = [
     "RECEIPTS_HISTORY_MAX_ROWS",
     "RECEIPTS_OVERLAY_ID",
     "RECEIPTS_PROJECTION_ENDPOINT",
+    "governance_counts_row_html",
+    "governance_counts_view",
     "receipts_history_fragment",
     "receipts_history_modal_markup",
     "receipts_history_script",

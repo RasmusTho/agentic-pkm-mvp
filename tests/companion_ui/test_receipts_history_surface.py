@@ -43,6 +43,8 @@ from companion_ui.workspace.receipts_history import (
     RECEIPTS_HISTORY_MAX_ROWS,
     RECEIPTS_OVERLAY_ID,
     RECEIPTS_PROJECTION_ENDPOINT,
+    governance_counts_row_html,
+    governance_counts_view,
     receipts_history_fragment,
     receipts_history_modal_markup,
     receipts_history_unavailable_fragment,
@@ -586,3 +588,95 @@ def test_dismisses_to_anchor() -> None:
         "window.open",
     ):
         assert forbidden not in script, f"modal must not call {forbidden}"
+
+
+# ---------------------------------------------------------------------------
+# AC1–AC5 (#2246): governance counts row — read-only projection in receipts modal
+# ---------------------------------------------------------------------------
+
+
+def test_governance_counts_render_as_read_only_projection() -> None:
+    """AC1–AC5 (#2246): governance counts row on receipts surface.
+
+    Verify:
+    - Counts row renders with data-region="governance-counts" and
+      data-authority="read-only-projection" when payload supplies governance.*
+    - Omitted when payload absent or all counts zero (no zero-state)
+    - No mutation affordance (no confirm/reject/execute button)
+    """
+    # AC1: row renders with correct data attributes when governance data present.
+    governance_with_counts = {
+        "pending_proposal_count": 3,
+        "pending_receipt_count": 1,
+        "latest_receipt_outcome": "logged",
+    }
+    html = governance_counts_row_html(governance_with_counts)
+    assert html != ""
+    assert 'data-region="governance-counts"' in html
+    assert 'data-authority="read-only-projection"' in html
+    assert 'data-read-only="true"' in html
+    assert 'data-testid="governance-counts-row"' in html
+    # Counts are present verbatim.
+    assert "3" in html  # pending proposals
+    assert "1" in html  # pending receipts
+    assert "logged" in html  # latest outcome
+
+    # AC2: row omitted when all counts zero and outcome absent.
+    assert governance_counts_view(None) is None
+    assert governance_counts_row_html(None) == ""
+    assert governance_counts_view({}) is None
+    assert governance_counts_row_html({}) == ""
+
+    all_zero = {
+        "pending_proposal_count": 0,
+        "pending_receipt_count": 0,
+        "latest_receipt_outcome": "none",
+    }
+    assert governance_counts_view(all_zero) is None
+    assert governance_counts_row_html(all_zero) == ""
+
+    unknown_outcome = {
+        "pending_proposal_count": 0,
+        "pending_receipt_count": 0,
+        "latest_receipt_outcome": "unknown",
+    }
+    assert governance_counts_view(unknown_outcome) is None
+    assert governance_counts_row_html(unknown_outcome) == ""
+
+    # Partial counts still render (non-zero field present).
+    partial = {"pending_proposal_count": 2, "pending_receipt_count": 0}
+    partial_html = governance_counts_row_html(partial)
+    assert partial_html != ""
+    assert "2" in partial_html
+    assert 'data-authority="read-only-projection"' in partial_html
+
+    # Meaningful outcome alone triggers render (zero counts + real outcome).
+    outcome_only = {
+        "pending_proposal_count": 0,
+        "pending_receipt_count": 0,
+        "latest_receipt_outcome": "logged",
+    }
+    outcome_html = governance_counts_row_html(outcome_only)
+    assert outcome_html != ""
+    assert "logged" in outcome_html
+
+    # AC3: no mutation affordance — no confirm/reject/execute control.
+    assert "<button" not in html
+    assert "<form" not in html
+    assert "<input" not in html
+    assert "confirm" not in html.lower()
+    assert "reject" not in html.lower()
+    assert "execute" not in html.lower()
+
+    # Pure view projection contract.
+    view = governance_counts_view(governance_with_counts)
+    assert view is not None
+    assert view["proposals"] == 3
+    assert view["receipts"] == 1
+    assert view["outcome"] == "logged"
+
+    # Coercion: string counts work.
+    str_counts = {"pending_proposal_count": "5", "pending_receipt_count": "0"}
+    str_view = governance_counts_view(str_counts)
+    assert str_view is not None
+    assert str_view["proposals"] == 5

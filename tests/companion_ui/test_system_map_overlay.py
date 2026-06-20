@@ -270,6 +270,7 @@ def test_map_renders_composition_table_nodes() -> None:
         "tts",
         "capture",
         "receipts",
+        "governance",
         "resurface_rail",
         "guidance",
     }, "exactly the composition-table surfaces (parked rows excluded)"
@@ -331,7 +332,7 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
     # nodes emit are existing declared intents — the map invents none.
     assert set(routable_surface_ids()) == {
         "anchor", "vault", "panel", "palette", "memory", "capture", "receipts",
-        "settings",
+        "governance", "settings",
     }
     for node in MAP_SURFACES:
         if node.routable:
@@ -345,6 +346,7 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         "memory": "memory.open",
         "capture": "capture.open",
         "receipts": "receipts.open",
+        "governance": "receipts.open",
         "settings": "settings.open",
     }
     # An unshipped surface can never be declared routable.
@@ -699,9 +701,50 @@ def test_relocated_map_counts_are_read_only_projection_without_zero_state() -> N
     MAP_SURFACES with mode=("resurface",) and status="shipped"; it is inert
     (routable=False — the rail is navigated in shell, not via overlayHost.mount).
     """
-    # --- Resurface MapNode: index entry present, inert, no overlayHost route ---
-    from companion_ui.workspace.system_map_overlay import MAP_SURFACES
+    # --- Governance MapNode (#2246): read-only index entry, routes via receipts.open ---
+    gov_nodes = [n for n in MAP_SURFACES if n.surface_id == "governance"]
+    assert gov_nodes, "governance MapNode must appear in MAP_SURFACES (#2246)"
+    gn = gov_nodes[0]
+    assert gn.status == "shipped", "governance node must have status='shipped'"
+    assert "act" in gn.modes or "reorient" in gn.modes, (
+        "governance node must carry act or reorient mode"
+    )
+    # Routes via receipts.open (inert index node, not a new occupant).
+    assert ROUTE_INTENTS.get("governance") == "receipts.open", (
+        "governance node must route via receipts.open intent"
+    )
+    # governance node is routable so that it renders as a button when receipts
+    # occupant is available — inert (renders as article) when receipts absent.
+    # Render inert when governance NOT in available_routes.
+    frag_no_gov = system_map_overlay_markup(available_routes=())
+    gov_section = re.search(
+        r'data-surface-id="governance"[^>]*>', frag_no_gov
+    )
+    assert gov_section, "governance node must render in system map HTML even when inert"
+    assert 'data-routable="false"' in gov_section.group(0), (
+        "governance node must render as inert (data-routable=false) when not in available_routes"
+    )
+    # Render routable button when governance IS in available_routes.
+    frag_with_gov = system_map_overlay_markup(available_routes=("governance",))
+    gov_btn = re.search(
+        r'<button[^>]*data-surface-id="governance"[^>]*>', frag_with_gov
+    )
+    assert gov_btn, (
+        "governance node must render as a button when available (receipts occupant present)"
+    )
+    assert 'data-intent="receipts.open"' in gov_btn.group(0), (
+        "governance button must carry data-intent=receipts.open"
+    )
+    # JS controller routes governance via overlayHost.mount('receipts').
+    script_text = system_map_overlay_script()
+    assert "governance" in script_text and "mount('receipts')" in script_text, (
+        "system map controller must route governance via overlayHost.mount('receipts')"
+    )
+    # data-authority on the map overlay is "projection" (map-level); governance
+    # node itself is read-only-projection by contract (#2246 cross-task invariant).
+    assert gn.routable is True  # ships as routable when receipts occupant present
 
+    # --- Resurface MapNode: index entry present, inert, no overlayHost route ---
     resurface_nodes = [n for n in MAP_SURFACES if n.surface_id == "resurface_rail"]
     assert resurface_nodes, "resurface_rail MapNode must appear in MAP_SURFACES (#2249)"
     rn = resurface_nodes[0]
@@ -819,4 +862,18 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
     )
     assert root and 'data-open="false"' in root.group(0), (
         "system-map-overlay must be closed (not auto-opened) on cold_start"
+    )
+
+    # #2246 governance suppression: governance-counts-row must NOT appear on
+    # cold_start outside pull-only surfaces (neither on the body nor the
+    # receipts modal which is closed on the entry surface).
+    # The governance 3-cell grid (workspace-orientation-governance) was
+    # suppressed by is_cold guard; the new governance-counts row must also be
+    # absent from the cold_start body.
+    assert 'data-testid="workspace-orientation-governance"' not in cold_no_overlay, (
+        "governance grid must not appear on cold_start body"
+    )
+    assert 'data-testid="governance-counts-row"' not in cold_no_overlay, (
+        "governance-counts-row must not appear on cold_start body outside "
+        "pull-only surfaces (receipts modal is closed, map overlay is closed)"
     )
