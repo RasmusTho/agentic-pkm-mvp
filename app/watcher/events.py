@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import timezone, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -9,6 +10,30 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from app.version import SOT_FORWARD
+
+# Default max size (bytes) for the dedicated watcher_run telemetry log before rotation.
+# Overridable via WATCHER_RUN_LOG_MAX_BYTES env variable.
+_WATCHER_RUN_LOG_MAX_BYTES_DEFAULT = 10 * 1024 * 1024  # 10 MB
+
+
+def _watcher_run_log_max_bytes() -> int:
+    raw = os.getenv("WATCHER_RUN_LOG_MAX_BYTES", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _WATCHER_RUN_LOG_MAX_BYTES_DEFAULT
+
+
+def _rotate_if_needed(path: Path, max_bytes: int) -> None:
+    """Rotate path -> path.1 when path exceeds max_bytes. Keeps one backup."""
+    try:
+        if path.exists() and path.stat().st_size >= max_bytes:
+            backup = path.with_suffix(path.suffix + ".1")
+            path.replace(backup)
+    except OSError:
+        pass
 
 
 def _now_iso() -> str:
@@ -99,10 +124,20 @@ def emit_watcher_run_event(
     *,
     vault_root: Path,
     snapshot_path: str | Path | None,
-    outbox_path: Path,
+    telemetry_log_path: Path,
     trigger: str,
     trace_id: str | None = None,
 ) -> WatcherRunEvent:
+    """Emit a watcher.run event to the DEDICATED telemetry log.
+
+    The telemetry log is separate from index-outbox.jsonl (the index/embedding
+    audit sink). Per-tick watcher.run records must never land in index-outbox
+    because they bloat it unboundedly (observed: 1.78 GB / 2.58M lines).
+
+    A simple size-based rotation is applied before each append: when the log
+    exceeds WATCHER_RUN_LOG_MAX_BYTES (default 10 MB) it is moved to
+    <path>.1 and a fresh log is started.
+    """
     event = build_watcher_run_event(
         summary,
         vault_root=vault_root,
@@ -110,8 +145,9 @@ def emit_watcher_run_event(
         trigger=trigger,
         trace_id=trace_id,
     )
-    path = Path(outbox_path)
+    path = Path(telemetry_log_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_if_needed(path, _watcher_run_log_max_bytes())
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False))
         handle.write("\n")

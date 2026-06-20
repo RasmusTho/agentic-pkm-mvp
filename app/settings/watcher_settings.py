@@ -13,6 +13,9 @@ from app.settings.source import SettingsSource, build_source
 
 DEFAULT_INDEX_OUTBOX = Path("tmp/index-outbox.jsonl")
 DEFAULT_WATCHER_TICK_LOG = Path("tmp/watcher_tick.jsonl")
+DEFAULT_WATCHER_RUN_LOG = Path("tmp/watcher_run.jsonl")
+# Maximum size (bytes) before the watcher_run_log is rotated. Default 10 MB.
+WATCHER_RUN_LOG_MAX_BYTES_DEFAULT = 10 * 1024 * 1024
 DEFAULT_ALLOWED_ACTIONS = ("promote.evergreen",)
 SUMMARY_MEASUREMENT_ACTION = "ingest.summary.create"
 MEASUREMENT_MODE_ENV = "WATCHER_MEASUREMENT_MODE"
@@ -89,6 +92,7 @@ class WatcherPaths:
     watcher_state: Path
     watcher_stop_file: Path
     panel_event_log: Path
+    watcher_run_log: Path
 
 
 @dataclass(frozen=True)
@@ -184,6 +188,12 @@ def load_watcher_settings(vault_root: Path | None = None, *, environment: Litera
         index_outbox,
         environment=env,
     )
+    watcher_run_log = _resolve_path_setting(
+        paths_cfg.get("watcher_run_log"),
+        "WATCHER_RUN_LOG_PATH",
+        DEFAULT_WATCHER_RUN_LOG,
+        environment=env,
+    )
 
     return WatcherSettings(
         auto_exec_env=auto_exec_env,
@@ -197,6 +207,7 @@ def load_watcher_settings(vault_root: Path | None = None, *, environment: Litera
             watcher_state=watcher_state,
             watcher_stop_file=watcher_stop_file,
             panel_event_log=panel_event_log,
+            watcher_run_log=watcher_run_log,
         ),
         source=build_source(path),
     )

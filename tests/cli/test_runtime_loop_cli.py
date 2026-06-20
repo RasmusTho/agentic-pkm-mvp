@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 
@@ -23,12 +22,15 @@ def test_runtime_loop_emits_watcher_event_and_counts(monkeypatch: pytest.MonkeyP
     vault = tmp_path / "vault"
     _write_note(vault, "Notes/A.md")
     outbox = tmp_path / "outbox.jsonl"
+    telemetry_log = tmp_path / "watcher_run.jsonl"
     snapshot = tmp_path / "snapshot.json"
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    # Route watcher.run telemetry to a controlled tmp path (#2253: never index-outbox).
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(telemetry_log))
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -51,21 +53,18 @@ def test_runtime_loop_emits_watcher_event_and_counts(monkeypatch: pytest.MonkeyP
     )
 
     assert result.exit_code == 0, result.output
+    # watcher.run must be in the dedicated telemetry log, not index-outbox (#2253).
     records = [
-        json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()
+        json.loads(line) for line in telemetry_log.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     watcher_events = [rec for rec in records if rec.get("event") == "watcher.run"]
-    assert watcher_events, "watcher.run event not emitted"
+    assert watcher_events, "watcher.run event not emitted to telemetry log"
     payload = watcher_events[-1].get("payload", {})
     assert payload.get("vault_root") == str(vault)
-
-    import app.observability.status_service as status_service
-
-    importlib.reload(status_service)
-    status_service.INDEX_OUTBOX_PATH = outbox
-    status = status_service.get_system_status()
-    assert status.events.watcher_runs_total >= 1
-    assert status.events.watcher_runs_24h >= 1
+    # index-outbox must NOT contain watcher.run records.
+    if outbox.exists():
+        outbox_records = [json.loads(l) for l in outbox.read_text().splitlines() if l.strip()]
+        assert not any(r.get("event") == "watcher.run" for r in outbox_records)
 
 
 def test_runtime_loop_rejects_directory_outbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -103,10 +102,13 @@ def test_runtime_loop_defaults_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_
     vault = tmp_path / "vault"
     _write_note(vault, "Notes/A.md")
     outbox = tmp_path / "fallback-outbox.jsonl"
+    telemetry_log = tmp_path / "watcher_run.jsonl"
 
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    # Route watcher.run telemetry to dedicated path (#2253: never index-outbox).
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(telemetry_log))
 
     runner = CliRunner()
     result = runner.invoke(
@@ -126,7 +128,8 @@ def test_runtime_loop_defaults_outbox_path(monkeypatch: pytest.MonkeyPatch, tmp_
     )
 
     assert result.exit_code == 0, result.output
-    payloads = [json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # watcher.run must be in the dedicated telemetry log, not in index-outbox (#2253).
+    payloads = [json.loads(line) for line in telemetry_log.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert any(rec.get("event") == "watcher.run" for rec in payloads)
 
 

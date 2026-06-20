@@ -272,7 +272,9 @@ def test_watcher_run_payload_mirrors_skip_reasons(tmp_path: Path) -> None:
 
 
 def test_emit_watcher_run_event_persists_skip_reasons(tmp_path: Path) -> None:
-    outbox = tmp_path / "watcher-outbox.jsonl"
+    # Note: emit_watcher_run_event now uses telemetry_log_path (not outbox_path)
+    # as per #2253 — watcher.run telemetry must not mix with index-outbox.jsonl.
+    telemetry_log = tmp_path / "watcher_run.jsonl"
     event = emit_watcher_run_event(
         {
             "changed": 1,
@@ -295,12 +297,12 @@ def test_emit_watcher_run_event_persists_skip_reasons(tmp_path: Path) -> None:
         },
         vault_root=tmp_path,
         snapshot_path="tmp/snapshot.json",
-        outbox_path=outbox,
+        telemetry_log_path=telemetry_log,
         trigger="test",
         trace_id="trace-watcher-emit",
     )
 
-    record = json.loads(outbox.read_text(encoding="utf-8").splitlines()[-1])
+    record = json.loads(telemetry_log.read_text(encoding="utf-8").splitlines()[-1])
     assert event.event == "watcher.run"
     assert record["payload"]["panel_skipped_auto_exec"] == 8
     assert record["payload"]["panel_skipped_allowed_actions"] == 9

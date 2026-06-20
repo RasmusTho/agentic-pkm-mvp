@@ -771,7 +771,9 @@ def _get_watcher_automation_status(
     if write_guard is None:
         write_guard = _get_write_guard_status()
     tick_record = _read_last_json_record(watcher_settings.paths.watcher_tick_log)
-    watcher_run_record = _last_watcher_run_record(watcher_settings.paths.panel_event_log)
+    # Read watcher.run records from the dedicated telemetry log (watcher_run_log),
+    # NOT panel_event_log / index-outbox. Per-tick writes were routed there from #2253.
+    watcher_run_record = _last_watcher_run_record(watcher_settings.paths.watcher_run_log)
     watcher_payload = watcher_run_record.get("payload") if isinstance(watcher_run_record, dict) else {}
     if not isinstance(watcher_payload, dict):
         watcher_payload = {}

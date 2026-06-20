@@ -166,6 +166,7 @@ def test_get_system_status_includes_watcher_automation_details(monkeypatch, tmp_
     vault = tmp_path / "vault"
     settings_dir = vault / "@Settings"
     settings_dir.mkdir(parents=True, exist_ok=True)
+    watcher_run_log = tmp_path / "watcher_run.jsonl"
     (settings_dir / "watchers.md").write_text(
         "---\n"
         "auto_run:\n"
@@ -174,6 +175,7 @@ def test_get_system_status_includes_watcher_automation_details(monkeypatch, tmp_
         "    - promote.evergreen\n"
         "paths:\n"
         f"  watcher_tick_log: {tmp_path / 'watcher_tick.jsonl'}\n"
+        f"  watcher_run_log: {watcher_run_log}\n"
         "---\n",
         encoding="utf-8",
     )
@@ -194,8 +196,9 @@ def test_get_system_status_includes_watcher_automation_details(monkeypatch, tmp_
         encoding="utf-8",
     )
 
-    outbox = tmp_path / "outbox.jsonl"
-    outbox.write_text(
+    # watcher.run records must go to the dedicated telemetry log (#2253),
+    # never to index-outbox.jsonl.
+    watcher_run_log.write_text(
         json.dumps(
             {
                 "event": "watcher.run",
@@ -211,6 +214,7 @@ def test_get_system_status_includes_watcher_automation_details(monkeypatch, tmp_
         + "\n",
         encoding="utf-8",
     )
+    outbox = tmp_path / "outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
     monkeypatch.setattr("app.observability.status_service.INDEX_OUTBOX_PATH", outbox)
 

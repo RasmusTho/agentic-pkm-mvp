@@ -16,6 +16,11 @@ def _write_note(base: Path, rel: str, body: str) -> Path:
     return path
 
 
+def _watcher_run_log_path(tmp_path: Path) -> Path:
+    """Dedicated telemetry log path for watcher.run events (separate from index-outbox, #2253)."""
+    return tmp_path / "watcher_run.jsonl"
+
+
 def _base_env(tmp_path: Path, actions_path: Path, outbox_path: Path) -> dict[str, str]:
     return {
         "PKM_SETTINGS_PROFILE": "lab",
@@ -25,6 +30,8 @@ def _base_env(tmp_path: Path, actions_path: Path, outbox_path: Path) -> dict[str
         "PANEL_ACTIONS_PATH": str(actions_path),
         "INDEX_OUTBOX_PATH": str(outbox_path),
         "WATCHER_AUTO_EXEC": "1",
+        # Route watcher.run telemetry to a controlled tmp path; must not mix with index-outbox (#2253).
+        "WATCHER_RUN_LOG_PATH": str(_watcher_run_log_path(tmp_path)),
     }
 
 
@@ -250,9 +257,12 @@ mappings:
 
     assert result.exit_code == 0, result.output
     assert "dry_run=True" in result.output
-    events = [e for e in _read_events(outbox_path) if e]
-    assert "watcher.run" in events
-    assert set(events) == {"watcher.run"}
+    # watcher.run events go to the dedicated telemetry log, not index-outbox (#2253).
+    telemetry_events = [e for e in _read_events(_watcher_run_log_path(tmp_path)) if e]
+    assert "watcher.run" in telemetry_events
+    # index-outbox must NOT contain watcher.run in dry-run mode.
+    outbox_events = [e for e in _read_events(outbox_path) if e]
+    assert "watcher.run" not in outbox_events
 
 
 def test_vault_watcher_cli_max_notes_blocks_without_force(tmp_path: Path, monkeypatch) -> None:
@@ -298,6 +308,6 @@ mappings:
     assert result.exit_code != 0
     assert "max-notes=1" in result.output
     assert "limit_exceeded=True" in result.output
-    events = [e for e in _read_events(outbox_path) if e]
-    assert "watcher.run" in events
-    assert set(events) == {"watcher.run"}
+    # watcher.run events go to the dedicated telemetry log, not index-outbox (#2253).
+    telemetry_events = [e for e in _read_events(_watcher_run_log_path(tmp_path)) if e]
+    assert "watcher.run" in telemetry_events

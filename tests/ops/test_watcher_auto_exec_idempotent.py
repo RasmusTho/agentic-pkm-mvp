@@ -95,9 +95,12 @@ def test_auto_exec_policy_denied_never(tmp_path: Path, monkeypatch: pytest.Monke
     _write(note_path, _panel_note("Manual", auto_run="never"))
 
     outbox = tmp_path / "outbox.jsonl"
+    telemetry_log = tmp_path / "watcher_run.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
+    # Route watcher.run telemetry to dedicated path (#2253: never index-outbox).
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(telemetry_log))
 
     before = _note_digest(note_path)
     summary, messages = run_watcher_tick(
@@ -117,9 +120,12 @@ def test_auto_exec_policy_denied_never(tmp_path: Path, monkeypatch: pytest.Monke
     assert summary.get("panel_skipped_policy", 0) == 1
     assert summary.get("panel_skipped_auto_exec", 0) == 0
     assert any("policy denies auto-run" in msg for msg in messages)
+    # watcher.run goes to dedicated telemetry log, not index-outbox (#2253).
+    telemetry_events = _read_events(telemetry_log)
+    telemetry_topics = {entry.get("event") for entry in telemetry_events}
+    assert "watcher.run" in telemetry_topics
     events = _read_events(outbox)
     topics = {entry.get("event") for entry in events}
-    assert "watcher.run" in topics
     assert "panel.intent.created" not in topics
 
 
@@ -142,10 +148,13 @@ Dont run
     _write(note_path, note)
 
     outbox = tmp_path / "outbox.jsonl"
+    telemetry_log = tmp_path / "watcher_run.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("WATCHER_AUTO_EXEC", "1")
     monkeypatch.setenv("VAULT_ROOT", str(vault))
+    # Route watcher.run telemetry to dedicated path (#2253: never index-outbox).
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(telemetry_log))
 
     _write_watchers_file(
         vault,
@@ -179,9 +188,12 @@ paths:
     assert summary.get("panel_runs", 0) == 0
     assert any("not in allowed set" in msg for msg in messages)
 
+    # watcher.run goes to dedicated telemetry log, not index-outbox (#2253).
+    telemetry_events = _read_events(telemetry_log)
+    telemetry_topics = {entry.get("event") for entry in telemetry_events}
+    assert "watcher.run" in telemetry_topics
     events = _read_events(outbox)
     topics = {entry.get("event") for entry in events}
-    assert "watcher.run" in topics
     assert "promote.intent.created" not in topics
 
 
