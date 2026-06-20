@@ -117,9 +117,9 @@ class VaultManager:
     def select_vault(self, vault_path: Path, *, remember: bool = True) -> VaultContext:
         previous = self._context
         context = self.validate_vault(vault_path)
-        self._context = context
         if remember and context.status in {"selected", "uninitialized", "invalid", "missing"}:
             self._remember_context(context, vault_path)
+        self._context = context
         self._emit_changed(previous, context)
         return context
 
