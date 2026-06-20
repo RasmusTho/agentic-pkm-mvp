@@ -295,7 +295,13 @@ The current shipped browser, referred to as **Vault Browser MLP v0**, is the bas
 
 Vault Browser MLP v0 provides:
 
-- read-only enumeration of Markdown notes in the active vault
+- read-only enumeration of Markdown notes in the active vault — the vault the
+  human has **selected**. A configured `VAULT_ROOT` is no longer silently read
+  as the active vault: with nothing selected the endpoint returns the
+  `vault_selection_required` picker state (200), never a note list (#2309 /
+  Option-2, 2026-06-20). Selecting an existing directory makes it readable even
+  before it is fully initialized; writes/permissions still require an
+  initialized vault.
 - a `read_only: true` invariant on the browser endpoint
 - active vault/channel identity in the response payload (`vault_identity`, `identity_available`)
 - deterministic case-insensitive path/title filtering via a single `q` parameter

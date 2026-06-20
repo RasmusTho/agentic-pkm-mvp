@@ -697,6 +697,25 @@ def test_cold_start_threshold_provenance_line() -> None:
     assert "read-only · server-declared" in cold_traj
 
 
+def test_cold_start_provenance_omits_present_when_leave_point_absent() -> None:
+    """#2309: the "Returning after a while" copy is also used for a non-empty
+    vault whose leave_point is *absent* (recents_anchor present, no leave
+    point). The provenance must declare the real (absent) status, never
+    fabricate "present"."""
+    html = _render(
+        orientation=_orientation_payload(
+            leave_status=None,  # leave_point absent
+            recents_anchor={"note_path": "Inbox/inbox.md", "display_label": "inbox"},
+        )
+    )
+    # Returning copy is used (non-empty vault), not first-contact.
+    assert "Returning after a while" in html
+    assert "Re-entry is through the vault." in html
+    # Provenance reflects the actual declared leave_point status — not "present".
+    assert "leave_point: absent" in html
+    assert "leave_point: present" not in html
+
+
 # ---------------------------------------------------------------------------
 # AC (#2176): recents-anchor sub-affordance on the cold_start threshold
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +62,7 @@ def _workspace(client: TestClient, note_path: str = "notes/note.md"):
 def test_vault_identity_present_in_runtime(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     resp = _workspace(client)
     assert resp.status_code == 200
@@ -71,6 +73,7 @@ def test_vault_identity_present_in_runtime(
 def test_vault_name_derived_from_vault_root_basename(
     client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bind_selected_vault(monkeypatch, tmp_path)
     monkeypatch.delenv("PKM_ENVIRONMENT", raising=False)
     # tmp_path basename is used as vault_name
     resp = _workspace(client)
@@ -85,6 +88,7 @@ def test_vault_name_prefers_host_root_over_container_path(
     """In the container VAULT_ROOT is /app/vault; the real operator vault name
     comes from VAULT_HOST_ROOT (issue #2141), so a correctly-mounted Niflheim
     must not be mislabeled "vault"."""
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     monkeypatch.delenv("PKM_ENVIRONMENT", raising=False)
     monkeypatch.setenv(
         "VAULT_HOST_ROOT",
@@ -100,6 +104,7 @@ def test_vault_name_prefers_host_root_over_container_path(
 def test_vault_channel_from_pkm_environment(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     monkeypatch.delenv("CHANNEL", raising=False)
     monkeypatch.delenv("PKM_CHANNEL", raising=False)
@@ -111,6 +116,7 @@ def test_vault_channel_from_pkm_environment(
 def test_vault_channel_from_channel_env(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     monkeypatch.delenv("PKM_ENVIRONMENT", raising=False)
     monkeypatch.setenv("CHANNEL", "dev")
     monkeypatch.delenv("PKM_CHANNEL", raising=False)
@@ -122,6 +128,7 @@ def test_vault_channel_from_channel_env(
 def test_vault_channel_from_pkm_channel_env(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     monkeypatch.delenv("PKM_ENVIRONMENT", raising=False)
     monkeypatch.delenv("CHANNEL", raising=False)
     monkeypatch.setenv("PKM_CHANNEL", "test")
@@ -133,6 +140,7 @@ def test_vault_channel_from_pkm_channel_env(
 def test_vault_provenance_env_when_vault_root_set(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     resp = _workspace(client)
     assert resp.status_code == 200
     identity = resp.json()["runtime"]["vault_identity"]
@@ -200,6 +208,7 @@ def test_mounted_vault_reports_truthful_identity(
     client: TestClient, vault_note: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A configured vault name is authoritative: provenance="settings", real name.
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
     resp = _workspace(client)
     assert resp.status_code == 200
@@ -236,6 +245,7 @@ def test_configured_vault_name_hot_reloads_without_restart(
 ) -> None:
     from app.settings import runtime as settings_runtime
 
+    bind_selected_vault(monkeypatch, vault_note.parent.parent)
     runtime_dir = _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
     assert (
         _workspace(client).json()["runtime"]["vault_identity"]["vault_name"]
@@ -263,7 +273,7 @@ def test_vault_name_safe_for_path_with_spaces(
         "---\nuuid: nifl-uuid-1\n---\n\n# Note\n\nBody.\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("VAULT_ROOT", str(vault_dir))
+    bind_selected_vault(monkeypatch, vault_dir)
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     monkeypatch.delenv("CANVAS_ENABLED", raising=False)
     resp = _workspace(client)

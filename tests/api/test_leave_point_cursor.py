@@ -26,13 +26,14 @@ from app.orientation.leave_point_cursor import (
     latest_leave_point_projection,
 )
 from app.services import outbox as outbox_service
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 @pytest.fixture(autouse=True)
 def _runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
-    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    bind_selected_vault(monkeypatch, vault_root, channel="test")
     monkeypatch.setenv("PKM_CHANNEL", "test")
     monkeypatch.setenv("LEAVE_POINT_TRACE_DB", str(tmp_path / "runtime" / "leave-point.sqlite3"))
     monkeypatch.setattr(companion_module, "_configured_vault_name", lambda: "vault-test")

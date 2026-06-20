@@ -4915,6 +4915,57 @@ def _is_remote_page_origin(hostname: str) -> bool:
     return host not in ("localhost", "127.0.0.1", "::1", "")
 
 
+def _render_vault_selection_required_section(payload: object) -> str:
+    """Render the no-vault picker surface from the runtime's
+    ``vault_selection_required`` payload (#2309, Option-2 decision 2026-06-20).
+
+    The runtime declares the state; the UI renders it. When the server declared
+    a configured-but-unselected vault root, the section offers a one-click
+    "Open" affordance that reuses the vault-settings panel's ``vault.select``
+    submit handler. The full open / initialize / recent-vault forms render in
+    the vault-settings panel that the page chrome already includes below.
+    """
+    data = payload if isinstance(payload, dict) else {}
+    reason = _e(str(data.get("reason") or "no_vault_bound"))
+    message = _e(
+        str(data.get("message") or "No vault is selected. Open a vault to continue.")
+    )
+    requested = str(data.get("requested_note_path") or "")
+    configured = str(data.get("configured_vault_root") or "")
+    requested_html = (
+        '<p class="vault-selection-requested" '
+        'data-testid="vault-selection-requested-note">'
+        f"You asked to open <code>{_e(requested)}</code>, but no vault is "
+        "selected yet."
+        "</p>"
+        if requested
+        else ""
+    )
+    if configured:
+        configured_name = _e(Path(configured).name or configured)
+        open_configured_html = (
+            '<form class="vault-selection-open-configured" data-intent="vault.select" '
+            'data-api-method="POST" data-api-path="/api/companion/vault/select">'
+            f'<input type="hidden" name="path" value="{_e(configured)}">'
+            '<button type="submit" data-testid="vault-selection-open-configured" '
+            f'data-vault-path="{_e(configured)}">Open {configured_name}</button>'
+            "</form>"
+        )
+    else:
+        open_configured_html = ""
+    return f"""
+    <section class="vault-selection-required" data-region="vault-selection-required"
+      data-testid="vault-selection-required" data-reason="{reason}"
+      data-entry-state="no_vault">
+      <h1 class="vault-selection-headline">No vault selected</h1>
+      <p class="vault-selection-summary">{message}</p>
+      {requested_html}
+      {open_configured_html}
+      <p class="vault-selection-hint">Open an existing vault, choose a recent
+        vault, or initialize a new one below.</p>
+    </section>"""
+
+
 def _render_error_section(
     error: str,
     *,
@@ -6127,7 +6178,16 @@ def _render_orientation_index_html(
         else:
             _cold_eyebrow = "Returning after a while"
             _cold_headline = "Re-entry is through the vault."
-            _cold_provenance = "trajectory: cold (&gt;14d) · leave_point: present · read-only · server-declared"
+            # Server declares, UI renders: derive the leave_point token from the
+            # actual declared status. The "returning" copy is also used for a
+            # non-empty vault whose leave_point is *absent* (recents present, no
+            # leave point) — claiming "present" there would fabricate state
+            # (#2309). Only assert "present" when the leave point truly is.
+            _cold_lp_token = "absent" if _leave_point_absent else "present"
+            _cold_provenance = (
+                f"trajectory: cold (&gt;14d) · leave_point: {_cold_lp_token} · "
+                "read-only · server-declared"
+            )
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
         _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
         _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
@@ -7466,6 +7526,7 @@ def render_index_html(
     ambient_refresh_enabled: bool = False,
     page_origin_hostname: str = "",
     route_error: bool = False,
+    vault_selection_required: Optional[dict] = None,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -7495,7 +7556,20 @@ def render_index_html(
             orientation=orientation,
             orientation_error=orientation_error,
         )
-    if orientation is not None and fields is None and not error:
+    # No vault is selected: the runtime returned the `vault_selection_required`
+    # picker payload on the orientation or note-load boundary. Declare the
+    # `no_vault` entry state and render the vault picker surface — never a blank
+    # `shell_active` note and never a fabricated `cold_start` orientation
+    # (#2309, Option-2 decision 2026-06-20).
+    if vault_selection_required is not None:
+        entry_resolution = EntryStateResolution(state="no_vault")
+
+    if (
+        vault_selection_required is None
+        and orientation is not None
+        and fields is None
+        and not error
+    ):
         return _render_orientation_index_html(
             api_base_url=api_base_url,
             note_path=note_path,
@@ -7509,7 +7583,9 @@ def render_index_html(
         )
 
     content_section = ""
-    if error:
+    if vault_selection_required is not None:
+        content_section = _render_vault_selection_required_section(vault_selection_required)
+    elif error:
         content_section = _render_error_section(
             error,
             entry_state=entry_resolution.state,
@@ -11314,6 +11390,12 @@ def render_index_html(
 </html>"""
 
 
+def _is_vault_selection_required(payload: object) -> bool:
+    """True when a runtime payload is the no-vault `vault_selection_required`
+    picker state (#2309). Server declares; the page renders the picker."""
+    return isinstance(payload, dict) and payload.get("state") == "vault_selection_required"
+
+
 def handle_get(
     *,
     query_string: str,
@@ -11344,6 +11426,7 @@ def handle_get(
     orientation_vault_browser_error = ""
     orientation_error = ""
     error = ""
+    vault_selection_required: Optional[dict] = None
 
     if note_path:
         page = RealNoteWorkspaceDevPage(client)
@@ -11355,7 +11438,10 @@ def handle_get(
                 vault_browser_limit=browser_limit,
             )
         )
-        if state.is_loaded:
+        if state.vault_selection_required:
+            # No vault selected: render the picker, not a blank note (#2309).
+            vault_selection_required = state.vault_selection_payload
+        elif state.is_loaded:
             fields = page.render_fields()
         else:
             error = state.error or "Unknown error"
@@ -11378,7 +11464,19 @@ def handle_get(
             )
         except (WorkspaceClientError, AssertionError) as exc:
             orientation_vault_browser_error = str(exc)
-        if orientation is None and orientation_vault_browser is not None:
+        # No vault selected: the orientation (and vault-browser) boundary returns
+        # the vault_selection_required picker payload (200). Render the picker —
+        # not a fabricated cold_start orientation with vault_id "unknown"
+        # (#2309). Checked before the orientation-unavailable fallback so the
+        # picker is never overwritten by the unavailable frame.
+        if _is_vault_selection_required(orientation):
+            vault_selection_required = orientation
+            orientation = None
+        elif _is_vault_selection_required(orientation_vault_browser):
+            vault_selection_required = orientation_vault_browser
+            orientation = None
+            orientation_vault_browser = None
+        elif orientation is None and orientation_vault_browser is not None:
             orientation = _orientation_unavailable_frame(orientation_error)
         elif orientation is None:
             error = orientation_error or orientation_vault_browser_error
@@ -11396,6 +11494,7 @@ def handle_get(
         diagnostics=diagnostics,
         ambient_refresh_enabled=orientation_ambient_refresh_enabled(),
         page_origin_hostname=page_origin_host,
+        vault_selection_required=vault_selection_required,
     )
 
 

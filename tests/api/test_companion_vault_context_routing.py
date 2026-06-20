@@ -100,11 +100,19 @@ def test_save_note_body_targets_persisted_vault(
     assert fresh_manager.context.active_vault_path == str(selected_vault)
 
 
-def test_no_last_active_fallback_uses_env_vault_and_attempts_lazy_load_once(
+def test_no_last_active_routes_to_picker_and_attempts_lazy_load_once(
     client: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """No persisted last-active + VAULT_ROOT set -> the no-vault picker (#2309).
+
+    Option-2 (decision 2026-06-20) removed the silent env-vault read-fallback:
+    with nothing selected, the active-vault boundary routes to the
+    ``vault_selection_required`` picker (offering the configured root), never an
+    env-vault note list. The lazy ``load_last_active`` restore is still attempted
+    exactly once and then cached.
+    """
     env_vault = tmp_path / "env-vault"
     _write_note(env_vault, "notes/env-only.md", "# Env Only\n\nEnv fallback.\n")
     monkeypatch.setenv("VAULT_ROOT", str(env_vault))
@@ -119,7 +127,14 @@ def test_no_last_active_fallback_uses_env_vault_and_attempts_lazy_load_once(
 
     assert first_resp.status_code == 200
     assert second_resp.status_code == 200
-    assert [note["path"] for note in first_resp.json()["notes"]] == ["notes/env-only.md"]
-    assert [note["path"] for note in second_resp.json()["notes"]] == ["notes/env-only.md"]
+    for resp in (first_resp, second_resp):
+        body = resp.json()
+        assert body["state"] == "vault_selection_required"
+        assert body["reason"] == "no_vault_bound"
+        # The configured-but-unselected root is offered to the picker, not read.
+        assert body["configured_vault_root"] == str(env_vault)
+        assert "notes" not in body
+    assert "env-only.md" not in first_resp.text
     assert manager.context.status == "none"
+    # The lazy last-active restore is attempted exactly once, then cached.
     assert manager.load_last_active_calls == 1

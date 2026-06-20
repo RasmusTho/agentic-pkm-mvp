@@ -24,11 +24,12 @@ from app.resurfacing.runtime import (
     ResurfacingSignal,
     ResurfacingWhyNow,
 )
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 @pytest.fixture(autouse=True)
 def _clear_runtime_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path, channel="test")
     monkeypatch.setenv("PKM_CHANNEL", "test")
     monkeypatch.setenv("LEAVE_POINT_TRACE_DB", str(tmp_path / "runtime" / "leave-point.sqlite3"))
     monkeypatch.setenv(

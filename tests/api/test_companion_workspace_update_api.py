@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.companion as companion_module
 from app.api.app import app
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 
 @pytest.fixture()
@@ -26,7 +27,7 @@ def _reset_guard_snapshot() -> None:
 
 @pytest.fixture()
 def workspace_notes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_initialized_vault(monkeypatch, tmp_path)
     monkeypatch.setenv("CANVAS_ENABLED", "1")
     monkeypatch.setenv("COMPANION_WORKSPACE_UPDATE_ENABLED", "1")
 

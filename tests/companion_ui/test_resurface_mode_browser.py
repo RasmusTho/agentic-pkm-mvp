@@ -135,7 +135,7 @@ def test_workspace_resurface_source_link_uses_logical_identifier(
     note.parent.mkdir()
     note.write_text("---\nuuid: note-1142\n---\n# Resurface Note\n", encoding="utf-8")
 
-    monkeypatch.setattr(companion, "_active_companion_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(companion, "_active_companion_vault_root", lambda **_: tmp_path)
     monkeypatch.setattr(
         companion,
         "evaluate_resurfacing_candidates",

@@ -8,11 +8,10 @@ from app.agent_memory.candidate import MemoryCandidate, MemoryType
 from app.agent_memory.review_queue import MemoryCandidateReviewQueue
 from app.api.app import app
 from app.api.routes import companion as companion_module
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 def _isolate_sources(tmp_path: Path, monkeypatch) -> Path:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path / "vault"))
-    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "")
@@ -62,6 +61,7 @@ def test_vault_browser_includes_agent_memory_posture_from_review_queue(
     vault_root = _isolate_sources(tmp_path, monkeypatch)
     note_uuid = "memory-posture-uuid"
     _write_note(vault_root, "notes/memory.md", uuid=note_uuid)
+    bind_selected_vault(monkeypatch, vault_root)
     queue = MemoryCandidateReviewQueue()
     queue.enqueue(
         _candidate(
@@ -93,6 +93,7 @@ def test_vault_browser_agent_memory_posture_is_separate_from_frontmatter_and_rec
     vault_root = _isolate_sources(tmp_path, monkeypatch)
     note_uuid = "separate-posture-uuid"
     _write_note(vault_root, "notes/separate.md", uuid=note_uuid)
+    bind_selected_vault(monkeypatch, vault_root)
     queue = MemoryCandidateReviewQueue()
     queue.enqueue(_candidate("note_path:notes/separate.md"))
     monkeypatch.setattr(companion_module, "_MEMORY_CANDIDATE_REVIEW_QUEUE", queue)
@@ -115,6 +116,7 @@ def test_vault_browser_matches_existing_memory_source_ref_formats(
 ) -> None:
     vault_root = _isolate_sources(tmp_path, monkeypatch)
     _write_note(vault_root, "notes/source-ref.md", uuid="source-ref-uuid")
+    bind_selected_vault(monkeypatch, vault_root)
     queue = MemoryCandidateReviewQueue()
     queue.enqueue(_candidate("note:notes/source-ref.md"))
     queue.enqueue(_candidate("vault://notes/source-ref.md"))
@@ -136,6 +138,7 @@ def test_vault_browser_agent_memory_posture_read_is_non_mutating(
 ) -> None:
     vault_root = _isolate_sources(tmp_path, monkeypatch)
     note_path = _write_note(vault_root, "notes/non-mutating.md", uuid="non-mutating-uuid")
+    bind_selected_vault(monkeypatch, vault_root)
     before_content = note_path.read_text(encoding="utf-8")
     queue = MemoryCandidateReviewQueue()
     candidate = _candidate("note_path:notes/non-mutating.md")

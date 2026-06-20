@@ -18,6 +18,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 def _write_note(path: Path, content: str) -> None:
@@ -57,8 +58,7 @@ class TestFilterByKind:
     def test_filter_kind_returns_only_matching_notes(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "human.md", _human_note("uuid-h"))
         _write_note(tmp_path / "b" / "companion.md", _companion_note("uuid-c"))
 
@@ -74,8 +74,7 @@ class TestFilterByKind:
     def test_filter_kind_empty_result_when_no_match(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "human.md", _human_note())
 
         client = TestClient(app)
@@ -88,8 +87,7 @@ class TestFilterByKind:
         self, tmp_path: Path, monkeypatch
     ) -> None:
         """Notes with missing kind (no frontmatter) are excluded when kind filter active."""
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "with-kind.md", _human_note())
         _write_note(tmp_path / "b" / "no-kind.md", _no_fm_note())
 
@@ -104,8 +102,7 @@ class TestFilterByKind:
 
 class TestFilterByZone:
     def test_filter_zone_active(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "active.md", _human_note())
         _write_note(tmp_path / "b" / "semi.md", _companion_note())
 
@@ -119,8 +116,7 @@ class TestFilterByZone:
         assert len(data["notes"]) == 1
 
     def test_filter_zone_semi_active(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "active.md", _human_note())
         _write_note(tmp_path / "b" / "semi.md", _companion_note())
 
@@ -136,8 +132,7 @@ class TestFilterByZone:
 
 class TestFilterByReviewState:
     def test_filter_review_state_needs_review(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "needs-review.md", _human_note())
         _write_note(tmp_path / "b" / "reviewed.md", _companion_note())
 
@@ -153,8 +148,7 @@ class TestFilterByReviewState:
         assert len(data["notes"]) == 1
 
     def test_filter_review_state_reviewed(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "needs-review.md", _human_note())
         _write_note(tmp_path / "b" / "reviewed.md", _companion_note())
 
@@ -172,8 +166,7 @@ class TestFilterByReviewState:
 
 class TestFilterByTrust:
     def test_filter_trust_assert(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "assert.md", _human_note())
         _write_note(tmp_path / "b" / "suggest.md", _companion_note())
 
@@ -187,8 +180,7 @@ class TestFilterByTrust:
         assert len(data["notes"]) == 1
 
     def test_filter_trust_suggest(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "assert.md", _human_note())
         _write_note(tmp_path / "b" / "suggest.md", _companion_note())
 
@@ -206,8 +198,7 @@ class TestActiveFiltersInResponse:
     def test_active_filters_returned_in_response(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "note.md", _human_note())
 
         client = TestClient(app)
@@ -225,8 +216,7 @@ class TestActiveFiltersInResponse:
     def test_no_active_filters_when_none_specified(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "note.md", _human_note())
 
         client = TestClient(app)
@@ -242,8 +232,7 @@ class TestTextSearchAndFiltersCompose:
     def test_q_filter_composes_with_kind_filter(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "human-alpha.md", _human_note("uuid-ha"))
         _write_note(tmp_path / "notes" / "human-beta.md", _human_note("uuid-hb"))
         _write_note(tmp_path / "companion" / "companion-alpha.md", _companion_note("uuid-ca"))

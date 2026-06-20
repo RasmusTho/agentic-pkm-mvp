@@ -30,6 +30,7 @@ from app.domain.commitments import CommitmentRecord
 from app.services.commitment_persistence import persist_commitment
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 @pytest.fixture()
@@ -39,9 +40,10 @@ def client() -> TestClient:
 
 @pytest.fixture()
 def vault_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A vault with one active note, wired through VAULT_ROOT like the other
-    companion workspace tests (``_active_companion_vault_root`` falls back to it)."""
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    """A vault with one active note, selected in the VaultManager like the other
+    companion workspace tests (Option-2: ``_active_companion_vault_root`` requires
+    a selected vault)."""
+    bind_selected_vault(monkeypatch, tmp_path)
     monkeypatch.delenv("CANVAS_ENABLED", raising=False)
     note = tmp_path / "notes" / "note.md"
     note.parent.mkdir(parents=True, exist_ok=True)

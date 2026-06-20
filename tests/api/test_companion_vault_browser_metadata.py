@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 def _write_note(path: Path, content: str) -> None:
@@ -69,8 +70,7 @@ class TestReadModelReturnsExpectedFieldsForHealthyNote:
     def test_all_core_fields_present_when_frontmatter_complete(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "complete.md", _full_frontmatter_note("Complete Note"))
 
         client = TestClient(app)
@@ -101,8 +101,7 @@ class TestReadModelReturnsExpectedFieldsForHealthyNote:
     def test_uuid_only_note_has_health_state_with_missing_fields(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "uuid-only.md", _uuid_only_note())
 
         client = TestClient(app)
@@ -126,8 +125,7 @@ class TestInvalidFrontmatterSurfacesHealthState:
     def test_blank_uuid_is_invalid_after_normalization(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(
             tmp_path / "notes" / "blank-uuid.md",
             "---\nuuid: '   '\ntitle: Blank UUID\n---\n\nBody.\n",
@@ -141,8 +139,7 @@ class TestInvalidFrontmatterSurfacesHealthState:
     def test_no_frontmatter_surfaces_missing_uuid(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "no-fm.md", _no_frontmatter_note())
 
         client = TestClient(app)
@@ -159,8 +156,7 @@ class TestInvalidFrontmatterSurfacesHealthState:
     def test_malformed_yaml_frontmatter_surfaces_invalid_state(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "malformed.md", _malformed_frontmatter_note())
 
         client = TestClient(app)
@@ -177,8 +173,7 @@ class TestInvalidFrontmatterSurfacesHealthState:
     def test_invalid_frontmatter_does_not_crash(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "broken.md", _malformed_frontmatter_note())
 
         client = TestClient(app)
@@ -192,8 +187,7 @@ class TestArtifactMetadataDistinctFromVaultIdentity:
     def test_vault_identity_and_artifact_metadata_are_separate_fields(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "note.md", _full_frontmatter_note())
 
         client = TestClient(app)
@@ -221,8 +215,7 @@ class TestArtifactMetadataDistinctFromVaultIdentity:
     def test_multiple_notes_each_have_independent_metadata(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "a" / "first.md", _full_frontmatter_note("First"))
         _write_note(tmp_path / "b" / "second.md", _no_frontmatter_note("Second"))
 
@@ -252,8 +245,7 @@ class TestZoneProjectionEnvelope:
     """
 
     def test_zone_projection_envelope_frontmatter(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "notes" / "complete.md", _full_frontmatter_note("Complete"))
 
         note = TestClient(app).get("/api/companion/vault-browser").json()["notes"][0]
@@ -266,8 +258,7 @@ class TestZoneProjectionEnvelope:
         assert note["zone_degradation"] == "none"
 
     def test_zone_projection_envelope_path_fallback(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         # uuid-only note: valid frontmatter, no zone key → path-derived fallback.
         _write_note(tmp_path / "Projects" / "foo.md", _uuid_only_note("Foo"))
 
@@ -282,8 +273,7 @@ class TestZoneProjectionEnvelope:
     def test_zone_projection_envelope_malformed_frontmatter(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "Inbox" / "broken.md", _malformed_frontmatter_note())
 
         note = TestClient(app).get("/api/companion/vault-browser").json()["notes"][0]
@@ -297,8 +287,7 @@ class TestZoneProjectionEnvelope:
     def test_zone_projection_envelope_no_frontmatter_is_absent_not_invalid(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         _write_note(tmp_path / "Areas" / "plain.md", _no_frontmatter_note("Plain"))
 
         note = TestClient(app).get("/api/companion/vault-browser").json()["notes"][0]
@@ -312,8 +301,7 @@ class TestMissingOptionalFieldsAreNullNotCrash:
     def test_optional_fields_absent_from_frontmatter_are_null(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
-        monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+        bind_selected_vault(monkeypatch, tmp_path)
         # Note has uuid + title only
         _write_note(tmp_path / "notes" / "minimal.md", _uuid_only_note("Minimal"))
 

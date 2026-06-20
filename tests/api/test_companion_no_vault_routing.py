@@ -160,6 +160,94 @@ def test_unset_vault_root_does_not_leak_cwd_vault_notes(
     assert "leaked.md" not in resp.text
 
 
+def test_unselected_with_vault_root_set_routes_to_picker_with_configured_root(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAULT_ROOT set + present but no vault selected -> no_vault picker (200).
+
+    Option-2 (#2309): a configured ``VAULT_ROOT`` is no longer silently read as
+    the active vault. Every active-vault read boundary routes to the picker, and
+    the picker surfaces the configured-but-unselected root via
+    ``configured_vault_root`` so the UI can offer a one-click open — never a
+    silent note list, never a 500.
+    """
+    vault_root = tmp_path / "Niflheim"
+    (vault_root / "notes").mkdir(parents=True, exist_ok=True)
+    (vault_root / "notes" / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    app_local_path = tmp_path / "app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
+    mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
+        delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
+
+    for url in (
+        "/api/companion/vault-browser",
+        "/api/companion/orientation",
+        "/api/companion/workspace?note_path=notes/a.md",
+    ):
+        resp = client.get(url)
+        assert resp.status_code == 200, (url, resp.text)
+        body = resp.json()
+        assert body["state"] == "vault_selection_required", url
+        assert body["reason"] == "no_vault_bound", url
+        # The configured-but-unselected root is offered to the picker, not read.
+        assert body["configured_vault_root"] == str(vault_root), url
+        # Never a silent note list / artifact off the configured root (the
+        # picker may echo the requested_note_path, but reads nothing).
+        assert "notes" not in body, url
+        assert "artifact" not in body, url
+
+
+def test_uninitialized_selected_vault_reads_but_writes_route_to_picker(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selected-but-uninitialized vault: reads work, writes route to the picker.
+
+    Option-2 (#2309) allows reads on a selected directory before it is
+    initialized; write boundaries (#2325 Codex P1) must NOT mutate an
+    uninitialized vault — ``/note/save`` returns the picker and writes nothing
+    until the vault is initialized.
+    """
+    vault = tmp_path / "bare-vault"
+    (vault / "notes").mkdir(parents=True, exist_ok=True)
+    note = vault / "notes" / "a.md"
+    note.write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    app_local_path = tmp_path / "app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
+    mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
+        delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
+    mgr.select_vault(vault, remember=False)
+    assert mgr.context.status == "uninitialized"
+
+    # READ works on the selected-but-uninitialized vault.
+    read = client.get("/api/companion/workspace", params={"note_path": "notes/a.md"})
+    assert read.status_code == 200, read.text
+    assert read.json().get("artifact", {}).get("note_path") == "notes/a.md"
+
+    # WRITE routes to the picker and mutates nothing.
+    before = note.read_text(encoding="utf-8")
+    save = client.post(
+        "/api/companion/note/save",
+        json={"note_path": "notes/a.md", "new_body": "# Mutated\n\nshould not persist\n"},
+    )
+    assert save.status_code == 200, save.text
+    assert save.json()["state"] == "vault_selection_required"
+    assert note.read_text(encoding="utf-8") == before
+
+
 # --- AC2: watcher idled in no-vault boot (start_full_system.sh) --------------
 
 
