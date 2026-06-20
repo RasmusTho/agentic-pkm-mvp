@@ -139,7 +139,7 @@ def test_malformed_frontmatter_diagnostic() -> None:
     )
 
 
-def test_apostrophe_value_no_parse_error() -> None:
+def test_apostrophe_inside_unquoted_value_not_malformed() -> None:
     document = parse_vault_markdown(
         "---\n"
         "title: Rasmus's note\n"
@@ -149,6 +149,20 @@ def test_apostrophe_value_no_parse_error() -> None:
 
     assert document.frontmatter is not None
     assert not any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
+def test_frontmatter_flags_unterminated_quote_after_closed_scalar() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        "title: 'ok' 'oops\n"
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert any(
         diagnostic.code == "frontmatter_parse_error"
         for diagnostic in document.diagnostics
     )
