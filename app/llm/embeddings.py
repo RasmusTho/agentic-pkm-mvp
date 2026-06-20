@@ -263,11 +263,12 @@ def _ollama_embed_one(text: str, *, model: str, dim: int, timeout: float) -> tup
 # Registry mapping provider name -> adapter callable.
 # Each adapter has signature: (text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]
 # To add a new provider, register it here — no changes to _embed_single required.
+from app.llm.gemini_embeddings import _gemini_embed_one  # noqa: E402
+
 PROVIDER_REGISTRY: dict[str, ProviderAdapter] = {
     "mock": _mock_embed_one,
     "ollama": _ollama_embed_one,
-    # Gemini adapter registered here by EMBEDREL-04:
-    # "gemini": _gemini_embed_one,
+    "gemini": _gemini_embed_one,
 }
 
 
