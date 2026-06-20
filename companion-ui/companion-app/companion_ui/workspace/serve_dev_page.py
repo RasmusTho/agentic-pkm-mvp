@@ -3308,7 +3308,9 @@ def _render_vault_browser(
     )
     read_only_text = "read-only" if read_only else "mutating"
     # Calm provenance label for daily-use visibility; raw value in data attribute.
-    calm_provenance = "read-only fallback · filesystem index" if read_only else "filesystem index"
+    # Badge already shows "read-only" when read_only=True; provenance omits the
+    # redundant qualifier to avoid duplication (#2240-a).
+    calm_provenance = "fallback · filesystem index" if read_only else "filesystem index"
     filters_html = _render_filter_chips(notes, active_filters or {})
     pagination_html = _render_vault_browser_pagination(
         note_path=note_path,
@@ -5769,12 +5771,16 @@ def _render_orientation_vault_entry(
     vault_browser: Optional[dict],
     *,
     error: str = "",
+    resolved_vault_id: str | None = None,
 ) -> str:
     """Render a concrete vault entrypoint on the no-active-note surface.
 
     Re-entry/orientation is derived runtime context. The root workspace must
     still provide a direct path into the human vault even when the orientation
     frame is sparse, stale, or unhelpful.
+
+    `resolved_vault_id` — when provided (cold_start path), the card uses the
+    scope-resolved vault name so it matches the cold_start chip (#2240-b).
     """
     if vault_browser is None and not error:
         return ""
@@ -5786,6 +5792,9 @@ def _render_orientation_vault_entry(
         if isinstance(note, dict)
     ]
     identity = _orientation_dict(payload.get("vault_identity"))
+    # Use the caller-supplied resolved vault id (from scope.vault_id) when
+    # available so the card identity matches the cold_start chip (#2240-b).
+    _vault_name = resolved_vault_id or str(identity.get("vault_name") or "unresolved")
     browser_html = _render_vault_browser(
         note_path="",
         notes=notes,
@@ -5795,7 +5804,7 @@ def _render_orientation_vault_entry(
         error=error,
         read_only=bool(payload.get("read_only", True)),
         identity_available=bool(payload.get("identity_available", False)),
-        vault_name=str(identity.get("vault_name") or "unresolved"),
+        vault_name=_vault_name,
         vault_channel=str(identity.get("channel") or "unknown"),
         vault_provenance=str(identity.get("provenance") or "unresolved"),
         active_filters=dict(payload.get("active_filters") or {}),
@@ -5939,6 +5948,7 @@ def _render_orientation_index_html(
     vault_entry_html = _render_orientation_vault_entry(
         vault_browser,
         error=vault_browser_error,
+        resolved_vault_id=_orientation_str(scope.get("vault_id")) or None,
     )
     vault_browser_script = _orientation_vault_browser_script() if vault_entry_html else ""
     # The system map overlay (#1787, SEP-05) is reachable from every entry
@@ -6474,6 +6484,27 @@ def _render_orientation_index_html(
       /* Narrow mode: the whisper column is suppressed and collapses into the
          card, which carries the same four answers. */
       .reentry-whisper-col {{ display: none; }}
+    }}
+    /* ---- cold_start inline capture (#2172, #2240-c) ---- */
+    .cold-start-capture-line {{
+      margin: 16px 0 0;
+    }}
+    .cold-start-capture-input {{
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--border-strong);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: 15px;
+      outline: none;
+      padding: 4px 0;
+      width: 100%;
+    }}
+    .cold-start-capture-input::placeholder {{
+      color: var(--fg-3);
+    }}
+    .cold-start-capture-input:focus {{
+      border-bottom-color: var(--accent);
     }}
   </style>
 </head>

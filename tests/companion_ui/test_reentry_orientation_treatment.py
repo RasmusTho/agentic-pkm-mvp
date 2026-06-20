@@ -780,3 +780,100 @@ def test_recents_anchor_uses_server_payload_without_ui_filesystem_probe() -> Non
     # No filesystem I/O marker: the rendered link text comes from the server
     # display_label, not from any local path computation (confirmed by the
     # two renders above differing only by payload, not by worktree state).
+
+
+# ---------------------------------------------------------------------------
+# AC (#2240-a,b): vault card de-dupes "read-only" and uses resolved vault_id
+# ---------------------------------------------------------------------------
+
+
+def _vault_browser_payload(vault_name: str = "Niflheim") -> dict:
+    """Minimal vault_browser payload for cold_start orientation rendering."""
+    return {
+        "notes": [],
+        "query": "",
+        "total_notes": 0,
+        "filtered_notes": 0,
+        "read_only": True,
+        "identity_available": True,
+        "vault_identity": {
+            "vault_name": vault_name,
+            "channel": "local",
+            "provenance": "resolved",
+        },
+        "active_filters": {},
+        "pagination": {},
+    }
+
+
+def test_cold_start_vault_card_dedupes_readonly_and_uses_resolved_vault_id() -> None:
+    """#2240-a,b: vault card shows read-only exactly once; vault_id matches chip.
+
+    The vault_browser badge already shows "read-only"; the calm_provenance string
+    must not repeat it.  The vault card identity must resolve from scope.vault_id
+    (same source as the cold_start chip), not from vault_browser.vault_identity.
+    """
+    payload = _orientation_payload(leave_status="absent")
+    # scope.vault_id = "dev-vault" (from _orientation_payload fixture)
+    vault_browser = _vault_browser_payload(vault_name="SomethingElse")
+
+    html = _render(orientation=payload, orientation_vault_browser=vault_browser)
+
+    # Only cold_start surfaces the threshold.
+    assert 'data-region="cold-start-threshold"' in html
+
+    # --- AC 2240-a: "read-only" must not appear in the provenance string ---
+    # The badge (data-testid=workspace-vault-browser-read-only) shows "read-only".
+    # The provenance calm label must NOT also contain "read-only" (de-duplication).
+    assert 'data-testid="workspace-vault-browser"' in html
+    provenance_block = html.split('data-testid="workspace-vault-browser-provenance"', 1)[1].split("</span>", 1)[0]
+    assert "read-only" not in provenance_block, (
+        "Provenance string must not repeat 'read-only' — badge already shows it"
+    )
+    # Provenance should indicate fallback source without duplicating the badge text.
+    assert "fallback" in provenance_block or "filesystem index" in provenance_block, (
+        f"Provenance should indicate fallback source, got: {provenance_block!r}"
+    )
+
+    # --- AC 2240-b: vault card identity matches scope.vault_id (the chip source) ---
+    # The cold_start chip shows "dev-vault" (from scope.vault_id).
+    assert "dev-vault" in html  # chip still shows it
+    # The vault browser identity label also resolves from scope.vault_id.
+    identity_block = html.split('data-testid="workspace-vault-browser-active-identity"', 1)[1].split("</span>", 1)[0]
+    assert "dev-vault" in identity_block, (
+        f"Vault browser identity should use scope.vault_id='dev-vault', got: {identity_block!r}"
+    )
+    # Must NOT show the vault_browser.vault_identity value ("SomethingElse").
+    assert "SomethingElse" not in identity_block
+
+
+# ---------------------------------------------------------------------------
+# AC (#2240-c): inline capture input is not truncated
+# ---------------------------------------------------------------------------
+
+
+def test_cold_start_inline_capture_not_truncated() -> None:
+    """#2240-c: inline capture input has full-width CSS so placeholder is readable.
+
+    The input must carry width:100% (or equivalent) styling so the placeholder
+    'Leave a note for future-you…' is not truncated on the cold_start surface.
+    """
+    html = _render(orientation=_orientation_payload(leave_status="absent"))
+
+    assert 'data-testid="cold-start-capture-input"' in html
+    assert 'data-region="cold-start-capture"' in html
+
+    # The placeholder text must be present verbatim (not truncated at render time).
+    assert "Leave a note for future-you" in html
+
+    # CSS for the input must declare full-width treatment.
+    assert ".cold-start-capture-input" in html
+    # Locate the CSS rule for .cold-start-capture-input
+    css_rule = html.split(".cold-start-capture-input", 1)[1].split("}", 1)[0]
+    assert "width" in css_rule, (
+        "cold-start-capture-input CSS must declare a width so the placeholder is not truncated"
+    )
+    # width must be 100% (full-width, unadorned inline line per design item 4).
+    assert "100%" in css_rule, (
+        "cold-start-capture-input must be width:100% to render the full placeholder"
+    )
