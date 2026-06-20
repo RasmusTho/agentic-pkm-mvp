@@ -358,7 +358,13 @@ def _node_html(node: MapNode, *, available: bool) -> str:
     )
 
 
-def system_map_overlay_markup(*, available_routes: tuple[str, ...] = ()) -> str:
+def system_map_overlay_markup(
+    *,
+    available_routes: tuple[str, ...] = (),
+    orientation_freshness: str = "",
+    orientation_as_of: str = "",
+    orientation_trace_id: str = "",
+) -> str:
     """The system map overlay markup — closed by default, never unbidden.
 
     ``available_routes`` declares which routable surfaces are actually live on
@@ -366,6 +372,12 @@ def system_map_overlay_markup(*, available_routes: tuple[str, ...] = ()) -> str:
     surfaces offer only the routes that truthfully exist there, e.g. the
     Vault Browser as the declared ``cold_start → shell_active`` path).
     Undeclared ids are rejected — availability is a contract, not a hint.
+
+    ``orientation_freshness``, ``orientation_as_of``, ``orientation_trace_id``
+    carry the relocated telemetry from the removed "Re-entry snapshot" meta
+    row (#2171/#2245). When present and non-empty they render as a read-only
+    projection row in the entry-point center node. When absent nothing renders
+    — no placeholder, no zero-state row.
     """
     declared = routable_surface_ids()
     for surface_id in available_routes:
@@ -379,6 +391,24 @@ def system_map_overlay_markup(*, available_routes: tuple[str, ...] = ()) -> str:
         for node in MAP_SURFACES
     )
     parked = " ".join(PARKED_SURFACES)
+    # Relocated telemetry: freshness/as_of/trace_id render only when the
+    # orientation payload supplies them (zero-state = omit, no placeholder).
+    # data-authority="read-only-projection" — no mutation affordance.
+    _f = orientation_freshness.strip()
+    _a = orientation_as_of.strip()
+    _t = orientation_trace_id.strip()
+    entry_point_meta_html = (
+        f"""
+      <div class="map-center-meta" data-testid="map-entry-point-freshness"
+        data-authority="read-only-projection"
+        data-region="map-entry-point-meta">
+        <span data-testid="map-entry-point-meta-freshness"><code>{_html.escape(_f)}</code></span>
+        {(f'<span data-testid="map-entry-point-meta-as-of">{_html.escape(_a)}</span>') if _a else ''}
+        {(f'<span data-testid="map-entry-point-meta-trace-id"><code>{_html.escape(_t)}</code></span>') if _t else ''}
+      </div>"""
+        if (_f or _a or _t)
+        else ""
+    )
     return f"""
   <!-- system-map-overlay start -->
   <!-- System map overlay (#1787, SEP-05) — a renderer/router index
@@ -426,6 +456,12 @@ def system_map_overlay_markup(*, available_routes: tuple[str, ...] = ()) -> str:
     }}
     .map-center-name {{ color: var(--accent, #d4a843); font-size: 15px; }}
     .map-center-sub {{ color: var(--fg-2, #7a9ab8); font-size: 12px; margin-top: 4px; }}
+    .map-center-meta {{
+      color: var(--fg-3, #3d5570); font-family: var(--font-mono, monospace);
+      font-size: 10px; margin-top: 6px; display: flex; gap: 8px;
+      justify-content: center; flex-wrap: wrap;
+    }}
+    .map-center-meta code {{ font-family: inherit; }}
     .system-map-grid {{
       display: grid; gap: 10px; grid-template-columns: repeat(2, 1fr);
     }}
@@ -487,6 +523,7 @@ def system_map_overlay_markup(*, available_routes: tuple[str, ...] = ()) -> str:
       data-region="system-map-center">
       <div class="map-center-name">{_e(MAP_CENTER_NAME)}</div>
       <div class="map-center-sub">{_e(MAP_CENTER_SUB)}</div>
+      {entry_point_meta_html}
     </div>
     <div class="system-map-grid" data-testid="system-map-grid">
       {nodes}

@@ -604,3 +604,183 @@ def test_map_is_a_host_occupant_with_dismiss_to_anchor() -> None:
     fragment = system_map_overlay_markup(available_routes=("vault",))
     assert 'data-open="false"' in fragment
     assert "system-map-controller" in system_map_overlay_script()
+
+
+# ---------------------------------------------------------------------------
+# Telemetry relocation (#2245, #2174): freshness/as_of/trace_id in topbar
+# disclosure and map entry-point center node.
+# ---------------------------------------------------------------------------
+
+
+def test_entry_point_map_and_runtime_status_render_relocated_telemetry() -> None:
+    """Topbar runtime-status popover and map center node render relocated telemetry.
+
+    Verifies AC1 and AC2 of #2245: when the orientation payload supplies
+    freshness/as_of/trace_id, both pull-only surfaces render the values as
+    read-only projection rows with data-authority="read-only-projection".
+    """
+    # --- Map center node (pure function path) ---
+    # system_map_overlay_markup accepts the three optional params directly.
+    fragment = system_map_overlay_markup(
+        available_routes=("vault",),
+        orientation_freshness="fresh",
+        orientation_as_of="2026-06-10T12:00:00Z",
+        orientation_trace_id="trace-orientation-1",
+    )
+    # Extract the map-center region (spans multiple nested divs; use the grid
+    # boundary as the close marker rather than a single </div>).
+    center_start = fragment.find('data-testid="system-map-center"')
+    center_end = fragment.find('data-testid="system-map-grid"')
+    assert center_start >= 0 and center_end > center_start, "system-map-center must render before grid"
+    center_html = fragment[center_start:center_end]
+    # The meta row renders inside the center node with read-only-projection authority.
+    assert 'data-testid="map-entry-point-freshness"' in center_html
+    assert 'data-authority="read-only-projection"' in center_html
+    assert "fresh" in center_html
+    assert "2026-06-10T12:00:00Z" in center_html
+    assert "trace-orientation-1" in center_html
+
+    # --- Topbar runtime-status popover (full render path) ---
+    # The workspace shell receives orientation meta via fields.
+    html = _render_workspace(
+        orientation_freshness="fresh",
+        orientation_as_of="2026-06-10T12:00:00Z",
+        orientation_trace_id="trace-orientation-1",
+    )
+    # Extract the popover region from the workspace-runtime-status-popover
+    # div up to the closing </details> tag.
+    pop_start = html.find('data-testid="workspace-runtime-status-popover"')
+    pop_end = html.find('</details>', pop_start)
+    assert pop_start >= 0, "workspace-runtime-status-popover must render"
+    popover_html = html[pop_start:pop_end]
+    # Freshness row with read-only-projection authority.
+    freshness_row = re.search(
+        r'<div[^>]*data-testid="workspace-freshness-as-of"[^>]*>', popover_html
+    )
+    assert freshness_row, "freshness row must appear in topbar popover"
+    assert 'data-authority="read-only-projection"' in freshness_row.group(0)
+    assert "fresh" in popover_html
+    # as_of row.
+    as_of_row = re.search(
+        r'<div[^>]*data-testid="workspace-orientation-as-of"[^>]*>', popover_html
+    )
+    assert as_of_row, "as_of row must appear in topbar popover"
+    assert 'data-authority="read-only-projection"' in as_of_row.group(0)
+    assert "2026-06-10T12:00:00Z" in popover_html
+    # trace_id row.
+    trace_row = re.search(
+        r'<div[^>]*data-testid="workspace-orientation-trace-id"[^>]*>', popover_html
+    )
+    assert trace_row, "orientation trace_id row must appear in topbar popover"
+    assert 'data-authority="read-only-projection"' in trace_row.group(0)
+    assert "trace-orientation-1" in popover_html
+
+    # --- Cold_start orientation page: map center node carries the values ---
+    cold = _render_cold_start()
+    cold_overlay = _map_overlay(cold)
+    cold_center_start = cold_overlay.find('data-testid="system-map-center"')
+    cold_center_end = cold_overlay.find('data-testid="system-map-grid"')
+    assert cold_center_start >= 0, "system-map-center must render on cold_start orientation page"
+    cold_center_html = cold_overlay[cold_center_start:cold_center_end]
+    # The map is pull-only — the meta row is present inside the (closed) overlay.
+    assert 'data-testid="map-entry-point-freshness"' in cold_center_html
+    assert 'data-authority="read-only-projection"' in cold_center_html
+
+
+def test_relocated_map_counts_are_read_only_projection_without_zero_state() -> None:
+    """Zero-state: when payload omits freshness/as_of/trace_id, no placeholder row renders.
+
+    Verifies AC4 of #2245: the map center node and topbar popover must not
+    render a placeholder or empty row when the orientation payload does not
+    supply the relocated telemetry fields.
+    """
+    # --- Map center node (pure function, no orientation meta) ---
+    fragment_empty = system_map_overlay_markup(available_routes=("vault",))
+    assert 'data-testid="map-entry-point-freshness"' not in fragment_empty, (
+        "map center node must not render a meta row when orientation meta is absent"
+    )
+    assert 'data-authority="read-only-projection"' not in fragment_empty or (
+        # read-only-projection may appear elsewhere (overlay authority="projection"),
+        # but specifically the map-entry-point-freshness div must not.
+        'data-testid="map-entry-point-freshness"' not in fragment_empty
+    )
+
+    # Only freshness present: as_of and trace_id rows must not render empty.
+    fragment_partial = system_map_overlay_markup(
+        available_routes=(),
+        orientation_freshness="fresh",
+        orientation_as_of="",
+        orientation_trace_id="",
+    )
+    cp_start = fragment_partial.find('data-testid="system-map-center"')
+    cp_end = fragment_partial.find('data-testid="system-map-grid"')
+    assert cp_start >= 0, "system-map-center must render"
+    center_partial_html = fragment_partial[cp_start:cp_end]
+    # Meta row renders because freshness is present.
+    assert 'data-testid="map-entry-point-freshness"' in center_partial_html
+    # But as_of and trace_id sub-spans are omitted when empty.
+    assert 'data-testid="map-entry-point-meta-as-of"' not in center_partial_html
+    assert 'data-testid="map-entry-point-meta-trace-id"' not in center_partial_html
+
+    # --- Topbar popover: no rows when fields absent ---
+    html = _render_workspace()  # no orientation_freshness/as_of/trace_id in fields
+    pop_start2 = html.find('data-testid="workspace-runtime-status-popover"')
+    pop_end2 = html.find('</details>', pop_start2)
+    assert pop_start2 >= 0, "workspace-runtime-status-popover must render"
+    popover_html2 = html[pop_start2:pop_end2]
+    assert 'data-testid="workspace-freshness-as-of"' not in popover_html2, (
+        "freshness row must not appear in topbar popover when orientation meta absent"
+    )
+    assert 'data-testid="workspace-orientation-as-of"' not in popover_html2
+    assert 'data-testid="workspace-orientation-trace-id"' not in popover_html2
+
+
+def test_cold_start_omits_relocated_telemetry_regions() -> None:
+    """Cold_start door does not render freshness/as_of/trace_id outside pull-only surfaces.
+
+    Verifies AC3 of #2245: the cold_start entry-surface body is clean of
+    these telemetry fields. They exist only inside the (closed) system-map
+    overlay (pull-only, requires explicit map.open) — never in the entry-
+    surface body, never in the topbar row (only inside the <details> popover
+    which requires explicit open by the operator).
+    """
+    cold = _render_cold_start()
+    assert _entry_state(cold) == "cold_start"
+
+    # The orientation-meta div (removed by #2171) must not appear in the body
+    # outside pull-only surfaces.
+    # The body region is everything outside the system-map-overlay fragment.
+    cold_no_overlay = re.sub(
+        r"<!-- system-map-overlay start -->.*?<!-- system-map-overlay end -->",
+        "",
+        cold,
+        flags=re.S,
+    )
+    # No "Re-entry snapshot" heading on cold_start (confirmed by #2171).
+    assert "Re-entry snapshot" not in cold_no_overlay, (
+        "cold_start must not render the Re-entry snapshot heading"
+    )
+    # The orientation-meta class/region must not appear in the body outside the overlay.
+    assert 'class="orientation-meta"' not in cold_no_overlay, (
+        "orientation-meta div must not appear on cold_start body outside pull-only overlay"
+    )
+    # The relocated rows (freshness-as-of / orientation-as-of / orientation-trace-id)
+    # must not appear in the body outside the closed map overlay.
+    for testid in (
+        "workspace-freshness-as-of",
+        "workspace-orientation-as-of",
+        "workspace-orientation-trace-id",
+    ):
+        assert f'data-testid="{testid}"' not in cold_no_overlay, (
+            f"{testid} must not appear on cold_start body outside pull-only surfaces"
+        )
+    # The map overlay IS present on the page (pull-only), so the cold_start
+    # page carries the overlay in its (closed) state — this is correct:
+    # the map requires an explicit map.open affordance to display.
+    cold_overlay = _map_overlay(cold)
+    root = re.search(
+        r'<div[^>]*data-testid="system-map-overlay"[^>]*>', cold_overlay
+    )
+    assert root and 'data-open="false"' in root.group(0), (
+        "system-map-overlay must be closed (not auto-opened) on cold_start"
+    )
