@@ -17,6 +17,8 @@ from app.agent_memory.recall_explanation import (
 from app.agent_memory.recall_retrieval import RecallCandidate, retrieve_relevant_promoted
 from app.agents.ask.state import AgentState, RetrievedHit
 from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer, score_hit
+from app.config.environment import active_environment
+from app.config.paths import resolve_optional_vault_root
 from app.components.rerankers import get_reranker
 from app.retrieval.capability import RetrievalRequest, retrieve
 from app.vault.manager import get_vault_manager
@@ -103,9 +105,9 @@ def _active_recall_vault_root() -> Path | None:
     context = manager.context
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser().resolve()
-    env_root = os.getenv("VAULT_ROOT")
-    if env_root:
-        return Path(env_root).expanduser().resolve()
+    env_root = resolve_optional_vault_root(environment=active_environment())
+    if env_root is not None:
+        return env_root.expanduser().resolve()
     # After an API restart the manager boots with an empty no-vault context;
     # the persisted last-active vault is only materialized on demand. Lazily
     # load it only when no explicit channel vault binding is present.

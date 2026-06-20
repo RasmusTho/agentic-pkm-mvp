@@ -67,6 +67,10 @@ def test_recall_vault_lazily_loads_persisted_vault_after_restart(tmp_path: Path,
     persisted_root = tmp_path / "persisted-vault"
     persisted_root.mkdir()
     monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    monkeypatch.delenv("PKM_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("PKM_SETTINGS_PROFILE", raising=False)
 
     manager = _RestartedVaultManager(_selected(persisted_root))
     monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
@@ -83,6 +87,7 @@ def test_recall_vault_prefers_explicit_env_over_last_active(tmp_path: Path, monk
     env_root = tmp_path / "env-vault"
     persisted_root.mkdir()
     env_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
     monkeypatch.setenv("VAULT_ROOT", str(env_root))
 
     manager = _RestartedVaultManager(_selected(persisted_root))
@@ -92,6 +97,26 @@ def test_recall_vault_prefers_explicit_env_over_last_active(tmp_path: Path, monk
 
     assert manager.load_last_active_calls == 0
     assert resolved == env_root.resolve()
+    assert resolved != persisted_root.resolve()
+
+
+def test_recall_vault_prefers_scoped_test_env_over_last_active(tmp_path: Path, monkeypatch) -> None:
+    """A scoped test-channel binding must also outrank stale last-active state."""
+    persisted_root = tmp_path / "persisted-vault"
+    scoped_root = tmp_path / "scoped-test-vault"
+    persisted_root.mkdir()
+    scoped_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "test")
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(scoped_root))
+
+    manager = _RestartedVaultManager(_selected(persisted_root))
+    monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
+
+    resolved = ask_graph._active_recall_vault_root()
+
+    assert manager.load_last_active_calls == 0
+    assert resolved == scoped_root.resolve()
     assert resolved != persisted_root.resolve()
 
 
@@ -121,6 +146,7 @@ def test_recall_vault_falls_back_to_env_when_no_persisted_vault(tmp_path: Path, 
     """No selected and no persisted vault -> env fallback still applies."""
     env_root = tmp_path / "env-vault"
     env_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
     monkeypatch.setenv("VAULT_ROOT", str(env_root))
 
     class _NoVaultManager:
