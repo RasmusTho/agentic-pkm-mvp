@@ -604,3 +604,87 @@ def test_residual_ambient_layer_persists_after_resume() -> None:
     lowered = ambient.lower()
     for forbidden in ("notification", "badge", "urgent"):
         assert forbidden not in lowered, forbidden
+
+
+# ---------------------------------------------------------------------------
+# AC2 (#2171): cold_start threshold body — inline verb-line, vault chip,
+# eyebrow/headline variants, provenance line
+# ---------------------------------------------------------------------------
+
+
+def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
+    """AC2 verify: verb-line is inline affordances, not a button/card grid.
+
+    Three intent affordances map 1:1 onto vault.open / capture.open / map.open
+    inside a data-region="cold-start-verbs" element.  The element is inline
+    prose — never a grid, card, or button.
+    """
+    # First-contact variant (leave_point absent)
+    first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
+    # Cold-trajectory variant (gap > 14 d)
+    cold_traj = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    for html, label in [(first_contact, "first-contact"), (cold_traj, "cold-trajectory")]:
+        # Threshold container is present.
+        assert 'data-region="cold-start-threshold"' in html, label
+
+        # Verb-line is present.
+        assert 'data-region="cold-start-verbs"' in html, label
+
+        # All three intent affordances are present.
+        assert 'data-intent="vault.open"' in html, label
+        assert 'data-intent="capture.open"' in html, label
+        assert 'data-intent="map.open"' in html, label
+
+        # Verb text labels are present.
+        assert "Find a note" in html, label
+        assert "Jot something down" in html, label
+        assert "See the map" in html, label
+
+        # No "Reorient" verb on cold_start.
+        assert "Reorient" not in html, label
+
+        # Verb-line is NOT a button/card grid — no grid wrapper around the verbs.
+        verb_region = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+        assert "<button" not in verb_region, label
+        assert 'class="orientation-grid"' not in verb_region, label
+        assert 'class="orientation-column"' not in verb_region, label
+
+
+def test_cold_start_threshold_eyebrow_headline_variants() -> None:
+    """Eyebrow and headline differ for first-contact vs cold-trajectory."""
+    first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
+    cold_traj = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    # First contact variant.
+    assert "First contact" in first_contact
+    assert "Nothing is open yet." in first_contact
+
+    # Cold trajectory variant.
+    assert "Returning after a while" in cold_traj
+    assert "Re-entry is through the vault." in cold_traj
+
+    # Variants are mutually exclusive (correct content in each page).
+    assert "Returning after a while" not in first_contact
+    assert "First contact" not in cold_traj
+
+
+def test_cold_start_threshold_vault_chip() -> None:
+    """Vault chip renders the server-declared vault_id."""
+    html = _render(orientation=_orientation_payload(leave_status="absent"))
+
+    assert "cold-start-vault-chip" in html
+    assert "dev-vault" in html  # from scope.vault_id in _orientation_payload fixture
+
+
+def test_cold_start_threshold_provenance_line() -> None:
+    """Provenance line content matches the variant."""
+    first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
+    cold_traj = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    assert "leave_point: absent" in first_contact
+    assert "read-only · server-declared" in first_contact
+
+    assert "trajectory: cold" in cold_traj
+    assert "leave_point: present" in cold_traj
+    assert "read-only · server-declared" in cold_traj
