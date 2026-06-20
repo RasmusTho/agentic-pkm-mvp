@@ -168,6 +168,20 @@ def test_frontmatter_flags_unterminated_quote_after_closed_scalar() -> None:
     )
 
 
+def test_escaped_double_quote_does_not_close_frontmatter_scalar() -> None:
+    document = parse_vault_markdown(
+        "---\n"
+        'title: "He said \\" \'hello\'\\""\n'
+        "---\n"
+        "Body text.\n"
+    )
+
+    assert not any(
+        diagnostic.code == "frontmatter_parse_error"
+        for diagnostic in document.diagnostics
+    )
+
+
 def test_unquoted_quote_after_mid_value_space_no_parse_error() -> None:
     document = parse_vault_markdown(
         "---\n"

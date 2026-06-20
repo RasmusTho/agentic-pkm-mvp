@@ -139,6 +139,8 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
         for idx, char in enumerate(line):
             if quote:
                 if char == quote:
+                    if quote == '"' and _is_escaped_double_quote(line, idx):
+                        continue
                     quote = None
                     closed_quoted_scalar = True
                     spaced_after_closed_quoted_scalar = False
@@ -200,6 +202,15 @@ def _frontmatter_looks_malformed(frontmatter: str) -> bool:
             return True
 
     return bool(stack)
+
+
+def _is_escaped_double_quote(line: str, quote_idx: int) -> bool:
+    backslash_count = 0
+    cursor = quote_idx - 1
+    while cursor >= 0 and line[cursor] == "\\":
+        backslash_count += 1
+        cursor -= 1
+    return backslash_count % 2 == 1
 
 
 def _iter_non_fenced_spans(body_markdown: str, body_offset: int) -> Iterator[tuple[str, int]]:
