@@ -428,3 +428,163 @@ def test_dismiss_preserves_unsent_text() -> None:
     for forbidden in ("location.href", "location.assign", "location.reload",
                       "history.pushState", "window.open"):
         assert forbidden not in script
+
+
+# ---------------------------------------------------------------------------
+# AC (#2172): inline capture field renders on cold_start / suppressed no_vault
+# ---------------------------------------------------------------------------
+
+
+def _cold_start_orientation(*, leave_status: str = "absent") -> dict:
+    """Minimal orientation payload for the given leave_point status."""
+    return {
+        "scope": {"kind": "workspace", "vault_id": "dev-vault", "channel": "dev"},
+        "meta": {
+            "contract_version": "workspace_orientation.v1",
+            "as_of": "2026-06-20T10:00:00Z",
+            "trace_id": "trace-cold",
+            "freshness": "fresh",
+            "stale_after": "2026-06-20T10:05:00Z",
+            "degraded_reasons": [],
+        },
+        "leave_point": {"status": leave_status} if leave_status else None,
+        "open_loops": [],
+        "notable_changes": [],
+        "resurface": {"candidates": []},
+        "governance": {
+            "pending_proposal_count": 0,
+            "pending_receipt_count": 0,
+            "latest_receipt_outcome": None,
+            "authority_role": "derived",
+            "source_ref": {"kind": "status", "ref": "status", "label": "status"},
+        },
+        "guards": {
+            "read_only": True,
+            "runtime_posture": "healthy",
+            "degraded": False,
+            "reasons": [],
+            "authority_role": "derived",
+            "source_ref": {"kind": "status", "ref": "status", "label": "status"},
+        },
+        "mutation_intents": [],
+    }
+
+
+def _render_cold_start() -> str:
+    """Render the orientation page with a cold_start (absent leave_point)."""
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_start_orientation(leave_status="absent"),
+    )
+
+
+def _render_no_vault() -> str:
+    """Render the orientation page as no_vault via an error orientation."""
+    from companion_ui.workspace.entry_state import EntryStateResolution
+    from companion_ui.workspace.serve_dev_page import _render_orientation_index_html  # type: ignore[attr-defined]
+
+    orientation = _cold_start_orientation(leave_status="absent")
+    entry_resolution = EntryStateResolution(state="no_vault")
+    return _render_orientation_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        orientation=orientation,
+        entry_resolution=entry_resolution,
+    )
+
+
+def test_entry_capture_field_renders_on_cold_start_and_suppresses_on_no_vault() -> None:
+    """Inline capture field renders on cold_start; suppressed on no_vault.
+
+    Design item 4 (implementation-contracts.md): an unadorned input line
+    "Leave a note for future-you…" that on focus / ⌘N mounts the shipped
+    governed capture occupant verbatim.
+
+    Suppressed on no_vault: capture has no honest landing for an offline write
+    at boot (SYSTEM_ENTRY_POINT_SPEC.md §Resolved Q17: "never claim a write it
+    cannot back").
+    """
+    # cold_start: the inline capture field and the modal occupant both render.
+    cold = _render_cold_start()
+    assert 'data-entry-state="cold_start"' in cold
+
+    # The inline capture field renders inside the cold-start-threshold region.
+    assert 'data-region="cold-start-threshold"' in cold
+    assert 'data-region="cold-start-capture"' in cold
+    assert 'data-testid="cold-start-capture-input"' in cold
+    assert "Leave a note for future-you" in cold
+
+    # On focus the field mounts the capture occupant (never opens inline editor).
+    assert "overlayHost.mount('capture')" in cold
+
+    # The capture modal occupant ships with the cold_start substrate.
+    assert 'data-region="capture-modal"' in cold
+    assert "overlayHost.register('capture'" in cold
+
+    # no_vault: the inline capture field is suppressed.
+    no_vault = _render_no_vault()
+    assert 'data-entry-state="no_vault"' in no_vault
+    assert 'data-region="cold-start-capture"' not in no_vault
+    assert 'data-testid="cold-start-capture-input"' not in no_vault
+    # The capture modal markup / script are also suppressed on no_vault
+    # (no honest landing for an offline write at boot).
+    assert 'data-region="capture-modal"' not in no_vault
+    assert "overlayHost.register('capture'" not in no_vault
+
+
+def test_entry_capture_preserves_unsent_text_without_claiming_write() -> None:
+    """Offline/unsent capture text is preserved; no write is claimed.
+
+    The inline capture field on cold_start opens the shipped capture occupant
+    via overlayHost.mount('capture'): dismissal routes through the overlay host
+    back to the anchor with unsent text preserved, no route reset.
+    A write is claimed ONLY on the runtime WriteReceipt.
+    """
+    # Pure model: dismissal preserves draft and session captures (unchanged
+    # contract from the workspace-shell modal, now also valid on entry surface).
+    state = CaptureSessionState(
+        draft="idea for future-me",
+        captures=(
+            SessionCapture(text="earlier offline", state=NOT_YET_WRITTEN, ack=None),
+        ),
+    )
+    assert dismiss_modal(state) is state
+    assert dismiss_modal(state).draft == "idea for future-me"
+    # No write is claimed from the draft alone.
+    assert not any(c.state == WRITTEN for c in state.captures)
+
+    # The rendered cold_start substrate does not claim a write client-side:
+    # the inline field routes to overlayHost.mount('capture') and the modal
+    # controller's save path requires a runtime acknowledgement.
+    cold = _render_cold_start()
+
+    # Inline field routes through the host; no inline save button on the field.
+    cold_start_capture = re.search(
+        r'data-region="cold-start-capture"(.*?)(?=<div|<p\s|</div)', cold, re.S
+    )
+    assert cold_start_capture, "cold-start-capture region must render"
+    capture_block = cold_start_capture.group(1)
+    # The inline field triggers host mount on focus — no inline form post.
+    assert "overlayHost.mount('capture')" in capture_block
+    assert "capture.save" not in capture_block
+    assert "/api/companion/capture" not in capture_block
+
+    # The modal controller (running after mount) is what owns the governed
+    # write path: save requires a runtime acknowledgement.
+    script_m = re.search(
+        r"/\* capture-modal-controller \*/(.*?)/\* /capture-modal-controller \*/",
+        cold,
+        re.S,
+    )
+    assert script_m, "capture-modal-controller must render on cold_start"
+    script = script_m.group(1)
+    # A write is claimed only from resp.ok (runtime acknowledgement path).
+    assert "resp.ok" in script
+    # Unsent text is never silently dropped: the not-yet-written path preserves
+    # the full text in the session list.
+    assert "not_yet_written" in script
+    assert "textContent = text" in script
+    # Dismissal never navigates (no route reset).
+    for forbidden in ("location.href", "location.assign", "location.reload",
+                      "history.pushState"):
+        assert forbidden not in script
