@@ -275,11 +275,12 @@ def rebuild(
         try:
             embedding = embed_with_retry(
                 text,
-                provider=identity.provider,
-                model=identity.model,
                 dim=identity.dim,
-                normalize=identity.normalize,
                 object_id=str(domain_obj.uuid),
+                # Retry the resolved client so non-registry providers (deterministic/
+                # test/offline profiles) still rebuild; _embed_single only knows the
+                # PROVIDER_REGISTRY adapters and would fail every deterministic object.
+                embed_callable=lambda: client.embed_text(text),
             )
         except EmbedDeadLetterError as _dead_exc:
             _record_failure(

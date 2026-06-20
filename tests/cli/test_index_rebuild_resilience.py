@@ -57,7 +57,18 @@ def test_rebuild_completes_with_one_bad_note(monkeypatch, tmp_path):
 
     call_count = 0
 
-    def controlled_embed(text, *, provider=None, model=None, dim=None, normalize=True, object_id=None, _sleep=True):
+    def controlled_embed(
+        text,
+        *,
+        provider=None,
+        model=None,
+        dim=None,
+        normalize=True,
+        object_id=None,
+        embed_callable=None,
+        dead_letter_on_exhaustion=True,
+        _sleep=True,
+    ):
         nonlocal call_count
         call_count += 1
         # First call fails (bad note), second succeeds (good note)
@@ -95,5 +106,37 @@ def test_rebuild_completes_with_one_bad_note(monkeypatch, tmp_path):
     record = json.loads(lines[0])
     assert record["stage"] == "embed"
     assert record["exception_type"] == "EmbedDeadLetterError"
+
+    legacy_store._MEMORY_STORE.clear()
+
+
+def test_rebuild_deterministic_profile_uses_resolved_client(monkeypatch):
+    """`index rebuild --profile deterministic` must embed via the resolved
+    deterministic client, not _embed_single (which only knows PROVIDER_REGISTRY
+    adapters and would record every object as an embed failure). Regression guard
+    for the Codex review on PR #2298 (rebuild embedding-client seam)."""
+    reset_store_backends()
+    legacy_store._MEMORY_STORE.clear()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("EMBED_DIM", "8")
+    monkeypatch.setenv("EMBED_RETRY_MAX", "1")
+    monkeypatch.setenv("EMBED_RETRY_BASE_BACKOFF_S", "0.0")
+
+    _seed_object("first deterministic note", source_ref="vault/d1.md")
+    _seed_object("second deterministic note", source_ref="vault/d2.md")
+
+    from app.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["index", "rebuild", "--backend", "memory", "--json", "--profile", "deterministic"],
+    )
+
+    assert result.exit_code == 0, f"CLI exited non-zero: {result.output}\n{result.exception}"
+    summary = json.loads(result.output)
+    assert summary["total_objects"] == 2
+    assert summary["processed"] == 2, f"deterministic rebuild should embed all objects, got {summary}"
+    assert summary["error_count"] == 0, f"deterministic rebuild produced embed failures: {summary.get('errors')}"
 
     legacy_store._MEMORY_STORE.clear()
