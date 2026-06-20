@@ -5986,11 +5986,25 @@ def _render_orientation_index_html(
     # contact when leave_point is absent/missing; cold trajectory when a
     # leave_point exists but the gap exceeded 14 d.  No client-side
     # re-derivation — the orientation payload is the server-declared source.
+    # #2243: "First contact / Nothing is open yet." is reserved for a genuinely
+    # empty vault.  If recents_anchor is present the runtime is signalling a
+    # non-empty vault; use "Returning after a while" copy regardless of
+    # leave_point.status.  No UI-side filesystem probe — the emptiness signal is
+    # entirely server-declared (recents_anchor presence = non-empty vault).
     cold_start_threshold_html = ""
     if is_cold:
         _cold_lp = _orientation_dict(orientation.get("leave_point"))
         _cold_lp_status = _cold_lp.get("status") if _cold_lp else None
-        _is_first_contact = (not _cold_lp) or _cold_lp_status == "absent"
+        # Recents-anchor sub-affordance (§6, design_handoff/implementation-contracts.md).
+        # Rendered only when the runtime declares the server-side recents_anchor field.
+        # NEVER auto-opens; omitted entirely when the field is absent.
+        # Consumes ONLY the server-declared field — no UI-side filesystem mtime probe.
+        # Also serves as the server-declared vault-nonempty signal (#2243).
+        _cold_recents = _orientation_dict(orientation.get("recents_anchor"))
+        # recents_anchor present → vault is non-empty → use returning copy (#2243).
+        _vault_nonempty = bool(_cold_recents)
+        _leave_point_absent = (not _cold_lp) or _cold_lp_status == "absent"
+        _is_first_contact = _leave_point_absent and not _vault_nonempty
         if _is_first_contact:
             _cold_eyebrow = "First contact"
             _cold_headline = "Nothing is open yet."
@@ -6000,11 +6014,6 @@ def _render_orientation_index_html(
             _cold_headline = "Re-entry is through the vault."
             _cold_provenance = "trajectory: cold (&gt;14d) · leave_point: present · read-only · server-declared"
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
-        # Recents-anchor sub-affordance (§6, design_handoff/implementation-contracts.md).
-        # Rendered only when the runtime declares the server-side recents_anchor field.
-        # NEVER auto-opens; omitted entirely when the field is absent.
-        # Consumes ONLY the server-declared field — no UI-side filesystem mtime probe.
-        _cold_recents = _orientation_dict(orientation.get("recents_anchor"))
         _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
         _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
         if _cold_recents_path and _cold_recents_label:

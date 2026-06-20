@@ -877,3 +877,73 @@ def test_cold_start_inline_capture_not_truncated() -> None:
     assert "100%" in css_rule, (
         "cold-start-capture-input must be width:100% to render the full placeholder"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC (#2243): returning copy when vault is non-empty (recents_anchor present)
+# ---------------------------------------------------------------------------
+
+
+def _with_recents_anchor(
+    payload: dict,
+    note_path: str = "Notes/latest.md",
+    display_label: str = "Latest note",
+) -> dict:
+    """Attach a server-declared recents_anchor to the orientation payload."""
+    import copy
+    p = copy.deepcopy(payload)
+    p["recents_anchor"] = {
+        "note_path": note_path,
+        "display_label": display_label,
+    }
+    return p
+
+
+def test_cold_start_headline_uses_returning_copy_when_vault_nonempty() -> None:
+    """#2243: recents_anchor present → returning copy, even with absent leave_point.
+
+    'First contact / Nothing is open yet.' is reserved for a genuinely empty vault
+    (no recents_anchor AND absent/no leave_point).  A non-empty vault (recents_anchor
+    present) must use 'Returning after a while / Re-entry is through the vault.' even
+    when leave_point.status == 'absent'.
+    """
+    # Case 1: leave_point absent AND recents_anchor present → non-empty vault → returning copy
+    payload_absent_lp = _with_recents_anchor(
+        _orientation_payload(leave_status="absent")
+    )
+    html_absent = _render(orientation=payload_absent_lp)
+    assert "Returning after a while" in html_absent, (
+        "Non-empty vault (recents_anchor present) with absent leave_point must show returning copy"
+    )
+    assert "Re-entry is through the vault." in html_absent
+    assert "First contact" not in html_absent, (
+        "First contact copy must be reserved for genuinely empty vault"
+    )
+    assert "Nothing is open yet." not in html_absent
+
+    # Case 2: no leave_point at all AND recents_anchor present → non-empty vault → returning copy
+    payload_no_lp = _with_recents_anchor(
+        _orientation_payload(leave_status=None)
+    )
+    html_no_lp = _render(orientation=payload_no_lp)
+    assert "Returning after a while" in html_no_lp, (
+        "Non-empty vault (recents_anchor present) with no leave_point must show returning copy"
+    )
+    assert "First contact" not in html_no_lp
+
+    # Case 3: absent leave_point AND no recents_anchor → genuinely empty vault → first contact copy
+    payload_empty_vault = _orientation_payload(leave_status="absent")
+    # Ensure no recents_anchor
+    payload_empty_vault.pop("recents_anchor", None)
+    html_empty = _render(orientation=payload_empty_vault)
+    assert "First contact" in html_empty, (
+        "Empty vault (no recents_anchor + absent leave_point) must show first contact copy"
+    )
+    assert "Nothing is open yet." in html_empty
+    assert "Returning after a while" not in html_empty
+
+    # Case 4: cold trajectory (>14d) with leave_point present → always returning (unchanged)
+    payload_cold_traj = _orientation_payload(gap=_GAP_COLD)
+    html_cold = _render(orientation=payload_cold_traj)
+    assert "Returning after a while" in html_cold
+    assert "First contact" not in html_cold
