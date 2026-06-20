@@ -5,8 +5,8 @@ Owner: Companion UI / interaction model
 Temporal class: stable
 Review cadence: event-driven
 Source of truth: authoritative for entry/shell composition; per-surface authority remains with owner contracts; runtime truth remains with shipped code, tests, and docs/STATUS.md
-Last reviewed: 2026-06-12
-Last verified against: tests/companion_ui/test_entry_state_gallery.py (state-gallery validation harness, #1795), companion-ui/design_handoff/2026-06-09-system-entry-point/, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md, companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, companion-ui/docs/OVERLAY_GRAMMAR.md, companion-ui/docs/POSTURE_TRANSITIONS.md, companion-ui/docs/CONTINUITY_AND_DECAY.md, companion-ui/docs/ATTENTION_MODEL.md, companion-ui/docs/CANVAS_SUGGESTION_FLOW.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/DISPLAY_PREFERENCE_LOCAL_STATE_CONTRACT.md, companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md, companion-ui/docs/BLOCKED_AND_STALE_STATE_SPEC.md, companion-ui/docs/CORE_TERM_MAPPING.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CANVAS_CHAT_SURFACE/README.md, companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py
+Last reviewed: 2026-06-20
+Last verified against: tests/companion_ui/test_entry_state_gallery.py (state-gallery validation harness, #1795), companion-ui/design_handoff/2026-06-09-system-entry-point/, companion-ui/design_handoff/2026-06-19-cold-start-threshold/implementation-contracts.md, companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md (§recents_anchor, #2176), companion-ui/docs/WORKSPACE_STATE_CONTRACT.md, companion-ui/docs/COMPANION_UI_STATE_MAP.md, companion-ui/docs/OVERLAY_GRAMMAR.md, companion-ui/docs/POSTURE_TRANSITIONS.md, companion-ui/docs/CONTINUITY_AND_DECAY.md, companion-ui/docs/ATTENTION_MODEL.md, companion-ui/docs/CANVAS_SUGGESTION_FLOW.md, companion-ui/docs/PANEL_COMPANION_UI_CONTRACT.md, companion-ui/docs/DISPLAY_PREFERENCE_LOCAL_STATE_CONTRACT.md, companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md, companion-ui/docs/BLOCKED_AND_STALE_STATE_SPEC.md, companion-ui/docs/CORE_TERM_MAPPING.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/CANVAS_CHAT_SURFACE/README.md, companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py
 
 # System Entry Point — Normalized Spec
 
@@ -66,7 +66,7 @@ The entry point is a small explicit state machine wrapping the existing renderer
 |---|---|---|
 | `boot` | Runtime handshake in progress. | request to `GET /api/companion/orientation` pending |
 | `no_vault` | Runtime aggregate unreachable. | HTTP 503 `runtime_unavailable` (`WORKSPACE_ORIENTATION_CONTRACT.md §Runtime Unavailable`) |
-| `cold_start` | First contact, or cold trajectory (> 14 days): no admissible `leave_point`. | `leave_point.status: absent` (and no warm/dormant signals) |
+| `cold_start` | First contact, or cold trajectory (> 14 days): no admissible `leave_point`. Renders the **intent-declaration threshold** (vault chip + honest headline + verb-line Find/Jot/Map + inline governed capture + provenance line). Does **NOT** render the orientation grid or any re-entry overlay; those are gated to `state in ('orienting', 'shell_active')`. | `leave_point.status: absent` (and no warm/dormant signals) |
 | `orienting` | Returning with a recoverable trajectory; re-entry surface shown. | `leave_point.status: present` (or `stale`/`artifact_missing`/`degraded` with the stale cross-flag, see below) |
 | `shell_active` | Document anchor open; overlay layer available. | user resume / open action |
 
@@ -134,6 +134,8 @@ Attributes follow the shipped renderer conventions (`data-testid` for test hooks
 | `data-rail="open\|closed"` | shell body | Rail visibility; survives re-anchor per §Resolved Q8. | same |
 | `data-guidance="on"` (absent = off) | shell root | Opt-in explanatory guidance layer; off is the established-user default. | same |
 | `data-region="capture-input"` | capture textarea | Friction-free capture field. | same |
+| `data-region="cold-start-threshold"` | `cold_start` container | Non-overlay structural region for the intent-declaration threshold. NOT registered with `overlay_host`; carries no continuity claim; suppressed under reduced-content/print. | (new; #2171) |
+| `data-region="cold-start-verbs"` | `cold_start` verb-line | Non-overlay structural region for the inline Find/Jot/Map verb sentence. NOT registered with `overlay_host`; carries no continuity claim. | (new; #2171) |
 | `data-cognitive-mode` | shell root | Server-declared cognitive mode, rendered as supplied (§Resolved Q6). | (disambiguated) |
 | `data-posture-emphasis` | shell root | Local posture emphasis (Local UI) (§Resolved Q6). | (disambiguated) |
 | `data-intent="…"` | any actionable | The intent vocabulary below. | same |
@@ -256,6 +258,19 @@ The context lane (time) and the place band are **out-of-scope placeholders**. No
 
 ### Design-vs-owner-doc correction — memory review outcomes
 The package's implementation contract proposed `memory.defer` / `memory.reject` as UI-local review-queue actions. The owner docs win: `docs/AGENT_MEMORY/ADD_MEMORY_CANDIDATE_REVIEW_QUEUE.md` requires **promote, reject, and revise as separate review outcomes**, and ADR-0009 requires a receipt for "rejecting memory with accountable review semantics". This spec therefore treats `memory.reject` and `memory.revise` as durable, receipt-bearing review decisions through the governed review boundary; only `memory.defer` (non-terminal "decide later" bookkeeping, no semantic transition) stays receipt-free. Raised by Codex review on PR #1776; resolved in the owner docs' favor.
+
+### Q1 — Recents-anchor (server-declared Find/recency projection)
+
+Operator decision: adopt (Q1 in `companion-ui/design_handoff/2026-06-19-cold-start-threshold/open-questions.md`). Governing issue: #2176.
+
+The runtime MAY emit a `recents_anchor` field on the `cold_start` orientation payload — a server-declared **Find/recency projection** identifying the most recently edited vault note at snapshot time. It is explicitly **NOT** a `leave_point` and carries **NO** continuity semantics. Full field definition and render rules are owned by `companion-ui/docs/WORKSPACE_ORIENTATION_CONTRACT.md §recents_anchor`.
+
+Summary of render rules (normative detail in the owner doc):
+
+- The UI renders `recents_anchor` as a labeled "Open your most recent note" sub-affordance on the `cold_start` threshold's Find verb, routing via the existing `/workspace?note_path=…` path.
+- The UI must **never** auto-open this path on mount; it is an affordance only.
+- The UI must **omit the sub-affordance entirely** when the field is absent.
+- The UI must **not** derive this field locally via a filesystem `mtime` probe — that would violate the "no direct vault I/O from the UI" invariant (ADR-0014, #2141).
 
 ### Deferred to implementation issues (unchanged from the package)
 Q10 (ambient foreground refresh opt-in, gated on `COMPANION_ORIENTATION_AMBIENT_REFRESH` per ADR-0011), Q11 (bottom-sheet snap points), Q12 (command-palette input grammar), Q13 (off-palette Panel staging-shell migration), Q14 (fuller keyboard map), Q20 (read-back eligibility scope).
