@@ -969,6 +969,21 @@ class WorkspaceOrientationMutationIntent(BaseModel):
     trace_id: str
 
 
+class WorkspaceOrientationRecentsAnchor(BaseModel):
+    """Server-declared most-recently-edited Find/recency projection.
+
+    Explicitly NOT a leave_point and NOT a continuity claim.  The UI renders
+    this as a labeled Find sub-affordance ("Open your most recent note") and
+    must omit it when the field is absent.  Declared by the runtime on the
+    orientation payload per WORKSPACE_ORIENTATION_CONTRACT.md §recents_anchor.
+    """
+
+    note_path: str
+    """Browser-safe runtime-relative note path for /workspace?note_path=..."""
+    display_label: str
+    """Display label derived from the note's first H1 or its filename stem."""
+
+
 class WorkspaceOrientationResponse(BaseModel):
     scope: WorkspaceOrientationScope
     meta: WorkspaceOrientationMeta
@@ -980,6 +995,7 @@ class WorkspaceOrientationResponse(BaseModel):
     governance: WorkspaceOrientationGovernance
     guards: WorkspaceOrientationGuards
     mutation_intents: list[WorkspaceOrientationMutationIntent] = Field(default_factory=list)
+    recents_anchor: WorkspaceOrientationRecentsAnchor | None = None
 
 
 class WorkspaceBodyUpdateRequest(BaseModel):
@@ -2013,6 +2029,47 @@ def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
             "governance summary",
         ),
     )
+
+
+def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecentsAnchor | None:
+    """Return the server-declared most-recently-edited Find/recency projection.
+
+    Scans vault_root recursively for .md files and picks the one with the
+    greatest mtime.  Deterministic tiebreak: path sort (ascending) when
+    multiple notes share the same mtime, so the lexicographically first path
+    wins.  Returns None when the vault is empty or unreadable.
+
+    This is a Find/recency projection only — NOT a leave_point and NOT a
+    continuity claim.  The display_label is derived from the note's first H1
+    heading or its filename stem.
+    """
+    try:
+        md_files = [p for p in vault_root.rglob("*.md") if p.is_file()]
+    except Exception:
+        return None
+    if not md_files:
+        return None
+    # Deterministic tiebreak: for equal mtime, the path sort wins.
+    md_files_sorted = sorted(md_files, key=lambda p: str(p))
+    best: Path | None = None
+    best_mtime: float = -1.0
+    for path in md_files_sorted:
+        try:
+            m = path.stat().st_mtime
+        except Exception:
+            continue
+        if m > best_mtime:
+            best_mtime = m
+            best = path
+    if best is None:
+        return None
+    try:
+        body = best.read_text(encoding="utf-8", errors="replace")
+        label = _extract_title(body, fallback=best.stem)
+    except Exception:
+        label = best.stem
+    note_path = str(best.relative_to(vault_root))
+    return WorkspaceOrientationRecentsAnchor(note_path=note_path, display_label=label)
 
 
 def _orientation_identity(vault_root: Path) -> VaultIdentityState:
@@ -3165,6 +3222,8 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
             ),
         )
 
+    recents_anchor = _orientation_recents_anchor(vault_root)
+
     degraded = bool(degraded_reasons)
     return WorkspaceOrientationResponse(
         scope=WorkspaceOrientationScope(
@@ -3195,6 +3254,7 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
             ),
         ),
         mutation_intents=mutation_intents,
+        recents_anchor=recents_anchor,
     )
 
 
