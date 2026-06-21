@@ -266,7 +266,9 @@ class VaultSelectionRequiredAction(BaseModel):
 
 class VaultSelectionRequiredResponse(BaseModel):
     state: Literal["vault_selection_required"] = "vault_selection_required"
-    reason: Literal["vault_root_misconfigured", "no_vault_bound"] = "vault_root_misconfigured"
+    reason: Literal[
+        "vault_root_misconfigured", "no_vault_bound", "uninitialized"
+    ] = "vault_root_misconfigured"
     message: str
     configured_vault_root: str | None = None
     context: VaultContextResponse
@@ -510,6 +512,60 @@ def _no_vault_selection_required_response(
     )
 
 
+def _uninitialized_selection_required_response(
+    *,
+    selected_vault_path: Path | None = None,
+    requested_note_path: str | None = None,
+    trace_id: str | None = None,
+) -> VaultSelectionRequiredResponse:
+    """Picker/init response for a selected-but-uninitialized vault write.
+
+    Mirrors :func:`_no_vault_selection_required_response` but names the residual
+    state ``uninitialized`` so the picker/init path can distinguish a vault that
+    is selected and readable but not yet initialized (#2336) from a genuinely
+    unselected (``no_vault_bound``) context. The selected directory is surfaced
+    on ``configured_vault_root`` so the caller can offer initialization.
+    """
+    return VaultSelectionRequiredResponse(
+        reason="uninitialized",
+        message=(
+            "The selected vault is not initialized yet. Initialize it to enable "
+            "writes, or open a different vault to continue."
+        ),
+        configured_vault_root=str(selected_vault_path)
+        if selected_vault_path is not None
+        else None,
+        context=_vault_context_response(
+            VaultContext(
+                status="uninitialized",
+                active_vault_path=str(selected_vault_path)
+                if selected_vault_path is not None
+                else None,
+            )
+        ),
+        recent_vaults=_recent_vaults_response(),
+        actions=[
+            VaultSelectionRequiredAction(
+                kind="open_existing",
+                label="Open existing vault",
+                endpoint="/api/companion/vault/select",
+            ),
+            VaultSelectionRequiredAction(
+                kind="create_new",
+                label="Create new vault",
+                endpoint="/api/companion/vault/initialize",
+            ),
+            VaultSelectionRequiredAction(
+                kind="open_recent",
+                label="Open recent vault",
+                endpoint="/api/companion/vault/select",
+            ),
+        ],
+        requested_note_path=requested_note_path,
+        trace_id=trace_id,
+    )
+
+
 def _vault_settings_response(context: VaultContext) -> VaultSettingsResponse:
     service = SettingsService()
     resolution = service.resolve(context)
@@ -556,6 +612,22 @@ class NoVaultBoundError(RuntimeError):
         self.configured_path = configured_path
 
 
+class VaultUninitializedError(RuntimeError):
+    """Raised when a write boundary resolves a selected-but-uninitialized vault.
+
+    Distinct from :class:`NoVaultBoundError` (genuinely unselected — ``none`` /
+    ``missing`` / ``invalid``). A selected vault that is readable but not yet
+    initialized (#2309) must not be written to (Codex #2325 P1), and the picker/
+    init path needs to name that residual state ``uninitialized`` rather than
+    collapsing it into ``no_vault_bound`` (#2336). The selected directory is
+    carried on ``selected_path`` so the response can offer initialization.
+    """
+
+    def __init__(self, message: str, *, selected_path: Path | None = None) -> None:
+        super().__init__(message)
+        self.selected_path = selected_path
+
+
 # Vault statuses whose selected directory is an existing, readable vault root.
 # Reads work for a *selected* vault even before it is fully initialized
 # (Design-Handoff settings present); writes/permissions still require the
@@ -575,6 +647,20 @@ def _active_companion_vault_root(*, require_initialized: bool = False) -> Path:
     allowed = frozenset({"selected"}) if require_initialized else _READABLE_SELECTED_STATUSES
     if context.status in allowed and context.active_vault_path:
         return Path(context.active_vault_path).expanduser()
+    # A write boundary on a selected-but-``uninitialized`` vault is blocked, but
+    # the residual state is distinct from a genuinely unselected context: name it
+    # ``uninitialized`` so the picker/init path can offer initialization rather
+    # than collapsing it into ``no_vault_bound`` (#2336). The selected directory
+    # is carried so the response can surface it.
+    if (
+        require_initialized
+        and context.status == "uninitialized"
+        and context.active_vault_path
+    ):
+        raise VaultUninitializedError(
+            "the selected vault is not initialized",
+            selected_path=Path(context.active_vault_path).expanduser(),
+        )
     # No vault is selected. Per the no-vault idle-boot invariant (#2005/#2006)
     # and the Option-2 decision (2026-06-20, #2309), the configured VAULT_ROOT
     # is NOT silently read as the active vault — selection is the only source
@@ -601,13 +687,21 @@ def _active_companion_vault_root_or_picker(
 
     ``require_initialized=True`` (write boundaries) additionally routes a
     selected-but-``uninitialized`` vault to the picker, so a write never lands
-    on a vault that has not been initialized (Codex #2325 P1).
+    on a vault that has not been initialized (Codex #2325 P1). That blocked write
+    yields the ``uninitialized`` picker state, distinct from ``no_vault_bound``,
+    so the picker/init path can offer initialization (#2336).
     """
     try:
         return _active_companion_vault_root(require_initialized=require_initialized)
     except VaultRootMisconfiguredError as exc:
         return _vault_selection_required_response(
             exc,
+            requested_note_path=requested_note_path,
+            trace_id=trace_id,
+        )
+    except VaultUninitializedError as exc:
+        return _uninitialized_selection_required_response(
+            selected_vault_path=exc.selected_path,
             requested_note_path=requested_note_path,
             trace_id=trace_id,
         )
