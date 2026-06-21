@@ -27,6 +27,40 @@ defines intent; later docs add detail.
 4. `docs/CONCEPTS/USER_NEEDS_MODEL.md` — canonical human needs.
 5. `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` — second-brain ontology.
 
+## Target architecture and SBS operationalization
+
+1. `docs/PROJECT_KERNEL.md` and `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — north star and product thesis.
+2. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target SBS decomposition.
+3. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — adoption plan and source-of-truth matrix.
+4. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
+5. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary status.
+6. `docs/architecture/SBS_FITNESS_RULES.md` — target architecture fitness rules.
+
+## Current runtime architecture
+
+1. `docs/ARCHITECTURE.md` — current runtime owner doc.
+2. `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` — current system-of-systems spine.
+3. `docs/STATUS.md` — current shipped/posture status.
+4. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target-state context only.
+
+## Major architecture changes
+
+1. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — phase and source-of-truth routing.
+2. Relevant contract stub in `docs/contracts/` — subsystem contract.
+3. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary maturity and enforcement status.
+4. `docs/architecture/SBS_TRANSITION_DEBT.md` — known deviations and containment.
+5. `docs/architecture/SBS_FITNESS_RULES.md` — fitness and failure-mode checks.
+6. Current runtime owner docs such as `docs/ARCHITECTURE.md`, `docs/STATUS.md`, and subsystem-specific docs.
+
+## Agents and Codex doing SBS work
+
+1. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — task routing and phase plan.
+2. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target SBS source.
+3. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
+4. Relevant contract stubs in `docs/contracts/`.
+5. `docs/architecture/SBS_FITNESS_RULES.md` — review/enforcement expectations.
+6. `docs/architecture/SBS_TRANSITION_DEBT.md` — debt and follow-up routing.
+
 ## Changing human flows
 
 1. `docs/HUMAN-FLOWS.md` — owner doc.

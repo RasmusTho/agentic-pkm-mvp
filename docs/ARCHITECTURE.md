@@ -16,6 +16,12 @@ This document is the active architecture source of truth for the SoT v5.5 Realit
 
 Forward-looking plan lives in `docs/ROADMAP.md`. Historical snapshots are no longer retained as live repo files; use git history for removed background material. If a roadmap document conflicts with this document on current-state runtime architecture, this document wins.
 
+## Target-State Architecture Reference
+
+`docs/ARCHITECTURE.md` owns current runtime architecture and current-vs-planned status. The target System Breakdown Structure is owned by `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`; its operationalization is owned by `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`.
+
+Current architecture and target architecture may intentionally differ during transition. Major changes should classify SBS impact, update the relevant target contract/register when needed, and avoid claiming target-state boundaries as shipped behavior unless `docs/STATUS.md` and runtime evidence support the claim.
+
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
 
 ## Executive Summary
@@ -177,6 +183,8 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 ## System-of-systems view
 
 The architecture spine for Yggdrasil as a system-of-systems with a stable kernel and replaceable extension fabric lives in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`. That document owns the kernel/extension-fabric framing and the eight-subsystem map (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness). This document remains authoritative for the current runtime baseline and current-vs-planned status.
+
+For long-horizon decomposition and change-impact reasoning, use `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. For the transition plan, boundary register, debt register, fitness rules, and critical contract stubs, use `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`.
 
 The complementary **semantic** decomposition lives in `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`. That document owns the seven semantic layers (ontology, artifact model, representation, governance/authority, runtime, machine mirror, UI projection), the authority topology over artifacts and runtime structures, and the artifact-flow and runtime-vs-durable boundary maps. Where the structural spine answers "which subsystem runs this?", the semantic map answers "what does this mean, what is authoritative, and how does meaning flow and mutate?".
 
