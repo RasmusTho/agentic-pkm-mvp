@@ -64,18 +64,21 @@ Out of scope (this capability):
 The foundation above introduced the optional resolver and shipped the startup/picker behavior.
 #2311 is the cleanup hub for remaining eager `resolve_vault_root()` consumers. It is not a
 single ready implementation slice; it is split into bounded children so request paths,
-background producers, and import-time/CLI/agent consumers can be verified independently.
+background producers, shared path helpers, and import-time/CLI/agent consumers can be
+verified independently.
 
 | Order | Task | Issue | Adds | Status |
 | --- | --- | --- | --- | --- |
 | 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | TBD | capture/artifacts/canvas/debug and companion request helpers return picker/empty no-vault responses instead of `./vault` fallback | Ready to file first; deliver before 05B/05C unless explicitly parallelized |
-| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | outbox worker and watcher/health settings idle or report no-vault when no vault is selected | Blocked/backlog until 05A lands or is released |
+| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | outbox worker, watcher/health settings, inbox appenders, and vault path helpers idle or report no-vault when no vault is selected | Blocked/backlog until 05A lands or is released |
 | 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | promotion queue import becomes lazy; CLI/agent/helper callers make vault requirements explicit or optional | Blocked/backlog until 05A/05B sequencing is clear |
 
 ### Follow-up invariants
 
 - No runtime code path may silently resolve to CWD-relative `./vault` when no vault is
   selected and `VAULT_ROOT` is unset.
+- This covers direct `Path("vault")` helper fallbacks, not only call sites that import
+  `app.config.paths.resolve_vault_root()`.
 - Request-path endpoints return the picker/no-vault contract or an explicitly empty read
   result; they do not 500 or serve an empty fallback vault.
 - Background producers idle/no-op when no vault is selected.

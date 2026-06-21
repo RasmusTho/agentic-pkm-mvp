@@ -21,7 +21,7 @@ State: **Filed and open** as the live validation hub.
 | Order | Task | Issue | Status |
 | --- | --- | --- | --- |
 | 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | TBD | file first; then `agent:ready` |
-| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | file as blocked/backlog until 05A delivery releases it |
+| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | file as blocked/backlog until 05A delivery releases it; includes worker/settings plus direct vault helper fallbacks |
 | 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | file as blocked/backlog until 05A/05B sequencing is clear |
 
 #2311 remains the validation hub for the follow-up migration and should not be implemented
