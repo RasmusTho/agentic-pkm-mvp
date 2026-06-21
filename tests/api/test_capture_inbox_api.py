@@ -263,4 +263,37 @@ def test_capture_writeguard_block_takes_precedence_over_vault_resolution(
     detail = resp.json()["detail"]
     assert detail["error"] == "writeguard_blocked"
     assert detail["reason"] == "test lock"
-    assert not outbox.exists()
+    assert _outbox_events(outbox) == []
+
+
+def test_capture_withholds_success_when_authority_receipt_event_is_not_persisted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault, outbox = _setup_vault(tmp_path, monkeypatch)
+
+    def _fail_jsonl_append(*args: object, **kwargs: object) -> bool:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        capture_module, "append_jsonl_outbox_event", _fail_jsonl_append
+    )
+
+    resp = TestClient(app).post(
+        "/api/companion/capture",
+        json={"text": "persist accountability before ack"},
+    )
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["error"] == "authority_receipt_persistence_failed"
+    assert detail["state"] == "not_acknowledged"
+    assert detail["trace_id"]
+    assert "could not be persisted" in detail["message"]
+
+    inbox_note = vault / "Inbox" / "inbox.md"
+    assert inbox_note.exists()
+    assert "persist accountability before ack" in inbox_note.read_text(
+        encoding="utf-8"
+    )
+    assert _outbox_events(outbox) == []

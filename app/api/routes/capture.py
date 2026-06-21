@@ -22,8 +22,10 @@ The action rides the existing governed machinery — no parallel write path:
   the endpoint.
 - **event pipeline** — a ``capture.inbox.appended`` outbox event records the
   applied append (JSONL audit log plus DB outbox mirror, same pattern as the
-  Panel confirmation service). The payload is metadata-only; the captured
-  text itself is durable in the vault, not duplicated into event logs.
+  Panel confirmation service). For governed writes this event carries the
+  AuthorityReceipt and is required before returning a success acknowledgement.
+  The payload is metadata-only; the captured text itself is durable in the
+  vault, not duplicated into event logs.
 
 vault-inbox note convention (reused from existing repo conventions):
 
@@ -80,6 +82,10 @@ _DEFAULT_CAPTURE_NOTE_NAME = "inbox.md"
 _EVENT_SOURCE = "companion.capture"
 _STATE_OWNER = "knowledge"
 _GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
+
+
+class CaptureEventPersistenceError(RuntimeError):
+    """Raised when governed capture accountability cannot be persisted."""
 
 
 class CaptureRequest(BaseModel):
@@ -176,9 +182,9 @@ def _writeguard_blocked_detail(exc: WritesBlockedError) -> dict[str, Any]:
 def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
     """Record the applied append on the event pipeline.
 
-    Same dual-sink pattern as the Panel confirmation service: JSONL audit log
-    always, DB outbox mirror when a pg backend is configured. Returns the
-    emitted event names; sink failures are logged, never silent.
+    JSONL audit log is the required local accountability sink. The DB outbox
+    mirror is used when a pg backend is configured. At least one sink must
+    persist the event before the endpoint acknowledges the governed write.
     """
     evt = make_outbox_event(
         event=CAPTURE_APPENDED_EVENT,
@@ -191,8 +197,12 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
         emitted = append_jsonl_outbox_event(
             _resolve_outbox_path(), evt, default_source=_EVENT_SOURCE
         )
-    except Exception:
-        logger.warning("capture event jsonl write failed trace_id=%s", trace_id)
+    except Exception as exc:
+        logger.warning(
+            "capture event jsonl write failed trace_id=%s err=%s",
+            trace_id,
+            exc,
+        )
 
     backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
     db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
@@ -200,8 +210,10 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
         outbox_evt = coerce_outbox_event(evt, default_source=_EVENT_SOURCE)
         if outbox_evt is not None:
             try:
-                write_outbox_event(outbox_evt, idempotency_key=outbox_evt.event_id)
-                emitted = True
+                stored_id = write_outbox_event(
+                    outbox_evt, idempotency_key=outbox_evt.event_id
+                )
+                emitted = emitted or bool(stored_id)
             except Exception as exc:
                 logger.warning(
                     "capture event db outbox write failed trace_id=%s err=%s",
@@ -209,7 +221,12 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
                     exc,
                 )
 
-    return [CAPTURE_APPENDED_EVENT] if emitted else []
+    if not emitted:
+        raise CaptureEventPersistenceError(
+            "capture AuthorityReceipt was not persisted to any outbox sink"
+        )
+
+    return [CAPTURE_APPENDED_EVENT]
 
 
 @router.post("/capture", response_model=CaptureResponse)
@@ -295,18 +312,32 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
     governed_write = _governed_write_payload(grant, authority_receipt)
 
     # Event pipeline — record the applied append (metadata only).
-    events_emitted = _emit_capture_event(
-        {
-            "note_path": receipt.locator.path,
-            "operation": receipt.operation,
-            "adapter": receipt.adapter,
-            "captured_at": captured_at,
-            "decision_token_id": grant.decision_token.token_id,
-            "authority_receipt_id": authority_receipt.receipt_id,
-            "governed_write": governed_write,
-        },
-        trace_id=trace_id,
-    )
+    try:
+        events_emitted = _emit_capture_event(
+            {
+                "note_path": receipt.locator.path,
+                "operation": receipt.operation,
+                "adapter": receipt.adapter,
+                "captured_at": captured_at,
+                "decision_token_id": grant.decision_token.token_id,
+                "authority_receipt_id": authority_receipt.receipt_id,
+                "governed_write": governed_write,
+            },
+            trace_id=trace_id,
+        )
+    except CaptureEventPersistenceError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "authority_receipt_persistence_failed",
+                "state": "not_acknowledged",
+                "message": (
+                    "The capture was written, but its AuthorityReceipt could "
+                    "not be persisted; success acknowledgement was withheld."
+                ),
+                "trace_id": trace_id,
+            },
+        ) from exc
 
     return CaptureResponse(
         note_path=receipt.locator.path,
