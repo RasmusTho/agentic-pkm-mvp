@@ -23,7 +23,7 @@ These rules make the target SBS inspectable without claiming current implementat
 
 | Rule | Classification | Detection | Response |
 |---|---|---|---|
-| No global `activeVault` as architecture contract outside WSP/EBF/HIX adapters. | Manual review now; CI check later | New public contracts pass vault path/root as the cognitive identity. | Replace with ActiveContextSet and source binding. |
+| No global `activeVault` as architecture contract outside WSP/EBF/HIX adapters. | CI check now for target SBS contract stubs; manual review elsewhere | `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity` scans target public SBS contracts outside WSP for active-vault/vault-path/root contract terms. | Replace with ActiveContextSet and source binding. |
 | No authority-bearing durable write without GOV DecisionToken and receipt. | Blocking invariant target; manual review now | Durable mutation path lacks pre-mutation token or post-mutation AuthorityReceipt. | Route through GovernedWriteProtocol. |
 | No direct HKA write from RCA, MEM, CAO, EXE, EBF, or HIX. | Blocking invariant target; CI check later | Non-HKA owner writes accepted human artifact state directly. | Use HKA-owned mutation under GOV decision. |
 | No memory promotion to HKA without GOV. | Blocking invariant target; CI check later | MEM material becomes durable human knowledge without approval/admissibility record. | Require GOV promotion policy and receipt. |
@@ -55,7 +55,7 @@ These rules make the target SBS inspectable without claiming current implementat
 
 ## First Enforcement Candidates
 
-- Grep or import-lint for new public `activeVault`/`vaultPath` contract usage outside adapters.
+- Shipped first rail: `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity` is a read-only pytest check for new public `activeVault`/`vaultPath`/vault-root contract usage in target SBS contracts outside WSP ActiveContextSet.
 - Contract tests for authority-bearing write paths once DecisionToken and AuthorityReceipt exist in code.
 - Dependency checks that prevent RCA/MEM/CAO/EXE direct HKA writes.
 - Provider-field checks for HKA/SIP/GOV contract files.

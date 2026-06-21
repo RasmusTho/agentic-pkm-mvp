@@ -13,6 +13,12 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`).
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
 
+## Architecture And SBS Fitness Checks
+
+Architecture tests under `tests/architecture/` include deterministic fitness checks for target-state boundaries that are stable enough to enforce mechanically.
+
+The first SBS enforcement rail is `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity`. It is a read-only pytest check that scans target public SBS contract stubs outside the WSP ActiveContextSet contract for `activeVault`, `vaultPath`, `active_vault`, `vault_path`, `vault_root`, `vault path`, or `vault root` contract terms. Violations fail with file and line context and should be corrected by using an ActiveContextSet reference plus source binding. The check reports only; it does not mutate policy, memory, retrieval, knowledge, execution, or contract docs.
+
 ## Companion UI Browser Runtime Tests
 
 Decision (#1435): Companion UI client-JS runtime behaviour uses Playwright, not Selenium or
