@@ -53,6 +53,7 @@ from app.text.helpers import (
     extract_title as _extract_title,
     split_frontmatter as _split_frontmatter,
 )
+from app.config.environment import active_environment
 from app.config.paths import (
     VaultRootMisconfiguredError,
     resolve_optional_vault_root,
@@ -1833,7 +1834,7 @@ def _memory_review_vault_context() -> VaultContext:
     if context.active_vault_id or context.active_vault_path:
         return context
     try:
-        resolve_optional_vault_root()
+        resolve_optional_vault_root(environment=active_environment())
     except VaultRootMisconfiguredError as exc:
         return VaultContext(
             status="missing",
@@ -1859,7 +1860,7 @@ def _memory_review_selection_required_response(
             configured_vault_root=Path(context.active_vault_path),
         )
     try:
-        configured = resolve_optional_vault_root()
+        configured = resolve_optional_vault_root(environment=active_environment())
     except VaultRootMisconfiguredError as exc:
         return _vault_selection_required_response(exc)
     return _no_vault_selection_required_response(configured_vault_root=configured)
