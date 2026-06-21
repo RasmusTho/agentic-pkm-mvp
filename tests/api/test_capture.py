@@ -6,12 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 
 def _setup_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     vault = tmp_path / "vault"
     vault.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    bind_initialized_vault(monkeypatch, vault, store_dir=tmp_path)
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "index-outbox.jsonl"))

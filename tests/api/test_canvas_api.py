@@ -37,6 +37,7 @@ def vault(tmp_path: Path) -> Path:
 def client(monkeypatch, vault: Path) -> TestClient:
     monkeypatch.setenv("CANVAS_ENABLED", "1")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
+    monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: vault)
     return TestClient(app)
 
 
@@ -248,6 +249,7 @@ def test_canvas_governance_proposal_uses_workspace_artifact_uuid(client: TestCli
 def test_canvas_disabled_returns_403(monkeypatch, vault: Path) -> None:
     monkeypatch.setenv("CANVAS_ENABLED", "0")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
+    monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: vault)
     client = TestClient(app)
     resp = client.post("/api/canvas/sessions", json={"note_path": "note.md", "label": "x"})
     assert resp.status_code == 403

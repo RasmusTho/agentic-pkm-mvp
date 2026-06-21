@@ -69,10 +69,10 @@ and final runtime mount cleanup can be verified independently.
 
 | Order | Task | Issue | Adds | Status |
 | --- | --- | --- | --- | --- |
-| 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | TBD | capture/artifacts/canvas/debug and companion request helpers return picker/empty no-vault responses instead of `./vault` fallback | Ready to file first; deliver before 05B/05C/05D unless explicitly parallelized |
-| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | outbox worker, watcher/health settings, inbox appenders, and vault path helpers idle or report no-vault when no vault is selected | Blocked/backlog until 05A lands or is released |
-| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | promotion queue import becomes lazy; CLI/agent/helper/MCP/knowledge callers make vault requirements explicit or optional | Blocked/backlog until 05A/05B sequencing is clear |
-| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | TBD | legacy `/app/vault` compose/runtime-env fallback is removed or re-baselined after resolver consumers no longer require it | Blocked/backlog until 05A-05C land |
+| 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | #2383 | capture/artifacts/canvas/debug and companion request helpers return picker/empty no-vault responses instead of `./vault` fallback | First pickup target; deliver before 05B/05C/05D unless explicitly parallelized |
+| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | #2384 | outbox worker, watcher/health settings, inbox appenders, and vault path helpers idle or report no-vault when no vault is selected | Blocked/backlog until 05A lands or is released |
+| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | #2385 | promotion queue import becomes lazy; CLI/agent/helper/MCP/knowledge callers make vault requirements explicit or optional | Blocked/backlog until 05A/05B sequencing is clear |
+| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | #2386 | legacy `/app/vault` compose/runtime-env fallback is removed or re-baselined after resolver consumers no longer require it | Blocked/backlog until 05A-05C land |
 
 ## Cross-Task Invariants / Interaction Safety
 

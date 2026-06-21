@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 # ---------------------------------------------------------------------------
@@ -27,8 +28,8 @@ def client() -> TestClient:
 
 @pytest.fixture()
 def vault_note(tmp_path: pathlib.Path, monkeypatch) -> pathlib.Path:
-    """Create a minimal vault note in tmp_path and set VAULT_ROOT."""
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    """Create a minimal vault note in tmp_path and select it as the active vault."""
+    bind_selected_vault(monkeypatch, tmp_path, store_dir=tmp_path.parent)
     note = tmp_path / "notes" / "test_artifact.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text(
@@ -67,7 +68,7 @@ def test_read_artifact_note_returns_body_payload(
 def test_read_artifact_note_strips_markdown_image_sigil_from_title(
     client: TestClient, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path, store_dir=tmp_path.parent)
     note = tmp_path / "notes" / "diagram.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("# ![Diagram](https://example.com/x.png)\n\nSome body text.\n", encoding="utf-8")
@@ -86,7 +87,7 @@ def test_read_artifact_note_strips_markdown_image_sigil_from_title(
 def test_read_artifact_note_missing_returns_typed_error(
     client: TestClient, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path, store_dir=tmp_path.parent)
     resp = client.get("/api/artifacts/note", params={"note_path": "does_not_exist.md"})
     assert resp.status_code == 404
     detail = resp.json()["detail"]
@@ -102,7 +103,7 @@ def test_read_artifact_note_missing_returns_typed_error(
 def test_read_artifact_note_rejects_path_traversal(
     client: TestClient, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path, store_dir=tmp_path.parent)
     traversal = "../etc/passwd"
     resp = client.get("/api/artifacts/note", params={"note_path": traversal})
     assert resp.status_code == 400
@@ -174,7 +175,7 @@ def test_companion_ui_does_not_read_vault_directly() -> None:
 def test_read_artifact_note_rejects_path_traversal_escape(
     client: TestClient, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path, store_dir=tmp_path.parent)
     resp = client.get("/api/artifacts/note", params={"note_path": "../outside.md"})
     assert resp.status_code == 400
     detail = resp.json()["detail"]
@@ -185,7 +186,7 @@ def test_read_artifact_note_rejects_path_traversal_escape(
 def test_read_artifact_note_rejects_symlink_escape(
     client: TestClient, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path, store_dir=tmp_path.parent)
     outside = tmp_path.parent / "outside-target.md"
     outside.write_text("outside", encoding="utf-8")
     link = tmp_path / "notes" / "escape.md"
@@ -202,7 +203,7 @@ def test_read_artifact_note_rejects_symlink_escape(
 def test_read_artifact_note_uses_trusted_vault_relative_path(
     client: TestClient, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_selected_vault(monkeypatch, tmp_path, store_dir=tmp_path.parent)
     note = tmp_path / "notes" / "trusted.md"
     note.parent.mkdir(parents=True, exist_ok=True)
     note.write_text("# Trusted\n\nok\n", encoding="utf-8")

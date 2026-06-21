@@ -20,10 +20,10 @@ State: **Filed and open** as the live validation hub.
 
 | Order | Task | Issue | Status |
 | --- | --- | --- | --- |
-| 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | TBD | file first; then `agent:ready` |
-| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | file as blocked/backlog until 05A delivery releases it; includes worker/settings plus direct vault helper fallbacks |
-| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | file as blocked/backlog until 05A/05B sequencing is clear; includes promotion/CLI/agent plus MCP/knowledge fallbacks |
-| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | TBD | file as blocked/backlog until 05A-05C land; removes or re-baselines legacy `/app/vault` compose/runtime-env fallback |
+| 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | #2383 | first pickup target |
+| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | #2384 | blocked/backlog until 05A delivery releases it; includes worker/settings plus direct vault helper fallbacks |
+| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | #2385 | blocked/backlog until 05A/05B sequencing is clear; includes promotion/CLI/agent plus MCP/knowledge fallbacks |
+| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | #2386 | blocked/backlog until 05A-05C land; removes or re-baselines legacy `/app/vault` compose/runtime-env fallback |
 
 #2311 remains the validation hub for the follow-up migration and should not be implemented
 directly. Each delivered child posts evidence to #2311 before the next slice is picked up.

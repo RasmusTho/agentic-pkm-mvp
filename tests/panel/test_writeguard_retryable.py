@@ -184,6 +184,7 @@ def vault(tmp_path: Path) -> Path:
 def _make_client(monkeypatch, vault: Path, classifier_label: str) -> TestClient:
     monkeypatch.setenv("CANVAS_ENABLED", "1")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
+    monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: vault)
     classifier_facade = _ClassifierStubFacade(classifier_label)
     monkeypatch.setattr(
         canvas_module, "_intent_classifier_facade_factory", lambda: classifier_facade

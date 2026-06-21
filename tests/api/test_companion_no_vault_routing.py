@@ -204,6 +204,74 @@ def test_unselected_with_vault_root_set_routes_to_picker_with_configured_root(
         assert "artifact" not in body, url
 
 
+def test_now_without_selected_vault_ignores_configured_root(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured ``VAULT_ROOT`` is not active for /now until selected."""
+    vault = tmp_path / "Niflheim"
+    vault.mkdir(parents=True)
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    app_local_path = tmp_path / "app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
+    mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
+        delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
+
+    calls: list[object] = []
+
+    def _collect_now(context: object) -> list[dict]:
+        calls.append(context)
+        return [{"leaked": True}]
+
+    monkeypatch.setattr(companion_module, "collect_now_moments", _collect_now)
+
+    resp = client.get("/api/companion/now")
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+    assert calls == []
+
+
+def test_now_with_uninitialized_selected_vault_stays_empty(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selected-but-uninitialized vault has no system folder for moments yet."""
+    vault = tmp_path / "bare-vault"
+    vault.mkdir(parents=True)
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    app_local_path = tmp_path / "app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
+    mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
+        delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
+    mgr.select_vault(vault, remember=False)
+    assert mgr.context.status == "uninitialized"
+
+    calls: list[object] = []
+
+    def _collect_now(context: object) -> list[dict]:
+        calls.append(context)
+        return [{"leaked": True}]
+
+    monkeypatch.setattr(companion_module, "collect_now_moments", _collect_now)
+
+    resp = client.get("/api/companion/now")
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+    assert calls == []
+
+
 def test_uninitialized_selected_vault_reads_but_writes_route_to_picker(
     client: TestClient,
     tmp_path: Path,

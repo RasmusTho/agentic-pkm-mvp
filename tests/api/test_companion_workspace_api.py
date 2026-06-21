@@ -342,7 +342,7 @@ def test_workspace_panel_counts_canvas_origin_proposals_by_uuid(
         "---\nuuid: note-uuid-canvas-workspace\n---\n\n# Canvas\n\nBody.\n",
         encoding="utf-8",
     )
-    bind_selected_vault(monkeypatch, tmp_path)
+    bind_initialized_vault(monkeypatch, tmp_path)
 
     open_resp = client.post(
         "/api/canvas/sessions",

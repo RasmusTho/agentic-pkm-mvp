@@ -14,6 +14,7 @@ class SessionLog:
     session_id: str
     note_path: Path
     label: str
+    vault_root: Path | None = None
 
 
 class SessionLogWriter:
@@ -51,7 +52,13 @@ class SessionLogWriter:
             f"## Session: {label_slug}\n\n"
         )
         log_path.write_text(frontmatter, encoding="utf-8")
-        return SessionLog(log_path=log_path, session_id=session_id, note_path=note_path, label=label_slug)
+        return SessionLog(
+            log_path=log_path,
+            session_id=session_id,
+            note_path=note_path,
+            label=label_slug,
+            vault_root=self._vault_root,
+        )
 
     def append_turn(self, session: SessionLog, user_prompt: str, change_summary: str) -> None:
         with session.log_path.open("a", encoding="utf-8") as handle:

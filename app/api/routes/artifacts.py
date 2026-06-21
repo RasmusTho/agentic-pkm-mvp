@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.config.paths import resolve_vault_root
+from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.text.helpers import content_hash, extract_title
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
@@ -78,8 +79,12 @@ def _resolve_and_validate(
 def read_artifact_note(
     note_path: str = Query(..., description="Vault-relative path to the note (absolute paths are rejected)"),
     artifact_id: Optional[str] = Query(None, description="Artifact UUID; echoed back in response"),
-) -> ArtifactNoteResponse:
-    vault_root = resolve_vault_root()
+) -> ArtifactNoteResponse | JSONResponse:
+    vault_root = active_vault_root_or_selection_required(
+        requested_note_path=note_path,
+    )
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
 
     resolved = _resolve_and_validate(note_path, vault_root)
 

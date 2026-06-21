@@ -28,13 +28,16 @@ from app.agent_memory.review_queue import (
     ReviewStatus,
 )
 from app.api.app import app
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
+from tests.api._vault_test_helpers import bind_initialized_vault, bind_selected_vault
 
 SENSITIVE_CONTENT = "Sensitive raw candidate body that must stay behind the review boundary."
 
 
 @pytest.fixture(autouse=True)
 def _runtime_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    bind_initialized_vault(monkeypatch, tmp_path, channel="test")
     monkeypatch.setenv("PKM_CHANNEL", "test")
 
 
@@ -280,3 +283,85 @@ def test_defer_is_non_terminal_and_unreceipted(
     # Unknown candidates are a read miss, not an invented decision surface.
     missing = client.post(_decision_url("no-such-candidate"), json={"action": "defer"})
     assert missing.status_code == 404
+
+
+def test_terminal_decision_without_selected_vault_returns_picker(
+    client: TestClient,
+    queue: MemoryCandidateReviewQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app_local_path = tmp_path / "app-local.md"
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    candidate = _candidate(title="No-vault decision attempt")
+    queue.enqueue(candidate)
+
+    resp = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "reject", "reviewed_by": "reviewer:human"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["state"] == "vault_selection_required"
+    assert data["reason"] == "no_vault_bound"
+    assert queue.get(candidate.candidate_id).status is ReviewStatus.PENDING
+
+
+def test_terminal_decision_picker_uses_active_environment_configured_root(
+    client: TestClient,
+    queue: MemoryCandidateReviewQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app_local_path = tmp_path / "app-local.md"
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    monkeypatch.setenv("PKM_ENVIRONMENT", "test")
+    base_vault = tmp_path / "base-vault"
+    test_vault = tmp_path / "test-vault"
+    base_vault.mkdir()
+    test_vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(base_vault))
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(test_vault))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    candidate = _candidate(title="Channel-specific no-vault decision attempt")
+    queue.enqueue(candidate)
+
+    resp = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "reject", "reviewed_by": "reviewer:human"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["state"] == "vault_selection_required"
+    assert data["reason"] == "no_vault_bound"
+    assert data["configured_vault_root"] == str(test_vault.resolve())
+    assert queue.get(candidate.candidate_id).status is ReviewStatus.PENDING
+
+
+def test_terminal_decision_with_uninitialized_vault_returns_picker(
+    client: TestClient,
+    queue: MemoryCandidateReviewQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "uninitialized-vault"
+    vault.mkdir()
+    bind_selected_vault(monkeypatch, vault, store_dir=tmp_path)
+    candidate = _candidate(title="Uninitialized-vault decision attempt")
+    queue.enqueue(candidate)
+
+    resp = client.post(
+        _decision_url(candidate.candidate_id),
+        json={"action": "reject", "reviewed_by": "reviewer:human"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["state"] == "vault_selection_required"
+    assert data["reason"] == "no_vault_bound"
+    assert data["configured_vault_root"] == str(vault.resolve())
+    assert queue.get(candidate.candidate_id).status is ReviewStatus.PENDING

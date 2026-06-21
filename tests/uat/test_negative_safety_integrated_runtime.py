@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.canvas as canvas_module
 import app.api.routes.companion as companion_module
 import app.api.routes.panel as panel_routes
+import app.api.routes.vault_resolution as vault_resolution_module
 import app.panel.checkbox_projection as projection_module
 import app.panel.confirmation as confirm_module
 from app.agents.panel.writeback import stable_action_id
@@ -55,6 +56,7 @@ def _select_initialized_test_vault(monkeypatch: pytest.MonkeyPatch, vault: Path)
     )
     manager.initialize_vault(vault, vault_name="vault-test", remember=False)
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    monkeypatch.setattr(vault_resolution_module, "get_vault_manager", lambda: manager)
 
 
 def _write_note(
