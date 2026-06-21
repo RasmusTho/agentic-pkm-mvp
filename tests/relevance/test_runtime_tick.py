@@ -21,7 +21,7 @@ from app.relevance import collect_now_moments
 from app.vault.manager import VaultContext
 from app.vault.paths import get_vault_system_dir_rel
 from app.watcher.relevance_tick import run_relevance_tick
-from tests.api._vault_test_helpers import bind_selected_vault
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 TODAY = date(2026, 6, 13)
 
@@ -56,7 +56,7 @@ def _ctx(vault: Path) -> VaultContext:
 def test_moment_materialized_and_surfaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault = _build_vault(tmp_path)
     monkeypatch.setenv("VAULT_ROOT", str(vault))
-    bind_selected_vault(monkeypatch, vault, store_dir=tmp_path)
+    bind_initialized_vault(monkeypatch, vault, store_dir=tmp_path)
     receipts = tmp_path / "moment_receipts.jsonl"
     reachout_receipts = tmp_path / "reachout_receipts.jsonl"
 

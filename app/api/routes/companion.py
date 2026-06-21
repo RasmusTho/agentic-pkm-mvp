@@ -667,7 +667,7 @@ def read_companion_now() -> list[dict]:
     notification, no reach-out: the human pulls this; the system does not interrupt.
     """
     context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
-    if context.status in _READABLE_SELECTED_STATUSES and context.active_vault_path:
+    if context.status == "selected" and context.active_vault_path:
         return collect_now_moments(context)
     return []
 
