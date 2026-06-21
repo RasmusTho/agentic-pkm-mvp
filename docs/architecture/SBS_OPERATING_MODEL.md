@@ -141,7 +141,7 @@ Resolve owner-doc impact to exactly one of:
 2. **Owner-doc updated in this PR** — preferred; bundle the doc update with the implementation so truth never lags (consistent with the repo's owner-doc-bundling practice and the `post-merge-owner-doc` skill).
 3. **Owner-doc follow-up issue created and linked** — only when the writeback is genuinely separable; the issue must be created (not merely described) and linked in the PR.
 
-A comment, TODO, or "to update later" note is **not** an acceptable resolution — it recreates the same drift the rule exists to prevent. The PR template encodes these three options as a checklist; exactly one must be checked.
+A comment, a placeholder marker, or a "to update later" note is **not** an acceptable resolution — it recreates the same drift the rule exists to prevent. The PR template encodes these three options as a checklist; exactly one must be checked.
 
 ## 9. Transition debt lifecycle
 
