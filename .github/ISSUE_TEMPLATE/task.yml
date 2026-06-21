@@ -37,6 +37,26 @@ body:
     validations:
       required: true
   - type: textarea
+    id: sbs_impact
+    attributes:
+      label: SBS Impact
+      description: Target System Breakdown Structure classification for routing, boundary review, and follow-up ownership.
+      placeholder: |
+        - Primary subsystem:
+        - Secondary subsystem(s):
+        - Write class:
+        - Authority impact:
+        - Persistence impact:
+        - Derived/rebuildable impact:
+        - Human knowledge impact:
+        - Memory impact:
+        - Retrieval/context impact:
+        - Sync/deployment impact:
+        - New or changed contract:
+        - Boundary risk:
+    validations:
+      required: true
+  - type: textarea
     id: constraints
     attributes:
       label: Constraints

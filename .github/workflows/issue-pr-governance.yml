@@ -49,6 +49,7 @@ jobs:
               "Context",
               "Scope",
               "Source Anchors",
+              "SBS Impact",
               "Constraints",
               "Acceptance Criteria",
               "Out of Scope",
