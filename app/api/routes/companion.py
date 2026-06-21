@@ -1843,6 +1843,28 @@ def _memory_review_vault_context() -> VaultContext:
     return VaultContext(status="none")
 
 
+def _memory_review_selection_required_response(
+    context: VaultContext,
+) -> VaultSelectionRequiredResponse | None:
+    if context.status == "selected" and (
+        context.active_vault_id or context.active_vault_path
+    ):
+        return None
+    if context.status == "missing" and context.active_vault_path:
+        return _vault_selection_required_response(
+            VaultRootMisconfiguredError("VAULT_ROOT", Path(context.active_vault_path))
+        )
+    if context.active_vault_path:
+        return _no_vault_selection_required_response(
+            configured_vault_root=Path(context.active_vault_path),
+        )
+    try:
+        configured = resolve_optional_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return _vault_selection_required_response(exc)
+    return _no_vault_selection_required_response(configured_vault_root=configured)
+
+
 def _memory_review_channel() -> str:
     return (
         os.getenv("PKM_ENVIRONMENT")
@@ -4049,12 +4071,12 @@ def get_memory_review_queue() -> MemoryReviewQueueResponse:
 
 @router.post(
     "/memory/review-queue/{candidate_id}/decision",
-    response_model=MemoryReviewDecisionResponse,
+    response_model=MemoryReviewDecisionResponse | VaultSelectionRequiredResponse,
     response_model_exclude_none=False,
 )
 def post_memory_review_decision(
     candidate_id: str, req: MemoryReviewDecisionRequest
-) -> MemoryReviewDecisionResponse:
+) -> MemoryReviewDecisionResponse | VaultSelectionRequiredResponse:
     """Record a governed review outcome (accept/reject/revise) or defer."""
 
     queue = _orientation_memory_review_queue()
@@ -4081,6 +4103,13 @@ def post_memory_review_decision(
                 "no review decision was recorded and no receipt exists."
             ),
         )
+
+    vault_context = _memory_review_vault_context()
+    selection_required = _memory_review_selection_required_response(vault_context)
+    if selection_required is not None:
+        return selection_required
+    channel = _memory_review_channel()
+    decision_store = _memory_review_decision_store()
 
     if req.action == "accept":
         # Dry-run the governed promotion gate on a frozen copy before
@@ -4109,9 +4138,6 @@ def post_memory_review_decision(
             reviewed_by=req.reviewed_by,
             notes=req.notes,
         )
-        vault_context = _memory_review_vault_context()
-        channel = _memory_review_channel()
-        decision_store = _memory_review_decision_store()
         decision_store.record_decision(
             decided,
             vault_context=vault_context,
@@ -4169,10 +4195,10 @@ def post_memory_review_decision(
             reviewed_by=req.reviewed_by,
             notes=req.notes,
         )
-        _memory_review_decision_store().record_decision(
+        decision_store.record_decision(
             decided,
-            vault_context=_memory_review_vault_context(),
-            channel=_memory_review_channel(),
+            vault_context=vault_context,
+            channel=channel,
         )
         rejected = reject_memory_candidate(decided)
         return MemoryReviewDecisionResponse(
@@ -4192,10 +4218,10 @@ def post_memory_review_decision(
         notes=req.notes,
         revision=revision_candidate,
     )
-    _memory_review_decision_store().record_decision(
+    decision_store.record_decision(
         decided,
-        vault_context=_memory_review_vault_context(),
-        channel=_memory_review_channel(),
+        vault_context=vault_context,
+        channel=channel,
     )
     revision_entry = queue.get(revision_candidate.candidate_id)
     revised = revise_memory_candidate(decided, revision_entry)

@@ -31,6 +31,7 @@ class SessionStore:
             session_id=data["session_id"],
             note_path=Path(data["note_path"]),
             label=data["label"],
+            vault_root=Path(data.get("vault_root") or self._vault_root),
         )
 
     def save(self, session: SessionLog) -> None:
@@ -40,6 +41,8 @@ class SessionStore:
         data = asdict(session)
         data["log_path"] = str(data["log_path"])
         data["note_path"] = str(data["note_path"])
+        if data.get("vault_root") is not None:
+            data["vault_root"] = str(data["vault_root"])
         session_file.write_text(json.dumps(data), encoding="utf-8")
 
     def delete(self, session_id: str) -> None:

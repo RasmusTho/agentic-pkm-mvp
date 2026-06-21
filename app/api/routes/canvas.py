@@ -85,6 +85,18 @@ def _get_vault_root_or_picker(
     )
 
 
+def _session_vault_root(session: SessionLog) -> Path:
+    if session.vault_root is not None:
+        return session.vault_root.expanduser().resolve()
+    return _get_vault_root()
+
+
+def _session_vault_root_or_picker(session: SessionLog) -> Path | JSONResponse:
+    if session.vault_root is not None:
+        return session.vault_root.expanduser().resolve()
+    return _get_vault_root_or_picker()
+
+
 def _coauthor_facade_factory() -> ReasoningFacade:
     """Reasoning facade used by the co-authoring cognition.
 
@@ -258,7 +270,7 @@ def _capture_leave_point_for_session(
     source_kind: Literal["artifact_activation", "canvas_session", "session_end"],
     capture_reason: Literal["artifact_focus", "artifact_interaction", "session_end"],
 ) -> None:
-    vault_root = _get_vault_root()
+    vault_root = _session_vault_root(session)
     try:
         safe_note_path = str(session.note_path.relative_to(vault_root))
         identity = resolve_note_artifact_identity(
@@ -317,7 +329,7 @@ def apply_edit(session_id: str, req: EditRequest) -> EditResponse | JSONResponse
     session = _sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-    vault_root = _get_vault_root_or_picker()
+    vault_root = _session_vault_root_or_picker(session)
     if isinstance(vault_root, JSONResponse):
         return vault_root
     if req.content_hash is not None:
@@ -488,7 +500,7 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
 
-    vault_root = _get_vault_root_or_picker()
+    vault_root = _session_vault_root_or_picker(session)
     if isinstance(vault_root, JSONResponse):
         return vault_root
     current_body = _note_body(session.note_path)
@@ -604,7 +616,7 @@ def undo_last_edit(session_id: str) -> UndoResponse | JSONResponse:
     session = _sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-    vault_root = _get_vault_root_or_picker()
+    vault_root = _session_vault_root_or_picker(session)
     if isinstance(vault_root, JSONResponse):
         return vault_root
 
@@ -653,7 +665,7 @@ def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResp
     session = _sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-    vault_root = _get_vault_root_or_picker()
+    vault_root = _session_vault_root_or_picker(session)
     if isinstance(vault_root, JSONResponse):
         return vault_root
     try:
@@ -696,7 +708,7 @@ def close_session(session_id: str, total_summary: str = "session closed") -> Clo
     session = _sessions.pop(session_id, None)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-    vault_root = _get_vault_root_or_picker()
+    vault_root = _session_vault_root_or_picker(session)
     if isinstance(vault_root, JSONResponse):
         _sessions[session_id] = session
         return vault_root

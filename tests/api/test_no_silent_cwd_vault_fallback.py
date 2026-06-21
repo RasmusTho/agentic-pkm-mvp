@@ -122,6 +122,50 @@ def test_api_request_endpoints_preserve_selected_vault_behavior(
     assert "selected write" in (vault / "Inbox" / "inbox.md").read_text(encoding="utf-8")
 
 
+def test_canvas_mutations_use_session_vault_after_selection_changes(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault_a = tmp_path / "vault-a"
+    bind_initialized_vault(monkeypatch, vault_a, store_dir=tmp_path)
+    monkeypatch.setenv("CANVAS_ENABLED", "1")
+    note_a = vault_a / "notes" / "session.md"
+    note_a.parent.mkdir(parents=True)
+    note_a.write_text(
+        "---\nuuid: session-vault-a\n---\n\n# A\n\nOriginal A.\n",
+        encoding="utf-8",
+    )
+
+    opened = client.post(
+        "/api/canvas/sessions",
+        json={"note_path": "notes/session.md", "label": "bound-vault"},
+    )
+    assert opened.status_code == 200, opened.text
+    session_id = opened.json()["session_id"]
+
+    vault_b = tmp_path / "vault-b"
+    bind_initialized_vault(monkeypatch, vault_b, store_dir=tmp_path)
+    note_b = vault_b / "notes" / "session.md"
+    note_b.parent.mkdir(parents=True)
+    note_b.write_text(
+        "---\nuuid: session-vault-b\n---\n\n# B\n\nOriginal B.\n",
+        encoding="utf-8",
+    )
+
+    edited = client.post(
+        f"/api/canvas/sessions/{session_id}/edits",
+        json={
+            "new_body": "# A\n\nEdited while another vault is selected.\n",
+            "change_summary": "edit after selection change",
+        },
+    )
+
+    assert edited.status_code == 200, edited.text
+    assert "Edited while another vault is selected" in note_a.read_text(encoding="utf-8")
+    assert "Original B" in note_b.read_text(encoding="utf-8")
+
+
 def test_companion_request_helpers_do_not_fallback_to_cwd_vault() -> None:
     target_files = [
         Path("app/api/routes/capture.py"),
