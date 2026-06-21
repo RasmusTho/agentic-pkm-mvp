@@ -26,7 +26,10 @@ def audit_event(
     }
 
     try:
-        with conn_rw() as conn:
+        # Bound the connect on this best-effort path so an unreachable DB host
+        # (e.g. memory/non-pg mode resolving a non-empty DSN to db:5432) cannot
+        # stall in DNS/socket resolution before the offline except below catches.
+        with conn_rw(connect_timeout=1) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
