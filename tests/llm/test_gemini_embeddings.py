@@ -532,6 +532,110 @@ def test_cli_group_embed_probe_forwards_provider(monkeypatch: pytest.MonkeyPatch
     assert result.exit_code != 0  # no key → unavailable
 
 
+def test_gemini_provider_chunks_oversized_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Oversized text routed through the Gemini provider must be split with the same
+    configured input budget (EMBED_MAX_INPUT_CHARS) and mean-pooled before submission,
+    not sent whole (#2327 BUG 1). Previously the chunk path was gated on
+    `provider == "ollama"`, so Gemini bypassed the budget entirely."""
+    import app.llm.embeddings as embeddings
+
+    embeddings._embed_single.cache_clear()
+    monkeypatch.setenv("EMBED_MAX_INPUT_CHARS", "10")
+
+    submitted: list[str] = []
+
+    def fake_adapter(text: str, *, model: str, dim: int, timeout: float) -> tuple[float, ...]:
+        submitted.append(text)
+        return tuple([0.5] * dim)
+
+    monkeypatch.setitem(embeddings.PROVIDER_REGISTRY, "gemini", fake_adapter)
+
+    oversized = "x" * 35  # 35 chars / budget 10 → 4 chunks
+    result = embeddings._embed_single(oversized, "gemini", _MODEL, _DIM)
+
+    # The provider received per-chunk text bounded to the budget, never the whole note.
+    assert len(submitted) == 4, f"expected 4 chunks, got {len(submitted)}: {[len(s) for s in submitted]}"
+    assert all(len(chunk) <= 10 for chunk in submitted), [len(s) for s in submitted]
+    assert oversized not in submitted, "oversized text must not be sent whole to the adapter"
+    assert len(result) == _DIM
+    embeddings._embed_single.cache_clear()
+
+
+def test_gemini_error_detail_redacts_submitted_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider/proxy that echoes the submitted note text in error.message or the raw
+    response body must NOT leak that text into the raised exception string (#2327 BUG 2).
+    The exception carries only the HTTP status (+ safe status enum), never note content."""
+    _set_key(monkeypatch)
+    secret_text = "SUPER_SECRET_NOTE_BODY_THAT_A_PROXY_ECHOED"
+
+    # Error body echoes the submitted note in BOTH error.message and the raw text.
+    def echo_post(*a, **kw) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": 400,
+                    "message": f"Invalid request for input: {secret_text}",
+                    "status": "INVALID_ARGUMENT",
+                }
+            },
+            request=httpx.Request("POST", "https://example.com"),
+        )
+
+    monkeypatch.setattr(httpx, "post", echo_post)
+
+    with pytest.raises(GeminiAuthError) as excinfo:
+        embed_gemini_text(secret_text, model=_MODEL, dim=_DIM, timeout=_TIMEOUT)
+
+    message = str(excinfo.value)
+    assert secret_text not in message, (
+        f"note content leaked into exception message: {message!r}"
+    )
+    # The HTTP status is still surfaced for diagnosis.
+    assert "400" in message
+
+
+def test_gemini_error_classification_preserves_status_without_body_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Error classification must still distinguish auth/config from transient failures
+    and surface the safe structured status enum + HTTP code, while never exposing
+    response.text or error.message body content (#2327 BUG 2)."""
+    _set_key(monkeypatch)
+    leaked = "RAW_BODY_NOTE_TEXT_LEAK_CANARY"
+
+    def make_post(status: int, enum: str) -> object:
+        # The raw body carries BOTH the structured status enum AND an echoed note
+        # body in error.message; only the enum + HTTP code may appear in the
+        # exception, never the echoed body (response.text / error.message).
+        def post(*a, **kw) -> httpx.Response:
+            return httpx.Response(
+                status,
+                json={"error": {"code": status, "message": leaked, "status": enum}},
+                request=httpx.Request("POST", "https://example.com"),
+            )
+
+        return post
+
+    # 403 PERMISSION_DENIED → auth (non-transient), status enum surfaced, body redacted.
+    monkeypatch.setattr(httpx, "post", make_post(403, "PERMISSION_DENIED"))
+    with pytest.raises(GeminiAuthError) as auth_exc:
+        embed_gemini_text("note", model=_MODEL, dim=_DIM, timeout=_TIMEOUT)
+    auth_msg = str(auth_exc.value)
+    assert leaked not in auth_msg, f"body leaked: {auth_msg!r}"
+    assert "403" in auth_msg
+    assert "PERMISSION_DENIED" in auth_msg
+
+    # 429 RESOURCE_EXHAUSTED → transient, status enum surfaced, body redacted.
+    monkeypatch.setattr(httpx, "post", make_post(429, "RESOURCE_EXHAUSTED"))
+    with pytest.raises(GeminiTransientError) as trans_exc:
+        embed_gemini_text("note", model=_MODEL, dim=_DIM, timeout=_TIMEOUT)
+    trans_msg = str(trans_exc.value)
+    assert leaked not in trans_msg, f"body leaked: {trans_msg!r}"
+    assert "429" in trans_msg
+    assert "RESOURCE_EXHAUSTED" in trans_msg
+
+
 def test_outbox_worker_classifies_gemini_transient_as_transient() -> None:
     """The OUTBOX WORKER classifier (not just the queue's) must honor is_transient, so a
     GeminiTransientError re-raised from the consumer path keeps the outbox row pending for

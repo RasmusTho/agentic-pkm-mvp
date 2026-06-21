@@ -105,22 +105,55 @@ def _build_endpoint(model: str, base_url: str) -> str:
     return f"{base}/v1beta/models/{model}:embedContent"
 
 
+# Bounded set of Google API status enums safe to surface. These are content-free
+# classifiers (never note text), so they cannot leak submitted note content even
+# when a provider/proxy echoes the request body in error.message or response.text.
+_GEMINI_SAFE_STATUS = frozenset(
+    {
+        "INVALID_ARGUMENT",
+        "PERMISSION_DENIED",
+        "UNAUTHENTICATED",
+        "RESOURCE_EXHAUSTED",
+        "FAILED_PRECONDITION",
+        "NOT_FOUND",
+        "UNAVAILABLE",
+        "DEADLINE_EXCEEDED",
+        "INTERNAL",
+        "ABORTED",
+        "OUT_OF_RANGE",
+        "CANCELLED",
+        "UNIMPLEMENTED",
+        "DATA_LOSS",
+        "ALREADY_EXISTS",
+        "UNKNOWN",
+    }
+)
+
+
 def _extract_gemini_error(response: httpx.Response) -> str | None:
-    """Extract a human-readable error detail from a Gemini error response."""
+    """Return a bounded, content-free error classifier from a Gemini error response.
+
+    Redaction (#2327): a provider or proxy can echo the submitted note text back in
+    ``error.message`` or the raw ``response.text``. Those strings are concatenated into
+    GeminiAuthError/GeminiTransientError messages, which the embedding queue logs
+    (``embed_with_retry ... error=%s``) and re-raises (``... (transient): {last_exc}``),
+    so any echoed note content would leak into worker/event logs. To prevent that we
+    return ONLY the structured ``error.status`` enum when it is a known Google API
+    status code; we never return ``error.message`` and never fall back to
+    ``response.text``. The caller already includes the HTTP status code in the
+    exception summary, so auth-vs-transient routing is preserved without the body.
+    """
     try:
         payload = response.json()
     except Exception:
-        payload = None
+        return None
     if isinstance(payload, Mapping):
         err = payload.get("error")
         if isinstance(err, Mapping):
-            detail = err.get("message") or err.get("status")
-        else:
-            detail = err
-        if isinstance(detail, str) and detail.strip():
-            return detail.strip()
-    text = (response.text or "").strip()
-    return text if text else None
+            status = err.get("status")
+            if isinstance(status, str) and status.strip().upper() in _GEMINI_SAFE_STATUS:
+                return status.strip().upper()
+    return None
 
 
 # ---------------------------------------------------------------------------
