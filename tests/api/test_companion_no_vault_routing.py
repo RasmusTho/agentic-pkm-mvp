@@ -313,6 +313,10 @@ def test_uninitialized_selected_vault_reads_but_writes_route_to_picker(
     )
     assert save.status_code == 200, save.text
     assert save.json()["state"] == "vault_selection_required"
+    # The blocked write names the residual state ``uninitialized`` rather than
+    # collapsing it into ``no_vault_bound`` (#2336): the picker/init path needs
+    # to know the selected vault is uninitialized, not unselected.
+    assert save.json()["reason"] == "uninitialized"
     assert note.read_text(encoding="utf-8") == before
 
 
