@@ -230,6 +230,15 @@ These are docs/decision-only ratifications (no behavior change). The runtime wor
 ADR-0015/0016, but those plus 0017–0022 were already taken by the SBS series; the ratifications use
 the next free numbers 0023/0024, with 0025 reserved for sibling #2318.)
 
+### Embedding Reliability reconciliation (W5 adopts #2292)
+
+The RAG/memory wave plan (epic #2314) does **not** create a parallel embedding-reliability track. **#2292 is the single Embedding Reliability hub**, and the W5 embedding wave adopts it rather than duplicating it. Mapping of the EMBEDREL children (native sub-issues of #2292):
+
+- **#2293 / #2294 / #2295 — DONE / reuse.** Execution queue + backpressure + retry (EMBEDREL-02), pluggable provider registry with primary/fallback selection (EMBEDREL-03), and the Gemini adapter at `output_dimensionality=768` (EMBEDREL-04) are closed and are reused by W5.
+- **#2296 / #2297 — the only open carry-forward items.** Provider fallback orchestration (Ollama-primary, Gemini-fallback, EMBEDREL-05) and dimension consistency + mixed-identity detection + reconcile/re-index migration (EMBEDREL-06) remain open and carry forward into W5.
+
+No parallel hub will be created. Two governance items are anchored elsewhere rather than resolved here: the no-generic-fallback reversal is governed by the embedding-fallback ADR (ADR-0023, created by #2317 — renumbered from the issue's "ADR-0015" label because ADR-0015–0022 are already taken), and the EMBED_DIM 1536→768 drift is recorded as a carry item on #2297. See `docs/EMBEDDINGS.md :: Fallback rule`.
+
 ## Deep Agents as runtime layer exploration (future work)
 
 <!-- Deep Agents runtime exploration -->
