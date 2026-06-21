@@ -29,9 +29,16 @@ def conn_ro():
     return _connect(_psycopg_dsn(), autocommit=True, row_factory=dict_row)
 
 
-def conn_rw():
-    """Return a read/write psycopg connection configured for dict-row results."""
-    conn = _connect(_psycopg_dsn(), row_factory=dict_row)
+def conn_rw(*, connect_timeout: int | None = None):
+    """Return a read/write psycopg connection configured for dict-row results.
+
+    Pass ``connect_timeout`` (seconds) to bound the underlying socket connect for
+    best-effort callers that must not stall when the DB host is unreachable.
+    """
+    kwargs: dict[str, object] = {"row_factory": dict_row}
+    if connect_timeout is not None:
+        kwargs["connect_timeout"] = connect_timeout
+    conn = _connect(_psycopg_dsn(), **kwargs)
     global _SCHEMA_INITIALIZED
     if not _SCHEMA_INITIALIZED:
         ensure_schema(conn)
