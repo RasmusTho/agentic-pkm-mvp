@@ -6,7 +6,7 @@ source_anchor: docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up eager resolver
 parent_capability: Vault Optional at Runtime
 prerequisites: [RESOLVE_NO_VAULT_STATE.md, COMPANION_NO_VAULT_ROUTING.md]
 depends_on: []
-can_parallelize_with: [BACKGROUND_OPTIONAL_VAULT_IDLE.md, PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md]
+can_parallelize_with: []
 ---
 
 # API Endpoint Optional Vault Boundaries
@@ -28,13 +28,15 @@ out of the same PR.
   - `app/api/routes/artifacts.py`
   - `app/api/routes/canvas.py`
   - `app/api/routes/debug.py`
-  - `app/api/routes/companion.py` companion request helpers still found by pickup audit
-    (`/now` is already optional on current main and should be verified, not reworked).
+  - `app/api/routes/companion.py` `/api/companion/now` and companion request helpers still
+    found by pickup audit.
 - Uses `resolve_optional_vault_root()` plus an explicit no-vault branch:
   - write/action endpoints return the existing `vault_selection_required` picker shape
     or an equivalent explicit no-vault response already accepted by their caller;
   - read-only companion glance surfaces that have an established empty-state contract
     return an empty list/object, not a fallback vault.
+- Treats selected-vault state as the active-vault authority. A configured `VAULT_ROOT`
+  without a selected `VaultManager` context is still no selected vault for this slice.
 - Keeps set-but-missing vaults explicit. They must not turn into CWD fallback and must not
   hide as successful reads from `./vault`.
 - Leaves background workers, settings, promotion queue, CLI, and agent-memory helpers to
@@ -47,7 +49,8 @@ response = client.get("/api/artifacts/note", params={"note_path": "Daily.md"})
 assert response.status_code == 200
 assert response.json()["state"] == "vault_selection_required"
 
-# /api/companion/now keeps the existing quiet read contract.
+# /api/companion/now keeps the existing quiet read contract and ignores
+# configured-but-unselected VAULT_ROOT.
 assert client.get("/api/companion/now").json() == []
 
 # A selected vault still resolves exactly as before.
@@ -66,8 +69,10 @@ CLI behavior.
       paths never resolve CWD-relative `./vault`; they return an explicit no-vault/picker
       response. Verify: `tests/api/test_no_silent_cwd_vault_fallback.py::test_api_request_endpoints_do_not_resolve_cwd_vault_without_selection`
 - [ ] The same endpoints preserve selected-vault behavior. Verify: `tests/api/test_no_silent_cwd_vault_fallback.py::test_api_request_endpoints_preserve_selected_vault_behavior`
-- [ ] `/api/companion/now` remains quiet and identity-accurate with no selected vault
-      (`[]`, not `./vault`, not 500). Verify: `tests/api/test_companion_no_vault_routing.py::test_now_without_selected_vault_returns_empty_not_fallback`
+- [ ] `/api/companion/now` remains quiet and identity-accurate with no selected vault,
+      including configured-but-unselected `VAULT_ROOT` (`[]`, not configured root, not
+      `./vault`, not 500). Verify:
+      `tests/api/test_companion_no_vault_routing.py::test_now_without_selected_vault_ignores_configured_root`
 - [ ] Any remaining companion request helper that still calls `resolve_vault_root()` after
       pickup audit is migrated or explicitly ruled out of request scope in the PR body.
       Verify: `tests/api/test_no_silent_cwd_vault_fallback.py::test_companion_request_helpers_do_not_fallback_to_cwd_vault`

@@ -5,8 +5,8 @@ task_id: VAULT_OPTIONAL_RUNTIME-05B
 source_anchor: docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up eager resolver migration
 parent_capability: Vault Optional at Runtime
 prerequisites: [RESOLVE_NO_VAULT_STATE.md, BOOT_RUNTIME_WITHOUT_VAULT.md]
-depends_on: []
-can_parallelize_with: [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md, PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md]
+depends_on: [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md]
+can_parallelize_with: []
 ---
 
 # Background Optional Vault Idle
