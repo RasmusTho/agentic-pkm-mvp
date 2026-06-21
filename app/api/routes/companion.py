@@ -2109,48 +2109,54 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
     human-meaningful label.
     """
     system_dir_rel = resolve_vault_system_dir_rel_or_default(vault_root)
-    system_dir_abs = vault_root / system_dir_rel
-
-    def _is_human_note(path: Path) -> bool:
-        # Exclude anything inside the system directory (companions, logs, etc.)
-        try:
-            path.relative_to(system_dir_abs)
-            return False
-        except ValueError:
-            pass
-        return True
-
     try:
-        md_files = [p for p in vault_root.rglob("*.md") if p.is_file() and _is_human_note(p)]
+        vault_root_resolved = vault_root.resolve(strict=True)
     except Exception:
         return None
-    if not md_files:
-        return None
-    # Deterministic tiebreak: for equal mtime, the path sort wins.
-    md_files_sorted = sorted(md_files, key=lambda p: str(p))
-    best: Path | None = None
-    best_mtime: float = -1.0
-    for path in md_files_sorted:
+    system_dir_abs = vault_root / system_dir_rel
+    system_dir_resolved = (vault_root / system_dir_rel).resolve(strict=False)
+
+    def _is_relative_to(path: Path, parent: Path) -> bool:
         try:
-            m = path.stat().st_mtime
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False
+
+    candidates: list[tuple[float, str, Path, Path]] = []
+    try:
+        for path in vault_root.rglob("*.md"):
+            try:
+                if not path.is_file():
+                    continue
+                if _is_relative_to(path, system_dir_abs):
+                    continue
+                resolved_path = path.resolve(strict=True)
+                if not _is_relative_to(resolved_path, vault_root_resolved):
+                    continue
+                if _is_relative_to(resolved_path, system_dir_resolved):
+                    continue
+                candidates.append((resolved_path.stat().st_mtime, str(path), path, resolved_path))
+            except Exception:
+                continue
+    except Exception:
+        return None
+    if not candidates:
+        return None
+
+    # Deterministic order: newest first; for equal mtime, path sort wins.
+    for _, _, path, resolved_path in sorted(candidates, key=lambda item: (-item[0], item[1])):
+        try:
+            body = resolved_path.read_text(encoding="utf-8", errors="replace")
+            label = _extract_title(body, fallback=path.stem)
         except Exception:
             continue
-        if m > best_mtime:
-            best_mtime = m
-            best = path
-    if best is None:
-        return None
-    try:
-        body = best.read_text(encoding="utf-8", errors="replace")
-        label = _extract_title(body, fallback=best.stem)
-    except Exception:
-        label = best.stem
-    # Omit the anchor when the only available label is a bare UUID — a UUID is
-    # not a human-readable title and must not be surfaced to the user.
-    if _UUID_RE.match(label):
-        return None
-    note_path = str(best.relative_to(vault_root))
-    return WorkspaceOrientationRecentsAnchor(note_path=note_path, display_label=label)
+        # Skip labels that are bare UUIDs and continue to the next valid human note.
+        if _UUID_RE.match(label):
+            continue
+        note_path = str(path.relative_to(vault_root))
+        return WorkspaceOrientationRecentsAnchor(note_path=note_path, display_label=label)
+    return None
 
 
 def _orientation_identity(vault_root: Path) -> VaultIdentityState:
