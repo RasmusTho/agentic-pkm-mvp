@@ -13,6 +13,7 @@ from app.a2a.schema import AgentRequest, AgentResponse, new_error, new_response
 from app.builderops.boundary import execute_builderops_mcp_tool, is_builderops_mcp_tool
 from app.builderops.models import BuilderOpsValidationError
 from app.domain.state_axes import normalize_promotion_payload
+from app.execution.execution_request import ExecutionRequest, ExecutionResult
 from app.mcp.vault_tools import VaultToolError, append_note
 from app.orchestrator.agents import AgentPermissionError, _normalize_agent_target, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
@@ -327,8 +328,23 @@ class MockPlanExecutor(PlanExecutor):
             ) from exc
 
     def _run_vault_append(self, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
+        # EXE side-effect seam (docs/contracts/EXECUTION_REQUEST.md): this path is
+        # only reached behind the real-tool gate (_should_use_real_tool), so the
+        # ExecutionRequest/ExecutionResult wrapper is additive and does not change
+        # mock/CI behavior or tool policy. EXE does not decide policy here; the
+        # DecisionToken reference is None until the orchestrator threads one
+        # through (see the contract's Transitional Implementation Notes).
+        vault_root = context.tool_settings.get("vault_root") if context.tool_settings else None
+        execution_request = ExecutionRequest(
+            side_effect="mcp.vault.append_note",
+            actor=context.agent_id or "orchestrator.runtime",
+            resource=str(args.get("title") or ""),
+            adapter="mcp.vault.append_note",
+            decision_token=None,
+            trace_id=context.trace_id,
+            args=dict(args),
+        )
         try:
-            vault_root = context.tool_settings.get("vault_root") if context.tool_settings else None
             note_path = append_note(
                 title=str(args.get("title") or ""),
                 body=str(args.get("body") or ""),
@@ -345,8 +361,22 @@ class MockPlanExecutor(PlanExecutor):
                 event_kwargs["trace_id"] = context.trace_id
             mcp_event = OutboxEvent(**event_kwargs)
             _write_outbox_events(_resolve_outbox_path(), [mcp_event])
-            return {"status": "ok", "note_path": str(note_path)}
+            effect_result = {"status": "ok", "note_path": str(note_path)}
+            ExecutionResult(
+                request=execution_request,
+                status="succeeded",
+                effect_result=effect_result,
+                receipt_ref=f"mcp.vault.append_note:{note_path}",
+                trace_id=context.trace_id,
+            )
+            return effect_result
         except VaultToolError as exc:
+            ExecutionResult(
+                request=execution_request,
+                status="failed",
+                effect_result={"error": str(exc)},
+                trace_id=context.trace_id,
+            )
             raise StepExecutionError(f"vault append failed: {exc}", error_type="mcp_tool_error") from exc
 
 
