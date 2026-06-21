@@ -89,6 +89,9 @@ They remain mirror/projection surfaces and do not hold semantic authority over t
 - Notes:
   - `kind="note"` is a runtime/storage label and may represent a projection of a vault note rather
     than the full semantic class of the human artifact.
+  - StorePort classification: rebuildable. The current object-store path is resolved through
+    `app.stores.resolve_object_store_port`, with recovery posture anchored in vault notes and
+    companion-note identity continuity rather than in this table as semantic authority.
 
 ### `store_vector_index`
 - `object_id` (`uuid`, PK)

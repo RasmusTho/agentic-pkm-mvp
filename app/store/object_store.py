@@ -8,7 +8,7 @@ from uuid import UUID
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED
 from app.services.outbox import insert_object_and_outbox
-from app.stores import get_object_store, resolve_store_backend
+from app.stores import resolve_object_store_port
 
 
 @dataclass
@@ -59,11 +59,11 @@ class ObjectStore:
         if object_id in _MEMORY_STORE:
             return _MEMORY_STORE[object_id]
 
-        if resolve_store_backend() == "memory":
-            return _MEMORY_STORE.get(object_id)
-
         try:
-            record = get_object_store().get(UUID(str(object_id)))
+            binding = resolve_object_store_port()
+            if binding.backend == "memory":
+                return _MEMORY_STORE.get(object_id)
+            record = binding.store.get(UUID(str(object_id)))
             if not record:
                 return _MEMORY_STORE.get(object_id)
             domain = _to_domain(record)
@@ -85,11 +85,11 @@ class ObjectStore:
         obj.created_at = _normalize_ts(obj.created_at)
         _MEMORY_STORE[obj.uuid] = obj
 
-        if resolve_store_backend() == "memory":
-            return
-
         try:
-            get_object_store().put(
+            binding = resolve_object_store_port()
+            if binding.backend == "memory":
+                return
+            binding.store.put(
                 UUID(str(obj.uuid)),
                 kind=str(obj.kind or "note"),
                 source_ref=str(obj.source_ref or ""),
@@ -114,11 +114,11 @@ class ObjectStore:
         kind: Optional[str] = None,
         limit: int = 100,
     ) -> List[DomainObject]:
-        if resolve_store_backend() == "memory":
-            return _list_from_memory(kind, limit)
-
         try:
-            rows = list(get_object_store().list_objects(kind=kind, limit=limit))
+            binding = resolve_object_store_port()
+            if binding.backend == "memory":
+                return _list_from_memory(kind, limit)
+            rows = list(binding.store.list_objects(kind=kind, limit=limit))
             out = [_to_domain(row if isinstance(row, dict) else dict(row)) for row in rows]
             for domain in out:
                 _MEMORY_STORE[domain.uuid] = domain
@@ -127,14 +127,14 @@ class ObjectStore:
             return _list_from_memory(kind, limit)
 
     def count_objects(self, kind: Optional[str] = None) -> int:
-        if resolve_store_backend() == "memory":
-            values = list(_MEMORY_STORE.values())
-            if kind is not None:
-                values = [obj for obj in values if obj.kind == kind]
-            return len(values)
-
         try:
-            return int(get_object_store().count_objects(kind=kind))
+            binding = resolve_object_store_port()
+            if binding.backend == "memory":
+                values = list(_MEMORY_STORE.values())
+                if kind is not None:
+                    values = [obj for obj in values if obj.kind == kind]
+                return len(values)
+            return int(binding.store.count_objects(kind=kind))
         except Exception:
             values = list(_MEMORY_STORE.values())
             if kind is not None:
