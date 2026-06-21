@@ -819,6 +819,12 @@ else
   apply_start_full_system_vault_defaults "$vault_host_path"
 fi
 
+# Full-host mounts (/Users, /Volumes) for in-process vault selection are
+# compose-static (#2310) so any disk's vault is reachable at its host-absolute
+# path; activation requires Colima to share those dirs
+# (docs/ops/COLIMA_FULL_HOST_MOUNT.md).
+echo "Vault mounts: /Users + /Volumes are compose-static (#2310) — requires Colima to share them"
+
 if [ "$NO_VAULT_MODE" -ne 1 ]; then
   echo "Vault env: VAULT_ROOT=${VAULT_ROOT}"
   echo "Vault env: VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-<not set>}"

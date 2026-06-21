@@ -39,6 +39,14 @@ services:
       # own VAULT_ROOT can be the in-container mount path /app/vault without
       # corrupting this source (issue #2141). VAULT_ROOT/./vault kept as fallback.
       - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
+      # Full host filesystem for in-process vault selection (#2310): /Users
+      # (internal SSD / iCloud Obsidian) and /Volumes (external disks, e.g. the
+      # T7) at IDENTICAL container paths, so a selected host-absolute vault path
+      # resolves transparently. Writes stay bounded to the selected vault
+      # (write_note_from_absolute enforces relative_to(vault_root)). Requires
+      # Colima to share /Users + /Volumes — see docs/ops/COLIMA_FULL_HOST_MOUNT.md.
+      - "/Users:/Users"
+      - "/Volumes:/Volumes"
       # External-SSD TTS store (models/cache/logs) bind-mounted to a fixed container path.
       # Host root is machine-local (${TTS_HOST_ROOT} in .env.prod.local); defaults to a dev scratch dir.
       - "${TTS_HOST_ROOT:-./tmp/tts}:/data/tts"
@@ -86,6 +94,14 @@ services:
     volumes:
       - ./:/app
       - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
+      # Full host filesystem for in-process vault selection (#2310): /Users
+      # (internal SSD / iCloud Obsidian) and /Volumes (external disks, e.g. the
+      # T7) at IDENTICAL container paths, so a selected host-absolute vault path
+      # resolves transparently. Writes stay bounded to the selected vault
+      # (write_note_from_absolute enforces relative_to(vault_root)). Requires
+      # Colima to share /Users + /Volumes — see docs/ops/COLIMA_FULL_HOST_MOUNT.md.
+      - "/Users:/Users"
+      - "/Volumes:/Volumes"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.workers.outbox_worker"]
     environment:
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
@@ -116,6 +132,14 @@ services:
     volumes:
       - ./:/app
       - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
+      # Full host filesystem for in-process vault selection (#2310): /Users
+      # (internal SSD / iCloud Obsidian) and /Volumes (external disks, e.g. the
+      # T7) at IDENTICAL container paths, so a selected host-absolute vault path
+      # resolves transparently. Writes stay bounded to the selected vault
+      # (write_note_from_absolute enforces relative_to(vault_root)). Requires
+      # Colima to share /Users + /Volumes — see docs/ops/COLIMA_FULL_HOST_MOUNT.md.
+      - "/Users:/Users"
+      - "/Volumes:/Volumes"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli watcher run"]
     environment:
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
