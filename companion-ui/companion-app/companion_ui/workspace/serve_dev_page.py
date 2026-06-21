@@ -6213,7 +6213,7 @@ def _render_orientation_index_html(
         <h1 class="cold-start-headline">{_e(_cold_headline)}</h1>
       </div>
       <p data-region="cold-start-verbs" class="cold-start-verbs">
-        <a data-intent="vault.open" onclick="vaultBrowser.focus(); return false;" href="#">Find a note</a>
+        <a data-intent="vault.open" onclick="vaultBrowser.focus(); return false;" href="#workspace-orientation-vault-entry">Find a note</a>
         &middot;
         <a data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;" href="#">Jot something down</a>
         &middot;
@@ -6777,6 +6777,40 @@ def _render_orientation_index_html(
 def _orientation_vault_browser_script() -> str:
     return """
   <script>
+  (function() {
+    function focusOrientationVaultBrowser() {
+      var target = document.getElementById('workspace-orientation-vault-entry');
+      if (!target) return;
+      target.setAttribute('data-browse-focused', 'true');
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      var details = target.querySelector('details');
+      if (details) details.open = true;
+      target.scrollIntoView({ block: 'start', inline: 'nearest' });
+      function firstVisibleFocusTarget(selector) {
+        var nodes = Array.prototype.slice.call(target.querySelectorAll(selector));
+        for (var i = 0; i < nodes.length; i += 1) {
+          if (!nodes[i].closest('[hidden]')) return nodes[i];
+        }
+        return null;
+      }
+      var focusTarget =
+        firstVisibleFocusTarget('[data-testid="workspace-vault-browser-search"]') ||
+        firstVisibleFocusTarget('[data-testid="workspace-vault-browser"] summary') ||
+        firstVisibleFocusTarget('[data-testid="workspace-vault-browser-note-link"]') ||
+        firstVisibleFocusTarget('input, button, summary, a') ||
+        target;
+      if (!focusTarget || typeof focusTarget.focus !== 'function') return;
+      try {
+        focusTarget.focus({ preventScroll: true });
+      } catch (err) {
+        focusTarget.focus();
+      }
+    }
+    window.vaultBrowser = window.vaultBrowser || {};
+    window.vaultBrowser.focus = focusOrientationVaultBrowser;
+    window.vaultBrowser.open = window.vaultBrowser.open || focusOrientationVaultBrowser;
+  })();
+
   function vaultBrowserSelectionControls() {
     return Array.prototype.slice.call(
       document.querySelectorAll('[data-testid="workspace-vault-browser-selection-toggle"]')
