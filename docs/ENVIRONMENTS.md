@@ -50,6 +50,12 @@ When the runtime runs in containers, the `VAULT_ROOT` runtime binding has **two 
 
 Writing the host path into the container's `VAULT_ROOT` is what made `resolve_vault_root()` raise `VaultRootMisconfiguredError` and the API 503 (#2141): the host path does not exist inside the container. The no-vault idle posture omits both `VAULT_HOST_ROOT` and the generated in-container `VAULT_ROOT`. `VAULT_HOST_ROOT` is a mount-machinery surface, not a vault-selection surface — it describes *where the one bound content vault is reached from* on the host, not *which* vault is active.
 
+### Full-host access for in-process vault selection (#2310)
+
+After Option-2 (#2309/#2325) the human selects any vault on any disk in-process, so the container must see the host filesystem. `api` / `worker` / `watcher` additionally bind-mount the host `/Users` and `/Volumes` at **identical container paths**, so a selected host-absolute vault path (internal SSD / iCloud Obsidian under `/Users/...`, or a `/Volumes/T7` external vault) resolves transparently in-container with **no path translation**. The mounts target the parents `/Users` / `/Volumes` (never a specific volume) so the stack boots when the T7 is unplugged. Activation requires Colima to share those host directories — see [`docs/ops/COLIMA_FULL_HOST_MOUNT.md`](ops/COLIMA_FULL_HOST_MOUNT.md).
+
+**Write guardrail.** A broader mount widens what is *selectable / readable*, not what is *writable beyond the selected vault*. Vault writes go through `write_note_from_absolute`, which enforces `resolved_path.relative_to(vault_root)` (`app/knowledge/write_ops.py`), and `app/write_guard.py` gates vault writes; a write cannot escape the selected vault regardless of mount breadth. The additive `/Users` + `/Volumes` mounts do not replace the legacy `${VAULT_HOST_ROOT}:/app/vault` mount, which remains until the eager `resolve_vault_root()` consumers are migrated (#2311).
+
 ## Code vs Environment Separation
 
 Two kinds of separation govern how `dev`, `test`, and `prod` stay isolated:
