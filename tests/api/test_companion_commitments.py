@@ -266,7 +266,15 @@ def test_commitments_surface_durable_across_repeated_reads(
 
     first = _workspace(client).json()["runtime"]["commitments"]
     second = _workspace(client).json()["runtime"]["commitments"]
-    assert first == second
+    # ``as_of`` is a per-read freshness stamp (now.isoformat(timespec="seconds"));
+    # two reads straddling a one-second boundary differ by a second even though the
+    # durable payload is identical. Assert freshness is present on both reads, then
+    # compare the durable payload with the freshness stamp excluded.
+    assert first["as_of"] is not None
+    assert second["as_of"] is not None
+    first_durable = {k: v for k, v in first.items() if k != "as_of"}
+    second_durable = {k: v for k, v in second.items() if k != "as_of"}
+    assert first_durable == second_durable
 
 
 def test_commitment_surface_is_read_only(
