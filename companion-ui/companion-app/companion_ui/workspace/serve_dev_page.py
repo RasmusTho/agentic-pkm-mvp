@@ -7605,6 +7605,11 @@ def render_index_html(
     suppress_vault_settings = runtime_unreachable or route_error
     vault_settings_panel_html = "" if suppress_vault_settings else vault_settings_panel_markup()
     vault_settings_panel_js = "" if suppress_vault_settings else vault_settings_panel_script()
+    # Keep the full vault settings surface available through the settings
+    # drawer on loaded note workspaces. Rendering it as a page-flow sibling
+    # covers the document after normal note navigation (#2333).
+    drawer_vault_settings_panel_html = vault_settings_panel_html if fields is not None else ""
+    top_level_vault_settings_panel_html = "" if fields is not None else vault_settings_panel_html
     # Live co-authoring wiring is gated by the server-declared canvas flag,
     # matching _render_note_section's guard derivation. With no fields (error /
     # orientation) the canvas surface is absent, so the script is not emitted.
@@ -10838,8 +10843,8 @@ def render_index_html(
   {panel_palette_markup(fields)}
   {memory_review_drawer_markup()}
   {receipts_history_modal_markup()}
-  {settings_drawer_markup(fields)}
-  {vault_settings_panel_html}
+  {settings_drawer_markup(fields, vault_settings_panel_html=drawer_vault_settings_panel_html)}
+  {top_level_vault_settings_panel_html}
   {system_map_overlay_markup(
     available_routes=map_available_routes,
     orientation_freshness=str((fields or {}).get("orientation_freshness") or ""),

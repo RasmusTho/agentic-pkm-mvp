@@ -376,7 +376,7 @@ def _connection_section(fields: dict) -> str:
         </section>"""
 
 
-def settings_drawer_markup(fields: dict) -> str:
+def settings_drawer_markup(fields: dict, *, vault_settings_panel_html: str = "") -> str:
     """The Settings right-drawer shell plus the local-only render badge.
 
     Renders closed (``data-open="false"``); the overlay host's ``settings``
@@ -386,6 +386,16 @@ def settings_drawer_markup(fields: dict) -> str:
     closed. Styles are scoped here so the drawer is self-contained.
     """
     sections = " ".join(SETTINGS_SECTIONS)
+    vault_settings_section = (
+        f"""
+    <section class="settings-section" data-testid="settings-section-vault"
+      data-settings-section="vault" data-authority="runtime-vault-settings">
+      <h3 class="settings-section-title">Vault</h3>
+      {vault_settings_panel_html}
+    </section>"""
+        if vault_settings_panel_html
+        else ""
+    )
     return f"""
   <!-- Settings drawer (#1789, SEP-07) — Local UI preferences in one home.
        Preferences re-render identical content (canonical hash byte-
@@ -522,7 +532,7 @@ def settings_drawer_markup(fields: dict) -> str:
     <section class="settings-section" data-testid="settings-section-display"
       data-settings-section="display" data-authority="render-only">
       <h3 class="settings-section-title">Display</h3>{_display_section_form()}
-    </section>{_listening_section()}{_behaviour_section()}{_connection_section(fields)}
+    </section>{_listening_section()}{_behaviour_section()}{_connection_section(fields)}{vault_settings_section}
     <footer class="settings-foot">
       <button type="button" class="settings-reset"
         data-testid="settings-reset" data-intent="settings.reset"

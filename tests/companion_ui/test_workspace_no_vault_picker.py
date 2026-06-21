@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from companion_ui.workspace.serve_dev_page import handle_get
+from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
 
 _PICKER_PAYLOAD: dict[str, Any] = {
     "state": "vault_selection_required",
@@ -86,3 +86,56 @@ def test_picker_without_configured_root_omits_one_click_open() -> None:
     assert 'data-testid="vault-selection-required"' in html
     # No configured root → no one-click "open configured" affordance.
     assert 'data-testid="vault-selection-open-configured"' not in html
+
+
+def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
+    fields: dict[str, Any] = {
+        "title": "Companion UI UAT",
+        "note_path": "Companion UI UAT.md",
+        "artifact_id": "note-uat",
+        "artifact_kind": "human_note",
+        "artifact_identity_source": "frontmatter.uuid",
+        "artifact_identity_state": "resolved",
+        "artifact_companion_of": None,
+        "artifact_owns_identity": True,
+        "content_hash": "sha256-uat",
+        "body": "# Companion UI UAT\n\nReady.",
+        "panel_rail": "Panel / agent rail placeholder",
+        "runtime_environment_label": "dev",
+        "runtime_api_base_url_label": "local-dev",
+        "runtime_trace_id": "trace-uat",
+        "runtime_vault_name": "Niflheim",
+        "runtime_vault_channel": "dev",
+        "runtime_vault_provenance": "selected",
+        "canvas_session_state": "idle",
+        "canvas_session_persistence": "in_memory",
+        "panel_state": "idle",
+        "panel_proposal_count": 0,
+        "panel_proposals": [],
+        "guard_writeguard_status": "ok",
+        "guard_canvas_enabled": True,
+        "guard_workspace_update_available": True,
+        "guard_update_flow_available": True,
+        "find_candidates": [],
+        "reorient_sections": {},
+        "resurface_candidates": [],
+        "governance_receipts": [],
+        "suggestion_state": "idle",
+        "suggestion_composer_enabled": True,
+    }
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Companion UI UAT.md",
+        fields=fields,
+    )
+
+    assert 'data-entry-state="shell_active"' in html
+    assert "Companion UI UAT" in html
+    assert 'data-testid="vault-selection-required"' not in html
+    assert 'data-testid="settings-drawer"' in html
+    assert 'data-testid="vault-settings-panel"' in html
+
+    drawer_start = html.index('data-testid="settings-drawer"')
+    drawer_end = html.index("</aside>", drawer_start)
+    panel_pos = html.index('data-testid="vault-settings-panel"')
+    assert drawer_start < panel_pos < drawer_end
