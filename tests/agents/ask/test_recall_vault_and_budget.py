@@ -142,6 +142,31 @@ def test_recall_vault_does_not_reload_when_already_selected(tmp_path: Path, monk
     assert manager.load_last_active_calls == 0
 
 
+def test_recall_vault_uses_selected_when_env_root_is_missing(tmp_path: Path, monkeypatch) -> None:
+    """A stale env vault must not break an already selected live vault."""
+    selected_root = tmp_path / "live-vault"
+    missing_env_root = tmp_path / "missing-env-vault"
+    selected_root.mkdir()
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+    monkeypatch.setenv("VAULT_ROOT", str(missing_env_root))
+
+    class _LiveManager:
+        context = _selected(selected_root)
+        load_last_active_calls = 0
+
+        def load_last_active(self) -> VaultContext:  # pragma: no cover - guard
+            self.load_last_active_calls += 1
+            raise AssertionError("must not reload when a vault is already selected")
+
+    manager = _LiveManager()
+    monkeypatch.setattr(ask_graph, "get_vault_manager", lambda: manager)
+
+    resolved = ask_graph._active_recall_vault_root()
+
+    assert resolved == selected_root.resolve()
+    assert manager.load_last_active_calls == 0
+
+
 def test_recall_vault_falls_back_to_env_when_no_persisted_vault(tmp_path: Path, monkeypatch) -> None:
     """No selected and no persisted vault -> env fallback still applies."""
     env_root = tmp_path / "env-vault"

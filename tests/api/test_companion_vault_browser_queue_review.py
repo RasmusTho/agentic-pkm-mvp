@@ -9,6 +9,8 @@ import app.api.routes.companion as companion_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.components.settings.panel_actions_loader import load_panel_action_catalog
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
 from app.write_guard import WritesBlockedError
 from tests.api._vault_test_helpers import bind_selected_vault
 
@@ -52,6 +54,16 @@ def _outbox_records(path: Path) -> list[str]:
     if not path.exists():
         return []
     return [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _bind_no_vault_manager(monkeypatch: pytest.MonkeyPatch, store_dir: Path) -> VaultManager:
+    app_local_path = store_dir / ".app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
+    mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
+        delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
+    return mgr
 
 
 def test_queue_review_exists_in_default_panel_action_catalog() -> None:
@@ -231,6 +243,7 @@ def test_queue_review_routes_missing_vault_root_to_picker(
     missing_root = tmp_path / "vault"
     monkeypatch.setenv("VAULT_ROOT", str(missing_root))
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    _bind_no_vault_manager(monkeypatch, tmp_path)
 
     resp = TestClient(app).post(
         "/api/companion/vault-browser/actions/queue-review",
