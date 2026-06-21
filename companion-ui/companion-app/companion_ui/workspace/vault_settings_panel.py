@@ -250,6 +250,18 @@ def vault_settings_panel_markup(
         if hidden_by_default
         else ""
     )
+    display_mode = "drawer" if hidden_by_default else "inline"
+    open_state = "false" if hidden_by_default else "true"
+    close_button = (
+        """
+    <button type="button" class="vault-settings-panel-close"
+      data-testid="vault-settings-panel-close"
+      data-intent="vault.settings.close"
+      aria-label="Close vault settings"
+      onclick="companionVaultSettings.close()">&times;</button>"""
+        if hidden_by_default
+        else ""
+    )
     return f"""
   <style>
     .vault-settings-panel {{
@@ -257,6 +269,24 @@ def vault_settings_panel_markup(
       display: grid; gap: 12px; padding: 14px 16px;
     }}
     .vault-settings-panel[hidden] {{ display: none !important; }}
+    .vault-settings-panel[data-display-mode="drawer"] {{
+      background: var(--bg-surface, #0b1220);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: 8px;
+      bottom: 16px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      max-width: calc(100vw - 32px);
+      overflow: auto;
+      position: fixed;
+      right: 16px;
+      top: 64px;
+      width: min(520px, calc(100vw - 32px));
+      z-index: 38;
+    }}
+    .vault-settings-panel-close {{
+      justify-self: end;
+      min-width: 32px;
+    }}
     .vault-settings-panel code {{ overflow-wrap: anywhere; }}
     .vault-settings-actions, .vault-settings-identity, .vault-settings-editor {{
       display: grid; gap: 8px;
@@ -276,10 +306,23 @@ def vault_settings_panel_markup(
     .vault-settings-panel button[disabled] {{ cursor: not-allowed; opacity: 0.55; }}
     .vault-permissions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
     .vault-permission {{ border: 1px solid var(--border, #152030); border-radius: 4px; padding: 3px 6px; }}
+    @media (max-width: 700px) {{
+      .vault-settings-panel[data-display-mode="drawer"] {{
+        bottom: 8px;
+        max-width: none;
+        right: 8px;
+        top: 56px;
+        width: calc(100vw - 16px);
+      }}
+    }}
   </style>
-  <section class="vault-settings-panel" data-testid="vault-settings-panel"{hidden_attrs}
+  <section class="vault-settings-panel" id="workspace-vault-settings-panel"
+    data-testid="vault-settings-panel"{hidden_attrs}
+    data-display-mode="{display_mode}" data-open="{open_state}"
     data-vault-status="{_e(status)}" data-api-path="{VAULT_SETTINGS_ENDPOINT}"
-    data-fragment-path="{VAULT_SETTINGS_FRAGMENT_ROUTE}" data-api-method="GET">
+    data-fragment-path="{VAULT_SETTINGS_FRAGMENT_ROUTE}" data-api-method="GET"
+    role="dialog" aria-label="Vault settings" tabindex="-1">
+    {close_button}
     {vault_settings_panel_fragment(projection)}
   </section>"""
 
@@ -291,6 +334,41 @@ def vault_settings_panel_script() -> str:
   (function() {{
     var root = document.querySelector('[data-testid="vault-settings-panel"]');
     if (!root) {{ return; }}
+    function vaultSettingsTriggers() {{
+      return Array.prototype.slice.call(document.querySelectorAll('[data-intent="vault.settings.open"]'));
+    }}
+    function syncDrawerState(open) {{
+      root.setAttribute('data-open', open ? 'true' : 'false');
+      vaultSettingsTriggers().forEach(function(trigger) {{
+        trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }});
+    }}
+    function openDrawer() {{
+      root.removeAttribute('hidden');
+      root.removeAttribute('aria-hidden');
+      root.removeAttribute('inert');
+      syncDrawerState(true);
+      try {{ root.focus(); }} catch (err) {{}}
+    }}
+    function closeDrawer() {{
+      if (root.getAttribute('data-default-hidden') === 'true') {{
+        root.setAttribute('hidden', '');
+        root.setAttribute('aria-hidden', 'true');
+        root.setAttribute('inert', '');
+      }}
+      syncDrawerState(false);
+      var triggers = vaultSettingsTriggers();
+      if (triggers[0]) {{ try {{ triggers[0].focus(); }} catch (err) {{}} }}
+    }}
+    window.companionVaultSettings = {{
+      open: openDrawer,
+      close: closeDrawer,
+      toggle: function() {{
+        if (root.hasAttribute('hidden')) {{ openDrawer(); }}
+        else {{ closeDrawer(); }}
+      }}
+    }};
+    syncDrawerState(!root.hasAttribute('hidden'));
     function jsonFetch(path, options) {{
       return fetch(path, Object.assign({{ headers: {{ 'Content-Type': 'application/json' }} }}, options || {{}}))
         .then(function(response) {{
@@ -379,6 +457,12 @@ def vault_settings_panel_script() -> str:
     // vault buttons and the Reload button), so a directly-attached listener
     // would be lost after the first reload (#2016 Codex review).
     document.addEventListener('click', function(event) {{
+      var vaultSettingsTrigger = event.target && event.target.closest('[data-intent="vault.settings.open"]');
+      if (vaultSettingsTrigger && window.companionVaultSettings) {{
+        event.preventDefault();
+        window.companionVaultSettings.toggle();
+        return;
+      }}
       var recent = event.target && event.target.closest('[data-testid="vault-recent-vault"]');
       if (recent) {{
         jsonFetch('{VAULT_SELECT_ENDPOINT}', {{

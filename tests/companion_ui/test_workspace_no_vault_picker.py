@@ -133,6 +133,10 @@ def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
     assert "Companion UI UAT" in html
     assert 'data-testid="vault-selection-required"' not in html
     assert 'data-testid="vault-settings-panel"' in html
+    assert 'data-testid="workspace-surface-icon-vault-settings"' in html
+    assert 'data-intent="vault.settings.open"' in html
+    assert 'aria-controls="workspace-vault-settings-panel"' in html
+    assert "window.companionVaultSettings" in html
 
     panel_start = html.index('<section class="vault-settings-panel"')
     panel_tag_end = html.index(">", panel_start)
@@ -140,4 +144,7 @@ def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
     assert " hidden" in panel_tag
     assert 'aria-hidden="true"' in panel_tag
     assert " inert" in panel_tag
+    assert 'data-display-mode="drawer"' in panel_tag
+    assert 'data-open="false"' in panel_tag
     assert ".vault-settings-panel[hidden] { display: none !important; }" in html
+    assert 'data-testid="vault-settings-panel-close"' in html
