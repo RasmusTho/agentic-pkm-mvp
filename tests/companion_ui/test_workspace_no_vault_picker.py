@@ -132,10 +132,11 @@ def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
     assert 'data-entry-state="shell_active"' in html
     assert "Companion UI UAT" in html
     assert 'data-testid="vault-selection-required"' not in html
-    assert 'data-testid="settings-drawer"' in html
     assert 'data-testid="vault-settings-panel"' in html
 
-    drawer_start = html.index('data-testid="settings-drawer"')
-    drawer_end = html.index("</aside>", drawer_start)
-    panel_pos = html.index('data-testid="vault-settings-panel"')
-    assert drawer_start < panel_pos < drawer_end
+    panel_start = html.index('<section class="vault-settings-panel"')
+    panel_tag_end = html.index(">", panel_start)
+    panel_tag = html[panel_start:panel_tag_end]
+    assert " hidden" in panel_tag
+    assert 'aria-hidden="true"' in panel_tag
+    assert " inert" in panel_tag

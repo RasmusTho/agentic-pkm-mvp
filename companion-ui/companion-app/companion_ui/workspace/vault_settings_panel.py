@@ -238,9 +238,18 @@ def vault_settings_panel_fragment(projection: dict[str, Any] | None = None) -> s
     return f'<div class="vault-settings-body" data-testid="vault-settings-body" data-vault-status="{_e(_panel_status(projection))}">{_panel_body(projection)}</div>'
 
 
-def vault_settings_panel_markup(projection: dict[str, Any] | None = None) -> str:
+def vault_settings_panel_markup(
+    projection: dict[str, Any] | None = None,
+    *,
+    hidden_by_default: bool = False,
+) -> str:
     projection = projection if isinstance(projection, dict) else {}
     status = _panel_status(projection)
+    hidden_attrs = (
+        ' hidden aria-hidden="true" inert data-default-hidden="true"'
+        if hidden_by_default
+        else ""
+    )
     return f"""
   <style>
     .vault-settings-panel {{
@@ -267,7 +276,7 @@ def vault_settings_panel_markup(projection: dict[str, Any] | None = None) -> str
     .vault-permissions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
     .vault-permission {{ border: 1px solid var(--border, #152030); border-radius: 4px; padding: 3px 6px; }}
   </style>
-  <section class="vault-settings-panel" data-testid="vault-settings-panel"
+  <section class="vault-settings-panel" data-testid="vault-settings-panel"{hidden_attrs}
     data-vault-status="{_e(status)}" data-api-path="{VAULT_SETTINGS_ENDPOINT}"
     data-fragment-path="{VAULT_SETTINGS_FRAGMENT_ROUTE}" data-api-method="GET">
     {vault_settings_panel_fragment(projection)}
