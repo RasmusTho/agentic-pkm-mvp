@@ -414,7 +414,16 @@ def capture_modal_script() -> str:
           body: JSON.stringify({text: text})
         }).then(function(resp) {
           if (resp.ok) {
-            return resp.json().then(function(ack) { onWritten(text, ack); });
+            return resp.json().then(function(ack) {
+              if (ack && ack.state === 'vault_selection_required') {
+                onNotWritten(
+                  text,
+                  ack.message || 'No vault is selected. Open a vault before capturing.'
+                );
+                return;
+              }
+              onWritten(text, ack);
+            });
           }
           return resp.json().catch(function() { return null; }).then(function(body) {
             var detail = body && body.detail ? body.detail : null;

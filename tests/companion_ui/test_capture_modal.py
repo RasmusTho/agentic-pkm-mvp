@@ -399,6 +399,8 @@ def test_offline_capture_is_honest_and_preserves_text() -> None:
     assert ".catch(" in script
     assert "not_yet_written" in script
     assert "not yet written" in script  # the plain user-facing label
+    assert "ack.state === 'vault_selection_required'" in script
+    assert "No vault is selected. Open a vault before capturing." in script
     # The not-yet-written entry is recorded with a null acknowledgement —
     # the offline path never builds one.
     assert "addEntry(text, 'not_yet_written', null)" in script
@@ -606,8 +608,10 @@ def test_entry_capture_preserves_unsent_text_without_claiming_write() -> None:
     )
     assert script_m, "capture-modal-controller must render on cold_start"
     script = script_m.group(1)
-    # A write is claimed only from resp.ok (runtime acknowledgement path).
+    # A write is claimed only from a real runtime acknowledgement path; 200
+    # picker payloads are not acknowledged writes.
     assert "resp.ok" in script
+    assert "ack.state === 'vault_selection_required'" in script
     # Unsent text is never silently dropped: the not-yet-written path preserves
     # the full text in the session list.
     assert "not_yet_written" in script
