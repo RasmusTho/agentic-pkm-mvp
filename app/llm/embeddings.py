@@ -286,23 +286,23 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
 
     timeout = float(os.getenv("LLM_TIMEOUT", "60"))
 
-    if provider == "ollama":
-        # Oversized note: embed each in-window chunk and mean-pool so a single
-        # long note cannot 500 the request and abort the whole index build (#2110).
-        chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
-        if len(chunks) == 1:
-            result = adapter(text, model=model, dim=dim, timeout=timeout)
-        else:
-            vectors = []
-            for chunk in chunks:
-                vec = adapter(chunk, model=model, dim=dim, timeout=timeout)
-                # Guard each chunk before pooling so a wrong-dim chunk reports a clean
-                # provider contract violation instead of an opaque error in _mean_pool.
-                assert_embed_dim(vec, expected=dim, name=f"{provider} embedding chunk (expected_dim={dim})")
-                vectors.append(vec)
-            result = _mean_pool(vectors, dim)
-    else:
+    # Oversized note: embed each in-window chunk and mean-pool so a single long
+    # note cannot exceed the provider's input budget and abort the whole index
+    # build (#2110). Provider-agnostic — the input budget must bound every
+    # provider (e.g. Gemini), not only Ollama (#2327); mock/ollama behavior is
+    # unchanged because a single-chunk text still takes the direct adapter path.
+    chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
+    if len(chunks) == 1:
         result = adapter(text, model=model, dim=dim, timeout=timeout)
+    else:
+        vectors = []
+        for chunk in chunks:
+            vec = adapter(chunk, model=model, dim=dim, timeout=timeout)
+            # Guard each chunk before pooling so a wrong-dim chunk reports a clean
+            # provider contract violation instead of an opaque error in _mean_pool.
+            assert_embed_dim(vec, expected=dim, name=f"{provider} embedding chunk (expected_dim={dim})")
+            vectors.append(vec)
+        result = _mean_pool(vectors, dim)
 
     # CTI-1: dim guardrail — every registered adapter (including a wrapper/replacement
     # under PROVIDER_REGISTRY["ollama"] that bypasses _parse_vector) must return a
