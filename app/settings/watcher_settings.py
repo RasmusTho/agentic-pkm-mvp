@@ -8,7 +8,11 @@ from typing import Any, Iterable, Literal, Mapping
 import yaml
 
 from app.config.environment import active_environment
-from app.config.paths import resolve_runtime_artifact_path
+from app.config.paths import (
+    VaultRootMisconfiguredError,
+    resolve_optional_vault_root,
+    resolve_runtime_artifact_path,
+)
 from app.settings.source import SettingsSource, build_source
 
 DEFAULT_INDEX_OUTBOX = Path("tmp/index-outbox.jsonl")
@@ -24,21 +28,40 @@ DEFAULT_AUTO_EXEC_DEFAULT = True
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
-def _resolve_vault_root(vault_root: Path | None = None) -> Path:
+def _resolve_vault_root(vault_root: Path | None = None) -> Path | None:
+    """Resolve the vault root for the *optional* watcher settings file, or ``None``.
+
+    An explicit ``vault_root`` always wins. Otherwise resolution defers to
+    :func:`app.config.paths.resolve_optional_vault_root`. The legacy silent
+    ``Path("vault")`` CWD fallback is removed (#2384): with no vault selected the
+    settings file is not read from a synthesized ``./vault`` and this returns
+    ``None`` (defaults are used).
+
+    The watcher settings *file* (``@Settings/watchers.md``) is optional config
+    that only tunes the watcher; it is not a note read/write surface. A
+    set-but-missing ``VAULT_ROOT`` therefore degrades to no-settings here rather
+    than raising at import time — the loud set-but-missing contract is enforced
+    by the resolvers that actually read or write vault notes (inbox, vault path
+    helpers, health, worker) and by the channel preflight, not by this optional
+    config lookup.
+    """
     if vault_root is not None:
         return Path(vault_root).expanduser()
-    env_root = os.getenv("VAULT_ROOT", "").strip()
-    if env_root:
-        return Path(env_root).expanduser()
-    return Path("vault").expanduser()
+    try:
+        return resolve_optional_vault_root()
+    except VaultRootMisconfiguredError:
+        return None
 
 
-def _settings_file(vault_root: Path | None = None) -> Path:
-    return _resolve_vault_root(vault_root) / "@Settings" / "watchers.md"
+def _settings_file(vault_root: Path | None = None) -> Path | None:
+    root = _resolve_vault_root(vault_root)
+    if root is None:
+        return None
+    return root / "@Settings" / "watchers.md"
 
 
-def _read_frontmatter(path: Path) -> dict[str, Any]:
-    if not path.exists():
+def _read_frontmatter(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
         return {}
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---"):
@@ -195,6 +218,12 @@ def load_watcher_settings(vault_root: Path | None = None, *, environment: Litera
         environment=env,
     )
 
+    source = (
+        SettingsSource(path="", mtime=None, sha256=None)
+        if path is None
+        else build_source(path)
+    )
+
     return WatcherSettings(
         auto_exec_env=auto_exec_env,
         auto_exec_default=auto_exec_default,
@@ -209,7 +238,7 @@ def load_watcher_settings(vault_root: Path | None = None, *, environment: Litera
             panel_event_log=panel_event_log,
             watcher_run_log=watcher_run_log,
         ),
-        source=build_source(path),
+        source=source,
     )
 
 

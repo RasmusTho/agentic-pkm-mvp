@@ -228,3 +228,50 @@ def test_companion_request_helpers_do_not_fallback_to_cwd_vault() -> None:
                 elif isinstance(func, ast.Attribute) and func.attr == "resolve_vault_root":
                     violations.append(f"{path}:{node.lineno}")
     assert violations == []
+
+
+def _is_cwd_vault_literal(node: ast.AST) -> bool:
+    """True for ``Path("vault")`` / ``Path('vault')`` CWD-relative literals."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    is_path_call = (isinstance(func, ast.Name) and func.id == "Path") or (
+        isinstance(func, ast.Attribute) and func.attr == "Path"
+    )
+    if not is_path_call or not node.args:
+        return False
+    first = node.args[0]
+    return isinstance(first, ast.Constant) and first.value == "vault"
+
+
+def test_background_resolvers_do_not_fallback_to_cwd_vault() -> None:
+    """AST guard: background/settings/path-helper sites must not synthesize ./vault.
+
+    Slice 05B (#2384) removes the silent CWD-relative ``Path("vault")`` fallback
+    from the background producers, settings readers, and shared vault path
+    helpers. This guard fails if any of those sites reintroduces a
+    ``Path("vault")`` literal so a no-vault regression is caught at the source.
+    """
+    target_files = [
+        Path("app/workers/outbox_worker.py"),
+        Path("app/settings/watcher_settings.py"),
+        Path("app/settings/health_settings.py"),
+        Path("app/health_contract.py"),
+        Path("app/services/inbox.py"),
+        Path("app/vault/paths.py"),
+    ]
+    violations: list[str] = []
+    for path in target_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            # Direct resolve_vault_root() calls reintroduce the ./vault default.
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "resolve_vault_root":
+                    violations.append(f"{path}:{node.lineno}:resolve_vault_root")
+                elif isinstance(func, ast.Attribute) and func.attr == "resolve_vault_root":
+                    violations.append(f"{path}:{node.lineno}:resolve_vault_root")
+            if _is_cwd_vault_literal(node):
+                violations.append(f"{path}:{node.lineno}:Path('vault')")
+    assert violations == []
+

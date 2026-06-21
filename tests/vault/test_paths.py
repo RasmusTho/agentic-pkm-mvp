@@ -7,6 +7,7 @@ import pytest
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
 from app.vault.paths import (
+    NoVaultSelectedError,
     VaultPathResolutionError,
     VaultPathResolver,
     get_vault_inbox_dir_rel,
@@ -16,6 +17,52 @@ from app.vault.paths import (
 )
 
 pytestmark = pytest.mark.not_pg
+
+
+def test_vault_path_helpers_do_not_fallback_to_cwd_vault(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Vault path helpers must not synthesize Path("vault") for no-vault callers.
+
+    Slice 05B (#2384): with no vault selected (``VAULT_ROOT`` unset and no
+    explicit ``vault_root``) the shared resolver raises ``NoVaultSelectedError``
+    instead of silently resolving the CWD-relative ``./vault``. Nothing is read
+    from or created under the current working directory.
+    """
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_RUNTIME_DIR_REL", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(NoVaultSelectedError):
+        get_vault_inbox_dir_rel(None)
+    with pytest.raises(NoVaultSelectedError):
+        get_vault_system_dir_rel(None)
+    with pytest.raises(NoVaultSelectedError):
+        get_vault_runtime_dir_rel(None)
+    with pytest.raises(NoVaultSelectedError):
+        resolve_vault_system_dir_rel_or_default(None)
+
+    assert not (tmp_path / "vault").exists()
+
+
+def test_vault_path_helpers_set_but_missing_stay_loud(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A set-but-missing VAULT_ROOT remains a loud misconfiguration, not no-vault."""
+    from app.config.paths import VaultRootMisconfiguredError
+
+    missing = tmp_path / "missing-vault"
+    monkeypatch.setenv("VAULT_ROOT", str(missing))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
+
+    with pytest.raises(VaultRootMisconfiguredError):
+        get_vault_inbox_dir_rel(None)
 
 
 def _write_settings(

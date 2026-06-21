@@ -112,22 +112,44 @@ class TestResolvedPathsWithEnvironment:
 class TestWatcherSettingsEnvironmentScoping:
     """Test watcher settings use environment-scoped paths."""
 
-    def test_watcher_settings_prod_paths(self):
+    # These tests assert the packaged default ``tmp/`` artifact paths, so the
+    # path-override env vars must be cleared. ``app.index.outbox`` does an
+    # import-time ``os.environ.setdefault("INDEX_OUTBOX_PATH", ...)``, which any
+    # earlier test in the suite can leave populated; clearing them here keeps the
+    # assertions deterministic regardless of collection order.
+    _PATH_ENV_VARS = (
+        "INDEX_OUTBOX_PATH",
+        "WATCHER_STATE_PATH",
+        "WATCHER_HEARTBEAT_PATH",
+        "WATCHER_TICK_LOG_PATH",
+        "WORKER_HEARTBEAT_PATH",
+        "WATCHER_STOP_FILE",
+        "WATCHER_RUN_LOG_PATH",
+    )
+
+    def _clear_path_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in self._PATH_ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_watcher_settings_prod_paths(self, monkeypatch: pytest.MonkeyPatch):
         """Watcher settings for prod use tmp/ paths."""
+        self._clear_path_env(monkeypatch)
         settings = load_watcher_settings(environment="prod")
         assert str(settings.paths.index_outbox) == "tmp/index-outbox.jsonl"
         assert str(settings.paths.watcher_state) == "tmp/watcher_state.json"
         assert str(settings.paths.watcher_heartbeat) == "tmp/watcher_heartbeat.json"
 
-    def test_watcher_settings_dev_paths(self):
+    def test_watcher_settings_dev_paths(self, monkeypatch: pytest.MonkeyPatch):
         """Watcher settings for dev use tmp-dev/ paths."""
+        self._clear_path_env(monkeypatch)
         settings = load_watcher_settings(environment="dev")
         assert str(settings.paths.index_outbox) == "tmp-dev/index-outbox.jsonl"
         assert str(settings.paths.watcher_state) == "tmp-dev/watcher_state.json"
         assert str(settings.paths.watcher_heartbeat) == "tmp-dev/watcher_heartbeat.json"
 
-    def test_watcher_settings_paths_distinct_by_environment(self):
+    def test_watcher_settings_paths_distinct_by_environment(self, monkeypatch: pytest.MonkeyPatch):
         """Watcher settings prod and dev paths are distinct."""
+        self._clear_path_env(monkeypatch)
         prod_settings = load_watcher_settings(environment="prod")
         dev_settings = load_watcher_settings(environment="dev")
 
