@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from app.store.object_store import DomainObject, ObjectStore
@@ -35,7 +36,7 @@ class FakeCanonicalStore:
         return sum(1 for row in self.rows if row.get("kind") == kind)
 
 
-def test_get_object_uses_memory_cache(monkeypatch):
+def test_get_object_uses_memory_cache():
     obj = DomainObject(
         uuid="mem-1",
         kind="capture_note",
@@ -47,11 +48,43 @@ def test_get_object_uses_memory_cache(monkeypatch):
 
     legacy._MEMORY_STORE.clear()
     legacy._MEMORY_STORE[obj.uuid] = obj
-    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "memory")
 
     got = ObjectStore().get_object("mem-1")
     assert got is not None
     assert got.uuid == "mem-1"
+
+
+def test_save_object_keeps_memory_fallback_when_port_resolution_fails(monkeypatch):
+    from app.store import object_store as legacy
+
+    legacy._MEMORY_STORE.clear()
+    monkeypatch.setattr(
+        "app.store.object_store.resolve_object_store_port",
+        lambda: (_ for _ in ()).throw(RuntimeError("missing dsn")),
+    )
+    obj = DomainObject(
+        uuid="fallback-1",
+        kind="capture_note",
+        payload={"plane": "vault"},
+        source_ref="vault://Inbox/fallback.md",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    ObjectStore().save_object(obj, emit_outbox=False, trace_id="test")
+
+    assert legacy._MEMORY_STORE["fallback-1"] is obj
+
+
+def _fake_binding(backend: str, store: FakeCanonicalStore):
+    return SimpleNamespace(
+        name="object_store",
+        backend=backend,
+        store=store,
+        classification="rebuildable",
+        rebuild_source="test fixture",
+        owner_subsystem="PDM",
+        contract="StorePort",
+    )
 
 
 def test_get_object_delegates_to_canonical_store(monkeypatch):
@@ -63,8 +96,8 @@ def test_get_object_delegates_to_canonical_store(monkeypatch):
         "source_ref": "vault://Inbox/note.md",
         "created_at": datetime.now(timezone.utc),
     }
-    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "pg")
-    monkeypatch.setattr("app.store.object_store.get_object_store", lambda: FakeCanonicalStore(record=row))
+    store = FakeCanonicalStore(record=row)
+    monkeypatch.setattr("app.store.object_store.resolve_object_store_port", lambda: _fake_binding("pg", store))
 
     obj = ObjectStore().get_object(str(oid))
     assert obj is not None
@@ -89,8 +122,8 @@ def test_list_objects_delegates_to_canonical_store(monkeypatch):
             "created_at": datetime.now(timezone.utc),
         },
     ]
-    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "pg")
-    monkeypatch.setattr("app.store.object_store.get_object_store", lambda: FakeCanonicalStore(rows=rows))
+    store = FakeCanonicalStore(rows=rows)
+    monkeypatch.setattr("app.store.object_store.resolve_object_store_port", lambda: _fake_binding("pg", store))
 
     listed = ObjectStore().list_objects(limit=5)
     assert len(listed) == 2
@@ -107,7 +140,7 @@ def test_count_objects_delegates_to_canonical_store(monkeypatch):
             "created_at": datetime.now(timezone.utc),
         }
     ]
-    monkeypatch.setattr("app.store.object_store.resolve_store_backend", lambda: "pg")
-    monkeypatch.setattr("app.store.object_store.get_object_store", lambda: FakeCanonicalStore(rows=rows))
+    store = FakeCanonicalStore(rows=rows)
+    monkeypatch.setattr("app.store.object_store.resolve_object_store_port", lambda: _fake_binding("pg", store))
 
     assert ObjectStore().count_objects() == 1

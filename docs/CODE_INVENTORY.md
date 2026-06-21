@@ -72,7 +72,7 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 **Files (5):** `membership_store.py`, `object_store.py`, `relation_index.py`, `vector_index.py`, `vector_store.py`
 
-**Current role:** `object_store.py` is a compatibility shim — it delegates actual storage to `app/stores` (imports `get_object_store`, `resolve_store_backend`) but re-exports `DomainObject`, `ObjectStore`, and index types that callers import directly.
+**Current role:** `object_store.py` is a compatibility shim — it delegates actual storage to `app/stores` through `resolve_object_store_port` but re-exports `DomainObject`, `ObjectStore`, and index types that callers import directly.
 
 **Stable canonical import boundary (shipped v5.6.1+):** `app/objects` — the new canonical home for `DomainObject`, `ObjectStore`, `RelationEdge`, `GraphSlice`, `RelationIndex`, `ScoredNeighbor`, and `VectorIndex`. New code must import from `app.objects`, not from `app.store.object_store`. Existing callers migrate per-area in follow-up issues; the `app/store` compatibility shims remain until all callers are migrated.
 
