@@ -1,6 +1,6 @@
 ---
 name: Promotion CLI Agent Optional Vault Resolution
-description: Promotion, CLI, and agent helper consumers make vault resolution lazy or explicit instead of resolving at import time or falling back to ./vault.
+description: Promotion, CLI, agent, MCP, and knowledge consumers make vault resolution lazy or explicit instead of resolving at import time or falling back to ./vault.
 task_id: VAULT_OPTIONAL_RUNTIME-05C
 source_anchor: docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up eager resolver migration
 parent_capability: Vault Optional at Runtime
@@ -14,11 +14,13 @@ can_parallelize_with: []
 ## Purpose
 The remaining non-request consumers must stop treating the legacy eager resolver as an
 ambient global. Promotion must not resolve a vault at import time, CLI commands must make
-vault requirements explicit per command, and agent/helper reads must return optional/empty
-results rather than using CWD-relative `./vault`.
+vault requirements explicit per command, and agent/helper/MCP/knowledge reads or writes must
+return optional/empty results or explicit no-vault errors rather than using CWD-relative
+`./vault`.
 
 This is Slice C of #2311. It is intentionally later than the API slice because it spans
-import-time code, CLI policy, and agent-memory helper behavior.
+import-time code, CLI policy, agent-memory helper behavior, MCP write helpers, and knowledge
+adapter fallback behavior.
 
 ## What This Task Does
 - Removes import-time vault resolution from `app/promotion/queue.py` by making vault access
@@ -33,6 +35,13 @@ import-time code, CLI policy, and agent-memory helper behavior.
   - `app/agents/panel_agent/cognition.py`
   - `app/agent_memory/recall_retrieval.py`
   - `app/panel/checkbox_projection.py`
+- Migrates MCP and knowledge paths that can still synthesize `./vault` without an explicit
+  selected/configured vault:
+  - `app/orchestrator/executor.py::_run_vault_append`
+  - `app/mcp/vault_tools.py::get_vault_root`
+  - `app/mcp/vault_tools.py::append_note`
+  - `app/knowledge/service.py::_resolve_fs_root`
+  - `app/knowledge/service.py::resolve_knowledge_port`
 - Preserves selected-vault behavior and write guards for rollback/write helpers.
 
 ## Concretely
@@ -47,6 +56,10 @@ assert "select or pass a vault" in result.output.lower()
 
 # Agent memory read helpers return no candidates when no vault is selected.
 assert recall_retrieval.search("topic", vault_root=None) == []
+
+# MCP/knowledge write helpers fail explicitly instead of creating ./vault artifacts.
+with pytest.raises(VaultToolError, match="vault root"):
+    append_note(title="T", body="B", vault_root=None, settings={})
 ```
 
 ## Why This Matters
@@ -65,7 +78,12 @@ slice.
       errors without fallback. Verify:
       `tests/agents/test_panel_agent_no_vault.py::test_panel_agent_no_vault_skips_without_fallback`
       and `tests/agent_memory/test_recall_retrieval_no_vault.py::test_recall_retrieval_no_vault_returns_empty`
-- [ ] A grep/AST guard covers the promotion/CLI/agent helper eager resolver sites. Verify:
+- [ ] MCP vault append and knowledge adapter resolution require an explicit selected or
+      configured vault and do not synthesize `Path("vault")`. Verify:
+      `tests/orchestrator/test_executor_no_vault.py::test_mcp_vault_append_requires_explicit_vault_root`,
+      `tests/mcp/test_vault_tools_no_vault.py::test_append_note_requires_explicit_vault_without_default`,
+      and `tests/knowledge/test_service_no_vault.py::test_resolve_knowledge_port_does_not_fallback_to_cwd_vault`
+- [ ] A grep/AST guard covers the promotion/CLI/agent/MCP/knowledge eager resolver sites. Verify:
       `tests/api/test_no_silent_cwd_vault_fallback.py::test_promotion_cli_agent_resolvers_do_not_fallback_to_cwd_vault`
 
 ## How to Verify (Pre-Merge)
@@ -75,6 +93,9 @@ pytest -q \
   tests/cli/test_no_vault_resolution.py \
   tests/agents/test_panel_agent_no_vault.py \
   tests/agent_memory/test_recall_retrieval_no_vault.py \
+  tests/orchestrator/test_executor_no_vault.py \
+  tests/mcp/test_vault_tools_no_vault.py \
+  tests/knowledge/test_service_no_vault.py \
   tests/api/test_no_silent_cwd_vault_fallback.py
 ruff check app tests
 RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/
@@ -86,6 +107,7 @@ runtime behavior.
 ## Out of Scope
 - API picker/empty responses (Slice A).
 - Background worker idle behavior (Slice B).
+- Legacy `/app/vault` compose/runtime-env mount cleanup (Slice D).
 - Reopening the owner decision for nested-vault boundaries or vault initialization.
 
 ## Related Docs

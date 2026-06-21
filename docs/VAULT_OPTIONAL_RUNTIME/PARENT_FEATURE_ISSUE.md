@@ -22,7 +22,8 @@ State: **Filed and open** as the live validation hub.
 | --- | --- | --- | --- |
 | 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | TBD | file first; then `agent:ready` |
 | 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | file as blocked/backlog until 05A delivery releases it; includes worker/settings plus direct vault helper fallbacks |
-| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | file as blocked/backlog until 05A/05B sequencing is clear |
+| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | file as blocked/backlog until 05A/05B sequencing is clear; includes promotion/CLI/agent plus MCP/knowledge fallbacks |
+| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | TBD | file as blocked/backlog until 05A-05C land; removes or re-baselines legacy `/app/vault` compose/runtime-env fallback |
 
 #2311 remains the validation hub for the follow-up migration and should not be implemented
 directly. Each delivered child posts evidence to #2311 before the next slice is picked up.
@@ -36,7 +37,7 @@ acceptance receipt to #2003 and proposes closure once the README capability-acce
 checklist is satisfied. #2007 (definition) may remain open as a deferred docs follow-up
 without blocking parent closure, at owner discretion.
 
-For the #2311 follow-up, closure is separate: after 05A-05C are delivered and evidence is
+For the #2311 follow-up, closure is separate: after 05A-05D are delivered and evidence is
 posted to #2311, close #2311 through verification-and-closure. Do not use #2311 child
 delivery alone as authority to close #2003; use the original #2003 checklist and owner
 decision for that parent.
