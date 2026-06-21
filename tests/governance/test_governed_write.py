@@ -54,6 +54,26 @@ def test_governed_write_adapter_issues_token_and_maps_state_owner_receipt() -> N
     assert authority_receipt.trace_id == "trace-1"
 
 
+def test_governed_write_adapter_normalizes_path_like_resources_before_matching() -> None:
+    adapter = GovernedWriteAdapter()
+
+    grant = adapter.issue_decision_token(
+        write_guard=_open_guard(),
+        action="companion.capture.append",
+        write_class="vault_capture_append",
+        actor="companion.capture",
+        resource=r"Inbox\inbox.md",
+    )
+    authority_receipt = adapter.record_authority_receipt(
+        decision_token=grant.decision_token,
+        mutation_receipt=_receipt("Inbox/inbox.md"),
+        state_owner="knowledge",
+    )
+
+    assert grant.decision_token.resource == "Inbox/inbox.md"
+    assert authority_receipt.resource == "Inbox/inbox.md"
+
+
 def test_governed_write_adapter_writeguard_denial_prevents_token() -> None:
     blocked_state = sorted(WRITE_BLOCKED_STATES)[0]
     guard = WriteGuard(snapshot_fn=lambda: {"state": blocked_state, "reason": "maintenance"})

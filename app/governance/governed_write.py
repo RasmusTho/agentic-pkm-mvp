@@ -114,13 +114,14 @@ class GovernedWriteAdapter:
     ) -> GovernedWriteGrant:
         write_guard.assert_writes_allowed(action)
         issued_at = _utc_now()
+        resource_ref = _normalize_resource_ref(resource)
         decision = PolicyDecision(
             decision_id=_id("policy_decision"),
             status="approved",
             action=action,
             write_class=write_class,
             actor=actor,
-            resource=resource,
+            resource=resource_ref,
             reason="WriteGuard allowed the bounded durable mutation.",
             issued_at=issued_at,
         )
@@ -130,7 +131,7 @@ class GovernedWriteAdapter:
             action=action,
             write_class=write_class,
             actor=actor,
-            resource=resource,
+            resource=resource_ref,
             issued_at=issued_at,
         )
         return GovernedWriteGrant(policy_decision=decision, decision_token=token)
@@ -155,8 +156,8 @@ class GovernedWriteAdapter:
                 "authority receipt recording requires the state owner's mutation receipt"
             )
 
-        resource = mutation_receipt.locator.path
-        if resource != decision_token.resource:
+        resource = _normalize_resource_ref(mutation_receipt.locator.path)
+        if resource != _normalize_resource_ref(decision_token.resource):
             raise InvalidDecisionTokenError(
                 "DecisionToken resource does not match state owner mutation receipt"
             )
@@ -188,6 +189,10 @@ def _utc_now() -> str:
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _normalize_resource_ref(resource: str) -> str:
+    return resource.strip().replace("\\", "/")
 
 
 __all__ = [
