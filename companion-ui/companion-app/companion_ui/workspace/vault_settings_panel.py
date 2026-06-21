@@ -256,6 +256,7 @@ def vault_settings_panel_markup(
       border-top: 1px solid var(--border, #152030);
       display: grid; gap: 12px; padding: 14px 16px;
     }}
+    .vault-settings-panel[hidden] {{ display: none !important; }}
     .vault-settings-panel code {{ overflow-wrap: anywhere; }}
     .vault-settings-actions, .vault-settings-identity, .vault-settings-editor {{
       display: grid; gap: 8px;

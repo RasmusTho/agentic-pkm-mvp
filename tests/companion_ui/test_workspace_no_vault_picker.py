@@ -140,3 +140,4 @@ def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
     assert " hidden" in panel_tag
     assert 'aria-hidden="true"' in panel_tag
     assert " inert" in panel_tag
+    assert ".vault-settings-panel[hidden] { display: none !important; }" in html
