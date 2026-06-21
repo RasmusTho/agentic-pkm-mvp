@@ -12,9 +12,23 @@ Fixes #
 Required for implementation lane. Leave blank for docs authoring lane.
 Leave blank for governance lane when the PR stays within approved governance surfaces.
 
+## SBS Impact
+- Primary subsystem:
+- Secondary subsystem(s):
+- Write class:
+- Authority impact:
+- Persistence impact:
+- Derived/rebuildable impact:
+- Human knowledge impact:
+- Memory impact:
+- Retrieval/context impact:
+- Sync/deployment impact:
+- New or changed contract:
+- Boundary risk:
+
 ## Summary
-- 
-- 
+-
+-
 
 ## Implementation Scope Check
 - [ ] Change stays within the linked Issue scope.

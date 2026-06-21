@@ -17,6 +17,8 @@ input for sequencing, not a runtime-promotion document. This status file remains
 owner doc. Capabilities should be read as shipped only when code plus tests or operator evidence are
 present and any owner-doc promotion gate has been satisfied.
 
+Target SBS status note: `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` is adopted as target-state architecture for long-horizon subsystem boundaries and change-impact reasoning. It is not fully implemented. Current implementation may contain transition debt tracked through `docs/architecture/SBS_TRANSITION_DEBT.md`; operationalization is tracked through `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`, `docs/ROADMAP.md`, tracking issue #2337, and delivery issue set #2355. Current shipped behavior remains owned by this file and `docs/ARCHITECTURE.md`.
+
 Integrated Runtime v1 release line: #1874 is open to integrate already-shipped capabilities through route parity, readiness matrix, Panel staging persistence, golden-path UAT, and negative-safety UAT gates without claiming new shipped behavior here.
 
 Contextual Relevance Engine posture: CRE-01 and CRE-02 are delivered concept-contract slices;

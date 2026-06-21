@@ -1,6 +1,6 @@
 State: SoT v5.5 Reality-MVP baseline locked (v5.6 delivered, v6.0 seams shipped at capability-seam level); this document is target-state framing for the system-of-systems decomposition and does not claim every subsystem is implemented today.
 Doc role: Core SoT
-Authority: Architecture spine that frames Yggdrasil as a system-of-systems with a stable kernel and a replaceable extension fabric. Owns the kernel/extension boundary and the subsystem map. It does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/PROJECT_KERNEL.md` (North Star); it sits above them and explains how their concerns compose.
+Authority: Architecture spine that frames Yggdrasil as a system-of-systems with a stable kernel and a replaceable extension fabric. Owns the current v5.x/v6 structural spine and eight-subsystem map. The 2030 target System Breakdown Structure, volatility boundaries, and change-impact model are owned by `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. This document does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/PROJECT_KERNEL.md` (North Star); it sits above them and explains how their concerns compose.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -25,6 +25,7 @@ If this document conflicts with any of the owner docs above on their respective 
 
 - Subsystems below are conceptual decompositions of the same single local-first runtime. They are not separate deployments, services, or processes.
 - "Kernel" describes the stable surfaces and contracts that newer agents, capabilities, integrations, and UI surfaces must not violate. "Extension fabric" describes the surfaces that are expected to evolve, be replaced, or grow over time.
+- For the long-horizon SBS that intentionally generalizes beyond current vault, Obsidian, storage, retrieval, memory, UI, and agent-runtime assumptions, read `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` first, then `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` for transition mechanics. This document remains the current system-of-systems spine.
 - Where a subsystem already has a shipped owner doc, that doc remains authoritative for current behavior. Where it does not, the subsystem entry is target-state framing and explicitly says so.
 - This document does not introduce new lower-level contracts. Detailed contracts for integration fabric and capabilities are owned by `docs/INTEGRATION_FABRIC_CONTRACT.md` and `docs/CAPABILITY_CONTRACT_MODEL.md` (Phase 2 of initiative #877, slice #879). Agent memory, context bundles, and companion-UI/vault topology contracts remain owned by the later phase issues in initiative #877.
 
