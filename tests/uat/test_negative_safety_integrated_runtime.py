@@ -11,11 +11,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
+import app.api.routes.companion as companion_module
 import app.api.routes.panel as panel_routes
 import app.panel.checkbox_projection as projection_module
 import app.panel.confirmation as confirm_module
 from app.agents.panel.writeback import stable_action_id
 from app.api.app import app
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
 from app.api.routes.artifacts import _content_hash
 from app.events.panel import (
     NoteRef,
@@ -37,6 +40,21 @@ pytestmark = [
         reason="opt-in integrated runtime UAT; set RUN_INTEGRATED_RUNTIME_UAT=1",
     ),
 ]
+
+
+def _select_initialized_test_vault(monkeypatch: pytest.MonkeyPatch, vault: Path) -> None:
+    """Select + initialize ``vault`` as the active vault (Option-2, #2309).
+
+    A configured ``VAULT_ROOT`` is no longer the active vault, so the integrated
+    runtime must select one or every boundary routes to the no-vault picker.
+    These negative-safety legs write, so the vault is initialized (status
+    ``selected``).
+    """
+    manager = VaultManager(
+        app_local_store=AppLocalSettingsStore(vault.parent / "app-local.md")
+    )
+    manager.initialize_vault(vault, vault_name="vault-test", remember=False)
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
 
 
 def _write_note(
@@ -197,6 +215,7 @@ def test_writeguard_blocked_confirm(
     )
     outbox = tmp_path / "index-outbox.jsonl"
     monkeypatch.setenv("VAULT_ROOT", str(vault))
+    _select_initialized_test_vault(monkeypatch, vault)
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
     _stage_proposal(note)
     guard = MagicMock(spec=WriteGuard)
@@ -231,6 +250,7 @@ def test_content_hash_mismatch_rejected(
     note = _write_note(vault, "notes/save.md", uuid="save-uat", body="Original.\n")
     panel = _write_panel_note(vault)
     monkeypatch.setenv("VAULT_ROOT", str(vault))
+    _select_initialized_test_vault(monkeypatch, vault)
     before_note = note.read_text(encoding="utf-8")
     before_panel = panel.read_text(encoding="utf-8")
 
@@ -264,6 +284,7 @@ def test_provider_unavailable_fails_closed(
     outbox = tmp_path / "index-outbox.jsonl"
     note = _write_note(vault, "notes/provider.md", uuid="provider-uat", body="# Provider\nBody.\n")
     monkeypatch.setenv("VAULT_ROOT", str(vault))
+    _select_initialized_test_vault(monkeypatch, vault)
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
     monkeypatch.setenv("CANVAS_ENABLED", "1")
@@ -327,6 +348,7 @@ def test_missing_receipt_source_honest(
     note = _write_note(vault, "notes/no-source.md", uuid="receipt-source-uat")
     before = note.read_text(encoding="utf-8")
     monkeypatch.setenv("VAULT_ROOT", str(vault))
+    _select_initialized_test_vault(monkeypatch, vault)
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "missing-outbox.jsonl"))
 
     resp = client.get("/api/companion/vault-browser")
@@ -396,6 +418,7 @@ def test_replay_and_foreign_intent_rejected(
         body="# Replay\n- [ ] send report\n",
     )
     monkeypatch.setenv("VAULT_ROOT", str(vault))
+    _select_initialized_test_vault(monkeypatch, vault)
     _stage_proposal(note)
     result = PanelRuntimeActionResult(
         id=stable_action_id("send report"),
