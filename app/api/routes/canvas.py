@@ -34,7 +34,10 @@ from app.chat.intent_classifier import (
     IntentClassifierCognition,
 )
 from app.chat.session_log import SessionLog, SessionLogWriter
-from app.config.paths import resolve_vault_root
+from app.api.routes.vault_resolution import (
+    active_vault_root_or_selection_required,
+    resolve_active_vault_root,
+)
 from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
 from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
@@ -68,7 +71,18 @@ def _require_canvas() -> None:
 
 
 def _get_vault_root() -> Path:
-    return resolve_vault_root().expanduser().resolve()
+    return resolve_active_vault_root()
+
+
+def _get_vault_root_or_picker(
+    *,
+    requested_note_path: str | None = None,
+    require_initialized: bool = True,
+) -> Path | JSONResponse:
+    return active_vault_root_or_selection_required(
+        requested_note_path=requested_note_path,
+        require_initialized=require_initialized,
+    )
 
 
 def _coauthor_facade_factory() -> ReasoningFacade:
@@ -271,9 +285,11 @@ def _capture_leave_point_for_session(
 
 
 @router.post("/sessions", response_model=OpenSessionResponse)
-def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
+def open_session(req: OpenSessionRequest) -> OpenSessionResponse | JSONResponse:
     _require_canvas()
-    vault_root = _get_vault_root()
+    vault_root = _get_vault_root_or_picker(requested_note_path=req.note_path)
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
     try:
         note_path = _validate_note_path(req.note_path, vault_root)
     except ValueError as exc:
@@ -296,17 +312,19 @@ def open_session(req: OpenSessionRequest) -> OpenSessionResponse:
 
 
 @router.post("/sessions/{session_id}/edits", response_model=EditResponse)
-def apply_edit(session_id: str, req: EditRequest) -> EditResponse:
+def apply_edit(session_id: str, req: EditRequest) -> EditResponse | JSONResponse:
     _require_canvas()
     session = _sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    vault_root = _get_vault_root_or_picker()
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
     if req.content_hash is not None:
         current_hash = _content_hash(session.note_path.read_text(encoding="utf-8"))
         if current_hash != req.content_hash:
             raise HTTPException(status_code=409, detail="content_hash mismatch")
     body_before = _note_body(session.note_path)
-    vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
     try:
@@ -470,7 +488,9 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
 
-    vault_root = _get_vault_root()
+    vault_root = _get_vault_root_or_picker()
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
     current_body = _note_body(session.note_path)
 
     # -----------------------------------------------------------------------
@@ -579,11 +599,14 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
 
 
 @router.delete("/sessions/{session_id}/edits/last", response_model=UndoResponse)
-def undo_last_edit(session_id: str) -> UndoResponse:
+def undo_last_edit(session_id: str) -> UndoResponse | JSONResponse:
     _require_canvas()
     session = _sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    vault_root = _get_vault_root_or_picker()
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
 
     edits = _edit_history.setdefault(session_id, [])
     if not edits:
@@ -600,7 +623,6 @@ def undo_last_edit(session_id: str) -> UndoResponse:
             ),
         )
 
-    vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     writer = CanvasWriter(vault_root=vault_root, log_writer=log_writer)
     undo_id = str(uuid4())
@@ -626,16 +648,18 @@ def undo_last_edit(session_id: str) -> UndoResponse:
 
 
 @router.post("/sessions/{session_id}/governance", response_model=GovernanceResponse)
-def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResponse:
+def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResponse | JSONResponse:
     _require_canvas()
     session = _sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    vault_root = _get_vault_root_or_picker()
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
     try:
         action_type = GovernanceActionType(req.action_type)
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Unknown action_type: {req.action_type!r}")
-    vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     safe_note_path = str(session.note_path.relative_to(vault_root))
     identity = resolve_note_artifact_identity(
@@ -667,14 +691,17 @@ def governance_action(session_id: str, req: GovernanceRequest) -> GovernanceResp
 
 
 @router.delete("/sessions/{session_id}", response_model=CloseResponse)
-def close_session(session_id: str, total_summary: str = "session closed") -> CloseResponse:
+def close_session(session_id: str, total_summary: str = "session closed") -> CloseResponse | JSONResponse:
     _require_canvas()
     session = _sessions.pop(session_id, None)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    vault_root = _get_vault_root_or_picker()
+    if isinstance(vault_root, JSONResponse):
+        _sessions[session_id] = session
+        return vault_root
     _edit_history.pop(session_id, None)
     _undone_history.pop(session_id, None)
-    vault_root = _get_vault_root()
     log_writer = SessionLogWriter(vault_root=vault_root)
     log_writer.close_session(session, total_summary)
     _capture_leave_point_for_session(

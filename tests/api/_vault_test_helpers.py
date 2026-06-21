@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import app.api.routes.companion as companion_module
+import app.api.routes.vault_resolution as vault_resolution_module
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
 
@@ -31,6 +32,7 @@ def _fresh_manager(monkeypatch: pytest.MonkeyPatch, store_dir: Path) -> VaultMan
     monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
     mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    monkeypatch.setattr(vault_resolution_module, "get_vault_manager", lambda: mgr)
     if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
         delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
     return mgr

@@ -56,7 +56,6 @@ from app.text.helpers import (
 from app.config.paths import (
     VaultRootMisconfiguredError,
     resolve_optional_vault_root,
-    resolve_vault_root,
 )
 from app.domain.commitments import (
     CommitmentRecord,
@@ -667,15 +666,8 @@ def read_companion_now() -> list[dict]:
     Pull-only, read-only projection of vault-native moment artifacts. No write, no
     notification, no reach-out: the human pulls this; the system does not interrupt.
     """
-    try:
-        root = resolve_optional_vault_root()
-    except VaultRootMisconfiguredError:
-        root = None
-    if root is not None:
-        return collect_now_moments(VaultContext(status="selected", active_vault_path=str(root)))
-
     context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
-    if context.status == "selected" and context.active_vault_path:
+    if context.status in _READABLE_SELECTED_STATUSES and context.active_vault_path:
         return collect_now_moments(context)
     return []
 
@@ -1837,16 +1829,18 @@ def _memory_review_decision_store() -> ReviewDecisionStore:
 
 
 def _memory_review_vault_context() -> VaultContext:
-    context = get_vault_manager().context
+    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
     if context.active_vault_id or context.active_vault_path:
         return context
-    vault_root = resolve_vault_root()
-    return VaultContext(
-        status="selected",
-        active_vault_id=os.getenv("VAULT_ID") or None,
-        active_vault_name=vault_root.name,
-        active_vault_path=str(vault_root),
-    )
+    try:
+        resolve_optional_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        return VaultContext(
+            status="missing",
+            active_vault_path=str(exc.configured_path),
+            validation_error=str(exc),
+        )
+    return VaultContext(status="none")
 
 
 def _memory_review_channel() -> str:

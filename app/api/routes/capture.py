@@ -51,9 +51,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config.paths import resolve_vault_root
+from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
 from app.governance.governed_write import (
@@ -230,7 +231,7 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
 
 
 @router.post("/capture", response_model=CaptureResponse)
-def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
+def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
     """Append a capture to the vault inbox note through the governed pipeline."""
     trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
 
@@ -262,7 +263,9 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
 
     # vault-inbox note convention — resolution failures are explicit, the text is
     # never silently dropped.
-    vault_root = resolve_vault_root()
+    vault_root = active_vault_root_or_selection_required(require_initialized=True)
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
     try:
         note_rel = _capture_note_rel(vault_root)
     except Exception as exc:

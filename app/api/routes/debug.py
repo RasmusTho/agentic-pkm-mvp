@@ -6,11 +6,12 @@ from typing import Any
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 _log = logging.getLogger(__name__)
 
 from app.agents.panel.parser import parse_panel
-from app.config.paths import resolve_vault_root
+from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.settings.panel_actions import get_panel_actions_diagnostics
 
 router = APIRouter(prefix="/api/debug")
@@ -27,9 +28,13 @@ def _resolve_note_path(vault_root: Path, note_rel: str) -> Path:
     return candidate
 
 
-@router.get("/panel")
-def debug_panel(note_rel: str = Query(..., description="Vault-relative path to note")) -> dict[str, Any]:
-    vault_root = resolve_vault_root().expanduser().resolve()
+@router.get("/panel", response_model=None)
+def debug_panel(note_rel: str = Query(..., description="Vault-relative path to note")) -> dict[str, Any] | JSONResponse:
+    vault_root = active_vault_root_or_selection_required(
+        requested_note_path=note_rel,
+    )
+    if isinstance(vault_root, JSONResponse):
+        return vault_root
     note_path = _resolve_note_path(vault_root, note_rel)
     if not note_path.exists():
         raise HTTPException(status_code=404, detail="note not found")

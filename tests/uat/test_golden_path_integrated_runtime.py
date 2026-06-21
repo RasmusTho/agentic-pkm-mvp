@@ -29,6 +29,7 @@ if str(_COMPANION_APP_ROOT) not in sys.path:
 
 import app.api.routes.canvas as canvas_module
 import app.api.routes.companion as companion_module
+import app.api.routes.vault_resolution as vault_resolution_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.vault.app_local import AppLocalSettingsStore
@@ -145,6 +146,11 @@ def golden_path(
     )
     _vault_manager.initialize_vault(vault, vault_name="vault-test", remember=False)
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: _vault_manager)
+    monkeypatch.setattr(
+        vault_resolution_module,
+        "get_vault_manager",
+        lambda: _vault_manager,
+    )
     _rebind_confirmation_stores()
     confirm_module._proposal_store.clear()
     confirm_module._idempotency_store.clear()

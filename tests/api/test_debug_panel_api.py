@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.vault.paths import get_vault_inbox_dir_rel
+from tests.api._vault_test_helpers import bind_selected_vault
 
 
 def test_debug_panel_endpoint_parses_actions_and_returns_mapping_summary(tmp_path, monkeypatch) -> None:
@@ -55,7 +56,7 @@ def test_debug_panel_endpoint_parses_actions_and_returns_mapping_summary(tmp_pat
         encoding="utf-8",
     )
 
-    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    bind_selected_vault(monkeypatch, vault_root, store_dir=tmp_path)
     monkeypatch.setenv("PANEL_ACTIONS_ROOT", str(actions_path))
 
     client = TestClient(app)
@@ -87,7 +88,7 @@ def test_debug_panel_read_error_does_not_expose_exception(tmp_path, monkeypatch)
     note_path = vault_root / "test.md"
     note_path.write_text("# test", encoding="utf-8")
 
-    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    bind_selected_vault(monkeypatch, vault_root, store_dir=tmp_path)
 
     def _raise_read(self, *args, **kwargs):
         raise PermissionError("/very/secret/path/token=abc123: permission denied")

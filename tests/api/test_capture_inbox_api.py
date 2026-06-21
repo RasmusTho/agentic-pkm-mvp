@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.capture as capture_module
 from app.api.app import app
 from app.write_guard import WritesBlockedError
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 _TASK_SEMANTIC_FIELDS = (
     "due_date",
@@ -47,7 +48,7 @@ def _setup_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     vault = tmp_path / "vault"
     vault.mkdir(parents=True, exist_ok=True)
     outbox = tmp_path / "index-outbox.jsonl"
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    bind_initialized_vault(monkeypatch, vault, store_dir=tmp_path)
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
     monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
