@@ -68,10 +68,8 @@ class ActiveContextResolver:
             ),
             scope=_unknown("Scope is not resolved by the current active-vault runtime."),
             sphere=_unknown("Sphere is not resolved by the current active-vault runtime."),
-            situated_identity=_known_or_unknown(
-                context.local_instance_id,
-                source="VaultContext.local_instance_id",
-                reason="Local situated identity is not available for this vault context.",
+            situated_identity=_unknown(
+                "Situated identity is not yet resolved; VaultContext.local_instance_id is a local clone identity."
             ),
             principal_context=_unknown(
                 "Principal context is not yet resolved; VaultContext.machine_role is a local clone posture."
@@ -88,12 +86,6 @@ class ActiveContextResolver:
 
 def _unknown(reason: str) -> ActiveContextField:
     return ActiveContextField(status="unknown", reason=reason)
-
-
-def _known_or_unknown(value: str | None, *, source: str, reason: str) -> ActiveContextField:
-    if value:
-        return ActiveContextField(status="known", value=value, source=source)
-    return _unknown(reason)
 
 
 def _source_bindings(context: VaultContext) -> tuple[ActiveContextSourceBinding, ...]:

@@ -36,7 +36,8 @@ def test_vault_context_response_includes_active_context_projection(
     assert active_context["workspace"]["status"] == "unknown"
     assert active_context["scope"]["status"] == "unknown"
     assert active_context["sphere"]["status"] == "unknown"
-    assert active_context["situated_identity"]["status"] == "known"
+    assert active_context["situated_identity"]["status"] == "unknown"
+    assert active_context["situated_identity"]["value"] is None
     assert active_context["principal_context"]["status"] == "unknown"
     assert active_context["principal_context"]["value"] is None
     assert active_context["topology_posture"]["value"] == "single-node"

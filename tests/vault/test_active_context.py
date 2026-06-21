@@ -23,7 +23,9 @@ def test_selected_vault_context_maps_path_to_source_binding(tmp_path: Path) -> N
     assert active_context.workspace.status == "unknown"
     assert active_context.scope.status == "unknown"
     assert active_context.sphere.status == "unknown"
-    assert active_context.situated_identity.value == "local-1"
+    assert active_context.situated_identity.status == "unknown"
+    assert active_context.situated_identity.value is None
+    assert "local_instance_id" in str(active_context.situated_identity.reason)
     assert active_context.principal_context.status == "unknown"
     assert active_context.principal_context.value is None
     assert "machine_role" in str(active_context.principal_context.reason)
