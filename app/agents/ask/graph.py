@@ -18,7 +18,7 @@ from app.agent_memory.recall_retrieval import RecallCandidate, retrieve_relevant
 from app.agents.ask.state import AgentState, RetrievedHit
 from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer, score_hit
 from app.config.environment import active_environment
-from app.config.paths import resolve_optional_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.components.rerankers import get_reranker
 from app.retrieval.capability import RetrievalRequest, retrieve
 from app.vault.manager import get_vault_manager
@@ -104,7 +104,10 @@ def _recall_receipt_path() -> Path:
 def _active_recall_vault_root() -> Path | None:
     manager = get_vault_manager()
     context = manager.context
-    env_root = resolve_optional_vault_root(environment=active_environment())
+    try:
+        env_root = resolve_optional_vault_root(environment=active_environment())
+    except VaultRootMisconfiguredError:
+        env_root = None
     if (
         context.status == "selected"
         and context.active_vault_path
