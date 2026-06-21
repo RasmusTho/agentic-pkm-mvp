@@ -5953,9 +5953,14 @@ def _render_orientation_vault_entry(
         if isinstance(note, dict)
     ]
     identity = _orientation_dict(payload.get("vault_identity"))
-    # Use the caller-supplied resolved vault id (from scope.vault_id) when
-    # available so the card identity matches the cold_start chip (#2240-b).
-    _vault_name = resolved_vault_id or str(identity.get("vault_name") or "unresolved")
+    # Use the caller-supplied resolved vault id (from scope.vault_id) when it
+    # is real so the card identity matches the cold_start chip (#2240-b). The
+    # orientation-unavailable fallback deliberately carries "unknown"; do not
+    # let that placeholder mask a real vault-browser identity.
+    _scope_vault_name = (resolved_vault_id or "").strip()
+    if _scope_vault_name.lower() == "unknown":
+        _scope_vault_name = ""
+    _vault_name = _scope_vault_name or str(identity.get("vault_name") or "unresolved")
     browser_html = _render_vault_browser(
         note_path="",
         notes=notes,
@@ -6006,6 +6011,8 @@ def _render_orientation_index_html(
     guards = _orientation_dict(orientation.get("guards"))
     reasons = _orientation_degraded_reasons(orientation)
     degraded = bool(guards.get("degraded")) or bool(reasons)
+    is_cold = entry_resolution.state == "cold_start"
+    is_no_vault = entry_resolution.state == "no_vault"
     title_suffix = "PROD" if production_profile else "DEV"
     dev_chip = "" if production_profile else '<span class="dev-chip">DEV / not production</span>'
     freshness = _orientation_str(meta.get("freshness"), "unknown")
@@ -6038,7 +6045,7 @@ def _render_orientation_index_html(
           {missing_source_html}
           <div>{reason_html}</div>
         </section>"""
-        if degraded
+        if degraded and not is_no_vault
         else ""
     )
     # Latency-ladder re-entry treatment (#1784, SEP-02). The shape is the
@@ -6047,11 +6054,9 @@ def _render_orientation_index_html(
     # cold_start (first contact / >14d cold) is the anti-dashboard posture:
     # no re-entry overlay, no orientation sections, just vault + map affordances
     # (SYSTEM_ENTRY_POINT_SPEC.md §Anti-dashboard; REENTRY_ORIENTATION_TREATMENT.md §Cold).
-    is_cold = entry_resolution.state == "cold_start"
     # no_vault via the orientation-unavailable frame (orientation fetch failed,
     # vault browser still reachable) also suppresses the orientation grid and
     # re-entry overlay; renders quiet-register copy instead (#2173).
-    is_no_vault = entry_resolution.state == "no_vault"
     reentry_overlay_html = ""
     whisper_html = ""
     rail_fade_attr = ""
