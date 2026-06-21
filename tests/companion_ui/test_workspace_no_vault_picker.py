@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
+from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
 _PICKER_PAYLOAD: dict[str, Any] = {
     "state": "vault_selection_required",
@@ -34,6 +35,41 @@ class _PickerClient:
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
         self.get_calls.append((url, params))
         return self._payload
+
+    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
+        return {}
+
+
+def _vault_browser_payload() -> dict[str, Any]:
+    return {
+        "notes": [],
+        "query": "",
+        "total_notes": 0,
+        "filtered_notes": 0,
+        "read_only": True,
+        "identity_available": True,
+        "vault_identity": {
+            "vault_name": "Niflheim",
+            "channel": "dev",
+            "provenance": "selected",
+        },
+        "active_filters": {},
+        "pagination": {},
+    }
+
+
+class _OrientationUnavailableClient:
+    def __init__(self, vault_browser_payload: dict[str, Any]) -> None:
+        self._vault_browser_payload = vault_browser_payload
+        self.get_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        self.get_calls.append((url, params))
+        if url == "/api/companion/orientation":
+            raise WorkspaceClientNetworkError("orientation unavailable")
+        if url == "/api/companion/vault-browser":
+            return self._vault_browser_payload
+        raise AssertionError(f"unexpected GET: {url}")
 
     def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
         return {}
@@ -72,6 +108,41 @@ def test_home_picker_payload_renders_picker_not_cold_start() -> None:
     assert 'data-region="reentry-card"' not in html
     # The orientation boundary was queried.
     assert any(url == "/api/companion/orientation" for url, _ in client.get_calls)
+
+
+def test_no_vault_orientation_unavailable_suppresses_degraded_banner() -> None:
+    client = _OrientationUnavailableClient(_vault_browser_payload())
+
+    html = handle_get(
+        query_string="",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+
+    assert client.get_calls == [
+        ("/api/companion/orientation", {}),
+        ("/api/companion/vault-browser", {"q": "", "limit": 250}),
+    ]
+    assert 'data-entry-state="no_vault"' in html
+    assert 'data-testid="workspace-vault-unreachable-threshold"' in html
+    assert 'data-testid="workspace-orientation-degraded"' not in html
+    assert "Partial orientation" not in html
+    assert "orientation_unavailable" in html
+
+
+def test_orientation_unavailable_preserves_vault_browser_identity() -> None:
+    client = _OrientationUnavailableClient(_vault_browser_payload())
+
+    html = handle_get(
+        query_string="",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+
+    identity = html.split('data-testid="workspace-vault-browser-active-identity"', 1)[1].split("</span>", 1)[0]
+    assert "Niflheim/dev" in identity
+    assert "unknown/dev" not in identity
+    assert "unknown/unknown" not in identity
 
 
 def test_picker_without_configured_root_omits_one_click_open() -> None:

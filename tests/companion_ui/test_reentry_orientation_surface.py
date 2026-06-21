@@ -250,7 +250,8 @@ def test_root_keeps_vault_entry_when_orientation_unavailable() -> None:
     )
 
     assert 'data-testid="workspace-reentry-orientation"' in html
-    assert 'data-testid="workspace-orientation-degraded"' in html
+    assert 'data-entry-state="no_vault"' in html
+    assert 'data-testid="workspace-orientation-degraded"' not in html
     assert "orientation_unavailable" in html
     assert 'data-testid="workspace-orientation-vault-entry"' in html
     assert 'data-testid="workspace-vault-browser-note-link"' in html
