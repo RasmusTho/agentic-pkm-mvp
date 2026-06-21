@@ -352,6 +352,41 @@ def test_full_mist_renders_four_fixed_questions_with_counts() -> None:
         assert forbidden not in lowered, forbidden
 
 
+def test_long_mist_renders_four_fixed_questions_with_counts() -> None:
+    payload = _orientation_payload(gap=_GAP_LONG_MIST)
+    payload["memory"] = {"pending_candidate_count": 4}
+
+    html = _render(orientation=payload)
+
+    card = _reentry_card(html)
+
+    assert 'data-reentry-treatment="long_mist"' in card
+    for question in ("doing", "stopped", "unresolved", "changed"):
+        assert f'data-reentry-question="{question}"' in card, question
+    assert len(re.findall(r'data-reentry-question="', card)) == 4
+
+    unresolved = card.split('data-testid="reentry-unresolved-counts"', 1)[1].split(
+        "</span>", 1
+    )[0]
+    unresolved_text = re.sub(r"\s+", " ", unresolved)
+    assert "3 open loops · 1 staged · 4 memory candidates" in unresolved_text
+    assert 'data-memory-candidate-count="4"' in unresolved
+    for idx in range(3):
+        assert f"Open loop label {idx}" not in card
+
+    changed = card.split('data-testid="reentry-changed-count"', 1)[1].split(
+        "</span>", 1
+    )[0]
+    assert "2 changes while you were away" in re.sub(r"\s+", " ", changed)
+    assert "Notable change label 0" not in changed
+
+    whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
+    whisper_text = re.sub(r"\s+", " ", whisper)
+    assert "3 open loops · 1 staged" in whisper_text
+    assert "2 deltas since you left" in whisper_text
+    assert "1 why-now candidates" in whisper_text
+
+
 # ---------------------------------------------------------------------------
 # AC: long_mist adds the delta strip and whisper column (suppressed narrow)
 # ---------------------------------------------------------------------------

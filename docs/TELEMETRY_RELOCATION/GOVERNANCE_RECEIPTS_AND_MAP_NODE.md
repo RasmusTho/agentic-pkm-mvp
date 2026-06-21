@@ -1,6 +1,6 @@
 ---
 name: Governance counts to receipts surface and map governance node
-description: Relocate the cold_start governance 3-cell grid (proposals/receipts/outcome) to the receipts surface as counts-not-tiles and to a map governance index node, read-only projection, no zero-state
+description: Relocate the cold_start governance 3-cell grid (pending proposals / pending receipts / latest receipt outcome) to the receipts surface as counts-not-tiles and to a map governance index node, read-only projection, no zero-state
 task_id: TELEMETRY_RELOCATION-02
 source_anchor: companion-ui/design_handoff/2026-06-19-cold-start-threshold/design-notes.md :: What moves off the door
 parent_capability: TELEMETRY_RELOCATION
@@ -13,11 +13,11 @@ can_parallelize_with: [REENTRY_COUNTS_ORIENTING_CARD.md]
 
 ## Purpose
 
-The governance 3-cell grid (proposals / receipts / outcome) was removed from the `cold_start` door. Governance counts are legitimate diagnostic information, but they must not re-appear as live interactive tiles. The two pull-only destinations are: the existing receipts surface (as a read-only count header, not a new tile region) and a new map governance index node (read-only, inert unless the receipts surface is routable).
+The governance 3-cell grid (pending proposals / pending receipts / latest receipt outcome) was removed from the `cold_start` door. Governance projection data is legitimate diagnostic information, but it must not re-appear as live interactive tiles. The two pull-only destinations are: the existing receipts surface (as a read-only summary header, not a new tile region) and a new map governance index node (read-only, inert unless the receipts surface is routable).
 
 ## What This Task Does
 
-1. In `receipts_history.py` (the shipped receipts history surface, #1794), add a governance-summary read-only count row at the head of the modal (`data-region="governance-counts"`, `data-authority="read-only-projection"`) showing pending proposal count, receipt count, and outcome count when the orientation payload supplies `governance.*`. Omitted when absent or all zero.
+1. In `receipts_history.py` (the shipped receipts history surface, #1794), add a governance-summary read-only row at the head of the modal (`data-region="governance-counts"`, `data-authority="read-only-projection"`) showing pending proposal count, pending receipt count, and latest receipt outcome when the orientation payload supplies `governance.*`. Omitted when absent or when both counts are zero and no meaningful latest outcome exists.
 2. In `system_map_overlay.py`, add a `governance` `MapNode` (status `shipped` once this lands) with mode `("act", "reorient")`, reached via `receipts.open` (routes to the receipts surface which now carries governance counts), inert when absent.
 3. Add the node to `MAP_SURFACES` in dependency order (after `receipts` node, which is already present).
 4. Add/update the named tests.
@@ -37,9 +37,9 @@ Governance receipts and proposals are a key operator diagnostic. Stranding them 
 
 ## Acceptance Criteria
 
-- [ ] The receipts history modal renders a governance counts row (`data-region="governance-counts"`, `data-authority="read-only-projection"`) showing `proposals`, `receipts`, and `outcome` counts when the orientation payload's `governance` object supplies them.
+- [ ] The receipts history modal renders a governance counts row (`data-region="governance-counts"`, `data-authority="read-only-projection"`) showing `pending_proposal_count`, `pending_receipt_count`, and `latest_receipt_outcome` when the orientation payload's `governance` object supplies them.
   - Verify: `tests/companion_ui/test_receipts_history_surface.py::test_governance_counts_render_as_read_only_projection`
-- [ ] The governance counts row is omitted when the orientation payload supplies no governance data or all counts are zero (no zero-state).
+- [ ] The governance counts row is omitted when the orientation payload supplies no governance data or both pending counts are zero and `latest_receipt_outcome` is absent/empty/non-meaningful (no zero-state).
   - Verify: `tests/companion_ui/test_receipts_history_surface.py::test_governance_counts_render_as_read_only_projection`
 - [ ] A `governance` map node appears in `MAP_SURFACES` as a read-only index node; it is inert (not routable) unless the `receipts` occupant is available; when available it routes via `receipts.open`.
   - Verify: `tests/companion_ui/test_system_map_overlay.py::test_relocated_map_counts_are_read_only_projection_without_zero_state`
