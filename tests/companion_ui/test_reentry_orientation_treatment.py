@@ -658,6 +658,59 @@ def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
         assert 'class="orientation-column"' not in verb_region, label
 
 
+def test_cold_start_vault_open_targets_rendered_vault_browser() -> None:
+    """#2308: cold-start vault.open targets the rendered orientation browser."""
+    html = _render(
+        orientation=_orientation_payload(leave_status="absent"),
+        orientation_vault_browser=_vault_browser_payload(),
+    )
+
+    assert 'data-entry-state="cold_start"' in html
+    assert 'id="workspace-orientation-vault-entry"' in html
+    verb_region = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+    assert 'data-intent="vault.open"' in verb_region
+    assert 'href="#workspace-orientation-vault-entry"' in verb_region
+    assert "vaultBrowser.focus(); return false;" in verb_region
+    assert "window.vaultBrowser = window.vaultBrowser || {};" in html
+    assert "window.vaultBrowser.focus = focusOrientationVaultBrowser;" in html
+    assert "data-browse-focused" in html
+    assert 'data-testid="vault-browser-overlay"' not in html
+
+
+def test_cold_start_vault_open_focus_skips_hidden_vault_rows() -> None:
+    """#2308: hidden companion rows must not steal vault.open focus."""
+    vault_browser = _vault_browser_payload()
+    vault_browser["notes"] = [
+        {
+            "note_path": "System/companion.md",
+            "title": "System companion",
+            "zone": "System",
+            "kind": "companion_note",
+            "frontmatter_valid": True,
+            "missing_required_fields": [],
+        },
+        {
+            "note_path": "Notes/visible.md",
+            "title": "Visible note",
+            "zone": "Notes",
+            "kind": "human_note",
+            "frontmatter_valid": True,
+            "missing_required_fields": [],
+        },
+    ]
+    html = _render(
+        orientation=_orientation_payload(leave_status="absent"),
+        orientation_vault_browser=vault_browser,
+    )
+
+    assert 'data-entry-state="cold_start"' in html
+    assert 'data-kind="companion_note" data-companion="true" data-nav-visible="false" hidden' in html
+    assert "function firstVisibleFocusTarget(selector)" in html
+    assert "closest('[hidden]')" in html
+    assert "firstVisibleFocusTarget('[data-testid=\"workspace-vault-browser\"] summary')" in html
+    assert "firstVisibleFocusTarget('[data-testid=\"workspace-vault-browser-note-link\"]')" in html
+
+
 def test_cold_start_threshold_eyebrow_headline_variants() -> None:
     """Eyebrow and headline differ for first-contact vs cold-trajectory."""
     first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
