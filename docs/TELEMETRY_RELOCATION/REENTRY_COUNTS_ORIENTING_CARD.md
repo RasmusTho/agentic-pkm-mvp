@@ -20,18 +20,18 @@ This task is primarily a **suppression gate plus regression guard**: confirm `_r
 ## What This Task Does
 
 1. Confirm (via code inspection + test) that the counts from `_reentry_counts` (open_loops, notable_changes, resurface_candidates, staged, memory_candidates) are not displayed in the `cold_start` render path.
-2. Confirm the `full_mist` re-entry card (`data-region="reentry-card"`) correctly renders the `_reentry_counts` aggregate as counts for the four fixed questions when `entry_resolution.state == "orienting"` and `reentry_shape in ("full_mist", "long_mist")`.
-3. Add the `cold_start` suppression assertion to `test_cold_start_omits_relocated_telemetry_regions` and confirm no regression to the existing `test_full_mist_renders_four_fixed_questions_with_counts`.
+2. Confirm the `full_mist` and `long_mist` re-entry cards (`data-region="reentry-card"`) correctly render the `_reentry_counts` aggregate as counts for the four fixed questions when `entry_resolution.state == "orienting"` and `reentry_shape in ("full_mist", "long_mist")`.
+3. Add the `cold_start` suppression assertion to `test_cold_start_omits_relocated_telemetry_regions` and confirm no regression to the `full_mist` and `long_mist` count tests.
 
 ## Concretely
 
 ```bash
 pytest -q \
   tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_omits_relocated_telemetry_regions \
-  tests/companion_ui/test_reentry_orientation_treatment.py::test_full_mist_renders_four_fixed_questions_with_counts
+  tests/companion_ui/test_reentry_orientation_treatment.py::test_long_mist_renders_four_fixed_questions_with_counts
 ```
 
-The second test already exists and must remain green.
+The second test asserts the long-mist card counts directly; the existing full-mist count test must also remain green.
 
 ## Why This Matters
 
@@ -41,10 +41,10 @@ The second test already exists and must remain green.
 
 - [ ] No count value from `_reentry_counts` (open_loops, notable_changes, resurface_candidates, staged, memory_candidates) appears in the `cold_start` HTML render — not as a grid cell, not as a badge, not as a `+N` overflow.
   - Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_omits_relocated_telemetry_regions`
-- [ ] The `full_mist` re-entry card (`data-region="reentry-card"`) renders `_reentry_counts` counts correctly for `orienting`/`full_mist` and `orienting`/`long_mist` shapes.
-  - Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_full_mist_renders_four_fixed_questions_with_counts`
+- [ ] The `long_mist` re-entry card (`data-region="reentry-card"`) renders `_reentry_counts` counts correctly for the `orienting`/`long_mist` shape.
+  - Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_long_mist_renders_four_fixed_questions_with_counts`
 - [ ] The suppression and orientation-card tests pass together without modifying the shipped `_reentry_counts` helper's behavior for `orienting`.
-  - Verify: both tests named above pass in the same test run.
+  - Verify: the cold-start suppression test and the long-mist count test named above pass in the same test run.
 
 ## How to Verify (Pre-Merge)
 
@@ -52,10 +52,10 @@ The second test already exists and must remain green.
 ruff check companion-ui/companion-app tests
 pytest -q \
   tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_omits_relocated_telemetry_regions \
-  tests/companion_ui/test_reentry_orientation_treatment.py::test_full_mist_renders_four_fixed_questions_with_counts
+  tests/companion_ui/test_reentry_orientation_treatment.py::test_long_mist_renders_four_fixed_questions_with_counts
 ```
 
-Both must pass. The second is an existing test and must not regress.
+Both must pass. The existing `test_full_mist_renders_four_fixed_questions_with_counts` must also remain green as adjacent coverage.
 
 ## Out of Scope
 
