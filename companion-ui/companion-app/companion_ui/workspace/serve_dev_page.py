@@ -11444,6 +11444,24 @@ def _is_vault_selection_required(payload: object) -> bool:
     return isinstance(payload, dict) and payload.get("state") == "vault_selection_required"
 
 
+def _relocated_orientation_telemetry_fields(orientation: object) -> dict[str, str]:
+    """Return relocated orientation meta fields when the runtime supplies them."""
+    if not isinstance(orientation, dict):
+        return {}
+    meta = _orientation_dict(orientation.get("meta"))
+    freshness = _orientation_str(meta.get("freshness"))
+    as_of = _orientation_str(meta.get("as_of"))
+    trace_id = _orientation_str(meta.get("trace_id"))
+    fields: dict[str, str] = {}
+    if freshness and freshness != "unknown":
+        fields["orientation_freshness"] = freshness
+    if as_of:
+        fields["orientation_as_of"] = as_of
+    if trace_id and trace_id != "unknown":
+        fields["orientation_trace_id"] = trace_id
+    return fields
+
+
 def handle_get(
     *,
     query_string: str,
@@ -11491,6 +11509,12 @@ def handle_get(
             vault_selection_required = state.vault_selection_payload
         elif state.is_loaded:
             fields = page.render_fields()
+            if fields is not None:
+                try:
+                    live_orientation = client.get("/api/companion/orientation", params={})
+                except (WorkspaceClientError, AssertionError):
+                    live_orientation = None
+                fields.update(_relocated_orientation_telemetry_fields(live_orientation))
         else:
             error = state.error or "Unknown error"
     else:

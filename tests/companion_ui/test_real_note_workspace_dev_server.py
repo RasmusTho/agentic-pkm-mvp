@@ -64,6 +64,24 @@ class _FakeClient:
         return {}
 
 
+class _WorkspaceWithOrientationClient:
+    def __init__(self, *, workspace_payload: dict[str, Any], orientation_payload: dict[str, Any]) -> None:
+        self._workspace_payload = workspace_payload
+        self._orientation_payload = orientation_payload
+        self.get_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        self.get_calls.append((url, params))
+        if url == "/api/companion/workspace":
+            return self._workspace_payload
+        if url == "/api/companion/orientation":
+            return self._orientation_payload
+        return {}
+
+    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+
 def _note_payload(
     note_path: str = "Some/Note.md",
     title: str = "Some Note",
@@ -564,10 +582,47 @@ class TestHandleGet:
             client=client,
             api_base_url="http://127.0.0.1:18001",
         )
-        assert len(client.get_calls) == 1
+        assert len(client.get_calls) == 2
         workspace_url, workspace_params = client.get_calls[0]
         assert workspace_url == "/api/companion/workspace"
         assert workspace_params.get("note_path") == "Some/Note.md"
+        assert client.get_calls[1] == ("/api/companion/orientation", {})
+
+    def test_note_workspace_populates_relocated_orientation_telemetry(self) -> None:
+        from companion_ui.workspace.serve_dev_page import handle_get
+
+        client = _WorkspaceWithOrientationClient(
+            workspace_payload=_note_payload(),
+            orientation_payload={
+                "meta": {
+                    "freshness": "fresh",
+                    "as_of": "2026-06-10T12:00:00Z",
+                    "trace_id": "trace-orientation-1",
+                },
+            },
+        )
+
+        html = handle_get(
+            query_string="note_path=Some%2FNote.md",
+            client=client,  # type: ignore[arg-type]
+            api_base_url="http://127.0.0.1:18001",
+        )
+
+        assert client.get_calls == [
+            ("/api/companion/workspace", {"note_path": "Some/Note.md"}),
+            ("/api/companion/orientation", {}),
+        ]
+        pop_start = html.find('data-testid="workspace-runtime-status-popover"')
+        pop_end = html.find("</details>", pop_start)
+        assert pop_start >= 0
+        popover_html = html[pop_start:pop_end]
+        assert 'data-testid="workspace-freshness-as-of"' in popover_html
+        assert 'data-testid="workspace-orientation-as-of"' in popover_html
+        assert 'data-testid="workspace-orientation-trace-id"' in popover_html
+        assert 'data-authority="read-only-projection"' in popover_html
+        assert "fresh" in popover_html
+        assert "2026-06-10T12:00:00Z" in popover_html
+        assert "trace-orientation-1" in popover_html
 
     def test_successful_load_renders_note_fields(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
