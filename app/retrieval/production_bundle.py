@@ -19,6 +19,9 @@ from app.context_bundles.schema import BundleScope, ExcludedItem
 from app.receipts.bundle_receipts import BundleReceipt, record_creation_receipt
 from app.retrieval.bundle_emission import RetrievalBundleResult, emit_retrieval_bundle
 from app.retrieval.capability import RetrievalRequest, RetrievalResponse, retrieve
+from app.retrieval.context_bundle_conformance import (
+    assert_retrieval_context_bundle_conformant,
+)
 
 
 def emit_bundle_from_response(
@@ -48,6 +51,7 @@ def emit_bundle_from_response(
         scope=scope,
         bundle_id=bundle_id,
     )
+    assert_retrieval_context_bundle_conformant(result)
     receipt = record_creation_receipt(result.bundle)
     return result, receipt
 

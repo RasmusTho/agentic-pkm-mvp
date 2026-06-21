@@ -78,7 +78,7 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 | Rule | Owner | Rationale | Enforcement now | Target enforcement | Issue / status |
 |---|---|---|---|---|---|
 | No private platform store construction outside PDM. | PDM / OEF | Keeps storage technology from becoming architecture; centralizes migrations. | Manual review now. | CI check later (DSN/store-construction scan) once PDM seam inventoried. | Debt D3 / #2358. |
-| `ContextBundle` must carry scope and provenance. | RCA | Keeps retrieval output candidate-only and explainable, never truth. | Manual review now. | CI check later (conformance check on retrieval outputs). | Debt D4 / #2359. |
+| `ContextBundle` must carry scope and provenance. | RCA | Keeps retrieval output candidate-only and explainable, never truth. | CI check now for production retrieval bundle emission; manual review elsewhere. | Extend CI conformance coverage across remaining retrieval/search outputs. | Debt D4 / #2359. |
 | `MemoryRecord` must carry review state and provenance. | MEM | Stops unreviewed memory from becoming hidden instruction. | Manual review now. | CI check later (record-shape conformance). | Debt D5 / #2360. |
 | `ExecutionRequest` must carry governed authorization for side effects. | EXE / GOV | Separates agents from side-effecting execution; ties effects to a decision. | Manual review now. | Blocking invariant (CI contract test once EXE seam exists). | Debt D6 / #2361. |
 
@@ -89,4 +89,3 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 | No provider-specific fields in HKA/SIP/GOV public contracts. | EBF / OEF | Keeps vendor/model/tool choices out of core semantics. | Manual review now. | CI check later (provider-field scan on core contract files). | Debt D8 (unfiled — file when audited). |
 | No SFC semantic conflict resolution without GOV policy. | SFC / GOV | Prevents sync transport from deciding meaning. | Manual review now (SFC is no-op/single-node today). | Blocking invariant when federation is implemented. | Debt D7 / #2362. |
 | No OEF automatic control loop mutating policy/memory/retrieval/knowledge/execution. | OEF / GOV | Keeps observability from becoming an ungoverned control loop. | Manual review now; OEF reports and blocks CI only. | Blocking invariant. | Roadmap-level; no loop exists yet. |
-
