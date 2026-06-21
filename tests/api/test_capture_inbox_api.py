@@ -111,6 +111,15 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     assert data["captured_at"]
     assert data["captured_at"] in written
     assert data["trace_id"]
+    governed_write = data["governed_write"]
+    assert governed_write["policy_decision"]["status"] == "approved"
+    assert governed_write["policy_decision"]["source"] == "WriteGuard"
+    assert governed_write["decision_token"]["resource"] == "Inbox/inbox.md"
+    assert governed_write["decision_token"]["write_class"] == "vault_capture_append"
+    assert governed_write["authority_receipt"]["outcome"] == "applied"
+    assert governed_write["authority_receipt"]["operation"] == "append_note"
+    assert governed_write["authority_receipt"]["adapter"] == "fs_vault"
+    assert governed_write["authority_receipt"]["state_owner"] == "knowledge"
 
     # The governed event pipeline recorded the applied append.
     assert "capture.inbox.appended" in data["events_emitted"]
@@ -119,6 +128,12 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     assert len(capture_events) == 1
     payload = capture_events[0].get("payload") or {}
     assert payload.get("note_path") == "Inbox/inbox.md"
+    assert payload.get("decision_token_id") == governed_write["decision_token"]["token_id"]
+    assert (
+        payload.get("authority_receipt_id")
+        == governed_write["authority_receipt"]["receipt_id"]
+    )
+    assert payload.get("governed_write") == governed_write
     assert capture_events[0].get("trace_id") == data["trace_id"]
 
     # A second capture appends — it does not replace the inbox note.

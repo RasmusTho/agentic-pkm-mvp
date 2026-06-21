@@ -43,9 +43,10 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -53,6 +54,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.config.paths import resolve_vault_root
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
+from app.governance.governed_write import (
+    AuthorityReceipt,
+    GovernedWriteAdapter,
+    GovernedWriteGrant,
+)
 from app.knowledge.write_ops import append_note_relative
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
@@ -69,8 +75,11 @@ router = APIRouter(prefix="/companion", tags=["companion"])
 
 CAPTURE_APPENDED_EVENT = "capture.inbox.appended"
 _WRITE_GUARD_ACTION = "companion.capture.append"
+_WRITE_CLASS = "vault_capture_append"
 _DEFAULT_CAPTURE_NOTE_NAME = "inbox.md"
 _EVENT_SOURCE = "companion.capture"
+_STATE_OWNER = "knowledge"
+_GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
 
 
 class CaptureRequest(BaseModel):
@@ -101,6 +110,7 @@ class CaptureResponse(BaseModel):
     captured_at: str
     trace_id: str
     events_emitted: list[str] = Field(default_factory=list)
+    governed_write: dict[str, Any] | None = None
 
 
 def _capture_note_rel(vault_root: Path) -> str:
@@ -143,7 +153,18 @@ def _resolve_outbox_path() -> Path:
     return Path(INDEX_OUTBOX_PATH)
 
 
-def _emit_capture_event(payload: dict[str, str], trace_id: str) -> list[str]:
+def _governed_write_payload(
+    grant: GovernedWriteGrant,
+    authority_receipt: AuthorityReceipt,
+) -> dict[str, Any]:
+    return {
+        "policy_decision": asdict(grant.policy_decision),
+        "decision_token": asdict(grant.decision_token),
+        "authority_receipt": asdict(authority_receipt),
+    }
+
+
+def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
     """Record the applied append on the event pipeline.
 
     Same dual-sink pattern as the Panel confirmation service: JSONL audit log
@@ -203,20 +224,6 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
             },
         )
 
-    # Policy — the WriteGuard gates the bounded capture action.
-    try:
-        DEFAULT_WRITE_GUARD.assert_writes_allowed(_WRITE_GUARD_ACTION)
-    except WritesBlockedError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "writeguard_blocked",
-                "state": "blocked",
-                "message": str(exc),
-                "reason": exc.reason,
-            },
-        ) from exc
-
     # vault-inbox note convention — resolution failures are explicit, the text is
     # never silently dropped.
     vault_root = resolve_vault_root()
@@ -234,6 +241,27 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
             },
         ) from exc
 
+    # Policy — the governed-write adapter maps WriteGuard approval to a
+    # DecisionToken before the state-owning writer mutates the vault.
+    try:
+        grant = _GOVERNED_WRITE_ADAPTER.issue_decision_token(
+            write_guard=DEFAULT_WRITE_GUARD,
+            action=_WRITE_GUARD_ACTION,
+            write_class=_WRITE_CLASS,
+            actor=_EVENT_SOURCE,
+            resource=note_rel,
+        )
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "writeguard_blocked",
+                "state": "blocked",
+                "message": str(exc),
+                "reason": exc.reason,
+            },
+        ) from exc
+
     # Deterministic writer — the governed append; its WriteReceipt is the
     # runtime acknowledgement.
     captured_at = (
@@ -244,6 +272,13 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
         _compose_append_entry(note_rel, text, captured_at, vault_root=vault_root),
         vault_root=vault_root,
     )
+    authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
+        decision_token=grant.decision_token,
+        mutation_receipt=receipt,
+        state_owner=_STATE_OWNER,
+        trace_id=trace_id,
+    )
+    governed_write = _governed_write_payload(grant, authority_receipt)
 
     # Event pipeline — record the applied append (metadata only).
     events_emitted = _emit_capture_event(
@@ -252,6 +287,9 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
             "operation": receipt.operation,
             "adapter": receipt.adapter,
             "captured_at": captured_at,
+            "decision_token_id": grant.decision_token.token_id,
+            "authority_receipt_id": authority_receipt.receipt_id,
+            "governed_write": governed_write,
         },
         trace_id=trace_id,
     )
@@ -263,6 +301,7 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
         captured_at=captured_at,
         trace_id=trace_id,
         events_emitted=events_emitted,
+        governed_write=governed_write,
     )
 
 
