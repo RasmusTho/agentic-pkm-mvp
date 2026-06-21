@@ -28,7 +28,7 @@ Each debt carries the full schema across two keyed tables (joined by debt ID): *
 | D6 | Agent runtime performing side effects without EXE/GOV seam | CAO vs EXE/GOV | `to verify` — agent tool/side-effect call sites not yet inventoried. | Agents bypass authorization and receipts. | High | Open. |
 | D7 | Watcher/sync event envelope lacking delivery semantics | EBF/SFC vs DRI/HKA/GOV/OEF | `to verify` — watcher/sync event envelope delivery/idempotency/replay posture not yet formalized. | Events drop, reorder, or fail replay/backfill invisibly. | Medium | Open. |
 | D8 | Provider-specific assumptions leaking into core semantics | EBF/DRI/RCA vs HKA/SIP/GOV | `to verify` — provider/model/tool fields in core contracts not yet audited. | Vendor/model/tool choices become architecture. | Medium | Open. |
-| D9 | OEF/fitness rules not yet enforcing SBS boundaries | OEF/CES vs all subsystems | First rail shipped: `tests/architecture/test_sbs_fitness_rules.py` (#2363/PR #2376); remaining P0/P1 rules manual-review-now. | Architecture remains documentation-only and drifts. | Medium | Containing — first rail shipped; CI promotion open (#2381). |
+| D9 | OEF/fitness rules not yet enforcing SBS boundaries | OEF/CES vs all subsystems | Two CI rails shipped in `tests/architecture/test_sbs_fitness_rules.py`: active-vault identity (#2363/PR #2376) and non-HKA contracts disclaiming direct HKA mutation while routing through GOV (#2381); remaining P0/P1 rules manual-review-now (token-dependent P0 deferred until `DecisionToken`/`AuthorityReceipt` exist on enough paths). | Architecture remains documentation-only and drifts. | Medium | Containing — two CI rails shipped; further P0/P1 CI promotion open. |
 | D10 | SIP projection / derived representation could become irreplaceable shadow store | SIP/DRI vs HKA/GOV | `to verify` — rebuildability of semantic projections/derived records from source anchors not yet verified. | Semantic projections carry unrecoverable meaning. | High | Open. |
 
 ## Resolution & ownership
@@ -58,7 +58,7 @@ The mission-required debt categories are each represented above (confirmed prese
 - Agent runtime performing side effects without EXE/GOV seam — D6 (`to verify`).
 - Watcher/sync event envelope lacking delivery semantics — D7 (`to verify`).
 - Provider-specific assumptions leaking into core semantics — D8 (`to verify`).
-- OEF/fitness rules not yet enforcing boundaries — D9 (first rail shipped).
+- OEF/fitness rules not yet enforcing boundaries — D9 (two CI rails shipped).
 - SIP/DRI non-rebuildable shadow store — D10 (`to verify`).
 
 ## Register Rule

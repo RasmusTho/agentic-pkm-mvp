@@ -56,8 +56,9 @@ These rules make the target SBS inspectable without claiming current implementat
 ## First Enforcement Candidates
 
 - Shipped first rail: `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity` is a read-only pytest check for new public `activeVault`/`vaultPath`/vault-root contract usage in target SBS contracts outside WSP ActiveContextSet.
+- Shipped second rail: `tests/architecture/test_sbs_fitness_rules.py::test_non_hka_contracts_do_not_claim_direct_hka_mutation` is a read-only contract-doc check that the non-HKA target contracts (RCA/MEM/CAO/EXE) do not claim direct durable HKA/artifact mutation and route knowledge mutation through GOV / GovernedWriteProtocol.
 - Contract tests for authority-bearing write paths once DecisionToken and AuthorityReceipt exist in code.
-- Dependency checks that prevent RCA/MEM/CAO/EXE direct HKA writes.
+- Dependency checks that prevent RCA/MEM/CAO/EXE direct HKA writes once those subsystems have stable physical modules (a literal code import-direction map; the contract-doc rail above is the interim enforcement).
 - Provider-field checks for HKA/SIP/GOV contract files.
 - Docs/PR template checks requiring SBS impact classification for major work.
 
@@ -71,7 +72,7 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 |---|---|---|---|---|---|
 | No global `activeVault`/`vaultPath` in target public contracts outside WSP. | WSP / OEF | Prevents scope collapse into a storage/source location; keeps `ActiveContextSet` the context seam. | CI check now — `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity`. | CI check now (extend coverage as contracts grow). | #2363 shipped (PR #2376); coverage extension under #2381. |
 | Authority-bearing durable writes require `DecisionToken` and `AuthorityReceipt`. | GOV | Stops governance from being advisory; makes accountability non-skippable. | Manual review now; first adapter on the capture path (#2357). | Blocking invariant (CI contract test once tokens exist on enough paths in code). | Token-dependent; tracked by #2381 (deferred portion) + debt D2. |
-| No direct HKA mutation from RCA/MEM/CAO/EXE/EBF/HIX. | HKA / OEF | Prevents retrieval/memory/agents/UI from becoming knowledge authority. | Manual review now. | Blocking invariant via dependency/import-direction CI check (feasible now). | #2381 (in scope as the next P0 CI rail). |
+| No direct HKA mutation from RCA/MEM/CAO/EXE/EBF/HIX. | HKA / OEF | Prevents retrieval/memory/agents/UI from becoming knowledge authority. | CI check now — `tests/architecture/test_sbs_fitness_rules.py::test_non_hka_contracts_do_not_claim_direct_hka_mutation` (contract-doc level: RCA/MEM/CAO/EXE contracts disclaim direct HKA mutation and route through GOV / GovernedWriteProtocol). | Blocking invariant; extend toward a literal dependency/import-direction check once subsystems have stable physical modules (Boundary Register shows Partial/No today). | #2381 — first contract-doc CI rail shipped; literal module-import map deferred. |
 
 ### P1 — substrate and cognitive contract integrity
 
