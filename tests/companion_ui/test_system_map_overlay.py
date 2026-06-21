@@ -33,7 +33,7 @@ from companion_ui.workspace.overlay_host import (
     OverlayHostState,
     mount,
 )
-from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
 from companion_ui.workspace.system_map_overlay import (
     MAP_CENTER_NAME,
     MAP_SURFACES,
@@ -688,6 +688,73 @@ def test_entry_point_map_and_runtime_status_render_relocated_telemetry() -> None
     # The map is pull-only — the meta row is present inside the (closed) overlay.
     assert 'data-testid="map-entry-point-freshness"' in cold_center_html
     assert 'data-authority="read-only-projection"' in cold_center_html
+
+
+def test_note_workspace_map_entry_point_receives_relocated_telemetry() -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.get_calls: list[tuple[str, dict[str, Any]]] = []
+
+        def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+            self.get_calls.append((url, params))
+            if url == "/api/companion/workspace":
+                return {
+                    "artifact": {
+                        "note_path": "Notes/note.md",
+                        "title": "Note",
+                        "artifact_id": "art-note",
+                        "artifact_kind": "human_note",
+                        "content_hash": "sha256-note",
+                        "body": "# Note\n\nBody.",
+                        "identity_source": "frontmatter.uuid",
+                        "identity_state": "resolved",
+                        "companion_of": None,
+                        "owns_identity": True,
+                    },
+                    "canvas": {"session_state": "idle"},
+                    "panel": {"state": "idle", "proposal_count": 0},
+                    "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
+                    "runtime": {
+                        "environment_label": "dev",
+                        "api_base_url_label": "local-dev",
+                        "trace_id": "trace-workspace-1",
+                    },
+                    "suggestions": {},
+                }
+            if url == "/api/companion/orientation":
+                return {
+                    "meta": {
+                        "freshness": "fresh",
+                        "as_of": "2026-06-10T12:00:00Z",
+                        "trace_id": "trace-orientation-1",
+                    }
+                }
+            return {}
+
+        def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+            return {}
+
+    client = _Client()
+    html = handle_get(
+        query_string="note_path=Notes%2Fnote.md",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+
+    assert client.get_calls == [
+        ("/api/companion/workspace", {"note_path": "Notes/note.md"}),
+        ("/api/companion/orientation", {}),
+    ]
+    overlay = _map_overlay(html)
+    center_start = overlay.find('data-testid="system-map-center"')
+    center_end = overlay.find('data-testid="system-map-grid"')
+    assert center_start >= 0 and center_end > center_start
+    center_html = overlay[center_start:center_end]
+    assert 'data-testid="map-entry-point-freshness"' in center_html
+    assert 'data-authority="read-only-projection"' in center_html
+    assert "fresh" in center_html
+    assert "2026-06-10T12:00:00Z" in center_html
+    assert "trace-orientation-1" in center_html
 
 
 def test_relocated_map_counts_are_read_only_projection_without_zero_state() -> None:
