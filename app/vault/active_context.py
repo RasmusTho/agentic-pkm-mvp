@@ -73,10 +73,8 @@ class ActiveContextResolver:
                 source="VaultContext.local_instance_id",
                 reason="Local situated identity is not available for this vault context.",
             ),
-            principal_context=_known_or_unknown(
-                context.machine_role,
-                source="VaultContext.machine_role",
-                reason="Principal context is not available for this vault context.",
+            principal_context=_unknown(
+                "Principal context is not yet resolved; VaultContext.machine_role is a local clone posture."
             ),
             topology_posture=ActiveContextField(
                 status="known",
