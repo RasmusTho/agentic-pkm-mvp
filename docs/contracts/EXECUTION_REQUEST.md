@@ -90,6 +90,26 @@ Separate cognitive planning from side-effecting execution by requiring authorize
 
 Existing tool/MCP/provider execution paths should be wrapped before widening autonomous or agent-triggered side effects.
 
+A first transitional adapter lives in `app/execution/execution_request.py`: frozen
+`ExecutionRequest` and `ExecutionResult` dataclasses plus `CONTRACT_VERSION`,
+mirroring `app/governance/governed_write.py`. It reuses the `DecisionToken` type
+from `app.governance.governed_write` rather than redefining it, so EXE and GOV
+share one authorization vocabulary.
+
+The first wrapped side effect is the real-vault `mcp.vault.append_note` write in
+`app/orchestrator/executor.py` (`MockPlanExecutor._run_vault_append`, reached via
+`_execute_tool_call` -> `_invoke_tool`). The wrapper is additive and lives behind
+the existing real-tool gate (`_should_use_real_tool`), so mock/CI behavior and
+tool policy are unchanged. The `ExecutionRequest`/`ExecutionResult` carry
+`context.trace_id` (and `context.agent_id` as actor) so trace linkage rides the
+already-emitted `mcp.tool_call.started` / `mcp.tool_call.finished` events.
+
+Transitional DecisionToken gap: the orchestrator does not yet thread a
+`DecisionToken` through `StepContext`, so the `decision_token` field is OPTIONAL
+and defaults to `None` on this path. This is the documented transitional gap the
+contract permits — authority-bearing durable effects will require a non-null
+`DecisionToken` once GOV authorization is threaded into orchestrator execution.
+
 ## Open Questions
 
 - Which side-effect classes require preview or dry-run before execution?
