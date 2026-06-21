@@ -40,7 +40,9 @@ body:
     id: sbs_impact
     attributes:
       label: SBS Impact
-      description: Target System Breakdown Structure classification for routing, boundary review, and follow-up ownership.
+      description: |
+        Target System Breakdown Structure classification for routing, boundary review, and follow-up ownership.
+        Run the classification procedure in docs/architecture/SBS_OPERATING_MODEL.md §3; use "none"/"unaffected" explicitly rather than leaving a field blank.
       placeholder: |
         - Primary subsystem:
         - Secondary subsystem(s):
@@ -52,7 +54,11 @@ body:
         - Memory impact:
         - Retrieval/context impact:
         - Sync/deployment impact:
+        - External boundary impact:
         - New or changed contract:
+        - Owner-doc impact:
+        - Transition debt impact:
+        - Fitness rule impact:
         - Boundary risk:
     validations:
       required: true

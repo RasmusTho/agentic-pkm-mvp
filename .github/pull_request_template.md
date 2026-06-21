@@ -13,6 +13,7 @@ Required for implementation lane. Leave blank for docs authoring lane.
 Leave blank for governance lane when the PR stays within approved governance surfaces.
 
 ## SBS Impact
+Classify per `docs/architecture/SBS_OPERATING_MODEL.md` §3; use "none"/"unaffected" explicitly rather than leaving a field blank.
 - Primary subsystem:
 - Secondary subsystem(s):
 - Write class:
@@ -23,8 +24,18 @@ Leave blank for governance lane when the PR stays within approved governance sur
 - Memory impact:
 - Retrieval/context impact:
 - Sync/deployment impact:
+- External boundary impact:
 - New or changed contract:
+- Owner-doc impact:
+- Transition debt impact:
+- Fitness rule impact:
 - Boundary risk:
+
+## Owner-Doc Writeback
+Resolve to exactly one (`docs/architecture/SBS_OPERATING_MODEL.md` §8). A comment or "to update later" note is not an acceptable resolution.
+- [ ] No owner-doc change implied.
+- [ ] Owner-doc updated in this PR.
+- [ ] Owner-doc follow-up issue created and linked.
 
 ## Summary
 -
