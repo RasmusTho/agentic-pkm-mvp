@@ -87,6 +87,8 @@ Name the distribution seam before multi-device, central/satellite, or multi-writ
 
 Current runtime should be read as single-node/single-authoritative posture. This contract exists to prevent future sync work from being designed as ad hoc watcher transport.
 
+First seam: `app.sfc.replication_envelope` (#2362) wraps the `watcher.run` event path (`app.watcher.events.WatcherRunEvent`) into a `SourceObservationEvent` and a `ReplicationEnvelope`, naming the idempotency key, replay/backfill cursor, delivery/ack status, and a staged conflict placeholder. Per ADR-0020 it is single-node / no-op: it asserts delivery semantics and does not replicate. Conflict classification is staged for GOV/HIX, never resolved by SFC transport. Broader watcher/sync paths remain unwrapped (see SBS transition-debt D7).
+
 ## Open Questions
 
 - What ReplicationEnvelope semantics are required before central/satellite deployment can be safe?

@@ -177,6 +177,15 @@ Payload (minimum contract):
 - `dry_run` (`bool`)
 - `limit_exceeded` (`bool`)
 
+SFC delivery seam: `watcher.run` is the first event path wrapped through the SFC
+ReplicationEnvelope contract (`app.sfc.replication_envelope.wrap_as_replication_envelope`,
+#2362). The adapter maps the event into a `SourceObservationEvent` and a
+`ReplicationEnvelope` carrying node/replica identity placeholders, a stable
+idempotency key derived from `event_id`, a replay/backfill cursor, observable
+delivery/ack status, and a conflict-classification placeholder staged for GOV/HIX.
+Per ADR-0020 the V1 posture is single-authoritative-node / no-op: the seam names
+delivery semantics; it does not replicate. See `docs/contracts/REPLICATION_ENVELOPE.md`.
+
 ### `outbox.event.dead_lettered`
 
 Emitted by the outbox worker when a transient retryable ingest or panel-scan event reaches the

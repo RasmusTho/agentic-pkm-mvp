@@ -26,7 +26,7 @@ Each debt carries the full schema across two keyed tables (joined by debt ID): *
 | D4 | Retrieval result shape not formalized as ContextBundle | RCA vs HIX/CAO/MEM/HKA | Production retrieval bundle emission now runs a ContextBundle conformance check (#2359); broader retrieval/search outputs remain `to verify`. | Retrieval output treated as truth or prompt stuffing. | Medium | Containing — first conformance rail delivered; broader adoption open. |
 | D5 | Memory records lacking explicit review/provenance lifecycle | MEM vs GOV/HKA/RCA | `to verify` — current memory records' review/provenance fields not yet audited. | Memory becomes hidden instruction or shadow knowledge. | High | Open. |
 | D6 | Agent runtime performing side effects without EXE/GOV seam | CAO vs EXE/GOV | `to verify` — agent tool/side-effect call sites not yet inventoried. | Agents bypass authorization and receipts. | High | Open. |
-| D7 | Watcher/sync event envelope lacking delivery semantics | EBF/SFC vs DRI/HKA/GOV/OEF | `to verify` — watcher/sync event envelope delivery/idempotency/replay posture not yet formalized. | Events drop, reorder, or fail replay/backfill invisibly. | Medium | Open. |
+| D7 | Watcher/sync event envelope lacking delivery semantics | EBF/SFC vs DRI/HKA/GOV/OEF | First seam wraps the `watcher.run` path (`app.watcher.events.WatcherRunEvent`) through `app.sfc.replication_envelope.wrap_as_replication_envelope` (#2362), naming delivery/idempotency/replay/conflict-staging semantics; other watcher/sync event paths remain `to verify`. | Events drop, reorder, or fail replay/backfill invisibly. | Medium | Containing — first ReplicationEnvelope seam delivered (single-node/no-op per ADR-0020); broader adoption open. |
 | D8 | Provider-specific assumptions leaking into core semantics | EBF/DRI/RCA vs HKA/SIP/GOV | `to verify` — provider/model/tool fields in core contracts not yet audited. | Vendor/model/tool choices become architecture. | Medium | Open. |
 | D9 | OEF/fitness rules not yet enforcing SBS boundaries | OEF/CES vs all subsystems | First rail shipped: `tests/architecture/test_sbs_fitness_rules.py` (#2363/PR #2376); remaining P0/P1 rules manual-review-now. | Architecture remains documentation-only and drifts. | Medium | Containing — first rail shipped; CI promotion open (#2381). |
 | D10 | SIP projection / derived representation could become irreplaceable shadow store | SIP/DRI vs HKA/GOV | `to verify` — rebuildability of semantic projections/derived records from source anchors not yet verified. | Semantic projections carry unrecoverable meaning. | High | Open. |
@@ -56,7 +56,7 @@ The mission-required debt categories are each represented above (confirmed prese
 - Retrieval result shape not formalized as ContextBundle — D4 (first conformance rail delivered; broader extent `to verify`).
 - Memory records lacking review/provenance lifecycle — D5 (`to verify`).
 - Agent runtime performing side effects without EXE/GOV seam — D6 (`to verify`).
-- Watcher/sync event envelope lacking delivery semantics — D7 (`to verify`).
+- Watcher/sync event envelope lacking delivery semantics — D7 (first ReplicationEnvelope seam delivered; broader extent `to verify`).
 - Provider-specific assumptions leaking into core semantics — D8 (`to verify`).
 - OEF/fitness rules not yet enforcing boundaries — D9 (first rail shipped).
 - SIP/DRI non-rebuildable shadow store — D10 (`to verify`).
