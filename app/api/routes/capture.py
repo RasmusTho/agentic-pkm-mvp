@@ -164,6 +164,15 @@ def _governed_write_payload(
     }
 
 
+def _writeguard_blocked_detail(exc: WritesBlockedError) -> dict[str, Any]:
+    return {
+        "error": "writeguard_blocked",
+        "state": "blocked",
+        "message": str(exc),
+        "reason": exc.reason,
+    }
+
+
 def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
     """Record the applied append on the event pipeline.
 
@@ -224,6 +233,16 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
             },
         )
 
+    # Policy — preserve the legacy guard-first failure ordering. Blocked writes
+    # must return writeguard_blocked before any vault binding or inbox lookup.
+    try:
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(_WRITE_GUARD_ACTION)
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_writeguard_blocked_detail(exc),
+        ) from exc
+
     # vault-inbox note convention — resolution failures are explicit, the text is
     # never silently dropped.
     vault_root = resolve_vault_root()
@@ -254,12 +273,7 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
     except WritesBlockedError as exc:
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": "writeguard_blocked",
-                "state": "blocked",
-                "message": str(exc),
-                "reason": exc.reason,
-            },
+            detail=_writeguard_blocked_detail(exc),
         ) from exc
 
     # Deterministic writer — the governed append; its WriteReceipt is the

@@ -92,8 +92,9 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     assert resp.status_code == 200, resp.text
     data = resp.json()
 
-    # Policy gate ran with the bounded capture action.
-    assert guard_actions == ["companion.capture.append"]
+    # Policy gate ran with the bounded capture action: first to preserve the
+    # legacy guard-held failure ordering, then again for token issuance.
+    assert guard_actions == ["companion.capture.append", "companion.capture.append"]
 
     # The capture landed in the vault inbox per the note convention.
     inbox_note = vault / "Inbox" / "inbox.md"
@@ -233,3 +234,33 @@ def test_capture_writeguard_block_is_explicit_and_writes_nothing(
 
     assert not (vault / "Inbox" / "inbox.md").exists()
     assert _outbox_events(outbox) == []
+
+
+def test_capture_writeguard_block_takes_precedence_over_vault_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_vault = tmp_path / "missing-vault"
+    outbox = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("VAULT_ROOT", str(missing_vault))
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.delenv("VAULT_CAPTURE_NOTE_REL", raising=False)
+
+    def _blocked(action: str) -> None:
+        raise WritesBlockedError(state="safe_mode", reason="test lock", action=action)
+
+    monkeypatch.setattr(
+        capture_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", _blocked
+    )
+
+    resp = TestClient(app).post(
+        "/api/companion/capture", json={"text": "blocked before vault lookup"}
+    )
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["error"] == "writeguard_blocked"
+    assert detail["reason"] == "test lock"
+    assert not outbox.exists()
