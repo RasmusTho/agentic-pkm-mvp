@@ -69,6 +69,7 @@ def emit_retrieval_bundle(
                 artifact_id=hit.object_id,
                 path=hit.source_ref,
                 reason="selected from ranked retrieval results",
+                source_role="retrieval_candidate",
                 retrieval_score=hit.score,
                 provenance=ItemProvenance(origin="retrieval"),
             )
@@ -92,7 +93,9 @@ def emit_retrieval_bundle(
             may_propose=False,
             may_write=False,
         ),
-        expiry=ExpiryPosture(),
+        expiry=ExpiryPosture(
+            reason="freshness unknown; bundle reflects a point-in-time retrieval snapshot",
+        ),
     )
 
     return RetrievalBundleResult(bundle=bundle, ranked_candidates=ranked_candidates)
