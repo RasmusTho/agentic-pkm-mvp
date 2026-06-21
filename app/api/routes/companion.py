@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from dataclasses import asdict
 import heapq
 import json
 import logging
@@ -89,6 +90,7 @@ from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
+from app.vault.active_context import ActiveContextResolver
 from app.vault.manager import MachineRole, VaultContext, get_vault_manager
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.settings_service import (
@@ -190,6 +192,7 @@ class VaultContextResponse(BaseModel):
     machine_role: str | None = None
     validation_error: str | None = None
     permissions: dict[str, bool] = Field(default_factory=dict)
+    active_context: dict[str, Any] | None = None
 
 
 class VaultSelectRequest(BaseModel):
@@ -289,6 +292,7 @@ _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
 def _vault_context_response(context: VaultContext) -> VaultContextResponse:
     manager = get_vault_manager()
     permissions = manager.permissions_for_context(context)
+    active_context = ActiveContextResolver().resolve(context)
     return VaultContextResponse(
         status=context.status,
         active_vault_id=context.active_vault_id,
@@ -305,6 +309,7 @@ def _vault_context_response(context: VaultContext) -> VaultContextResponse:
             "allowSharedSettingsEdits": permissions.allow_shared_settings_edits,
             "allowLocalSettingsEdits": permissions.allow_local_settings_edits,
         },
+        active_context=asdict(active_context),
     )
 
 
