@@ -325,6 +325,132 @@ def test_recents_anchor_excludes_system_dir_and_uuid_only_label(
     assert result.note_path == "My Project.md"
 
 
+def test_recents_anchor_rejects_symlink_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A symlinked markdown file must not escape the active vault boundary."""
+    import os
+
+    from app.api.routes.companion import _orientation_recents_anchor
+
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "System")
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    escaped_target = outside / "Escaped.md"
+    escaped_target.write_text("# Escaped\n\nOutside vault.", encoding="utf-8")
+
+    symlink_note = tmp_path / "Newest.md"
+    symlink_note.symlink_to(escaped_target)
+    human_note = tmp_path / "Older.md"
+    human_note.write_text("# Older\n\nInside vault.", encoding="utf-8")
+
+    shared = 1_700_000_000
+    os.utime(human_note, (shared, shared))
+    os.utime(escaped_target, (shared + 10, shared + 10))
+
+    result = _orientation_recents_anchor(tmp_path)
+
+    assert result is not None
+    assert result.note_path == "Older.md"
+    assert result.display_label == "Older"
+
+
+def test_recents_anchor_rejects_system_dir_symlink_to_human_note(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A System-dir link must not surface even when it targets a valid note."""
+    import os
+
+    from app.api.routes.companion import _orientation_recents_anchor
+
+    system_dir = "System"
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", system_dir)
+
+    human_note = tmp_path / "Z-human.md"
+    human_note.write_text("# Human Note\n\nInside vault.", encoding="utf-8")
+    system_link = tmp_path / system_dir / "A-linked-human.md"
+    system_link.parent.mkdir()
+    system_link.symlink_to(human_note)
+
+    shared = 1_700_000_010
+    os.utime(human_note, (shared, shared))
+
+    result = _orientation_recents_anchor(tmp_path)
+
+    assert result is not None
+    assert result.note_path == "Z-human.md"
+    assert result.display_label == "Human Note"
+
+
+def test_recents_anchor_skips_invalid_candidates_to_next_human_note(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid newest candidates are skipped so the next valid human note can win."""
+    import os
+
+    from app.api.routes.companion import _orientation_recents_anchor
+
+    system_dir = "System"
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", system_dir)
+
+    human_note = tmp_path / "Human.md"
+    human_note.write_text("# Human Note\n\nInside vault.", encoding="utf-8")
+    uuid_note = tmp_path / "952d5491-e098-43a2-85db-a01ee1fb34fe.md"
+    uuid_note.write_text("---\nuuid: 952d5491-e098-43a2-85db-a01ee1fb34fe\n---\n", encoding="utf-8")
+    system_note = tmp_path / system_dir / "system.md"
+    system_note.parent.mkdir()
+    system_note.write_text("# System Note\n\nMachine surface.", encoding="utf-8")
+
+    os.utime(human_note, (1_700_000_000, 1_700_000_000))
+    os.utime(uuid_note, (1_700_000_010, 1_700_000_010))
+    os.utime(system_note, (1_700_000_020, 1_700_000_020))
+
+    result = _orientation_recents_anchor(tmp_path)
+
+    assert result is not None
+    assert result.note_path == "Human.md"
+    assert result.display_label == "Human Note"
+
+
+def test_recents_anchor_skips_unreadable_candidate_to_next_human_note(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unreadable newest candidates are skipped instead of emitted by filename."""
+    import os
+
+    from app.api.routes.companion import _orientation_recents_anchor
+
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "System")
+
+    human_note = tmp_path / "Readable.md"
+    human_note.write_text("# Readable Note\n\nInside vault.", encoding="utf-8")
+    unreadable_note = tmp_path / "Unreadable.md"
+    unreadable_note.write_text("# Unreadable\n\nNo read permission.", encoding="utf-8")
+
+    os.utime(human_note, (1_700_000_000, 1_700_000_000))
+    os.utime(unreadable_note, (1_700_000_010, 1_700_000_010))
+
+    original_read_text = Path.read_text
+
+    def _read_text(path: Path, *args, **kwargs):
+        if path == unreadable_note.resolve():
+            raise PermissionError("simulated unreadable candidate")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _read_text)
+
+    result = _orientation_recents_anchor(tmp_path)
+
+    assert result is not None
+    assert result.note_path == "Readable.md"
+    assert result.display_label == "Readable Note"
+
+
 def test_orientation_payload_includes_recent_target_with_deterministic_tiebreak(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

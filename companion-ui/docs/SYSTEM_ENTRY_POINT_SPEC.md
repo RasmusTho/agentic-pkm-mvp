@@ -93,7 +93,7 @@ boot ──▶ no_vault            (503)
 boot ──▶ cold_start          (leave_point absent)
 boot ──▶ orienting           (leave_point present)        [+degraded] [+stale]
 no_vault ──▶ boot            (entry.retry)
-cold_start ──▶ shell_active  (vault.open / vault.pick / map→surface)
+cold_start ──▶ shell_active  (vault.open / vault.pick / recents.open / map→surface)
 orienting ──▶ shell_active   (entry.resume | entry.dismiss | vault.pick)
 ```
 
@@ -153,6 +153,7 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | `entry.dismiss` | orienting | → `shell_active`, fresh | no |
 | `vault.open` | shell / entry | open/focus the Vault Browser pane (narrow: modal) | no |
 | `vault.pick` | Vault Browser | re-anchor shell to a note via `GET /api/companion/workspace?note_path` (§Resolved Q8) | no (read) |
+| `recents.open` | cold_start | re-anchor shell to the server-declared `recents_anchor` via `GET /api/companion/workspace?note_path` (§Q1) | no (read) |
 | `vault.queue` | Vault Browser | `queue_review` via `POST /api/companion/vault-browser/actions/queue-review` | **yes — governed handoff** |
 | `cmd.open` | shell (`⌘K`) | open Panel command palette | no |
 | `panel.confirm` | Panel (rail or palette) | confirm a governed proposal via `POST /api/panel/confirm` | **yes — governed; receipt** |
