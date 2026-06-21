@@ -231,6 +231,15 @@ The system states why the recalled memory matters and what its provenance and au
 - Recall must remain bounded by trust, scope, and write policy.
 - Memory may support suggestion or explanation, but not silent authority escalation.
 
+`docs/adr/ADR-0025-memory-authority-direct-write-policy.md` re-affirms (does not relax) these rules
+and names the direct-write tier: memory written outside the governed candidate → review → promote
+lifecycle is **provisional / low-trust**, admitted at read and cited-proposal only and never at
+tool-use / APPLY. No-silent-escalation is codified there — promotion, deprecation, supersession, and
+deletion all require a governance transition or human review — re-affirming the `authority_guard`
+conjunction in `app/agent_memory/authority_guard.py` and the unreviewed-memory-never-hidden-authority
+rule (`docs/SEMANTIC_AUTHORITY_MATRIX.md` reading rule 3). Enforcement of the trust-tier ceiling at
+the write boundary is the W7-MEM-02 deliverable (#2354); WriteGuard is health-state-only today.
+
 ## Review and promotion rules
 
 Promotion should be explicit and reviewable.
