@@ -55,8 +55,25 @@ Per document, we compute:
 - `emb_norm` = normalized embedding similarity score
 - `overlap_bonus` = fraction of query tokens present in doc tokens
 
-Current weights:
+Current weights (weighted linear fusion):
 - `combined = 0.5*bm25_norm + 0.4*emb_norm + 0.1*overlap_bonus`
+
+This weighted linear fusion is the ratified current topology (see
+`docs/adr/ADR-0024-retrieval-topology.md`). The weights are an intentional first-pass **trust
+encoding** — exact lexical match (BM25) weighted above fuzzy semantic match (embeddings), with a
+small overlap bonus — not an arbitrary tuning artifact.
+
+**Live serving path vs durable spine:** the active serving path is the in-process memory store
+(`app/retrieval/hybrid.py`), consumed through the typed `app/retrieval/capability.py` wrapper. The
+durable Postgres/pgvector index (`PgVectorIndex`) is the intended durable **spine** and forward
+direction, but it is **not** the serving path today — making it the served source is future work
+tracked under the RAG/memory decomposition epic (#2314). Default retrieval is metadata-filtered
+hybrid with **rerank off by default** (`RERANK_ENABLE` unset/false; see *Optional Rerank*).
+
+**Named future work (not current behavior):** RRF (Reciprocal Rank Fusion) over the weighted linear
+sum, HyDE / query expansion, and provenance-aware / low-trust signal weights are deferred behind the
+future `SearchPort` boundary (`docs/ROADMAP.md :: Abstraction Layer Hardening`). Adopting any of them
+is a new decision (a new ADR superseding ADR-0024); none changes the current scoring above.
 
 ### Scope filter
 Optional operational-scope filtering:

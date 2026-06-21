@@ -43,7 +43,7 @@ Routing is intentionally deterministic and single-source:
 
 Current state:
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
-- Embedding fallback is blocked unless the fallback preserves the resolved embedding identity.
+- Embedding fallback is blocked unless the fallback **preserves the resolved embedding identity**. The sanctioned identity-preserving fallback is Ollama-primary with a Gemini `text-embedding-004` @ 768 (normalization-matched, query==document) auto-fallback on primary failure, with re-index on mixed identity, per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md` and `docs/EMBEDDINGS.md :: Fallback rule`. Generic fallback that changes dimension/normalization/identity remains blocked.
 - Endpoint repair is operational and separate from provider substitution.
 - The router never emits a route whose `model` belongs to a different provider than the one that will execute the call. `LLM_PROVIDER` binds the executing provider on the enforced path **and** on the no-explicit-policy default path: the env provider is bound only when `LLM_PROVIDER_ENFORCE=1` (enforce) or when the task has no explicit policy (`router.py`: `if enforce or not has_explicit_task_policy`). For a task that *does* carry an explicit policy (e.g. `tasks.qa` with a cloud primary) and `LLM_PROVIDER` set **without** enforce, the router falls through to the policy primary — so `LLM_PROVIDER` does not necessarily run that call. To force an explicit-policy task onto the env provider, set `LLM_PROVIDER_ENFORCE=1`; then the resolved route uses a candidate (primary or fallback) that provider actually serves — e.g. an `ollama`-enforced chat task with a cloud-primary policy resolves to the local `ollama` fallback model, not the cloud model. When `LLM_PROVIDER_ENFORCE=1` and no candidate is served by the enforced provider, the router fails loud (`LLMRouteError`) rather than guessing a cross-provider route. The model swap is surfaced via `LLMRoute.reason` (`enforced-provider:<provider>`).
 
@@ -124,5 +124,5 @@ Tests: `tests/e2e/test_llm_routing_e2e.py::test_force_override_affects_ask_api`
 
 - Task-aware routing is implemented for the current task classes through the compiled settings file.
 - Generic chat/reasoning fallback can remain local or mock when the task policy allows it.
-- Embeddings are stricter: if the configured provider/model implies a different identity, startup must fail or require rebuild instead of silently degrading.
-- Multi-provider load balancing and rate limit handling are out of scope for the current fabric.
+- Embeddings are stricter: if the configured provider/model implies a different identity, startup must fail or require rebuild instead of silently degrading. The one sanctioned exception is the **identity-preserving** Gemini fallback (768/L2/query==document) per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; a mixed-identity index triggers re-index, not silent degradation.
+- Multi-provider load balancing and rate limit handling are out of scope for the current fabric. The Gemini embedding fallback above is a single identity-matched reliability fallback, not load balancing.

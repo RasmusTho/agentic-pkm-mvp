@@ -80,7 +80,15 @@ For every relation the taxonomy records:
 - **Rebuildable (mirror projections):** the relation-store representation of any edge, inferred `supports`/`contextualizes`/`sphere_membership`, and `proposal_for` edges. The RelationIndex/relation store is a Machine Mirror (Layer 6): it must be reconstructable from the durable surface + provenance and carries no independent authority (owner: `docs/COMPONENTS.md`, semantic map Layer 6).
 - If losing a relation would lose human-authored meaning, it was a durable edge and must be persisted on the human surface, not only in the relation store.
 
-## Relation persistence semantics
+### Graph projection ratification (rebuildable mirror) — #2317
+
+The retrieval/embedding ratification in #2317 (`docs/adr/ADR-0024-retrieval-topology.md`) **reaffirms**,
+without introducing any new object or contract, that the **relation/graph projection is a rebuildable
+mirror**: the RelationIndex / relation-store representation of the graph is a Machine Mirror (Layer 6),
+reconstructable from the durable human surface + provenance, carrying **no independent authority**. A
+graph view used by retrieval or ranking is therefore a derived projection, not a source of truth —
+losing it loses no human-authored meaning. This is the existing rebuildability rule above, restated as
+the ratified posture; it adds no new persistence, authority, or behavior.
 
 - **Durable human-surface relations** (`links_to`, `part_of`, `supersedes`, `task_for`, `decision_about`, confirmed `supports`/`sphere_membership`) persist in frontmatter or body links and follow the frontmatter write contract (`docs/FRONTMATTER.md`) and write-guard rules.
 - **System-owned relations** (`companion_for`/`has_companion`) persist via the companion note pattern and the relation store.

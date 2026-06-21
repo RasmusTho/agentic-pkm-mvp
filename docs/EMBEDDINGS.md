@@ -46,14 +46,24 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
   - Setting this changes the embedding **identity** (provider) and therefore requires a vector-index rebuild — see *Change policy* and the re-index path.
 - `EMBED_FALLBACK_PROVIDER`
-  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). A dimension-matched fallback is required — see the disciplined-fallback / re-index path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
+  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). An **identity-preserving** fallback is required — dimension-matched, normalization-matched, query==document identity. The sanctioned posture is Ollama-primary with a Gemini `text-embedding-004` @ 768 fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; see the disciplined-fallback / re-index path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
   - Example (default local): `nomic-embed-text:latest`
 - `EMBED_DIM`
-  - Runtime guardrail default: `1536` (`DEFAULT_EMBED_DIM` in `app/embedding_config.py`, mirrored by `settings.embed_dim`). This is the **configured/requested** dimension the runtime asserts against.
-  - Relationship to the model's native dimension: `nomic-embed-text` emits `768` natively. The runtime includes a `dimensions` field in the Ollama payload (see Call graph), but the **legacy** `/api/embeddings` endpoint ignores it (only `/api/embed` honors `dimensions`), so the returned vector stays at the model's native size. The guardrail asserts the returned length matches `EMBED_DIM`, so `EMBED_DIM` must be set to the model's native dimension (`768` for `nomic-embed-text`) — it does **not** resize the vector. A mismatch (e.g. native `768` vs the runtime default `1536`) fails indexing for that object.
+  - **Documented/operative default: `768`** — matching both the local `nomic-embed-text` native
+    dimension and the identity-preserving Gemini `text-embedding-004` @ 768 fallback
+    (`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`). This is the **configured/requested**
+    dimension the runtime asserts against, and it must equal the active embedding identity's
+    dimension.
+  - **Runtime-constant caveat:** the in-code constant `app/embedding_config.py::DEFAULT_EMBED_DIM`
+    (mirrored by `settings.embed_dim`) currently still defaults to `1536`. Aligning that runtime
+    constant to `768` is a **separate runtime change tracked by #2296 / #2297 and is out of scope for
+    this docs ratification** — no `app/` change is made here. Until that lands, an operator running
+    `nomic-embed-text` must set `EMBED_DIM=768` explicitly so the guardrail matches the native vector
+    length.
+  - Relationship to the model's native dimension: `nomic-embed-text` emits `768` natively. The runtime includes a `dimensions` field in the Ollama payload (see Call graph), but the **legacy** `/api/embeddings` endpoint ignores it (only `/api/embed` honors `dimensions`), so the returned vector stays at the model's native size. The guardrail asserts the returned length matches `EMBED_DIM`, so `EMBED_DIM` must be set to the model's native dimension (`768` for `nomic-embed-text`) — it does **not** resize the vector. A mismatch (e.g. native `768` vs the legacy code constant `1536`) fails indexing for that object until `EMBED_DIM` is set to `768`.
   - Used as a **guardrail**. If the provider returns a vector whose length differs from `EMBED_DIM`, indexing fails for that object and an error event is emitted.
 
 ### Optional env vars
@@ -114,7 +124,7 @@ The system maintains a stable identity record resolved by `get_embedding_identit
 
 - provider (e.g., `ollama`)
 - model (e.g., `nomic-embed-text:latest`)
-- expected dimension (the configured `EMBED_DIM` guardrail; default `1536` — distinct from `nomic-embed-text`'s native `768`, see Configuration)
+- expected dimension (the configured `EMBED_DIM` guardrail; documented default `768` to match `nomic-embed-text`'s native dimension and the identity-preserving Gemini `text-embedding-004` @ 768 fallback — see Configuration; the in-code `DEFAULT_EMBED_DIM` constant still reads `1536` pending #2296/#2297)
 - normalize flag (e.g., `true`)
 - (optional) formatting mode policy version (if query/passage rules apply)
 
@@ -125,13 +135,40 @@ This identity must be:
 
 ### Fallback rule
 
-Embeddings do not allow generic provider fallback. The runtime may:
+Embeddings do not allow **generic** provider fallback, but they **do** allow one sanctioned
+**identity-preserving** fallback. This reconciles the historical no-generic-fallback invariant with
+the owner-settled embedding-egress posture recorded in
+`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md` (decided 2026-06-20). ADR-0023 **supersedes**
+the absolute "never switch provider" wording of this rule — but only as a scoped, identity-preserving
+exception, **not** a blanket reversal. The comparability intent the rule protects is preserved.
+
+The runtime may:
 - repair the endpoint for the chosen provider (for example, choose a Docker-reachable Ollama base URL),
 - keep using the same provider/model/identity, and
 - continue only if the resolved identity remains compatible.
 
-The runtime must not silently switch to another embedding model/provider that changes provider, model, dimension, or normalization.
-If the preferred embedding identity is unavailable and no compatible fallback exists, startup should fail or require index rebuild.
+**Sanctioned identity-preserving fallback (ADR-0023).** On *primary-provider failure*, the runtime
+may fall back to a named secondary provider **only when the fallback preserves the resolved embedding
+identity**. The current sanctioned posture is **Ollama-primary with a Google Gemini
+`text-embedding-004` auto-fallback** that is:
+- **dimension-matched** — requested at `768` to match the local `nomic-embed-text` native dimension,
+- **normalization-matched** — L2-normalized to match `EMBED_NORMALIZE`,
+- **query==document identity** — the same identity embeds both indexed documents/chunks and the ASK
+  query (the RAG invariant in *Query vs Document embeddings*).
+When the stored index mixes more than one identity (some objects under Ollama, some under the Gemini
+fallback), the system must **re-index on mixed identity** so comparability is restored under a single
+identity. The fallback is a reliability bridge, not a license to leave a permanently heterogeneous
+index.
+
+**Still forbidden.** The runtime must not silently switch to an embedding model/provider whose
+fallback would *change* dimension, normalization, or query/document identity in a way that breaks
+comparability. That generic fallback remains prohibited. If the preferred embedding identity is
+unavailable and no *identity-preserving* fallback exists, startup should fail or require an index
+rebuild.
+
+> The runtime change that registers and wires the Gemini adapter and fallback orchestration is
+> tracked by #2292 / #2296 / #2297 and is out of scope for the ADR-0023 docs ratification; this
+> section records the accepted posture that runtime work implements against.
 
 ### Why identity matters
 

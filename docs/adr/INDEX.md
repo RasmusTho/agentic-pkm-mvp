@@ -27,3 +27,5 @@ State: Index (historical). ADRs are design records and may be partially outdated
 - [ADR 0020: Declare SFC now with single-node/no-op posture until federation is scheduled](./ADR-0020-sfc-single-node-upgrade-path.md)
 - [ADR 0021: Treat CES as architecture stewardship practice, not a runtime peer subsystem](./ADR-0021-ces-architecture-stewardship-practice.md)
 - [ADR 0022: Treat OEF as first-class but non-authoritative](./ADR-0022-oef-first-class-non-authoritative.md)
+- [ADR 0023: Embedding egress — Ollama-primary with identity-preserving Gemini auto-fallback (accepted, supersedes the EMBEDDINGS no-generic-fallback invariant as a scoped exception)](./ADR-0023-embedding-egress-gemini-fallback.md)
+- [ADR 0024: Retrieval topology — in-memory hybrid serving, weighted linear fusion, durable-spine direction (accepted, ratifies shipped reality)](./ADR-0024-retrieval-topology.md)

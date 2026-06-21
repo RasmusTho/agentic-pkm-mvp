@@ -57,6 +57,20 @@ orientation/resurfacing consumption must not silently substitute it for a real e
 It is downstream of `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` and downstream of the typed-contract
 spec directory `docs/CONTEXT_BUNDLES/`. It does not redefine the contract.
 
+### ContextPack ratification (no new object) — #2317
+
+The ContextPack/bundle assembly posture is **ratified, not re-introduced**, as part of the
+retrieval/embedding ratification in #2317. No new object, route, or contract is created: the
+ContextBundle remains the existing inspectable Bridge/Assembly artifact described above, assembled
+from the retrieval path ratified in `docs/adr/ADR-0024-retrieval-topology.md`.
+
+The capability boundary is **reaffirmed**: an emitted/assembled bundle carries **`may_write=false`**
+and bypasses no write guard, trust, or policy gate. It is a read-only assembly projection over
+retrieval results — never a write-authority surface, never agent memory, never durable knowledge.
+The non-write `intended_use` mapping (`orient`/`resurface`) and the bounded process-local
+addressability registry described below stay exactly as shipped; this ratification adds no authority
+and changes no behavior.
+
 ## Relationship to the Contract and the Typed-Contract Spec
 
 - `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` defines what a context bundle means (semantic source of
