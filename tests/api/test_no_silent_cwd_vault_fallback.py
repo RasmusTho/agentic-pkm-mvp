@@ -78,6 +78,49 @@ def test_api_request_endpoints_do_not_resolve_cwd_vault_without_selection(
     assert not (cwd_vault / "Inbox" / "inbox.md").exists()
 
 
+def test_api_request_endpoints_report_channel_specific_configured_root(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_no_vault_manager(monkeypatch, tmp_path)
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    dev_vault = tmp_path / "configured-dev-vault"
+    dev_vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT_DEV", str(dev_vault))
+
+    capture = client.post("/api/companion/capture", json={"text": "needs a vault"})
+
+    assert capture.status_code == 200
+    body = capture.json()
+    assert body["state"] == "vault_selection_required"
+    assert body["reason"] == "no_vault_bound"
+    assert body["configured_vault_root"] == str(dev_vault)
+
+
+def test_api_request_endpoints_report_missing_channel_specific_root(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind_no_vault_manager(monkeypatch, tmp_path)
+    monkeypatch.setenv("PKM_ENVIRONMENT", "test")
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    missing = tmp_path / "missing-test-vault"
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(missing))
+
+    artifact = client.get("/api/artifacts/note", params={"note_path": "notes/missing.md"})
+
+    assert artifact.status_code == 200
+    body = artifact.json()
+    assert body["state"] == "vault_selection_required"
+    assert body["reason"] == "vault_root_misconfigured"
+    assert body["configured_vault_root"] == str(missing)
+
+
 def test_api_request_endpoints_preserve_selected_vault_behavior(
     client: TestClient,
     tmp_path: Path,

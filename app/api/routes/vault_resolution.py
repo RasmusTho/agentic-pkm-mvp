@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.responses import JSONResponse
 
+from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.vault.manager import get_vault_manager
 
@@ -32,7 +33,9 @@ def resolve_active_vault_root(*, require_initialized: bool = False) -> Path:
     allowed = frozenset({"selected"}) if require_initialized else _READABLE_SELECTED_STATUSES
     if context.status in allowed and context.active_vault_path:
         return Path(context.active_vault_path).expanduser().resolve()
-    configured = resolve_optional_vault_root()  # raises on set-but-missing
+    configured = resolve_optional_vault_root(
+        environment=active_environment()
+    )  # raises on set-but-missing
     raise NoSelectedVaultError(configured)
 
 
