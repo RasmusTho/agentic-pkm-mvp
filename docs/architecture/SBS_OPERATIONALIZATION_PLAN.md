@@ -45,6 +45,8 @@ All target boundaries are declared now as charters, contracts, dependency rules,
 | Current runtime architecture | `docs/ARCHITECTURE.md` | Owns shipped/current behavior. |
 | Current system-of-systems spine | `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` | Owns current SoS framing. |
 | SBS operationalization | `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` | Owns transition from strategy to operational reality. |
+| SBS operating model (process) | `docs/architecture/SBS_OPERATING_MODEL.md` | Owns how SBS work is classified, readied, done, reviewed, and recorded; review-gate fallback policy; source-of-truth verification matrix. |
+| SBS roadmap (initiative phases) | `docs/architecture/SBS_ROADMAP.md` | Owns phase intent and status (Phase 0 architecture residency → Phase 5 opportunistic physical separation). |
 | Current-to-target mapping | `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` | Owns mapping between existing docs/code concepts and target SBS. |
 | Boundary status | `docs/architecture/SBS_BOUNDARY_REGISTER.md` | Owns boundary existence/enforcement status. |
 | Transition debt | `docs/architecture/SBS_TRANSITION_DEBT.md` | Owns known deviations from target architecture. |
@@ -95,6 +97,8 @@ All target boundaries are declared now as charters, contracts, dependency rules,
 
 ## Operational References
 
+- Operating model (how to use the SBS day-to-day): `docs/architecture/SBS_OPERATING_MODEL.md`
+- Initiative roadmap (phase intent and status): `docs/architecture/SBS_ROADMAP.md`
 - Current-to-target mapping: `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`
 - Boundary register: `docs/architecture/SBS_BOUNDARY_REGISTER.md`
 - Transition debt: `docs/architecture/SBS_TRANSITION_DEBT.md`

@@ -60,3 +60,33 @@ These rules make the target SBS inspectable without claiming current implementat
 - Dependency checks that prevent RCA/MEM/CAO/EXE direct HKA writes.
 - Provider-field checks for HKA/SIP/GOV contract files.
 - Docs/PR template checks requiring SBS impact classification for major work.
+
+## Prioritized Fitness Rule Roadmap
+
+This roadmap orders rules by how load-bearing the boundary is and how mechanically checkable it is today. Its lifecycle is owned by `docs/architecture/SBS_OPERATING_MODEL.md` §10: a rule is only **CI check now** when a real, fail-loud test enforces it; promoting a rule from manual to CI is itself SBS work (issue + test + posture update). "Enforcement now" states reality; "Target enforcement" states the intended end state.
+
+### P0 — authority and identity integrity (highest priority)
+
+| Rule | Owner | Rationale | Enforcement now | Target enforcement | Issue / status |
+|---|---|---|---|---|---|
+| No global `activeVault`/`vaultPath` in target public contracts outside WSP. | WSP / OEF | Prevents scope collapse into a storage/source location; keeps `ActiveContextSet` the context seam. | CI check now — `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity`. | CI check now (extend coverage as contracts grow). | #2363 shipped (PR #2376); coverage extension under #2381. |
+| Authority-bearing durable writes require `DecisionToken` and `AuthorityReceipt`. | GOV | Stops governance from being advisory; makes accountability non-skippable. | Manual review now; first adapter on the capture path (#2357). | Blocking invariant (CI contract test once tokens exist on enough paths in code). | Token-dependent; tracked by #2381 (deferred portion) + debt D2. |
+| No direct HKA mutation from RCA/MEM/CAO/EXE/EBF/HIX. | HKA / OEF | Prevents retrieval/memory/agents/UI from becoming knowledge authority. | Manual review now. | Blocking invariant via dependency/import-direction CI check (feasible now). | #2381 (in scope as the next P0 CI rail). |
+
+### P1 — substrate and cognitive contract integrity
+
+| Rule | Owner | Rationale | Enforcement now | Target enforcement | Issue / status |
+|---|---|---|---|---|---|
+| No private platform store construction outside PDM. | PDM / OEF | Keeps storage technology from becoming architecture; centralizes migrations. | Manual review now. | CI check later (DSN/store-construction scan) once PDM seam inventoried. | Debt D3 / #2358. |
+| `ContextBundle` must carry scope and provenance. | RCA | Keeps retrieval output candidate-only and explainable, never truth. | Manual review now. | CI check later (conformance check on retrieval outputs). | Debt D4 / #2359. |
+| `MemoryRecord` must carry review state and provenance. | MEM | Stops unreviewed memory from becoming hidden instruction. | Manual review now. | CI check later (record-shape conformance). | Debt D5 / #2360. |
+| `ExecutionRequest` must carry governed authorization for side effects. | EXE / GOV | Separates agents from side-effecting execution; ties effects to a decision. | Manual review now. | Blocking invariant (CI contract test once EXE seam exists). | Debt D6 / #2361. |
+
+### P2 — provider, sync, and observability neutrality
+
+| Rule | Owner | Rationale | Enforcement now | Target enforcement | Issue / status |
+|---|---|---|---|---|---|
+| No provider-specific fields in HKA/SIP/GOV public contracts. | EBF / OEF | Keeps vendor/model/tool choices out of core semantics. | Manual review now. | CI check later (provider-field scan on core contract files). | Debt D8 (unfiled — file when audited). |
+| No SFC semantic conflict resolution without GOV policy. | SFC / GOV | Prevents sync transport from deciding meaning. | Manual review now (SFC is no-op/single-node today). | Blocking invariant when federation is implemented. | Debt D7 / #2362. |
+| No OEF automatic control loop mutating policy/memory/retrieval/knowledge/execution. | OEF / GOV | Keeps observability from becoming an ungoverned control loop. | Manual review now; OEF reports and blocks CI only. | Blocking invariant. | Roadmap-level; no loop exists yet. |
+

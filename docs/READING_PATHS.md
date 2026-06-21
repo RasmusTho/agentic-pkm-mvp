@@ -32,9 +32,11 @@ defines intent; later docs add detail.
 1. `docs/PROJECT_KERNEL.md` and `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — north star and product thesis.
 2. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target SBS decomposition.
 3. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — adoption plan and source-of-truth matrix.
-4. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
-5. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary status.
-6. `docs/architecture/SBS_FITNESS_RULES.md` — target architecture fitness rules.
+4. `docs/architecture/SBS_OPERATING_MODEL.md` — how the SBS is used operationally (classification, DoR/DoD, owner-doc writeback, review-gate fallback).
+5. `docs/architecture/SBS_ROADMAP.md` — initiative phases (0 architecture residency → 5 opportunistic physical separation).
+6. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
+7. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary status.
+8. `docs/architecture/SBS_FITNESS_RULES.md` — target architecture fitness rules.
 
 ## Current runtime architecture
 
@@ -45,21 +47,23 @@ defines intent; later docs add detail.
 
 ## Major architecture changes
 
-1. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — phase and source-of-truth routing.
-2. Relevant contract stub in `docs/contracts/` — subsystem contract.
-3. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary maturity and enforcement status.
-4. `docs/architecture/SBS_TRANSITION_DEBT.md` — known deviations and containment.
-5. `docs/architecture/SBS_FITNESS_RULES.md` — fitness and failure-mode checks.
-6. Current runtime owner docs such as `docs/ARCHITECTURE.md`, `docs/STATUS.md`, and subsystem-specific docs.
+1. `docs/architecture/SBS_OPERATING_MODEL.md` — classify the change (§3), check Definition of Ready/Done, owner-doc writeback, and the review-gate fallback policy.
+2. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — phase and source-of-truth routing.
+3. Relevant contract stub in `docs/contracts/` — subsystem contract.
+4. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary maturity and enforcement status.
+5. `docs/architecture/SBS_TRANSITION_DEBT.md` — known deviations and containment.
+6. `docs/architecture/SBS_FITNESS_RULES.md` — fitness and failure-mode checks.
+7. Current runtime owner docs such as `docs/ARCHITECTURE.md`, `docs/STATUS.md`, and subsystem-specific docs.
 
 ## Agents and Codex doing SBS work
 
-1. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — task routing and phase plan.
-2. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target SBS source.
-3. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
-4. Relevant contract stubs in `docs/contracts/`.
-5. `docs/architecture/SBS_FITNESS_RULES.md` — review/enforcement expectations.
-6. `docs/architecture/SBS_TRANSITION_DEBT.md` — debt and follow-up routing.
+1. `docs/architecture/SBS_OPERATING_MODEL.md` — operational entry point: classification procedure, DoR/DoD, issue/PR lifecycle, owner-doc writeback, transition-debt and fitness lifecycles, review-gate fallback policy, source-of-truth matrix.
+2. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — task routing and phase plan.
+3. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target SBS source.
+4. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
+5. Relevant contract stubs in `docs/contracts/`.
+6. `docs/architecture/SBS_FITNESS_RULES.md` — review/enforcement expectations.
+7. `docs/architecture/SBS_TRANSITION_DEBT.md` — debt and follow-up routing.
 
 ## Changing human flows
 
