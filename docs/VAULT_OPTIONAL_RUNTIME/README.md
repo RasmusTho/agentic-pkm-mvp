@@ -73,7 +73,7 @@ verified independently.
 | 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | outbox worker, watcher/health settings, inbox appenders, and vault path helpers idle or report no-vault when no vault is selected | Blocked/backlog until 05A lands or is released |
 | 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | promotion queue import becomes lazy; CLI/agent/helper callers make vault requirements explicit or optional | Blocked/backlog until 05A/05B sequencing is clear |
 
-### Follow-up invariants
+## Cross-Task Invariants / Interaction Safety
 
 - No runtime code path may silently resolve to CWD-relative `./vault` when no vault is
   selected and `VAULT_ROOT` is unset.
@@ -88,6 +88,15 @@ verified independently.
 - Selected-vault behavior remains unchanged.
 - Changes that touch vault resolution, active-vault boundaries, or companion hot paths must
   run the opt-in IR-v1 UAT: `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`.
+- Partial delivery is explicitly a mixed-migration state: after 05A lands, request-path
+  endpoints may be safe while background/helper/CLI fallbacks remain tracked in 05B/05C.
+  Do not claim the global no-fallback invariant until all three slices have posted evidence.
+- 05B and 05C stay Backlog/blocked unless the coordinator updates the issue contract and
+  Project state; they must not become `agent:ready` just because 05A is in flight.
+- If implementation discovers another runtime `./vault` fallback outside 05A-05C, stop,
+  update #2311, and create or route a bounded child slice before claiming closure.
+- Each delivered child posts evidence to #2311. Posting the same evidence to #2003 is
+  traceability for the original capability, not automatic closure authority for #2003.
 
 ## Execution order
 

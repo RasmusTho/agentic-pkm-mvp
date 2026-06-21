@@ -25,11 +25,18 @@ State: **Filed and open** as the live validation hub.
 | 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | file as blocked/backlog until 05A/05B sequencing is clear |
 
 #2311 remains the validation hub for the follow-up migration and should not be implemented
-directly. Each delivered child posts evidence to #2311 and to #2003 before the next slice is
-picked up.
+directly. Each delivered child posts evidence to #2311 before the next slice is picked up.
+The same evidence may be linked to #2003 for traceability, but #2311 is a follow-up hub and
+does not by itself reopen or block the original #2003 closure contract unless the owner
+explicitly keeps #2003 open for this follow-up.
 
 ## Closure handoff
 The final delivered child (normally #2006 or #2005, whichever lands last) posts the capability
 acceptance receipt to #2003 and proposes closure once the README capability-acceptance
 checklist is satisfied. #2007 (definition) may remain open as a deferred docs follow-up
 without blocking parent closure, at owner discretion.
+
+For the #2311 follow-up, closure is separate: after 05A-05C are delivered and evidence is
+posted to #2311, close #2311 through verification-and-closure. Do not use #2311 child
+delivery alone as authority to close #2003; use the original #2003 checklist and owner
+decision for that parent.
