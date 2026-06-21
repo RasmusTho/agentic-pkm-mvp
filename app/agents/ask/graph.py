@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 TOP_K_INITIAL = 40
 RECALL_TOP_K = 3
 DEFAULT_RECALL_RECEIPTS_PATH = Path("runtime/agent_memory/recall_receipts.jsonl")
+_ASK_LAST_ACTIVE_LOADED_ATTR = "_ask_recall_last_active_loaded"
 
 
 def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> RetrievedHit:
@@ -103,15 +104,23 @@ def _recall_receipt_path() -> Path:
 def _active_recall_vault_root() -> Path | None:
     manager = get_vault_manager()
     context = manager.context
+    env_root = resolve_optional_vault_root(environment=active_environment())
+    if (
+        context.status == "selected"
+        and context.active_vault_path
+        and env_root is not None
+        and getattr(manager, _ASK_LAST_ACTIVE_LOADED_ATTR, False)
+    ):
+        return env_root.expanduser().resolve()
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser().resolve()
-    env_root = resolve_optional_vault_root(environment=active_environment())
     if env_root is not None:
         return env_root.expanduser().resolve()
     # After an API restart the manager boots with an empty no-vault context;
     # the persisted last-active vault is only materialized on demand. Lazily
     # load it only when no explicit channel vault binding is present.
     context = manager.load_last_active()
+    setattr(manager, _ASK_LAST_ACTIVE_LOADED_ATTR, context.status == "selected")
     if context.status == "selected" and context.active_vault_path:
         return Path(context.active_vault_path).expanduser().resolve()
     return None

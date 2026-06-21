@@ -17,8 +17,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
+import app.api.routes.companion as companion_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
 from tests.api._vault_test_helpers import bind_selected_vault
 
 
@@ -57,6 +60,16 @@ def client() -> TestClient:
 
 def _workspace(client: TestClient, note_path: str = "notes/note.md"):
     return client.get("/api/companion/workspace", params={"note_path": note_path})
+
+
+def _bind_no_vault_manager(monkeypatch: pytest.MonkeyPatch, store_dir: Path) -> VaultManager:
+    app_local_path = store_dir / ".app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
+    mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
+        delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
+    return mgr
 
 
 def test_vault_identity_present_in_runtime(
@@ -156,6 +169,7 @@ def test_no_vault_root_routes_to_picker_not_default_vault(
     # up implicitly.
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("VAULT_ROOT", raising=False)
+    _bind_no_vault_manager(monkeypatch, tmp_path)
     default_vault = Path("vault").resolve()
     default_note = default_vault / "notes" / "note.md"
     default_note.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +193,7 @@ def test_vault_root_invalid_returns_selection_required_state(
     monkeypatch.chdir(tmp_path)
     missing_vault = tmp_path / "missing-vault"
     monkeypatch.setenv("VAULT_ROOT", str(missing_vault))
+    _bind_no_vault_manager(monkeypatch, tmp_path)
     resp = _workspace(client)
     assert resp.status_code == 200
     data = resp.json()
@@ -231,6 +246,7 @@ def test_configured_vault_name_does_not_allow_missing_vault_root_fallback(
     )
     missing_vault = tmp_path / "host-only" / "Niflheim"
     monkeypatch.setenv("VAULT_ROOT", str(missing_vault))
+    _bind_no_vault_manager(monkeypatch, tmp_path)
     _configure_runtime_vault(monkeypatch, tmp_path, "Niflheim")
     resp = _workspace(client, note_path="notes/note.md")
     assert resp.status_code == 200

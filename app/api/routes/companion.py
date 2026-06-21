@@ -667,15 +667,17 @@ def read_companion_now() -> list[dict]:
     Pull-only, read-only projection of vault-native moment artifacts. No write, no
     notification, no reach-out: the human pulls this; the system does not interrupt.
     """
+    try:
+        root = resolve_optional_vault_root()
+    except VaultRootMisconfiguredError:
+        root = None
+    if root is not None:
+        return collect_now_moments(VaultContext(status="selected", active_vault_path=str(root)))
+
     context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
     if context.status == "selected" and context.active_vault_path:
         return collect_now_moments(context)
-    # Parity with `_active_companion_vault_root`: fall back to the configured VAULT_ROOT.
-    try:
-        root = resolve_vault_root()
-    except VaultRootMisconfiguredError:
-        return []
-    return collect_now_moments(VaultContext(status="selected", active_vault_path=str(root)))
+    return []
 
 
 @router.post(
