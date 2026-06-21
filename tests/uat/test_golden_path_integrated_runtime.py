@@ -31,6 +31,8 @@ import app.api.routes.canvas as canvas_module
 import app.api.routes.companion as companion_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
+from app.vault.app_local import AppLocalSettingsStore
+from app.vault.manager import VaultManager
 from app.panel.confirmation import SAME_TURN_TTL_SECONDS
 from companion_ui.workspace.serve_dev_page import make_handler
 
@@ -135,6 +137,14 @@ def golden_path(
     monkeypatch.delenv("CANVAS_ENABLED", raising=False)
     monkeypatch.delenv("WORKSPACE_UPDATE_FLOW_ENABLED", raising=False)
     monkeypatch.setattr(companion_module, "_configured_vault_name", lambda: "vault-test")
+    # Option-2 (#2309): a configured VAULT_ROOT is no longer the active vault —
+    # select the test vault so the integrated runtime resolves it instead of the
+    # no-vault picker. The golden path writes (confirm/save), so initialize it.
+    _vault_manager = VaultManager(
+        app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md")
+    )
+    _vault_manager.initialize_vault(vault, vault_name="vault-test", remember=False)
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: _vault_manager)
     _rebind_confirmation_stores()
     confirm_module._proposal_store.clear()
     confirm_module._idempotency_store.clear()
