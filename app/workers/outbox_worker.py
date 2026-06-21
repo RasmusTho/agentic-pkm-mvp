@@ -26,7 +26,7 @@ from app.services.companion_note import CompanionNote, scan_attachments, write_c
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import ack_outbox, append_jsonl_outbox_event, bootstrap, bump_outbox_attempts, poll_outbox_one, write_outbox_event
-from app.vault.paths import get_vault_inbox_dir_rel
+from app.vault.paths import NoVaultSelectedError, get_vault_inbox_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.events.models import new_event
 from scripts.yaml_roundtrip import load_frontmatter
@@ -202,6 +202,79 @@ class WorkerPanelSummary:
     deferred: bool = False
 
 
+@dataclass
+class WorkerTickResult:
+    """Outcome of a single worker tick.
+
+    ``state`` is ``"no_vault"`` when no vault is selected and the worker idled
+    without touching the filesystem, ``"idle"`` when a vault is bound but the
+    outbox had nothing to process, and ``"processed"`` when a message was
+    dispatched.
+    """
+
+    state: str
+    processed: int = 0
+
+
+def run_once(
+    *,
+    vault_root: Path | None = None,
+) -> WorkerTickResult:
+    """Run a single worker tick, idling honestly when no vault is selected.
+
+    With no vault bound (``VAULT_ROOT`` unset, no explicit ``vault_root``) the
+    worker reports a ``"no_vault"`` state and performs no outbox poll or
+    filesystem access, so it never synthesizes a CWD-relative ``./vault`` (#2384).
+    A set-but-missing ``VAULT_ROOT`` still raises through the strict resolver,
+    preserving the loud misconfiguration contract.
+    """
+    if _resolve_optional_vault_root(vault_root) is None:
+        logger.debug("outbox worker tick idled: no vault selected")
+        return WorkerTickResult(state="no_vault", processed=0)
+
+    message = poll_outbox_one()
+    if not message:
+        return WorkerTickResult(state="idle", processed=0)
+
+    topic = message.get("topic")
+    payload = message.get("payload") or {}
+    trace_id = (
+        payload.get("trace_id")
+        or message.get("trace_id")
+        or _trace_id_from_envelope(message.get("event"))
+        or "-"
+    )
+    _dispatch_topic(topic, payload, trace_id=trace_id, message=message)
+    ack_outbox(message["id"])
+    return WorkerTickResult(state="processed", processed=1)
+
+
+def _dispatch_topic(
+    topic: str | None,
+    payload: Mapping[str, Any],
+    *,
+    trace_id: str,
+    message: Mapping[str, Any],
+) -> None:
+    if topic == INGEST_OBJECT_CREATED:
+        handle_ingest_object_created(payload)
+    elif topic == INGEST_VAULT_CHANGED:
+        handle_ingest_vault_changed(payload, trace_id=trace_id)
+    elif topic == INGEST_OBJECT_DELETED:
+        handle_ingest_object_deleted(payload)
+    elif topic == PANEL_SCAN_REQUESTED:
+        event_timestamp = message.get("timestamp") or payload.get("timestamp")
+        handle_panel_scan_requested(
+            payload,
+            trace_id=trace_id,
+            scan_requested_ts=event_timestamp,
+        )
+    elif topic == NOTE_MOVE_WORKBENCH:
+        handle_note_move_workbench(payload, trace_id=trace_id)
+    else:
+        logger.debug("worker run_once skipping unsupported topic=%s trace_id=%s", topic, trace_id)
+
+
 def _trace_id_from_envelope(envelope: object) -> str | None:
     if isinstance(envelope, dict):
         raw = envelope.get("trace_id")
@@ -237,7 +310,16 @@ def _ensure_logging_configured() -> None:
     logger.propagate = False
 
 
-def _resolve_vault_root(vault_root: Path | None = None) -> Path:
+def _resolve_optional_vault_root(vault_root: Path | None = None) -> Path | None:
+    """Resolve the worker's vault root, or ``None`` when no vault is selected.
+
+    Precedence: explicit ``vault_root`` -> existing ``WATCHER_VAULT_PATH`` ->
+    existing ``VAULT_ROOT`` -> existing legacy ``/app/vault`` mount. The legacy
+    ``/app/vault`` mount check is intentionally kept here; its removal is Slice
+    05D (#2386) and out of scope for this slice. The silent CWD-relative
+    ``Path("vault")`` fallback is removed (#2384): with no vault selected this
+    returns ``None`` so the worker idles instead of synthesizing ``./vault``.
+    """
     if vault_root is not None:
         return vault_root.expanduser().resolve()
     watcher_root = os.getenv("WATCHER_VAULT_PATH")
@@ -250,10 +332,26 @@ def _resolve_vault_root(vault_root: Path | None = None) -> Path:
         env_path = Path(env_root).expanduser()
         if env_path.exists():
             return env_path.resolve()
-    mounted_root = Path("/app/vault")
+    mounted_root = Path("/app/vault")  # legacy mount, removed in slice 05D (#2386)
     if mounted_root.exists():
         return mounted_root.resolve()
-    return Path("vault").expanduser().resolve()
+    return None
+
+
+def _resolve_vault_root(vault_root: Path | None = None) -> Path:
+    """Resolve the worker vault root, raising when no vault is selected.
+
+    Event handlers require a vault root to locate note files; they call this
+    strict variant. The no-vault idle decision is made earlier (see
+    :func:`run_once`) so handlers are only reached once a vault is bound.
+    """
+    resolved = _resolve_optional_vault_root(vault_root)
+    if resolved is None:
+        raise NoVaultSelectedError(
+            "outbox worker requires a selected vault to process events; "
+            "VAULT_ROOT is unset"
+        )
+    return resolved
 
 
 def _note_path_from_payload(payload: Mapping[str, Any], *, vault_root: Path) -> Path:

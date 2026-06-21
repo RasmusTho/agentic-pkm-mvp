@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import yaml
 
+from app.config.paths import resolve_optional_vault_root
 from app.vault.layout import load_layout
 from app.vault.manager import VaultContext
 from app.vault.settings_service import SettingsService
@@ -36,6 +37,15 @@ class ResolvedVaultPaths:
 
 class VaultPathResolutionError(RuntimeError):
     """Raised when vault-scoped paths cannot be resolved from the active context."""
+
+
+class NoVaultSelectedError(RuntimeError):
+    """Raised when a vault path helper is called without a selected vault.
+
+    Runtime callers that previously relied on the silent ``Path("vault")``
+    CWD fallback must now branch on this explicit no-vault signal instead of
+    reading or writing under the current working directory (#2384).
+    """
 
 
 class VaultPathResolver:
@@ -100,13 +110,24 @@ def _optional_local_path(vault_root: Path, value: object) -> Path | None:
 
 
 def _resolve_vault_root(vault_root: Path | None = None) -> Path:
+    """Resolve the vault root for path helpers.
+
+    An explicit ``vault_root`` always wins. Otherwise resolution defers to
+    :func:`app.config.paths.resolve_optional_vault_root`, which returns ``None``
+    when ``VAULT_ROOT`` is unset (no selected vault) and still raises
+    :class:`VaultRootMisconfiguredError` for a set-but-missing root. The legacy
+    silent ``Path("vault")`` CWD fallback is gone (#2384): a no-vault state now
+    raises :class:`NoVaultSelectedError` so runtime callers skip rather than
+    synthesize a CWD-relative vault.
+    """
     if vault_root is not None:
         return vault_root.expanduser()
-    env_root = os.getenv("VAULT_ROOT")
-    if env_root:
-        return Path(env_root).expanduser()
-    # Keep the historical fallback for non-runtime contexts.
-    return Path("vault").expanduser()
+    resolved = resolve_optional_vault_root()
+    if resolved is None:
+        raise NoVaultSelectedError(
+            "vault path resolution requires a selected vault; VAULT_ROOT is unset"
+        )
+    return resolved.expanduser()
 
 
 def _read_system_settings(path: Path) -> Dict[str, Any]:
@@ -276,6 +297,7 @@ def get_vault_runtime_dir_rel(vault_root: Path | None = None) -> str:
 
 
 __all__ = [
+    "NoVaultSelectedError",
     "ResolvedVaultPaths",
     "VaultPathResolutionError",
     "VaultPathResolver",

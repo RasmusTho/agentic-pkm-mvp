@@ -55,6 +55,12 @@ def test_compile_removes_stale_agent_yaml(tmp_path, monkeypatch):
 def test_compile_includes_panel_and_watcher_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_dir = tmp_path / "runtime/settings"
     monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    # Bind the repo vault fixture explicitly. The watcher settings source path is
+    # only populated when a vault is selected; the implicit CWD-relative ./vault
+    # fallback was removed in #2384, so the test must set VAULT_ROOT rather than
+    # rely on compilation happening to run from the repo root.
+    repo_vault = Path(__file__).resolve().parents[2] / "vault"
+    monkeypatch.setenv("VAULT_ROOT", str(repo_vault))
     compiler.compile_all()
 
     panel_yaml = yaml.safe_load((runtime_dir / "panel_actions.yaml").read_text())

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config.environment import active_environment
-from app.config.paths import resolve_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.events.outbox import default_outbox_path, event_name, latest_trace_story, normalize_timestamp
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
@@ -186,15 +186,22 @@ class HealthContract:
         *,
         state_machine: HealthStateMachine | None = None,
         now_fn: Callable[[], datetime] | None = None,
-        vault_root_fn: Callable[[], Path] | None = None,
+        vault_root_fn: Callable[[], Path | None] | None = None,
     ):
         self.state_machine = state_machine or HealthStateMachine()
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
-        self.vault_root_fn = vault_root_fn or resolve_vault_root
+        # Optional resolver: returns None when no vault is selected (#2384) and
+        # still raises VaultRootMisconfiguredError for a set-but-missing root.
+        self.vault_root_fn = vault_root_fn or resolve_optional_vault_root
 
     def evaluate(self) -> dict[str, Any]:
         now = self.now_fn()
-        vault_root = self.vault_root_fn()
+        try:
+            vault_root = self.vault_root_fn()
+        except VaultRootMisconfiguredError:
+            # Set-but-missing VAULT_ROOT stays loud as a not_selected vault
+            # identity; health still evaluates the rest of the runtime.
+            vault_root = None
         settings_result = load_health_settings(vault_root=vault_root)
         outbox_path = default_outbox_path()
         outbox_count = _count_outbox_lines(outbox_path)
@@ -253,6 +260,10 @@ class HealthContract:
             "state": state,
             "reason": reason,
             "since_ts": since_ts,
+            "vault": {
+                "status": settings_result.vault_status,
+                "configured_vault_root": settings_result.configured_vault_root,
+            },
             "outbox_count": outbox_count,
             "outbox_recent_age_s": age,
             "store_object_count": object_count,

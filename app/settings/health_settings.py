@@ -11,7 +11,7 @@ from app.settings.tiering import is_lab_profile
 
 import yaml
 
-from app.config.paths import resolve_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.vault.paths import get_vault_system_dir_rel
 
 
@@ -80,6 +80,8 @@ class HealthSettingsLoadResult:
     settings: HealthSettingsV1
     source: SettingsSource
     errors: list[str]
+    vault_status: str = "selected"
+    configured_vault_root: str | None = None
 
 
 _ENV_OVERRIDE_SPEC = {
@@ -122,7 +124,33 @@ def load_health_settings(
         profile_env: Mapping used to determine the active settings profile
             (defaults to ``os.environ``).  Inject a custom mapping in tests.
     """
-    vault_root = vault_root or resolve_vault_root()
+    if vault_root is None:
+        try:
+            vault_root = resolve_optional_vault_root()
+        except VaultRootMisconfiguredError as exc:
+            # Set-but-missing VAULT_ROOT stays loud/misconfigured (#2384): report
+            # an explicit not_selected vault status with the configured root,
+            # rather than reading settings from a synthesized ./vault.
+            return HealthSettingsLoadResult(
+                status="missing",
+                settings=HealthSettingsV1.defaults(),
+                source=SettingsSource(path="", mtime=None, sha256=None),
+                errors=[],
+                vault_status="not_selected",
+                configured_vault_root=str(exc.configured_path),
+            )
+        if vault_root is None:
+            # No vault selected: report no-vault identity instead of falling back
+            # to a CWD-relative ./vault default root (#2384).
+            return HealthSettingsLoadResult(
+                status="missing",
+                settings=HealthSettingsV1.defaults(),
+                source=SettingsSource(path="", mtime=None, sha256=None),
+                errors=[],
+                vault_status="none",
+                configured_vault_root=None,
+            )
+
     target = vault_root / _settings_rel_path(vault_root)
     source = build_source(target)
     if not target.exists():
@@ -131,6 +159,8 @@ def load_health_settings(
             settings=HealthSettingsV1.defaults(),
             source=source,
             errors=[],
+            vault_status="selected",
+            configured_vault_root=str(vault_root),
         )
 
     raw, parse_errors = _read_frontmatter(target)
@@ -176,6 +206,8 @@ def load_health_settings(
         settings=active_settings,
         source=source,
         errors=errors,
+        vault_status="selected",
+        configured_vault_root=str(vault_root),
     )
 
 
