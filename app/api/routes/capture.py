@@ -22,8 +22,10 @@ The action rides the existing governed machinery — no parallel write path:
   the endpoint.
 - **event pipeline** — a ``capture.inbox.appended`` outbox event records the
   applied append (JSONL audit log plus DB outbox mirror, same pattern as the
-  Panel confirmation service). The payload is metadata-only; the captured
-  text itself is durable in the vault, not duplicated into event logs.
+  Panel confirmation service). For governed writes this event carries the
+  AuthorityReceipt and is required before returning a success acknowledgement.
+  The payload is metadata-only; the captured text itself is durable in the
+  vault, not duplicated into event logs.
 
 vault-inbox note convention (reused from existing repo conventions):
 
@@ -43,9 +45,10 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -53,6 +56,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.config.paths import resolve_vault_root
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
+from app.governance.governed_write import (
+    AuthorityReceipt,
+    GovernedWriteAdapter,
+    GovernedWriteGrant,
+)
 from app.knowledge.write_ops import append_note_relative
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
@@ -69,8 +77,15 @@ router = APIRouter(prefix="/companion", tags=["companion"])
 
 CAPTURE_APPENDED_EVENT = "capture.inbox.appended"
 _WRITE_GUARD_ACTION = "companion.capture.append"
+_WRITE_CLASS = "vault_capture_append"
 _DEFAULT_CAPTURE_NOTE_NAME = "inbox.md"
 _EVENT_SOURCE = "companion.capture"
+_STATE_OWNER = "knowledge"
+_GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
+
+
+class CaptureEventPersistenceError(RuntimeError):
+    """Raised when governed capture accountability cannot be persisted."""
 
 
 class CaptureRequest(BaseModel):
@@ -101,6 +116,7 @@ class CaptureResponse(BaseModel):
     captured_at: str
     trace_id: str
     events_emitted: list[str] = Field(default_factory=list)
+    governed_write: dict[str, Any] | None = None
 
 
 def _capture_note_rel(vault_root: Path) -> str:
@@ -143,12 +159,32 @@ def _resolve_outbox_path() -> Path:
     return Path(INDEX_OUTBOX_PATH)
 
 
-def _emit_capture_event(payload: dict[str, str], trace_id: str) -> list[str]:
+def _governed_write_payload(
+    grant: GovernedWriteGrant,
+    authority_receipt: AuthorityReceipt,
+) -> dict[str, Any]:
+    return {
+        "policy_decision": asdict(grant.policy_decision),
+        "decision_token": asdict(grant.decision_token),
+        "authority_receipt": asdict(authority_receipt),
+    }
+
+
+def _writeguard_blocked_detail(exc: WritesBlockedError) -> dict[str, Any]:
+    return {
+        "error": "writeguard_blocked",
+        "state": "blocked",
+        "message": str(exc),
+        "reason": exc.reason,
+    }
+
+
+def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
     """Record the applied append on the event pipeline.
 
-    Same dual-sink pattern as the Panel confirmation service: JSONL audit log
-    always, DB outbox mirror when a pg backend is configured. Returns the
-    emitted event names; sink failures are logged, never silent.
+    JSONL audit log is the required local accountability sink. The DB outbox
+    mirror is used when a pg backend is configured. At least one sink must
+    persist the event before the endpoint acknowledges the governed write.
     """
     evt = make_outbox_event(
         event=CAPTURE_APPENDED_EVENT,
@@ -161,8 +197,12 @@ def _emit_capture_event(payload: dict[str, str], trace_id: str) -> list[str]:
         emitted = append_jsonl_outbox_event(
             _resolve_outbox_path(), evt, default_source=_EVENT_SOURCE
         )
-    except Exception:
-        logger.warning("capture event jsonl write failed trace_id=%s", trace_id)
+    except Exception as exc:
+        logger.warning(
+            "capture event jsonl write failed trace_id=%s err=%s",
+            trace_id,
+            exc,
+        )
 
     backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
     db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
@@ -170,8 +210,10 @@ def _emit_capture_event(payload: dict[str, str], trace_id: str) -> list[str]:
         outbox_evt = coerce_outbox_event(evt, default_source=_EVENT_SOURCE)
         if outbox_evt is not None:
             try:
-                write_outbox_event(outbox_evt, idempotency_key=outbox_evt.event_id)
-                emitted = True
+                stored_id = write_outbox_event(
+                    outbox_evt, idempotency_key=outbox_evt.event_id
+                )
+                emitted = emitted or bool(stored_id)
             except Exception as exc:
                 logger.warning(
                     "capture event db outbox write failed trace_id=%s err=%s",
@@ -179,7 +221,12 @@ def _emit_capture_event(payload: dict[str, str], trace_id: str) -> list[str]:
                     exc,
                 )
 
-    return [CAPTURE_APPENDED_EVENT] if emitted else []
+    if not emitted:
+        raise CaptureEventPersistenceError(
+            "capture AuthorityReceipt was not persisted to any outbox sink"
+        )
+
+    return [CAPTURE_APPENDED_EVENT]
 
 
 @router.post("/capture", response_model=CaptureResponse)
@@ -203,18 +250,14 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
             },
         )
 
-    # Policy — the WriteGuard gates the bounded capture action.
+    # Policy — preserve the legacy guard-first failure ordering. Blocked writes
+    # must return writeguard_blocked before any vault binding or inbox lookup.
     try:
         DEFAULT_WRITE_GUARD.assert_writes_allowed(_WRITE_GUARD_ACTION)
     except WritesBlockedError as exc:
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": "writeguard_blocked",
-                "state": "blocked",
-                "message": str(exc),
-                "reason": exc.reason,
-            },
+            detail=_writeguard_blocked_detail(exc),
         ) from exc
 
     # vault-inbox note convention — resolution failures are explicit, the text is
@@ -234,6 +277,22 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
             },
         ) from exc
 
+    # Policy — the governed-write adapter maps WriteGuard approval to a
+    # DecisionToken before the state-owning writer mutates the vault.
+    try:
+        grant = _GOVERNED_WRITE_ADAPTER.issue_decision_token(
+            write_guard=DEFAULT_WRITE_GUARD,
+            action=_WRITE_GUARD_ACTION,
+            write_class=_WRITE_CLASS,
+            actor=_EVENT_SOURCE,
+            resource=note_rel,
+        )
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_writeguard_blocked_detail(exc),
+        ) from exc
+
     # Deterministic writer — the governed append; its WriteReceipt is the
     # runtime acknowledgement.
     captured_at = (
@@ -244,17 +303,41 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
         _compose_append_entry(note_rel, text, captured_at, vault_root=vault_root),
         vault_root=vault_root,
     )
-
-    # Event pipeline — record the applied append (metadata only).
-    events_emitted = _emit_capture_event(
-        {
-            "note_path": receipt.locator.path,
-            "operation": receipt.operation,
-            "adapter": receipt.adapter,
-            "captured_at": captured_at,
-        },
+    authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
+        decision_token=grant.decision_token,
+        mutation_receipt=receipt,
+        state_owner=_STATE_OWNER,
         trace_id=trace_id,
     )
+    governed_write = _governed_write_payload(grant, authority_receipt)
+
+    # Event pipeline — record the applied append (metadata only).
+    try:
+        events_emitted = _emit_capture_event(
+            {
+                "note_path": receipt.locator.path,
+                "operation": receipt.operation,
+                "adapter": receipt.adapter,
+                "captured_at": captured_at,
+                "decision_token_id": grant.decision_token.token_id,
+                "authority_receipt_id": authority_receipt.receipt_id,
+                "governed_write": governed_write,
+            },
+            trace_id=trace_id,
+        )
+    except CaptureEventPersistenceError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "authority_receipt_persistence_failed",
+                "state": "not_acknowledged",
+                "message": (
+                    "The capture was written, but its AuthorityReceipt could "
+                    "not be persisted; success acknowledgement was withheld."
+                ),
+                "trace_id": trace_id,
+            },
+        ) from exc
 
     return CaptureResponse(
         note_path=receipt.locator.path,
@@ -263,6 +346,7 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse:
         captured_at=captured_at,
         trace_id=trace_id,
         events_emitted=events_emitted,
+        governed_write=governed_write,
     )
 
 

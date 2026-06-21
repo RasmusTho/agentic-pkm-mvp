@@ -92,8 +92,9 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     assert resp.status_code == 200, resp.text
     data = resp.json()
 
-    # Policy gate ran with the bounded capture action.
-    assert guard_actions == ["companion.capture.append"]
+    # Policy gate ran with the bounded capture action: first to preserve the
+    # legacy guard-held failure ordering, then again for token issuance.
+    assert guard_actions == ["companion.capture.append", "companion.capture.append"]
 
     # The capture landed in the vault inbox per the note convention.
     inbox_note = vault / "Inbox" / "inbox.md"
@@ -111,6 +112,15 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     assert data["captured_at"]
     assert data["captured_at"] in written
     assert data["trace_id"]
+    governed_write = data["governed_write"]
+    assert governed_write["policy_decision"]["status"] == "approved"
+    assert governed_write["policy_decision"]["source"] == "WriteGuard"
+    assert governed_write["decision_token"]["resource"] == "Inbox/inbox.md"
+    assert governed_write["decision_token"]["write_class"] == "vault_capture_append"
+    assert governed_write["authority_receipt"]["outcome"] == "applied"
+    assert governed_write["authority_receipt"]["operation"] == "append_note"
+    assert governed_write["authority_receipt"]["adapter"] == "fs_vault"
+    assert governed_write["authority_receipt"]["state_owner"] == "knowledge"
 
     # The governed event pipeline recorded the applied append.
     assert "capture.inbox.appended" in data["events_emitted"]
@@ -119,6 +129,12 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     assert len(capture_events) == 1
     payload = capture_events[0].get("payload") or {}
     assert payload.get("note_path") == "Inbox/inbox.md"
+    assert payload.get("decision_token_id") == governed_write["decision_token"]["token_id"]
+    assert (
+        payload.get("authority_receipt_id")
+        == governed_write["authority_receipt"]["receipt_id"]
+    )
+    assert payload.get("governed_write") == governed_write
     assert capture_events[0].get("trace_id") == data["trace_id"]
 
     # A second capture appends — it does not replace the inbox note.
@@ -217,4 +233,77 @@ def test_capture_writeguard_block_is_explicit_and_writes_nothing(
     assert detail["message"]
 
     assert not (vault / "Inbox" / "inbox.md").exists()
+    assert _outbox_events(outbox) == []
+
+
+def test_capture_writeguard_block_takes_precedence_over_vault_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_vault = tmp_path / "missing-vault"
+    outbox = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("VAULT_ROOT", str(missing_vault))
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    monkeypatch.delenv("VAULT_CAPTURE_NOTE_REL", raising=False)
+
+    def _blocked(action: str) -> None:
+        raise WritesBlockedError(state="safe_mode", reason="test lock", action=action)
+
+    monkeypatch.setattr(
+        capture_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", _blocked
+    )
+
+    resp = TestClient(app).post(
+        "/api/companion/capture", json={"text": "blocked before vault lookup"}
+    )
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["error"] == "writeguard_blocked"
+    assert detail["reason"] == "test lock"
+    assert _outbox_events(outbox) == []
+
+
+def test_capture_withholds_success_when_authority_receipt_event_is_not_persisted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault, outbox = _setup_vault(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(
+        capture_module.DEFAULT_WRITE_GUARD,
+        "assert_writes_allowed",
+        lambda action: None,
+    )
+
+    def _fail_jsonl_append(*args: object, **kwargs: object) -> bool:
+        raise OSError("disk full")
+
+    def _fail_db_write(*args: object, **kwargs: object) -> str:
+        raise OSError("db down")
+
+    monkeypatch.setattr(
+        capture_module, "append_jsonl_outbox_event", _fail_jsonl_append
+    )
+    monkeypatch.setattr(capture_module, "write_outbox_event", _fail_db_write)
+
+    resp = TestClient(app).post(
+        "/api/companion/capture",
+        json={"text": "persist accountability before ack"},
+    )
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["error"] == "authority_receipt_persistence_failed"
+    assert detail["state"] == "not_acknowledged"
+    assert detail["trace_id"]
+    assert "could not be persisted" in detail["message"]
+
+    inbox_note = vault / "Inbox" / "inbox.md"
+    assert inbox_note.exists()
+    assert "persist accountability before ack" in inbox_note.read_text(
+        encoding="utf-8"
+    )
     assert _outbox_events(outbox) == []

@@ -34,6 +34,7 @@ from companion_ui.workspace.capture_modal import (
     CAPTURE_STATES,
     NOT_YET_WRITTEN,
     WRITTEN,
+    WRITTEN_UNACKNOWLEDGED,
     CaptureAck,
     CaptureSessionState,
     SessionCapture,
@@ -223,9 +224,15 @@ def test_capture_save_shows_written_state_from_runtime_ack() -> None:
 
     # A write can never be claimed without a runtime acknowledgement: the
     # written state is unconstructable ack-less, by construction.
-    assert CAPTURE_STATES == (WRITTEN, NOT_YET_WRITTEN)
+    assert CAPTURE_STATES == (WRITTEN, WRITTEN_UNACKNOWLEDGED, NOT_YET_WRITTEN)
     with pytest.raises(ValueError):
         SessionCapture(text="ghost write", state=WRITTEN, ack=None)
+    pending = SessionCapture(
+        text="vault write happened but acknowledgement failed",
+        state=WRITTEN_UNACKNOWLEDGED,
+        ack=None,
+    )
+    assert pending.state == WRITTEN_UNACKNOWLEDGED
 
     # Rendered surface: the modal, its declared regions, and the save action.
     html = _render()
@@ -308,6 +315,27 @@ def test_capture_modal_success_path_records_written_result() -> None:
     assert after.captures[0].ack is not None
     assert after.captures[0].ack.trace_id == "trace-cap-written"
     assert after.draft == ""
+
+
+def test_capture_modal_distinguishes_written_but_unacknowledged_response() -> None:
+    pending = SessionCapture(
+        text="already in vault, acknowledgement pending",
+        state=WRITTEN_UNACKNOWLEDGED,
+        ack=None,
+    )
+    assert pending.state == WRITTEN_UNACKNOWLEDGED
+    with pytest.raises(ValueError):
+        SessionCapture(
+            text="ack reference would be fabricated",
+            state=WRITTEN_UNACKNOWLEDGED,
+            ack=_ack(),
+        )
+
+    script = _script(_render())
+    assert "onWrittenUnacknowledged" in script
+    assert "detail.state === 'not_acknowledged'" in script
+    assert "addEntry(text, 'written_unacknowledged', null)" in script
+    assert "written \\u00b7 acknowledgement pending" in script
 
 
 def test_capture_proxy_allows_companion_capture_path() -> None:
