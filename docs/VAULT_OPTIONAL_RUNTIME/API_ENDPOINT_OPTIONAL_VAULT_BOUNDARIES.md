@@ -4,8 +4,8 @@ description: Request-path API endpoints stop using eager vault resolution and re
 task_id: VAULT_OPTIONAL_RUNTIME-05A
 source_anchor: docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up eager resolver migration
 parent_capability: Vault Optional at Runtime
-prerequisites: [RESOLVE_NO_VAULT_STATE.md, COMPANION_NO_VAULT_ROUTING.md]
-depends_on: []
+prerequisites: [VAULT_OPTIONAL_RUNTIME-01, VAULT_OPTIONAL_RUNTIME-03]
+depends_on: [RESOLVE_NO_VAULT_STATE.md, COMPANION_NO_VAULT_ROUTING.md]
 can_parallelize_with: []
 ---
 

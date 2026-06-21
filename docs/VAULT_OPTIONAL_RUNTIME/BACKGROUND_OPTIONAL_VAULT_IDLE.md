@@ -4,7 +4,7 @@ description: Background workers and settings readers idle honestly when no vault
 task_id: VAULT_OPTIONAL_RUNTIME-05B
 source_anchor: docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up eager resolver migration
 parent_capability: Vault Optional at Runtime
-prerequisites: [RESOLVE_NO_VAULT_STATE.md, BOOT_RUNTIME_WITHOUT_VAULT.md]
+prerequisites: [VAULT_OPTIONAL_RUNTIME-01, VAULT_OPTIONAL_RUNTIME-02]
 depends_on: [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md]
 can_parallelize_with: []
 ---

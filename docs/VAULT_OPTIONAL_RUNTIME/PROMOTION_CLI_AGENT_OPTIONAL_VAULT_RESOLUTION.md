@@ -4,7 +4,7 @@ description: Promotion, CLI, and agent helper consumers make vault resolution la
 task_id: VAULT_OPTIONAL_RUNTIME-05C
 source_anchor: docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up eager resolver migration
 parent_capability: Vault Optional at Runtime
-prerequisites: [RESOLVE_NO_VAULT_STATE.md]
+prerequisites: [VAULT_OPTIONAL_RUNTIME-01]
 depends_on: [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md, BACKGROUND_OPTIONAL_VAULT_IDLE.md]
 can_parallelize_with: []
 ---
