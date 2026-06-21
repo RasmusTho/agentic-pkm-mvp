@@ -80,7 +80,7 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 |---|---|---|---|---|---|
 | No private platform store construction outside PDM. | PDM / OEF | Keeps storage technology from becoming architecture; centralizes migrations. | Manual review now. | CI check later (DSN/store-construction scan) once PDM seam inventoried. | Debt D3 / #2358. |
 | `ContextBundle` must carry scope and provenance. | RCA | Keeps retrieval output candidate-only and explainable, never truth. | CI check now for production retrieval bundle emission; manual review elsewhere. | Extend CI conformance coverage across remaining retrieval/search outputs. | Debt D4 / #2359. |
-| `MemoryRecord` must carry review state and provenance. | MEM | Stops unreviewed memory from becoming hidden instruction. | Manual review now. | CI check later (record-shape conformance). | Debt D5 / #2360. |
+| `MemoryRecord` must carry review state and provenance. | MEM | Stops unreviewed memory from becoming hidden instruction. | CI check now for review-entry and promoted-recall adapter projection; manual review elsewhere. | Extend CI conformance coverage across remaining memory lifecycle classes. | Debt D5 / #2360. |
 | `ExecutionRequest` must carry governed authorization for side effects. | EXE / GOV | Separates agents from side-effecting execution; ties effects to a decision. | Manual review now. | Blocking invariant (CI contract test once EXE seam exists). | Debt D6 / #2361. |
 
 ### P2 — provider, sync, and observability neutrality

@@ -86,6 +86,9 @@ Define inspectable machine memory and learning feedback without letting memory b
 ## Transitional Implementation Notes
 
 Existing Agent Memory and Durable Memory/Recall docs provide current behavior and shipped slices. This target contract adds the SBS owner boundary and required lifecycle fields.
+The first runtime adapter is `app/agent_memory/memory_record.py` (#2360), which projects current
+review-entry and promoted-recall outputs into a MemoryRecord-shaped envelope and explicitly marks
+fields that the current lifecycle does not yet capture.
 
 ## Open Questions
 

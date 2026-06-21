@@ -42,6 +42,14 @@ its lifecycle, and its authority limits. It remains the semantic source of truth
 records how that contract was turned into the delivered slices and where their verification evidence
 lives.
 
+## SBS MemoryRecord Adapter
+
+Issue #2360 adds `app/agent_memory/memory_record.py`, a read-only adapter that projects current
+review-queue and promoted-recall outputs into a MemoryRecord-shaped envelope. The adapter preserves
+existing behavior: it surfaces review state, provenance, confidence when present, correction posture,
+promotion receipts, and `may_write=false`, while explicitly marking ActiveContext, staleness timestamp,
+archive, and forgetting fields as unavailable on the current path.
+
 ## Successor Capability
 
 The storage-backend non-goal listed above was deferred, not abandoned. The successor capability
