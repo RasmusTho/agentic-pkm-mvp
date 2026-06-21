@@ -697,6 +697,7 @@ def _render_workspace_header_strip(
           <span class="workspace-header-spacer" aria-hidden="true"></span>
           <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
+            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.settings.open" title="Vault settings" aria-label="Open vault settings" aria-controls="workspace-vault-settings-panel" aria-expanded="false">V</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-map" data-surface="map" data-intent="map.open" title="System map" aria-label="Open system map" onclick="overlayHost.mount('map')">❖</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-memory" data-surface="memory" data-intent="memory.open" title="Memory candidate review" aria-label="Open memory candidate review drawer" onclick="overlayHost.mount('memory')">&#9670;</button>
             <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-receipts" data-surface="receipts" data-intent="receipts.open" title="Receipts history" aria-label="Open read-only receipts history" onclick="overlayHost.mount('receipts')">&#9776;</button>
@@ -7603,8 +7604,16 @@ def render_index_html(
     # gates only on the server-declared error, it does not re-classify state.
     runtime_unreachable = _is_runtime_unreachable(error)
     suppress_vault_settings = runtime_unreachable or route_error
-    vault_settings_panel_html = "" if suppress_vault_settings else vault_settings_panel_markup()
+    vault_settings_panel_html = (
+        ""
+        if suppress_vault_settings
+        else vault_settings_panel_markup(hidden_by_default=fields is not None)
+    )
     vault_settings_panel_js = "" if suppress_vault_settings else vault_settings_panel_script()
+    # Loaded note workspaces keep the settings panel mounted for controller
+    # compatibility, but hidden/inert by default so it cannot cover the
+    # document after normal note navigation (#2333). True no-vault/setup pages
+    # still render the panel visibly as the picker recovery surface.
     # Live co-authoring wiring is gated by the server-declared canvas flag,
     # matching _render_note_section's guard derivation. With no fields (error /
     # orientation) the canvas surface is absent, so the script is not emitted.
