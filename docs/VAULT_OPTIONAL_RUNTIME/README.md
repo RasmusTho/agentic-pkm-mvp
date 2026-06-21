@@ -1,6 +1,6 @@
 # Vault Optional at Runtime
 
-State: Specification filed. Parent feature issue **#2003** (validation hub); children #2004–#2007. See `PARENT_FEATURE_ISSUE.md`.
+State: Specification filed. Parent feature issue **#2003** (validation hub); children #2004-#2007. Follow-up eager resolver migration hub **#2311** is split into Slices 05A-05D. See `PARENT_FEATURE_ISSUE.md`.
 Doc role: Capability specification / source of truth for the breakdown.
 Owner decision: 2026-06-14 — a vault is **not required at initiation**; the runtime boots
 with no vault bound and idles until one is opened; vaults can be opened, switched, and
@@ -59,9 +59,54 @@ Out of scope (this capability):
 | 3 | [COMPANION_NO_VAULT_ROUTING](COMPANION_NO_VAULT_ROUTING.md) | #2006 | companion `vault_selection_required` covers the *unset* case; open/switch/register verified end-to-end | Delivered (`/api/companion/vault/context` returns `reason="no_vault_bound"` with `recent_vaults`; verified by `tests/api/test_companion_vault_routing.py`) |
 | later | [PIN_VAULT_DEFINITION](PIN_VAULT_DEFINITION.md) | #2007 | pin the overloaded "vault" term across docs | Deferred (needs-human) |
 
+## Follow-up eager resolver migration (#2311)
+
+The foundation above introduced the optional resolver and shipped the startup/picker behavior.
+#2311 is the cleanup hub for remaining eager `resolve_vault_root()` consumers. It is not a
+single ready implementation slice; it is split into bounded children so request paths,
+background producers, shared path helpers, import-time/CLI/agent/MCP/knowledge consumers,
+and final runtime mount cleanup can be verified independently.
+
+| Order | Task | Issue | Adds | Status |
+| --- | --- | --- | --- | --- |
+| 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | TBD | capture/artifacts/canvas/debug and companion request helpers return picker/empty no-vault responses instead of `./vault` fallback | Ready to file first; deliver before 05B/05C/05D unless explicitly parallelized |
+| 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | TBD | outbox worker, watcher/health settings, inbox appenders, and vault path helpers idle or report no-vault when no vault is selected | Blocked/backlog until 05A lands or is released |
+| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | TBD | promotion queue import becomes lazy; CLI/agent/helper/MCP/knowledge callers make vault requirements explicit or optional | Blocked/backlog until 05A/05B sequencing is clear |
+| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | TBD | legacy `/app/vault` compose/runtime-env fallback is removed or re-baselined after resolver consumers no longer require it | Blocked/backlog until 05A-05C land |
+
+## Cross-Task Invariants / Interaction Safety
+
+- No runtime code path may silently resolve to CWD-relative `./vault` when no vault is
+  selected and `VAULT_ROOT` is unset.
+- This covers direct `Path("vault")` helper fallbacks, not only call sites that import
+  `app.config.paths.resolve_vault_root()`.
+- Request-path endpoints return the picker/no-vault contract or an explicitly empty read
+  result; they do not 500 or serve an empty fallback vault.
+- Background producers idle/no-op when no vault is selected.
+- Import-time modules do not resolve a vault as a side effect of import.
+- CLI commands either accept an explicit vault or fail with an explicit operator-facing
+  vault requirement.
+- Selected-vault behavior remains unchanged.
+- Changes that touch vault resolution, active-vault boundaries, or companion hot paths must
+  run the opt-in IR-v1 UAT: `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`.
+- Partial delivery is explicitly a mixed-migration state: after 05A lands, request-path
+  endpoints may be safe while background/helper/CLI/MCP/knowledge and mount/runtime-env
+  fallbacks remain tracked in 05B-05D. Do not claim the global no-fallback invariant until
+  all four slices have posted evidence.
+- 05B, 05C, and 05D stay Backlog/blocked unless the coordinator updates the issue contract
+  and Project state; they must not become `agent:ready` just because 05A is in flight.
+- If implementation discovers another runtime `./vault` fallback outside 05A-05D, stop,
+  update #2311, and create or route a bounded child slice before claiming closure.
+- Each delivered child posts evidence to #2311. Posting the same evidence to #2003 is
+  traceability for the original capability, not automatic closure authority for #2003.
+
 ## Execution order
 
 `RESOLVE_NO_VAULT_STATE` → ( `BOOT_RUNTIME_WITHOUT_VAULT` ∥ `COMPANION_NO_VAULT_ROUTING` ) → `PIN_VAULT_DEFINITION` (any time; gated as a human decision).
+
+Follow-up #2311 sequencing: `API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES` first, then
+`BACKGROUND_OPTIONAL_VAULT_IDLE`, then `PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION`,
+then `LEGACY_VAULT_MOUNT_REMOVAL` unless the coordinator confirms non-overlapping pickup.
 
 ## Capability acceptance
 
