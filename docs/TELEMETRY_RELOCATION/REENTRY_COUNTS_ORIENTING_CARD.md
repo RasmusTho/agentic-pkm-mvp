@@ -28,10 +28,11 @@ This task is primarily a **suppression gate plus regression guard**: confirm `_r
 ```bash
 pytest -q \
   tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_omits_relocated_telemetry_regions \
+  tests/companion_ui/test_reentry_orientation_treatment.py::test_full_mist_renders_four_fixed_questions_with_counts \
   tests/companion_ui/test_reentry_orientation_treatment.py::test_long_mist_renders_four_fixed_questions_with_counts
 ```
 
-The second test asserts the long-mist card counts directly; the existing full-mist count test must also remain green.
+The long-mist test asserts long-mist card counts directly; the existing full-mist count test must also remain green.
 
 ## Why This Matters
 
@@ -41,10 +42,11 @@ The second test asserts the long-mist card counts directly; the existing full-mi
 
 - [ ] No count value from `_reentry_counts` (open_loops, notable_changes, resurface_candidates, staged, memory_candidates) appears in the `cold_start` HTML render — not as a grid cell, not as a badge, not as a `+N` overflow.
   - Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_omits_relocated_telemetry_regions`
-- [ ] The `long_mist` re-entry card (`data-region="reentry-card"`) renders `_reentry_counts` counts correctly for the `orienting`/`long_mist` shape.
+- [ ] The `full_mist` and `long_mist` re-entry cards (`data-region="reentry-card"`) render `_reentry_counts` counts correctly for the `orienting` shapes.
+  - Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_full_mist_renders_four_fixed_questions_with_counts`
   - Verify: `tests/companion_ui/test_reentry_orientation_treatment.py::test_long_mist_renders_four_fixed_questions_with_counts`
 - [ ] The suppression and orientation-card tests pass together without modifying the shipped `_reentry_counts` helper's behavior for `orienting`.
-  - Verify: the cold-start suppression test and the long-mist count test named above pass in the same test run.
+  - Verify: the cold-start suppression test and both mist count tests named above pass in the same test run.
 
 ## How to Verify (Pre-Merge)
 
@@ -52,10 +54,11 @@ The second test asserts the long-mist card counts directly; the existing full-mi
 ruff check companion-ui/companion-app tests
 pytest -q \
   tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_omits_relocated_telemetry_regions \
+  tests/companion_ui/test_reentry_orientation_treatment.py::test_full_mist_renders_four_fixed_questions_with_counts \
   tests/companion_ui/test_reentry_orientation_treatment.py::test_long_mist_renders_four_fixed_questions_with_counts
 ```
 
-Both must pass. The existing `test_full_mist_renders_four_fixed_questions_with_counts` must also remain green as adjacent coverage.
+All three must pass in the same run.
 
 ## Out of Scope
 
