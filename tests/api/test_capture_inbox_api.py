@@ -271,13 +271,23 @@ def test_capture_withholds_success_when_authority_receipt_event_is_not_persisted
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vault, outbox = _setup_vault(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(
+        capture_module.DEFAULT_WRITE_GUARD,
+        "assert_writes_allowed",
+        lambda action: None,
+    )
 
     def _fail_jsonl_append(*args: object, **kwargs: object) -> bool:
         raise OSError("disk full")
 
+    def _fail_db_write(*args: object, **kwargs: object) -> str:
+        raise OSError("db down")
+
     monkeypatch.setattr(
         capture_module, "append_jsonl_outbox_event", _fail_jsonl_append
     )
+    monkeypatch.setattr(capture_module, "write_outbox_event", _fail_db_write)
 
     resp = TestClient(app).post(
         "/api/companion/capture",

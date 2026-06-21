@@ -15,7 +15,10 @@ The surface is a top modal mounted on the shared overlay host (#1785,
 - a session-capture list showing this session's captures with their
   written / not-yet-written state. **A write is claimed only on the runtime
   acknowledgement** (the endpoint surfaces the deterministic writer's
-  ``WriteReceipt`` verbatim); the UI never fabricates one.
+  ``WriteReceipt`` verbatim); the UI never fabricates one. If the runtime
+  reports that the vault write happened but its AuthorityReceipt was not
+  persisted, the item is shown as written with acknowledgement pending, never
+  as retryable not-yet-written.
 - **Offline honesty:** when the runtime is unreachable the composer stays
   usable, each unwritten capture is plainly labeled not yet written with its
   full text kept visible in the session list, and text is never silently
@@ -48,10 +51,16 @@ CAPTURE_OVERLAY_ID = "capture"
 CAPTURE_ENDPOINT = "/api/companion/capture"
 
 # Session-capture states. A capture is `written` only when the runtime
-# acknowledged it; everything else is honestly `not_yet_written`.
+# acknowledged it. `written_unacknowledged` is the explicit post-write failure
+# state for "vault write happened, AuthorityReceipt persistence failed".
 WRITTEN = "written"
+WRITTEN_UNACKNOWLEDGED = "written_unacknowledged"
 NOT_YET_WRITTEN = "not_yet_written"
-CAPTURE_STATES: tuple[str, ...] = (WRITTEN, NOT_YET_WRITTEN)
+CAPTURE_STATES: tuple[str, ...] = (
+    WRITTEN,
+    WRITTEN_UNACKNOWLEDGED,
+    NOT_YET_WRITTEN,
+)
 
 
 @dataclass(frozen=True)
@@ -93,9 +102,10 @@ class SessionCapture:
             raise ValueError(
                 "a write is never claimed without the runtime acknowledgement"
             )
-        if self.state == NOT_YET_WRITTEN and self.ack is not None:
+        if self.state != WRITTEN and self.ack is not None:
             raise ValueError(
-                "a not-yet-written capture cannot carry an acknowledgement reference"
+                "only a runtime-acknowledged written capture can carry an "
+                "acknowledgement reference"
             )
 
 
@@ -272,6 +282,10 @@ def capture_modal_markup() -> str:
       .capture-session-state {
       color: var(--accent);
     }
+    .capture-session-item[data-capture-state="written_unacknowledged"]
+      .capture-session-state {
+      color: var(--warning, var(--accent));
+    }
   </style>
   <div class="capture-modal" id="capture-modal" data-testid="capture-modal"
        data-region="capture-modal" role="dialog" aria-modal="true"
@@ -340,6 +354,8 @@ def capture_modal_script() -> str:
         li.setAttribute('data-ack-trace-id', ack.trace_id || '');
         li.setAttribute('data-ack-captured-at', ack.captured_at || '');
         stateSpan.textContent = 'written \\u00b7 ' + (ack.note_path || '');
+      } else if (state === 'written_unacknowledged') {
+        stateSpan.textContent = 'written \\u00b7 acknowledgement pending';
       } else {
         stateSpan.textContent = 'not yet written';
       }
@@ -370,6 +386,14 @@ def capture_modal_script() -> str:
       setStatus(reason);
     }
 
+    function onWrittenUnacknowledged(text, reason) {
+      // The runtime reported a post-write acknowledgement failure. Do not
+      // invite a retry that would duplicate the vault entry.
+      addEntry(text, 'written_unacknowledged', null);
+      clearComposerIfUnchanged(text);
+      setStatus(reason);
+    }
+
     window.captureModal = {
       open: function() {
         modal.removeAttribute('hidden');
@@ -393,9 +417,14 @@ def capture_modal_script() -> str:
             return resp.json().then(function(ack) { onWritten(text, ack); });
           }
           return resp.json().catch(function() { return null; }).then(function(body) {
-            var msg = (body && body.detail && body.detail.message)
+            var detail = body && body.detail ? body.detail : null;
+            var msg = (detail && detail.message)
               ? body.detail.message
               : 'The runtime did not acknowledge the capture (HTTP ' + resp.status + ').';
+            if (detail && detail.state === 'not_acknowledged') {
+              onWrittenUnacknowledged(text, msg);
+              return;
+            }
             onNotWritten(text, msg);
           });
         }).catch(function() {
@@ -425,6 +454,7 @@ __all__ = [
     "CAPTURE_STATES",
     "NOT_YET_WRITTEN",
     "WRITTEN",
+    "WRITTEN_UNACKNOWLEDGED",
     "CaptureAck",
     "CaptureSessionState",
     "SessionCapture",
