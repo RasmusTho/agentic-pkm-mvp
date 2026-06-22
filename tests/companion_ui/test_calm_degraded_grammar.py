@@ -348,14 +348,25 @@ def test_enum_map_fail_closed_on_unknown_token() -> None:
 
 
 def test_humanise_token_passes_through_legitimate_action_class() -> None:
-    # A legitimate, already-human action class is not an enum or an id — it must
-    # pass through unchanged (only the degraded-reason path fails closed).
+    # A legitimate, already-human action class is not an enum, an id, or a
+    # classified-namespace token — it passes through unchanged.
     assert humanise_token("bounded.panel_action") == "bounded.panel_action"
+    assert humanise_token("followup.create") == "followup.create"
+    assert humanise_token("maturity_transition") == "maturity_transition"
 
 
 def test_humanise_token_suppresses_id_patterns() -> None:
     for token in ["prop-move-1", "prop-001", "art-123", "artifact-x", "note-a"]:
         assert humanise_token(token) == ""
+
+
+def test_humanise_token_fails_closed_on_unmapped_classified_namespace() -> None:
+    # A mapped classified token humanises; an UNMAPPED token in the same
+    # classified namespace (lifecycle.*) must fail closed to suppression rather
+    # than leak raw to a user surface (CUIDR-01 fail-closed for unmapped enums).
+    assert humanise_token("lifecycle.move") == "Move note"
+    for unmapped in ["lifecycle.archive", "lifecycle.delete", "lifecycle.split"]:
+        assert humanise_token(unmapped) == "", f"{unmapped!r} must fail closed"
 
 
 # ---------------------------------------------------------------------------

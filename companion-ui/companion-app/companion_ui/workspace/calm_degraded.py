@@ -70,9 +70,22 @@ _SUPPRESS_ID_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"^note-[\w.-]+$"),
 )
 
+# Runtime classified-token namespaces. A token in one of these namespaces is a
+# machine enum, never user-facing copy: if it is not explicitly mapped it must
+# FAIL CLOSED (suppressed) rather than pass through raw. The review names
+# ``lifecycle.*`` as a confirmed leak family (lifecycle.move / future
+# lifecycle.* actions); the calling site falls back to the proposal's
+# ``description``. Legitimate human/evidence values (e.g. ``bounded.panel_action``)
+# live outside these namespaces and pass through.
+_CLASSIFIED_TOKEN_NAMESPACES: Final[tuple[str, ...]] = ("lifecycle.",)
+
 
 def _is_suppressed_identifier(token: str) -> bool:
     return any(pattern.match(token) for pattern in _SUPPRESS_ID_PATTERNS)
+
+
+def _is_classified_namespace_token(token: str) -> bool:
+    return any(token.startswith(ns) for ns in _CLASSIFIED_TOKEN_NAMESPACES)
 
 
 def calm_degraded(
@@ -115,13 +128,14 @@ def humanise_token(token: object) -> str:
     - A ``prop-*`` / ``art-*`` / ``note-*``-style internal identifier returns the
       empty string (suppressed — the caller uses the artefact/proposal
       ``description`` instead). The raw id is never returned.
+    - An *unmapped* token in a known classified-enum namespace (``lifecycle.*``)
+      FAILS CLOSED to the empty string — a new runtime enum is never shown raw.
     - Any other value (a legitimate, already-human action class such as
       ``bounded.panel_action``, or free-text) passes through unchanged.
 
     This is the general humanisation map used before a classified *label* token
-    reaches a user surface. It does NOT fail closed for arbitrary strings — only
-    for the degraded-reason path (see :func:`humanise_degraded_reason`), where an
-    unknown token must collapse to the calm fallback rather than leak.
+    reaches a user surface. Arbitrary free-text passes through; known machine
+    namespaces and internal identifiers fail closed to suppression.
     """
     text = "" if token is None else str(token).strip()
     if not text:
@@ -129,6 +143,9 @@ def humanise_token(token: object) -> str:
     if text in _ENUM_MAP:
         return _ENUM_MAP[text]
     if _is_suppressed_identifier(text):
+        return ""
+    if _is_classified_namespace_token(text):
+        # Unmapped machine enum in a classified namespace — fail closed.
         return ""
     return text
 
