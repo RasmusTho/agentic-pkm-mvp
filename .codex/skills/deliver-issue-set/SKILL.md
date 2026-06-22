@@ -14,16 +14,15 @@ This skill is a coordinator. It does not replace `issue-to-code`, `verification-
 ## First Context To Load
 
 1. `AGENTS.md`
-2. `.codex/skills/README.md`
-3. `.codex/skills/issue-to-code/SKILL.md`
-4. `.codex/skills/verification-and-closure/SKILL.md`
-5. `docs/development/DEV_WORKFLOW.md`
-6. `docs/development/AGENT_OPERATING_PROTOCOL.md`
-7. `docs/DOCS_INDEX.md`
-8. Owner docs and `Source Docs` referenced by the epic or candidate issues
-9. `docs/architecture/SBS_OPERATING_MODEL.md` when issues touch Product/Runtime SBS impact,
-   Builder System workflows, repo-local skills, issue/PR governance, CI/fitness, release/UAT,
-   BuilderOps, learning, or TCD
+2. `docs/architecture/SBS_OPERATING_MODEL.md` — mandatory. This skill always classifies the issue set as Product/Runtime vs Builder System vs boundary work *before* dispatch; §3 (Builder System boundary and classification procedure) is the source of that classification, §5 (Definition of Ready) defines the `## SBS Impact` readiness gate used below, and §9/§10 define the owner-doc and transition-debt writeback the parent validation hub checks at closure.
+3. `.codex/skills/README.md`
+4. `.codex/skills/issue-to-code/SKILL.md`
+5. `.codex/skills/verification-and-closure/SKILL.md`
+6. `docs/development/DEV_WORKFLOW.md`
+7. `docs/development/AGENT_OPERATING_PROTOCOL.md`
+8. `docs/development/GOVERNANCE_PROPORTIONALITY.md`
+9. `docs/DOCS_INDEX.md`
+10. Owner docs and `Source Docs` referenced by the epic or candidate issues
 
 Load secondary skills only when the work needs them:
 
@@ -128,7 +127,13 @@ For an epic or parent feature issue:
 - Treat the parent as the validation hub.
 - Deliver child/slice issues in dependency order.
 - Keep parent validation evidence on the parent issue after each child delivery.
+- Before closing the parent validation hub, confirm on the parent that, across the delivered set:
+  - **child receipts** exist — every in-scope child has a recorded delivery receipt (PR link, merge/closure state, validation evidence), and no child was silently left blocked or non-executable;
+  - **owner-doc writeback** is resolved per `docs/architecture/SBS_OPERATING_MODEL.md` §9 — each child landed exactly one of the three valid resolutions (no owner-doc change implied, owner-doc updated in-PR, or a created-and-linked follow-up issue); a "to update later" note does not count;
+  - **transition debt** is handled per `docs/architecture/SBS_OPERATING_MODEL.md` §10 — each relevant slice reduced a debt row, added a bounded one, or stated no effect, and for a Builder System or boundary set the D11/D12 outcome from the [SBS classification and impact gate](#sbs-classification-and-impact-gate) is recorded;
+  - **learning capture** ran when plan divergence occurred — if any child diverged from its contract or an earlier artifact was found wrong during delivery, `capture-learning` was invoked (it owns the invocation gate; see [Capturing Learning](#capturing-learning)).
 - Close the parent only when repo-verifiable acceptance is satisfied and parent-closure rules allow it.
+- These hub-closure checks are scoped to epic / parent / Project-lane coordination; ordinary single-issue delivery carries only its own issue-contract, `## SBS Impact`, and verification requirements (`docs/development/GOVERNANCE_PROPORTIONALITY.md`).
 
 For a Kanban / Project request:
 
@@ -160,6 +165,7 @@ An issue may be made ready only when all are true:
 - behavioral ACs name concrete tests
 - non-behavioral ACs name concrete doc anchors, roadmap diffs, runtime receipts, or closure evidence
 - `Suggested Validation` executes the `Verify:` targets
+- its `## SBS Impact` block is present, complete, and consistent with the issue's Product/Runtime vs Builder System vs boundary classification, per `docs/architecture/SBS_OPERATING_MODEL.md` §5 (Definition of Ready) — every field resolved, with "none"/"unaffected" stated explicitly rather than left blank or as a template placeholder (see [SBS classification and impact gate](#sbs-classification-and-impact-gate))
 - no dependency, human decision, or authority ambiguity remains
 - repo reality does not already satisfy the issue
 
@@ -177,6 +183,7 @@ For each candidate issue, inspect:
 - linked PRs
 - Product/Runtime System vs Builder System vs boundary classification, with the owner docs required
   by that classification
+- the `## SBS Impact` block: presence, completeness, and consistency with that classification
 - every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`)
 
 Classify each candidate as exactly one:
@@ -192,6 +199,17 @@ Classify each candidate as exactly one:
 - `needs human decision`
 
 When classifying priority, follow `issue-to-code`: `prio:high` before `prio:med` before `prio:low`, then prefer clear source anchors, bounded scope, dependency-unlocking work, smallest safe implementation surface, and reduced rollout drift.
+
+### SBS classification and impact gate
+
+A candidate must not be made Ready or selected for pickup unless its `## SBS Impact` block is present, complete, and consistent with its Product/Runtime vs Builder System vs boundary classification, per `docs/architecture/SBS_OPERATING_MODEL.md` §5 (Definition of Ready). Treat a missing, partially filled, placeholder, or classification-inconsistent block as a readiness failure: repair it under the Ready Pool Rule when the source authority is clear, otherwise classify the candidate `needs issue-maintenance-change-control` or `needs human decision`. This gate is the issue contract's own SBS requirement applied at the issue's existing risk tier — not extra ceremony layered on single-issue delivery (`docs/development/GOVERNANCE_PROPORTIONALITY.md`).
+
+For a Builder System or boundary issue set, also check the set against the Builder-System transition debts in `docs/architecture/SBS_TRANSITION_DEBT.md` and record, for the set, whether it **reduces**, **preserves**, or **adds** each:
+
+- **D11 — CES overloaded into the whole Builder System.** Does the set concentrate more stewardship/coordination authority into one skill, agent, or surface (pushing CES toward a development control plane), or keep Builder System workflows, skills, BuilderOps, and TCD governance within their own bounded enabling-system boundary?
+- **D12 — builder learning and TCD signals not uniformly captured across all workflows.** Does the set make `capture-learning` and TCD-signal capture more consistent across the workflows it touches, or leave gaps where learning/cost evidence can vanish from receipts or be over-promoted into runtime/user memory?
+
+Run this D11/D12 check only for Builder System or boundary sets; Product/Runtime-only sets resolve the standard `## SBS Impact` transition-debt field without it. The transition-debt register and its lifecycle remain owned by `docs/architecture/SBS_OPERATING_MODEL.md` §10 — record the set's D11/D12 outcome in the readiness/verification ledger; do not duplicate the register here.
 
 ## Implementation Plan
 
