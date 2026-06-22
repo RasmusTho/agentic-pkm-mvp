@@ -150,6 +150,23 @@ if [ ! -d "$VAULT_ROOT" ]; then
   exit 2
 fi
 
+# Base compose no longer binds /app/vault (#2386). This verifier brings the
+# stack up via bare `docker compose` with an explicitly bound VAULT_ROOT and
+# execs/asserts under /app/vault, so include the legacy overlay and carry the
+# host path in VAULT_HOST_ROOT. Seed COMPOSE_FILE explicitly (preserving the
+# implicit docker-compose.override.yml that an explicit file list would drop)
+# before appending the overlay.
+export VAULT_HOST_ROOT="$VAULT_ROOT"
+if [ -z "${COMPOSE_FILE:-}" ]; then
+  COMPOSE_FILE="docker-compose.yaml"
+  [ -f docker-compose.override.yml ] && COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.override.yml"
+fi
+case ":${COMPOSE_FILE}:" in
+  *":docker-compose.legacy-vault.yml:"*) ;;
+  *) COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.legacy-vault.yml" ;;
+esac
+export COMPOSE_FILE
+
 _log "START verify_runtime_chain"
 _log "INFO LOCAL_UID=${LOCAL_UID:-<unset>} LOCAL_GID=${LOCAL_GID:-<unset>}"
 
