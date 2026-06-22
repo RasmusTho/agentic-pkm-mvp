@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 
 import yaml
 
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.knowledge.write_ops import write_note_relative
 
 
@@ -38,14 +39,19 @@ def get_vault_root(settings: Mapping[str, Any] | None = None) -> Path:
     env_root = os.getenv("MCP_VAULT_ROOT") or os.getenv("VAULT_DIR")
     if env_root:
         candidates.append(env_root)
-    default = Path("vault")
-    if default.exists():
-        candidates.append(default)
     for candidate in candidates:
         path = _as_path(candidate)
         if path:
             return path
-    raise VaultToolError("Vault root is not configured")
+    try:
+        resolved = resolve_optional_vault_root()
+    except VaultRootMisconfiguredError as exc:
+        raise VaultToolError(str(exc)) from exc
+    if resolved is not None:
+        return resolved
+    raise VaultToolError(
+        "vault root is required; pass vault_root/settings or configure MCP_VAULT_ROOT, VAULT_DIR, or VAULT_ROOT"
+    )
 
 
 def _slugify(value: str) -> str:

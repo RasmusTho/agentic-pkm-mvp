@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.agents.panel.parser import is_ai_fence, parse_panel
 from app.agents.panel.writeback import parse_action_line, stable_action_id
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
-from app.config.paths import resolve_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.text.helpers import content_hash as _content_hash
 from app.knowledge.write_ops import write_note_from_absolute
 from app.services.artifact_identity import resolve_note_artifact_identity
@@ -303,7 +303,28 @@ class CheckboxProjectionService:
         request: CheckboxProjectionRequest,
         safe_note_path: str,
     ) -> CheckboxProjectionResponse:
-        vault_root = resolve_vault_root()
+        try:
+            vault_root = resolve_optional_vault_root()
+        except VaultRootMisconfiguredError as exc:
+            response = self._response(
+                request,
+                status="blocked",
+                note_path=safe_note_path,
+                before="",
+                after="",
+                block_reason=f"vault_root_misconfigured:{exc.env_var}",
+            )
+            raise CheckboxProjectionHTTPError(409, response) from exc
+        if vault_root is None:
+            response = self._response(
+                request,
+                status="blocked",
+                note_path=safe_note_path,
+                before="",
+                after="",
+                block_reason="no_vault_bound",
+            )
+            raise CheckboxProjectionHTTPError(409, response)
         note_path = _vault_contained_abs_path(vault_root, safe_note_path)
         if note_path is None or not note_path.is_file():
             response = self._response(
@@ -441,6 +462,7 @@ class CheckboxProjectionService:
             raw_text=written,
             content_hash_before=content_hash_before,
             content_hash_after=content_hash_after,
+            vault_root=vault_root,
         )
         self._idempotency.set(request.idempotency_key, response)
         return response
@@ -455,6 +477,7 @@ class CheckboxProjectionService:
         raw_text: str,
         content_hash_before: str,
         content_hash_after: str,
+        vault_root: Path,
     ) -> CheckboxProjectionResponse:
         try:
             refresh_panel_note_object(
@@ -469,7 +492,7 @@ class CheckboxProjectionService:
                 trigger="companion",
             )
         except Exception as exc:
-            write_note_from_absolute(note_path, rollback_text, vault_root=resolve_vault_root())
+            write_note_from_absolute(note_path, rollback_text, vault_root=vault_root)
             rolled_back = note_path.read_text(encoding="utf-8")
             return self._response(
                 request,

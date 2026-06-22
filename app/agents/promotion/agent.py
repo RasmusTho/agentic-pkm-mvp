@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.events.types import PROMOTE_AGENT_PLAN, PROMOTE_AGENT_RUN
 from app.observability.tracing import current_trace_id, span, start_tracer
-from app.promotion.queue import LOG as _LOG
+from app.promotion.queue import _log_path
 from app.promotion.queue import run_once as _worker_run_once
 
 
@@ -17,13 +17,19 @@ def _append_jsonl(path: Path, obj: dict) -> None:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
+def _append_agent_log(obj: dict) -> None:
+    path = _log_path()
+    if path is None:
+        return
+    _append_jsonl(path, obj)
+
+
 class PromotionAgent:
     name = "promotion-agent"
 
     def plan(self) -> None:
         with span("agent.plan"):
-            _append_jsonl(
-                _LOG,
+            _append_agent_log(
                 {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "level": "debug",
@@ -39,8 +45,7 @@ class PromotionAgent:
 
     def reflect(self, processed: int) -> None:
         with span("agent.reflect"):
-            _append_jsonl(
-                _LOG,
+            _append_agent_log(
                 {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "level": "info",

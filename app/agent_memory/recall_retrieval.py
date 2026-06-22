@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,6 +8,7 @@ from typing import Any, Iterable
 
 from scripts.yaml_roundtrip import load_frontmatter
 
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.agent_memory.candidate import ActivationPolicy, MemoryCandidate, MemoryType, ReviewState
 from app.agent_memory.materialization import (
     DEFAULT_MATERIALIZATION_RECEIPTS_PATH,
@@ -150,10 +150,11 @@ def retrieve_relevant_promoted(
 def _resolve_vault_root(vault_root: str | Path | None) -> Path | None:
     if vault_root is not None:
         return Path(vault_root).expanduser().resolve()
-    env_root = os.getenv("VAULT_ROOT")
-    if not env_root:
+    try:
+        resolved = resolve_optional_vault_root()
+    except VaultRootMisconfiguredError:
         return None
-    return Path(env_root).expanduser().resolve()
+    return resolved.expanduser().resolve() if resolved is not None else None
 
 
 def _resolve_outbox_path(outbox_path: str | Path | None) -> Path:
