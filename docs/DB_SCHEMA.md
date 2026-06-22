@@ -101,12 +101,16 @@ They remain mirror/projection surfaces and do not hold semantic authority over t
 - `embedding` (`double precision[]`, `NOT NULL`)
 - `dim` (`integer`, `NOT NULL`) — the configured embedding guardrail dimension (`EMBED_DIM`, default `1536` from `DEFAULT_EMBED_DIM`); this is the requested/configured dimension, distinct from `nomic-embed-text`'s native `768`. See `docs/EMBEDDINGS.md`.
 - `model` (`text`, `NOT NULL`)
+- `provider` (`text`, nullable) — the embedding provider that generated this row's vector (e.g. `ollama`, `gemini`). Added in the EMBEDREL-06 Phase A migration; backfilled from `vector_index_meta` for pre-existing rows.
+- `normalize` (`boolean`, nullable) — whether this row's vector was L2-normalized. Added with `provider` in the same migration and backfilled the same way.
 - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
 - Interpretation:
   - the vector index is a derived runtime artifact, rebuildable from `store_objects` payloads
   - embeddings are stored as a `double precision[]` array; there is no `vector`-extension column and
     no separate `chunk_id` in the active store — similarity is computed in application code
-  - every row carries its generating `model` and `dim`
+  - every row carries its full generating embedding identity tuple `(provider, model, dim, normalize)`; the index-level primary identity lives in `vector_index_meta`
+  - an ordinary upsert must match the primary identity; a reconcilable fallback write may record a divergent per-row `provider`/`model`/`normalize` (with the same `dim`), making fallback-written vectors visible and reconcilable (EMBEDREL-06 Phase A, `app/stores/pg.py::PgVectorIndex.upsert`)
+  - the `dim` guard is unconditional — a dimension mismatch fails loud and writes no row
   - embeddings do not participate in the identity-history/SCD pattern
 
 ### `store_relations`
