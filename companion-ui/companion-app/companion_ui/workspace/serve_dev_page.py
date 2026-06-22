@@ -1872,31 +1872,39 @@ def _render_note_section(fields: dict) -> str:
     # orientation step), not when it is the idle/empty recall payload (#1419).
     _reorient = fields.get("reorient_sections") or {}
     reorient_actionable = any(_reorient.get(name) for name in _reorient)
-    # Commitments count as actionable when the surface has something the human
-    # should see now: active commitments (populated) or an honest degraded /
-    # not-shown notice. A healthy-empty surface stays idle (#2075).
-    _commitments = fields.get("commitments_surface") or {}
-    commitments_actionable = str(_commitments.get("state") or "") in {
-        "populated",
-        "degraded",
-        "not-shown",
-    }
-    rail_actionable = bool(
-        rail_safety_critical
-        or proposal_count > 0
-        or bool(panel_proposals)
-        or bool(_panel_last_response)
-        or canvas_session_state_raw not in {"idle", "", "unknown"}
-        or panel_state_raw not in {"idle", "", "unknown"}
-        or bool(panel_message_raw)
-        or len(fields.get("find_candidates") or []) > 0
-        or reorient_actionable
-        or len(fields.get("resurface_candidates") or []) > 0
-        or commitments_actionable
+    # CUIDR-03 (#2446) — rail ambient-until-active. The rail earns its width
+    # only when it carries something the reader must act on. The governing
+    # contract is: active iff the payload declares at least one suggestion,
+    # proposal, or receipt. Safety-critical and actionable-orientation states
+    # (WriteGuard blocked, canvas recovery/conflict, reorient with real items)
+    # stay expanded too — the binding forewarning on the spec PR — because
+    # collapsing them into the ambient strip would hide a write block or a
+    # recovery prompt. Presentation only: every input below is a runtime-
+    # declared payload field; the render never reclassifies or invents content.
+    rail_has_proposal = proposal_count > 0 or bool(panel_proposals)
+    rail_has_receipt = (
+        bool(_panel_last_response)
         or len(fields.get("governance_receipts") or []) > 0
-        or len(fields.get("suggestion_cards") or []) > 0
-        or str(fields.get("suggestion_state", "idle") or "idle") not in {"idle", "", "unknown"}
     )
+    rail_has_suggestion = (
+        len(fields.get("suggestion_cards") or []) > 0
+        or str(fields.get("suggestion_state", "idle") or "idle")
+        not in {"idle", "", "unknown"}
+    )
+    rail_actionable = bool(
+        rail_has_proposal
+        or rail_has_receipt
+        or rail_has_suggestion
+        # Safety-critical / actionable-orientation overrides (must never
+        # collapse into the ambient strip even with no suggestion/proposal/
+        # receipt).
+        or rail_safety_critical
+        or reorient_actionable
+    )
+    # The ambient/active decision is carried on the layout grid as
+    # ``data-rail-state`` so CSS can reclaim the rail column width for the note
+    # column when the rail is ambient (the note becomes the widest column).
+    rail_layout_state = "active" if rail_actionable else "ambient"
     rail_posture_token = "active" if rail_actionable else "idle"
     if rail_safety_critical:
         rail_posture_copy = "Companion &middot; needs attention"
@@ -2099,7 +2107,7 @@ def _render_note_section(fields: dict) -> str:
         )
 
     return f"""
-  <div class="workspace-layout workspace-layout--three-col">
+  <div class="workspace-layout workspace-layout--three-col" data-rail-state="{rail_layout_state}">
     {left_context_panel_html}
     <div class="workspace-main">
       {workspace_header_strip_html}
@@ -8068,11 +8076,50 @@ def render_index_html(
       min-height: 0;
       overflow: hidden;
     }}
-    /* Left-pane layout: vault browser left, note center, agent-rail right */
+    /* Left-pane layout: vault browser left, note center, agent-rail right.
+
+       CUIDR-03 (#2446) — rail ambient-until-active. The rail column only earns
+       its full width when it carries something to act on. In the ambient state
+       it demotes to a thin presence strip and the note (centre) column reclaims
+       the reclaimed width, becoming unambiguously the widest column. The
+       active/ambient switch is data-driven off ``data-rail-state`` set on this
+       element by the render path. */
     .workspace-layout--three-col {{
       display: grid;
       grid-template-columns: 280px 1fr 320px;
       grid-template-rows: 1fr;
+    }}
+    .workspace-layout--three-col[data-rail-state="active"] {{
+      grid-template-columns: 280px 1fr 320px;
+    }}
+    .workspace-layout--three-col[data-rail-state="ambient"] {{
+      /* Thin ambient strip: the rail keeps a minimal presence cue, the note
+         column (1fr) absorbs the reclaimed ~264px and is the widest region. */
+      grid-template-columns: 280px 1fr 56px;
+    }}
+    /* In the ambient strip the rail header / posture line / sub-module details
+       collapse to a quiet vertical cue — no idle header copy, no card stack
+       claiming reading width. The content stays in the DOM (presence cue +
+       state contract) but is visually demoted. */
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail {{
+      width: 56px;
+      overflow: hidden;
+    }}
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-header,
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-posture,
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-placeholder-body {{
+      display: none;
+    }}
+    /* A minimal always-present vertical presence cue so the user can still see
+       a companion surface exists in the ambient strip. */
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail::before {{
+      content: "";
+      display: block;
+      width: 4px;
+      height: 28px;
+      margin: 16px auto 0;
+      border-radius: 2px;
+      background: var(--agent-muted);
     }}
     .vault-browser-left-pane {{
       background: var(--bg-surface);

@@ -85,6 +85,20 @@ def _rail(html: str) -> str:
     return html[start:end]
 
 
+def _layout_open_tag(html: str) -> str:
+    """Return the opening ``<div class="workspace-layout ...">`` tag.
+
+    The rail ambient/active state is carried on the layout element as a
+    ``data-rail-state`` attribute so CSS can reclaim the rail column width for
+    the note column when the rail has nothing to act on (CUIDR-03).
+    """
+    start = html.index('class="workspace-layout workspace-layout--three-col"')
+    # Walk back to the opening '<' of the tag and forward to its closing '>'.
+    open_lt = html.rindex("<", 0, start)
+    close_gt = html.index(">", start)
+    return html[open_lt : close_gt + 1]
+
+
 # ---------------------------------------------------------------------------
 # AC: compact non-actionable states
 # ---------------------------------------------------------------------------
@@ -245,3 +259,133 @@ def test_writeguard_block_still_expands_despite_compaction_fix():
     rail = _rail(_html(guard_writeguard_status="blocked", guard_degraded=True))
     assert 'data-testid="workspace-rail-idle-details"' not in rail
     assert 'data-testid="workspace-guard-indicator"' in rail
+
+
+# ---------------------------------------------------------------------------
+# CUIDR-03 (#2446) — rail ambient-until-active
+#
+# Idle shell: the rail demotes to a thin ambient strip and the note column
+# reclaims the width (it is no longer a permanently-reserved empty third). The
+# rail expands to full active width iff the payload carries a suggestion,
+# proposal, or receipt. Safety-critical states (WriteGuard blocked, canvas
+# recovery_needed, actionable reorient-with-items) keep it expanded too.
+#
+# The ambient/active decision is carried on the layout element as
+# ``data-rail-state`` so CSS can switch ``grid-template-columns`` between the
+# ambient (thin-strip) and active (full-rail) layouts. Presentation only — the
+# underlying classification still arrives from the runtime payload.
+# ---------------------------------------------------------------------------
+
+
+def test_idle_shell_rail_is_ambient_strip():
+    html = _html()
+    layout = _layout_open_tag(html)
+    # Idle shell → rail demoted to the ambient strip on the layout grid...
+    assert 'data-rail-state="ambient"' in layout
+    rail = _rail(html)
+    # ...and the rail posture is idle (no active proposals).
+    assert 'data-rail-posture="idle"' in rail
+    # The idle sub-module cards do not render as a visible stack — they are
+    # collapsed behind the single details affordance (minimal presence cue),
+    # not a permanently-reserved third of cards.
+    assert 'data-testid="workspace-rail-idle-details"' in rail
+
+
+def test_active_payload_expands_rail():
+    proposals = [
+        {
+            "proposal_id": "p1",
+            "summary": "Add a link",
+            "action_mode": "confirm_required",
+            "status": "staged",
+        }
+    ]
+    html = _html(panel_state="proposals-staged", panel_proposal_count=1, panel_proposals=proposals)
+    layout = _layout_open_tag(html)
+    assert 'data-rail-state="active"' in layout
+    rail = _rail(html)
+    assert 'data-rail-posture="active"' in rail
+    assert 'data-testid="workspace-rail-idle-details"' not in rail
+
+
+def test_receipt_alone_expands_rail():
+    # A governed receipt arriving after Apply is content, not decoration — the
+    # rail must never be ambient when a receipt exists.
+    response = {
+        "status": "executed",
+        "receipt": {
+            "receipt_id": "r1",
+            "outcome": "applied",
+            "message": "done",
+            "persistence": "durable",
+        },
+    }
+    html = _html(panel_last_response=response)
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+
+
+def test_governance_receipt_alone_expands_rail():
+    html = _html(governance_receipts=[{"receipt_id": "r9", "outcome": "applied"}])
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+
+
+def test_suggestion_card_alone_expands_rail():
+    html = _html(suggestion_cards=[{"id": "s1", "text": "Consider linking note X"}])
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+
+
+def test_zero_content_returns_to_ambient():
+    # After an active payload, a payload with all counts at zero collapses back
+    # to ambient. No intermediate expanded state persists.
+    html = _html(
+        panel_state="idle",
+        panel_proposal_count=0,
+        panel_proposals=[],
+        panel_last_response={},
+        governance_receipts=[],
+        suggestion_cards=[],
+        suggestion_state="idle",
+    )
+    assert 'data-rail-state="ambient"' in _layout_open_tag(html)
+
+
+def test_rail_active_contract_parametrized():
+    # Parametrise over (suggestion, proposal, receipt, all-absent) and assert
+    # the rendered rail state matches the single active-iff contract in each
+    # case. (Hand-rolled to avoid a pytest.mark.parametrize import churn.)
+    cases = [
+        ("proposal", {"panel_proposal_count": 1,
+                       "panel_proposals": [{"proposal_id": "p", "summary": "x",
+                                            "action_mode": "confirm_required", "status": "staged"}]},
+         "active"),
+        ("suggestion-card", {"suggestion_cards": [{"id": "s", "text": "t"}]}, "active"),
+        ("suggestion-state", {"suggestion_state": "ready"}, "active"),
+        ("panel-receipt", {"panel_last_response": {"status": "executed",
+                            "receipt": {"receipt_id": "r", "outcome": "applied",
+                                        "message": "m", "persistence": "durable"}}}, "active"),
+        ("governance-receipt", {"governance_receipts": [{"receipt_id": "r"}]}, "active"),
+        ("all-absent", {}, "ambient"),
+    ]
+    for name, overrides, expected in cases:
+        layout = _layout_open_tag(_html(**overrides))
+        assert f'data-rail-state="{expected}"' in layout, (
+            f"case {name!r}: expected rail-state {expected!r}"
+        )
+
+
+def test_safety_critical_states_stay_active_without_content():
+    # Binding forewarning: WriteGuard blocked, canvas recovery_needed, and
+    # actionable reorient-with-items must keep the rail expanded even with no
+    # suggestion/proposal/receipt.
+    safety_cases = [
+        ("writeguard-blocked", {"guard_writeguard_status": "blocked"}),
+        ("canvas-recovery", {"canvas_recovery_needed": True}),
+        ("reorient-with-items",
+         {"reorient_sections": {"open_loops": [{"text": "Close loop X", "source_path": "n.md"}]}}),
+    ]
+    for name, overrides in safety_cases:
+        html = _html(**overrides)
+        assert 'data-rail-state="active"' in _layout_open_tag(html), (
+            f"safety case {name!r} must keep the rail active"
+        )
