@@ -257,7 +257,7 @@ def _dispatch_topic(
     message: Mapping[str, Any],
 ) -> None:
     if topic == INGEST_OBJECT_CREATED:
-        handle_ingest_object_created(payload)
+        handle_ingest_object_created(_indexer_payload(payload))
     elif topic == INGEST_VAULT_CHANGED:
         handle_ingest_vault_changed(payload, trace_id=trace_id)
     elif topic == INGEST_OBJECT_DELETED:
@@ -273,6 +273,10 @@ def _dispatch_topic(
         handle_note_move_workbench(payload, trace_id=trace_id)
     else:
         logger.debug("worker run_once skipping unsupported topic=%s trace_id=%s", topic, trace_id)
+
+
+def _indexer_payload(payload: Mapping[str, Any]) -> dict[str, object]:
+    return dict(payload)
 
 
 def _trace_id_from_envelope(envelope: object) -> str | None:
@@ -1077,7 +1081,7 @@ def run(
                 with start_span("worker.consume", trace_id, {"topic": topic}):
                     try:
                         if topic == INGEST_OBJECT_CREATED:
-                            handle_ingest_object_created(payload)
+                            handle_ingest_object_created(_indexer_payload(payload))
                         elif topic == INGEST_VAULT_CHANGED:
                             handle_ingest_vault_changed(payload, trace_id=trace_id)
                         elif topic == INGEST_OBJECT_DELETED:
