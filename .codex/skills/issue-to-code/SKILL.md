@@ -66,7 +66,7 @@ promotes them.
 - Task depends on target-state or spec docs as shipped behavior but no code path, passing test, or owner-doc acceptance record confirms the behavior is live.
 - Any Acceptance Criterion lacks a concrete `Verify:` target (a test pointer for behavioral ACs, a doc anchor / roadmap diff / runtime receipt for non-behavioral ACs).
 - Product/Runtime vs Builder System vs boundary classification cannot be stated from the issue and
-  source anchors.
+  source anchors, or from the PR Direct Repair block for bounded direct-repair work.
 
 Apply `docs/development/AGENT_OPERATING_PROTOCOL.md` for the full classification reference.
 
