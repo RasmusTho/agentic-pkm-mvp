@@ -164,9 +164,15 @@ def _require_vault_root_path(value: Path | None, *, purpose: str) -> Path:
 def _resolve_mcp_vault_root_path(value: Path | None) -> Path | None:
     if value is not None:
         return value
-    env_root = os.getenv("MCP_VAULT_ROOT") or os.getenv("VAULT_DIR")
-    if env_root and env_root.strip():
-        return Path(env_root).expanduser()
+    for env_var in ("MCP_VAULT_ROOT", "VAULT_DIR"):
+        env_root = os.getenv(env_var)
+        if not env_root or not env_root.strip():
+            continue
+        resolved = Path(env_root).expanduser()
+        if not resolved.exists():
+            exc = VaultRootMisconfiguredError(env_var, resolved)
+            raise click.ClickException(str(exc)) from exc
+        return resolved.resolve()
     return _resolve_vault_root_path(None, allow_env=True, fallback_to_default=False)
 
 

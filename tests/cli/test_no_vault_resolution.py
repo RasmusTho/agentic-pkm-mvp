@@ -69,6 +69,28 @@ def test_ask_enable_mcp_vault_accepts_mcp_specific_env(
     assert len(files) == 1
 
 
+@pytest.mark.parametrize("env_var", ["MCP_VAULT_ROOT", "VAULT_DIR"])
+def test_ask_enable_mcp_vault_rejects_missing_mcp_specific_env(
+    env_var: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_vault_env(monkeypatch)
+    reset_plan_store()
+    missing_vault = tmp_path / "missing-vault"
+    fallback_vault = tmp_path / "fallback-vault"
+    fallback_vault.mkdir()
+    monkeypatch.setenv(env_var, str(missing_vault))
+    monkeypatch.setenv("VAULT_ROOT", str(fallback_vault))
+
+    result = CliRunner().invoke(cli, ["ask", "What should be saved?", "--enable-mcp-vault"])
+
+    assert result.exit_code != 0
+    assert f"{env_var} is set to a missing vault root" in result.output
+    assert not missing_vault.exists()
+    assert not (fallback_vault / "_mcp").exists()
+
+
 def test_ask_enable_mcp_vault_prefers_mcp_env_over_vault_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
