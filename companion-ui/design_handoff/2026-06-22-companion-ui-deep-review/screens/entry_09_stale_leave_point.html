@@ -1,0 +1,1714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Companion UI — Workspace Orientation [DEV]</title>
+  <style>
+    :root {
+      --bg-base: #070b12;
+      --bg-surface: #0c1220;
+      --bg-raised: #111a2e;
+      --fg-1: #dce8f0;
+      --fg-2: #7a9ab8;
+      --fg-3: #3d5570;
+      --border: #152030;
+      --border-strong: #1e3050;
+      --accent: #d4a843;
+      --cyan: #00d4e8;
+      --amber: #f09030;
+      --destructive: #ff3d3d;
+      --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg-base);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      line-height: 1.55;
+    }
+    .topbar {
+      align-items: center;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      padding: 8px 20px;
+    }
+    .topbar-api {
+      color: var(--fg-2);
+      flex: 1;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      min-width: 0;
+    }
+    .api-label { color: var(--fg-3); letter-spacing: 0.06em; text-transform: uppercase; }
+    .dev-chip {
+      border: 1px solid rgba(212,168,67,0.45);
+      border-radius: 4px;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      text-transform: uppercase;
+    }
+    body[data-diagnostics="false"] .topbar,
+    body[data-diagnostics="false"] .dev-controls-disclosure,
+    body[data-diagnostics="false"] .dev-chip { display: none; }
+    .dev-controls-disclosure { background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+    .dev-controls-summary {
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 4px 20px;
+    }
+    .load-bar { display: flex; gap: 8px; padding: 10px 20px; }
+    .load-bar form { align-items: center; display: flex; gap: 8px; width: 100%; }
+    .load-bar label {
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .load-bar input {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--fg-1);
+      flex: 1;
+      min-width: 0;
+      padding: 7px 10px;
+    }
+    .load-bar button {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--fg-1);
+      cursor: pointer;
+      padding: 7px 14px;
+    }
+    .orientation-shell {
+      display: grid;
+      gap: 16px;
+      margin: 0 auto;
+      max-width: 1180px;
+      padding: 24px;
+    }
+    .orientation-header {
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      gap: 8px;
+      padding-bottom: 16px;
+    }
+    .orientation-eyebrow {
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .orientation-heading {
+      font-size: 26px;
+      font-weight: 600;
+      margin: 0;
+    }
+    .orientation-meta {
+      color: var(--fg-2);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .orientation-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+    }
+    .orientation-column { display: grid; gap: 16px; min-width: 0; }
+    .orientation-section {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }
+    .orientation-section--primary { border-color: var(--border-strong); }
+    .orientation-section-header {
+      align-items: center;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .orientation-section-kicker {
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .orientation-title {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0;
+    }
+    .orientation-subheading {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 4px 0 0;
+    }
+    .orientation-vault-entry {
+      grid-column: 1 / -1;
+    }
+    .orientation-vault-entry .vault-browser {
+      background: transparent;
+      border: 0;
+      padding: 0;
+    }
+    .orientation-vault-entry .vault-browser > summary {
+      display: none;
+    }
+    .orientation-vault-open {
+      color: var(--cyan);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      text-decoration: none;
+    }
+    .orientation-vault-open:hover { text-decoration: underline; }
+    .orientation-vault-entry .vault-browser-list {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      list-style: none;
+      margin: 0;
+      max-height: 360px;
+      overflow: auto;
+      padding: 10px;
+    }
+    .orientation-vault-entry .vault-tree-children {
+      list-style: none;
+      margin: 4px 0 0 14px;
+      padding: 0;
+    }
+    .orientation-vault-entry .vault-tree-folder-summary {
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 3px 0;
+    }
+    .orientation-vault-entry .vault-browser-row {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      min-height: 28px;
+    }
+    .orientation-vault-entry .vault-browser-selection-toggle {
+      flex: 0 0 auto;
+    }
+    .orientation-vault-entry .vault-browser-row-title {
+      color: var(--cyan);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .orientation-vault-entry .vault-browser-row-title:hover { text-decoration: underline; }
+    .orientation-vault-entry .vault-browser-zone-label,
+    .orientation-vault-entry .note-badge--nav-hidden {
+      display: none;
+    }
+    .orientation-item {
+      border-top: 1px solid var(--border);
+      display: grid;
+      gap: 8px;
+      padding-top: 12px;
+    }
+    .orientation-item:first-of-type { border-top: 0; padding-top: 0; }
+    .orientation-item h3 { font-size: 16px; font-weight: 600; margin: 0; }
+    .orientation-item p { color: var(--fg-2); margin: 0; }
+    .orientation-artifact-link { color: var(--cyan); font-size: 14px; text-decoration: none; }
+    .orientation-artifact-link:hover { text-decoration: underline; }
+    .orientation-artifact-link--empty { color: var(--fg-3); }
+    .orientation-badges, .orientation-signals, .orientation-meta-row {
+      color: var(--fg-2);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .orientation-badges span, .orientation-signal, .orientation-count, .orientation-reason {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+    }
+    .orientation-provenance {
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .orientation-empty { color: var(--fg-3); margin: 0; }
+    .orientation-governance-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .orientation-governance-grid div {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+    }
+    .orientation-governance-grid span { display: block; font-size: 20px; font-weight: 600; }
+    .orientation-governance-grid small {
+      color: var(--fg-2);
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      margin-top: 2px;
+    }
+    /* Degraded is a calm amber banner naming the missing source — never an
+       alarm and never the destructive token (spec cross-flag treatment;
+       BLOCKED_AND_STALE_STATE_SPEC.md visual contract). */
+    .orientation-degraded {
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
+      border-radius: 8px;
+      color: var(--fg-1);
+      display: grid;
+      gap: 8px;
+      padding: 12px 16px;
+    }
+    .orientation-degraded strong { color: var(--amber); }
+    .orientation-degraded-source { color: var(--fg-2); font-family: var(--font-mono); font-size: 12px; }
+    .orientation-refresh {
+      align-items: center;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--fg-2);
+      display: flex;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      gap: 10px;
+      justify-content: space-between;
+      padding: 10px 12px;
+    }
+    .orientation-refresh a { color: var(--cyan); text-decoration: none; }
+    .orientation-refresh a:hover { text-decoration: underline; }
+    .orientation-budget-expand summary {
+      color: var(--fg-2);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    /* ---- Re-entry treatments per latency-ladder shape (#1784, SEP-02) ---- */
+    .reentry-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-left: 2px solid var(--accent);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }
+    .reentry-head { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+    .reentry-traj-pill {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      padding: 2px 10px;
+      text-transform: uppercase;
+    }
+    .reentry-questions { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+    .reentry-q { display: grid; gap: 2px; }
+    .reentry-q-label {
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .reentry-q-body { color: var(--fg-1); }
+    .reentry-inspect {
+      color: var(--cyan);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      margin-left: 6px;
+      text-decoration: none;
+    }
+    .reentry-inspect:hover { text-decoration: underline; }
+    .reentry-caret-echo {
+      animation: reentry-breathe 1.6s ease-in-out infinite;
+      background: var(--accent);
+      display: inline-block;
+      height: 1.1em;
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      width: 2px;
+    }
+    @keyframes reentry-breathe { 0%, 100% { opacity: 0.25; } 50% { opacity: 0.8; } }
+    @media (prefers-reduced-motion: reduce) {
+      .reentry-caret-echo { animation: none; opacity: 0.6; }
+    }
+    .reentry-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
+    .reentry-resume {
+      background: var(--bg-raised);
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      color: var(--accent);
+      padding: 6px 12px;
+      text-decoration: none;
+    }
+    .reentry-dismiss {
+      background: transparent;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--fg-2);
+      cursor: pointer;
+      font: inherit;
+      padding: 6px 12px;
+    }
+    /* Guard-held qualified resume — amber/staged token, never destructive. */
+    .reentry-resume-guard {
+      background: rgba(240,144,48,0.08);
+      border: 1px solid rgba(240,144,48,0.35);
+      border-radius: 6px;
+      display: grid;
+      gap: 6px;
+      padding: 10px 12px;
+    }
+    .reentry-guard-copy { color: var(--fg-1); font-size: 14px; }
+    .reentry-resume-forward { color: var(--cyan); text-decoration: none; }
+    .reentry-resume-forward:hover { text-decoration: underline; }
+    .reentry-delta-strip {
+      border-top: 1px dashed var(--border-strong);
+      display: grid;
+      gap: 6px;
+      padding-top: 10px;
+    }
+    .reentry-delta-item { align-items: center; color: var(--fg-2); display: flex; font-size: 14px; gap: 8px; }
+    .reentry-delta-dot { background: var(--cyan); border-radius: 50%; flex: none; height: 6px; width: 6px; }
+    .reentry-delta-more { color: var(--fg-3); font-family: var(--font-mono); font-size: 12px; }
+    .reentry-delta-more a { color: var(--cyan); text-decoration: none; }
+    .reentry-peripheral-line { color: var(--fg-3); font-size: 13px; margin: 0; text-align: right; }
+    .reentry-whisper-col {
+      display: grid;
+      gap: 14px;
+      pointer-events: none;
+      position: fixed;
+      right: 18px;
+      top: 25vh;
+      width: 180px;
+    }
+    .reentry-whisper { display: grid; gap: 2px; }
+    .reentry-whisper-label {
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .reentry-whisper-text { color: var(--fg-2); font-size: 13px; }
+    /* Thread fade (90s–15m): the rail pane fades a fraction; no card, no
+       line — the trajectory stays implicit. */
+    .orientation-shell--rail-faded .orientation-column--rail { opacity: 0.85; }
+    @media (max-width: 860px) {
+      .orientation-grid { grid-template-columns: 1fr; }
+      .orientation-governance-grid { grid-template-columns: 1fr; }
+      .orientation-shell { padding: 16px; }
+      /* Narrow mode: the whisper column is suppressed and collapses into the
+         card, which carries the same four answers. */
+      .reentry-whisper-col { display: none; }
+    }
+    /* ---- cold_start inline capture (#2172, #2240-c) ---- */
+    .cold-start-capture-line {
+      margin: 16px 0 0;
+    }
+    .cold-start-capture-input {
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--border-strong);
+      color: var(--fg-1);
+      font-family: var(--font-ui);
+      font-size: 15px;
+      outline: none;
+      padding: 4px 0;
+      width: 100%;
+    }
+    .cold-start-capture-input::placeholder {
+      color: var(--fg-3);
+    }
+    .cold-start-capture-input:focus {
+      border-bottom-color: var(--accent);
+    }
+  </style>
+</head>
+<body data-diagnostics="false" data-entry-state="orienting" data-reentry-shape="full_mist" data-stale="true">
+  <button type="button" class="help-toggle" data-testid="workspace-help-toggle" aria-haspopup="dialog" aria-controls="workspace-help-drawer" aria-expanded="false" title="Companion UI help" onclick="companionHelp.open()"><span aria-hidden="true">?</span> Help</button>
+  <div class="topbar">
+    <div class="topbar-api">
+      <span class="api-label">Server-side runtime</span>
+      <span title="Companion UI proxies browser actions through same-origin routes">same-origin bridge</span>
+    </div>
+    <span class="dev-chip">DEV / not production</span>
+  </div>
+  <details class="dev-controls-disclosure" data-testid="workspace-dev-controls" open>
+    <summary class="dev-controls-summary" data-testid="workspace-dev-controls-toggle">dev controls</summary>
+    <div class="load-bar">
+      <form method="GET" action="/workspace">
+        <label for="note_path">note_path</label>
+        <input id="note_path" name="note_path" type="text"
+          value="" placeholder="Some/Note.md" autocomplete="off">
+        <button type="submit">Load</button>
+      </form>
+    </div>
+  </details>
+  <main class="orientation-shell" data-testid="workspace-reentry-orientation"
+    data-read-only="true"
+    data-contract-version="workspace_orientation.v1"
+    data-freshness="fresh"
+    data-as-of="2026-06-10T12:00:00Z"
+    data-stale-after="2026-06-10T12:05:00Z"
+    data-trace-id="trace-orientation-1"
+    data-degraded="false"
+    data-ambient-refresh="disabled">
+    <header class="orientation-header">
+      <div class="orientation-eyebrow">Workspace orientation</div>
+      <h1 class="orientation-heading">Re-entry snapshot</h1>
+      <div class="orientation-meta">
+        <span>vault: dev-vault</span>
+        <span>channel: dev</span>
+        <span>freshness: fresh</span>
+        <span>as of: 2026-06-10T12:00:00Z</span>
+        <span>trace: trace-orientation-1</span>
+      </div>
+    </header>
+    
+        <section class="orientation-refresh"
+          data-testid="workspace-orientation-ambient-refresh"
+          data-refresh-mode="manual"
+          data-refresh-state="manual_refresh"
+          data-read-only="true">
+          <span>Manual refresh</span>
+          <a href="/" data-testid="workspace-orientation-manual-refresh">Refresh</a>
+          <button type="button" class="orientation-map-affordance"
+            data-testid="workspace-orientation-map-affordance" data-intent="map.open"
+            aria-label="Open the system map"
+            onclick="overlayHost.mount('map')">System map</button>
+        </section>
+    
+    
+    <section class="reentry-card" data-region="reentry-card" data-testid="reentry-card"
+      data-traj-state="dormant" data-reentry-treatment="full_mist"
+      data-read-only="true">
+      <div class="reentry-head">
+        <span class="orientation-section-kicker">Re-entry</span>
+        <span class="reentry-traj-pill" data-testid="reentry-traj-pill">dormant</span>
+        <button type="button" class="guidance-toggle" data-testid="guidance-toggle-reentry" data-intent="guidance.toggle" data-guidance-surface="reentry" aria-pressed="false" title="Toggle explanatory guidance (session-local)" aria-label="Toggle explanatory guidance" onclick="guidanceLayer.toggle()">&#9432;</button>
+      </div>
+      <div class="callout guidance guidance-callout" data-testid="guidance-callout-reentry" data-guidance-surface="reentry" data-authority="explanation" role="note"><span class="guidance-callout-kicker">guidance</span><strong class="guidance-callout-title">Re-entry</strong><span class="guidance-callout-body">After time away, these four fixed questions restore your prior trajectory. Resume returns to where momentum stopped; Start fresh keeps unresolved tension without re-opening it. Nothing here mutates the vault.</span><a class="guidance-callout-help-link" href="/help#reorient" data-testid="guidance-help-link-reentry">Full guide</a></div>
+      <ol class="reentry-questions">
+        <li class="reentry-q" data-reentry-question="doing">
+          <span class="reentry-q-label">What was I doing</span>
+          <span class="reentry-q-body">Resume the runtime API contract</span>
+        </li>
+        <li class="reentry-q" data-reentry-question="stopped">
+          <span class="reentry-q-label">Where did momentum stop</span>
+          <span class="reentry-q-body"><a class="orientation-artifact-link" data-testid="reentry-stop-link" data-note-path="Notes/resume.md" data-artifact-id="art-resume" href="/workspace?note_path=Notes%2Fresume.md">Resume plan</a><span class="reentry-caret-echo" data-testid="reentry-caret-echo" aria-hidden="true"></span></span>
+        </li>
+        <li class="reentry-q" data-reentry-question="unresolved">
+          <span class="reentry-q-label">What remains unresolved</span>
+          <span class="reentry-q-body" data-testid="reentry-unresolved-counts">
+            3 open loops · 1 staged
+            · 0 memory candidates
+            <a class="reentry-inspect" data-testid="reentry-inspect"
+              data-intent="memory.open"
+              data-memory-candidate-count="0"
+              href="#workspace-orientation-open-loops"
+              onclick="if (window.overlayHost) { overlayHost.mount('memory'); return false; }">inspect</a>
+          </span>
+        </li>
+        <li class="reentry-q" data-reentry-question="changed">
+          <span class="reentry-q-label">What changed since</span>
+          <span class="reentry-q-body" data-testid="reentry-changed-count">
+            2 changes while you were away
+          </span>
+        </li>
+      </ol>
+      
+      <div class="reentry-actions">
+        
+            <div class="reentry-resume-guard" data-testid="reentry-resume-guard"
+              data-guard-held="true" data-guard-cause="stale">
+              <span class="reentry-guard-copy">Source changed since this was captured. Nothing was mutated.</span>
+              <a class="reentry-resume-forward" data-testid="reentry-resume" data-intent="entry.resume" data-resume-qualified="true" href="/workspace?note_path=Notes%2Fresume.md">Open the current artifact state</a>
+            </div>
+        <button class="reentry-dismiss" type="button" data-testid="reentry-dismiss"
+          data-intent="entry.dismiss" data-unresolved-tension="preserved"
+          onclick="entryDismiss(this)">Start fresh</button>
+      </div>
+    </section>
+    
+    
+    
+    <div class="orientation-grid">
+      <div class="orientation-column">
+        
+        <section class="orientation-section orientation-section--primary"
+          data-testid="workspace-orientation-leave-point"
+          data-leave-point-kind="stale">
+          <div class="orientation-section-kicker">Leave point</div>
+          <h1 class="orientation-title">Resume the runtime API contract</h1>
+          <div class="orientation-artifact-row">
+            <a class="orientation-artifact-link" data-testid="workspace-orientation-leave-link" data-note-path="Notes/resume.md" data-artifact-id="art-resume" href="/workspace?note_path=Notes%2Fresume.md">Resume plan</a>
+          </div>
+          <div class="orientation-meta-row">
+            <span>Last signal: 2026-06-09T12:00:00Z</span>
+            <span class="orientation-muted">session session-123</span>
+          </div>
+          <div class="orientation-provenance" data-testid="workspace-orientation-leave-provenance" data-authority-role="operational_trace_pointer" data-source-kind="artifact_activation" data-source-ref="trace-leave">operational_trace_pointer · artifact_activation</div>
+        </section>
+        
+        <section class="orientation-section" id="workspace-orientation-open-loops"
+          data-testid="workspace-orientation-open-loops"
+          data-display-default-budget="3"
+          data-display-overflow-count="0">
+          <div class="orientation-section-header">
+            <div class="orientation-section-kicker">Open loops</div>
+            <span class="orientation-count">3</span>
+          </div>
+          
+            <article class="orientation-item" data-testid="workspace-orientation-open-loop"
+              data-visible-by-default="true"
+              data-loop-status="open"
+              data-handoff-hint="panel">
+              <div class="orientation-item-main">
+                <h3>Open loop label 0</h3>
+                <a class="orientation-artifact-link" data-testid="workspace-orientation-open-loop-link" data-note-path="Notes/loop-0.md" data-artifact-id="art-loop-0" href="/workspace?note_path=Notes%2Floop-0.md">Loop 0</a>
+              </div>
+              <div class="orientation-badges">
+                <span>open</span>
+                <span>handoff: panel</span>
+              </div>
+              <div class="orientation-provenance" data-testid="workspace-orientation-open-loop-provenance" data-authority-role="derived" data-source-kind="runtime_signal" data-source-ref="orientation.signals">derived · open loop 0</div>
+            </article>
+            <article class="orientation-item" data-testid="workspace-orientation-open-loop"
+              data-visible-by-default="true"
+              data-loop-status="open"
+              data-handoff-hint="panel">
+              <div class="orientation-item-main">
+                <h3>Open loop label 1</h3>
+                <a class="orientation-artifact-link" data-testid="workspace-orientation-open-loop-link" data-note-path="Notes/loop-1.md" data-artifact-id="art-loop-1" href="/workspace?note_path=Notes%2Floop-1.md">Loop 1</a>
+              </div>
+              <div class="orientation-badges">
+                <span>open</span>
+                <span>handoff: panel</span>
+              </div>
+              <div class="orientation-provenance" data-testid="workspace-orientation-open-loop-provenance" data-authority-role="derived" data-source-kind="runtime_signal" data-source-ref="orientation.signals">derived · open loop 1</div>
+            </article>
+            <article class="orientation-item" data-testid="workspace-orientation-open-loop"
+              data-visible-by-default="true"
+              data-loop-status="open"
+              data-handoff-hint="panel">
+              <div class="orientation-item-main">
+                <h3>Open loop label 2</h3>
+                <a class="orientation-artifact-link" data-testid="workspace-orientation-open-loop-link" data-note-path="Notes/loop-2.md" data-artifact-id="art-loop-2" href="/workspace?note_path=Notes%2Floop-2.md">Loop 2</a>
+              </div>
+              <div class="orientation-badges">
+                <span>open</span>
+                <span>handoff: panel</span>
+              </div>
+              <div class="orientation-provenance" data-testid="workspace-orientation-open-loop-provenance" data-authority-role="derived" data-source-kind="runtime_signal" data-source-ref="orientation.signals">derived · open loop 2</div>
+            </article>
+          
+        </section>
+        
+        <section class="orientation-section" id="workspace-orientation-notable-changes"
+          data-testid="workspace-orientation-notable-changes"
+          data-display-default-budget="3"
+          data-display-overflow-count="0">
+          <div class="orientation-section-header">
+            <div class="orientation-section-kicker">Notable changes</div>
+            <span class="orientation-count">2</span>
+          </div>
+          
+            <article class="orientation-item" data-testid="workspace-orientation-notable-change"
+              data-visible-by-default="true">
+              <div class="orientation-item-main">
+                <h3>Notable change label 0</h3>
+                <p>Bounded delta summary 0.</p>
+                <a class="orientation-artifact-link" data-testid="workspace-orientation-notable-change-link" data-note-path="Notes/change-0.md" data-artifact-id="art-change-0" href="/workspace?note_path=Notes%2Fchange-0.md">Change 0</a>
+              </div>
+              <div class="orientation-meta-row">Changed: 2026-06-10T11:00:00Z</div>
+              <div class="orientation-provenance" data-testid="workspace-orientation-notable-change-provenance" data-authority-role="derived" data-source-kind="runtime_signal" data-source-ref="orientation.signals">derived · notable change 0</div>
+            </article>
+            <article class="orientation-item" data-testid="workspace-orientation-notable-change"
+              data-visible-by-default="true">
+              <div class="orientation-item-main">
+                <h3>Notable change label 1</h3>
+                <p>Bounded delta summary 1.</p>
+                <a class="orientation-artifact-link" data-testid="workspace-orientation-notable-change-link" data-note-path="Notes/change-1.md" data-artifact-id="art-change-1" href="/workspace?note_path=Notes%2Fchange-1.md">Change 1</a>
+              </div>
+              <div class="orientation-meta-row">Changed: 2026-06-10T10:00:00Z</div>
+              <div class="orientation-provenance" data-testid="workspace-orientation-notable-change-provenance" data-authority-role="derived" data-source-kind="runtime_signal" data-source-ref="orientation.signals">derived · notable change 1</div>
+            </article>
+          
+        </section>
+      </div>
+      <div class="orientation-column orientation-column--rail">
+        
+        <section class="orientation-section orientation-governance"
+          data-testid="workspace-orientation-governance">
+          <div class="orientation-section-kicker">Governance</div>
+          <div class="orientation-governance-grid">
+            <div><span>1</span><small>pending proposals</small></div>
+            <div><span>0</span><small>pending receipts</small></div>
+            <div><span>logged</span><small>latest receipt outcome</small></div>
+          </div>
+          <div class="orientation-provenance" data-testid="workspace-orientation-governance-provenance" data-authority-role="derived" data-source-kind="runtime_signal" data-source-ref="orientation.signals">derived · governance summary</div>
+        </section>
+        
+        <section class="orientation-section"
+          data-testid="workspace-orientation-resurface"
+          data-resurface-posture="read-only"
+          data-resurface-default-budget="3"
+          data-resurface-overflow-count="0"
+          data-notification="false"
+          data-persistence-backed="false"
+          data-authority="read-only-projection">
+          <div class="orientation-section-header">
+            <div class="orientation-section-kicker">Resurface</div>
+            <span class="orientation-count">1</span>
+          </div>
+          
+          
+            <article class="orientation-item"
+              data-testid="workspace-orientation-resurface-candidate"
+              data-visible-by-default="true">
+              <div class="orientation-item-main">
+                <h3>Resurface candidate 0</h3>
+                <p class="orientation-why" data-testid="workspace-orientation-resurface-why-now">
+                  Relevant now because signal 0 changed.
+                </p>
+                <a class="orientation-artifact-link" data-testid="workspace-orientation-resurface-link" data-note-path="Notes/res-0.md" data-artifact-id="art-res-0" href="/workspace?note_path=Notes%2Fres-0.md">Candidate 0</a>
+              </div>
+              <div class="orientation-signals"><span class="orientation-signal">signal=0</span></div>
+              <div class="orientation-provenance" data-testid="workspace-orientation-resurface-provenance" data-authority-role="derived" data-source-kind="runtime_signal" data-source-ref="orientation.signals">derived · resurfacing signal 0</div>
+            </article>
+          
+        </section>
+      </div>
+      
+        <section class="orientation-section orientation-vault-entry"
+          id="workspace-orientation-vault-entry"
+          data-testid="workspace-orientation-vault-entry"
+          data-read-only="true">
+          <div class="orientation-section-header">
+            <div>
+              <div class="orientation-section-kicker">Vault</div>
+              <h2 class="orientation-subheading">Browse notes</h2>
+            </div>
+            <a class="orientation-vault-open" href="/?diagnostics=0">Root</a>
+          </div>
+          
+        <details class="vault-browser" data-testid="workspace-vault-browser" open>
+          <summary data-testid="workspace-vault-browser-toggle">Browse vault notes</summary>
+          <div class="vault-browser-meta" data-testid="workspace-vault-browser-meta">
+            <span data-testid="workspace-vault-browser-active-identity">dev-vault/dev</span>
+            <span data-testid="workspace-vault-browser-read-only">read-only</span>
+            <span data-testid="workspace-vault-browser-query"></span>
+            <span class="vault-browser-provenance-calm"
+                  data-testid="workspace-vault-browser-provenance"
+                  data-raw-provenance="env">fallback · filesystem index</span>
+          </div>
+          
+          <details class="vault-browser-filters-disclosure"><summary class="vault-browser-filters-summary" data-testid="workspace-vault-browser-filters-toggle">Filters</summary><div class="vault-browser-filters" data-testid="workspace-vault-browser-filters"><span class="filter-chip" data-testid="vault-browser-filter-chip" data-key="kind" data-value="human_note" data-active="false" onclick="vbToggleFilter(this)" style="cursor:pointer">Kind: human_note</span><span class="filter-chip" data-testid="vault-browser-filter-chip" data-key="zone" data-value="Notes" data-active="false" onclick="vbToggleFilter(this)" style="cursor:pointer">Zone: Notes</span></div></details>
+          <div class="vault-browser-state" data-testid="workspace-vault-browser-state-ready">1 matches from 1 markdown notes.</div>
+          <div class="vault-browser-selection-summary" data-testid="workspace-vault-browser-selection-summary" data-mode="ui_only" data-selected-count="0" aria-live="polite">0 selected</div>
+          <ul class="vault-browser-list vault-tree" data-testid="workspace-vault-browser-list"><li class="vault-tree-folder" data-testid="workspace-vault-browser-group" data-folder="Notes"><details class="vault-tree-folder-details"><summary class="vault-tree-folder-summary">Notes</summary><ul class="vault-tree-children"><li class="vault-browser-row" data-testid="workspace-vault-browser-note-row" data-active="false" data-selected="false" data-kind="human_note"><input type="checkbox" class="vault-browser-selection-toggle" data-testid="workspace-vault-browser-selection-toggle" data-mode="ui_only" data-selected="false" data-note-path="Notes/resume.md" aria-label="Select resume" onclick="vaultBrowserToggleSelection(event, this)"><a href="/?note_path=Notes/resume.md" class="vault-browser-row-title" data-testid="workspace-vault-browser-note-link" title="Resume plan">resume</a><code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" title="Notes/resume.md" hidden>resume.md</code><span data-testid="workspace-vault-browser-note-zone" class="vault-browser-zone-label">Notes</span><span class="note-badge note-badge--nav-hidden" data-nav-visible="false" data-testid="workspace-vault-browser-note-kind">human_note</span></li></ul></details></li></ul>
+          
+          
+        </details>
+        </section>
+    </div>
+  </main>
+  
+  <script>
+  (function() {
+    function focusOrientationVaultBrowser() {
+      var target = document.getElementById('workspace-orientation-vault-entry');
+      if (!target) return;
+      target.setAttribute('data-browse-focused', 'true');
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      var details = target.querySelector('details');
+      if (details) details.open = true;
+      target.scrollIntoView({ block: 'start', inline: 'nearest' });
+      function firstVisibleFocusTarget(selector) {
+        var nodes = Array.prototype.slice.call(target.querySelectorAll(selector));
+        for (var i = 0; i < nodes.length; i += 1) {
+          if (!nodes[i].closest('[hidden]')) return nodes[i];
+        }
+        return null;
+      }
+      var focusTarget =
+        firstVisibleFocusTarget('[data-testid="workspace-vault-browser-search"]') ||
+        firstVisibleFocusTarget('[data-testid="workspace-vault-browser"] summary') ||
+        firstVisibleFocusTarget('[data-testid="workspace-vault-browser-note-link"]') ||
+        firstVisibleFocusTarget('input, button, summary, a') ||
+        target;
+      if (!focusTarget || typeof focusTarget.focus !== 'function') return;
+      try {
+        focusTarget.focus({ preventScroll: true });
+      } catch (err) {
+        focusTarget.focus();
+      }
+    }
+    window.vaultBrowser = window.vaultBrowser || {};
+    window.vaultBrowser.focus = focusOrientationVaultBrowser;
+    window.vaultBrowser.open = window.vaultBrowser.open || focusOrientationVaultBrowser;
+  })();
+
+  function vaultBrowserSelectionControls() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('[data-testid="workspace-vault-browser-selection-toggle"]')
+    );
+  }
+
+  function vaultBrowserUpdateSelectionSummary() {
+    var controls = vaultBrowserSelectionControls();
+    var selected = controls.filter(function(control) { return control.checked; });
+    var summary = document.querySelector('[data-testid="workspace-vault-browser-selection-summary"]');
+    if (!summary) return;
+    summary.dataset.selectedCount = String(selected.length);
+    summary.textContent = selected.length === 1 ? '1 selected' : selected.length + ' selected';
+  }
+
+  function vaultBrowserToggleSelection(event, control) {
+    if (event) { event.stopPropagation(); }
+    if (!control) return;
+    var row = control.closest('[data-testid="workspace-vault-browser-note-row"]');
+    var selected = !!control.checked;
+    control.dataset.selected = selected ? 'true' : 'false';
+    if (row) {
+      row.dataset.selected = selected ? 'true' : 'false';
+    }
+    vaultBrowserUpdateSelectionSummary();
+  }
+
+  document.addEventListener('DOMContentLoaded', vaultBrowserUpdateSelectionSummary);
+
+  function vbToggleFilter(el) {
+    var key = el.dataset.key;
+    var val = el.dataset.value;
+    var url = new URL(window.location.href);
+    var params = url.searchParams;
+    var existing = params.getAll(key);
+    params.delete(key);
+    if (existing.indexOf(val) === -1) { params.append(key, val); }
+    existing.filter(function(v) { return v !== val; }).forEach(function(v) { params.append(key, v); });
+    window.location.href = url.toString();
+  }
+  </script>
+  
+  
+  <script>
+  function entryDismiss(control) {
+    var card = control && control.closest('[data-region=reentry-card]');
+    if (card) { card.remove(); }
+    var siblingCues = document.querySelectorAll('[data-region=delta-strip], [data-region=whisper-column]');
+    for (var i = 0; i < siblingCues.length; i++) {
+      siblingCues[i].remove();
+    }
+    if (document.body) {
+      document.body.dataset.entryState = 'shell_active';
+      document.body.setAttribute('data-entry-state', 'shell_active');
+    }
+  }
+  </script>
+  
+  <!-- Shared overlay host (#1785, SEP-03) — the single mount/dismiss
+       substrate for shell overlays. Esc and the scrim dismiss the topmost
+       overlay back to the document anchor; no route reset, no data loss. -->
+  <div class="overlay-host" id="workspace-overlay-host"
+       data-testid="workspace-overlay-host" data-region="overlay-host"
+       data-overlay-open="none" data-overlay-stack=""
+       data-anchor-note-path=""
+       data-declared-overlays="cmd vault memory peek posture map settings capture receipts tts help"
+       data-shipped-occupants="vault capture cmd memory receipts settings map">
+    <div class="overlay-host-scrim" id="workspace-overlay-scrim"
+         data-testid="workspace-overlay-scrim" data-active="false"
+         onclick="overlayHost.dismiss()" aria-hidden="true"></div>
+    <div class="overlay-host-mount" id="workspace-overlay-mount"
+         data-testid="workspace-overlay-mount"></div>
+  </div>
+  <!-- Memory candidate review drawer (#1793, SEP-09b) — the only admissible
+       place where candidate -> memory promotion is decided. Governed
+       decisions route through the #1792 endpoints; the UI renders runtime
+       outcomes and receipts and never classifies or promotes locally. -->
+  <style>
+    .memory-review-drawer {
+      background: var(--bg-surface, #0c1220);
+      border-left: 1px solid var(--border-strong, #1e3050);
+      bottom: 0;
+      box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
+      display: flex;
+      flex-direction: column;
+      max-width: 92vw;
+      overflow-y: auto;
+      padding: 18px 20px 28px;
+      position: fixed;
+      right: 0;
+      top: 0;
+      transform: translateX(100%);
+      transition: transform 160ms ease;
+      width: 420px;
+      z-index: 960;
+    }
+    .memory-review-drawer[data-open="true"] { transform: translateX(0); }
+    .memory-review-head {
+      align-items: flex-start; display: flex; gap: 12px;
+      justify-content: space-between;
+    }
+    .memory-review-kicker {
+      color: var(--fg-3, #3d5570); font-size: 11px; letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .memory-review-title { color: var(--fg-1, #dce8f0); font-size: 17px; margin: 2px 0 0; }
+    .memory-review-close {
+      background: none; border: 1px solid var(--border, #152030);
+      border-radius: 4px; color: var(--fg-2, #7a9ab8); cursor: pointer;
+      font-size: 16px; line-height: 1; padding: 4px 9px;
+    }
+    .memory-review-callout {
+      border: 1px solid var(--amber-dim, #805010);
+      border-left: 3px solid var(--amber, #f09030);
+      border-radius: 4px; color: var(--fg-1, #dce8f0); font-size: 13px;
+      margin: 14px 0; padding: 9px 12px;
+    }
+    .memory-review-candidate {
+      border: 1px solid var(--border, #152030); border-radius: 6px;
+      margin: 0 0 12px; padding: 12px;
+    }
+    .memory-candidate-head {
+      display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px;
+    }
+    .memory-candidate-title { color: var(--fg-1, #dce8f0); font-size: 14px; }
+    .memory-candidate-authority-tag {
+      color: var(--amber, #f09030); font-family: var(--font-mono, monospace);
+      font-size: 11px;
+    }
+    .memory-candidate-why-now { color: var(--fg-2, #7a9ab8); font-size: 13px; margin: 6px 0; }
+    .memory-candidate-provenance { margin: 8px 0; }
+    .memory-provenance-row {
+      color: var(--fg-3, #3d5570); display: flex; font-size: 12px; gap: 8px;
+    }
+    .memory-provenance-row code { color: var(--fg-2, #7a9ab8); word-break: break-all; }
+    .memory-provenance-label {
+      flex: 0 0 92px; letter-spacing: 0.05em; text-transform: uppercase;
+      font-size: 10px; line-height: 1.8;
+    }
+    .memory-review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .memory-review-action {
+      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
+      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer;
+      font-size: 12px; padding: 6px 12px;
+    }
+    .memory-review-action[data-governed="true"] { border-color: var(--accent-dim, #80621a); }
+    .memory-review-action:disabled { cursor: default; opacity: 0.45; }
+    .memory-decision-outcome[data-outcome-state="none"] { display: none; }
+    .memory-decision-outcome {
+      border-top: 1px dashed var(--border, #152030); color: var(--fg-2, #7a9ab8);
+      font-size: 12px; margin-top: 10px; padding-top: 8px;
+    }
+    .memory-outcome-receipt {
+      display: grid; gap: 2px 10px; grid-template-columns: auto 1fr; margin: 6px 0 0;
+    }
+    .memory-outcome-receipt dt {
+      color: var(--fg-3, #3d5570); font-size: 10px; letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .memory-outcome-receipt dd {
+      color: var(--fg-2, #7a9ab8); font-family: var(--font-mono, monospace);
+      font-size: 11px; margin: 0; word-break: break-all;
+    }
+    .memory-review-empty, .memory-review-unavailable, .memory-review-loading {
+      color: var(--fg-2, #7a9ab8); font-size: 13px;
+    }
+    /* Overlay-host layer styles (duplicated verbatim from the workspace
+       sheet so the host substrate is also styled on the orientation
+       surface, where the drawer is reachable from the re-entry card). */
+    .overlay-host-scrim {
+      background: rgba(7, 11, 18, 0.55); display: none; inset: 0;
+      position: fixed; z-index: 900;
+    }
+    .overlay-host-scrim[data-active="true"] { display: block; }
+  </style>
+  <aside class="memory-review-drawer" id="memory-review-drawer"
+    data-testid="memory-review-drawer" data-region="memory-review-drawer"
+    data-overlay-id="memory" data-drawer-side="right" data-open="false"
+    data-authority="proposal" data-decided-statuses="accepted rejected revised"
+    data-reviewed-by="companion-ui:reviewer"
+    role="dialog" aria-modal="false" aria-hidden="true"
+    aria-label="Memory candidate review">
+    <header class="memory-review-head">
+      <div>
+        <span class="memory-review-kicker">Memory review</span>
+        <h2 class="memory-review-title">Pending candidates</h2>
+      </div>
+      <button type="button" class="guidance-toggle" data-testid="guidance-toggle-memory" data-intent="guidance.toggle" data-guidance-surface="memory" aria-pressed="false" title="Toggle explanatory guidance (session-local)" aria-label="Toggle explanatory guidance" onclick="guidanceLayer.toggle()">&#9432;</button>
+      <button type="button" class="memory-review-close"
+        data-testid="memory-review-close" data-intent="overlay.dismiss"
+        aria-label="Close and return to the document"
+        onclick="overlayHost.dismiss()">&times;</button>
+    </header>
+    <div class="callout guidance guidance-callout" data-testid="guidance-callout-memory" data-guidance-surface="memory" data-authority="explanation" role="note"><span class="guidance-callout-kicker">guidance</span><strong class="guidance-callout-title">Memory review</strong><span class="guidance-callout-body">Unreviewed memory is not semantic authority. Candidates wait here until you accept, reject, revise, or defer them; accept promotes through the governed path and produces a receipt.</span><a class="guidance-callout-help-link" href="/help#boundaries" data-testid="guidance-help-link-memory">Full guide</a></div>
+    <p class="memory-review-callout" data-testid="memory-review-callout"
+      data-tone="advisory">Unreviewed memory is not semantic authority.</p>
+    <div class="memory-review-queue" data-testid="memory-review-queue"
+      data-loaded="false" data-source="agent_memory.review_queue">
+      <p class="memory-review-loading">Loading review queue…</p>
+    </div>
+  </aside>
+  <!-- system-map-overlay start -->
+  <!-- System map overlay (#1787, SEP-05) — a renderer/router index
+       (Projection) over the spec's composition table. Pull-based: opened
+       only by an explicit map.open affordance; never auto-opens, never
+       badges. Dismissal routes through the shared overlay host back to the
+       document anchor — no route reset, no data loss. -->
+  <style>
+    .system-map-overlay {
+      background: var(--bg-surface, #0c1220);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: 8px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+      display: none;
+      left: 50%;
+      max-height: 88vh;
+      overflow-y: auto;
+      padding: 18px 20px 24px;
+      position: fixed;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(960px, 94vw);
+      z-index: 960;
+    }
+    .system-map-overlay[data-open="true"] { display: block; }
+    .system-map-head {
+      align-items: flex-start; display: flex; gap: 12px;
+      justify-content: space-between;
+    }
+    .system-map-kicker {
+      color: var(--fg-3, #3d5570); font-size: 11px; letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .system-map-title { color: var(--fg-1, #dce8f0); font-size: 17px; margin: 2px 0 0; }
+    .system-map-close {
+      background: none; border: 1px solid var(--border, #152030);
+      border-radius: 4px; color: var(--fg-2, #7a9ab8); cursor: pointer;
+      font-size: 16px; line-height: 1; padding: 4px 9px;
+    }
+    .system-map-note { color: var(--fg-2, #7a9ab8); font-size: 12px; margin: 10px 0 14px; }
+    .map-center {
+      background: rgba(212, 168, 67, 0.07);
+      border: 1px dashed var(--accent, #d4a843); border-radius: 6px;
+      margin: 0 0 14px; padding: 12px; text-align: center;
+    }
+    .map-center-name { color: var(--accent, #d4a843); font-size: 15px; }
+    .map-center-sub { color: var(--fg-2, #7a9ab8); font-size: 12px; margin-top: 4px; }
+    .map-center-meta {
+      color: var(--fg-3, #3d5570); font-family: var(--font-mono, monospace);
+      font-size: 10px; margin-top: 6px; display: flex; gap: 8px;
+      justify-content: center; flex-wrap: wrap;
+    }
+    .map-center-meta code { font-family: inherit; }
+    .system-map-grid {
+      display: grid; gap: 10px; grid-template-columns: repeat(2, 1fr);
+    }
+    @media (max-width: 720px) { .system-map-grid { grid-template-columns: 1fr; } }
+    .map-node {
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border, #152030); border-radius: 6px;
+      color: var(--fg-1, #dce8f0); display: block; font: inherit;
+      padding: 10px 12px; text-align: left; width: 100%;
+    }
+    button.map-node { cursor: pointer; }
+    button.map-node:hover { border-color: var(--accent, #d4a843); }
+    .map-node--inert { opacity: 0.72; }
+    .map-node-head { display: flex; gap: 8px; justify-content: space-between; }
+    .map-node-name { color: var(--fg-1, #dce8f0); font-size: 13px; }
+    .map-node-mode {
+      color: var(--fg-3, #3d5570); font-family: var(--font-mono, monospace);
+      font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .map-node-reach { color: var(--fg-2, #7a9ab8); font-size: 11px; margin: 6px 0 0; }
+    .map-node-status {
+      color: var(--fg-3, #3d5570); font-family: var(--font-mono, monospace);
+      font-size: 10px; margin: 4px 0 0;
+    }
+    .map-node-status[data-status="shipped"] { color: var(--cyan, #00d4e8); }
+    .map-node-unavailable {
+      color: var(--amber, #f09030); font-size: 10px; margin: 4px 0 0;
+    }
+    .map-node-open-loops-count {
+      color: var(--cyan, #00d4e8); font-family: var(--font-mono, monospace);
+      font-size: 10px; margin: 4px 0 0;
+    }
+    .system-map-parked {
+      border-top: 1px dashed var(--border, #152030);
+      color: var(--fg-3, #3d5570); font-size: 11px; margin: 14px 0 0;
+      padding-top: 10px;
+    }
+  </style>
+  <div class="system-map-overlay" id="system-map-overlay"
+    data-testid="system-map-overlay" data-region="system-map-overlay"
+    data-overlay-id="map" data-open="false"
+    data-authority="projection"
+    role="dialog" aria-modal="false" aria-hidden="true"
+    aria-label="System map">
+    <header class="system-map-head">
+      <div>
+        <span class="system-map-kicker">System map</span>
+        <h2 class="system-map-title">Every surface, one index</h2>
+      </div>
+      <button type="button" class="guidance-toggle" data-testid="guidance-toggle-map" data-intent="guidance.toggle" data-guidance-surface="map" aria-pressed="false" title="Toggle explanatory guidance (session-local)" aria-label="Toggle explanatory guidance" onclick="guidanceLayer.toggle()">&#9432;</button>
+      <button type="button" class="system-map-close"
+        data-testid="system-map-close" data-intent="overlay.dismiss"
+        aria-label="Close and return to the document"
+        onclick="overlayHost.dismiss()">&times;</button>
+    </header>
+    <div class="callout guidance guidance-callout" data-testid="guidance-callout-map" data-guidance-surface="map" data-authority="explanation" role="note"><span class="guidance-callout-kicker">guidance</span><strong class="guidance-callout-title">System map</strong><span class="guidance-callout-body">An index that makes the existing surfaces one system: each node states how it is reached from the document anchor and how it returns. Pull-based — sought from the topbar, never shown unbidden.</span><a class="guidance-callout-help-link" href="/help#layout" data-testid="guidance-help-link-map">Full guide</a></div>
+    <p class="system-map-note" data-testid="system-map-note">An index of the
+      companion's surfaces — it renders and routes, nothing more. Everything
+      opens over the document anchor and returns to it; nothing here
+      re-classifies anything.</p>
+    <div class="map-center" data-testid="system-map-center"
+      data-region="system-map-center">
+      <div class="map-center-name">Entry point · the document anchor</div>
+      <div class="map-center-sub">cold start → orientation (latency ladder) → unified shell → any surface → back</div>
+      
+      <div class="map-center-meta" data-testid="map-entry-point-freshness"
+        data-authority="read-only-projection"
+        data-region="map-entry-point-meta">
+        <span data-testid="map-entry-point-meta-freshness"><code>fresh</code></span>
+        <span data-testid="map-entry-point-meta-as-of">2026-06-10T12:00:00Z</span>
+        <span data-testid="map-entry-point-meta-trace-id"><code>trace-orientation-1</code></span>
+      </div>
+    </div>
+    <div class="system-map-grid" data-testid="system-map-grid">
+      <article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="orientation" data-mode="reorient" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Orientation re-entry</span><span class="map-node-mode">reorient</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: the entry substrate (orienting) — reached by returning, never by opening · returns: becomes the shell on resume</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — re-entry surface; state machine #1783; mist treatments #1784</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="anchor" data-mode="find reorient resurface act" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Document anchor (active note)</span><span class="map-node-mode">find reorient resurface act</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: the shell&#x27;s primary column · returns: — (it is the anchor)</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — the canonical note body every overlay returns to</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p></article><button type="button" class="map-node" data-testid="system-map-node" data-surface-id="vault" data-mode="find" data-status="shipped" data-routable="true" data-intent="vault.open" onclick="systemMap.route('vault')"><span class="map-node-head"><span class="map-node-name">Vault Browser</span><span class="map-node-mode">find</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: left pane; modal in narrow mode · returns: re-anchors the shell</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — browse/find (Projection); queue_review is the one governed handoff</p></button><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="panel" data-mode="act" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Panel rail</span><span class="map-node-mode">act</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: right rail (the shipped agent rail) · returns: stays on anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — proposal → confirmation → receipt (governed)</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="palette" data-mode="act" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">⌘K Panel command palette</span><span class="map-node-mode">act</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: command overlay (⌘K · cmd.open) · returns: dismisses to anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#1786, SEP-04) — a Panel presentation, not new authority</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="chat_rail" data-mode="find act" data-status="partial" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Chat rail slot</span><span class="map-node-mode">find act</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: margin rail slot (bottom sheet when narrow) · returns: dismisses to anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="partial">slot defined by the spec; occupant owned by the canvas-chat lane (#1716+)</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="suggestions" data-mode="act" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Canvas suggestion blocks</span><span class="map-node-mode">act</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: staged block inside the document · returns: stays on anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — proposal → body-edit lane (no receipt)</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="memory" data-mode="reorient act" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Memory candidate review drawer</span><span class="map-node-mode">reorient act</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: right drawer overlay (memory.open) · returns: dismisses to anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — endpoints #1792; drawer #1793; governed review outcomes</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p><p class="map-node-open-loops-count" data-testid="map-memory-node-open-loops-count" data-authority="read-only-projection">3 open loops</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="peek" data-mode="find" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Source peek</span><span class="map-node-mode">find</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: anchored popover (source.peek) · returns: dismisses to anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — provenance lines are live; no map route exists on no-vault/error renders</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="posture" data-mode="local-ui" data-status="new" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Posture emphasis switch</span><span class="map-node-mode">local-ui</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: centered overlay (posture.open) · returns: anchor preserved with carry-forward set</p><p class="map-node-status" data-testid="system-map-node-status" data-status="new">new — not yet shipped</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="map" data-mode="reorient" data-status="shipped" data-routable="false" data-current="true" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">System map overlay</span><span class="map-node-mode">reorient</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: topbar + cold-start affordance (map.open) · returns: dismisses to anchor; nodes route to surfaces</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#1787, SEP-05) — you are here</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="settings" data-mode="local-ui" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Settings drawer</span><span class="map-node-mode">local-ui</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: right drawer overlay (settings.open) · returns: dismisses to anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#1789, SEP-07) — Local UI preferences; canonical hash untouched</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="tts" data-mode="local-ui" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">TTS read-back</span><span class="map-node-mode">local-ui</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: per-surface Listen control → plan popover · returns: stays on anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped — local listening; the plan is inspected before audio</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="capture" data-mode="act" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Capture</span><span class="map-node-mode">act</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: top modal (⌘N · capture.open) · returns: dismisses to anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#1791, SEP-08b) — governed append to the vault inbox</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="receipts" data-mode="act reorient" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Receipts / history</span><span class="map-node-mode">act reorient</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: top modal (receipts.open) · returns: dismisses to anchor</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#1794, SEP-10) — runtime receipts rendered verbatim, never invented</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="governance" data-mode="act reorient" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Governance counts</span><span class="map-node-mode">act reorient</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: receipts surface (receipts.open) — counts header row on the receipts modal · returns: dismisses to anchor via receipts surface</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#2246, TELEMETRY_RELOCATION-02) — projection index; routes via receipts.open</p><p class="map-node-unavailable" data-testid="system-map-node-unavailable">not openable from this entry state</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="resurface_rail" data-mode="resurface" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Resurface candidates</span><span class="map-node-mode">resurface</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: shell resurface rail mode (_render_resurface_mode); navigated in shell, not via overlayHost.mount · returns: stays in shell</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#2249) — read-only index node; rail is navigated in shell, never via overlay route</p></article><article class="map-node map-node--inert" data-testid="system-map-node" data-surface-id="guidance" data-mode="local-ui" data-status="shipped" data-routable="false" aria-disabled="true"><span class="map-node-head"><span class="map-node-name">Guidance layer</span><span class="map-node-mode">local-ui</span></span><p class="map-node-reach" data-testid="system-map-node-reach">reached: ⓘ toggle on topbar, overlay heads, re-entry card · returns: cross-cutting; persists nothing</p><p class="map-node-status" data-testid="system-map-node-status" data-status="shipped">shipped (#1788, SEP-06) — cross-cutting local UI toggle</p></article>
+    </div>
+    <p class="system-map-parked" data-testid="system-map-parked-note"
+      data-parked-surfaces="context_lane place_band">Parked (spec §Parked, Q15–Q16): the
+      context lane and the place band have no grounded source yet and are not
+      reachable from anywhere — including here.</p>
+  </div>
+  <!-- system-map-overlay end -->
+  <script>
+  /* overlay-host-controller */
+  (function() {
+    var host = document.getElementById('workspace-overlay-host');
+    var scrim = document.getElementById('workspace-overlay-scrim');
+    if (!host) { return; }
+    var DECLARED = (host.getAttribute('data-declared-overlays') || '').split(' ');
+    var occupants = {};
+    var stack = [];
+    function assertDeclared(id) {
+      if (DECLARED.indexOf(id) === -1) {
+        throw new Error('undeclared overlay: ' + id);
+      }
+    }
+    function sync() {
+      host.setAttribute('data-overlay-open', stack.length ? stack[stack.length - 1] : 'none');
+      host.setAttribute('data-overlay-stack', stack.join(' '));
+      if (scrim) { scrim.setAttribute('data-active', stack.length ? 'true' : 'false'); }
+    }
+    window.overlayHost = {
+      register: function(id, adapter) {
+        assertDeclared(id);
+        occupants[id] = adapter || {};
+      },
+      mount: function(id) {
+        assertDeclared(id);
+        var occ = occupants[id];
+        // Declared but unshipped: inert no-op — never invent a surface.
+        if (!occ) { return; }
+        var at = stack.indexOf(id);
+        if (at !== -1) { stack.splice(at, 1); }
+        stack.push(id);
+        sync();
+        if (occ.open) { occ.open(); }
+      },
+      dismiss: function() {
+        // overlay.dismiss — return to the document anchor. Pops only the
+        // topmost overlay and updates host bookkeeping. It never navigates
+        // and never touches the document column, so the URL, scroll
+        // ownership, anchor identity, staged suggestions, and open-loop
+        // counts are preserved by construction.
+        if (!stack.length) { return; }
+        var id = stack.pop();
+        sync();
+        var occ = occupants[id];
+        if (occ && occ.close) { occ.close(); }
+      },
+      notifyClosed: function(id) {
+        // An occupant closed itself through its own affordance; keep the
+        // host stack truthful without re-running the occupant close hook.
+        var at = stack.indexOf(id);
+        if (at !== -1) { stack.splice(at, 1); sync(); }
+      },
+      topmost: function() {
+        return stack.length ? stack[stack.length - 1] : null;
+      }
+    };
+    // Keyboard map (SYSTEM_ENTRY_POINT_SPEC.md §Keyboard map):
+    //   meta+k -> cmd.open, meta+n -> capture.open, escape -> overlay.dismiss.
+    // cmd.open mounts the shipped Panel command palette (#1786, SEP-04);
+    // capture.open mounts the shipped capture occupant (#1791).
+    document.addEventListener('keydown', function(e) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+        var k = String(e.key || '').toLowerCase();
+        if (k === 'k') { e.preventDefault(); window.overlayHost.mount('cmd'); return; }
+        if (k === 'n') { e.preventDefault(); window.overlayHost.mount('capture'); return; }
+      }
+      if (e.key === 'Escape') { window.overlayHost.dismiss(); }
+    });
+    // Shipped occupant: the narrow-mode vault-browser modal (#1785 scope).
+    // Its open/close routes through the host so the dismiss rule (Esc /
+    // scrim -> anchor) is enforced in one place.
+    if (window.vaultBrowser) {
+      var rawOpen = window.vaultBrowser.open;
+      var rawClose = window.vaultBrowser.close;
+      window.overlayHost.register('vault', {
+        open: function() { rawOpen(); },
+        close: function() { rawClose(); }
+      });
+      window.vaultBrowser.open = function() { window.overlayHost.mount('vault'); };
+      window.vaultBrowser.close = function() {
+        rawClose();
+        window.overlayHost.notifyClosed('vault');
+      };
+    }
+  })();
+  /* /overlay-host-controller */
+  </script>
+  <script>
+  /* memory-review-drawer-controller */
+  (function() {
+    var drawer = document.getElementById('memory-review-drawer');
+    if (!drawer || !window.overlayHost) { return; }
+    var queueEl = drawer.querySelector('[data-testid="memory-review-queue"]');
+    var DECIDED = (drawer.getAttribute('data-decided-statuses') || '').split(' ');
+    var REVIEWER = drawer.getAttribute('data-reviewed-by') || '';
+    function setOpen(open) {
+      drawer.setAttribute('data-open', open ? 'true' : 'false');
+      drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+    function load() {
+      queueEl.setAttribute('data-loaded', 'false');
+      fetch('/memory-review', {method: 'GET'})
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+          queueEl.innerHTML = html;
+          queueEl.setAttribute('data-loaded', 'true');
+        })
+        .catch(function() {
+          queueEl.innerHTML = '<p class="memory-review-unavailable" ' +
+            'data-testid="memory-review-unavailable" data-tone="calm">' +
+            'Review queue unavailable \u2014 the runtime could not be ' +
+            'reached. Nothing was decided.</p>';
+          queueEl.setAttribute('data-loaded', 'error');
+        });
+    }
+    // Host occupant: the host owns mount/dismiss (Esc / scrim -> the
+    // document anchor; no route reset, no data loss).
+    window.overlayHost.register('memory', {
+      open: function() { setOpen(true); load(); },
+      close: function() { setOpen(false); }
+    });
+    window.memoryReviewDrawer = {
+      open: function() { window.overlayHost.mount('memory'); },
+      close: function() { window.overlayHost.dismiss(); }
+    };
+    // Mirrors memory_review_drawer.decision_outcome_view: the rendered
+    // outcome comes from the runtime payload's declared status — never from
+    // the action the UI requested — and a receipt renders only when the
+    // runtime produced one. A 409 refusal renders calm and pending.
+    function outcomeView(statusCode, payload) {
+      payload = (payload && typeof payload === 'object') ? payload : {};
+      if (statusCode === 409) {
+        var detail = (payload.detail && typeof payload.detail === 'object') ? payload.detail : {};
+        return { kind: 'refused', pending: true, receipt: null, status: '',
+                 message: detail.message || ('The runtime declined to record ' +
+                 'this decision. The candidate is still pending review; ' +
+                 'nothing was decided.') };
+      }
+      if (statusCode !== 200) {
+        return { kind: 'unavailable', pending: true, receipt: null, status: '',
+                 message: 'The runtime could not be reached. No decision was ' +
+                 'recorded; the candidate is still pending review.' };
+      }
+      if (payload.status === 'deferred') {
+        return { kind: 'deferred', pending: true, receipt: null, status: payload.status,
+                 message: payload.detail || ('Deferred \u2014 the candidate ' +
+                 'stays pending; no review decision was recorded and no ' +
+                 'receipt exists.') };
+      }
+      if (DECIDED.indexOf(payload.status) === -1) {
+        return { kind: 'unconfirmed', pending: true, receipt: null, status: '',
+                 message: 'The runtime did not declare a review outcome. The ' +
+                 'candidate is treated as still pending review.' };
+      }
+      return { kind: 'governed_outcome', status: payload.status,
+               pending: payload.candidate_pending === true,
+               receipt: (payload.receipt && typeof payload.receipt === 'object') ? payload.receipt : null,
+               revisionCandidateId: payload.revision_candidate_id || null,
+               message: '' };
+    }
+    function renderOutcome(row, view) {
+      var out = row.querySelector('[data-testid="memory-decision-outcome"]');
+      if (!out) { return; }
+      out.textContent = '';
+      out.setAttribute('data-outcome-state', view.kind);
+      row.setAttribute('data-review-state', view.pending ? 'pending' : view.status);
+      var line = document.createElement('p');
+      line.className = 'memory-outcome-line';
+      line.setAttribute('data-testid', 'memory-outcome-status');
+      line.textContent = view.kind === 'governed_outcome'
+        ? 'Runtime outcome: ' + view.status
+        : view.message;
+      out.appendChild(line);
+      if (view.revisionCandidateId) {
+        var rev = document.createElement('p');
+        rev.className = 'memory-outcome-revision';
+        rev.setAttribute('data-testid', 'memory-outcome-revision');
+        rev.textContent = 'Sent back for revision as candidate ' + view.revisionCandidateId;
+        out.appendChild(rev);
+      }
+      if (view.receipt) {
+        // Runtime receipt projection rendered verbatim — never invented.
+        var receipt = document.createElement('dl');
+        receipt.className = 'memory-outcome-receipt';
+        receipt.setAttribute('data-testid', 'memory-outcome-receipt');
+        receipt.setAttribute('data-receipt-id', String(view.receipt.receipt_id || ''));
+        receipt.setAttribute('data-receipt-source', String(view.receipt.source || ''));
+        ['receipt_id', 'outcome', 'decided_by', 'decided_at', 'recorded_at',
+         'decision_notes', 'revision_of'].forEach(function(key) {
+          if (view.receipt[key] === undefined || view.receipt[key] === null) { return; }
+          var dt = document.createElement('dt');
+          dt.textContent = key.replace(/_/g, ' ');
+          var dd = document.createElement('dd');
+          dd.textContent = String(view.receipt[key]);
+          receipt.appendChild(dt);
+          receipt.appendChild(dd);
+        });
+        out.appendChild(receipt);
+      }
+      if (!view.pending) {
+        var actions = row.querySelector('[data-testid="memory-review-actions"]');
+        if (actions) {
+          Array.prototype.forEach.call(actions.querySelectorAll('button'), function(btn) {
+            btn.disabled = true;
+          });
+        }
+      }
+    }
+    function decide(row, action) {
+      var id = row.getAttribute('data-candidate-id');
+      if (!id || row.getAttribute('data-decision-inflight')) { return; }
+      row.setAttribute('data-decision-inflight', action);
+      fetch('/api/companion/memory/review-queue/' + encodeURIComponent(id) + '/decision', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: action, reviewed_by: REVIEWER})
+      })
+        .then(function(r) {
+          return r.json()
+            .then(function(payload) { return {code: r.status, payload: payload}; })
+            .catch(function() { return {code: r.status, payload: {}}; });
+        })
+        .catch(function() { return {code: 0, payload: {}}; })
+        .then(function(res) {
+          row.removeAttribute('data-decision-inflight');
+          renderOutcome(row, outcomeView(res.code, res.payload));
+        });
+    }
+    queueEl.addEventListener('click', function(e) {
+      var btn = (e.target && e.target.closest) ? e.target.closest('[data-action]') : null;
+      if (!btn || btn.disabled) { return; }
+      var row = btn.closest('[data-candidate-id]');
+      if (!row) { return; }
+      decide(row, btn.getAttribute('data-action'));
+    });
+  })();
+  /* /memory-review-drawer-controller */
+  </script>
+  <script>
+  /* system-map-controller */
+  (function() {
+    var overlay = document.getElementById('system-map-overlay');
+    if (!overlay || !window.overlayHost) { return; }
+    function setOpen(open) {
+      overlay.setAttribute('data-open', open ? 'true' : 'false');
+      overlay.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+    // Host occupant registration only — nothing in this controller ever
+    // mounts the map; opening is owned by explicit map.open affordances.
+    window.overlayHost.register('map', {
+      open: function() { setOpen(true); },
+      close: function() { setOpen(false); }
+    });
+    function focusRegion(selector) {
+      var el = document.querySelector(selector);
+      if (!el) { return; }
+      if (el.scrollIntoView) { el.scrollIntoView({block: 'nearest'}); }
+      if (el.focus) { el.focus(); }
+    }
+    window.systemMap = {
+      // Routing composes existing surfaces: dismiss the map back to the
+      // document anchor first (overlay grammar — no route reset, no data
+      // loss), then open/focus the target via its own shipped affordance.
+      route: function(id) {
+        window.overlayHost.dismiss();
+        // Focus selectors use unquoted CSS attribute values so the script
+        // never embeds another surface's quoted test markers.
+        if (id === 'anchor') {
+          focusRegion('[data-region=document-column], [data-region=note-body]');
+          return;
+        }
+        if (id === 'vault') {
+          if (window.vaultBrowser) { window.vaultBrowser.focus(); return; }
+          focusRegion('[data-testid=workspace-orientation-vault-entry]');
+          return;
+        }
+        if (id === 'panel') {
+          focusRegion('[data-testid=workspace-agent-rail]');
+          return;
+        }
+        if (id === 'palette') { window.overlayHost.mount('cmd'); return; }
+        if (id === 'memory') { window.overlayHost.mount('memory'); return; }
+        if (id === 'capture') { window.overlayHost.mount('capture'); return; }
+        if (id === 'receipts') { window.overlayHost.mount('receipts'); return; }
+        if (id === 'governance') { window.overlayHost.mount('receipts'); return; }
+        if (id === 'settings') { window.overlayHost.mount('settings'); return; }
+      }
+    };
+  })();
+  /* /system-map-controller */
+  </script>
+  <style>
+    /* guidance-layer (#1788, SEP-06): explanation is opt-in and decays to
+       nothing. Off (attribute absent) is the default in every entry state;
+       only .guidance-scoped elements may key on data-guidance. */
+    .guidance-callout { display: none; }
+    body[data-guidance="on"] .guidance-callout {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 8px 0;
+      padding: 8px 10px;
+      border: 1px solid var(--border, #152030);
+      border-left: 3px solid var(--accent-dim, #1b5e6e);
+      border-radius: 8px;
+      background: var(--bg-raised, #0e1626);
+      color: var(--fg-2, #7a9ab8);
+      font-family: var(--font-ui, sans-serif);
+      font-size: var(--text-sm, 13px);
+    }
+    .guidance-callout-kicker {
+      color: var(--fg-3, #3d5570);
+      font-family: var(--font-mono, monospace);
+      font-size: var(--text-xs, 11px);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .guidance-callout-title { color: var(--fg-1, #dce8f0); }
+    .guidance-callout-help-link {
+      align-self: flex-start;
+      color: var(--accent, #35c8e8);
+      font-size: var(--text-xs, 11px);
+    }
+    .guidance-toggle {
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      color: var(--fg-3, #3d5570);
+      cursor: pointer;
+      font-size: 0.95rem;
+      line-height: 1;
+      padding: 2px 5px;
+    }
+    .guidance-toggle:hover { color: var(--fg-1, #dce8f0); }
+    body[data-guidance="on"] .guidance-toggle {
+      color: var(--accent, #35c8e8);
+    }
+  </style>
+  <script>
+  /* guidance-layer-controller */
+  (function() {
+    if (window.guidanceLayer) { return; }
+    function isOn() {
+      return document.body.getAttribute('data-guidance') === 'on';
+    }
+    function sync() {
+      var on = isOn();
+      var toggles = document.querySelectorAll('[data-intent="guidance.toggle"]');
+      for (var i = 0; i < toggles.length; i++) {
+        toggles[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    }
+    window.guidanceLayer = {
+      isOn: isOn,
+      toggle: function() {
+        // Mirrors guidance_layer.toggled_guidance: flip the root
+        // attribute only. Nothing persisted, no endpoint reached, no
+        // content semantics changed. Mark the session override so Settings
+        // default re-application cannot erase it until reload or another
+        // explicit guidance toggle.
+        document.body.setAttribute('data-guidance-session-override', 'true');
+        if (isOn()) { document.body.removeAttribute('data-guidance'); }
+        else { document.body.setAttribute('data-guidance', 'on'); }
+        sync();
+      }
+    };
+    // The Settings drawer (#1789) applies the stored guidance default to
+    // the same root attribute at load; observe the attribute so the
+    // affordances stay truthful whichever side flipped it.
+    if (window.MutationObserver) {
+      new MutationObserver(sync).observe(document.body, {
+        attributes: true,
+        attributeFilter: ['data-guidance']
+      });
+    }
+    sync();
+  })();
+  /* /guidance-layer-controller */
+  </script>
+  
+  <style>
+    .help-toggle{position:fixed;bottom:18px;right:18px;z-index:999;
+      display:inline-flex;align-items:center;gap:6px;
+      padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
+      background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:999px;
+      cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+    .help-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
+    .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
+      opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
+    .help-drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,94vw);
+      transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);
+      background:var(--bg-surface);border-left:1px solid var(--border-strong);
+      box-shadow:-8px 0 32px rgba(0,0,0,.45);z-index:1001;display:flex;
+      flex-direction:column}
+    .help-drawer-host[data-open="true"] .help-drawer{transform:translateX(0)}
+    .help-drawer-host[data-open="true"] .help-drawer-backdrop{opacity:1;
+      pointer-events:auto}
+    .help-drawer-head{display:flex;align-items:center;gap:10px;padding:12px 16px;
+      border-bottom:1px solid var(--border);background:var(--bg-raised)}
+    .help-drawer-title{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1)}
+    .help-drawer-sub{font:400 12px/1 'JetBrains Mono',monospace;color:var(--fg-3)}
+    .help-drawer-close{margin-left:auto;background:none;border:1px solid var(--border);
+      color:var(--fg-2);border-radius:6px;width:30px;height:30px;cursor:pointer;
+      font-size:18px;line-height:1}
+    .help-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
+    .help-drawer-frame{flex:1;border:0;width:100%;background:var(--bg-base)}
+  </style>
+  <div class="help-drawer-host" id="workspace-help-host"
+       data-testid="workspace-help-host" data-open="false"
+       data-authority-role="server_declared">
+    <div class="help-drawer-backdrop" data-testid="workspace-help-backdrop"
+         onclick="companionHelp.close()"></div>
+    <aside class="help-drawer" id="workspace-help-drawer"
+           data-testid="workspace-help-drawer" role="dialog" aria-modal="true"
+           aria-label="Companion UI help">
+      <div class="help-drawer-head">
+        <span class="help-drawer-title">Companion UI · Help</span>
+        <span class="help-drawer-sub">served at /help</span>
+        <button type="button" class="help-drawer-close"
+                data-testid="workspace-help-close" aria-label="Close help"
+                onclick="companionHelp.close()">&times;</button>
+      </div>
+      <iframe class="help-drawer-frame" id="workspace-help-frame"
+              data-testid="workspace-help-frame" title="Companion UI help guide"
+              data-src="/help" loading="lazy"></iframe>
+    </aside>
+  </div>
+  <script>
+  (function() {
+    var host  = document.getElementById('workspace-help-host');
+    var frame = document.getElementById('workspace-help-frame');
+    var toggle = document.querySelector('[data-testid="workspace-help-toggle"]');
+    if (!host || !frame) { return; }
+    function setExpanded(state) {
+      if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
+    }
+    function handleEscape(ev) {
+      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
+        window.companionHelp.close();
+      }
+    }
+    function installHelpFrameEscapeHandling() {
+      try {
+        var frameWindow = frame.contentWindow;
+        var frameDocument = frameWindow ? frameWindow.document : null;
+        if (!frameDocument || frameDocument.__companionHelpEscapeInstalled) { return; }
+        frameDocument.addEventListener('keydown', handleEscape);
+        frameDocument.__companionHelpEscapeInstalled = true;
+      } catch (e) {
+        // Same-origin is expected for /help; if that contract changes, the
+        // parent document Escape handler still covers shell focus.
+      }
+    }
+    frame.addEventListener('load', installHelpFrameEscapeHandling);
+    window.companionHelp = {
+      open: function() {
+        // Lazy-load the guide on first open (server declares the content).
+        if (!frame.getAttribute('src')) { frame.setAttribute('src', frame.dataset.src); }
+        installHelpFrameEscapeHandling();
+        host.setAttribute('data-open', 'true');
+        setExpanded(true);
+      },
+      close: function() {
+        host.setAttribute('data-open', 'false');
+        setExpanded(false);
+        if (toggle) { try { toggle.focus(); } catch (e) {} }
+      },
+      toggle: function() {
+        if (host.getAttribute('data-open') === 'true') { this.close(); }
+        else { this.open(); }
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+  }());
+  </script>
+  
+  <style>
+    .operator-toggle{position:fixed;bottom:60px;right:18px;z-index:999;
+      display:inline-flex;align-items:center;gap:6px;
+      padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;
+      color:var(--amber);background:var(--amber-muted);
+      border:1px solid var(--amber-dim);border-radius:999px;
+      cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+    .operator-toggle:hover{border-color:var(--amber)}
+    .operator-drawer-backdrop{position:fixed;inset:0;
+      background:rgba(7,11,18,.72);opacity:0;pointer-events:none;
+      transition:opacity .18s ease;z-index:1000}
+    .operator-drawer{position:fixed;top:0;right:0;height:100vh;
+      width:min(640px,94vw);transform:translateX(100%);
+      transition:transform .22s cubic-bezier(.4,0,.2,1);
+      background:var(--bg-surface);
+      border-left:1px solid var(--border-strong);
+      box-shadow:-8px 0 32px rgba(0,0,0,.5);z-index:1001;
+      display:flex;flex-direction:column}
+    .operator-drawer-host[data-open="true"] .operator-drawer{transform:translateX(0)}
+    .operator-drawer-host[data-open="true"] .operator-drawer-backdrop{
+      opacity:1;pointer-events:auto}
+    .operator-drawer-head{display:flex;align-items:center;gap:10px;
+      padding:12px 16px;border-bottom:1px solid var(--border);
+      background:var(--bg-raised)}
+    .operator-drawer-title{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1)}
+    .operator-drawer-badge{font:500 11px/1 'JetBrains Mono',monospace;
+      color:var(--amber);background:var(--amber-muted);
+      border:1px solid var(--amber-dim);border-radius:999px;
+      padding:2px 8px;letter-spacing:.06em;text-transform:uppercase}
+    .operator-drawer-close{margin-left:auto;background:none;
+      border:1px solid var(--border);color:var(--fg-2);border-radius:6px;
+      width:30px;height:30px;cursor:pointer;font-size:18px;line-height:1}
+    .operator-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
+    .operator-drawer-body{flex:1;overflow-y:auto;padding:16px;background:var(--bg-surface)}
+    .operator-drawer-loading{color:var(--fg-3);font-size:13px;padding:12px 0}
+  </style>
+  <button type="button" class="operator-toggle" data-testid="workspace-operator-toggle" aria-haspopup="dialog" aria-controls="workspace-operator-drawer" aria-expanded="false" title="Operator diagnostics" onclick="companionOperator.open()"><span aria-hidden="true">⚠</span> Operator</button>
+  <div class="operator-drawer-host" id="workspace-operator-host"
+       data-testid="workspace-operator-host" data-open="false"
+       data-authority-role="server_declared">
+    <div class="operator-drawer-backdrop" data-testid="workspace-operator-backdrop"
+         onclick="companionOperator.close()"></div>
+    <aside class="operator-drawer" id="workspace-operator-drawer"
+           data-testid="workspace-operator-drawer" role="dialog" aria-modal="true"
+           aria-label="Operator diagnostics">
+      <div class="operator-drawer-head">
+        <span class="operator-drawer-title">Operator diagnostics</span>
+        <span class="operator-drawer-badge"
+              data-testid="workspace-operator-badge">Operator</span>
+        <button type="button" class="operator-drawer-close"
+                data-testid="workspace-operator-close"
+                aria-label="Close operator panel"
+                onclick="companionOperator.close()">&times;</button>
+      </div>
+      <div class="operator-drawer-body" id="workspace-operator-body"
+           data-testid="workspace-operator-body">
+        <div class="operator-drawer-loading"
+             data-testid="workspace-operator-loading">Loading…</div>
+      </div>
+    </aside>
+  </div>
+  <script>
+  (function() {
+    var host   = document.getElementById('workspace-operator-host');
+    var body   = document.getElementById('workspace-operator-body');
+    var toggle = document.querySelector('[data-testid="workspace-operator-toggle"]');
+    if (!host || !body) { return; }
+    var loaded = false;
+    function setExpanded(state) {
+      if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
+    }
+    function loadContent() {
+      if (loaded) { return; }
+      loaded = true;
+      fetch('/operator', {method: 'GET'})
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+          body.innerHTML = html;
+          // Execute inline scripts inside the loaded fragment.
+          Array.prototype.slice.call(body.querySelectorAll('script')).forEach(function(s) {
+            var ns = document.createElement('script');
+            ns.textContent = s.textContent;
+            s.parentNode.replaceChild(ns, s);
+          });
+        })
+        .catch(function(err) {
+          body.innerHTML = '<div class="op-banner-degraded"'
+            + ' data-testid="operator-degraded-banner" data-state="degraded">'
+            + 'Operator panel unavailable: ' + String(err) + '</div>';
+        });
+    }
+    window.companionOperator = {
+      open: function() {
+        loadContent();
+        host.setAttribute('data-open', 'true');
+        setExpanded(true);
+      },
+      close: function() {
+        host.setAttribute('data-open', 'false');
+        setExpanded(false);
+        if (toggle) { try { toggle.focus(); } catch (e) {} }
+      },
+      toggle: function() {
+        if (host.getAttribute('data-open') === 'true') { this.close(); }
+        else { this.open(); }
+      }
+    };
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && host.getAttribute('data-open') === 'true') {
+        window.companionOperator.close();
+      }
+    });
+  }());
+  </script>
+</body>
+</html>
