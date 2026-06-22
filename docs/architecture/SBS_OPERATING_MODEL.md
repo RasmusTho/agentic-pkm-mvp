@@ -221,6 +221,7 @@ Allowed learning destinations:
 |---|---|---|---|---|
 | Issue or PR comment / delivery receipt | Lifecycle evidence, not Product semantic truth | Durable GitHub record | Explicit `gh issue comment` / `gh pr comment` by the responsible workflow | Recording observed delivery evidence, blockers, validation, TCD rationale, or parent validation receipts. |
 | BuilderOps `LearningSignal` | Builder operational learning signal | Durable BuilderOps record; projections are derived | `capture-learning` or the owning workflow, with source refs | A concrete divergence names an upstream artifact that may need repair. |
+| BuilderOps `PromotionIntent` | Reviewed staging request for crossing authority classes | Durable BuilderOps record | BuilderOps CLI or owning workflow before GitHub/repo/Product promotion | Learning material should become a GitHub Issue, PR/branch proposal, owner-doc or skill/AGENTS writeback, generated projection, discard, or Product/Runtime authority proposal. |
 | BuilderOps `BuilderOpsReceipt` or generated projection | Processing ledger or derived review view | Receipt is durable; projection is rebuildable | BuilderOps CLI, then regenerate projections from source records | Retrospective completion, supersession, discard, or projection for review. |
 | Repo-local skill update | Normative Builder System workflow instruction | Durable repo-governed artifact | Bounded issue or direct-repair PR, with validation and owner-doc receipt | Learning changes how future agents should classify, execute, verify, or recover. |
 | Builder owner docs / development docs | Normative or reference Builder System governance | Durable repo-governed docs | Docs/governance PR with SBS Impact and validation | Learning changes boundary model, workflow policy, or durable process truth. |
@@ -238,8 +239,11 @@ Learning-to-change path:
 2. **Classify.** The owner skill classifies the signal as Product/Runtime, Builder System, or
    boundary work. Product effects require Product owner docs and SBS impact; Builder effects use this
    Builder System model; boundary effects name both.
-3. **Route.** Keep raw/high-churn material in BuilderOps or comments. Promote only bounded work with
-   `Verify:` targets into GitHub Issues. Promote repo-governed artifacts only by PR.
+3. **Route.** Keep raw/high-churn material in BuilderOps or comments. Before crossing from
+   BuilderOps material into GitHub Issues, PR/branch proposals, owner-doc or skill/AGENTS writeback,
+   generated projections, discard handling, or Product/Runtime authority proposals, create or
+   consume a BuilderOps `PromotionIntent` that names the target surface. Promote only bounded work
+   with `Verify:` targets into GitHub Issues. Promote repo-governed artifacts only by PR.
 4. **Change.** Apply the smallest governed change: skill edit, owner-doc edit, issue/template repair,
    fitness rule, transition debt row, roadmap update, prompt/policy update, or Product issue/PR when
    Product authority is genuinely required.
