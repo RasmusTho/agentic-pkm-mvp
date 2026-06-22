@@ -1,6 +1,6 @@
 State: Accepted (target-state governance decision, 2026-06-22). Re-affirms — does not relax — the existing non-authoritative agent-memory posture and names a quarantined provisional/low-trust tier for direct writes. Enforcement of the trust-tier guard is a future W7 deliverable (W7-MEM-02, #2354); this ADR is words only and changes no runtime code.
 Doc role: Decision record (ADR)
-Authority: Authoritative for the *decision* that direct-write memory is provisional/low-trust and non-authoritative by default, that lifecycle escalation requires governance or human, and that provisional memory persists through a human-readable provenance-bound Markdown mirror. Semantic authority for memory remains in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; the inbound admit-by predicate remains owned by `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md`; per-entity authority flags remain owned by `docs/SEMANTIC_AUTHORITY_MATRIX.md`. This ADR consolidates and re-affirms those owners; it does not redefine them.
+Authority: Authoritative for the *decision* that direct-write memory is provisional/low-trust and non-authoritative by default, that lifecycle escalation requires governance or human, and that provisional memory persists through a human-readable provenance-bound provisional memory note (the human-editable primary artifact, not a rebuildable mirror). Semantic authority for memory remains in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; the inbound admit-by predicate remains owned by `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md`; per-entity authority flags remain owned by `docs/SEMANTIC_AUTHORITY_MATRIX.md`. This ADR consolidates and re-affirms those owners; it does not redefine them.
 Owner: Agent memory / Architecture spine
 Temporal class: Durable decision (supersede via a new ADR, do not edit in place)
 Source of truth: This ADR plus the owner contracts it re-affirms (`AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`, `CONTEXT_ADMISSIBILITY_CONTRACT.md`, `SEMANTIC_AUTHORITY_MATRIX.md`, `docs/DURABLE_MEMORY_AND_RECALL/README.md`).
@@ -40,8 +40,9 @@ What is missing is a single decision record that (a) names *direct writes* (memo
 going through the governed candidate → review → promote path — for example a human or agent editing a
 provisional memory note directly) as a **provisional/low-trust** tier with an explicit, narrow
 admission ceiling; (b) codifies that no runtime agent may silently escalate any memory across its
-lifecycle; (c) requires a human-readable, editable, provenance-bound Markdown mirror for provisional
-memory distinct from materialized promoted notes; and (d) mandates receipts on every lifecycle
+lifecycle; (c) requires a human-readable, editable, provenance-bound provisional memory note (the
+human-editable primary artifact, not a rebuildable mirror) for provisional memory distinct from
+materialized promoted notes; and (d) mandates receipts on every lifecycle
 transition while keeping the lifecycle ledger non-authoritative for claim truth.
 
 This ADR opens the reserved widening slot in the memory contract **narrowly** — it names a tier and
@@ -98,19 +99,24 @@ artifact may never hold `activatable`/`instructional`/`action_authorizing`, rega
 signal. Provisional direct-write memory is unreviewed and is therefore categorically excluded from
 those rights until a governance or human transition promotes it.
 
-### 3. Provisional memory persists through a human-readable, provenance-bound Markdown mirror
+### 3. Provisional memory persists through a human-readable, provenance-bound provisional memory note
 
-Provisional memory persists through a **human-readable, editable, provenance-bound Markdown mirror**,
-distinct from the materialized promoted notes produced by the governed
-`proposal → WriteGuard → receipt → artifact` path. The mirror exists so provisional memory stays
-inspectable and correctable by the human: it carries source/provenance and review-state markers, it
-is the surface a human edits when correcting provisional memory directly, and it is visibly separate
-from promoted semantic notes so a reader never mistakes a provisional draft for reviewed truth.
+Provisional memory persists through a **human-readable, editable, provenance-bound provisional memory
+note** — the human-editable *primary* artifact for direct-write memory, not a rebuildable projection
+of some other durable source. (This is deliberately **not** a "mirror" in the repo's terminology:
+`docs/ENVIRONMENTS.md` and the durable-memory owner docs reserve "mirror" for a rebuildable
+projection that is never the primary artifact, whereas this surface is itself the artifact a human
+authors and corrects.) It is distinct from the materialized promoted notes produced by the governed
+`proposal → WriteGuard → receipt → artifact` path. The provisional note exists so provisional memory
+stays inspectable and correctable by the human: it carries source/provenance and review-state
+markers, it is the surface a human edits when correcting provisional memory directly, and it is
+visibly separate from promoted semantic notes so a reader never mistakes a provisional draft for
+reviewed truth.
 
-**iCloud (or any sync substrate the mirror happens to live on) is never an execution bus.** The
-Markdown mirror is a human-readable persistence and review surface only. Writing to the mirror, or a
-sync engine propagating it across devices, must never trigger promotion, escalation, tool-use, or any
-state transition. Lifecycle transitions happen only through the governed path with receipts (§4),
+**iCloud (or any sync substrate the provisional note happens to live on) is never an execution bus.**
+The provisional memory note is a human-readable persistence and review surface only. Writing to it, or
+a sync engine propagating it across devices, must never trigger promotion, escalation, tool-use, or
+any state transition. Lifecycle transitions happen only through the governed path with receipts (§4),
 never as a side effect of a file appearing or changing on a sync volume.
 
 ### 4. Receipts on every lifecycle transition; ledger authoritative for lifecycle state, not claim truth
@@ -128,13 +134,21 @@ promotion records that a governance/human transition occurred, not that the cont
 Claim truth continues to come from human-authored knowledge and review, never from the existence of a
 ledger entry.
 
-**WriteGuard is health-state-only today.** `app/write_guard.py` gates vault writes on the health
-contract (`WRITE_BLOCKED_STATES`); it does not yet enforce a memory trust tier. A **trust-tier guard**
-that enforces this ADR's provisional read/cited-proposal ceiling at the write boundary is therefore a
-future deliverable — **W7-MEM-02**, tracked by **#2354**. This ADR is **words only**: it sets the
-policy and the admission ceiling but adds no enforcement code. Until W7-MEM-02 ships, the constraint
-is normative for new work and is upheld by the existing `authority_guard` conjunction and the
-admissibility contract, not by WriteGuard.
+**No live enforcement of this ceiling exists today; the re-affirmation below is normative only.**
+`app/write_guard.py` gates vault writes on the health contract (`WRITE_BLOCKED_STATES`) and does not
+enforce a memory trust tier. The `authority_guard` re-affirmed in §2 is itself normative-scope only:
+`app/agent_memory/authority_guard.py::evaluate_memory_authority` evaluates `PromotedMemory` and does
+not gate a provisional/direct-write path. The admissibility contract is likewise unenforced at
+runtime — `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` records that nothing consults it on a live
+path (`app/activation/gate.py` does not invoke it). So there is **no live admissibility or trust-tier
+enforcement of this ADR's provisional ceiling today**; the policy is binding on new work as a
+normative constraint, not by any running guard.
+
+A **trust-tier guard** that enforces this ADR's provisional read/cited-proposal ceiling at the write
+boundary is the required future deliverable — **W7-MEM-02**, tracked by **#2354**. This ADR is **words
+only**: it sets the policy and the admission ceiling but adds no enforcement code. W7-MEM-02 is
+**required before any provisional direct-write producer or reader lands**, so that the first code path
+that creates or consumes provisional memory is gated rather than relying on this normative text alone.
 
 ## Constraints honored
 
@@ -153,9 +167,9 @@ admissibility contract, not by WriteGuard.
 - No-silent-escalation is codified as a decision: promotion/deprecation/supersession/deletion require
   governance or human; the `authority_guard` conjunction and the unreviewed-memory-never-hidden-
   authority rule are re-affirmed, not relaxed.
-- Provisional memory has a designated human-readable, provenance-bound Markdown mirror surface
-  distinct from promoted notes, with the explicit rule that the sync substrate is never an execution
-  bus.
+- Provisional memory has a designated human-readable, provenance-bound provisional memory note (the
+  human-editable primary artifact, not a rebuildable mirror) distinct from promoted notes, with the
+  explicit rule that the sync substrate is never an execution bus.
 - Every lifecycle transition is receipt-bearing, with the ledger authoritative for lifecycle state
   and never for claim truth.
 - Enforcement of the trust-tier ceiling at the write boundary is deferred to W7-MEM-02 (#2354);
