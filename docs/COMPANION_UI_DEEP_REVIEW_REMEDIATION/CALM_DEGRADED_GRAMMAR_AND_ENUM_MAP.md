@@ -78,7 +78,7 @@ The degraded voice — "Nothing was mutated / decided / lost" — is identified 
 ## Acceptance Criteria
 
 - [ ] **Grammar definition.** A single degraded-grammar render helper (`calm_degraded(what, why, nothing_clause, what_to_do)` or equivalent) exists in the companion-ui render layer and is the only code path that emits unavailable/error copy on any user-facing surface. No surface may inline its own unavailable-state string literal.
-  Verify: `tests/companion_ui/test_calm_degraded_grammar.py::test_grammar_helper_is_sole_unavailable_emitter` — static scan of the render module confirms no `"unavailable"` or `"Error:"` string literal outside the helper; the helper's output matches the template for all parametrised inputs.
+  Verify: `tests/companion_ui/test_calm_degraded_grammar.py::test_grammar_helper_is_sole_unavailable_emitter` — static scan of the render module confirms no user-visible unavailable/error **copy** literal (e.g. `"unavailable"`, `"Error:"`) is emitted outside the helper; the helper's output matches the template for all parametrised inputs. The scan targets user-visible copy only — server-authoritative classification tokens carrying the same word in non-copy positions (data-attribute values such as `data-affordance-status="unavailable"`, enum/posture values, CSS class names, test ids) are exempt, since they are runtime-declared classification, not copy, and the next AC requires those classified values to still reach the fixtures.
 
 - [ ] **C3 (review verbatim).** No raw runtime enum or internal identifier (e.g. `resurfacing_source_unavailable`, `prop-move-1`, `art-123`, `lifecycle.move`) is visible on any user-facing surface; each maps to human copy.
   Verify: `tests/companion_ui/test_calm_degraded_grammar.py::test_enum_map_covers_known_tokens` — parametrised over the confirmed leak tokens; each asserts that rendering the degraded + proposal fixtures produces no raw token in the HTML output, and that the humanised string is produced by the map function (not hardcoded in the template call-site). The classified value (`resurfacing_source_unavailable`, `lifecycle.move`, etc.) must still be present in the fixture payload passed to the renderer — confirming it arrives from the runtime, not derived in the template.
@@ -93,7 +93,7 @@ The degraded voice — "Nothing was mutated / decided / lost" — is identified 
 
 ```bash
 # Run the full calm-grammar test suite (static, no runtime needed):
-cd /Users/rasmusthornberg/code/agentic-pkm-mvp-cui-review
+cd "$(git rev-parse --show-toplevel)"   # repo root of the current checkout
 pytest tests/companion_ui/test_calm_degraded_grammar.py -v
 
 # Also run the existing orientation/vault-browser tests to confirm no regressions:

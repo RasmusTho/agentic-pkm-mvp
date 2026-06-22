@@ -145,7 +145,7 @@ All three are static (no live runtime required). A Playwright live UAT confirmin
 
 ## Out of Scope
 
-- The `cmd` overlay's internal surface routing or its visual frame — governed by CUIDR-05
+- The `cmd` overlay's internal surface routing or its visual frame — governed by CUIDR-02
   (Overlay Modal Frame Spec).
 - Bottom-sheet snap state or drag-handle behavior at 430 px — governed by the existing
   `test_converse_session_drawer_portrait.py` suite; this task only defines the composed bar

@@ -77,17 +77,12 @@ topbar launch icons are clipped off-screen at the capture width — itself a fin
 
 ## Reproducing the screenshots
 
-From the repo root (`agentic-pkm-mvp`), with the project venv:
-
-```bash
-.venv/bin/python companion-ui/design_handoff/2026-06-22-companion-ui-deep-review/_tools/generate.py
-.venv/bin/python companion-ui/design_handoff/2026-06-22-companion-ui-deep-review/_tools/screenshot.py
-```
-
-`generate.py` renders every state to `screens/*.html` (pure render, no runtime). `screenshot.py`
-drives Chromium (Playwright) over those files and writes `img/*.png`. Both reuse the fixtures in
-`tests/companion_ui/test_entry_state_gallery.py`, so the package stays in lock-step with the
-shipped renderer.
+The committed `screens/*.html` and `img/*.png` are the captured artifacts for this review. The
+generation tooling (`_tools/generate.py` renders every state to `screens/*.html` as a pure render;
+`_tools/screenshot.py` drives Chromium/Playwright over those files to write `img/*.png`, both reusing
+the fixtures in `tests/companion_ui/test_entry_state_gallery.py` so the package stays in lock-step
+with the shipped renderer) is code, so it lands via a separate code-lane PR rather than this
+docs-authoring PR — see the parent feature issue #2443 for the follow-up.
 
 ## Governance
 

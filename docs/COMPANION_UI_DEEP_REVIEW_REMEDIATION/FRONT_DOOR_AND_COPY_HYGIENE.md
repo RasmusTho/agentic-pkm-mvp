@@ -76,7 +76,7 @@ No input (vault picker fields, rail textarea, settings time inputs) renders with
 
 ## How to Verify (Pre-Merge)
 
-1. Run the existing companion-UI test suite (`pytest tests/companion_ui/ -x -q --not-pg`). No regressions.
+1. Run the existing companion-UI test suite (`pytest tests/companion_ui/ -x -q -m "not pg"`). No regressions.
 2. Render E11, E1, E2, O7, O4 fixtures via `render_index_html` with appropriate payloads and inspect the HTML:
    - E11: vault picker — zero raw `<input>` / `<select>` without DS classes; primary button class on the configured-vault open action.
    - E1/E2: cold_start action row — one `btn--primary`, two `btn--secondary` (or whatever the DS tokens are); no `<a href` in the action row.
