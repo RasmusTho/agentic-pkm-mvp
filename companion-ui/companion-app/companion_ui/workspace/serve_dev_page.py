@@ -1898,12 +1898,14 @@ def _render_note_section(fields: dict) -> str:
         len(fields.get("suggestion_cards") or []) > 0
         or _suggestion_state.startswith("staged")
     )
-    # A blocked Panel carries a failure reason the user must see (it is the
-    # Panel-side analogue of a WriteGuard block). Treat it as a safety-critical
-    # override so the blocked reason is never hidden behind the ambient strip's
-    # collapsed body (Codex P2). Other transient panel states (running, idle)
-    # are not content and stay ambient.
-    rail_panel_blocked = panel_state_raw == "blocked"
+    # A Panel that carries a human-facing message (a blocked reason, a
+    # no-match reason, or any first-class visible Panel failure state) is
+    # content the user must see — it is the Panel-side analogue of a WriteGuard
+    # block. Treat a non-empty Panel message, and the explicit blocked state, as
+    # a visibility-critical override so the reason is never hidden behind the
+    # ambient strip's collapsed body (Codex P2). Transient/no-message states
+    # (running, idle) are not content and stay ambient.
+    rail_panel_message_present = panel_state_raw == "blocked" or bool(panel_message_raw)
     rail_actionable = bool(
         rail_has_proposal
         or rail_has_receipt
@@ -1912,7 +1914,7 @@ def _render_note_section(fields: dict) -> str:
         # collapse into the ambient strip even with no suggestion/proposal/
         # receipt).
         or rail_safety_critical
-        or rail_panel_blocked
+        or rail_panel_message_present
         or reorient_actionable
     )
     # The ambient/active decision is carried on the layout grid as

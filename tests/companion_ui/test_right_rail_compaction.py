@@ -403,6 +403,31 @@ def test_panel_blocked_state_keeps_rail_active():
     assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
 
 
+def test_panel_no_match_state_keeps_rail_active():
+    # A no-match Panel carries a no_match_reason mapped into panel_render.message
+    # — a first-class visible Panel state. It must not collapse into the ambient
+    # strip where the reason is hidden (Codex P2 follow-up).
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/note.md",
+        fields=_fields(
+            panel_render={"state": "no-match", "message": "No matching note found."}
+        ),
+    )
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+
+
+def test_nonempty_panel_message_keeps_rail_active():
+    # Generalised: any non-empty Panel message is content the user must see.
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/note.md",
+        fields=_fields(panel_render={"state": "idle", "message": "Heads up: something to read."}),
+    )
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+
+
 def test_open_loops_cta_hidden_in_ambient_strip():
     # The open-loops orientation CTA renders outside .rail-placeholder-body; in
     # the ambient strip it must be CSS-hidden, not left as a clipped button, and
