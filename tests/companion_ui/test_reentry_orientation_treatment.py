@@ -515,7 +515,10 @@ def test_degraded_banner_names_missing_source() -> None:
     )[0]
     assert 'data-tone="amber"' in html
     assert "Missing source" in banner
-    assert "resurfacing_source_unavailable" in banner
+    # CUIDR-01: the banner names the missing source in humanised copy, never the
+    # raw runtime enum (resurfacing_source_unavailable).
+    assert "Orientation source unavailable" in banner
+    assert "resurfacing_source_unavailable" not in banner
 
     # Calm, never an alarm: amber styling, not the destructive token.
     assert ".orientation-degraded" in html

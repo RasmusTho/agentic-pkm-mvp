@@ -261,32 +261,44 @@ def test_enum_map_covers_known_tokens(token: str, human: str) -> None:
 
 def test_enum_map_no_raw_token_on_degraded_surface() -> None:
     for token in ["resurfacing_source_unavailable", "orientation_unavailable"]:
+        payload = _degraded_orientation_payload(token)
         html = _render_degraded_orientation_html(token)
         # Humanised copy is present (produced by the map, not the template call).
         assert humanise_degraded_reason(token) in html
-        # The raw token never appears as visible copy. It is allowed only inside
-        # the server-authoritative data-* attribute (classification still
-        # arrives from the runtime payload).
-        visible = _strip_data_attributes(html)
-        assert token not in visible, f"raw enum {token!r} leaked to visible copy"
-        # The classified value still reaches the fixture via data-reason-token.
-        assert f'data-reason-token="{token}"' in html
+        # The raw enum token must be ABSENT from the rendered orientation
+        # degraded *surface* — neither as visible chip copy nor echoed into a
+        # chip/source data-* attribute on that surface. (The server-authoritative
+        # entry-state declaration on <body data-entry-degraded-reasons=…>, set
+        # by the entry-state resolver, is the exempt classification carrier and
+        # is out of CUIDR-01 scope; we scan the degraded surface, not <body>.)
+        surface = _degraded_orientation_surface(html)
+        assert token not in surface, f"raw enum {token!r} leaked into degraded surface"
+        # The classified value still arrives from the runtime: it is present in
+        # the fixture payload passed to the renderer, and the surface declares
+        # the degraded posture server-side.
+        assert token in payload["meta"]["degraded_reasons"]
+        assert token in payload["guards"]["reasons"]
+        assert 'data-runtime-posture="degraded"' in html
 
 
 def test_enum_map_suppresses_internal_ids_on_proposal_surface() -> None:
     html = _render_proposal_html()
     visible = _strip_data_attributes(html)
-    # Internal identifiers must not be visible copy.
+    # Internal identifiers and the raw action class must not appear as visible
+    # copy. The proposal-id / artifact-id correlation IDs may remain only inside
+    # pre-existing data-* attributes (server-authoritative correlation, exempt
+    # per the AC1 note); they are never rendered as user-facing copy.
     for token in SUPPRESSED_ID_TOKENS:
         assert token not in visible, f"internal id {token!r} leaked to visible copy"
-    # The raw action class must not be visible copy; it is humanised.
-    assert "lifecycle.move" not in visible
+    assert "lifecycle.move" not in visible, "raw action class leaked to visible copy"
     assert "Move note" in html
-    # Classification still arrives from the payload (correlation ids preserved
-    # in data-* attributes — server-authoritative, exempt).
-    assert 'data-proposal-id="prop-move-1"' in html
-    assert 'data-artifact-id="art-123"' in html
-    assert 'data-action-class="lifecycle.move"' in html
+    # The classified correlation IDs still arrive from the runtime payload
+    # (proof of server authority is the payload, not a copy echo).
+    payload = _leaky_workspace_payload()
+    proposal = payload["panel"]["proposals"][0]
+    assert proposal["proposal_id"] == "prop-move-1"
+    assert proposal["artifact_id"] == "art-123"
+    assert proposal["evidence"]["action_class"] == "lifecycle.move"
     # The proposal's human description is what the user reads instead.
     assert "Move this note into Projects/" in html
 
@@ -301,15 +313,16 @@ def test_vault_browser_fetch_error_uses_calm_grammar() -> None:
         orientation_vault_browser=_vault_browser_payload(),
         orientation_vault_browser_error=RAW_TRANSPORT_ERROR,
     )
-    # (a) the raw transport error must not appear as visible copy.
-    visible = _strip_data_attributes(html)
-    assert RAW_TRANSPORT_ERROR not in visible
+    # (a) the literal transport error must not appear in the HTML output at all
+    #     (not even echoed into a data-* attribute).
+    assert RAW_TRANSPORT_ERROR not in html
     # (b) the output uses the calm grammar template.
     assert (
         "Notes unavailable — connection failed. Nothing was lost. Refresh to retry."
         in html
     )
-    # (c) the classified error state still arrives from the payload.
+    # (c) the classified error *state* still arrives from the payload — evidenced
+    #     by the state-error element being present.
     assert 'data-testid="workspace-vault-browser-state-error"' in html
 
 
@@ -321,14 +334,17 @@ def test_enum_map_fail_closed_on_unknown_token() -> None:
     assert humanise_degraded_reason(unknown) == FAIL_CLOSED_DEGRADED
     assert FAIL_CLOSED_DEGRADED == "… unavailable — details withheld. Nothing was lost."
 
-    # End-to-end: an unknown degraded reason renders the fallback, never the raw
-    # token, in the orientation surface.
+    # End-to-end: an unknown degraded reason renders the fallback, and the raw
+    # token is absent from the rendered degraded surface (not echoed into a
+    # chip/source data-* attribute). The entry-state <body> declaration is the
+    # exempt server-authoritative carrier and is out of scope here.
+    payload = _degraded_orientation_payload(unknown)
     html = _render_degraded_orientation_html(unknown)
-    visible = _strip_data_attributes(html)
-    assert unknown not in visible, "unmapped token leaked to visible copy"
+    surface = _degraded_orientation_surface(html)
+    assert unknown not in surface, "unmapped token leaked into degraded surface"
     assert "details withheld" in html
-    # The classified value still arrives from the payload (data-* preserved).
-    assert f'data-reason-token="{unknown}"' in html
+    # The classified value still arrives from the runtime payload.
+    assert unknown in payload["meta"]["degraded_reasons"]
 
 
 def test_humanise_token_passes_through_legitimate_action_class() -> None:
@@ -351,8 +367,21 @@ _DATA_ATTR_RE = re.compile(r'\sdata-[\w-]+="[^"]*"')
 def _strip_data_attributes(html: str) -> str:
     """Remove data-* attribute values so the scan targets visible copy only.
 
-    Server-authoritative classification tokens are carried in data-* attributes
-    (and are exempt from the copy scan); stripping them isolates user-visible
-    copy for the raw-token assertions.
+    Server-authoritative classification tokens carried in data-* attributes
+    are exempt from the copy scan; stripping them isolates user-visible copy.
     """
     return _DATA_ATTR_RE.sub("", html)
+
+
+def _degraded_orientation_surface(html: str) -> str:
+    """Isolate the rendered orientation degraded/resurface region.
+
+    Excludes the ``<body>`` tag, whose ``data-entry-degraded-reasons``
+    declaration is the server-authoritative entry-state classification carrier
+    (set by the entry-state resolver, exempt and out of CUIDR-01 scope). The
+    raw-token scan targets the degraded chips, banner, and resurface posture
+    region that this task humanises.
+    """
+    marker = "<main"
+    idx = html.find(marker)
+    return html[idx:] if idx != -1 else html

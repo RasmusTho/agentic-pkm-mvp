@@ -3320,14 +3320,14 @@ def _render_vault_browser(
     )
     if error:
         # D3 (CUIDR-01): never surface the raw transport error
-        # ("Error: Failed to fetch"). The classified error state still arrives
-        # from the payload — preserved in data-error-token — but the visible
-        # copy reads from the single calm grammar. Presentation only.
-        error_token = _e("" if error is None else str(error))
+        # ("Error: Failed to fetch") — it must not appear in the HTML output at
+        # all. The classified error *state* still arrives from the payload and
+        # is evidenced by the state-error testid element; the visible copy reads
+        # from the single calm grammar. Presentation only — the raw token is not
+        # echoed back into the DOM.
         state_html = (
             '<div class="vault-browser-state" '
-            'data-testid="workspace-vault-browser-state-error" '
-            f'data-error-token="{error_token}">'
+            'data-testid="workspace-vault-browser-state-error">'
             + _e(
                 calm_degraded(
                     what="Notes",
@@ -4271,7 +4271,7 @@ def _render_act_mode(
             <div class="act-proposal-title">{_e(proposal.get("description", ""))}</div>
             <div class="act-bundle" data-testid="act-action-bundle-context">
               <span>{_e(evidence.get("trigger_summary", ""))}</span>
-              <span data-action-class="{_e(evidence.get("action_class", ""))}">{_e(humanise_token(evidence.get("action_class", "")))}</span>
+              <span>{_e(humanise_token(evidence.get("action_class", "")))}</span>
               <span>{_e(evidence.get("cognition_route", ""))}</span>
             </div>
             <div class="act-flow" data-testid="act-governed-flow">
@@ -4874,14 +4874,14 @@ def _render_panel_proposal_rows(
           {origin_html}
           {reflected_receipt_html}
           <div class="panel-proposal-meta">
-            <span data-testid="workspace-panel-proposal-id" data-proposal-id="{proposal_id}">{_e(humanise_token(proposal.get("proposal_id", "")))}</span>
-            <span data-testid="workspace-panel-artifact-id" data-artifact-id="{artifact_id}">{_e(humanise_token(proposal.get("artifact_id", "")))}</span>
+            <span data-testid="workspace-panel-proposal-id">{_e(humanise_token(proposal.get("proposal_id", "")))}</span>
+            <span data-testid="workspace-panel-artifact-id">{_e(humanise_token(proposal.get("artifact_id", "")))}</span>
             <span>{_e(proposal.get("status", ""))}</span>
           </div>
           <details class="panel-proposal-evidence" data-testid="workspace-panel-evidence" open>
             <summary data-testid="workspace-panel-evidence-disclosure">Evidence</summary>
             <span data-testid="workspace-panel-trigger-summary">{_e(evidence.get("trigger_summary", ""))}</span>
-            <span data-testid="workspace-panel-action-class" data-action-class="{_e(evidence.get("action_class", ""))}">{_e(humanise_token(evidence.get("action_class", "")))}</span>
+            <span data-testid="workspace-panel-action-class">{_e(humanise_token(evidence.get("action_class", "")))}</span>
             <span data-testid="workspace-panel-cognition-route">{_e(evidence.get("cognition_route", ""))}</span>
           </details>
           <div class="panel-proposal-affordances panel-action-row">
@@ -5568,12 +5568,12 @@ def _render_orientation_resurface(
     reasons = degraded_reasons or []
     posture = "degraded" if reasons else "read-only"
     # C3 (CUIDR-01): humanise the runtime reason enum before it reaches the
-    # chip. The classified token still arrives from the payload and is preserved
-    # in data-reason-token (server-authoritative); only the copy is humanised,
-    # failing closed for unknown tokens. Presentation only.
+    # chip; the raw enum must not appear in the HTML output. The classified
+    # state still arrives from the payload (the degraded posture below is
+    # server-declared); only the copy is humanised, failing closed for unknown
+    # tokens. Presentation only — the raw token is not echoed into the DOM.
     reason_html = "".join(
-        f'<span class="orientation-reason" data-reason-token="{_e(reason)}">'
-        f"{_e(humanise_degraded_reason(reason))}</span>"
+        f'<span class="orientation-reason">{_e(humanise_degraded_reason(reason))}</span>'
         for reason in reasons
     )
 
@@ -6097,24 +6097,23 @@ def _render_orientation_index_html(
     trace_id = _orientation_str(meta.get("trace_id"), "unknown")
     runtime_posture = _orientation_str(guards.get("runtime_posture"), "unknown")
     # C3 (CUIDR-01): humanise the runtime reason enum before it reaches the
-    # chip; preserve the classified token in data-reason-token. Presentation
-    # only — classification stays server-authoritative.
+    # chip; the raw enum must not appear in the HTML output. Classification
+    # stays server-authoritative (the degraded posture / runtime_posture below
+    # is server-declared); the raw token is not echoed into the DOM.
     reason_html = "".join(
-        f'<span class="orientation-reason" data-reason-token="{_e(reason)}">'
-        f"{_e(humanise_degraded_reason(reason))}</span>"
+        f'<span class="orientation-reason">{_e(humanise_degraded_reason(reason))}</span>'
         for reason in reasons
     )
     # Degraded is an amber banner naming the missing source(s); the rest of
     # the surface stays calm and the resolved slices still render
     # (SYSTEM_ENTRY_POINT_SPEC.md §Entry-point state model, cross-flags).
     # C3 (CUIDR-01): humanise each runtime reason before naming the missing
-    # source(s); preserve the raw classified tokens in data-reason-tokens.
+    # source(s); the raw enum tokens must not appear in the HTML output.
     humanised_sources = " · ".join(humanise_degraded_reason(reason) for reason in reasons)
     missing_source_html = (
         f"""
           <span class="orientation-degraded-source"
-            data-testid="workspace-orientation-degraded-source"
-            data-reason-tokens="{_e(" · ".join(reasons))}">
+            data-testid="workspace-orientation-degraded-source">
             Missing source: {_e(humanised_sources)}
           </span>"""
         if reasons
