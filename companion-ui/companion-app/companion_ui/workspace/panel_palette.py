@@ -97,8 +97,18 @@ def palette_row_model(
         "guard_held": writeguard_blocked,
         "actions": actions,
         # Filter haystack (simple substring grammar; package Q12 deferred).
+        # Include the humanised action-class label so typing the *visible* text
+        # (e.g. "Move note") matches the row even when the description does not
+        # already contain it (CUIDR-01: the user filters on what they see).
         "filter_text": " ".join(
-            part for part in (description, action_class, proposal_id) if part
+            part
+            for part in (
+                description,
+                action_class,
+                humanise_token(action_class),
+                proposal_id,
+            )
+            if part
         ).lower(),
     }
 

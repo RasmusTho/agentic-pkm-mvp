@@ -360,6 +360,28 @@ def test_humanise_token_suppresses_id_patterns() -> None:
         assert humanise_token(token) == ""
 
 
+def test_palette_filter_haystack_includes_humanised_label() -> None:
+    # The palette filters on the visible text. A mapped action class renders as
+    # "Move note", so typing "Move note" must still match the row even when the
+    # description does not contain that exact phrase.
+    from companion_ui.workspace.panel_palette import (
+        filter_palette_rows,
+        palette_row_model,
+    )
+
+    proposal = {
+        "proposal_id": "prop-move-1",
+        "artifact_id": "art-123",
+        "description": "Relocate into Projects/",  # does not contain "Move note"
+        "status": "staged",
+        "evidence": {"action_class": "lifecycle.move"},
+        "affordances": {"confirm": True, "correct": True, "reject": True},
+    }
+    row = palette_row_model(proposal, writeguard_blocked=False)
+    assert "move note" in row["filter_text"], "humanised label missing from haystack"
+    assert filter_palette_rows([row], "Move note") == [row]
+
+
 def test_humanise_token_fails_closed_on_unmapped_classified_namespace() -> None:
     # A mapped classified token humanises; an UNMAPPED token in the same
     # classified namespace (lifecycle.*) must fail closed to suppression rather
