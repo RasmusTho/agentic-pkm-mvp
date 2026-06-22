@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 import json
-import os
 
 from app.db.db import conn_rw
+from app.stores import resolve_store_backend
 
 def audit_event(
     *,
@@ -19,16 +19,13 @@ def audit_event(
     Best-effort audit logger.
     Writes to audit table if DB is up, otherwise silently no-ops for pytest.
     """
-    # Skip the DB write entirely unless the durable Postgres backend is active.
-    # In memory/non-pg mode the resolved DSN is non-empty but points at the
-    # default unreachable host (db:5432), and ``psycopg.connect()`` can stall in
-    # ``socket.getaddrinfo()`` — a stall ``connect_timeout`` cannot bound, since
-    # it covers only the TCP connect, not DNS resolution. That intermittent
-    # getaddrinfo stall is the #2377 "not pg" gate hang. Gating on STORE_BACKEND
-    # (the canonical durable-store signal, e.g. app/health_contract.py) removes
-    # the stall at the source while leaving the reachable-Postgres path unchanged.
-    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
-    if backend != "pg":
+    # Skip the DB write entirely unless the store layer resolves to the durable
+    # Postgres backend. In memory/non-pg mode the resolved DSN may still be
+    # non-empty but point at the default unreachable host (db:5432), and
+    # ``psycopg.connect()`` can stall in ``socket.getaddrinfo()``. Use the same
+    # backend resolver as the store layer so auto-detected pg deployments still
+    # write audit rows while genuine memory mode avoids DB/DNS work.
+    if resolve_store_backend() != "pg":
         return
 
     payload = {
