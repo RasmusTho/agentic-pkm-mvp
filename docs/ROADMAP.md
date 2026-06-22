@@ -206,6 +206,30 @@ These are deferred until `SearchPort` exists as the safe boundary for swapping s
 - **Query expansion / HyDE** — single-pass retrieval misses abstract or personal queries ("what was I exploring about X last year"). HyDE (generate a hypothetical answer, embed it) or multi-query (N rephrased variants, merged via RRF) are the standard remedies. Most valuable for PKM-style retrospective queries.
 - **Eval framework** — no automated signal when retrieval quality regresses. RAGAS or an LLM-as-judge faithfulness/relevance scorer in CI is the strategic gap with highest risk exposure.
 
+### Retrieval / embedding topology ratified (baseline captured, 2026-06-20)
+
+The current retrieval and embedding topology is now captured as decision records so the hardening
+work above reasons against a ratified baseline rather than implicit code reality (#2317, part of the
+RAG/memory decomposition epic #2314):
+
+- **`docs/adr/ADR-0024-retrieval-topology.md`** — ratifies the shipped topology: in-memory hybrid
+  serving (`app/retrieval/hybrid.py`), weighted linear fusion `combined = 0.5*bm25_norm +
+  0.4*emb_norm + 0.1*overlap_bonus`, rerank-off by default, with the durable Postgres/pgvector
+  `PgVectorIndex` as the forward **direction** (not yet the serving path). RRF / HyDE /
+  low-trust-weights / eval remain named future work behind `SearchPort` (the items listed above).
+- **`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`** — ratifies Ollama-primary embedding
+  with a **dimension-matched (768)** Gemini `gemini-embedding-001` @ 768 auto-fallback (L2-renormalized,
+  query path uses the primary identity). The fallback write is **MIXED-IDENTITY / reconcilable** — the
+  Gemini vector carries the Gemini identity, reconciled via `index reconcile` once Ollama recovers
+  (see `docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). Supersedes the no-generic-fallback
+  invariant as a scoped exception (not a blanket reversal).
+
+These are docs/decision-only ratifications (no behavior change). The runtime work they ratify against
+(durable-spine migration; Gemini adapter wiring; aligning the `DEFAULT_EMBED_DIM` code constant to
+`768`) is tracked under #2314 / #2292 / #2296 / #2297. (ADR numbering note: #2317 originally named
+ADR-0015/0016, but those plus 0017–0022 were already taken by the SBS series; the ratifications use
+the next free numbers 0023/0024, with 0025 reserved for sibling #2318.)
+
 ## Deep Agents as runtime layer exploration (future work)
 
 <!-- Deep Agents runtime exploration -->

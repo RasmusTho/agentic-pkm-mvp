@@ -81,6 +81,14 @@ defines intent; later docs add detail.
 4. `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md` and `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md` — mirror/projection invariants.
 5. `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md` — verify which human flow the change affects.
 
+## Changing retrieval / embeddings
+
+1. `docs/RETRIEVAL.md` — owner doc for the live retrieval scoring and serving path (in-memory hybrid, weighted linear fusion, rerank-off).
+2. `docs/adr/ADR-0024-retrieval-topology.md` — ratified retrieval topology and the durable-spine direction; RRF/HyDE/low-trust-weights as future work.
+3. `docs/EMBEDDINGS.md` — normative embedding identity, the `Fallback rule`, and the `EMBED_DIM` guardrail.
+4. `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md` — Ollama-primary + identity-preserving Gemini fallback posture (supersedes the no-generic-fallback invariant as a scoped exception).
+5. `docs/LLM_ROUTING.md` and `docs/LLM.md` — embedding routing/fabric contract and operational provider/setup, kept in sync with the embedding-identity change policy.
+
 ## Changing agent memory
 
 1. `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` — agent semantics and authority.
