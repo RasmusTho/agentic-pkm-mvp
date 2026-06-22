@@ -62,6 +62,12 @@ from companion_ui.renderer import (
     render_vault_markdown,
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
+from companion_ui.workspace.calm_degraded import (
+    NOTHING_LOST,
+    calm_degraded,
+    humanise_degraded_reason,
+    humanise_token,
+)
 from companion_ui.workspace.capture_modal import (
     capture_modal_markup,
     capture_modal_script,
@@ -3313,9 +3319,23 @@ def _render_vault_browser(
         f'<span data-testid="workspace-vault-browser-active-identity">{_e(identity_label)}</span>'
     )
     if error:
+        # D3 (CUIDR-01): never surface the raw transport error
+        # ("Error: Failed to fetch") — it must not appear in the HTML output at
+        # all. The classified error *state* still arrives from the payload and
+        # is evidenced by the state-error testid element; the visible copy reads
+        # from the single calm grammar. Presentation only — the raw token is not
+        # echoed back into the DOM.
         state_html = (
-            '<div class="vault-browser-state" data-testid="workspace-vault-browser-state-error">'
-            + _e(str(error))
+            '<div class="vault-browser-state" '
+            'data-testid="workspace-vault-browser-state-error">'
+            + _e(
+                calm_degraded(
+                    what="Notes",
+                    why="connection failed",
+                    nothing_clause=NOTHING_LOST,
+                    what_to_do="Refresh to retry",
+                )
+            )
             + "</div>"
         )
     elif not identity_available:
@@ -4119,8 +4139,12 @@ def _render_commitments_mode(surface: dict | None) -> str:
             class="commitments-notice"
             data-testid="commitments-degraded-state"
             data-degraded-reason="{reason}">
-            Commitments are unavailable — the durable read is degraded
-            ({reason}). This is not a sign that you have none.
+            {_e(calm_degraded(
+                what="Commitments",
+                why="the durable read is degraded",
+                nothing_clause=NOTHING_LOST,
+                what_to_do="This is not a sign that you have none",
+            ))}
           </div>
         </section>"""
 
@@ -4247,7 +4271,7 @@ def _render_act_mode(
             <div class="act-proposal-title">{_e(proposal.get("description", ""))}</div>
             <div class="act-bundle" data-testid="act-action-bundle-context">
               <span>{_e(evidence.get("trigger_summary", ""))}</span>
-              <span>{_e(evidence.get("action_class", ""))}</span>
+              <span>{_e(humanise_token(evidence.get("action_class", "")))}</span>
               <span>{_e(evidence.get("cognition_route", ""))}</span>
             </div>
             <div class="act-flow" data-testid="act-governed-flow">
@@ -4850,14 +4874,14 @@ def _render_panel_proposal_rows(
           {origin_html}
           {reflected_receipt_html}
           <div class="panel-proposal-meta">
-            <span data-testid="workspace-panel-proposal-id">{proposal_id}</span>
-            <span data-testid="workspace-panel-artifact-id">{artifact_id}</span>
+            <span data-testid="workspace-panel-proposal-id">{_e(humanise_token(proposal.get("proposal_id", "")))}</span>
+            <span data-testid="workspace-panel-artifact-id">{_e(humanise_token(proposal.get("artifact_id", "")))}</span>
             <span>{_e(proposal.get("status", ""))}</span>
           </div>
           <details class="panel-proposal-evidence" data-testid="workspace-panel-evidence" open>
             <summary data-testid="workspace-panel-evidence-disclosure">Evidence</summary>
             <span data-testid="workspace-panel-trigger-summary">{_e(evidence.get("trigger_summary", ""))}</span>
-            <span data-testid="workspace-panel-action-class">{_e(evidence.get("action_class", ""))}</span>
+            <span data-testid="workspace-panel-action-class">{_e(humanise_token(evidence.get("action_class", "")))}</span>
             <span data-testid="workspace-panel-cognition-route">{_e(evidence.get("cognition_route", ""))}</span>
           </details>
           <div class="panel-proposal-affordances panel-action-row">
@@ -5543,8 +5567,14 @@ def _render_orientation_resurface(
     default_budget = _ORIENTATION_DISPLAY_BUDGET
     reasons = degraded_reasons or []
     posture = "degraded" if reasons else "read-only"
+    # C3 (CUIDR-01): humanise the runtime reason enum before it reaches the
+    # chip; the raw enum must not appear in the HTML output. The classified
+    # state still arrives from the payload (the degraded posture below is
+    # server-declared); only the copy is humanised, failing closed for unknown
+    # tokens. Presentation only — the raw token is not echoed into the DOM.
     reason_html = "".join(
-        f'<span class="orientation-reason">{_e(reason)}</span>' for reason in reasons
+        f'<span class="orientation-reason">{_e(humanise_degraded_reason(reason))}</span>'
+        for reason in reasons
     )
 
     def _candidate_row(candidate: dict, *, testid: str, visible_default: bool) -> str:
@@ -6066,17 +6096,25 @@ def _render_orientation_index_html(
     as_of = _orientation_str(meta.get("as_of"))
     trace_id = _orientation_str(meta.get("trace_id"), "unknown")
     runtime_posture = _orientation_str(guards.get("runtime_posture"), "unknown")
+    # C3 (CUIDR-01): humanise the runtime reason enum before it reaches the
+    # chip; the raw enum must not appear in the HTML output. Classification
+    # stays server-authoritative (the degraded posture / runtime_posture below
+    # is server-declared); the raw token is not echoed into the DOM.
     reason_html = "".join(
-        f'<span class="orientation-reason">{_e(reason)}</span>' for reason in reasons
+        f'<span class="orientation-reason">{_e(humanise_degraded_reason(reason))}</span>'
+        for reason in reasons
     )
     # Degraded is an amber banner naming the missing source(s); the rest of
     # the surface stays calm and the resolved slices still render
     # (SYSTEM_ENTRY_POINT_SPEC.md §Entry-point state model, cross-flags).
+    # C3 (CUIDR-01): humanise each runtime reason before naming the missing
+    # source(s); the raw enum tokens must not appear in the HTML output.
+    humanised_sources = " · ".join(humanise_degraded_reason(reason) for reason in reasons)
     missing_source_html = (
         f"""
           <span class="orientation-degraded-source"
             data-testid="workspace-orientation-degraded-source">
-            Missing source: {_e(" · ".join(reasons))}
+            Missing source: {_e(humanised_sources)}
           </span>"""
         if reasons
         else ""
