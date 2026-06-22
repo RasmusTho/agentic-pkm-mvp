@@ -57,6 +57,7 @@ RESUME_PERSISTENCE_BLOCKERS = (1877,)
 class GoldenPathContext:
     client: TestClient
     vault: Path
+    app_local_path: Path
     outbox: Path
     note_path: str
 
@@ -141,10 +142,11 @@ def golden_path(
     # Option-2 (#2309): a configured VAULT_ROOT is no longer the active vault —
     # select the test vault so the integrated runtime resolves it instead of the
     # no-vault picker. The golden path writes (confirm/save), so initialize it.
+    app_local_path = tmp_path / "app-local.md"
     _vault_manager = VaultManager(
-        app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md")
+        app_local_store=AppLocalSettingsStore(app_local_path)
     )
-    _vault_manager.initialize_vault(vault, vault_name="vault-test", remember=False)
+    _vault_manager.initialize_vault(vault, vault_name="vault-test", remember=True)
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: _vault_manager)
     monkeypatch.setattr(
         vault_resolution_module,
@@ -158,6 +160,7 @@ def golden_path(
     return GoldenPathContext(
         client=TestClient(app),
         vault=vault,
+        app_local_path=app_local_path,
         outbox=outbox,
         note_path="notes/golden-path.md",
     )
@@ -411,7 +414,10 @@ def test_confirm_and_receipt_leg(golden_path: GoldenPathContext) -> None:
 
 
 @pytest.mark.uat_integrated_runtime
-def test_resume_leg_after_restart(golden_path: GoldenPathContext) -> None:
+def test_resume_leg_after_restart(
+    golden_path: GoldenPathContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     queued = _queue_review(golden_path)
     assert confirm_module._proposal_store.get(queued["proposal_id"]) is not None
 
@@ -422,6 +428,18 @@ def test_resume_leg_after_restart(golden_path: GoldenPathContext) -> None:
         )
 
     _rebind_confirmation_stores()
+    restarted_manager = VaultManager(
+        app_local_store=AppLocalSettingsStore(golden_path.app_local_path)
+    )
+    restarted_context = restarted_manager.load_last_active()
+    assert restarted_context.status == "selected"
+    assert restarted_context.active_vault_path == str(golden_path.vault.resolve())
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: restarted_manager)
+    monkeypatch.setattr(
+        vault_resolution_module,
+        "get_vault_manager",
+        lambda: restarted_manager,
+    )
     resumed = TestClient(app)
     workspace = _get(resumed, "/api/companion/workspace", note_path=golden_path.note_path)
     assert workspace["artifact"]["note_path"] == golden_path.note_path
