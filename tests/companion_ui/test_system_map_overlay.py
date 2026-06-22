@@ -273,6 +273,9 @@ def test_map_renders_composition_table_nodes() -> None:
         "governance",
         "resurface_rail",
         "guidance",
+        # CUIDR-04 (#2447): the operator/diagnostics layer is now a map node —
+        # operator telemetry moved off the front edge and is reached here.
+        "operator",
     }, "exactly the composition-table surfaces (parked rows excluded)"
     for node in MAP_SURFACES:
         assert set(node.modes) <= set(PRODUCT_MODES)
@@ -333,6 +336,9 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
     assert set(routable_surface_ids()) == {
         "anchor", "vault", "panel", "palette", "memory", "capture", "receipts",
         "governance", "settings",
+        # CUIDR-04 (#2447): the operator layer routes from the map via the
+        # operator drawer (operator.open).
+        "operator",
     }
     for node in MAP_SURFACES:
         if node.routable:
@@ -348,6 +354,7 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         "receipts": "receipts.open",
         "governance": "receipts.open",
         "settings": "settings.open",
+        "operator": "operator.open",
     }
     # An unshipped surface can never be declared routable.
     with pytest.raises(ValueError):
@@ -453,17 +460,25 @@ def test_map_reachable_from_cold_and_no_vault_states() -> None:
     # The map is a shipped overlay-host occupant and a shipped topbar surface.
     assert SYSTEM_MAP_OVERLAY_ID == "map"
     assert "map" in SHIPPED_OVERLAY_OCCUPANTS
-    assert "map" in SHIPPED_TOPBAR_SURFACES
+    # CUIDR-04 (#2447): the System Map is the never-clipping overflow surface;
+    # its single opener moved off the crowded topbar into the composed bottom
+    # bar (a wayfinding/meta affordance). The top edge keeps IDENTITY + Capture.
+    assert "map" not in SHIPPED_TOPBAR_SURFACES
     state = OverlayHostState(anchor_note_path="Notes/note.md")
     assert mount(state, "map").stack == ("map",)
 
-    # shell_active: the topbar surface icon carries the map.open affordance.
+    # shell_active: the bottom-bar map opener carries the map.open affordance.
     shell = _render_workspace()
     assert _entry_state(shell) == "shell_active"
-    icon = re.search(
-        r'<button[^>]*data-testid="workspace-surface-icon-map"[^>]*>', shell
+    bottom_bar = re.search(
+        r'<[^>]*data-region="bottom-bar"[^>]*>.*?</div>', shell, re.S
     )
-    assert icon, "topbar must render the map surface icon"
+    assert bottom_bar, "composed bottom bar must render"
+    icon = re.search(
+        r'<button[^>]*data-testid="workspace-surface-icon-map"[^>]*>',
+        bottom_bar.group(0),
+    )
+    assert icon, "bottom bar must render the system-map opener"
     assert 'data-intent="map.open"' in icon.group(0)
     assert "overlayHost.mount('map')" in icon.group(0)
     _map_overlay(shell)

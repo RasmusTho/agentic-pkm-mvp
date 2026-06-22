@@ -520,10 +520,15 @@ def _render_workspace_header_strip(
     orientation_as_of: str = "",
     orientation_trace_id: str = "",
 ) -> str:
+    # CUIDR-04 (#2447): the front-edge runtime-status pill, the freshness
+    # string, and the quick-open hint are removed from the visible top edge —
+    # they are operator/diagnostic telemetry on an anti-dashboard surface. The
+    # detailed runtime telemetry rows are NOT discarded: they relocate, intact,
+    # into the server-rendered operator-telemetry region below the header
+    # (`data-region="operator-telemetry"`, `data-layer="operator"`), reachable
+    # via the System Map operator node. Presentation only — the values still
+    # come from the runtime payload; only WHERE they render changed.
     freshness_label, freshness_title = _workspace_header_freshness(fields)
-    canvas_token = "canvas off" if not canvas_enabled else "canvas on"
-    runtime_token = "runtime degraded" if posture in {"blocked", "degraded", "unavailable"} else "ok"
-    pill_label = canvas_token if not canvas_enabled else runtime_token
     is_prod = bool(fields.get("is_production_ui")) or str(
         fields.get("runtime_environment_label") or ""
     ).lower() == "prod"
@@ -553,6 +558,13 @@ def _render_workspace_header_strip(
     coarse_posture = coarse_vault_posture(
         vault_state=vault_state, primary_posture=posture
     )
+    canvas_token = "canvas off" if not canvas_enabled else "canvas on"
+    runtime_token = (
+        "runtime degraded"
+        if posture in {"blocked", "degraded", "unavailable"}
+        else "ok"
+    )
+    pill_label = canvas_token if not canvas_enabled else runtime_token
     telemetry_rows = [
         ("workspace-runtime-channel", "runtime_environment_label", "runtime", runtime_environment),
         ("workspace-runtime-channel-api", "runtime_api_base_url_label", "channel", runtime_channel),
@@ -636,10 +648,9 @@ def _render_workspace_header_strip(
         for row in telemetry_rows
         for testid, field, label, value in [row[:4]]
     )
-    # Relocated telemetry from the removed "Re-entry snapshot" meta row
-    # (#2171/#2245): freshness/as_of/trace_id rendered as read-only projection
-    # rows in the popover when the orientation payload supplies them.
-    # Zero-state: omit entirely when absent — no placeholder row.
+    # Relocated orientation telemetry (#2171/#2245): freshness/as_of/trace_id
+    # render as read-only projection rows when the orientation payload supplies
+    # them. Zero-state: omit entirely when absent — no placeholder row.
     _of = (orientation_freshness or "").strip()
     _oa = (orientation_as_of or "").strip()
     _ot = (orientation_trace_id or "").strip()
@@ -670,6 +681,31 @@ def _render_workspace_header_strip(
             <span class="workspace-runtime-popover-key">orientation trace</span>
             <code>{_e(_ot)}</code>
           </div>"""
+    # CUIDR-04 (#2447): the runtime-status disclosure is rendered OFF the front
+    # edge, inside the operator-telemetry region. It keeps every telemetry
+    # testid (the values still come from the runtime payload — presentation
+    # only) but no longer sits on the orientation/reading surface. The region
+    # is hidden by default and surfaced through the operator layer.
+    operator_telemetry_html = f"""
+      <section class="workspace-operator-telemetry" data-testid="workspace-operator-telemetry-region"
+        data-region="operator-telemetry" data-layer="operator" hidden aria-hidden="true">
+        <details class="workspace-runtime-status" data-testid="workspace-runtime-status">
+          <summary
+            class="workspace-runtime-pill"
+            data-testid="workspace-runtime-pill"
+            aria-label="Show runtime telemetry">
+            <span>{pill_label}</span>
+            <span class="workspace-runtime-human-label">{posture_label}</span>
+          </summary>
+          <span id="workspace-runtime-telemetry"
+            data-testid="workspace-runtime-telemetry"
+            aria-hidden="true"></span>
+          <div class="workspace-runtime-status-popover" data-testid="workspace-runtime-status-popover">
+            {telemetry_html}
+          </div>
+        </details>
+        <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
+      </section>"""
     return f"""
       <header
         class="workspace-header-strip primary-posture posture-tone-{posture}"
@@ -682,45 +718,31 @@ def _render_workspace_header_strip(
             <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
             <span>{vault_name} · vault {vault_state}</span>
           </a>
+          <!-- Vault settings is vault-config, identity-adjacent — it stays by
+               the vault chip (not in the displaced launcher cluster). #2447. -->
+          <button type="button" class="workspace-surface-icon workspace-vault-settings-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.settings.open" title="Vault settings" aria-label="Open vault settings" aria-controls="workspace-vault-settings-panel" aria-expanded="false">V</button>
           <span class="workspace-anchor-pill" data-testid="workspace-anchor-pill" data-region="document-anchor" data-anchor-note-path="{_e(anchor_note_path)}" title="Document anchor">{_e(anchor_title)}</span>
           <span class="workspace-posture-pill" data-testid="workspace-posture-pill" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" data-authority="local-ui" title="Posture emphasis (local rendering only)">{DEFAULT_POSTURE_EMPHASIS}</span>
-          <details class="workspace-runtime-status" data-testid="workspace-runtime-status">
-            <summary
-              class="workspace-runtime-pill"
-              data-testid="workspace-runtime-pill"
-              aria-label="Show runtime telemetry">
-              <span>{pill_label}</span>
-              <span class="workspace-runtime-human-label">{posture_label}</span>
-            </summary>
-            <span id="workspace-runtime-telemetry"
-              data-testid="workspace-runtime-telemetry"
-              aria-hidden="true"></span>
-            <div class="workspace-runtime-status-popover" data-testid="workspace-runtime-status-popover">
-              {telemetry_html}
-            </div>
-          </details>
-          <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
           <span class="workspace-header-spacer" aria-hidden="true"></span>
+          <!-- CUIDR-04 (#2447): the top edge keeps IDENTITY + ONE primary
+               action (Capture, ⌘N). Every other surface launcher (vault, map,
+               memory, receipts, settings, help) leaves the topbar and is
+               reachable via the System Map overlay (a never-clipping surface).
+               Operator/diagnostic telemetry (runtime pill, freshness, the
+               quick-open hint, the runtime-status popover) moves off the front
+               edge to the operator layer (System Map / operator drawer). -->
           <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
-            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault" data-surface="vault" data-intent="vault.open" title="Vault browser" aria-label="Open vault browser" onclick="vaultBrowser.focus()">&#9636;</button>
-            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.settings.open" title="Vault settings" aria-label="Open vault settings" aria-controls="workspace-vault-settings-panel" aria-expanded="false">V</button>
-            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-map" data-surface="map" data-intent="map.open" title="System map" aria-label="Open system map" onclick="overlayHost.mount('map')">❖</button>
-            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-memory" data-surface="memory" data-intent="memory.open" title="Memory candidate review" aria-label="Open memory candidate review drawer" onclick="overlayHost.mount('memory')">&#9670;</button>
-            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-receipts" data-surface="receipts" data-intent="receipts.open" title="Receipts history" aria-label="Open read-only receipts history" onclick="overlayHost.mount('receipts')">&#9776;</button>
-            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-settings" data-surface="settings" data-intent="settings.open" title="Settings" aria-label="Open settings drawer" onclick="overlayHost.mount('settings')">&#9881;</button>
-            <button type="button" class="workspace-surface-icon" data-testid="workspace-surface-icon-help" data-surface="help" title="Help" aria-label="Open help" onclick="companionHelp.open()">?</button>
+            <button type="button" class="workspace-surface-icon workspace-surface-icon--primary" data-testid="workspace-surface-icon-capture" data-surface="capture" data-intent="capture.open" title="Capture to inbox (⌘N)" aria-label="Capture to inbox" onclick="overlayHost.mount('capture')">&#43;</button>
             {guidance_toggle_markup('topbar')}
           </nav>
-          <button class="workspace-quick-open" data-testid="workspace-quick-open" type="button" aria-disabled="true" title="Quick-open is visual only in this slice">
-            <kbd>/</kbd><span>⌘K</span>
-          </button>
           <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>
           {dev_ribbon}
         </div>
       </header>
       <!-- Guidance layer (#1788, SEP-06): the shell callout — explanation
            only, hidden unless the shell root carries data-guidance="on". -->
-      {guidance_callout_markup('shell')}"""
+      {guidance_callout_markup('shell')}
+      {operator_telemetry_html}"""
 
 
 def _render_rail_empty_state(
@@ -7345,19 +7367,14 @@ def render_operator_overlay_html(
 
 
 def _render_operator_toggle() -> str:
-    """Fixed-position control that opens the in-shell Operator diagnostics drawer.
+    """No front-edge operator affordance (#2447, CUIDR-04).
 
-    Operator-badged and positioned above the Help toggle. Deliberately uses
-    amber accent (operator color per help_guide.html badge legend) to signal
-    it is not a daily-use surface.
+    The floating Operator pill is removed from the bottom edge. The operator
+    layer (the diagnostics drawer below) is reached from the System Map's
+    ``operator`` node (``operator.open``) — operator/diagnostic telemetry is
+    one level deeper, never on the orientation/front surface.
     """
-    return (
-        '<button type="button" class="operator-toggle" '
-        'data-testid="workspace-operator-toggle" aria-haspopup="dialog" '
-        'aria-controls="workspace-operator-drawer" aria-expanded="false" '
-        'title="Operator diagnostics" onclick="companionOperator.open()">'
-        '<span aria-hidden="true">⚠</span> Operator</button>'
-    )
+    return ""
 
 
 def _render_operator_drawer() -> str:
@@ -7372,13 +7389,9 @@ def _render_operator_drawer() -> str:
     """
     return """
   <style>
-    .operator-toggle{position:fixed;bottom:60px;right:18px;z-index:999;
-      display:inline-flex;align-items:center;gap:6px;
-      padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;
-      color:var(--amber);background:var(--amber-muted);
-      border:1px solid var(--amber-dim);border-radius:999px;
-      cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
-    .operator-toggle:hover{border-color:var(--amber)}
+    /* CUIDR-04 (#2447): the floating Operator pill is removed from the bottom
+       edge. The operator drawer is reached from the System Map operator node;
+       no front-edge operator affordance / toggle CSS remains. */
     .operator-drawer-backdrop{position:fixed;inset:0;
       background:rgba(7,11,18,.72);opacity:0;pointer-events:none;
       transition:opacity .18s ease;z-index:1000}
@@ -7567,18 +7580,40 @@ def load_help_guide_html() -> str:
 
 
 def _render_help_toggle() -> str:
-    """Fixed-position control that opens the in-shell Help drawer.
+    """The composed bottom bar (#2447, CUIDR-04) — one container, no stray
+    fixed siblings at the bottom edge.
+
+    Before CUIDR-04 the bottom edge was a collision of independently positioned
+    fixed elements (the Help pill, the Operator pill, the body-edit hint, the
+    sheet triggers) all fighting for one corner. They now compose into a single
+    ``data-region="bottom-bar"`` container with a defined stacking order. The
+    bar itself is the only fixed element at the bottom edge; the Help control
+    is a child, not an independently positioned sibling. The Operator pill is
+    gone from the edge entirely (reached via the System Map operator node).
 
     Rendered as part of the drawer region (not a per-view header) so it stays
     visible regardless of which shell layout is active — the adaptive shell
     hides the legacy ``.topbar``, so a header-embedded control would not show.
     """
     return (
+        '<div class="workspace-bottom-bar" data-testid="workspace-bottom-bar" '
+        'data-region="bottom-bar">'
+        # The System Map is the never-clipping overflow surface that hosts the
+        # displaced launchers (vault, map, memory, receipts, settings). Its
+        # single opener lives in the composed bottom bar — a wayfinding/meta
+        # affordance, keeping the top edge to IDENTITY + Capture only.
+        '<button type="button" class="map-toggle" '
+        'data-testid="workspace-surface-icon-map" '
+        'data-intent="map.open" aria-haspopup="dialog" '
+        'title="System map — all surfaces" aria-label="Open system map" '
+        'onclick="overlayHost.mount(\'map\')">'
+        '<span aria-hidden="true">&#10070;</span> Map</button>'
         '<button type="button" class="help-toggle" '
         'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
         'aria-controls="workspace-help-drawer" aria-expanded="false" '
         'title="Companion UI help" onclick="companionHelp.open()">'
         '<span aria-hidden="true">?</span> Help</button>'
+        '</div>'
     )
 
 
@@ -7591,12 +7626,18 @@ def _render_help_drawer() -> str:
     """
     return """
   <style>
-    .help-toggle{position:fixed;bottom:18px;right:18px;z-index:999;
+    /* CUIDR-04 (#2447): one composed bottom bar. The bar is the single fixed
+       element at the bottom edge; its controls (Help, and the layout's sheet
+       triggers / body-edit hint) are children, never independently positioned
+       fixed siblings. */
+    .workspace-bottom-bar{position:fixed;bottom:18px;right:18px;z-index:999;
+      display:inline-flex;align-items:center;gap:8px}
+    .help-toggle,.map-toggle{position:static;
       display:inline-flex;align-items:center;gap:6px;
       padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
       background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:999px;
       cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
-    .help-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
+    .help-toggle:hover,.map-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
     .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
       opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
     .help-drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,94vw);
@@ -7831,6 +7872,9 @@ def render_index_html(
             "capture",
             "receipts",
             "settings",
+            # CUIDR-04 (#2447): the operator layer is reached from the System
+            # Map now that the floating operator pill is gone from the edge.
+            "operator",
         )
         if fields is not None
         else ()
@@ -8307,7 +8351,6 @@ def render_index_html(
     .workspace-vault-chip,
     .workspace-runtime-pill,
     .workspace-freshness,
-    .workspace-quick-open,
     .workspace-browse-vault,
     .workspace-dev-ribbon {{
       align-items: center;
@@ -8391,6 +8434,13 @@ def render_index_html(
       border-color: var(--border-strong);
       color: var(--fg-1);
     }}
+    /* CUIDR-04 (#2447): the runtime telemetry disclosure lives off the front
+       edge in the operator-telemetry region. The region is hidden from the
+       reading surface (the `hidden` attribute already removes it); the operator
+       layer surfaces it. It never participates in the topbar layout. */
+    .workspace-operator-telemetry[hidden] {{
+      display: none;
+    }}
     .workspace-runtime-status {{
       flex-shrink: 0;
       position: relative;
@@ -8460,7 +8510,7 @@ def render_index_html(
       flex: 1 1 auto;
       min-width: 12px;
     }}
-    .workspace-quick-open,
+    /* CUIDR-04 (#2447): the quick-open hint is removed from the front edge. */
     .workspace-browse-vault {{
       background: var(--bg-raised);
       border: 1px solid var(--border);
@@ -8469,20 +8519,6 @@ def render_index_html(
       height: 24px;
       gap: 6px;
       padding: 0 8px;
-    }}
-    .workspace-quick-open {{
-      cursor: default;
-      opacity: 0.46;
-      padding: 0 6px;
-    }}
-    .workspace-quick-open span {{
-      display: none;
-    }}
-    .workspace-quick-open kbd {{
-      background: transparent;
-      color: var(--fg-3);
-      font-family: var(--font-mono);
-      font-size: var(--text-xs);
     }}
     .workspace-browse-vault {{
       cursor: pointer;

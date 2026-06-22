@@ -267,8 +267,22 @@ class TestPrimaryPostureSurface:
         )
 
     def test_primary_posture_has_human_label(self) -> None:
+        # CUIDR-04 (#2447): the runtime pill's human label ("Online") is
+        # operator/diagnostic telemetry — it moved off the front edge into the
+        # operator-telemetry region. The header still declares the posture
+        # (data-posture) and renders the local posture-emphasis pill; the human
+        # runtime label lives one level deeper in the operator layer.
         html = _html()
-        region = _header_strip(html)
+        header = _header_strip(html)
+        assert 'data-posture=' in header
+        assert 'data-testid="workspace-posture-pill"' in header
+        op_region = re.search(
+            r'<section class="workspace-operator-telemetry"[^>]*>.*?</section>',
+            html,
+            re.DOTALL,
+        )
+        assert op_region, "operator-telemetry region must render"
+        region = op_region.group(0)
         assert "Online" in region or "Ok" in region or "Ready" in region
 
 
@@ -285,24 +299,38 @@ class TestWorkspaceHeaderStrip:
         assert 'data-testid="workspace-runtime-safety-strip"' not in html
         assert header.count('data-testid="workspace-header-row"') == 1
 
+        # CUIDR-04 (#2447): the runtime pill, freshness string, and quick-open
+        # hint are operator/diagnostic telemetry — removed from the front edge.
+        # The header now carries identity (wordmark, vault chip, vault-settings,
+        # anchor pill, posture pill), the spacer, the single Capture launcher
+        # (surface-icons), Browse vault, and the dev ribbon, in that order.
         ordered_testids = [
             'data-testid="workspace-wordmark"',
             'data-testid="workspace-vault-chip"',
-            'data-testid="workspace-runtime-pill"',
-            'data-testid="workspace-freshness"',
+            'data-testid="workspace-anchor-pill"',
+            'data-testid="workspace-posture-pill"',
             'class="workspace-header-spacer"',
-            'data-testid="workspace-quick-open"',
+            'data-testid="workspace-surface-icon-capture"',
             'data-testid="workspace-browse-vault"',
             'data-testid="workspace-dev-ribbon"',
         ]
         positions = [header.index(token) for token in ordered_testids]
         assert positions == sorted(positions)
+        # The relocated telemetry is no longer in the header.
+        for relocated in (
+            'data-testid="workspace-runtime-pill"',
+            'data-testid="workspace-freshness"',
+        ):
+            assert relocated not in header, f"{relocated} must not sit on the header"
+        assert 'data-testid="workspace-quick-open"' not in html
 
-    def test_inactive_quick_open_is_visually_deemphasized(self) -> None:
+    def test_quick_open_hint_removed_from_front_edge(self) -> None:
+        # CUIDR-04 (#2447): the quick-open hint is operator/diagnostic chrome —
+        # removed from the front edge. ⌘K still mounts the palette via the host
+        # keyboard map; the visual hint no longer renders.
         html = _html()
-        assert "opacity: 0.46;" in html
-        assert ".workspace-quick-open span" in html
-        assert "display: none;" in html
+        assert 'data-testid="workspace-quick-open"' not in html
+        assert ".workspace-quick-open" not in html
 
     def test_runtime_status_popover_contains_runtime_fields(self) -> None:
         html = _html(
