@@ -11,6 +11,17 @@ from app.workers import outbox_worker
 pytestmark = pytest.mark.not_pg
 
 
+@pytest.fixture(autouse=True)
+def _select_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+    # run() now idles the whole tick when no vault is selected (#2407), mirroring
+    # run_once. These tests exercise the vault-present dispatch path, so pin a
+    # selected vault; the no-vault idle behavior is covered separately in
+    # tests/workers/test_outbox_worker*.py.
+    monkeypatch.setattr(
+        outbox_worker, "_resolve_optional_vault_root", lambda *_a, **_k: Path("/tmp/vault")
+    )
+
+
 def test_worker_run_dispatches_ingest_vault_changed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
