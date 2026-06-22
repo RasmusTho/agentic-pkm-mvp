@@ -25,9 +25,15 @@ _T = TypeVar("_T")
 def _resolve_fs_root(vault_root: Path | str | None = None) -> Path | None:
     if vault_root is not None:
         return Path(vault_root).expanduser().resolve()
-    env_root = os.getenv("MCP_VAULT_ROOT") or os.getenv("VAULT_DIR")
-    if env_root:
-        return Path(env_root).expanduser().resolve()
+    for env_var in ("MCP_VAULT_ROOT", "VAULT_DIR"):
+        env_root = os.getenv(env_var)
+        if not env_root or not env_root.strip():
+            continue
+        path = Path(env_root).expanduser()
+        if not path.exists():
+            exc = VaultRootMisconfiguredError(env_var, path)
+            raise KnowledgeConfigError(str(exc)) from exc
+        return path.resolve()
     try:
         return resolve_optional_vault_root()
     except VaultRootMisconfiguredError as exc:

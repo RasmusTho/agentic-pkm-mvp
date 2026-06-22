@@ -23,6 +23,18 @@ def _as_path(value: Any) -> Path | None:
     return None
 
 
+def _resolve_mcp_env_root() -> Path | None:
+    for env_var in ("MCP_VAULT_ROOT", "VAULT_DIR"):
+        env_root = os.getenv(env_var)
+        if not env_root or not env_root.strip():
+            continue
+        path = Path(env_root).expanduser()
+        if not path.exists():
+            raise VaultRootMisconfiguredError(env_var, path)
+        return path.resolve()
+    return None
+
+
 def get_vault_root(settings: Mapping[str, Any] | None = None) -> Path:
     """Return the configured vault root directory."""
 
@@ -36,14 +48,14 @@ def get_vault_root(settings: Mapping[str, Any] | None = None) -> Path:
             for key in ("root", "path"):
                 if key in vault_settings:
                     candidates.append(vault_settings[key])
-    env_root = os.getenv("MCP_VAULT_ROOT") or os.getenv("VAULT_DIR")
-    if env_root:
-        candidates.append(env_root)
     for candidate in candidates:
         path = _as_path(candidate)
         if path:
             return path
     try:
+        env_root = _resolve_mcp_env_root()
+        if env_root is not None:
+            return env_root
         resolved = resolve_optional_vault_root()
     except VaultRootMisconfiguredError as exc:
         raise VaultToolError(str(exc)) from exc

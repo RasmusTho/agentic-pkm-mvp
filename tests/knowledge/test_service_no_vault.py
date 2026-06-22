@@ -28,6 +28,31 @@ def test_resolve_knowledge_port_does_not_fallback_to_cwd_vault(
         resolve_knowledge_port(settings=settings)
 
 
+@pytest.mark.parametrize("env_var", ["MCP_VAULT_ROOT", "VAULT_DIR"])
+def test_fs_knowledge_adapter_rejects_missing_mcp_specific_env(
+    env_var: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for name in ("VAULT_ROOT", "VAULT_ROOT_DEV", "VAULT_ROOT_TEST", "MCP_VAULT_ROOT", "VAULT_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    missing_vault = tmp_path / "missing-vault"
+    fallback_vault = tmp_path / "fallback-vault"
+    fallback_vault.mkdir()
+    monkeypatch.setenv(env_var, str(missing_vault))
+    monkeypatch.setenv("VAULT_ROOT", str(fallback_vault))
+    settings = KnowledgeSettings(
+        primary_adapter=KnowledgeAdapter.FS_VAULT,
+        fallback_adapter=KnowledgeAdapter.OBSIDIAN_CLI,
+        allow_fallback=False,
+    )
+
+    with pytest.raises(KnowledgeConfigError, match=f"{env_var} is set to a missing vault root"):
+        resolve_knowledge_port(settings=settings)
+
+    assert not missing_vault.exists()
+
+
 def test_obsidian_primary_does_not_require_fs_fallback_root_when_available(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
