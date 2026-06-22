@@ -366,6 +366,22 @@ def test_workspace_panel_counts_canvas_origin_proposals_by_uuid(
     assert data["panel"]["proposal_count"] == 1
 
 
+def test_workspace_resurface_declares_scarce_glance_contract(
+    client: TestClient, vault_note: Path
+) -> None:
+    """The workspace resurface payload always declares the scarce display cap and
+    the held-back flag, and tags each candidate with its (read-only) pinned
+    state — the contract the "scarce glance" surface renders against."""
+    resp = _workspace(client)
+
+    assert resp.status_code == 200
+    resurface = resp.json()["runtime"]["resurface"]
+    assert isinstance(resurface["scarce_count"], int) and resurface["scarce_count"] > 0
+    assert isinstance(resurface["more_held_back"], bool)
+    for candidate in resurface["candidates"]:
+        assert candidate["pinned"] is False
+
+
 def test_workspace_guards(
     client: TestClient, vault_note: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

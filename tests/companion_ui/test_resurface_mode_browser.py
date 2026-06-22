@@ -282,4 +282,149 @@ def test_resurface_visual_pass_enables_no_action() -> None:
     # All three action buttons are unavailable + aria-disabled; none enabled.
     assert section.count('data-affordance-status="unavailable"') >= 3
     assert 'aria-disabled="true"' in section
+
+
+# --- "A scarce glance, not a feed" handoff deltas (pinned / withheld / scarce) -
+
+
+class _ResurfacePayloadClient:
+    """Renders an arbitrary resurface payload through the real pipeline so the
+    pinned / scarce-count / withheld branches can be exercised end to end."""
+
+    def __init__(self, resurface: dict[str, Any]) -> None:
+        self.resurface = resurface
+
+    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        if is_vault_browser_get(url):
+            return default_vault_browser_payload()
+        assert url == "/api/companion/workspace"
+        return {
+            "artifact": {
+                "artifact_id": "art-scarce",
+                "note_path": "Notes/resurface.md",
+                "title": "Resurface Note",
+                "body": "# Resurface Note",
+                "content_hash": "hash-resurface-scarce",
+            },
+            "canvas": {"session_state": "idle", "can_edit_body": False},
+            "panel": {"state": "idle", "proposal_count": 0},
+            "guards": {"canvas_enabled": True, "writeguard_status": "ok"},
+            "runtime": {"resurface": self.resurface},
+            "suggestions": {},
+        }
+
+
+def _candidate(candidate_id: str, label: str, *, pinned: bool = False) -> dict[str, Any]:
+    return {
+        "candidate_id": candidate_id,
+        "label": label,
+        "why_now": "Derived relevance changed for this artifact.",
+        "relation_to_active_artifact": "Evaluated while Notes/resurface.md is active.",
+        "source_link": f"status.{candidate_id}",
+        "signal_labels": [f"{candidate_id}=1"],
+        "pinned": pinned,
+    }
+
+
+def _render_resurface_payload(resurface: dict[str, Any]) -> str:
+    page = RealNoteWorkspaceDevPage(_ResurfacePayloadClient(resurface))  # type: ignore[arg-type]
+    state = page.load(NoteLoadIntent(note_path="Notes/resurface.md"))
+    assert state.is_loaded is True
+    fields = page.render_fields()
+    assert fields is not None
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/resurface.md",
+        fields=fields,
+    )
+
+
+def test_resurface_populated_title_word_is_ambient() -> None:
+    """A calm word ("ambient") sits where a count would go — never a number."""
+    section = _resurface_section(_render_resurface())
+    assert ">ambient<" in section
+    assert "low-pressure" not in section
+
+
+def test_resurface_pinned_sorts_first_and_is_marked() -> None:
+    """Pinned cards sort to the top and carry the visual hook; the rest keep
+    server order. Pin remains a read-only sort signal — no action is enabled."""
+    section = _resurface_section(
+        _render_resurface_payload(
+            {
+                "candidates": [
+                    _candidate("alpha", "Alpha unpinned"),
+                    _candidate("beta", "Beta pinned", pinned=True),
+                ]
+            }
+        )
+    )
+    assert 'data-pinned="true"' in section
+    # The pinned card (beta) renders before the unpinned one (alpha).
+    assert section.find("Beta pinned") < section.find("Alpha unpinned")
+    # No action is enabled by pinning.
+    assert 'aria-disabled="true"' in section
+
+
+def test_resurface_unpinned_set_has_no_pinned_hook() -> None:
+    section = _resurface_section(
+        _render_resurface_payload({"candidates": [_candidate("alpha", "Alpha")]})
+    )
+    assert 'data-pinned="true"' not in section
+
+
+def test_resurface_scarce_cap_holds_back_without_a_count() -> None:
+    """The set caps to the server-declared scarce count, and the overflow is
+    signalled by the withheld line — with no number or badge anywhere."""
+    section = _resurface_section(
+        _render_resurface_payload(
+            {
+                "candidates": [
+                    _candidate("a", "Card A"),
+                    _candidate("b", "Card B"),
+                    _candidate("c", "Card C"),
+                ],
+                "scarce_count": 2,
+            }
+        )
+    )
+    # Capped to 2 — the third card is held back, not paginated.
+    assert section.count('data-testid="resurface-candidate"') == 2
+    assert "Card C" not in section
+    assert 'data-testid="resurface-withheld"' in section
+    assert "held below the line" in section
+    # No count/badge of any kind in the withheld signal.
+    withheld_start = section.find('data-testid="resurface-withheld"')
+    withheld = section[withheld_start : section.find("</div>", withheld_start)]
+    assert not any(ch.isdigit() for ch in withheld)
+
+
+def test_resurface_withheld_line_single_card_phrasing() -> None:
+    """When the server says more was held but only one card surfaces, the line
+    reads as a calm "nothing else rose to a glance today"."""
+    section = _resurface_section(
+        _render_resurface_payload(
+            {"candidates": [_candidate("a", "Card A")], "more_held_back": True}
+        )
+    )
+    assert 'data-testid="resurface-withheld"' in section
+    assert "nothing else rose to a glance today" in section
+
+
+def test_resurface_no_withheld_line_when_nothing_held() -> None:
+    section = _resurface_section(
+        _render_resurface_payload({"candidates": [_candidate("a", "Card A")]})
+    )
+    assert 'data-testid="resurface-withheld"' not in section
+
+
+def test_resurface_empty_is_affirmative_and_settled() -> None:
+    """Empty-healthy reads as intentional calm ("at rest", green dot, affirmative
+    lead + sub-line), never a dashboard waiting to be filled."""
+    section = _resurface_section(_render_empty_resurface())
+    assert ">at rest<" in section
+    assert "Nothing is asking for your attention." in section
+    assert "quiet period, not an empty shelf" in section
+    # No urgency vocabulary leaks into the settled state.
+    assert "urgent" not in section.lower()
     assert 'data-persistence-backed="true"' not in section

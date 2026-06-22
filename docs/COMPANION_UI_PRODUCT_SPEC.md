@@ -126,11 +126,15 @@ Current shipped runtime truth is owned by:
   inspect, dismiss, snooze, or pin when those actions are explicitly scoped. No alert, badge,
   notification inbox, focus stealing, or persistent monitoring stream is implied by this mode.
 - Current-state caveat: minimal resurfacing runtime seams exist; full product-surface suggestion
-  orchestration remains target-state. The read-only card surface now carries a low-pressure
-  visual treatment (Claude-Design pass: scarce bordered cards, provenance-first why-now, a single
-  cool relation glyph, source pointer, receded disabled actions, and a settled-green empty that is
-  unmistakable from the amber degraded state); the dismiss/snooze/pin actions remain disabled
-  pending persistence, and the underlying suggestion/ranking orchestration is still target-state.
+  orchestration remains target-state. The read-only card surface carries the "scarce glance, not a
+  feed" treatment (Claude-Design pass): scarce bordered cards capped to a server-declared scarce
+  count, pinned cards sorted to the top with a cool "pinned" tag, provenance-first why-now, a single
+  cool relation glyph, source pointer, receded disabled actions, a settled-green "at rest" empty
+  that is unmistakable from the amber "can't say" degraded state, and a withheld line that signals
+  "more was held below the line" without any count or badge. The resurfacing runtime declares
+  `scarce_count` and `more_held_back` and tags each candidate with a read-only `pinned` flag (always
+  false until pin persistence lands). The dismiss/snooze/pin actions remain disabled pending
+  persistence, and the underlying suggestion/ranking orchestration is still target-state.
 
 ### 4) Act
 

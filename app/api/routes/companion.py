@@ -913,7 +913,9 @@ class RuntimeState(BaseModel):
     trace_id: str
     vault_identity: VaultIdentityState
     reorient: dict[str, list[dict[str, str | bool]]] = Field(default_factory=dict)
-    resurface: dict[str, list[dict[str, str | list[str]]]] = Field(default_factory=dict)
+    resurface: dict[str, list[dict[str, str | list[str] | bool]] | int | bool] = Field(
+        default_factory=dict
+    )
     commitments: CommitmentSurfaceState = Field(default_factory=CommitmentSurfaceState)
 
 
@@ -1870,13 +1872,15 @@ def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list
     }
 
 
-def _resurface_state(safe_note_path: str, signals: OrientationSignals | None = None) -> dict[str, list[dict[str, str | list[str]]]]:
+def _resurface_state(
+    safe_note_path: str, signals: OrientationSignals | None = None
+) -> dict[str, list[dict[str, str | list[str] | bool]] | int | bool]:
     evaluation = evaluate_resurfacing_candidates(signals=signals)
-    candidates: list[dict[str, str | list[str]]] = []
+    candidates: list[dict[str, str | list[str] | bool]] = []
     for candidate in evaluation.candidates:
-        signals = candidate.why_now.signals
+        candidate_signals = candidate.why_now.signals
         source_link = _safe_resurface_source_link(candidate.candidate_id)
-        signal_labels = [f"{signal.name}={signal.value}" for signal in signals]
+        signal_labels = [f"{signal.name}={signal.value}" for signal in candidate_signals]
         candidates.append(
             {
                 "candidate_id": candidate.candidate_id,
@@ -1887,9 +1891,14 @@ def _resurface_state(safe_note_path: str, signals: OrientationSignals | None = N
                 ),
                 "source_link": source_link,
                 "signal_labels": signal_labels,
+                "pinned": candidate.pinned,
             }
         )
-    return {"candidates": candidates}
+    return {
+        "candidates": candidates,
+        "scarce_count": evaluation.scarce_count,
+        "more_held_back": evaluation.more_held_back,
+    }
 
 
 def _safe_resurface_source_link(candidate_id: str) -> str:

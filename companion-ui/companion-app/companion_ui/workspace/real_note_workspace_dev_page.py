@@ -147,6 +147,8 @@ class DevPageState:
     find_payload_available: bool = False
     reorient_sections: dict[str, list[dict[str, Any]]] | None = None
     resurface_candidates: list[dict[str, Any]] | None = None
+    resurface_scarce_count: int | None = None
+    resurface_more_held_back: bool = False
     commitments_surface: dict[str, Any] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
@@ -499,6 +501,8 @@ class RealNoteWorkspaceDevPage:
             find_payload_available=find_payload_available,
             reorient_sections=_reorient_sections_from_payload(reorient_payload),
             resurface_candidates=_resurface_candidates_from_payload(resurface_payload),
+            resurface_scarce_count=_resurface_scarce_count_from_payload(resurface_payload),
+            resurface_more_held_back=_resurface_more_held_back_from_payload(resurface_payload),
             commitments_surface=_commitment_surface_from_payload(commitments_payload),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
@@ -1008,6 +1012,8 @@ class RealNoteWorkspaceDevPage:
             "find_payload_available": self.state.find_payload_available,
             "reorient_sections": self.state.reorient_sections or {},
             "resurface_candidates": self.state.resurface_candidates or [],
+            "resurface_scarce_count": self.state.resurface_scarce_count,
+            "resurface_more_held_back": self.state.resurface_more_held_back,
             "commitments_surface": self.state.commitments_surface,
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
@@ -1192,9 +1198,33 @@ def _resurface_candidates_from_payload(resurface: dict[str, Any]) -> list[dict[s
                 "relation_to_active_artifact": relation,
                 "source_link": source_link,
                 "signal_labels": [str(label) for label in signal_labels],
+                "pinned": bool(raw.get("pinned", False)),
             }
         )
     return candidates
+
+
+def _resurface_scarce_count_from_payload(resurface: dict[str, Any]) -> int | None:
+    """Server-declared scarce display cap, honest-by-omission.
+
+    Returns ``None`` (no cap → render the set as-is) unless the server declares a
+    positive count. The UI never widens or paginates beyond it.
+    """
+    raw = resurface.get("scarce_count")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw if raw > 0 else None
+
+
+def _resurface_more_held_back_from_payload(resurface: dict[str, Any]) -> bool:
+    """Whether the server held more candidates below the surfaced set.
+
+    Drives the withheld line. Honest-by-omission: only true when the server says
+    so (or aliases ``held_back`` / ``withheld``); never inferred client-side."""
+    for key in ("more_held_back", "held_back", "withheld"):
+        if bool(resurface.get(key, False)):
+            return True
+    return False
 
 
 def _commitment_item_from_raw(
