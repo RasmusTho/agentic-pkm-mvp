@@ -116,7 +116,7 @@ def memory_record_from_review_entry(
         candidate,
         status=entry.status.value,
         review=MemoryRecordReview(
-            state=candidate.review_state.value,
+            state=_review_state_for_status(entry.status).value,
             status=entry.status.value,
             reviewed_by=entry.decided_by,
             reviewed_at=entry.decided_at,
@@ -155,7 +155,11 @@ def memory_record_from_promoted(
             may_propose=promoted.outcome is ReviewState.ACCEPTED,
             may_write=False,
         ),
-        promoted_at=promoted.promoted_at,
+        promoted_at=(
+            promoted.promoted_at
+            if promoted.outcome is ReviewState.ACCEPTED
+            else None
+        ),
         scope=scope,
         artifact_path=artifact_path,
         promotion_receipt_id=promotion_receipt_id or promoted.promotion_id,
@@ -223,6 +227,22 @@ def _memory_record_from_candidate(
         promotion=MemoryRecordPromotion(receipt_id=promotion_receipt_id),
         unavailable_fields=unavailable,
     )
+
+
+def _review_state_for_status(status: ReviewStatus) -> ReviewState:
+    """Map a review-queue decision status to the effective MemoryRecord review state.
+
+    A review entry records the decision on ``status``/``decision`` without mutating
+    the embedded candidate's original ``review_state`` (which commonly stays
+    ``unreviewed``). The MemoryRecord review posture must reflect the decision so it
+    cannot contradict the authority granted for the same status.
+    """
+    return {
+        ReviewStatus.PENDING: ReviewState.UNREVIEWED,
+        ReviewStatus.PROMOTED: ReviewState.ACCEPTED,
+        ReviewStatus.REJECTED: ReviewState.REJECTED,
+        ReviewStatus.REVISED: ReviewState.REVISED,
+    }[status]
 
 
 def _authority_for_status(status: ReviewStatus) -> MemoryRecordAuthority:

@@ -10,6 +10,7 @@ from app.agent_memory.candidate import (
 )
 from app.agent_memory.memory_record import (
     MemoryRecordScope,
+    memory_record_from_promoted,
     memory_record_from_recall_candidate,
     memory_record_from_review_entry,
 )
@@ -120,6 +121,9 @@ def test_memory_record_preserves_gov_promotion_boundary() -> None:
 
     record = memory_record_from_review_entry(entry, promotion_receipt_id="receipt-review")
 
+    # Review state must reflect the decision, not the candidate's original
+    # (unmutated) review_state, so it cannot contradict the granted authority.
+    assert record.review.state == "accepted"
     assert record.authority.may_answer is True
     assert record.authority.may_propose is True
     assert record.authority.may_write is False
@@ -127,3 +131,28 @@ def test_memory_record_preserves_gov_promotion_boundary() -> None:
     assert record.promotion.target == "GOV/HKA"
     assert record.promotion.hidden_in_mem is False
     assert record.promotion.receipt_id == "receipt-review"
+
+
+def test_rejected_promoted_memory_is_not_stamped_as_promoted() -> None:
+    candidate = _candidate(review_state=ReviewState.REJECTED)
+    rejected = PromotedMemory(
+        promotion_id="promotion-rejected",
+        outcome=ReviewState.REJECTED,
+        candidate=candidate,
+        decided_by="companion-ui:reviewer",
+        decided_at=datetime(2026, 6, 21, 8, 30, tzinfo=timezone.utc),
+        decision_notes="Rejected on review.",
+        # The lifecycle receipt timestamp is populated even for non-accepted
+        # outcomes; it must not leak into lifecycle.promoted_at.
+        promoted_at=datetime(2026, 6, 21, 8, 31, tzinfo=timezone.utc),
+    )
+
+    record = memory_record_from_promoted(rejected)
+
+    assert record.lifecycle.promoted_at is None
+    assert record.review.state == "rejected"
+    assert record.authority.may_recall is False
+    assert record.authority.may_answer is False
+    assert record.authority.may_propose is False
+    # reviewed_at still carries the decision timestamp for non-accepted outcomes.
+    assert record.review.reviewed_at == datetime(2026, 6, 21, 8, 30, tzinfo=timezone.utc)
