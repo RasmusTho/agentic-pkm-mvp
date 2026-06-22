@@ -22,6 +22,11 @@ This is Slice C of #2311. It is intentionally later than the API slice because i
 import-time code, CLI policy, agent-memory helper behavior, MCP write helpers, and knowledge
 adapter fallback behavior.
 
+Status: **Delivered** by #2385 / PR #2415. Promotion queue and promotion agent path
+resolution are lazy, CLI/MCP/knowledge vault requirements are explicit, and the
+promotion/CLI/agent/MCP/knowledge resolver sites are covered by no-`./vault` regression
+tests.
+
 ## What This Task Does
 - Removes import-time vault resolution from `app/promotion/queue.py` by making vault access
   lazy and optional at the call site.
@@ -69,22 +74,22 @@ Making these consumers lazy or explicit completes the migration without overload
 slice.
 
 ## Acceptance Criteria
-- [ ] `app/promotion/queue.py` imports without requiring or resolving a vault. Verify:
-      `tests/promotion/test_queue_lazy_vault.py::test_queue_import_does_not_require_vault`
-- [ ] CLI commands either accept an explicit vault or fail clearly when they need one; none
+- [x] `app/promotion/queue.py` imports without requiring or resolving a vault. Verify:
+      `tests/promotion/test_queue_lazy_vault.py::test_queue_import_does_not_bind_cwd_vault`
+- [x] CLI commands either accept an explicit vault or fail clearly when they need one; none
       silently fall back to CWD-relative `./vault`. Verify:
-      `tests/cli/test_no_vault_resolution.py::test_cli_commands_do_not_fallback_to_cwd_vault`
-- [ ] Agent/panel/agent-memory helpers return optional/empty results or explicit no-vault
+      `tests/cli/test_no_vault_resolution.py::{test_canvas_open_requires_explicit_or_configured_vault,test_ask_enable_mcp_vault_requires_explicit_or_configured_vault,test_ask_enable_mcp_vault_prefers_mcp_env_over_vault_root}`
+- [x] Agent/panel/agent-memory helpers return optional/empty results or explicit no-vault
       errors without fallback. Verify:
-      `tests/agents/test_panel_agent_no_vault.py::test_panel_agent_no_vault_skips_without_fallback`
-      and `tests/agent_memory/test_recall_retrieval_no_vault.py::test_recall_retrieval_no_vault_returns_empty`
-- [ ] MCP vault append and knowledge adapter resolution require an explicit selected or
+      `tests/agents/test_panel_agent_no_vault.py::test_panel_agent_no_vault_skips_note_context_without_fallback`
+      and `tests/agent_memory/test_recall_retrieval_no_vault.py::test_recall_retrieval_no_vault_returns_empty_without_cwd_fallback`
+- [x] MCP vault append and knowledge adapter resolution require an explicit selected or
       configured vault and do not synthesize `Path("vault")`. Verify:
       `tests/orchestrator/test_executor_no_vault.py::test_mcp_vault_append_requires_explicit_vault_root`,
-      `tests/mcp/test_vault_tools_no_vault.py::test_append_note_requires_explicit_vault_without_default`,
+      `tests/mcp/test_vault_tools_no_vault.py::test_append_note_requires_explicit_or_configured_vault`,
       and `tests/knowledge/test_service_no_vault.py::test_resolve_knowledge_port_does_not_fallback_to_cwd_vault`
-- [ ] A grep/AST guard covers the promotion/CLI/agent/MCP/knowledge eager resolver sites. Verify:
-      `tests/api/test_no_silent_cwd_vault_fallback.py::test_promotion_cli_agent_resolvers_do_not_fallback_to_cwd_vault`
+- [x] A grep/AST guard covers the promotion/CLI/agent/MCP/knowledge eager resolver sites. Verify:
+      `tests/api/test_no_silent_cwd_vault_fallback.py::test_promotion_cli_agent_mcp_knowledge_do_not_fallback_to_cwd_vault`
 
 ## How to Verify (Pre-Merge)
 ```bash
@@ -116,6 +121,5 @@ runtime behavior.
 - #2311 (parent migration hub)
 
 ## Related GitHub Issues
-One bounded child issue to be filed from this task after the spec lands on main. It should
-remain blocked/backlog until Slices A and B are either delivered or intentionally sequenced
-around it.
+Delivered by #2385 / PR #2415. #2311 remains the follow-up validation hub until the
+remaining 05D legacy mount cleanup is routed and delivered.
