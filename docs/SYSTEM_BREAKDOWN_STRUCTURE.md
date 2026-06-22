@@ -77,7 +77,13 @@ Cross-cutting stewardship practice:
 | --- | --- | --- | --- |
 | CES | Contract & Evolution Stewardship | Trust, Fitness & Evolution | Subsystem charters, interface versioning, compatibility, ADRs, dependency rules, and deprecation discipline. |
 
-CES is not a runtime subsystem or peer implementation boundary. It is architecture, documentation, and CI discipline. Without explicit contract stewardship, the SBS will decay back into implementation structure; with too much stewardship machinery, it becomes compliance overhead. Keep it lean.
+CES is not a runtime subsystem, peer implementation boundary, or the full continuous-development
+Builder System. It is architecture, documentation, and CI discipline for Product SBS contracts. The
+Builder System boundary and authority model live in `docs/architecture/SBS_OPERATING_MODEL.md`;
+builder agents, repo-local skills, delivery workflows, BuilderOps records, and TCD routing use CES
+practice surfaces when they change Product contracts, but they do not become CES-owned runtime
+subsystems. Without explicit contract stewardship, the SBS will decay back into implementation
+structure; with too much stewardship machinery, it becomes compliance overhead. Keep it lean.
 
 ### Major conclusions
 
@@ -1157,6 +1163,9 @@ Authority boundaries:
 
 - CES is not a runtime subsystem, control plane, or user-facing governance authority.
 - CES stewards architecture contracts; it does not approve user-level mutations or runtime business behavior.
+- CES is not the Builder System; repo-local skills, issue pickup, release workflows, BuilderOps
+  operational records, delivery receipts, and TCD routing remain Builder System concerns unless they
+  also update Product SBS contracts through the normal repo authority path.
 - CES must stay lean: ADRs, glossary hygiene, compatibility checks, and dependency-rule enforcement are enough until a concrete drift problem demands more.
 
 Does not own:

@@ -33,6 +33,7 @@ These rules make the target SBS inspectable without claiming current implementat
 | No DRI record that is non-rebuildable unless reclassified. | Manual review now | Derived record is the only source of human meaning or accountability. | Reclassify to HKA, GOV, or MEM. |
 | No SFC semantic conflict resolution without GOV policy. | Blocking invariant target | Sync transport applies semantic conflict winner without policy class. | Stage conflict and route authority-bearing resolution through GOV/HIX. |
 | No OEF automatic control loop that mutates policy, memory, retrieval, knowledge, or execution. | Blocking invariant target | Metrics/evals/traces directly alter runtime behavior outside governed remediation. | OEF reports/proposes; GOV/EXE/HIX or normal development applies changes. |
+| No Builder System artifact becomes a Product SBS runtime subsystem or runtime MEM/HKA without authority promotion. | Manual review now | Repo-local skills, BuilderOps records/projections, delivery receipts, worklogs, issue delivery flow, TCD routing, or release workflow state are described as runtime CAO/MEM/HKA behavior or as CES-owned Product SBS implementation. | Reclassify through `SBS_OPERATING_MODEL.md` §3; use `Builder System / CES boundary` for Builder work and update Product owner docs only through the normal authority path. |
 
 ## Failure-Mode Catalog
 
@@ -52,6 +53,7 @@ These rules make the target SBS inspectable without claiming current implementat
 | Provider-specific concepts leak into core semantics | Vendor/model/tool fields become HKA/SIP/GOV contract language. | Replacing provider changes semantic authority. | Translate provider details behind EBF/DRI/RCA/EXE. |
 | Agent runtime owns policy/retrieval/memory/tool side effects | Agent framework absorbs adjacent subsystem authority. | Replacing agent runtime requires redesigning GOV/RCA/MEM/EXE. | CAO coordinates cognition; consumes contracts; EXE executes effects. |
 | Derived representations contain non-rebuildable meaning | Index/projection/embedding/mirror loss loses human meaning. | DRI record cannot be rebuilt from source anchors. | Reclassify non-rebuildable material into HKA/GOV/MEM. |
+| Builder System collapses into CES or runtime memory | Builder workflow artifacts are treated as Product SBS runtime subsystems, CES-owned implementation surfaces, or runtime/user memory. | Issues/PRs use Product SBS owners for pure builder workflow changes; docs describe repo-local skills or BuilderOps records as runtime CAO/MEM/HKA truth. | Classify as Builder System or boundary work; promote into Product contracts only through repo PR/issue authority and owner-doc writeback. |
 
 ## First Enforcement Candidates
 
@@ -90,3 +92,4 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 | No provider-specific fields in HKA/SIP/GOV public contracts. | EBF / OEF | Keeps vendor/model/tool choices out of core semantics. | Manual review now. | CI check later (provider-field scan on core contract files). | Debt D8 (unfiled — file when audited). |
 | No SFC semantic conflict resolution without GOV policy. | SFC / GOV | Prevents sync transport from deciding meaning. | Manual review now (SFC is no-op/single-node today). | Blocking invariant when federation is implemented. | Debt D7 / #2362. |
 | No OEF automatic control loop mutating policy/memory/retrieval/knowledge/execution. | OEF / GOV | Keeps observability from becoming an ungoverned control loop. | Manual review now; OEF reports and blocks CI only. | Blocking invariant. | Roadmap-level; no loop exists yet. |
+| No Builder System artifact classified as Product runtime subsystem or runtime memory. | CES practice / Builder System | Keeps CES lean and prevents builder worklogs, skills, receipts, and BuilderOps records from becoming Product SBS or runtime MEM/HKA truth by shortcut. | Manual review now via SBS impact classification and PR review. | CI check later only if stable template/doc patterns justify mechanical detection. | Debt D11 / #2422; skill alignment follow-up #2420. |
