@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Companion UI — Deep Design Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&display=swap');
+@import url('https://fonts.bunny.net/css?family=jetbrains-mono:400,500&display=swap');
+
+:root{
+  --bg-base:#070b12; --bg-surface:#0c1220; --bg-raised:#111a2e; --bg-overlay:#162038; --bg-modal:#0e1828;
+  --fg-1:#dce8f0; --fg-2:#7a9ab8; --fg-3:#3d5570; --fg-inverse:#070b12;
+  --border:#152030; --border-strong:#1e3050; --border-focus:#00d4e8;
+  --accent:#d4a843; --accent-dim:#80621a; --accent-muted:#2a1e06;
+  --cyan:#00d4e8; --cyan-dim:#007a8a; --cyan-muted:#001e28; --cyan-glow:0 0 12px rgba(0,212,232,0.35),0 0 4px rgba(0,212,232,0.5);
+  --vault:#39e87d; --vault-dim:#1a7840; --vault-muted:#041a10; --vault-glow:0 0 8px rgba(57,232,125,0.3);
+  --agent:#4a9eff; --agent-dim:#1e5a9a; --agent-muted:#051228; --agent-glow:0 0 8px rgba(74,158,255,0.3);
+  --amber:#f09030; --amber-dim:#805010; --amber-muted:#1a0e02;
+  --destructive:#ff3d3d; --destructive-dim:#8a1a1a; --destructive-muted:#160404;
+  --font-display:'EB Garamond',Georgia,serif; --font-ui:'Space Grotesk',system-ui,sans-serif; --font-mono:'JetBrains Mono','Fira Code',monospace;
+  --radius-sm:2px; --radius-md:4px; --radius-lg:6px; --radius-xl:10px; --radius-full:9999px;
+  --shadow-float:0 4px 24px rgba(0,0,0,0.55),0 1px 4px rgba(0,0,0,0.3);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:16px;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;scroll-behavior:smooth}
+body{
+  background:var(--bg-base); color:var(--fg-1); font-family:var(--font-ui);
+  font-size:15px; line-height:1.55; font-weight:400;
+}
+body::before{
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background-image:linear-gradient(rgba(0,212,232,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,232,0.025) 1px,transparent 1px);
+  background-size:40px 40px;
+  -webkit-mask-image:radial-gradient(ellipse 90% 55% at 50% 0%,#000 0%,transparent 75%);
+          mask-image:radial-gradient(ellipse 90% 55% at 50% 0%,#000 0%,transparent 75%);
+}
+
+/* ---------- layout ---------- */
+.wrap{position:relative; z-index:1; max-width:1080px; margin:0 auto; padding:0 40px 140px}
+.doc-head{padding:88px 0 40px; border-bottom:1px solid var(--border-strong)}
+.kicker{font-family:var(--font-mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--cyan); margin-bottom:22px; display:flex; gap:14px; align-items:center}
+.kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--cyan);box-shadow:var(--cyan-glow)}
+h1{font-family:var(--font-display); font-weight:400; font-size:60px; line-height:1.04; letter-spacing:-0.02em; max-width:18ch}
+.subhead{font-family:var(--font-display); font-style:italic; font-size:23px; color:var(--fg-2); margin-top:18px; max-width:46ch; line-height:1.4}
+.meta-row{display:flex; flex-wrap:wrap; gap:8px 28px; margin-top:34px; font-family:var(--font-mono); font-size:11.5px; color:var(--fg-3); letter-spacing:.04em}
+.meta-row b{color:var(--fg-2); font-weight:500}
+
+/* ---------- section scaffolding ---------- */
+section{padding-top:72px}
+.sec-num{font-family:var(--font-mono); font-size:12px; color:var(--accent); letter-spacing:.1em}
+h2{font-family:var(--font-display); font-weight:400; font-size:38px; line-height:1.1; letter-spacing:-0.02em; margin:10px 0 8px}
+.sec-lede{color:var(--fg-2); font-size:16px; max-width:62ch; margin-bottom:28px; text-wrap:pretty}
+h3{font-family:var(--font-ui); font-weight:600; font-size:19px; margin:0}
+h4{font-family:var(--font-ui); font-weight:600; font-size:14px; letter-spacing:.02em}
+p{text-wrap:pretty}
+p+p{margin-top:12px}
+.eyebrow{font-family:var(--font-mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--fg-3)}
+strong{color:var(--fg-1); font-weight:600}
+em.term{font-style:normal; font-family:var(--font-mono); font-size:.86em; color:var(--fg-2); background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius-sm); padding:.08em .4em}
+a.ref{color:var(--cyan); text-decoration:none; font-family:var(--font-mono); font-size:.86em; border-bottom:1px dotted var(--cyan-dim)}
+a.ref:hover{color:var(--fg-1)}
+
+/* ---------- pills / verdicts ---------- */
+.pill{display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; padding:3px 10px; border-radius:var(--radius-full); border:1px solid}
+.v-works{color:var(--vault); border-color:var(--vault-dim); background:var(--vault-muted)}
+.v-friction{color:var(--amber); border-color:var(--amber-dim); background:var(--amber-muted)}
+.v-broken{color:var(--destructive); border-color:var(--destructive-dim); background:var(--destructive-muted)}
+.axis-tags{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:6px 0 0}
+.axis{display:inline-flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:11px; color:var(--fg-3); letter-spacing:.04em}
+.axis b{color:var(--fg-2); font-weight:500}
+
+/* ---------- journey cards ---------- */
+.journey{border:1px solid var(--border); border-radius:var(--radius-lg); background:linear-gradient(180deg,var(--bg-surface),var(--bg-base)); padding:26px 28px; margin-bottom:22px}
+.journey-head{display:flex; justify-content:space-between; align-items:flex-start; gap:24px; flex-wrap:wrap}
+.journey-head .jid{font-family:var(--font-mono); font-size:12px; color:var(--accent); letter-spacing:.08em; margin-bottom:6px}
+.journey-goal{color:var(--fg-2); font-size:14px; margin-top:8px; max-width:64ch}
+.journey-body{margin-top:20px; display:grid; grid-template-columns:1fr; gap:18px}
+.evidence{color:var(--fg-1); font-size:14.5px}
+.evidence p+p{margin-top:10px}
+.leverage{margin-top:18px; border-left:2px solid var(--accent); background:var(--accent-muted); padding:12px 16px; border-radius:0 var(--radius-md) var(--radius-md) 0}
+.leverage .eyebrow{color:var(--accent)}
+.leverage p{margin-top:5px; font-size:14.5px}
+
+/* ---------- evidence figures ---------- */
+figure{margin:0}
+.shots{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:18px}
+.shots figure{border:1px solid var(--border); border-radius:var(--radius-md); overflow:hidden; background:var(--bg-base)}
+.shots img{display:block; width:100%; height:auto; opacity:.94; transition:opacity .15s}
+.shots figure:hover img{opacity:1}
+figcaption{font-family:var(--font-mono); font-size:10.5px; color:var(--fg-3); letter-spacing:.04em; padding:7px 9px; border-top:1px solid var(--border); display:flex; justify-content:space-between; gap:8px}
+figcaption .tag{color:var(--cyan)}
+
+/* ---------- exec read ---------- */
+.exec{display:grid; gap:14px; margin-top:8px}
+.exec-item{display:grid; grid-template-columns:42px 1fr; gap:20px; border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--bg-surface); padding:22px 26px}
+.exec-item .n{font-family:var(--font-display); font-size:34px; color:var(--accent); line-height:1}
+.exec-item h3{margin-bottom:6px}
+.exec-item p{color:var(--fg-2); font-size:14.5px}
+.exec-item.keep{border-color:var(--vault-dim)}
+.exec-item.keep .n{color:var(--vault)}
+
+/* ---------- cross-cutting ---------- */
+.xc{border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--bg-surface); padding:22px 26px; margin-bottom:14px}
+.xc-head{display:flex; justify-content:space-between; align-items:center; gap:18px; flex-wrap:wrap; margin-bottom:10px}
+.xc-head h3{font-size:17px}
+.xc p{color:var(--fg-2); font-size:14.5px}
+.xc .fix{margin-top:10px; font-size:14px}
+.xc .fix b{color:var(--fg-1)}
+
+/* ---------- recommendations ---------- */
+.rec-group{margin-bottom:34px}
+.rec-group-head{display:flex; align-items:baseline; gap:14px; border-bottom:1px solid var(--border-strong); padding-bottom:10px; margin-bottom:16px}
+.rec-group-head h3{font-size:18px}
+.rec-group-head .gnum{font-family:var(--font-mono); font-size:12px; color:var(--accent)}
+.rec-group-head .effort{margin-left:auto; font-family:var(--font-mono); font-size:11px; color:var(--fg-3); letter-spacing:.04em}
+.rec{display:grid; grid-template-columns:30px 1fr; gap:16px; padding:13px 0; border-bottom:1px solid var(--border)}
+.rec:last-child{border-bottom:none}
+.rec .rk{font-family:var(--font-mono); font-size:12px; color:var(--fg-3)}
+.rec h4{margin-bottom:4px}
+.rec p{color:var(--fg-2); font-size:13.5px}
+.rec .tie{font-family:var(--font-mono); font-size:11px; color:var(--cyan-dim); margin-top:5px; letter-spacing:.03em}
+.donot .rec{grid-template-columns:30px 1fr}
+.donot .rk{color:var(--vault)}
+
+/* ---------- UAT table ---------- */
+.uat{margin-top:8px; border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden}
+.uat-row{display:grid; grid-template-columns:64px 1fr 116px; gap:18px; padding:15px 20px; border-bottom:1px solid var(--border); align-items:start}
+.uat-row:last-child{border-bottom:none}
+.uat-row.head{background:var(--bg-surface); font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--fg-3)}
+.uat-row .id{font-family:var(--font-mono); font-size:12px; color:var(--accent)}
+.uat-row .crit{font-size:13.5px; color:var(--fg-1)}
+.uat-row .crit small{display:block; color:var(--fg-3); font-family:var(--font-mono); font-size:11px; margin-top:4px; letter-spacing:.02em}
+.verify{font-family:var(--font-mono); font-size:10.5px; letter-spacing:.05em; padding:3px 8px; border-radius:var(--radius-full); border:1px solid; white-space:nowrap; height:fit-content}
+.verify.static{color:var(--cyan); border-color:var(--cyan-dim); background:var(--cyan-muted)}
+.verify.live{color:var(--amber); border-color:var(--amber-dim); background:var(--amber-muted)}
+
+/* ---------- misc ---------- */
+.callout{border:1px solid var(--border-strong); border-left:2px solid var(--cyan); background:var(--bg-surface); border-radius:0 var(--radius-md) var(--radius-md) 0; padding:16px 20px; margin:22px 0; font-size:14px; color:var(--fg-2)}
+.callout b{color:var(--fg-1)}
+.scope{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:18px}
+.scope .box{border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 18px; background:var(--bg-surface)}
+.scope .box h4{margin-bottom:8px; font-size:12px; letter-spacing:.08em; text-transform:uppercase; font-family:var(--font-mono)}
+.scope .box.in h4{color:var(--vault)}
+.scope .box.out h4{color:var(--fg-3)}
+.scope .box ul{list-style:none; font-size:13px; color:var(--fg-2)}
+.scope .box li{padding:3px 0 3px 16px; position:relative}
+.scope .box li::before{content:"·"; position:absolute; left:4px; color:var(--fg-3)}
+.toc{columns:2; column-gap:40px; margin-top:24px}
+.toc a{display:block; text-decoration:none; color:var(--fg-2); font-size:14px; padding:6px 0; border-bottom:1px solid var(--border); break-inside:avoid}
+.toc a:hover{color:var(--cyan)}
+.toc a .tn{font-family:var(--font-mono); font-size:11px; color:var(--accent); margin-right:10px}
+.foot{margin-top:90px; padding-top:24px; border-top:1px solid var(--border-strong); font-family:var(--font-mono); font-size:11px; color:var(--fg-3); letter-spacing:.04em; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px}
+
+@media (max-width:720px){
+  .wrap{padding:0 22px 90px}
+  h1{font-size:40px} h2{font-size:30px}
+  .exec-item{grid-template-columns:1fr; gap:8px}
+  .scope{grid-template-columns:1fr}
+  .toc{columns:1}
+  .uat-row{grid-template-columns:48px 1fr; }
+  .uat-row .verify{grid-column:2}
+}
+@media print{
+  body{background:#fff; color:#111}
+  body::before{display:none}
+  .wrap{max-width:none; padding:0}
+  .journey,.xc,.exec-item,.uat,.callout,.scope .box{break-inside:avoid}
+  section{break-before:auto}
+  a.ref,.kicker .dot{color:#555}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ============ HEADER ============ -->
+<header class="doc-head" data-screen-label="Cover">
+  <div class="kicker"><span class="dot"></span> Yggdrasil · Companion UI · Deep design review</div>
+  <h1>Where the core loop holds, and where it breaks.</h1>
+  <p class="subhead">A two-axis read of the assisted-thinking shell — does each journey stay <em>intuitive</em>, and is each function <em>built well</em> — with a prioritised specification, not patches.</p>
+  <div class="meta-row">
+    <span><b>Scope</b> · J1–J7 + cross-cutting</span>
+    <span><b>Method</b> · 26 static server-rendered captures, no live runtime</span>
+    <span><b>Authority</b> · Crossing-A design input · spec, not code</span>
+    <span><b>Date</b> · 2026-06-22</span>
+  </div>
+</header>
+
+<!-- ============ ORIENTATION / TOC ============ -->
+<section id="how" data-screen-label="How to read">
+  <div class="sec-num">00 — How to read this</div>
+  <h2>The rubric, and what it can't see</h2>
+  <p class="sec-lede">Every journey is graded on two independent axes. A journey can pass one and fail the other — a sound concept half-built, or a polished surface that confuses. Where a finding depends on motion, focus, live data, or a round-trip the stills can't exercise, it is flagged for <strong>live UAT</strong> rather than asserted.</p>
+
+  <div class="axis-tags" style="margin-bottom:20px">
+    <span class="axis"><b>Axis A</b> Intuitiveness — do I know where I am, what changed, what to do next?</span>
+  </div>
+  <div class="axis-tags" style="margin-bottom:24px">
+    <span class="axis"><b>Axis B</b> Implementation — states complete, hierarchy right, copy precise, affordances reachable?</span>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+    <span class="pill v-works">Works</span><span style="color:var(--fg-3);font-size:13px;align-self:center">ship as-is</span>
+    <span class="pill v-friction">Friction</span><span style="color:var(--fg-3);font-size:13px;align-self:center">works but costs clarity/effort</span>
+    <span class="pill v-broken">Broken</span><span style="color:var(--fg-3);font-size:13px;align-self:center">fails its purpose / unreachable / missing state</span>
+  </div>
+
+  <nav class="toc">
+    <a href="#exec"><span class="tn">01</span> Executive read</a>
+    <a href="#j1"><span class="tn">J1</span> First arrival &amp; getting in</a>
+    <a href="#j2"><span class="tn">J2</span> Read &amp; navigate a note</a>
+    <a href="#j3"><span class="tn">J3</span> Capture a thought mid-flow</a>
+    <a href="#j4"><span class="tn">J4</span> Resume after time away</a>
+    <a href="#j5"><span class="tn">J5</span> Two lanes of agent output</a>
+    <a href="#j6"><span class="tn">J6</span> Govern: act · receipt · block</a>
+    <a href="#j7"><span class="tn">J7</span> Configure &amp; understand</a>
+    <a href="#xc"><span class="tn">03</span> Cross-cutting findings</a>
+    <a href="#rec"><span class="tn">04</span> Prioritised recommendations</a>
+    <a href="#uat"><span class="tn">05</span> Acceptance criteria / UAT</a>
+  </nav>
+</section>
+
+<!-- ============ 01 EXECUTIVE READ ============ -->
+<section id="exec" data-screen-label="Executive read">
+  <div class="sec-num">01 — Executive read</div>
+  <h2>Lead with the answer</h2>
+  <p class="sec-lede">The loop — <em class="term">open → orient → read → act with clarity → leave a clean thread</em> — is sound in concept, and several surfaces are genuinely well-built (the re-entry card, capture, settings, the system map). The loop breaks in three high-leverage places, plus two systemic ones. Fixing the first three would move the product more than any number of screen-level polishes.</p>
+
+  <div class="exec">
+    <div class="exec-item">
+      <div class="n">1</div>
+      <div>
+        <h3>The mist ladder doesn't grade — it's a fixed maximal dashboard with decorations bolted on</h3>
+        <p>The signature feature inverts its own philosophy. <a class="ref" href="#j4">no_mist</a> (30&nbsp;s away) and <strong>thread_fade</strong> (5&nbsp;min) are pixel-identical: both render the full <em class="term">Re-entry snapshot</em> — leave point, three open loops, two notable changes, governance tiles, resurface. The thing that should be <em>absent</em> at short gaps is always present; the thing that should <em>grow</em> (the re-entry card) is what gets added at the top end — and it duplicates the panels beneath it. Calm, proportional re-entry becomes a re-entry console.</p>
+      </div>
+    </div>
+    <div class="exec-item">
+      <div class="n">2</div>
+      <div>
+        <h3>The right Panel rail is an operator console, not a reading companion</h3>
+        <p>It permanently reserves a third of the shell to stack ~8 mostly-empty, mostly-disabled sub-modules (Canvas · Log · Find · Reorient · Resurface · Commitments…), leaks raw internal identifiers (<em class="term">prop-move-1 art-123</em>, <em class="term">lifecycle.move</em>), and renders an unstyled white textarea. On the live capture its header even overlaps the topbar. This is the direct opposite of <strong>“the document is the primary surface.”</strong></p>
+      </div>
+    </div>
+    <div class="exec-item">
+      <div class="n">3</div>
+      <div>
+        <h3>The governed receipt — the trust payload of the whole system — is nearly invisible</h3>
+        <p>After a governed <em class="term">Apply</em>, the only confirmation is a dim monospace log line (<em class="term">executed · success moved via governed path</em>) at the very bottom of the long, scrolled rail. The user cannot tell at a glance that <strong>the vault changed and a record exists</strong> — the one question this system exists to answer cleanly.</p>
+      </div>
+    </div>
+    <div class="exec-item">
+      <div class="n">4</div>
+      <div>
+        <h3>The top edge is doing operator work and can't be reached</h3>
+        <p>The topbar carries diagnostic telemetry (<em class="term">N&nbsp;RECOVERY</em>, <em class="term">ok&nbsp;Online</em>, <em class="term">as of 21:08</em>, the amber ⚠&nbsp;Operator pill) on an anti-dashboard surface — <strong>and</strong> overflows its own surface-launch icons off-screen at ≤1440&nbsp;px. Discoverability quietly collapses onto the System&nbsp;Map and two keyboard shortcuts.</p>
+      </div>
+    </div>
+    <div class="exec-item">
+      <div class="n">5</div>
+      <div>
+        <h3>The calm-state grammar is real but not yet consistent</h3>
+        <p>Held/degraded states are a genuine strength — <em class="term">“Nothing was mutated”</em>, <em class="term">“Nothing was lost”</em>, the green “Nothing needs action here.” But the vault browser drops to a raw <em class="term">“Error: Failed to fetch”</em>, degraded orientation leaks the enum <em class="term">resurfacing_source_unavailable</em> as a chip, and <em class="term">Blocked</em> states the rule name without a reason or a way forward. One grammar, applied everywhere, closes the gap cheaply.</p>
+      </div>
+    </div>
+    <div class="exec-item keep">
+      <div class="n">✓</div>
+      <div>
+        <h3>What is working and must be preserved</h3>
+        <p>The re-entry card's four-question structure + Resume/Start-fresh; the stale held-state; settings' “never touches the vault, always resettable” framing; capture's lightness; the System Map as an honest, non-authoritative index; and the deliberate body-edit vs governed <em>asymmetry</em> (once made legible). Above all: the anti-dashboard posture and the server-authoritative classification boundary. Do not push classification into the client to “fix” any of the above.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 02 PER-JOURNEY ============ -->
+<section id="journeys" data-screen-label="Per-journey verdicts">
+  <div class="sec-num">02 — Per-journey verdicts</div>
+  <h2>Walking J1 – J7</h2>
+  <p class="sec-lede">Each journey carries a verdict per axis, evidence citing the specific captures, and the single highest-leverage change. Citations use the surface IDs from the inventory (E#, S#, O#, R#).</p>
+
+  <!-- J1 -->
+  <article class="journey" id="j1" data-screen-label="J1">
+    <div class="journey-head">
+      <div>
+        <div class="jid">J1</div>
+        <h3>First arrival &amp; getting in</h3>
+        <p class="journey-goal">Reach a usable state — first time, return after weeks, or vault not yet connected.</p>
+      </div>
+      <div class="axis-tags">
+        <span class="axis"><b>A</b> <span class="pill v-friction">Friction</span></span>
+        <span class="axis"><b>B</b> <span class="pill v-broken">Broken</span></span>
+      </div>
+    </div>
+    <div class="journey-body">
+      <div class="evidence">
+        <p>The calm posture reads well in principle — one column, a single declarative line (<em class="term">“Nothing is open yet.”</em> / <em class="term">“Re-entry is through the vault.”</em>). But the one obvious next action is not visually obvious: the <em class="term">Find a note · Jot something down · See the map</em> row renders as <strong>default browser-blue underlined links</strong> — off-palette, and reading as fine print rather than the primary way in (E1, E2). Below them, a <em class="term">Leave a note for future-you…</em> input and a <em class="term">leave_point: absent · read-only · server-declared</em> metadata line add machine noise to a first-contact screen.</p>
+        <p>The 21-day return (E2) is deliberately identical to first contact. The anti-dashboard intent is right, but note the consequence: because <em class="term">cold_start</em> claims everything &gt;14&nbsp;days, the moment of <em>greatest</em> re-entry need — weeks away — receives the <em>least</em> orientation, while a one-day gap gets the full card. A single calm “last here 21 days ago — resume the thread?” line would serve the returner without becoming a dashboard.</p>
+        <p>The two “can't proceed” states are correctly distinguished in copy — E10 <em class="term">“The runtime is unreachable. Nothing was lost.”</em> (calm, with Refresh + read-only fallback) versus E11's vault-selection picker. But E11 is the <strong>worst-built surface in the set</strong>: it is entirely unstyled — system serif/sans, raw default form controls, a bare <em class="term">Open Niflheim</em> button, <em class="term">unknown / unknown</em> recent-vault rows. The literal front door looks like a different application.</p>
+      </div>
+      <div class="shots">
+        <figure><img src="img/entry_01_first_contact.png" alt="First contact"><figcaption><span>E1 first_contact</span><span class="tag">blue links</span></figcaption></figure>
+        <figure><img src="img/entry_10_no_vault.png" alt="No vault / runtime unreachable"><figcaption><span>E10 no_vault</span><span class="tag">calm ✓</span></figcaption></figure>
+        <figure><img src="img/entry_11_vault_picker.png" alt="Vault picker, unstyled"><figcaption><span>E11 picker</span><span class="tag">unstyled</span></figcaption></figure>
+      </div>
+      <div class="leverage">
+        <div class="eyebrow">Highest-leverage change</div>
+        <p>Bring the literal front door into the design system: style E11 to the DS, and turn the entry-screen action row into real, ranked affordances (one primary “Open the vault / Find a note”, the rest secondary) instead of inline browser-blue links.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- J2 -->
+  <article class="journey" id="j2" data-screen-label="J2">
+    <div class="journey-head">
+      <div>
+        <div class="jid">J2</div>
+        <h3>Read &amp; navigate a note</h3>
+        <p class="journey-goal">Open a note, read long-form, move to a related note.</p>
+      </div>
+      <div class="axis-tags">
+        <span class="axis"><b>A</b> <span class="pill v-friction">Friction</span></span>
+        <span class="axis"><b>B</b> <span class="pill v-friction">Friction</span></span>
+      </div>
+    </div>
+    <div class="journey-body">
+      <div class="evidence">
+        <p>The note body itself is well-typeset — EB&nbsp;Garamond title, monospace path/properties, a clear <em class="term">read-only</em> pill, Read aloud, Edit (S1). The read/write boundary is legible (pill + Edit + the bottom hint <em class="term">“Edit note body · Opt-in · keeps the reading surface primary”</em>). But the note does not <strong>visibly dominate</strong>: the idle right rail eats roughly a third of the width while saying only <em class="term">“Companion · idle — no active proposals,”</em> the topbar is a cramped diagnostic strip, and the rail header is drawn <em>over</em> the topbar's right cluster (OBSERVED #2). Three regions compete; the document does not win.</p>
+        <p>As the “primary navigator,” the vault browser (O5) under-delivers: in capture it is a thin search modal (<em class="term">“Search by title or path…”</em>) showing <em class="term">“Error: Failed to fetch”</em> — not the note list + filters + inspector the inventory promises, and its error string breaks the calm voice used elsewhere. Whether the populated list/inspector is a true navigator needs live UAT; as a still it reads as a secondary utility.</p>
+      </div>
+      <div class="shots">
+        <figure><img src="img/shell_01_active_anchor.png" alt="Active shell"><figcaption><span>S1 shell</span><span class="tag">rail dominates</span></figcaption></figure>
+        <figure><img src="img/overlay_05_vault_browser.png" alt="Vault browser"><figcaption><span>O5 vault browser</span><span class="tag">raw error</span></figcaption></figure>
+      </div>
+      <div class="leverage">
+        <div class="eyebrow">Highest-leverage change</div>
+        <p>Collapse the idle right rail to a thin ambient strip until it has something to say, so the note is unambiguously the primary surface. Reclaim the reclaimed width for reading measure, not for a permanently-reserved empty console.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- J3 -->
+  <article class="journey" id="j3" data-screen-label="J3">
+    <div class="journey-head">
+      <div>
+        <div class="jid">J3</div>
+        <h3>Capture a thought mid-flow</h3>
+        <p class="journey-goal">Jot something to the inbox without losing the thread.</p>
+      </div>
+      <div class="axis-tags">
+        <span class="axis"><b>A</b> <span class="pill v-works">Works</span></span>
+        <span class="axis"><b>B</b> <span class="pill v-works">Works</span></span>
+      </div>
+    </div>
+    <div class="journey-body">
+      <div class="evidence">
+        <p>The capture modal is exactly as light as it needs to be: centered, scrimmed, a single <em class="term">“What needs taking care of?”</em> field and a gold <em class="term">Capture to inbox</em> button, with ⓘ and a close affordance (O2). It is reachable in one gesture (⌘N — one of only two launchers with a keyboard fallback) and returns to the anchor. This is the model the rest of the overlay layer should imitate.</p>
+        <p>Two small gaps, both deferrable: nothing beyond the button label signals the capture is <em>governed</em> (goes through the write pipeline), and no post-capture confirmation is exercised in the stills. Both are minor; the second needs live UAT.</p>
+      </div>
+      <div class="shots">
+        <figure><img src="img/overlay_02_capture_modal.png" alt="Capture modal"><figcaption><span>O2 capture</span><span class="tag">light ✓</span></figcaption></figure>
+      </div>
+      <div class="leverage">
+        <div class="eyebrow">Highest-leverage change</div>
+        <p>Keep it. Add a quiet, non-blocking post-capture confirmation that names the destination (e.g. “Captured to Inbox”), and verify return-to-caret on dismiss in live UAT.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- J4 -->
+  <article class="journey" id="j4" data-screen-label="J4">
+    <div class="journey-head">
+      <div>
+        <div class="jid">J4</div>
+        <h3>Resume after time away — the re-entry mist ladder</h3>
+        <p class="journey-goal">Recover the thread proportional to how long you were gone. The signature feature — judged hardest.</p>
+      </div>
+      <div class="axis-tags">
+        <span class="axis"><b>A</b> <span class="pill v-broken">Broken</span></span>
+        <span class="axis"><b>B</b> <span class="pill v-friction">Friction</span></span>
+      </div>
+    </div>
+    <div class="journey-body">
+      <div class="evidence">
+        <p><strong>The gradient is not a gradient.</strong> E3 (<em class="term">no_mist</em>, ~30&nbsp;s) and E4 (<em class="term">thread_fade</em>, ~5&nbsp;min) are identical, and both already render the entire <em class="term">Re-entry snapshot</em> — leave point, three open loops, two notable changes, the governance tiles (pending proposals / receipts / latest outcome), and resurface. The spec wants no_mist to “look essentially like an uninterrupted session.” Instead, the maximum is the floor. E5 (<em class="term">soft_mist</em>) adds a single <em class="term">“Where you stopped”</em> line; E6 (<em class="term">full_mist</em>) finally adds the re-entry card — <em>on top of</em> the same full dashboard, repeating the open-loop and change counts it sits above.</p>
+        <p>This also surfaces the philosophy violation directly: the governance summary tiles are <em>telemetry on the orientation surface</em>, exactly what the brief says belongs behind the System Map. And at E7 (<em class="term">long_mist</em>) the whisper column collides with the card's ⓘ glyph (<em class="term">DOING</em> overlaps the info icon) — a real layout defect at the densest rung.</p>
+        <p><strong>The card itself is the asset.</strong> Its four questions — <em>what was I doing · where did momentum stop · what remains unresolved · what changed since</em> — plus the proportional WARM/DORMANT badge and the clear Resume / Start-fresh pair, are a genuine “pick up the thread” affordance, not a changelog. It should <em>be</em> the orienting surface; the panel dashboard should be progressively revealed beneath/behind it, not the always-on baseline.</p>
+        <p>The off-nominal rungs are strong. Degraded (E8) presents amber, informative-not-alarming — <em class="term">“Partial orientation · Runtime posture: degraded · Missing source.”</em> Stale (E9) is exemplary: <em class="term">“Source changed since this was captured. Nothing was mutated.”</em> with Resume correctly suppressed and replaced by “Open the current artifact state.” The only blemish is enum leakage — <em class="term">resurfacing_source_unavailable</em> shown raw as a chip and again in the resurface card.</p>
+      </div>
+      <div class="shots">
+        <figure><img src="img/entry_03_no_mist.png" alt="no_mist"><figcaption><span>E3 no_mist 30s</span><span class="tag">= E4</span></figcaption></figure>
+        <figure><img src="img/entry_04_thread_fade.png" alt="thread_fade"><figcaption><span>E4 thread_fade 5m</span><span class="tag">identical</span></figcaption></figure>
+        <figure><img src="img/entry_06_full_mist.png" alt="full_mist"><figcaption><span>E6 full_mist 1d</span><span class="tag">card + dupes</span></figcaption></figure>
+        <figure><img src="img/entry_07_long_mist.png" alt="long_mist"><figcaption><span>E7 long_mist 7d</span><span class="tag">whisper collides ⓘ</span></figcaption></figure>
+        <figure><img src="img/entry_08_degraded_full_mist.png" alt="degraded"><figcaption><span>E8 degraded</span><span class="tag">amber ✓</span></figcaption></figure>
+        <figure><img src="img/entry_09_stale_leave_point.png" alt="stale"><figcaption><span>E9 stale</span><span class="tag">exemplar ✓</span></figcaption></figure>
+      </div>
+      <div class="leverage">
+        <div class="eyebrow">Highest-leverage change</div>
+        <p>Make the ladder <strong>subtractive</strong>. Short gaps show little to nothing (no_mist ≈ the shell with at most a quiet resume line; thread_fade ≈ the peripheral rail cue only). The orientation panels appear only from full_mist upward, <em>de-duplicated</em> and arranged beneath the card — never repeating what the card already states. The runtime keeps declaring the rung and the snapshot data; the UI simply renders proportionally to it. No classification moves to the client.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- J5 -->
+  <article class="journey" id="j5" data-screen-label="J5">
+    <div class="journey-head">
+      <div>
+        <div class="jid">J5</div>
+        <h3>Two lanes of agent output — body-edit vs governed</h3>
+        <p class="journey-goal">Respond to two different kinds of agent output, and never confuse them.</p>
+      </div>
+      <div class="axis-tags">
+        <span class="axis"><b>A</b> <span class="pill v-friction">Friction</span></span>
+        <span class="axis"><b>B</b> <span class="pill v-friction">Friction</span></span>
+      </div>
+    </div>
+    <div class="journey-body">
+      <div class="evidence">
+        <p>The asymmetry exists structurally but is not made <em>legible</em>. The body-edit lane (S2) is an amber-accented <em class="term">SUGGESTED</em> block inline in the document plus a rail card with <em>Apply / Discard</em> — no Defer, no receipt. The governed lane (S3) is a blue-bordered rail card (<em class="term">MOVE NOTE TO PROJECTS/</em>) with <em>Apply / Discard / Defer</em>. The crucial distinction — one is recorded, one is not — is stated <strong>nowhere</strong>. The user must infer the lane from colour (amber vs blue) and button count (two vs three), and amber is already overloaded (degraded, operator). “Defer” is never explained.</p>
+        <p>The ⌘K command palette (O1) is the clearer of the two “act” surfaces and earns its existence with an explicit disclaimer: <em class="term">“Panel ≠ Chat — a faster presentation of the same governed Panel proposals; no free-text generation, no conversation.”</em> The duplication with the rail is acceptable <em>once the rail is calmed</em>; today both exist and the rail is the noisier path, so it reads as a fork to learn rather than a shortcut.</p>
+      </div>
+      <div class="shots">
+        <figure><img src="img/shell_02_staged_suggestion.png" alt="Body suggestion"><figcaption><span>S2 body-edit</span><span class="tag">amber · no receipt</span></figcaption></figure>
+        <figure><img src="img/shell_03_panel_proposals.png" alt="Governed proposals"><figcaption><span>S3 governed</span><span class="tag">blue · defer</span></figcaption></figure>
+        <figure><img src="img/overlay_01_command_palette.png" alt="Command palette"><figcaption><span>O1 ⌘K palette</span><span class="tag">clearest ✓</span></figcaption></figure>
+      </div>
+      <div class="leverage">
+        <div class="eyebrow">Highest-leverage change</div>
+        <p>Label the lanes in words, not just colour. The body-edit lane should read <em class="term">Apply · not recorded (no receipt)</em>; the governed lane <em class="term">Apply → vault change → receipt</em>. Give “Defer” a one-line consequence. Make the recorded/not-recorded line the headline of each card.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- J6 -->
+  <article class="journey" id="j6" data-screen-label="J6">
+    <div class="journey-head">
+      <div>
+        <div class="jid">J6</div>
+        <h3>Govern the agent — act, get a receipt, review history, handle blocks</h3>
+        <p class="journey-goal">Direct an agent action and stay in control, including the record and the refusals.</p>
+      </div>
+      <div class="axis-tags">
+        <span class="axis"><b>A</b> <span class="pill v-friction">Friction</span></span>
+        <span class="axis"><b>B</b> <span class="pill v-broken">Broken</span></span>
+      </div>
+    </div>
+    <div class="journey-body">
+      <div class="evidence">
+        <p><strong>The receipt is buried.</strong> After a governed Apply (S4) the only confirmation is a dim, monospace <em class="term">“executed · success moved via governed path · 2026-06-10T11:00:00Z”</em> at the very bottom of the already-long rail. For the system whose central promise is “you can always tell whether your vault changed and whether there's a record,” the payload of that promise is the least visible thing on screen. This fails its purpose on Axis B.</p>
+        <p>Receipts history (O6) shows the right calm degraded copy (<em class="term">“Receipt history unavailable… Nothing was decided and nothing was lost.”</em>); its populated ledger is unexercised — flag for live UAT — and its discoverability rests on a topbar icon that is clipped at common widths.</p>
+        <p>Blocked (S5) presents as held rather than red — good — with the topbar pill flipping to <em class="term">runtime degraded · Blocked</em> and the proposal's buttons replaced by <em class="term">“staged proposal unavailable.”</em> But it states the rule's name (<em class="term">blocked by WriteGuard</em>) with <strong>no reason and no recourse</strong>: no “why,” no “what unblocks this,” no next step. It lands closer to a dead end than a guided hold. Memory review (O3) is structurally sound with a strong provenance guard (<em class="term">“Unreviewed memory is not semantic authority”</em>); its populated accept/reject/revise/defer flow needs live UAT.</p>
+      </div>
+      <div class="shots">
+        <figure><img src="img/shell_04_governed_receipt.png" alt="Governed receipt"><figcaption><span>S4 receipt</span><span class="tag">buried</span></figcaption></figure>
+        <figure><img src="img/shell_05_panel_blocked.png" alt="Blocked"><figcaption><span>S5 blocked</span><span class="tag">no recourse</span></figcaption></figure>
+        <figure><img src="img/overlay_06_receipts_history.png" alt="Receipts history"><figcaption><span>O6 receipts</span><span class="tag">calm ✓ / UAT</span></figcaption></figure>
+        <figure><img src="img/overlay_03_memory_review.png" alt="Memory review"><figcaption><span>O3 memory</span><span class="tag">guard ✓ / UAT</span></figcaption></figure>
+      </div>
+      <div class="leverage">
+        <div class="eyebrow">Highest-leverage change</div>
+        <p>Promote the receipt to a first-class confirmation at the moment and place of action: on the just-applied card, replace it with a clear “Applied · receipt recorded” state that links straight to its entry in history. Give Blocked a two-line reason + recourse (“held by WriteGuard because… · what unblocks this”).</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- J7 -->
+  <article class="journey" id="j7" data-screen-label="J7">
+    <div class="journey-head">
+      <div>
+        <div class="jid">J7</div>
+        <h3>Configure &amp; understand the system</h3>
+        <p class="journey-goal">Adjust preferences and understand status without leaving the calm surface.</p>
+      </div>
+      <div class="axis-tags">
+        <span class="axis"><b>A</b> <span class="pill v-works">Works</span></span>
+        <span class="axis"><b>B</b> <span class="pill v-works">Works</span></span>
+      </div>
+    </div>
+    <div class="journey-body">
+      <div class="evidence">
+        <p>Settings (O4) is the best-built surface in the set. It is unmistakably render-only — <em class="term">“Preferences re-render identical content. They never touch the vault and are always resettable”</em> — well grouped (Display / Listening / Behaviour / Connection), scannable, with “Reset to canonical” always available. The CONNECTION block is borderline diagnostic but correctly demoted and labelled “display only.” Only nit: the white time inputs sit slightly outside the dark palette.</p>
+        <p>The guidance layer (O8) is the right call for an expert-but-intermittent user: off by default, server-rendered, calm teaching copy with a gold accent and a “Full guide” link — it informs without cluttering. The System Map (O7) carries the discoverability load honestly: <em class="term">“Every surface, one index… it renders and routes, nothing more.”</em> Its weakness is leakage of internal references (<em class="term">#1783, SEP-04, #1716+</em>) into user-facing copy, and the structural fact that — given the clipped topbar — it has become the <em>de facto</em> only reliable launcher.</p>
+      </div>
+      <div class="shots">
+        <figure><img src="img/overlay_04_settings_drawer.png" alt="Settings"><figcaption><span>O4 settings</span><span class="tag">best-built ✓</span></figcaption></figure>
+        <figure><img src="img/overlay_08_guidance_layer.png" alt="Guidance"><figcaption><span>O8 guidance</span><span class="tag">good ✓</span></figcaption></figure>
+        <figure><img src="img/overlay_07_system_map.png" alt="System map"><figcaption><span>O7 system map</span><span class="tag">issue refs leak</span></figcaption></figure>
+      </div>
+      <div class="leverage">
+        <div class="eyebrow">Highest-leverage change</div>
+        <p>Keep settings and guidance as they are. Strip internal issue numbers from the System Map's user-facing copy (or gate them behind the operator/guidance layer) so the index reads as “what each surface is and how to reach it,” not a changelog.</p>
+      </div>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 03 CROSS-CUTTING ============ -->
+<section id="xc" data-screen-label="Cross-cutting">
+  <div class="sec-num">03 — Cross-cutting findings</div>
+  <h2>Patterns that span every journey</h2>
+  <p class="sec-lede">These compound the per-journey findings; fixing them lifts several journeys at once.</p>
+
+  <div class="xc">
+    <div class="xc-head"><h3>Visual hierarchy &amp; calm</h3><span class="pill v-broken">Broken</span></div>
+    <p>Across states the document rarely dominates. The right rail, the topbar telemetry, and repeated monospace metadata accrete into a dashboard texture the philosophy explicitly forbids — most visibly the governance tiles riding on the orientation surface (E3–E8) and the idle rail owning a third of the shell (S1).</p>
+    <p class="fix"><b>Fix:</b> demote the rail to ambient-until-active; move <em class="term">RECOVERY / Online / as-of / Operator</em> telemetry behind the System Map; reserve the surface for the note plus at most one orientation affordance.</p>
+  </div>
+
+  <div class="xc">
+    <div class="xc-head"><h3>State completeness</h3><span class="pill v-works">Works</span></div>
+    <p>A genuine strength. Empty, loading, degraded, stale, and blocked are all designed and mostly calm (E8, E9, O3, O6, and the green “Nothing needs action here” on S5). Two gaps keep it from full marks: raw tokens/errors leak to the surface (<em class="term">resurfacing_source_unavailable</em>, <em class="term">“Error: Failed to fetch”</em>), and Blocked lacks recourse.</p>
+    <p class="fix"><b>Fix:</b> one degraded-copy grammar — “&lt;what&gt; unavailable — &lt;why&gt;. Nothing was lost/decided/mutated. &lt;what to do&gt;.” — and a humanising map for runtime enum tokens before they reach a user surface.</p>
+  </div>
+
+  <div class="xc">
+    <div class="xc-head"><h3>Reachability</h3><span class="pill v-broken">Broken</span></div>
+    <p>Confirmed and load-bearing (OBSERVED #1/#2). At ≤1440&nbsp;px the topbar clips its own surface-launchers and the rail overlaps the icon cluster; only ⌘K / ⌘N have fallbacks, so several entry points are unreachable by pointer and discoverability collapses onto the System Map.</p>
+    <p class="fix"><b>Fix:</b> decide what the top edge is <em>for</em> (identity + the single most-used action), and route the rest of the launchers into one resilient surface — a command menu and/or an overflow that never clips. This is a design decision about the bar's job, not just a wrap rule.</p>
+  </div>
+
+  <div class="xc">
+    <div class="xc-head"><h3>Responsive integrity</h3><span class="pill v-friction">Friction</span></div>
+    <p>The narrow reading surface survives well (R1) and long_mist stacks acceptably with the whisper column collapsing into the card (R2). But the identity/status string runs off-screen with no wrap or truncation (OBSERVED #3), and the bottom edge collides — the “Edit note body” hint, the Outline/Panel sheet triggers, and the floating Operator/Help pills fight for the same corner (OBSERVED #4).</p>
+    <p class="fix"><b>Fix:</b> reconcile both edges into single composed bars — a top status that truncates with an affordance, and one real bottom bar that owns the sheet triggers and hint instead of independently-positioned fixed pills.</p>
+  </div>
+
+  <div class="xc">
+    <div class="xc-head"><h3>Overlay-grammar consistency</h3><span class="pill v-friction">Friction</span></div>
+    <p>“One overlay host, one dismiss grammar” is the intent, but the overlays don't yet share a frame. The ⌘K palette is a large centered panel; capture a medium centered modal; receipts a small top-anchored card; settings and memory are right drawers; the system map a large centered modal. Header furniture varies too — some carry a read-only pill, some ⓘ, some ×, some a mix.</p>
+    <p class="fix"><b>Fix:</b> one modal-frame spec — a small set of positions (center / right-drawer), a fixed header furniture order (title · status-pill · ⓘ · close), one scrim and one dismiss grammar. Verify focus-trap and Esc behaviour in live UAT.</p>
+  </div>
+</section>
+
+<!-- ============ 04 RECOMMENDATIONS ============ -->
+<section id="rec" data-screen-label="Recommendations">
+  <div class="sec-num">04 — Prioritised recommendations</div>
+  <h2>Ranked by leverage, grouped by type</h2>
+  <p class="sec-lede">Ordered for an owner who optimises for the fewest, highest-leverage decisions. Within each group, top item first.</p>
+
+  <div class="rec-group">
+    <div class="rec-group-head"><span class="gnum">A</span><h3>Workflow / interaction redesign</h3><span class="effort">highest leverage</span></div>
+    <div class="rec"><div class="rk">A1</div><div><h4>Make the mist ladder subtractive</h4><p>Re-author the orienting surface so short gaps render little to nothing and the orientation panels appear only from full_mist up, beneath the card and de-duplicated against it. The runtime keeps declaring the rung; the UI renders proportionally.</p><div class="tie">J4 · exec #1 · hierarchy</div></div></div>
+    <div class="rec"><div class="rk">A2</div><div><h4>Promote the governed receipt to a first-class, in-place confirmation</h4><p>On Apply, the card becomes “Applied · receipt recorded” with a direct link to its history entry — not a dim log line at the bottom of the rail.</p><div class="tie">J6 · exec #3</div></div></div>
+    <div class="rec"><div class="rk">A3</div><div><h4>Give Blocked a reason and a recourse</h4><p>Two lines: why the hold fired, and what unblocks it. Keep the calm held-state treatment; remove the dead-end feel.</p><div class="tie">J6 · state completeness</div></div></div>
+  </div>
+
+  <div class="rec-group">
+    <div class="rec-group-head"><span class="gnum">B</span><h3>Structural layout change</h3></div>
+    <div class="rec"><div class="rk">B1</div><div><h4>Demote the right rail to ambient-until-active</h4><p>A thin strip when idle; expands only when it carries a suggestion, proposal, or receipt. Returns a third of the shell to reading.</p><div class="tie">J2 · exec #2 · hierarchy</div></div></div>
+    <div class="rec"><div class="rk">B2</div><div><h4>Decide what the top edge is for, and stop it clipping</h4><p>Identity + one primary action stay; surface-launchers route into one resilient command/overflow surface that never hides affordances.</p><div class="tie">reachability · OBSERVED #1/#2</div></div></div>
+    <div class="rec"><div class="rk">B3</div><div><h4>Reconcile the narrow top and bottom edges into composed bars</h4><p>A truncating top status; one real bottom bar owning sheet triggers + hint instead of overlapping fixed pills.</p><div class="tie">responsive · OBSERVED #3/#4</div></div></div>
+    <div class="rec"><div class="rk">B4</div><div><h4>Adopt one modal-frame spec for the overlay host</h4><p>Fixed positions, header furniture order, scrim, and dismiss grammar across all overlays.</p><div class="tie">overlay grammar</div></div></div>
+  </div>
+
+  <div class="rec-group">
+    <div class="rec-group-head"><span class="gnum">C</span><h3>Cognitive-load reduction</h3></div>
+    <div class="rec"><div class="rk">C1</div><div><h4>Move operator telemetry off the front edge</h4><p><em class="term">RECOVERY / Online / as-of / ⚠ Operator</em> belong behind the System Map, not on an anti-dashboard surface.</p><div class="tie">hierarchy · exec #4</div></div></div>
+    <div class="rec"><div class="rk">C2</div><div><h4>Label the two agent lanes in words</h4><p>“Apply · not recorded” vs “Apply → vault change → receipt”; explain Defer. Stop relying on colour + button-count alone.</p><div class="tie">J5</div></div></div>
+    <div class="rec"><div class="rk">C3</div><div><h4>Humanise runtime enum tokens before they reach a user surface</h4><p>No more raw <em class="term">resurfacing_source_unavailable</em> chips or <em class="term">lifecycle.move</em> / <em class="term">prop-move-1 art-123</em> IDs in the rail and orientation card.</p><div class="tie">J4/J5 · state completeness</div></div></div>
+    <div class="rec"><div class="rk">C4</div><div><h4>Strip internal issue numbers from the System Map's user copy</h4><p>Keep the honest index; drop <em class="term">#1783 / SEP-04 / #1716+</em> or gate them behind the operator layer.</p><div class="tie">J7</div></div></div>
+  </div>
+
+  <div class="rec-group">
+    <div class="rec-group-head"><span class="gnum">D</span><h3>Quick visual fix</h3></div>
+    <div class="rec"><div class="rk">D1</div><div><h4>Style the vault picker (E11) to the design system</h4><p>It is currently unstyled default-browser markup — the literal front door of the product.</p><div class="tie">J1 · exec #5</div></div></div>
+    <div class="rec"><div class="rk">D2</div><div><h4>Make entry-screen actions real ranked affordances, not browser-blue links</h4><p>One primary, the rest secondary; on-palette.</p><div class="tie">J1</div></div></div>
+    <div class="rec"><div class="rk">D3</div><div><h4>Replace raw error strings with the calm grammar</h4><p>Vault browser's <em class="term">“Error: Failed to fetch”</em> → the “…unavailable — …. Nothing was lost.” pattern.</p><div class="tie">J2 · state completeness</div></div></div>
+    <div class="rec"><div class="rk">D4</div><div><h4>Fix the long_mist whisper-column / ⓘ collision and style stray white inputs</h4><p>The card's info glyph overlaps the “DOING” whisper at E7; the rail textarea and settings time inputs render white against the dark theme.</p><div class="tie">J4 · J6 · J7</div></div></div>
+  </div>
+
+  <div class="rec-group">
+    <div class="rec-group-head"><span class="gnum">E</span><h3>Strategic / future</h3></div>
+    <div class="rec"><div class="rk">E1</div><div><h4>Reconsider the cold_start cutoff for long absences</h4><p>Because &gt;14&nbsp;days routes to the calm cold posture, the greatest re-entry need gets the least orientation while a 1-day gap gets the full card. Explore a single calm “last here N days ago — resume?” line for long returns without re-introducing a dashboard.</p><div class="tie">J1 · J4</div></div></div>
+    <div class="rec"><div class="rk">E2</div><div><h4>Decide the rail-vs-palette relationship deliberately</h4><p>Once the rail is calmed, confirm the ⌘K palette is the fast path and the rail the ambient one — or fold one into the other — so there is one model to learn.</p><div class="tie">J5</div></div></div>
+  </div>
+
+  <div class="rec-group donot">
+    <div class="rec-group-head"><span class="gnum">✓</span><h3>Do not change — preserve deliberately</h3><span class="effort" style="color:var(--vault)">load-bearing</span></div>
+    <div class="rec"><div class="rk">✓</div><div><h4>The anti-dashboard posture &amp; server-authoritative classification</h4><p>Do not push entry-state, authority, receipts, or posture into the client to “fix” anything above — that boundary is test-enforced and the point of the system. Every recommendation here renders runtime-declared data differently; none reclassifies it.</p></div></div>
+    <div class="rec"><div class="rk">✓</div><div><h4>The re-entry card's four-question structure + Resume / Start-fresh</h4><p>The strongest single artifact in the UI. Keep it; let it carry more of the orienting load, not less.</p></div></div>
+    <div class="rec"><div class="rk">✓</div><div><h4>The stale held-state and the calm degraded voice</h4><p>“Nothing was mutated / decided / lost” is exactly right. Extend it; don't dilute it.</p></div></div>
+    <div class="rec"><div class="rk">✓</div><div><h4>Settings' “never touches the vault, always resettable” framing &amp; capture's lightness</h4><p>Both are models the rest of the surface should imitate.</p></div></div>
+    <div class="rec"><div class="rk">✓</div><div><h4>The deliberate body-edit vs governed asymmetry</h4><p>Keep the two lanes distinct — make the asymmetry <em>legible</em> (C2), don't flatten it into one.</p></div></div>
+  </div>
+</section>
+
+<!-- ============ 05 UAT ============ -->
+<section id="uat" data-screen-label="Acceptance / UAT">
+  <div class="sec-num">05 — Acceptance criteria / UAT checklist</div>
+  <h2>“Done,” phrased as design spec</h2>
+  <p class="sec-lede">Each non-trivial recommendation gets a testable statement of done. <span class="verify static">static</span> can be verified on a rendered capture; <span class="verify live">live</span> needs the running app (motion, focus, live data, round-trips).</p>
+
+  <div class="uat">
+    <div class="uat-row head"><div>Rec</div><div>Acceptance criterion</div><div>Verify</div></div>
+
+    <div class="uat-row"><div class="id">A1</div><div class="crit">no_mist and thread_fade are visually distinguishable, and neither renders the orientation panels; the snapshot panels appear only at full_mist and above, with no datum (open-loop count, change count, leave point) repeated between the card and a panel.<small>render each rung fixture and diff</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">A1</div><div class="crit">The re-entry card's resume action restores the prior caret/scroll position; the entrance reads as proportional to the rung (heavier only at higher rungs).<small>requires runtime + motion</small></div><div><span class="verify live">live</span></div></div>
+
+    <div class="uat-row"><div class="id">A2</div><div class="crit">Immediately after a governed Apply, the originating card shows an “Applied · receipt recorded” state in place of the proposal, with a control that opens that exact entry in receipts history — without scrolling the rail.<small>capture the post-apply state</small></div><div><span class="verify live">live</span></div></div>
+
+    <div class="uat-row"><div class="id">A3</div><div class="crit">A Blocked proposal shows, in the calm (non-red) treatment, both a plain-language reason and an explicit next step / recourse; no proposal collapses to “unavailable” with no explanation.<small>render the WriteGuard-held fixture</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">B1</div><div class="crit">In the idle shell the right rail occupies a thin ambient strip (no permanently-reserved empty third), and expands only when carrying a suggestion, proposal, or receipt; the note column is the widest, highest-contrast region on screen.<small>idle vs active shell at 1280/1440</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">B2</div><div class="crit">At 1280 and 1440&nbsp;px every surface launcher is either visible and clickable or reachable through one never-clipping command/overflow surface; no launch icon sits behind the rail.<small>pointer-hit-test each launcher</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">B3</div><div class="crit">At 430&nbsp;px the status string truncates with an affordance (never runs off-screen), and the bottom hint, sheet triggers, and Operator/Help controls occupy one composed bar with no overlap.<small>narrow shell capture</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">B4</div><div class="crit">Every overlay uses one of the defined frame positions with identical header furniture order and scrim; all dismiss via the same gesture and Esc, and trap focus while open.<small>frame is static; focus/Esc are live</small></div><div><span class="verify live">live</span></div></div>
+
+    <div class="uat-row"><div class="id">C1</div><div class="crit">No operator/diagnostic telemetry (recovery, online, as-of, operator) appears on the shell or orientation surfaces; it is reachable only via the System Map / operator layer.<small>scan all shell + entry captures</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">C2</div><div class="crit">Each agent card states in words whether applying it is recorded (receipt) or not; Defer states its consequence. The recorded/not-recorded line is the most prominent text on the card.<small>S2 / S3 / O1 fixtures</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">C3</div><div class="crit">No raw runtime enum or internal identifier (e.g. <em class="term">resurfacing_source_unavailable</em>, <em class="term">prop-move-1 art-123</em>, <em class="term">lifecycle.move</em>) is visible on any user-facing surface; each maps to human copy.<small>scan degraded + proposal fixtures</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">C4</div><div class="crit">The System Map carries no bare internal issue numbers in user-facing copy; each surface entry reads as identity + how-to-reach + how-it-returns.<small>O7 capture</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">D1</div><div class="crit">The vault picker uses the design system's fonts, colours, controls, and spacing — indistinguishable in family from the rest of the app; no default-browser form styling remains.<small>E11 capture</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">D2</div><div class="crit">Entry-screen actions are ranked, on-palette affordances (one primary), not inline browser-blue links.<small>E1 / E2 capture</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">D3</div><div class="crit">No surface shows a raw transport error (“Error: Failed to fetch”); all unavailable states use the single calm grammar.<small>O5 + any fetch-fail state</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">D4</div><div class="crit">At long_mist the whisper column does not overlap the card's info glyph; no input renders with default white chrome against the dark theme.<small>E7, S2-rail, O4 inputs</small></div><div><span class="verify static">static</span></div></div>
+
+    <div class="uat-row"><div class="id">—</div><div class="crit">Populated flows not exercised by the static set behave as their structure promises: memory-review accept/reject/revise/defer, receipts-history ledger, vault-browser list + inspector, capture confirmation + return-to-caret.<small>none of these had live data in capture</small></div><div><span class="verify live">live</span></div></div>
+  </div>
+
+  <div class="callout" style="margin-top:32px">
+    <b>Authority note.</b> Every item above changes how runtime-declared data is <em>presented</em>. None asks the client to invent or reclassify entry-state, authority, posture, staleness, or receipts. Where a criterion could be read as moving classification into the UI, it should be resolved on the presentation side only.
+  </div>
+</section>
+
+<footer class="foot">
+  <span>Yggdrasil · Companion UI deep design review · 2026-06-22</span>
+  <span>Crossing-A design input — specification, not architecture authority or runtime truth</span>
+</footer>
+
+</div>
+
+<template id="__bundler_thumbnail">
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+<rect width="100" height="100" fill="#070b12"/>
+<g stroke="#00d4e8" stroke-width="1.5" fill="none" opacity="0.9">
+<line x1="50" y1="22" x2="50" y2="78"/>
+<path d="M50 40 L34 30 M50 40 L66 30 M50 56 L34 48 M50 56 L66 48"/>
+<circle cx="50" cy="22" r="4" fill="#d4a843" stroke="none"/>
+<circle cx="34" cy="30" r="3"/><circle cx="66" cy="30" r="3"/>
+<circle cx="34" cy="48" r="3"/><circle cx="66" cy="48" r="3"/>
+</g>
+<text x="50" y="92" fill="#7a9ab8" font-family="monospace" font-size="7" text-anchor="middle">REVIEW</text>
+</svg>
+</template>
+</body>
+</html>

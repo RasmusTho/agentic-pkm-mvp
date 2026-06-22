@@ -1,0 +1,309 @@
+ 
+
+ Companion UI — Deep Design Review 
+
+ Yggdrasil · Companion UI · Deep design review 
+ Where the core loop holds, and where it breaks. 
+ A two-axis read of the assisted-thinking shell — does each journey stay intuitive , and is each function built well — with a prioritised specification, not patches. 
+
+ Scope · J1–J7 + cross-cutting 
+ Method · 26 static server-rendered captures, no live runtime 
+ Authority · Crossing-A design input · spec, not code 
+ Date · 2026-06-22 
+
+ 00 — How to read this 
+ The rubric, and what it can't see 
+ Every journey is graded on two independent axes. A journey can pass one and fail the other — a sound concept half-built, or a polished surface that confuses. Where a finding depends on motion, focus, live data, or a round-trip the stills can't exercise, it is flagged for live UAT rather than asserted. 
+
+ Axis A Intuitiveness — do I know where I am, what changed, what to do next? 
+
+ Axis B Implementation — states complete, hierarchy right, copy precise, affordances reachable? 
+
+ Works ship as-is 
+ Friction works but costs clarity/effort 
+ Broken fails its purpose / unreachable / missing state 
+
+ 01 Executive read 
+ J1 First arrival & getting in 
+ J2 Read & navigate a note 
+ J3 Capture a thought mid-flow 
+ J4 Resume after time away 
+ J5 Two lanes of agent output 
+ J6 Govern: act · receipt · block 
+ J7 Configure & understand 
+ 03 Cross-cutting findings 
+ 04 Prioritised recommendations 
+ 05 Acceptance criteria / UAT 
+
+ 01 — Executive read 
+ Lead with the answer 
+ The loop — open → orient → read → act with clarity → leave a clean thread — is sound in concept, and several surfaces are genuinely well-built (the re-entry card, capture, settings, the system map). The loop breaks in three high-leverage places, plus two systemic ones. Fixing the first three would move the product more than any number of screen-level polishes. 
+
+ 1 
+
+ The mist ladder doesn't grade — it's a fixed maximal dashboard with decorations bolted on 
+ The signature feature inverts its own philosophy. no_mist (30 s away) and thread_fade (5 min) are pixel-identical: both render the full Re-entry snapshot — leave point, three open loops, two notable changes, governance tiles, resurface. The thing that should be absent at short gaps is always present; the thing that should grow (the re-entry card) is what gets added at the top end — and it duplicates the panels beneath it. Calm, proportional re-entry becomes a re-entry console. 
+
+ 2 
+
+ The right Panel rail is an operator console, not a reading companion 
+ It permanently reserves a third of the shell to stack ~8 mostly-empty, mostly-disabled sub-modules (Canvas · Log · Find · Reorient · Resurface · Commitments…), leaks raw internal identifiers ( prop-move-1 art-123 , lifecycle.move ), and renders an unstyled white textarea. On the live capture its header even overlaps the topbar. This is the direct opposite of “the document is the primary surface.” 
+
+ 3 
+
+ The governed receipt — the trust payload of the whole system — is nearly invisible 
+ After a governed Apply , the only confirmation is a dim monospace log line ( executed · success moved via governed path ) at the very bottom of the long, scrolled rail. The user cannot tell at a glance that the vault changed and a record exists — the one question this system exists to answer cleanly. 
+
+ 4 
+
+ The top edge is doing operator work and can't be reached 
+ The topbar carries diagnostic telemetry ( N RECOVERY , ok Online , as of 21:08 , the amber ⚠ Operator pill) on an anti-dashboard surface — and overflows its own surface-launch icons off-screen at ≤1440 px. Discoverability quietly collapses onto the System Map and two keyboard shortcuts. 
+
+ 5 
+
+ The calm-state grammar is real but not yet consistent 
+ Held/degraded states are a genuine strength — “Nothing was mutated” , “Nothing was lost” , the green “Nothing needs action here.” But the vault browser drops to a raw “Error: Failed to fetch” , degraded orientation leaks the enum resurfacing_source_unavailable as a chip, and Blocked states the rule name without a reason or a way forward. One grammar, applied everywhere, closes the gap cheaply. 
+
+ ✓ 
+
+ What is working and must be preserved 
+ The re-entry card's four-question structure + Resume/Start-fresh; the stale held-state; settings' “never touches the vault, always resettable” framing; capture's lightness; the System Map as an honest, non-authoritative index; and the deliberate body-edit vs governed asymmetry (once made legible). Above all: the anti-dashboard posture and the server-authoritative classification boundary. Do not push classification into the client to “fix” any of the above. 
+
+ 02 — Per-journey verdicts 
+ Walking J1 – J7 
+ Each journey carries a verdict per axis, evidence citing the specific captures, and the single highest-leverage change. Citations use the surface IDs from the inventory (E#, S#, O#, R#). 
+
+ J1 
+ First arrival & getting in 
+ Reach a usable state — first time, return after weeks, or vault not yet connected. 
+
+ A Friction 
+ B Broken 
+
+ The calm posture reads well in principle — one column, a single declarative line ( “Nothing is open yet.” / “Re-entry is through the vault.” ). But the one obvious next action is not visually obvious: the Find a note · Jot something down · See the map row renders as default browser-blue underlined links — off-palette, and reading as fine print rather than the primary way in (E1, E2). Below them, a Leave a note for future-you… input and a leave_point: absent · read-only · server-declared metadata line add machine noise to a first-contact screen. 
+ The 21-day return (E2) is deliberately identical to first contact. The anti-dashboard intent is right, but note the consequence: because cold_start claims everything >14 days, the moment of greatest re-entry need — weeks away — receives the least orientation, while a one-day gap gets the full card. A single calm “last here 21 days ago — resume the thread?” line would serve the returner without becoming a dashboard. 
+ The two “can't proceed” states are correctly distinguished in copy — E10 “The runtime is unreachable. Nothing was lost.” (calm, with Refresh + read-only fallback) versus E11's vault-selection picker. But E11 is the worst-built surface in the set : it is entirely unstyled — system serif/sans, raw default form controls, a bare Open Niflheim button, unknown / unknown recent-vault rows. The literal front door looks like a different application. 
+
+ E1 first_contact blue links 
+ E10 no_vault calm ✓ 
+ E11 picker unstyled 
+
+ Highest-leverage change 
+ Bring the literal front door into the design system: style E11 to the DS, and turn the entry-screen action row into real, ranked affordances (one primary “Open the vault / Find a note”, the rest secondary) instead of inline browser-blue links. 
+
+ J2 
+ Read & navigate a note 
+ Open a note, read long-form, move to a related note. 
+
+ A Friction 
+ B Friction 
+
+ The note body itself is well-typeset — EB Garamond title, monospace path/properties, a clear read-only pill, Read aloud, Edit (S1). The read/write boundary is legible (pill + Edit + the bottom hint “Edit note body · Opt-in · keeps the reading surface primary” ). But the note does not visibly dominate : the idle right rail eats roughly a third of the width while saying only “Companion · idle — no active proposals,” the topbar is a cramped diagnostic strip, and the rail header is drawn over the topbar's right cluster (OBSERVED #2). Three regions compete; the document does not win. 
+ As the “primary navigator,” the vault browser (O5) under-delivers: in capture it is a thin search modal ( “Search by title or path…” ) showing “Error: Failed to fetch” — not the note list + filters + inspector the inventory promises, and its error string breaks the calm voice used elsewhere. Whether the populated list/inspector is a true navigator needs live UAT; as a still it reads as a secondary utility. 
+
+ S1 shell rail dominates 
+ O5 vault browser raw error 
+
+ Highest-leverage change 
+ Collapse the idle right rail to a thin ambient strip until it has something to say, so the note is unambiguously the primary surface. Reclaim the reclaimed width for reading measure, not for a permanently-reserved empty console. 
+
+ J3 
+ Capture a thought mid-flow 
+ Jot something to the inbox without losing the thread. 
+
+ A Works 
+ B Works 
+
+ The capture modal is exactly as light as it needs to be: centered, scrimmed, a single “What needs taking care of?” field and a gold Capture to inbox button, with ⓘ and a close affordance (O2). It is reachable in one gesture (⌘N — one of only two launchers with a keyboard fallback) and returns to the anchor. This is the model the rest of the overlay layer should imitate. 
+ Two small gaps, both deferrable: nothing beyond the button label signals the capture is governed (goes through the write pipeline), and no post-capture confirmation is exercised in the stills. Both are minor; the second needs live UAT. 
+
+ O2 capture light ✓ 
+
+ Highest-leverage change 
+ Keep it. Add a quiet, non-blocking post-capture confirmation that names the destination (e.g. “Captured to Inbox”), and verify return-to-caret on dismiss in live UAT. 
+
+ J4 
+ Resume after time away — the re-entry mist ladder 
+ Recover the thread proportional to how long you were gone. The signature feature — judged hardest. 
+
+ A Broken 
+ B Friction 
+
+ The gradient is not a gradient. E3 ( no_mist , ~30 s) and E4 ( thread_fade , ~5 min) are identical, and both already render the entire Re-entry snapshot — leave point, three open loops, two notable changes, the governance tiles (pending proposals / receipts / latest outcome), and resurface. The spec wants no_mist to “look essentially like an uninterrupted session.” Instead, the maximum is the floor. E5 ( soft_mist ) adds a single “Where you stopped” line; E6 ( full_mist ) finally adds the re-entry card — on top of the same full dashboard, repeating the open-loop and change counts it sits above. 
+ This also surfaces the philosophy violation directly: the governance summary tiles are telemetry on the orientation surface , exactly what the brief says belongs behind the System Map. And at E7 ( long_mist ) the whisper column collides with the card's ⓘ glyph ( DOING overlaps the info icon) — a real layout defect at the densest rung. 
+ The card itself is the asset. Its four questions — what was I doing · where did momentum stop · what remains unresolved · what changed since — plus the proportional WARM/DORMANT badge and the clear Resume / Start-fresh pair, are a genuine “pick up the thread” affordance, not a changelog. It should be the orienting surface; the panel dashboard should be progressively revealed beneath/behind it, not the always-on baseline. 
+ The off-nominal rungs are strong. Degraded (E8) presents amber, informative-not-alarming — “Partial orientation · Runtime posture: degraded · Missing source.” Stale (E9) is exemplary: “Source changed since this was captured. Nothing was mutated.” with Resume correctly suppressed and replaced by “Open the current artifact state.” The only blemish is enum leakage — resurfacing_source_unavailable shown raw as a chip and again in the resurface card. 
+
+ E3 no_mist 30s = E4 
+ E4 thread_fade 5m identical 
+ E6 full_mist 1d card + dupes 
+ E7 long_mist 7d whisper collides ⓘ 
+ E8 degraded amber ✓ 
+ E9 stale exemplar ✓ 
+
+ Highest-leverage change 
+ Make the ladder subtractive . Short gaps show little to nothing (no_mist ≈ the shell with at most a quiet resume line; thread_fade ≈ the peripheral rail cue only). The orientation panels appear only from full_mist upward, de-duplicated and arranged beneath the card — never repeating what the card already states. The runtime keeps declaring the rung and the snapshot data; the UI simply renders proportionally to it. No classification moves to the client. 
+
+ J5 
+ Two lanes of agent output — body-edit vs governed 
+ Respond to two different kinds of agent output, and never confuse them. 
+
+ A Friction 
+ B Friction 
+
+ The asymmetry exists structurally but is not made legible . The body-edit lane (S2) is an amber-accented SUGGESTED block inline in the document plus a rail card with Apply / Discard — no Defer, no receipt. The governed lane (S3) is a blue-bordered rail card ( MOVE NOTE TO PROJECTS/ ) with Apply / Discard / Defer . The crucial distinction — one is recorded, one is not — is stated nowhere . The user must infer the lane from colour (amber vs blue) and button count (two vs three), and amber is already overloaded (degraded, operator). “Defer” is never explained. 
+ The ⌘K command palette (O1) is the clearer of the two “act” surfaces and earns its existence with an explicit disclaimer: “Panel ≠ Chat — a faster presentation of the same governed Panel proposals; no free-text generation, no conversation.” The duplication with the rail is acceptable once the rail is calmed ; today both exist and the rail is the noisier path, so it reads as a fork to learn rather than a shortcut. 
+
+ S2 body-edit amber · no receipt 
+ S3 governed blue · defer 
+ O1 ⌘K palette clearest ✓ 
+
+ Highest-leverage change 
+ Label the lanes in words, not just colour. The body-edit lane should read Apply · not recorded (no receipt) ; the governed lane Apply → vault change → receipt . Give “Defer” a one-line consequence. Make the recorded/not-recorded line the headline of each card. 
+
+ J6 
+ Govern the agent — act, get a receipt, review history, handle blocks 
+ Direct an agent action and stay in control, including the record and the refusals. 
+
+ A Friction 
+ B Broken 
+
+ The receipt is buried. After a governed Apply (S4) the only confirmation is a dim, monospace “executed · success moved via governed path · 2026-06-10T11:00:00Z” at the very bottom of the already-long rail. For the system whose central promise is “you can always tell whether your vault changed and whether there's a record,” the payload of that promise is the least visible thing on screen. This fails its purpose on Axis B. 
+ Receipts history (O6) shows the right calm degraded copy ( “Receipt history unavailable… Nothing was decided and nothing was lost.” ); its populated ledger is unexercised — flag for live UAT — and its discoverability rests on a topbar icon that is clipped at common widths. 
+ Blocked (S5) presents as held rather than red — good — with the topbar pill flipping to runtime degraded · Blocked and the proposal's buttons replaced by “staged proposal unavailable.” But it states the rule's name ( blocked by WriteGuard ) with no reason and no recourse : no “why,” no “what unblocks this,” no next step. It lands closer to a dead end than a guided hold. Memory review (O3) is structurally sound with a strong provenance guard ( “Unreviewed memory is not semantic authority” ); its populated accept/reject/revise/defer flow needs live UAT. 
+
+ S4 receipt buried 
+ S5 blocked no recourse 
+ O6 receipts calm ✓ / UAT 
+ O3 memory guard ✓ / UAT 
+
+ Highest-leverage change 
+ Promote the receipt to a first-class confirmation at the moment and place of action: on the just-applied card, replace it with a clear “Applied · receipt recorded” state that links straight to its entry in history. Give Blocked a two-line reason + recourse (“held by WriteGuard because… · what unblocks this”). 
+
+ J7 
+ Configure & understand the system 
+ Adjust preferences and understand status without leaving the calm surface. 
+
+ A Works 
+ B Works 
+
+ Settings (O4) is the best-built surface in the set. It is unmistakably render-only — “Preferences re-render identical content. They never touch the vault and are always resettable” — well grouped (Display / Listening / Behaviour / Connection), scannable, with “Reset to canonical” always available. The CONNECTION block is borderline diagnostic but correctly demoted and labelled “display only.” Only nit: the white time inputs sit slightly outside the dark palette. 
+ The guidance layer (O8) is the right call for an expert-but-intermittent user: off by default, server-rendered, calm teaching copy with a gold accent and a “Full guide” link — it informs without cluttering. The System Map (O7) carries the discoverability load honestly: “Every surface, one index… it renders and routes, nothing more.” Its weakness is leakage of internal references ( #1783, SEP-04, #1716+ ) into user-facing copy, and the structural fact that — given the clipped topbar — it has become the de facto only reliable launcher. 
+
+ O4 settings best-built ✓ 
+ O8 guidance good ✓ 
+ O7 system map issue refs leak 
+
+ Highest-leverage change 
+ Keep settings and guidance as they are. Strip internal issue numbers from the System Map's user-facing copy (or gate them behind the operator/guidance layer) so the index reads as “what each surface is and how to reach it,” not a changelog. 
+
+ 03 — Cross-cutting findings 
+ Patterns that span every journey 
+ These compound the per-journey findings; fixing them lifts several journeys at once. 
+
+ Visual hierarchy & calm Broken 
+ Across states the document rarely dominates. The right rail, the topbar telemetry, and repeated monospace metadata accrete into a dashboard texture the philosophy explicitly forbids — most visibly the governance tiles riding on the orientation surface (E3–E8) and the idle rail owning a third of the shell (S1). 
+ Fix: demote the rail to ambient-until-active; move RECOVERY / Online / as-of / Operator telemetry behind the System Map; reserve the surface for the note plus at most one orientation affordance. 
+
+ State completeness Works 
+ A genuine strength. Empty, loading, degraded, stale, and blocked are all designed and mostly calm (E8, E9, O3, O6, and the green “Nothing needs action here” on S5). Two gaps keep it from full marks: raw tokens/errors leak to the surface ( resurfacing_source_unavailable , “Error: Failed to fetch” ), and Blocked lacks recourse. 
+ Fix: one degraded-copy grammar — “<what> unavailable — <why>. Nothing was lost/decided/mutated. <what to do>.” — and a humanising map for runtime enum tokens before they reach a user surface. 
+
+ Reachability Broken 
+ Confirmed and load-bearing (OBSERVED #1/#2). At ≤1440 px the topbar clips its own surface-launchers and the rail overlaps the icon cluster; only ⌘K / ⌘N have fallbacks, so several entry points are unreachable by pointer and discoverability collapses onto the System Map. 
+ Fix: decide what the top edge is for (identity + the single most-used action), and route the rest of the launchers into one resilient surface — a command menu and/or an overflow that never clips. This is a design decision about the bar's job, not just a wrap rule. 
+
+ Responsive integrity Friction 
+ The narrow reading surface survives well (R1) and long_mist stacks acceptably with the whisper column collapsing into the card (R2). But the identity/status string runs off-screen with no wrap or truncation (OBSERVED #3), and the bottom edge collides — the “Edit note body” hint, the Outline/Panel sheet triggers, and the floating Operator/Help pills fight for the same corner (OBSERVED #4). 
+ Fix: reconcile both edges into single composed bars — a top status that truncates with an affordance, and one real bottom bar that owns the sheet triggers and hint instead of independently-positioned fixed pills. 
+
+ Overlay-grammar consistency Friction 
+ “One overlay host, one dismiss grammar” is the intent, but the overlays don't yet share a frame. The ⌘K palette is a large centered panel; capture a medium centered modal; receipts a small top-anchored card; settings and memory are right drawers; the system map a large centered modal. Header furniture varies too — some carry a read-only pill, some ⓘ, some ×, some a mix. 
+ Fix: one modal-frame spec — a small set of positions (center / right-drawer), a fixed header furniture order (title · status-pill · ⓘ · close), one scrim and one dismiss grammar. Verify focus-trap and Esc behaviour in live UAT. 
+
+ 04 — Prioritised recommendations 
+ Ranked by leverage, grouped by type 
+ Ordered for an owner who optimises for the fewest, highest-leverage decisions. Within each group, top item first. 
+
+ A Workflow / interaction redesign highest leverage 
+ A1 Make the mist ladder subtractive Re-author the orienting surface so short gaps render little to nothing and the orientation panels appear only from full_mist up, beneath the card and de-duplicated against it. The runtime keeps declaring the rung; the UI renders proportionally. J4 · exec #1 · hierarchy 
+ A2 Promote the governed receipt to a first-class, in-place confirmation On Apply, the card becomes “Applied · receipt recorded” with a direct link to its history entry — not a dim log line at the bottom of the rail. J6 · exec #3 
+ A3 Give Blocked a reason and a recourse Two lines: why the hold fired, and what unblocks it. Keep the calm held-state treatment; remove the dead-end feel. J6 · state completeness 
+
+ B Structural layout change 
+ B1 Demote the right rail to ambient-until-active A thin strip when idle; expands only when it carries a suggestion, proposal, or receipt. Returns a third of the shell to reading. J2 · exec #2 · hierarchy 
+ B2 Decide what the top edge is for, and stop it clipping Identity + one primary action stay; surface-launchers route into one resilient command/overflow surface that never hides affordances. reachability · OBSERVED #1/#2 
+ B3 Reconcile the narrow top and bottom edges into composed bars A truncating top status; one real bottom bar owning sheet triggers + hint instead of overlapping fixed pills. responsive · OBSERVED #3/#4 
+ B4 Adopt one modal-frame spec for the overlay host Fixed positions, header furniture order, scrim, and dismiss grammar across all overlays. overlay grammar 
+
+ C Cognitive-load reduction 
+ C1 Move operator telemetry off the front edge RECOVERY / Online / as-of / ⚠ Operator belong behind the System Map, not on an anti-dashboard surface. hierarchy · exec #4 
+ C2 Label the two agent lanes in words “Apply · not recorded” vs “Apply → vault change → receipt”; explain Defer. Stop relying on colour + button-count alone. J5 
+ C3 Humanise runtime enum tokens before they reach a user surface No more raw resurfacing_source_unavailable chips or lifecycle.move / prop-move-1 art-123 IDs in the rail and orientation card. J4/J5 · state completeness 
+ C4 Strip internal issue numbers from the System Map's user copy Keep the honest index; drop #1783 / SEP-04 / #1716+ or gate them behind the operator layer. J7 
+
+ D Quick visual fix 
+ D1 Style the vault picker (E11) to the design system It is currently unstyled default-browser markup — the literal front door of the product. J1 · exec #5 
+ D2 Make entry-screen actions real ranked affordances, not browser-blue links One primary, the rest secondary; on-palette. J1 
+ D3 Replace raw error strings with the calm grammar Vault browser's “Error: Failed to fetch” → the “…unavailable — …. Nothing was lost.” pattern. J2 · state completeness 
+ D4 Fix the long_mist whisper-column / ⓘ collision and style stray white inputs The card's info glyph overlaps the “DOING” whisper at E7; the rail textarea and settings time inputs render white against the dark theme. J4 · J6 · J7 
+
+ E Strategic / future 
+ E1 Reconsider the cold_start cutoff for long absences Because >14 days routes to the calm cold posture, the greatest re-entry need gets the least orientation while a 1-day gap gets the full card. Explore a single calm “last here N days ago — resume?” line for long returns without re-introducing a dashboard. J1 · J4 
+ E2 Decide the rail-vs-palette relationship deliberately Once the rail is calmed, confirm the ⌘K palette is the fast path and the rail the ambient one — or fold one into the other — so there is one model to learn. J5 
+
+ ✓ Do not change — preserve deliberately load-bearing 
+ ✓ The anti-dashboard posture & server-authoritative classification Do not push entry-state, authority, receipts, or posture into the client to “fix” anything above — that boundary is test-enforced and the point of the system. Every recommendation here renders runtime-declared data differently; none reclassifies it. 
+ ✓ The re-entry card's four-question structure + Resume / Start-fresh The strongest single artifact in the UI. Keep it; let it carry more of the orienting load, not less. 
+ ✓ The stale held-state and the calm degraded voice “Nothing was mutated / decided / lost” is exactly right. Extend it; don't dilute it. 
+ ✓ Settings' “never touches the vault, always resettable” framing & capture's lightness Both are models the rest of the surface should imitate. 
+ ✓ The deliberate body-edit vs governed asymmetry Keep the two lanes distinct — make the asymmetry legible (C2), don't flatten it into one. 
+
+ 05 — Acceptance criteria / UAT checklist 
+ “Done,” phrased as design spec 
+ Each non-trivial recommendation gets a testable statement of done. static can be verified on a rendered capture; live needs the running app (motion, focus, live data, round-trips). 
+
+ Rec Acceptance criterion Verify 
+
+ A1 no_mist and thread_fade are visually distinguishable, and neither renders the orientation panels; the snapshot panels appear only at full_mist and above, with no datum (open-loop count, change count, leave point) repeated between the card and a panel. render each rung fixture and diff static 
+
+ A1 The re-entry card's resume action restores the prior caret/scroll position; the entrance reads as proportional to the rung (heavier only at higher rungs). requires runtime + motion live 
+
+ A2 Immediately after a governed Apply, the originating card shows an “Applied · receipt recorded” state in place of the proposal, with a control that opens that exact entry in receipts history — without scrolling the rail. capture the post-apply state live 
+
+ A3 A Blocked proposal shows, in the calm (non-red) treatment, both a plain-language reason and an explicit next step / recourse; no proposal collapses to “unavailable” with no explanation. render the WriteGuard-held fixture static 
+
+ B1 In the idle shell the right rail occupies a thin ambient strip (no permanently-reserved empty third), and expands only when carrying a suggestion, proposal, or receipt; the note column is the widest, highest-contrast region on screen. idle vs active shell at 1280/1440 static 
+
+ B2 At 1280 and 1440 px every surface launcher is either visible and clickable or reachable through one never-clipping command/overflow surface; no launch icon sits behind the rail. pointer-hit-test each launcher static 
+
+ B3 At 430 px the status string truncates with an affordance (never runs off-screen), and the bottom hint, sheet triggers, and Operator/Help controls occupy one composed bar with no overlap. narrow shell capture static 
+
+ B4 Every overlay uses one of the defined frame positions with identical header furniture order and scrim; all dismiss via the same gesture and Esc, and trap focus while open. frame is static; focus/Esc are live live 
+
+ C1 No operator/diagnostic telemetry (recovery, online, as-of, operator) appears on the shell or orientation surfaces; it is reachable only via the System Map / operator layer. scan all shell + entry captures static 
+
+ C2 Each agent card states in words whether applying it is recorded (receipt) or not; Defer states its consequence. The recorded/not-recorded line is the most prominent text on the card. S2 / S3 / O1 fixtures static 
+
+ C3 No raw runtime enum or internal identifier (e.g. resurfacing_source_unavailable , prop-move-1 art-123 , lifecycle.move ) is visible on any user-facing surface; each maps to human copy. scan degraded + proposal fixtures static 
+
+ C4 The System Map carries no bare internal issue numbers in user-facing copy; each surface entry reads as identity + how-to-reach + how-it-returns. O7 capture static 
+
+ D1 The vault picker uses the design system's fonts, colours, controls, and spacing — indistinguishable in family from the rest of the app; no default-browser form styling remains. E11 capture static 
+
+ D2 Entry-screen actions are ranked, on-palette affordances (one primary), not inline browser-blue links. E1 / E2 capture static 
+
+ D3 No surface shows a raw transport error (“Error: Failed to fetch”); all unavailable states use the single calm grammar. O5 + any fetch-fail state static 
+
+ D4 At long_mist the whisper column does not overlap the card's info glyph; no input renders with default white chrome against the dark theme. E7, S2-rail, O4 inputs static 
+
+ — Populated flows not exercised by the static set behave as their structure promises: memory-review accept/reject/revise/defer, receipts-history ledger, vault-browser list + inspector, capture confirmation + return-to-caret. none of these had live data in capture live 
+
+ Authority note. Every item above changes how runtime-declared data is presented . None asks the client to invent or reclassify entry-state, authority, posture, staleness, or receipts. Where a criterion could be read as moving classification into the UI, it should be resolved on the presentation side only.
+
+ Yggdrasil · Companion UI deep design review · 2026-06-22 
+ Crossing-A design input — specification, not architecture authority or runtime truth 
+
+ REVIEW 
+
+
