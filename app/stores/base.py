@@ -43,6 +43,7 @@ class VectorIndex(Protocol):
         embedding: list[float],
         model: str,
         identity: EmbeddingIdentity | None = None,
+        reconcilable_fallback: bool = False,
     ) -> None: ...
 
     def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> list: ...

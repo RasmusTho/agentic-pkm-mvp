@@ -169,7 +169,13 @@ class MemoryVectorIndex(VectorIndex):
         embedding: list[float],
         model: str,
         identity: EmbeddingIdentity | None = None,
+        reconcilable_fallback: bool = False,
     ) -> None:
+        # reconcilable_fallback is accepted for interface parity with PgVectorIndex.
+        # The in-memory index has no per-row identity column and is dev/test-only,
+        # so fallback recording / mixed-identity handling is out of scope here
+        # (see docs/EMBEDDING_RELIABILITY/DIMENSION_CONSISTENCY_AND_REINDEX.md "Out of Scope").
+        del reconcilable_fallback
         embedding_floats = coerce_floats(embedding)
         resolved_identity = self._ensure_identity(identity, allow_initialize=True)
         dim = len(embedding_floats)

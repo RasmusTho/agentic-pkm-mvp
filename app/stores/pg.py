@@ -101,7 +101,32 @@ def _ensure_tables() -> None:
             )
             cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS dim INTEGER")
             cur.execute("UPDATE store_vector_index SET dim = array_length(embedding, 1) WHERE dim IS NULL")
+            # Phase A (EMBEDREL-06): per-vector full embedding identity columns.
+            # `model` and `dim` already exist; add `provider` and `normalize` so every
+            # row records the complete (provider, model, dim, normalize) identity tuple.
+            cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS provider TEXT")
+            cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS normalize BOOLEAN")
+            _backfill_identity_columns(cur)
     _TABLES_READY = True
+
+
+def _backfill_identity_columns(cur) -> None:
+    """Backfill per-row provider/normalize from the index-level identity.
+
+    Idempotent: only rows with a NULL provider or normalize are touched, so a
+    second run on an already-migrated database is a no-op. Object ids, vectors,
+    dims, and models are never modified.
+    """
+    cur.execute(
+        """
+        UPDATE store_vector_index AS v
+        SET provider = COALESCE(v.provider, m.identity_json->>'provider'),
+            normalize = COALESCE(v.normalize, (m.identity_json->>'normalize')::boolean)
+        FROM vector_index_meta AS m
+        WHERE m.id = 1
+          AND (v.provider IS NULL OR v.normalize IS NULL)
+        """
+    )
 
 
 _IDENTITY_REBUILD_HINT = "Run 'python -m app.cli index rebuild' to rebuild embeddings."
@@ -151,6 +176,33 @@ def _ensure_index_identity(cur, requested: EmbeddingIdentity, *, allow_create: b
             f"requested provider={requested.provider} model={requested.model} dim={requested.dim} normalize={requested.normalize}). {_IDENTITY_REBUILD_HINT}"
         )
     return stored
+
+
+def _resolve_primary_identity_for_write(
+    cur,
+    requested: EmbeddingIdentity,
+    *,
+    reconcilable_fallback: bool,
+) -> EmbeddingIdentity:
+    """Resolve the index PRIMARY identity for a write.
+
+    Ordinary write: behaves like ``_ensure_index_identity(allow_create=True)`` —
+    creates the primary identity if absent, otherwise requires the requested
+    identity to match it (provider/model/dim/normalize), failing loud on drift.
+
+    Reconcilable fallback write: the index must already have a primary identity
+    (you cannot fall back from nothing); the primary identity stays unchanged and
+    is returned even when the requested provider/model/normalize diverges from it.
+    The dim guard is enforced by the caller against the returned primary dim.
+    """
+    if not reconcilable_fallback:
+        return _ensure_index_identity(cur, requested, allow_create=True)
+    primary = _load_index_identity(cur)
+    if primary is None:
+        raise RuntimeError(
+            f"Reconcilable fallback write requires an existing primary vector index identity. {_IDENTITY_REBUILD_HINT}"
+        )
+    return primary
 
 
 def pg_available() -> bool:
@@ -314,6 +366,7 @@ class PgVectorIndex(VectorIndex):
         embedding: list[float],
         model: str,
         identity: EmbeddingIdentity | None = None,
+        reconcilable_fallback: bool = False,
     ) -> None:
         _ensure_tables()
         embedding_floats = coerce_floats(embedding)
@@ -329,18 +382,35 @@ class PgVectorIndex(VectorIndex):
         model_value = model or resolved_identity.model
         with _connect() as conn:
             with conn.cursor() as cur:
-                stored_identity = _ensure_index_identity(cur, resolved_identity, allow_create=True)
-                dim = stored_identity.dim
-                if stored_identity.normalize:
+                # The index keeps a stable PRIMARY identity in vector_index_meta,
+                # used for queries and allow_create. An ordinary upsert must match
+                # that primary identity. A reconcilable fallback write may diverge in
+                # provider/model/normalize (recorded per-row), but the dim must always
+                # match the primary identity — a dim mismatch fails loud and writes
+                # nothing (CTI-1). See docs/EMBEDDING_RELIABILITY/DIMENSION_CONSISTENCY_AND_REINDEX.md.
+                primary_identity = _resolve_primary_identity_for_write(
+                    cur,
+                    resolved_identity,
+                    reconcilable_fallback=reconcilable_fallback,
+                )
+                dim = primary_identity.dim
+                if resolved_identity.dim != dim:
+                    raise RuntimeError(
+                        f"embedding dim mismatch for vector index (primary dim={dim}; "
+                        f"requested provider={resolved_identity.provider} model={resolved_identity.model} "
+                        f"dim={resolved_identity.dim}). {_IDENTITY_REBUILD_HINT}"
+                    )
+                if resolved_identity.normalize:
                     embedding_values = l2_normalize(embedding_floats)
                 else:
                     embedding_values = embedding_floats
                 cur.execute(
                     """
                     INSERT INTO store_vector_index (
-                        object_id, kind, source_ref, payload, embedding, dim, model, updated_at
+                        object_id, kind, source_ref, payload, embedding,
+                        dim, model, provider, normalize, updated_at
                     )
-                    VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, now())
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, now())
                     ON CONFLICT (object_id) DO UPDATE
                     SET kind = EXCLUDED.kind,
                         source_ref = EXCLUDED.source_ref,
@@ -348,9 +418,21 @@ class PgVectorIndex(VectorIndex):
                         embedding = EXCLUDED.embedding,
                         dim = EXCLUDED.dim,
                         model = EXCLUDED.model,
+                        provider = EXCLUDED.provider,
+                        normalize = EXCLUDED.normalize,
                         updated_at = now()
                     """,
-                    (object_id, kind, source_ref, json.dumps(payload), embedding_values, dim, model_value),
+                    (
+                        object_id,
+                        kind,
+                        source_ref,
+                        json.dumps(payload),
+                        embedding_values,
+                        resolved_identity.dim,
+                        model_value,
+                        resolved_identity.provider,
+                        resolved_identity.normalize,
+                    ),
                 )
 
     def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> List[_VectorHit]:
