@@ -117,11 +117,13 @@ def _backfill_identity_columns(cur) -> None:
     second run on an already-migrated database is a no-op. Object ids, vectors,
     dims, and models are never modified.
     """
+    # vector_index_meta.identity_json is declared TEXT, so it must be cast to
+    # jsonb before the ->> JSON field-access operator (which has no text overload).
     cur.execute(
         """
         UPDATE store_vector_index AS v
-        SET provider = COALESCE(v.provider, m.identity_json->>'provider'),
-            normalize = COALESCE(v.normalize, (m.identity_json->>'normalize')::boolean)
+        SET provider = COALESCE(v.provider, (m.identity_json::jsonb)->>'provider'),
+            normalize = COALESCE(v.normalize, ((m.identity_json::jsonb)->>'normalize')::boolean)
         FROM vector_index_meta AS m
         WHERE m.id = 1
           AND (v.provider IS NULL OR v.normalize IS NULL)
