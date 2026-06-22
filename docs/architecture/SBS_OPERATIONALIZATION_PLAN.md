@@ -55,6 +55,7 @@ All target boundaries are declared now as charters, contracts, dependency rules,
 | Roadmap | `docs/ROADMAP.md` | Owns strategic sequencing and initiative status. |
 | Issues | GitHub issues created from this plan | Own executable work items. |
 | ADRs | `docs/adr/*` | Own durable architecture decisions. |
+| Builder System boundary | `docs/architecture/SBS_OPERATING_MODEL.md` §3 | Owns the continuous-development enabling system boundary, including how Builder System work relates to Product/Runtime SBS and CES. |
 
 ## Phase Plan
 

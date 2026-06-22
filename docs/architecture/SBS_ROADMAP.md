@@ -38,9 +38,14 @@ It is **not** a commitment to build fourteen modules. Phases 1–4 add *seams* (
 
 **Key artifacts.** `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`; ADR-0015–ADR-0019; `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`, `SBS_CURRENT_TO_TARGET_MAPPING.md`, `SBS_BOUNDARY_REGISTER.md`, `SBS_TRANSITION_DEBT.md`, `SBS_FITNESS_RULES.md`; the ten critical contract stubs in `docs/contracts/`; SBS impact sections in the issue and PR templates; and — landing in this initiative — `docs/architecture/SBS_OPERATING_MODEL.md` and this roadmap, plus the review-gate fallback policy and source-of-truth matrix.
 
-**Relevant issues.** Tracking `#2337`; operationalization issues `#2338`–`#2354`; the operating-model umbrella issue (this PR's contract).
+**Relevant issues.** Tracking `#2337`; operationalization issues `#2338`–`#2354`; Builder System
+boundary epic `#2417` and children `#2418`–`#2422` for the CES/Builder relationship and follow-on
+builder workflow alignment.
 
-**Current status.** Done for the strategy/contract layer. The operating-model layer (operating model, roadmap, hardened debt register, prioritized fitness roadmap, review-gate fallback policy, template field completion, source-of-truth matrix) lands with this initiative, completing residency.
+**Current status.** Done for the strategy/contract layer. The operating-model layer (operating
+model, roadmap, hardened debt register, prioritized fitness roadmap, review-gate fallback policy,
+template field completion, source-of-truth matrix, and Builder System boundary model) is resident.
+CES/Builder reconciliation is tracked as boundary hygiene, not as a new Product runtime phase.
 
 **Blockers.** None.
 
