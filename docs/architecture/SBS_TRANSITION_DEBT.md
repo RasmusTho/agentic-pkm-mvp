@@ -31,6 +31,7 @@ Each debt carries the full schema across two keyed tables (joined by debt ID): *
 | D9 | OEF/fitness rules not yet enforcing SBS boundaries | OEF/CES vs all subsystems | Two CI rails shipped in `tests/architecture/test_sbs_fitness_rules.py`: active-vault identity (#2363/PR #2376) and non-HKA contracts disclaiming direct HKA mutation while routing through GOV (#2381); remaining P0/P1 rules manual-review-now (token-dependent P0 deferred until `DecisionToken`/`AuthorityReceipt` exist on enough paths). | Architecture remains documentation-only and drifts. | Medium | Containing — two CI rails shipped; further P0/P1 CI promotion open. |
 | D10 | SIP projection / derived representation could become irreplaceable shadow store | SIP/DRI vs HKA/GOV | `to verify` — rebuildability of semantic projections/derived records from source anchors not yet verified. | Semantic projections carry unrecoverable meaning. | High | Open. |
 | D11 | CES overloaded into the whole Builder System | CES vs Builder System / Product SBS | Historical and current docs may use CES as shorthand for architecture stewardship while builder agents, repo-local skills, issue delivery, BuilderOps records, release workflows, and TCD routing are broader Builder System concerns. | Builder workflows get misclassified as Product SBS runtime subsystems or CES silently becomes a development control plane. | Medium | Containing — Builder System boundary model resident in `SBS_OPERATING_MODEL.md`; #2422 reconciles CES wording and adds manual fitness coverage. |
+| D12 | Builder learning and TCD signals not uniformly captured across all workflows | Builder System vs Product runtime memory / OEF | Builder Learning and TCD governance loop is defined in `SBS_OPERATING_MODEL.md`; current skills cover hot-path learning, issue intake, delivery, verification, and release/promotion routing, but uniform metric capture and mechanical completeness checks remain `to verify`. | High-cost or repeated builder failures may remain in chat context, disappear from receipts, or be over-promoted into runtime/user memory instead of governed Builder destinations. | Medium | Containing — loop and allowed destinations defined; mechanical capture coverage open. |
 
 ## Resolution & ownership
 
@@ -47,6 +48,7 @@ Each debt carries the full schema across two keyed tables (joined by debt ID): *
 | D9 | Classify rules as manual now, CI later, CI now, or blocking invariant; ship CI rails as boundaries stabilize. | P0 fitness rules enforced by deterministic CI checks. | OEF | #2381 | Fitness-rule roadmap P0/P1/P2 in `SBS_FITNESS_RULES.md` |
 | D10 | Keep artifact-origin facts in HKA and decision/action receipts in GOV; keep SIP/DRI rebuildable. | HKA owns artifact-origin facts, GOV owns receipts; SIP/DRI fully rebuildable from source anchors. | SIP / DRI | none filed (tie to #2359/#2358 verification) | "No DRI record that is non-rebuildable unless reclassified"; "SIP becomes irreplaceable shadow store" failure mode |
 | D11 | Classify Builder System work through `SBS_OPERATING_MODEL.md` §3; route Product contract changes through CES practice only when Product SBS truth changes. | CES remains lean Product SBS contract stewardship; Builder System workflows, skills, BuilderOps records, and TCD governance keep their own enabling-system boundary. | CES practice / Builder System | #2422 first reconciliation; #2420 for repo-local skill alignment | "No Builder System artifact becomes a Product SBS runtime subsystem or runtime MEM/HKA without authority promotion" |
+| D12 | Use BuilderOps records, issue/PR receipts, skills, transition debt, fitness rules, roadmap updates, and prompt/policy PRs as the only durable Builder learning destinations unless Product authority is explicit. | Builder learning and TCD signals are routinely captured, routed, and verified without becoming Product runtime memory or hidden prompt state. | Builder System / OEF | none filed — file when mechanical completeness checks or metrics schema are specified | "No Builder learning or TCD signal bypasses the governed Builder destination path or silently promotes into runtime/user memory" |
 
 ## Known debt categories represented
 
@@ -63,6 +65,7 @@ The mission-required debt categories are each represented above (confirmed prese
 - OEF/fitness rules not yet enforcing boundaries — D9 (two CI rails shipped).
 - SIP/DRI non-rebuildable shadow store — D10 (`to verify`).
 - CES overloading into the whole Builder System — D11 (containing through the Builder System boundary model).
+- Builder learning / TCD signal capture gaps — D12 (containing through the governance loop; mechanical completeness `to verify`).
 
 ## Register Rule
 
