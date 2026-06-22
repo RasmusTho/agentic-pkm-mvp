@@ -34,11 +34,12 @@ services:
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
-      # Bind-mount source is the HOST vault path. VAULT_HOST_ROOT (from
-      # tmp/runtime.env / start_full_system.sh) carries it so the container's
-      # own VAULT_ROOT can be the in-container mount path /app/vault without
-      # corrupting this source (issue #2141). VAULT_ROOT/./vault kept as fallback.
-      - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
+      # Legacy /app/vault compatibility mount removed from the base compose
+      # (#2386, Slice 05D of #2311): a no-vault startup must not synthesize a
+      # repo-local ./vault bind. The /app/vault compatibility mount now lives in
+      # the explicit docker-compose.legacy-vault.yml overlay, included by
+      # start_full_system.sh ONLY when a vault is bound (VAULT_HOST_ROOT set);
+      # its source is the required-variable form so it cannot fall back to ./vault.
       # Full host filesystem for in-process vault selection (#2310): /Users
       # (internal SSD / iCloud Obsidian) and /Volumes (external disks, e.g. the
       # T7) at IDENTICAL container paths, so a selected host-absolute vault path
@@ -93,7 +94,8 @@ services:
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       - ./:/app
-      - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
+      # Legacy /app/vault compatibility mount moved to docker-compose.legacy-vault.yml
+      # (#2386); included only for explicit-vault startups, never a no-vault ./vault fallback.
       # Full host filesystem for in-process vault selection (#2310): /Users
       # (internal SSD / iCloud Obsidian) and /Volumes (external disks, e.g. the
       # T7) at IDENTICAL container paths, so a selected host-absolute vault path
@@ -131,7 +133,8 @@ services:
         required: false
     volumes:
       - ./:/app
-      - "${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault"
+      # Legacy /app/vault compatibility mount moved to docker-compose.legacy-vault.yml
+      # (#2386); included only for explicit-vault startups, never a no-vault ./vault fallback.
       # Full host filesystem for in-process vault selection (#2310): /Users
       # (internal SSD / iCloud Obsidian) and /Volumes (external disks, e.g. the
       # T7) at IDENTICAL container paths, so a selected host-absolute vault path
