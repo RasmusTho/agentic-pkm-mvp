@@ -919,9 +919,13 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         raise click.BadParameter("Question must not be empty.")
 
     event = new_event(event_type=ASK_QUERY_RECEIVED, payload={"question": question_text}, source="cli")
-    resolved_root = _resolve_mcp_vault_root_path(vault_root)
     env_flag = os.getenv("MCP_VAULT_ENABLE")
     writes_enabled = enable_mcp_vault or _truthy_flag(env_flag)
+    resolved_root = (
+        _resolve_mcp_vault_root_path(vault_root)
+        if writes_enabled or vault_root is not None
+        else None
+    )
     tool_settings: Dict[str, Any] = {}
     if resolved_root is not None:
         tool_settings["vault_root"] = str(resolved_root)

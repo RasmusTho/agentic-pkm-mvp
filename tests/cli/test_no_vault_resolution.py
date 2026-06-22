@@ -91,6 +91,27 @@ def test_ask_enable_mcp_vault_rejects_missing_mcp_specific_env(
     assert not (fallback_vault / "_mcp").exists()
 
 
+@pytest.mark.parametrize("env_var", ["MCP_VAULT_ROOT", "VAULT_DIR"])
+def test_ask_without_mcp_writes_ignores_missing_mcp_specific_env(
+    env_var: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_vault_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    reset_plan_store()
+    missing_vault = tmp_path / "missing-vault"
+    monkeypatch.setenv(env_var, str(missing_vault))
+    monkeypatch.setenv("MCP_VAULT_ENABLE", "0")
+
+    result = CliRunner().invoke(cli, ["ask", "What should be saved?"])
+
+    assert result.exit_code == 0, result.output
+    assert "Vault writes disabled (mock mode)." in result.output
+    assert not missing_vault.exists()
+    assert not (tmp_path / "vault").exists()
+
+
 def test_ask_enable_mcp_vault_prefers_mcp_env_over_vault_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
