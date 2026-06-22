@@ -166,7 +166,9 @@ def resolve_knowledge_port(
 
     try:
         fallback = _build_fs_fallback(vault_root, effective.fallback_adapter)
-    except KnowledgeConfigError:
+    except KnowledgeConfigError as exc:
+        if isinstance(exc.__cause__, VaultRootMisconfiguredError):
+            raise
         return primary
     if fallback is None:
         return primary
