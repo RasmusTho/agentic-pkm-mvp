@@ -244,7 +244,8 @@ def run_once(
         or _trace_id_from_envelope(message.get("event"))
         or "-"
     )
-    _dispatch_topic(topic, payload, trace_id=trace_id, message=message)
+    event_id = _event_id_from_message(message)
+    _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
     ack_outbox(message["id"])
     return WorkerTickResult(state="processed", processed=1)
 
@@ -255,7 +256,16 @@ def _dispatch_topic(
     *,
     trace_id: str,
     message: Mapping[str, Any],
+    event_id: str = "",
 ) -> None:
+    """Dispatch one outbox message to its real topic handler.
+
+    This is the single shared dispatch table used by both ``run_once`` and the
+    production daemon ``run()`` loop. Keeping one table prevents the two paths
+    from diverging, which is how a supported topic (e.g. ``promote.intent.created``
+    or ``index.embedding.requested``) could be acked as "unsupported" via
+    ``run_once`` while ``run()`` actually handled it (#2407).
+    """
     if topic == INGEST_OBJECT_CREATED:
         handle_ingest_object_created(_indexer_payload(payload))
     elif topic == INGEST_VAULT_CHANGED:
@@ -269,10 +279,26 @@ def _dispatch_topic(
             trace_id=trace_id,
             scan_requested_ts=event_timestamp,
         )
+    elif topic == PROMOTE_INTENT_CREATED:
+        from app.promotion.consumer import consume_promotion_intent_payload
+
+        consume_promotion_intent_payload(
+            payload,
+            trace_id=trace_id,
+            event_id=event_id,
+        )
     elif topic == NOTE_MOVE_WORKBENCH:
         handle_note_move_workbench(payload, trace_id=trace_id)
+    elif topic == INDEX_EMBEDDING_REQUESTED:
+        process_indexer_event(
+            {
+                "event": INDEX_EMBEDDING_REQUESTED,
+                "payload": dict(payload),
+                "trace_id": trace_id,
+            }
+        )
     else:
-        logger.debug("worker run_once skipping unsupported topic=%s trace_id=%s", topic, trace_id)
+        logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
 
 
 def _indexer_payload(payload: Mapping[str, Any]) -> dict[str, object]:
@@ -1043,10 +1069,21 @@ def run(
     errors_total = 0
     last_heartbeat = 0.0
 
+    # The loop polls/dispatches only while a vault is selected. When no vault is
+    # bound, ``no_vault_idle`` short-circuits the poll/dispatch body for that tick
+    # (heartbeats, logging, sleep, and stop-after-ticks below still run).
     while True:
         ticks_total += 1
+        no_vault_idle = _resolve_optional_vault_root(None) is None
+        if no_vault_idle:
+            # No-vault idle guard (#2407): match run_once's runtime decision. With
+            # no vault selected the production loop must not poll/dispatch
+            # vault-bound rows, since their handlers raise NoVaultSelectedError —
+            # a non-transient error that would poison-count and dead-letter the
+            # row instead of leaving it queued until a vault is selected.
+            logger.debug("worker tick idled: no vault selected")
         try:
-            message = poll_outbox_one()
+            message = None if no_vault_idle else poll_outbox_one()
             if message:
                 processed_total += 1
                 topic = message.get("topic")
@@ -1080,41 +1117,15 @@ def run(
 
                 with start_span("worker.consume", trace_id, {"topic": topic}):
                     try:
-                        if topic == INGEST_OBJECT_CREATED:
-                            handle_ingest_object_created(_indexer_payload(payload))
-                        elif topic == INGEST_VAULT_CHANGED:
-                            handle_ingest_vault_changed(payload, trace_id=trace_id)
-                        elif topic == INGEST_OBJECT_DELETED:
-                            handle_ingest_object_deleted(payload)
-                        elif topic == PANEL_SCAN_REQUESTED:
-                            event_timestamp = message.get("timestamp") or payload.get("timestamp")
-                            handle_panel_scan_requested(
-                                payload,
-                                trace_id=trace_id,
-                                scan_requested_ts=event_timestamp,
-                            )
-                        elif topic == PROMOTE_INTENT_CREATED:
-                            from app.promotion.consumer import consume_promotion_intent_payload
-
-                            consume_promotion_intent_payload(
-                                payload,
-                                trace_id=trace_id,
-                                event_id=event_id,
-                            )
-                        elif topic == NOTE_MOVE_WORKBENCH:
-                            handle_note_move_workbench(payload, trace_id=trace_id)
-                        elif topic == INDEX_EMBEDDING_REQUESTED:
-                            process_indexer_event(
-                                {
-                                    "event": INDEX_EMBEDDING_REQUESTED,
-                                    "payload": dict(payload),
-                                    "trace_id": trace_id,
-                                }
-                            )
-                        elif topic == NOTE_MOVE_WORKBENCH:
-                            handle_note_move_workbench(payload, trace_id=trace_id)
-                        else:
-                            logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
+                        # Dispatch through the single shared table so run() and
+                        # run_once cannot diverge on which topics are supported (#2407).
+                        _dispatch_topic(
+                            topic,
+                            payload,
+                            trace_id=trace_id,
+                            message=message,
+                            event_id=event_id,
+                        )
                     except Exception as handler_exc:
                         logger.exception(
                             "worker handler failed topic=%s trace_id=%s note_path=%s",

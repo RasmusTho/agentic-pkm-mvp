@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -34,6 +35,11 @@ def test_missing_object_embedding_request_is_dropped_without_worker_crash(
     monkeypatch.setattr(outbox_worker, "bootstrap", lambda: None)
     monkeypatch.setattr(outbox_worker, "write_worker_heartbeat", lambda **_: None)
     monkeypatch.setattr(outbox_worker, "ack_outbox", lambda msg_id: acked.append(str(msg_id)) or True)
+    # run() idles when no vault is selected (#2407); pin one so the embedding
+    # request is actually dispatched through the worker loop.
+    monkeypatch.setattr(
+        outbox_worker, "_resolve_optional_vault_root", lambda *_a, **_k: Path("/tmp/vault")
+    )
 
     messages = [
         {
