@@ -10,10 +10,10 @@ the #2377 fix's own CI run via the classifier audit path in test_uat_run_cli).
 
 ``connect_timeout`` bounds only the TCP connect, **not** DNS resolution, so it
 cannot stop a ``getaddrinfo`` stall. The fix gates the audit write on
-``STORE_BACKEND``: in memory/non-pg mode it does not attempt a connection at all
-(removing the stall at its source), while a configured Postgres backend keeps
-writing audit rows (with the connect additionally bounded by ``connect_timeout``
-for an unreachable-but-resolvable host).
+the store backend resolver: in memory/non-pg mode it does not attempt a
+connection at all (removing the stall at its source), while resolved Postgres
+backends keep writing audit rows (with the connect additionally bounded by
+``connect_timeout`` for an unreachable-but-resolvable host).
 """
 
 from __future__ import annotations
@@ -36,6 +36,34 @@ _UNROUTABLE_DSN = "postgresql://app:app@192.0.2.1:5432/app"
 # regression costs ~75s. 5s cleanly distinguishes the two and stays well under
 # the 120s per-test CI timeout the issue is about.
 _MAX_SECONDS = 5.0
+
+
+class _RecordingCursor:
+    def __init__(self) -> None:
+        self.statements: list[tuple[str, tuple[object, ...]]] = []
+
+    def __enter__(self) -> _RecordingCursor:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, statement: str, params: tuple[object, ...]) -> None:
+        self.statements.append((statement, params))
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.cursor_instance = _RecordingCursor()
+
+    def __enter__(self) -> _RecordingConnection:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def cursor(self) -> _RecordingCursor:
+        return self.cursor_instance
 
 
 def test_audit_event_skips_db_in_memory_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,3 +111,33 @@ def test_audit_event_bounded_connect_on_pg_backend(
         f"audit_event() took {elapsed:.2f}s against an unreachable DB; expected a "
         f"bounded connect (<{_MAX_SECONDS}s)."
     )
+
+
+def test_audit_event_writes_when_backend_resolves_pg_without_store_backend_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto-detected pg mode must write even when STORE_BACKEND is unset."""
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    monkeypatch.setattr(audit_module, "resolve_store_backend", lambda: "pg")
+    connection = _RecordingConnection()
+
+    def _recording_conn_rw(*, connect_timeout: int) -> _RecordingConnection:
+        assert connect_timeout == 1
+        return connection
+
+    monkeypatch.setattr(audit_module, "conn_rw", _recording_conn_rw)
+
+    result = audit_event(
+        event="test.event",
+        object_id="object-1",
+        agent="tester",
+        trace_id="t-2406",
+        extra={"source": "auto-detect"},
+    )
+
+    assert result is None
+    assert len(connection.cursor_instance.statements) == 1
+    statement, params = connection.cursor_instance.statements[0]
+    assert "INSERT INTO audit" in statement
+    assert params[0] == "t-2406"
+    assert params[1] == "test.event"
