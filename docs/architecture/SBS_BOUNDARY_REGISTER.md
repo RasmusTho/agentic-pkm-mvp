@@ -28,7 +28,7 @@ This register tracks boundary maturity. It is not a package map and does not req
 | EXE - Capability Execution & Automation | Governed Execution | Yes | Yes | Manual review now | Partial | `EXECUTION_REQUEST.md` defines side-effect seam after GOV authorization. |
 | SFC - Synchronization, Federation & Consensus | Cognitive Context & Topology | Yes | Yes | Manual review now | No | `REPLICATION_ENVELOPE.md` names no-op/single-node V1 and future central/satellite upgrade path. |
 | OEF - Observability, Evaluation & Fitness | Trust, Fitness & Evolution | Yes | Yes | Partial current CI | Partial | `SBS_FITNESS_RULES.md` owns target SBS fitness rules. |
-| CES practice - Contract & Evolution Stewardship | Trust, Fitness & Evolution | Yes | Partial | Manual review now | No | ADRs, indexes, contracts, registers, PR template, and dependency rules are the practice surface. |
+| CES practice - Contract & Evolution Stewardship | Trust, Fitness & Evolution | Yes | Partial | Manual review now | No | ADRs, indexes, contracts, registers, PR template, and dependency rules are the practice surface. CES is Product SBS stewardship, not the entire Builder System; `SBS_OPERATING_MODEL.md` owns the Builder System boundary and authority model. |
 
 ## Status Vocabulary
 

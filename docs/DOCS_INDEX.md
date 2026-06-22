@@ -25,14 +25,14 @@ First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to lo
 
 | Work area | First-read docs |
 | --- | --- |
-| Builder-agent workflow | `AGENTS.md` → `.codex/skills/README.md` → `docs/development/AGENT_OPERATING_PROTOCOL.md` |
+| Builder-agent workflow | `AGENTS.md` → `.codex/skills/README.md` → `docs/architecture/SBS_OPERATING_MODEL.md` (Builder System boundary) → `docs/development/AGENT_OPERATING_PROTOCOL.md` |
 | Agent-facing flows / direct agent workspaces | `docs/AGENT-FLOWS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
 | Runtime agents | `docs/AGENTS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
 | Contextualization Layer | `docs/CONTEXTUALIZATION_LAYER/README.md`, `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` |
 | Companion notes | `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/CONTEXTUALIZATION_LAYER/COMPANION_NOTE_PATTERN.md` |
 | Agent memory | `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`, `docs/AGENT_MEMORY/README.md` |
 | 2030 target SBS / subsystem boundaries | `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, then `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` and `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` |
-| Using the SBS operationally (classify work, DoR/DoD, owner-doc writeback, review-gate fallback) | `docs/architecture/SBS_OPERATING_MODEL.md`, then `docs/architecture/SBS_ROADMAP.md` |
+| Using the SBS operationally (Product/Builder/boundary classification, DoR/DoD, owner-doc writeback, review-gate fallback) | `docs/architecture/SBS_OPERATING_MODEL.md`, then `docs/architecture/SBS_ROADMAP.md` |
 | Release channels | `docs/RELEASE_CHANNELS/README.md`, `docs/ENVIRONMENTS.md` |
 | Roadmap reset / strategic sequencing | `docs/ROADMAP.md`, `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` |
 | Canvas Chat / interaction surfaces | `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/CANVAS_CHAT_SURFACE/README.md` |
@@ -52,8 +52,9 @@ role map; the rows below are a quick pointer, not a replacement for the full tab
 - Target architecture operationalization: `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`,
   `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, `docs/architecture/SBS_BOUNDARY_REGISTER.md`,
   `docs/architecture/SBS_TRANSITION_DEBT.md`, and `docs/architecture/SBS_FITNESS_RULES.md`
-- SBS operating model and roadmap (how SBS work is classified, readied, done, reviewed, and recorded;
-  review-gate fallback policy; source-of-truth matrix): `docs/architecture/SBS_OPERATING_MODEL.md` and
+- SBS operating model and roadmap (how Product/Runtime System work, Builder System work, and boundary
+  work are classified; how SBS work is readied, done, reviewed, and recorded; review-gate fallback
+  policy; source-of-truth matrix): `docs/architecture/SBS_OPERATING_MODEL.md` and
   `docs/architecture/SBS_ROADMAP.md`
 - Semantic topology and authority map: `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`
 - Current runtime truth: `docs/ARCHITECTURE.md` + `docs/STATUS.md`
@@ -169,7 +170,7 @@ The 2026 docs cleanup work is not retained as live documentation. The active rea
 | docs/COGNITIVE_PROSTHESIS_CHARTER.md | Cognitive prosthesis charter (product thesis) | Aligned (forward line v5.x) | 2026-05-12 | Product-level thesis framing Yggdrasil as a local-first cognitive prosthesis, second-brain environment, and governed memory/runtime substrate for agents; names the kinds of state, the role of Markdown/vault artifacts, the role of runtime surfaces, and the failure modes that would violate the prosthesis purpose. |
 | docs/SYSTEM_BREAKDOWN_STRUCTURE.md | Target System Breakdown Structure (2030 resilience) | Target-state SBS V2 | 2026-06-21 | Strategic architecture reference defining the long-lived Yggdrasil subsystem decomposition optimized for authority integrity, change isolation, and TCD reduction. Defines an eight macro-domain / fourteen control-boundary SBS plus lean contract-stewardship practice; generalizes current vault-first framing into portable-human-artifact-first architecture; and adds explicit ActiveContextSet, principal, HKA-owned identity/provenance anchors, persistence-vs-derived-representation, hard-enforced governed-write-protocol, and sync/federation/consensus boundaries. Subordinate to PROJECT_KERNEL/Charter on intent and ARCHITECTURE/STATUS on shipped behavior. |
 | docs/architecture/SBS_OPERATIONALIZATION_PLAN.md | SBS operationalization plan | Target-state transition plan | 2026-06-21 | Owns contract-first/module-lazy adoption, phase plan, source-of-truth matrix, first implementation slices, and issue-tracking posture for making the target SBS operational without claiming shipped behavior. |
-| docs/architecture/SBS_OPERATING_MODEL.md | SBS operating model | Target-state process surface | 2026-06-21 | Owns how the target SBS is used operationally: classification procedure, Definition of Ready/Done, issue/PR lifecycle, owner-doc writeback rule, transition-debt and fitness-rule lifecycles, the review-gate fallback policy, and the source-of-truth verification matrix. Makes the SBS self-sustaining for future agents; not a physical module map and not a shipped-runtime claim. |
+| docs/architecture/SBS_OPERATING_MODEL.md | SBS operating model and Builder System boundary | Target-state process surface | 2026-06-21 | Owns how the target SBS is used operationally and how future agents classify Product/Runtime System work, Builder System work, and boundary work. Defines the Builder System as the continuous-development enabling system around the Product/Runtime System, keeps CES as a lean stewardship practice rather than the full builder system, and covers Definition of Ready/Done, issue/PR lifecycle, owner-doc writeback, transition-debt and fitness-rule lifecycles, the review-gate fallback policy, and the source-of-truth verification matrix. Not a physical module map and not a shipped-runtime claim. |
 | docs/architecture/SBS_ROADMAP.md | SBS roadmap (initiative phases) | Target-state initiative roadmap | 2026-06-21 | Phase model (0 architecture residency → 5 opportunistic physical separation) for the SBS operationalization initiative, with per-phase purpose, artifacts, issues, status, blockers, and non-goals; reconciles delivery slices #2356-#2363 to phases. Linked from `docs/ROADMAP.md`. |
 | docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md | SBS current-to-target mapping | Target-state mapping register | 2026-06-21 | Maps current architecture areas such as vault, retrieval, memory, agents, execution, persistence, watchers, sync, observability, and docs processes to target SBS owners without claiming implementation conformance. |
 | docs/architecture/SBS_BOUNDARY_REGISTER.md | SBS boundary register | Target-state boundary register | 2026-06-21 | Tracks target boundary charter, contract, enforcement, and physical-module posture for every SBS subsystem plus CES practice. |

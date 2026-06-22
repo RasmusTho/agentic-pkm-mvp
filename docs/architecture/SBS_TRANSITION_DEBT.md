@@ -10,7 +10,7 @@ Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/ARCHITECTURE.md,
 
 # SBS Transition Debt
 
-This register names deviations and likely deviations from the target SBS. Its lifecycle is owned by `docs/architecture/SBS_OPERATING_MODEL.md` §9: every target-state slice either reduces a row, adds a bounded row, or states no debt effect.
+This register names deviations and likely deviations from the target SBS. Its lifecycle is owned by `docs/architecture/SBS_OPERATING_MODEL.md` §10: every target-state slice either reduces a row, adds a bounded row, or states no debt effect.
 
 **`to verify`** means the debt category is architecturally plausible but has not been confirmed by code/doc inspection. Do not assert a debt is confirmed in code unless it was inspected; record the unverified extent as `to verify` rather than overstating.
 

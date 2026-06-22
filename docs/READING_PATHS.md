@@ -32,7 +32,7 @@ defines intent; later docs add detail.
 1. `docs/PROJECT_KERNEL.md` and `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — north star and product thesis.
 2. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target SBS decomposition.
 3. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — adoption plan and source-of-truth matrix.
-4. `docs/architecture/SBS_OPERATING_MODEL.md` — how the SBS is used operationally (classification, DoR/DoD, owner-doc writeback, review-gate fallback).
+4. `docs/architecture/SBS_OPERATING_MODEL.md` — how the SBS and Builder System boundary are used operationally (Product/Builder/boundary classification, DoR/DoD, owner-doc writeback, review-gate fallback).
 5. `docs/architecture/SBS_ROADMAP.md` — initiative phases (0 architecture residency → 5 opportunistic physical separation).
 6. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
 7. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary status.
@@ -47,7 +47,7 @@ defines intent; later docs add detail.
 
 ## Major architecture changes
 
-1. `docs/architecture/SBS_OPERATING_MODEL.md` — classify the change (§3), check Definition of Ready/Done, owner-doc writeback, and the review-gate fallback policy.
+1. `docs/architecture/SBS_OPERATING_MODEL.md` — classify the change as Product/Runtime System, Builder System, or boundary work, then check Definition of Ready/Done, owner-doc writeback, and the review-gate fallback policy.
 2. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — phase and source-of-truth routing.
 3. Relevant contract stub in `docs/contracts/` — subsystem contract.
 4. `docs/architecture/SBS_BOUNDARY_REGISTER.md` — boundary maturity and enforcement status.
@@ -57,13 +57,22 @@ defines intent; later docs add detail.
 
 ## Agents and Codex doing SBS work
 
-1. `docs/architecture/SBS_OPERATING_MODEL.md` — operational entry point: classification procedure, DoR/DoD, issue/PR lifecycle, owner-doc writeback, transition-debt and fitness lifecycles, review-gate fallback policy, source-of-truth matrix.
+1. `docs/architecture/SBS_OPERATING_MODEL.md` — operational entry point: Product/Runtime System, Builder System, and boundary-work classification; DoR/DoD; issue/PR lifecycle; owner-doc writeback; transition-debt and fitness lifecycles; review-gate fallback policy; source-of-truth matrix.
 2. `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` — task routing and phase plan.
 3. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target SBS source.
 4. `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — current-to-target owner mapping.
 5. Relevant contract stubs in `docs/contracts/`.
 6. `docs/architecture/SBS_FITNESS_RULES.md` — review/enforcement expectations.
 7. `docs/architecture/SBS_TRANSITION_DEBT.md` — debt and follow-up routing.
+
+## Builder System and repo-local workflows
+
+1. `AGENTS.md` — canonical builder-agent policy and TCD/parallel execution rules.
+2. `.codex/skills/README.md` — repo-local skill routing and BuilderOps routing checkpoints.
+3. `docs/architecture/SBS_OPERATING_MODEL.md` — Builder System boundary and authority model; classify work as Product/Runtime System, Builder System, or boundary work.
+4. `docs/development/AGENT_OPERATING_PROTOCOL.md` — pre-implementation task classification and stop conditions.
+5. `docs/development/DEV_WORKFLOW.md` — issue-first delivery loop, validation expectations, and acceptance verifiability.
+6. Relevant `.codex/skills/*/SKILL.md` — workflow-specific pickup, publication, verification, closure, or maintenance instructions.
 
 ## Changing human flows
 

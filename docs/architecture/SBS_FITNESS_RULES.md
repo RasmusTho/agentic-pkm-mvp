@@ -64,7 +64,7 @@ These rules make the target SBS inspectable without claiming current implementat
 
 ## Prioritized Fitness Rule Roadmap
 
-This roadmap orders rules by how load-bearing the boundary is and how mechanically checkable it is today. Its lifecycle is owned by `docs/architecture/SBS_OPERATING_MODEL.md` §10: a rule is only **CI check now** when a real, fail-loud test enforces it; promoting a rule from manual to CI is itself SBS work (issue + test + posture update). "Enforcement now" states reality; "Target enforcement" states the intended end state.
+This roadmap orders rules by how load-bearing the boundary is and how mechanically checkable it is today. Its lifecycle is owned by `docs/architecture/SBS_OPERATING_MODEL.md` §11: a rule is only **CI check now** when a real, fail-loud test enforces it; promoting a rule from manual to CI is itself SBS work (issue + test + posture update). "Enforcement now" states reality; "Target enforcement" states the intended end state.
 
 ### P0 — authority and identity integrity (highest priority)
 
