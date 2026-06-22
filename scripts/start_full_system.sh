@@ -824,9 +824,16 @@ else
   # ${VAULT_HOST_ROOT:?...} errors rather than falling back to ./vault. Skip the
   # duplicate append if COMPOSE_FILE already names the overlay (operator override).
   # When COMPOSE_FILE is unset (no channel selected), seed the base compose first
-  # so the overlay augments rather than replaces it.
+  # so the overlay augments rather than replaces it. Setting COMPOSE_FILE switches
+  # Compose from its implicit docker-compose.yaml + docker-compose.override.yml load
+  # to an explicit file list, which drops the automatic override; preserve it
+  # explicitly so a bare active-vault start keeps the override's worker env
+  # (OPENAI_BASE_URL / OPENAI_API_KEY).
   if [ -z "${COMPOSE_FILE:-}" ]; then
     COMPOSE_FILE="docker-compose.yaml"
+    if [ -f "docker-compose.override.yml" ]; then
+      COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.override.yml"
+    fi
   fi
   case ":${COMPOSE_FILE}:" in
     *":docker-compose.legacy-vault.yml:"*) ;;

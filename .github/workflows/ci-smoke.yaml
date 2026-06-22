@@ -280,6 +280,12 @@ jobs:
         run: |
           set -euo pipefail
           export VAULT_ROOT="/tmp/ci-vault"
+          # Base compose no longer binds /app/vault (#2386); the explicit
+          # docker-compose.legacy-vault.yml overlay restores it from VAULT_HOST_ROOT.
+          # The /Users + /Volumes same-path mounts (#2310) are macOS-only and absent
+          # on the Linux CI runner, so the overlay is how the seeded vault reaches
+          # the api/worker/watcher containers at /app/vault.
+          export VAULT_HOST_ROOT="$VAULT_ROOT"
           rm -rf "$VAULT_ROOT"
           mkdir -p "$VAULT_ROOT/System" "$VAULT_ROOT/settings"
           cat > "$VAULT_ROOT/System/vault.layout.md" <<'EOF'
@@ -373,7 +379,7 @@ jobs:
           cache/
           EOF
 
-          compose_files="-f docker-compose.yaml"
+          compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
           cleanup() {
             rc=$?
             trap - EXIT
