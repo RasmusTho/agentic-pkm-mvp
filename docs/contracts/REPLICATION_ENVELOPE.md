@@ -5,13 +5,19 @@ Owner subsystem: SFC - Synchronization, Federation & Consensus
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-21
+Last reviewed: 2026-06-22
 
 # ReplicationEnvelope
 
 ## Purpose
 
 Name the distribution seam before multi-device, central/satellite, or multi-write deployments are implemented.
+
+For watcher/source-observation delivery semantics, this is the current owner
+contract. `SourceObservationEvent` is the normalized observed-source payload
+inside the envelope; it preserves source binding but does not own delivery,
+idempotency, replay/backfill, ordering, or failure visibility for the shipped
+`watcher.run` seam.
 
 ## Inputs
 
@@ -59,6 +65,9 @@ Name the distribution seam before multi-device, central/satellite, or multi-writ
 - V1 is single-authoritative-node unless explicitly superseded.
 - SFC does not decide semantic conflict meaning.
 - Delivery, idempotency, replay/backfill, and failure visibility are explicit.
+- Watcher/source-observation delivery semantics have exactly one owner in the
+  current docs: `ReplicationEnvelope`. EBF source-observation payloads may link
+  here rather than redefine the delivery contract.
 - Future central/satellite and multi-device posture must preserve distributed receipt continuity.
 
 ## Allowed Producers
@@ -88,6 +97,12 @@ Name the distribution seam before multi-device, central/satellite, or multi-writ
 Current runtime should be read as single-node/single-authoritative posture. This contract exists to prevent future sync work from being designed as ad hoc watcher transport.
 
 First seam: `app.sfc.replication_envelope` (#2362) wraps the `watcher.run` event path (`app.watcher.events.WatcherRunEvent`) into a `SourceObservationEvent` and a `ReplicationEnvelope`, naming the idempotency key, replay/backfill cursor, delivery/ack status, and a staged conflict placeholder. Per ADR-0020 it is single-node / no-op: it asserts delivery semantics and does not replicate. Conflict classification is staged for GOV/HIX, never resolved by SFC transport. Broader watcher/sync paths remain unwrapped (see SBS transition-debt D7).
+
+Contract ownership decision (#2411): do not create a separate
+`SOURCE_OBSERVATION_EVENT.md` for the current watcher delivery seam. EBF may
+later need a source-observation contract for provider/source payload semantics,
+but watcher/source-observation delivery semantics are currently owned here and
+linked from EBF/SBS docs to avoid duplicate sources of truth.
 
 ## Open Questions
 
