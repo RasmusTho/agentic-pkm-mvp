@@ -1952,6 +1952,8 @@ def _render_note_section(fields: dict) -> str:
     resurface_mode_html = _render_resurface_mode(
         fields.get("resurface_candidates") or [],
         degraded=guard_degraded,
+        scarce_count=fields.get("resurface_scarce_count"),
+        more_held_back=bool(fields.get("resurface_more_held_back", False)),
     )
     commitments_mode_html = _render_commitments_mode(
         fields.get("commitments_surface")
@@ -3760,33 +3762,58 @@ def _render_reorient_mode(sections: dict[str, list[dict]]) -> str:
         </section>"""
 
 
-def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) -> str:
+def _render_resurface_mode(
+    candidates: list[dict],
+    *,
+    degraded: bool = False,
+    scarce_count: int | None = None,
+    more_held_back: bool = False,
+) -> str:
     if not candidates:
-        affordance_status = "unavailable" if degraded else "read-only"
-        state_label = "degraded" if degraded else "empty"
-        state_testid = "resurface-degraded-state" if degraded else "resurface-empty-state"
-        state_copy = (
-            "Resurface is degraded because the runtime reported degraded guard state; "
-            "no candidate payload is actionable here."
-            if degraded
-            else "No Resurface candidates are available for this note. Nothing needs action here."
-        )
-        return f"""
+        if degraded:
+            # "Can't say" — unmistakably distinct from the settled empty state,
+            # and never a confident "nothing to resurface".
+            return """
         <section
           class="resurface-mode"
           data-testid="resurface-mode"
-          data-affordance-status="{affordance_status}"
+          data-affordance-status="unavailable"
           data-capability="resurface">
           <div class="rail-state-row">
             <span class="rail-state-label">Resurface</span>
-            <span class="rail-state-value">{state_label}</span>
+            <span class="rail-state-value">degraded</span>
           </div>
-          <div class="resurface-empty" data-testid="{state_testid}">
-            {state_copy}
+          <div class="resurface-empty" data-testid="resurface-degraded-state">
+            Resurface is degraded because the runtime reported degraded guard state;
+            no candidate payload is actionable here.
           </div>
         </section>"""
+        # Empty but healthy: affirmative and settled, not a dashboard waiting to
+        # be filled. A calm word ("at rest") sits where a count would go.
+        return """
+        <section
+          class="resurface-mode"
+          data-testid="resurface-mode"
+          data-affordance-status="read-only"
+          data-capability="resurface">
+          <div class="rail-state-row">
+            <span class="rail-state-label">Resurface</span>
+            <span class="rail-state-value">at rest</span>
+          </div>
+          <div class="resurface-empty" data-testid="resurface-empty-state">
+            <span class="resurface-empty-lead">Nothing is asking for your attention.</span>
+            <span class="resurface-empty-sub">No Resurface candidates are available for this note. Nothing needs action here &mdash; a quiet period, not an empty shelf.</span>
+          </div>
+        </section>"""
+    # Pinned cards sort to the top; the rest keep server order (no client
+    # re-rank). A stable sort preserves the underlying order within each group.
+    ordered = sorted(candidates, key=lambda candidate: not candidate.get("pinned", False))
+    total = len(ordered)
+    # Cap to the server-declared scarce count; never widen or paginate.
+    shown = ordered[:scarce_count] if scarce_count and scarce_count > 0 else ordered
+    held_back = more_held_back or len(shown) < total
     rows: list[str] = []
-    for candidate in candidates:
+    for candidate in shown:
         signals = "".join(
             (
                 '<span class="resurface-signal" data-testid="resurface-signal">'
@@ -3811,13 +3838,16 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
                 ("pin", "Pin"),
             )
         )
+        # "Held by the user" — emitted only when the candidate is pinned, so the
+        # cool pinned variant degrades silently to a plain card when absent.
+        pinned_attr = ' data-pinned="true"' if candidate.get("pinned", False) else ""
         rows.append(
             f"""
           <article
             class="resurface-candidate"
             data-testid="resurface-candidate"
             data-affordance-status="read-only"
-            data-runtime-backed="true"
+            data-runtime-backed="true"{pinned_attr}
             data-candidate-id="{_e(candidate.get("candidate_id", ""))}">
             <div class="resurface-title" data-testid="resurface-candidate-label">
               {_e(_cap(candidate.get("label", "")))}
@@ -3839,6 +3869,21 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
             <div class="resurface-actions">{actions}</div>
           </article>"""
         )
+    # The withheld line communicates "more was held back" without any count or
+    # badge, and adapts to the surfaced set size. It renders only when something
+    # was genuinely held below the line.
+    withheld_html = ""
+    if held_back:
+        withheld_phrase = (
+            "nothing else rose to a glance today"
+            if len(shown) <= 1
+            else "a few others were considered and held below the line"
+        )
+        withheld_html = (
+            '<div class="resurface-withheld" data-testid="resurface-withheld">'
+            '<span class="resurface-withheld-glyph" aria-hidden="true">⋯</span> '
+            f"{withheld_phrase}</div>"
+        )
     return f"""
         <section
           class="resurface-mode"
@@ -3847,9 +3892,10 @@ def _render_resurface_mode(candidates: list[dict], *, degraded: bool = False) ->
           data-capability="resurface">
           <div class="rail-state-row">
             <span class="rail-state-label">Resurface</span>
-            <span class="rail-state-value">low-pressure</span>
+            <span class="rail-state-value">ambient</span>
           </div>
           {"".join(rows)}
+          {withheld_html}
         </section>"""
 
 
@@ -9721,8 +9767,29 @@ def render_index_html(
       opacity: 0.85;
     }}
 
+    /* The withheld line: "more was held back" with no count or badge. Quietest
+       thing in the rail — mono, tertiary, italic. */
+    .resurface-withheld {{
+      font-family: var(--font-mono);
+      font-size: 10px;
+      line-height: 1.5;
+      letter-spacing: 0.02em;
+      font-style: italic;
+      color: var(--fg-3);
+      padding: 2px 1px;
+    }}
+    .resurface-withheld-glyph {{
+      font-style: normal;
+      color: var(--fg-3);
+      opacity: 0.7;
+      margin-right: 2px;
+    }}
+
     .resurface-empty[data-testid="resurface-empty-state"] {{
       position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
       padding: 12px 13px 12px 30px;
       font-size: var(--text-sm);
       line-height: 1.5;
@@ -9741,6 +9808,14 @@ def render_index_html(
       border-radius: 999px;
       background: var(--vault);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--vault) 16%, transparent);
+    }}
+    .resurface-empty-lead {{
+      color: var(--fg-1);
+    }}
+    .resurface-empty-sub {{
+      font-size: var(--text-xs);
+      line-height: 1.5;
+      color: var(--fg-3);
     }}
 
     .resurface-mode[data-affordance-status="unavailable"] .rail-state-value {{
