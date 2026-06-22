@@ -15,6 +15,10 @@ Do not use this skill to:
 ## Capability boundary
 
 Read `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md` before running. That document is the authority for what rollback restores and what it cannot restore. Key limits stated there:
+Rollback execution is Builder System boundary work. Rollback PRs and receipts are Builder System
+governance artifacts; runtime refs, migrations, and channel state are Product/Runtime effects. Route
+owner-doc, SBS, transition-debt, and fitness-rule consequences through
+`docs/architecture/SBS_OPERATING_MODEL.md`, and do not treat rollback evidence as runtime/user memory.
 
 - **Vault is not rewound.** The real vault is never touched by rollback.
 - **Forward-only migrations are not reversed.** If the promotion applied forward-only migrations and they succeeded, the DB schema may not return to its pre-promotion shape. This was acknowledged by the operator at promotion time.

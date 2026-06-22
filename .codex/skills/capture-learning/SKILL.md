@@ -8,6 +8,11 @@ description: "Create one BuilderOps LearningSignal when a concrete divergence is
 Maintenance-path repair skill. Creates one BuilderOps `LearningSignal` record when a plan
 divergence is concrete enough to name an upstream artifact now.
 
+This is a Builder System workflow. A `LearningSignal` records builder-learning input; it is not
+runtime/user memory, a Human Knowledge Artifact, or Product MEM/HKA authority. Promotion into
+Product/Runtime truth requires the explicit Product System authority path named by
+`docs/architecture/SBS_OPERATING_MODEL.md`.
+
 `docs/learning-log.md` is historical/compatibility material after #1506. Do not treat it as the
 primary operational learning store.
 
@@ -32,6 +37,7 @@ All three are required:
    - `AGENTS.md §Governance lane`
    - `.codex/skills/issue-to-code/SKILL.md`
    - `docs/templates/ task-contract template`
+   - `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Artifact And Workflow Map`
    - `"unknown — flag for retro"` (last resort only)
 3. **Source** — which skill or moment noticed it (e.g. `issue-to-code`, `verification-and-closure`, `human`)
 

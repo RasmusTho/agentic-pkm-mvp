@@ -23,6 +23,20 @@ For the merged PR, read:
 
 Then answer: does the diff change something those owner docs currently claim?
 
+Classify the diff before deciding owner-doc impact:
+
+- Product/Runtime System changes use the relevant Product owner docs and SBS impact procedure from
+  `docs/architecture/SBS_OPERATING_MODEL.md`.
+- Builder System changes to `.codex/skills/**`, `AGENTS.md`, issue/PR governance, CI/fitness,
+  release/UAT/promotion workflows, BuilderOps, learning, TCD, or delivery receipts use the Builder
+  System boundary and artifact map in `docs/architecture/SBS_OPERATING_MODEL.md` plus the skill index.
+- Boundary changes, such as owner-doc writeback or BuilderOps promotion into repo artifacts, inspect
+  both the Builder System owner model and the affected Product/Runtime owner docs.
+
+Builder System receipts, learning, skills, or prompts are not runtime/user memory and do not require
+Product MEM/HKA owner-doc promotion unless the merged diff explicitly changed Product memory
+semantics or followed a Product System authority path.
+
 ## Receipt placement
 
 The receipt comment always goes on the **closed issue** that the PR fixes. If the PR closed multiple issues, post the receipt on each one. If the PR closed no issues (docs-only lane, governance lane), post the receipt as a **PR comment** instead — the PR is then the auditable artifact.
