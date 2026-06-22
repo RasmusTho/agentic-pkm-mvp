@@ -1898,6 +1898,12 @@ def _render_note_section(fields: dict) -> str:
         len(fields.get("suggestion_cards") or []) > 0
         or _suggestion_state.startswith("staged")
     )
+    # A blocked Panel carries a failure reason the user must see (it is the
+    # Panel-side analogue of a WriteGuard block). Treat it as a safety-critical
+    # override so the blocked reason is never hidden behind the ambient strip's
+    # collapsed body (Codex P2). Other transient panel states (running, idle)
+    # are not content and stay ambient.
+    rail_panel_blocked = panel_state_raw == "blocked"
     rail_actionable = bool(
         rail_has_proposal
         or rail_has_receipt
@@ -1906,6 +1912,7 @@ def _render_note_section(fields: dict) -> str:
         # collapse into the ambient strip even with no suggestion/proposal/
         # receipt).
         or rail_safety_critical
+        or rail_panel_blocked
         or reorient_actionable
     )
     # The ambient/active decision is carried on the layout grid as
@@ -8114,7 +8121,12 @@ def render_index_html(
     }}
     .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-header,
     .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-posture,
-    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-placeholder-body {{
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-placeholder-body,
+    /* The open-loops orientation CTA sits outside .rail-placeholder-body; it is
+       orientation metadata, not a suggestion/proposal/receipt, so it does not
+       force the rail active and must not survive as a clipped button in the
+       thin ambient strip (Codex P3). */
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .panel-rail-open-loops {{
       display: none;
     }}
     /* A minimal always-present vertical presence cue so the user can still see

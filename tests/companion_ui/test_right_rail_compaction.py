@@ -393,3 +393,24 @@ def test_safety_critical_states_stay_active_without_content():
         assert 'data-rail-state="active"' in _layout_open_tag(html), (
             f"safety case {name!r} must keep the rail active"
         )
+
+
+def test_panel_blocked_state_keeps_rail_active():
+    # A blocked Panel carries a failure reason the user must see; it must not be
+    # hidden behind the ambient strip's collapsed body (Codex P2).
+    html = _html(panel_state="blocked", panel_message="Action not permitted")
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+
+
+def test_open_loops_cta_hidden_in_ambient_strip():
+    # The open-loops orientation CTA renders outside .rail-placeholder-body; in
+    # the ambient strip it must be CSS-hidden, not left as a clipped button, and
+    # an open-loops count alone must NOT force the rail active (it is
+    # orientation metadata, not a suggestion/proposal/receipt) (Codex P3).
+    html = _html(orientation_open_loops_count=3)
+    assert 'data-rail-state="ambient"' in _layout_open_tag(html)
+    # The ambient CSS hides the open-loops region within the strip.
+    assert (
+        '[data-rail-state="ambient"] .agent-rail .panel-rail-open-loops' in html
+    )
