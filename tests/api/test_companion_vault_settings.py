@@ -47,6 +47,77 @@ def _init_readonly_satellite_vault(vault_root: Path) -> Path:
     return settings_dir
 
 
+def _initialized_remembered_vault(
+    tmp_path: Path,
+    vault_root: Path,
+) -> tuple[Path, VaultManager]:
+    app_local_path = tmp_path / "app-local.md"
+    first_manager = VaultManager(app_local_store=AppLocalSettingsStore(path=app_local_path))
+    result = first_manager.initialize_vault(
+        vault_root,
+        vault_name="Niflheim",
+        machine_role="testNode",
+        remember=False,
+    )
+    assert result.context.status == "selected"
+    selected = first_manager.select_vault(vault_root, remember=True)
+    assert selected.status == "selected"
+
+    restarted_manager = VaultManager(app_local_store=AppLocalSettingsStore(path=app_local_path))
+    assert restarted_manager.context.status == "none"
+    return app_local_path, restarted_manager
+
+
+def test_remembered_selection_restored_after_manager_restart(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remembered vault selection survives a fresh API manager instance."""
+    vault_root = tmp_path / "Niflheim"
+    _, restarted_manager = _initialized_remembered_vault(tmp_path, vault_root)
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: restarted_manager)
+
+    response = client.get("/api/companion/vault/settings")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["context"]["status"] == "selected"
+    assert body["context"]["active_vault_path"] == str(vault_root)
+    assert body["context"]["permissions"]["allowWritesToVault"] is True
+
+
+def test_settings_restart_uses_remembered_selection_not_cwd_or_env_vault(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remembered selection remains authoritative after restart.
+
+    A configured-but-unselected ``VAULT_ROOT`` and a materialized CWD ``./vault``
+    must not become the active Companion context when app-local last-active
+    points at a valid selected vault.
+    """
+    remembered_vault = tmp_path / "Niflheim"
+    env_vault = tmp_path / "env-vault"
+    cwd = tmp_path / "cwd"
+    env_vault.mkdir(parents=True)
+    (cwd / "vault").mkdir(parents=True)
+    _, restarted_manager = _initialized_remembered_vault(tmp_path, remembered_vault)
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: restarted_manager)
+    monkeypatch.setenv("VAULT_ROOT", str(env_vault))
+    monkeypatch.chdir(cwd)
+
+    response = client.get("/api/companion/vault/settings")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["context"]["status"] == "selected"
+    assert body["context"]["active_vault_path"] == str(remembered_vault)
+    assert body["context"]["active_vault_path"] != str(env_vault)
+    assert body["context"]["active_vault_path"] != str((cwd / "vault").resolve())
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
