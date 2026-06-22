@@ -30,11 +30,13 @@ This capability closes that gap. Its shipped boundary is:
 - **surface materialized memory and recall provenance** in the Companion UI.
 
 `docs/adr/ADR-0025-memory-authority-direct-write-policy.md` extends this boundary for the
-provisional/low-trust direct-write tier. Provisional memory persists through a human-readable,
-editable, provenance-bound Markdown mirror, **distinct from the materialized promoted notes** produced
-by the governed `proposal → WriteGuard → receipt → artifact` path above; the sync substrate the mirror
-lives on (e.g. iCloud) is **never an execution bus** — a file appearing or changing there triggers no
-promotion, escalation, or tool-use. ADR-0025 mandates **receipts on every lifecycle transition** and
+provisional/low-trust direct-write tier as **target-state** policy. ADR-0025 specifies
+(target-state, enforcement deferred to **W7-MEM-02**, #2354) that provisional memory will persist
+through a human-readable, editable, provenance-bound Markdown mirror, **distinct from the materialized
+promoted notes** produced by the governed `proposal → WriteGuard → receipt → artifact` path above —
+**not yet shipped: no runtime producer or schema for that mirror exists today**. As specified, the
+sync substrate the mirror would live on (e.g. iCloud) is **never an execution bus** — a file appearing
+or changing there triggers no promotion, escalation, or tool-use. ADR-0025 mandates **receipts on every lifecycle transition** and
 records that the receipt ledger is **authoritative for lifecycle state, not claim truth** (a promoted
 memory can still be wrong; promotion records that a transition occurred, not that the content is
 correct). WriteGuard is **health-state-only** today (`app/write_guard.py` gates on the health
