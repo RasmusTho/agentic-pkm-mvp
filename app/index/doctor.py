@@ -145,4 +145,54 @@ def reset_diagnose_cache() -> None:
         _diagnose_cache = None
 
 
-__all__ = ["diagnose_index", "reset_diagnose_cache"]
+class IndexDriftError(AssertionError):
+    """Raised when durable objects exist with no embedded vector-index row.
+
+    This is the #2252-class stall: a ``store_objects`` row is present but the
+    outbox never drained, so no ``store_vector_index`` row with a non-empty
+    embedding was written. The condition must fail loud rather than pass
+    silently.
+    """
+
+
+def verify_object_embedded(object_id: str) -> None:
+    """Fail loud when ``object_id`` is present in ``store_objects`` but unembedded.
+
+    Drives the durable Postgres backend (the same ``store_vector_index`` table the
+    consumer writes and recall reads). Raises :class:`IndexDriftError` when the
+    object has no ``store_vector_index`` row carrying a non-empty embedding.
+
+    This is the production verification entrypoint for the objects-present /
+    no-vector drift the worker stall produces; ``make verify`` style drift checks
+    and the indexer regression tests call it rather than re-implementing the
+    assertion inline.
+    """
+    if PgVectorIndex is None:
+        raise RuntimeError("Postgres backend is required to verify embedding drift.")
+
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM store_vector_index "
+                "WHERE object_id = %s "
+                "AND embedding IS NOT NULL AND array_length(embedding, 1) > 0 "
+                "LIMIT 1",
+                (object_id,),
+            )
+            embedded = cur.fetchone() is not None
+
+    if not embedded:
+        raise IndexDriftError(
+            f"object {object_id} present in store_objects but has no embedded "
+            "store_vector_index row (processed_total=0; #2252-class stall)"
+        )
+
+
+__all__ = [
+    "diagnose_index",
+    "reset_diagnose_cache",
+    "verify_object_embedded",
+    "IndexDriftError",
+]

@@ -76,28 +76,49 @@ def test_indexer_runner_pg_does_not_consume_jsonl_outbox_queue(tmp_path, monkeyp
     reset_store_backends()
 
 
-def _drain_db_outbox_embedding_spine(*, max_messages: int = 50) -> int:
-    """Drain the DB outbox through the exact dispatch path the worker uses.
+def _undelivered_rows_for_object(dsn: str, object_id: str) -> list[tuple[str, str, dict]]:
+    """Return ``(id, topic, payload)`` for this object's undelivered outbox rows only.
 
-    Mirrors ``app.workers.outbox_worker.run``: poll one undelivered row at a
-    time via :func:`poll_outbox_one`, dispatch ``INDEX_EMBEDDING_REQUESTED``
-    rows into :func:`app.indexer.consumer.process_event` (the same entrypoint
-    the worker dispatches to), then ack. Returns ``processed_total`` — the
-    count of rows the worker would have processed in this run.
+    ``poll_outbox_one`` returns the oldest *global* undelivered row and a drain
+    loop over it would dispatch+ack pre-existing rows from other work on a shared
+    or operator DB — destructive and flaky. We instead claim by payload
+    ``object_id`` so the drain touches only rows this test emitted; foreign rows
+    are never selected, dispatched, or acked.
+    """
+    rows: list[tuple[str, str, dict]] = []
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, topic, payload FROM outbox "
+                "WHERE delivered_at IS NULL "
+                "AND payload->>'object_id' = %s "
+                "ORDER BY created_at ASC",
+                (str(object_id),),
+            )
+            for row in cur.fetchall():
+                raw = row[2]
+                payload = raw if isinstance(raw, dict) else (raw or {})
+                rows.append((str(row[0]), str(row[1]), dict(payload)))
+    return rows
+
+
+def _drain_db_outbox_embedding_spine(dsn: str, object_id: str) -> int:
+    """Drain ONLY this test's seeded embedding-request rows, leaving others intact.
+
+    Selects undelivered outbox rows scoped to ``object_id`` (never the global
+    oldest row), then for each ``INDEX_EMBEDDING_REQUESTED`` row dispatches into
+    :func:`app.indexer.consumer.process_event` — the same entrypoint
+    ``app.workers.outbox_worker.run`` dispatches to — and acks just that row via
+    :func:`ack_outbox`. Foreign rows are never acked or dispatched. Returns
+    ``processed_total``: the count of this test's rows processed.
     """
     from app.indexer.consumer import process_event as process_indexer_event
     from app.outbox.events import INDEX_EMBEDDING_REQUESTED
-    from app.services.outbox import ack_outbox, poll_outbox_one
+    from app.services.outbox import ack_outbox
 
     processed_total = 0
-    for _ in range(max_messages):
-        message = poll_outbox_one()
-        if not message:
-            break
-        processed_total += 1
-        topic = message.get("topic")
-        payload = dict(message.get("payload") or {})
-        trace_id = payload.get("trace_id") or message.get("trace_id") or "-"
+    for message_id, topic, payload in _undelivered_rows_for_object(dsn, object_id):
+        trace_id = payload.get("trace_id") or "-"
         if topic == INDEX_EMBEDDING_REQUESTED:
             process_indexer_event(
                 {
@@ -106,7 +127,8 @@ def _drain_db_outbox_embedding_spine(*, max_messages: int = 50) -> int:
                     "trace_id": trace_id,
                 }
             )
-        ack_outbox(message["id"])
+        processed_total += 1
+        ack_outbox(message_id)
     return processed_total
 
 
@@ -177,7 +199,7 @@ def test_outbox_roundtrip_embeds(tmp_path, monkeypatch) -> None:
     # Force the consumer to read the durable backend, not the in-process mirror.
     legacy_object_store._MEMORY_STORE.clear()
 
-    processed_total = _drain_db_outbox_embedding_spine()
+    processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
 
     # Worker-equivalent receipt: at least the embedding-request row was processed.
     assert processed_total >= 1
@@ -246,16 +268,17 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
     matching = [r for r in rows if str(r[0]) == str(oid)]
     assert not matching, "precondition: object must be present but un-embedded"
 
-    # A loud verification gate must reject this state rather than pass silently.
-    def _assert_object_embedded(object_id: str) -> None:
-        embedded = [r for r in _vector_index_rows_with_embedding(dsn) if str(r[0]) == str(object_id)]
-        if not embedded:
-            raise AssertionError(
-                f"object {object_id} present in store_objects but has no embedded "
-                "store_vector_index row (processed_total=0; #2252-class stall)"
-            )
+    # Drive the REAL production verifier (app.index.doctor.verify_object_embedded),
+    # not a self-defined raiser, against the objects-present/no-vector state. The
+    # production drift check must reject this state rather than pass silently.
+    from app.index.doctor import IndexDriftError, verify_object_embedded
 
-    with pytest.raises(AssertionError, match="present in store_objects but has no embedded"):
-        _assert_object_embedded(str(oid))
+    with pytest.raises(IndexDriftError, match="present in store_objects but has no embedded"):
+        verify_object_embedded(str(oid))
+
+    # And once the row IS drained/embedded, the same verifier must pass.
+    processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
+    assert processed_total >= 1
+    verify_object_embedded(str(oid))
 
     reset_store_backends()
