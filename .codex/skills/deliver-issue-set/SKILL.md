@@ -129,7 +129,7 @@ For an epic or parent feature issue:
 - Keep parent validation evidence on the parent issue after each child delivery.
 - Before closing the parent validation hub, confirm on the parent that, across the delivered set:
   - **child receipts** exist — every in-scope child has a recorded delivery receipt (PR link, merge/closure state, validation evidence), and no child was silently left blocked or non-executable;
-  - **owner-doc writeback** is resolved per `docs/architecture/SBS_OPERATING_MODEL.md` §9 — each child either updated its owner doc in-PR or created and linked a follow-up issue; a "to update later" note does not count;
+  - **owner-doc writeback** is resolved per `docs/architecture/SBS_OPERATING_MODEL.md` §9 — each child landed exactly one of the three valid resolutions (no owner-doc change implied, owner-doc updated in-PR, or a created-and-linked follow-up issue); a "to update later" note does not count;
   - **transition debt** is handled per `docs/architecture/SBS_OPERATING_MODEL.md` §10 — each relevant slice reduced a debt row, added a bounded one, or stated no effect, and for a Builder System or boundary set the D11/D12 outcome from the [SBS classification and impact gate](#sbs-classification-and-impact-gate) is recorded;
   - **learning capture** ran when plan divergence occurred — if any child diverged from its contract or an earlier artifact was found wrong during delivery, `capture-learning` was invoked (it owns the invocation gate; see [Capturing Learning](#capturing-learning)).
 - Close the parent only when repo-verifiable acceptance is satisfied and parent-closure rules allow it.
