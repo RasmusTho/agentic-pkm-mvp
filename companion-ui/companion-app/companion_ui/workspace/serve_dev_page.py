@@ -6278,10 +6278,15 @@ def _render_orientation_index_html(
     # The system map overlay (#1787, SEP-05) is reachable from every entry
     # state (spec §Resolved Q4): the calm affordance above is the only opener
     # — pull-based, never unbidden. The overlay-host substrate therefore
-    # ships on every orientation render; only the vault route truthfully
-    # exists on the entry surfaces (the declared cold_start → shell_active
-    # path), so the map offers exactly that one.
-    orientation_map_routes = ("vault",) if vault_entry_html else ()
+    # ships on every orientation render; the vault route truthfully exists on
+    # the entry surfaces (the declared cold_start → shell_active path). The
+    # operator drawer also renders on every orientation page, so the operator
+    # node is routable here too — CUIDR-04 (#2447) made the System Map the only
+    # operator opener (the floating pill is gone), and operator access must not
+    # regress on entry-state pages.
+    orientation_map_routes = ("operator",) + (
+        ("vault",) if vault_entry_html else ()
+    )
     overlay_host_overlays_html = (
         overlay_host_markup(anchor_note_path="")
         + memory_drawer_markup_html
@@ -7475,13 +7480,30 @@ def _render_operator_drawer() -> str:
             + 'Operator panel unavailable: ' + String(err) + '</div>';
         });
     }
+    // CUIDR-04 (#2447): the relocated runtime-telemetry region (the runtime
+    // pill / freshness that left the front edge) is revealed when the operator
+    // layer opens, and re-hidden when it closes — it is reachable only through
+    // the operator layer, never on the reading surface.
+    function revealTelemetry(show) {
+      var region = document.querySelector('[data-region="operator-telemetry"]');
+      if (!region) { return; }
+      if (show) {
+        region.removeAttribute('hidden');
+        region.setAttribute('aria-hidden', 'false');
+      } else {
+        region.setAttribute('hidden', '');
+        region.setAttribute('aria-hidden', 'true');
+      }
+    }
     window.companionOperator = {
       open: function() {
         loadContent();
+        revealTelemetry(true);
         host.setAttribute('data-open', 'true');
         setExpanded(true);
       },
       close: function() {
+        revealTelemetry(false);
         host.setAttribute('data-open', 'false');
         setExpanded(false);
         if (toggle) { try { toggle.focus(); } catch (e) {} }

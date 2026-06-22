@@ -415,3 +415,20 @@ def test_operator_telemetry_absent_from_shell() -> None:
         "operator surface must be reachable via the System Map / operator layer"
     )
     assert 'data-surface-id="operator"' in map_overlay
+
+    # The relocated telemetry is not dead markup: opening the operator layer
+    # reveals the operator-telemetry region (and closing re-hides it), so the
+    # relocated pill/freshness is actually reachable by the user.
+    assert "revealTelemetry(true)" in full_shell
+    assert "revealTelemetry(false)" in full_shell
+    assert 'data-region="operator-telemetry"' in full_shell
+
+    # Operator access must not regress on entry-state pages: the operator node
+    # is routable on every orientation render (the operator drawer ships there).
+    for state, raw in _ENTRY_RENDERS.items():
+        node = re.search(
+            r'<button[^>]*data-surface-id="operator"[^>]*data-routable="true"[^>]*>',
+            raw,
+        )
+        assert node, f"operator node must be routable on entry state {state}"
+        assert 'data-intent="operator.open"' in node.group(0)
