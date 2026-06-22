@@ -68,12 +68,10 @@ def test_doctor_reports_indexed(tmp_path, monkeypatch) -> None:
     from datetime import datetime, timezone
 
     from app.db.dsn import resolve_dsn
-    from app.indexer.consumer import process_event as process_indexer_event
     from app.objects import DomainObject, ObjectStore
     from app.outbox import events
-    from app.outbox.events import INDEX_EMBEDDING_REQUESTED
-    from app.services.outbox import ack_outbox, poll_outbox_one
     from app.stores import reset_store_backends
+    from tests.indexer.test_outbox_roundtrip_pg import _drain_db_outbox_embedding_spine
 
     dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
     reset_store_backends()
@@ -110,20 +108,12 @@ def test_doctor_reports_indexed(tmp_path, monkeypatch) -> None:
 
     legacy_object_store._MEMORY_STORE.clear()
 
-    # Drain through the same dispatch path the worker uses.
-    for _ in range(50):
-        message = poll_outbox_one()
-        if not message:
-            break
-        if message.get("topic") == INDEX_EMBEDDING_REQUESTED:
-            process_indexer_event(
-                {
-                    "event": INDEX_EMBEDDING_REQUESTED,
-                    "payload": dict(message.get("payload") or {}),
-                    "trace_id": "trace-doctor-indexed",
-                }
-            )
-        ack_outbox(message["id"])
+    # Drain ONLY this object's seeded embedding-request row, scoped by object_id
+    # on the nested envelope path, through the same consumer entrypoint the
+    # production worker dispatches to. A global ``poll_outbox_one`` loop would
+    # ack pre-existing foreign rows on a shared/operator DB — destructive.
+    processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
+    assert processed_total >= 1
 
     reset_diagnose_cache()
     result = diagnose_index()

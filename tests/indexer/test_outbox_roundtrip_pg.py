@@ -77,13 +77,20 @@ def test_indexer_runner_pg_does_not_consume_jsonl_outbox_queue(tmp_path, monkeyp
 
 
 def _undelivered_rows_for_object(dsn: str, object_id: str) -> list[tuple[str, str, dict]]:
-    """Return ``(id, topic, payload)`` for this object's undelivered outbox rows only.
+    """Return ``(id, topic, inner_payload)`` for this object's undelivered rows only.
 
     ``poll_outbox_one`` returns the oldest *global* undelivered row and a drain
     loop over it would dispatch+ack pre-existing rows from other work on a shared
-    or operator DB — destructive and flaky. We instead claim by payload
-    ``object_id`` so the drain touches only rows this test emitted; foreign rows
-    are never selected, dispatched, or acked.
+    or operator DB — destructive and flaky. We instead claim by ``object_id`` so
+    the drain touches only rows this test emitted; foreign rows are never
+    selected, dispatched, or acked.
+
+    The ``outbox.payload`` column stores the *full* OutboxEvent envelope
+    (``write_outbox_event`` persists ``envelope.model_dump_json()``), so the
+    event ``object_id`` lives at ``payload->'payload'->>'object_id'`` — NOT at
+    the envelope top level. We select on that nested path and return the
+    *unwrapped* inner event payload (``envelope['payload']``), matching the shape
+    ``poll_outbox_one`` hands the production worker (``event.payload``).
     """
     rows: list[tuple[str, str, dict]] = []
     with psycopg.connect(dsn) as conn:
@@ -91,14 +98,21 @@ def _undelivered_rows_for_object(dsn: str, object_id: str) -> list[tuple[str, st
             cur.execute(
                 "SELECT id, topic, payload FROM outbox "
                 "WHERE delivered_at IS NULL "
-                "AND payload->>'object_id' = %s "
+                "AND payload->'payload'->>'object_id' = %s "
                 "ORDER BY created_at ASC",
                 (str(object_id),),
             )
             for row in cur.fetchall():
                 raw = row[2]
-                payload = raw if isinstance(raw, dict) else (raw or {})
-                rows.append((str(row[0]), str(row[1]), dict(payload)))
+                envelope = raw if isinstance(raw, dict) else (raw or {})
+                if not isinstance(envelope, dict):
+                    envelope = {}
+                inner = envelope.get("payload")
+                inner_payload = dict(inner) if isinstance(inner, dict) else {}
+                # trace_id lives on the envelope, not the inner event payload;
+                # carry it through so the dispatched event matches the worker.
+                inner_payload.setdefault("trace_id", envelope.get("trace_id"))
+                rows.append((str(row[0]), str(row[1]), inner_payload))
     return rows
 
 
