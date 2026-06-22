@@ -134,7 +134,10 @@ def test_memory_record_preserves_gov_promotion_boundary() -> None:
 
 
 def test_rejected_promoted_memory_is_not_stamped_as_promoted() -> None:
-    candidate = _candidate(review_state=ReviewState.REJECTED)
+    # The real reject()/revise() paths leave candidate.review_state == unreviewed;
+    # the effective review state must come from the promotion outcome, not the
+    # embedded candidate, so use the default (unreviewed) candidate here.
+    candidate = _candidate(review_state=ReviewState.UNREVIEWED)
     rejected = PromotedMemory(
         promotion_id="promotion-rejected",
         outcome=ReviewState.REJECTED,

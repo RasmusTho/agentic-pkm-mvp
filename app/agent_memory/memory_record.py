@@ -256,9 +256,14 @@ def _authority_for_status(status: ReviewStatus) -> MemoryRecordAuthority:
 
 
 def _effective_review_state(promoted: PromotedMemory) -> ReviewState:
-    if promoted.outcome is ReviewState.ACCEPTED:
-        return ReviewState.ACCEPTED
-    return promoted.candidate.review_state
+    """Derive the review state from the promotion outcome, not the candidate.
+
+    ``reject()`` / ``revise()`` build a ``PromotedMemory`` from the original
+    candidate without mutating ``candidate.review_state`` (it commonly stays
+    ``unreviewed``). ``promoted.outcome`` is the explicit decision, so the
+    MemoryRecord review posture must come from it for every outcome.
+    """
+    return promoted.outcome
 
 
 def _unavailable_fields(
