@@ -1886,10 +1886,17 @@ def _render_note_section(fields: dict) -> str:
         bool(_panel_last_response)
         or len(fields.get("governance_receipts") or []) > 0
     )
+    # A suggestion is *content* only when there is an actual staged suggestion
+    # to act on — a suggestion card, or a staged suggestion state. The
+    # preparatory / non-content state-machine values ("thinking", "blocked",
+    # "idle"/""/"unknown") are not content: CUIDR-03 has no intermediate or
+    # "loading" expanded rail, so they must stay ambient. This mirrors the
+    # render's own ``_is_suggestion_idle`` content semantics
+    # (_render_suggestion_flow_region).
+    _suggestion_state = str(fields.get("suggestion_state", "idle") or "idle")
     rail_has_suggestion = (
         len(fields.get("suggestion_cards") or []) > 0
-        or str(fields.get("suggestion_state", "idle") or "idle")
-        not in {"idle", "", "unknown"}
+        or _suggestion_state.startswith("staged")
     )
     rail_actionable = bool(
         rail_has_proposal

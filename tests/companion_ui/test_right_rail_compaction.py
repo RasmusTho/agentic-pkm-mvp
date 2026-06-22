@@ -360,7 +360,11 @@ def test_rail_active_contract_parametrized():
                                             "action_mode": "confirm_required", "status": "staged"}]},
          "active"),
         ("suggestion-card", {"suggestion_cards": [{"id": "s", "text": "t"}]}, "active"),
-        ("suggestion-state", {"suggestion_state": "ready"}, "active"),
+        ("suggestion-staged", {"suggestion_state": "staged_body"}, "active"),
+        # Preparatory / non-content suggestion states stay ambient — there is
+        # no intermediate "loading" expanded rail (CUIDR-03; Codex P2).
+        ("suggestion-thinking", {"suggestion_state": "thinking"}, "ambient"),
+        ("suggestion-blocked-no-cards", {"suggestion_state": "blocked"}, "ambient"),
         ("panel-receipt", {"panel_last_response": {"status": "executed",
                             "receipt": {"receipt_id": "r", "outcome": "applied",
                                         "message": "m", "persistence": "durable"}}}, "active"),
