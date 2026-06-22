@@ -33,6 +33,7 @@ from __future__ import annotations
 import html as _html
 from typing import Any, Optional
 
+from companion_ui.workspace.calm_degraded import humanise_token
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
     guidance_toggle_markup,
@@ -200,7 +201,7 @@ def _rows_html(rows: list[dict[str, Any]]) -> str:
             f'data-filter-text="{_e(row["filter_text"])}">'
             f'<span class="palette-row-desc">{_e(row["description"])}</span>'
             '<span class="palette-row-class" '
-            f'data-testid="palette-proposal-class">{_e(row["action_class"])}</span>'
+            f'data-testid="palette-proposal-class">{_e(humanise_token(row["action_class"]))}</span>'
             '<span class="palette-row-status" '
             f'data-testid="palette-proposal-status">{_e(row["status"])}</span>'
             f'<span class="palette-row-actions">{_row_actions_html(row)}</span>'
