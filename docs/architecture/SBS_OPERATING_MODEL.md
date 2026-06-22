@@ -23,7 +23,7 @@ The SBS is operationally self-sustaining when a future contributor can start fro
 - whether transition debt must be recorded;
 - which fitness rules apply.
 
-Every question above is answered by following the [classification procedure](#3-how-new-work-is-classified-against-sbs) and reading the source-of-truth docs it points to. No answer depends on memory.
+Every question above is answered by following the [Builder System classification procedure](#3-builder-system-boundary-and-work-classification) and [SBS impact procedure](#4-how-new-work-is-classified-against-sbs), then reading the source-of-truth docs they point to. No answer depends on memory.
 
 ## What the SBS is not
 
@@ -57,13 +57,111 @@ The SBS is described across several docs, each with a single owner. Do not dupli
 | Fitness rules | `docs/architecture/SBS_FITNESS_RULES.md` | Architecture fitness rules, enforcement posture, and the prioritized rule roadmap. |
 | Critical contracts | `docs/contracts/*.md` | ActiveContextSet, GovernedWriteProtocol, ArtifactContract, StorePort, ContextBundle, MemoryRecord, ExecutionRequest, ReplicationEnvelope, CapabilityContract, WorkflowContract. |
 | Durable architecture decisions | `docs/adr/ADR-0015` … `ADR-0019` | Authority-first SBS, contract-first/module-lazy, HKA/GOV survivability, provenance split, governed writes. |
-| Issue lifecycle | this doc §6 + `.github/ISSUE_TEMPLATE/task.yml` + `.github/github-governance.yml` | Required sections and labels are enforced by governance config. |
-| PR lifecycle | this doc §7 + `.github/pull_request_template.md` | SBS impact block and owner-doc writeback checklist live in the template. |
-| Review-gate fallback policy | this doc §11 | What to do when a required automated review gate is unavailable. |
+| Issue lifecycle | this doc §7 + `.github/ISSUE_TEMPLATE/task.yml` + `.github/github-governance.yml` | Required sections and labels are enforced by governance config. |
+| PR lifecycle | this doc §8 + `.github/pull_request_template.md` | SBS impact block and owner-doc writeback checklist live in the template. |
+| Review-gate fallback policy | this doc §12 | What to do when a required automated review gate is unavailable. |
+| Builder System boundary and authority model | this doc §3 | Defines the continuous-development enabling system, its relationship to the Product/Runtime SBS and CES, and how builder agents classify Product, Builder, and boundary work. |
 
 This matrix is the **source-of-truth verification matrix** required for SBS operationalization. If a new SBS concern appears, add a row here naming exactly one owner doc.
 
-## 3. How new work is classified against SBS
+## 3. Builder System Boundary And Work Classification
+
+Yggdrasil has two related but distinct systems:
+
+- **Product/Runtime System** - the human-first cognitive platform described by `docs/PROJECT_KERNEL.md`,
+  `docs/COGNITIVE_PROSTHESIS_CHARTER.md`, current runtime owner docs, and the target SBS in
+  `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`.
+- **Builder System** - the continuous-development enabling system that builds, verifies, releases,
+  governs, and learns from changes to the Product/Runtime System.
+
+The Builder System includes builder agents, repo-local skills, issue creation and delivery workflows,
+PR governance, CI and architecture fitness, release/UAT/promotion workflows, owner-doc writeback,
+delivery receipts, BuilderOps Vault records and projections, TCD governance, and builder-learning
+feedback loops. It also includes external model, tool, GitHub, CI, and connector dependencies when
+they are used to produce or verify repo-governed changes.
+
+The Builder System is **not** a Product/Runtime SBS subsystem. It is an enabling system around the
+Product/Runtime System. Classifying work as Builder System work does not claim shipped runtime
+behavior and does not make repo-local skills runtime CAO/MEM capabilities.
+
+CES remains the Product SBS contract-stewardship practice: it owns subsystem charters, interface
+versioning, compatibility, ADRs, dependency rules, and deprecation discipline. CES does not carry the
+entire Builder System. The Builder System may use CES-governed artifacts, and it may update CES
+practice surfaces through repo-governed PRs, but release workflows, issue pickup, skill execution,
+BuilderOps records, TCD routing, and delivery receipts are Builder System concerns unless they also
+change Product/Runtime contracts.
+
+### Classification Procedure
+
+Run this procedure before non-trivial issue creation, implementation, docs/governance work, or
+verification:
+
+1. **Product/Runtime System work** changes product behavior, runtime code, user-facing semantics,
+   Product SBS contracts, durable human knowledge authority, machine memory, retrieval, execution,
+   sync, persistence, or current shipped architecture. Route it through the Product owner docs,
+   `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, relevant `docs/contracts/*.md`, and the SBS
+   impact procedure below.
+2. **Builder System work** changes development-time machinery: `AGENTS.md`, `.codex/skills/**`,
+   issue/PR templates, GitHub governance config, CI/fitness rails, release/promotion skills,
+   BuilderOps object/projection docs, delivery receipts, worklogs, learning/retrospective workflows,
+   TCD policy, or agent workflow docs. Route it through this Builder System model, the repo-local
+   skill index, and the development workflow docs.
+3. **Boundary work** changes how Builder System machinery affects Product/Runtime truth, for example
+   owner-doc writeback, issue/PR classification, release promotion, architecture fitness enforcement,
+   Product SBS contract updates, or BuilderOps promotion into GitHub/repo artifacts. Route it through
+   both sides: this Builder System model and the relevant Product/Runtime owner docs.
+
+If the classification is still unclear, choose the stricter boundary route and name both owner surfaces
+in the Issue/PR. Do not treat Builder System records, projections, skills, prompts, or delivery
+learning as runtime/user memory or Human Knowledge Artifacts unless a Product/Runtime authority path
+explicitly promotes them.
+
+### Builder-Agent Authority Model
+
+Builder agents and repo-local skills may change repo-governed artifacts only through the repo's normal
+authority path:
+
+- bounded GitHub Issue or explicit direct-repair contract;
+- isolated worktree/branch for active edits;
+- PR with lane classification, validation evidence, BuilderOps routing outcome where required, and
+  owner-doc writeback resolution;
+- CI, architecture fitness, Codex review, and verification gates required by the lane and risk tier;
+- delivery receipt on the governing Issue/PR and parent validation hub when applicable.
+
+Builder agents may create or update BuilderOps operational records for builder worklogs, learning
+signals, docs freshness, roadmap execution movement, promotion intents, and receipts when the workflow
+requires those records. BuilderOps records and generated projections are not Product/Runtime truth and
+do not mutate runtime/user memory. Crossing from BuilderOps into repo docs, GitHub Issues, PRs,
+runtime behavior, or Product SBS contracts requires the explicit promotion or PR path named by the
+relevant workflow.
+
+Runtime/user memory separation is strict: failed prompts, quota/context failures, issue decomposition
+problems, PR feedback, high-TCD deliveries, and workflow learnings are Builder System learning inputs.
+They may become skill updates, issue updates, transition debt, fitness rules, roadmap changes,
+BuilderOps records, or repo-doc PRs. They must not silently become HKA/MEM/user memory, runtime
+instructions, or product semantics without Product System authority review.
+
+### Builder System SBS Impact Guidance
+
+For Builder System issues and PRs, fill `SBS Impact` as follows:
+
+- Primary subsystem: use `Builder System / CES boundary` when the work changes builder workflow,
+  repo governance, skill behavior, or development authority. This value is valid for Builder System
+  work even though it is not a Product/Runtime SBS subsystem.
+- Secondary subsystem(s): name Product SBS subsystems only when their contracts, owner docs, runtime
+  behavior, release state, or fitness rules are read or changed.
+- Write class: normally `governance/docs/process`; use a more specific Product write class only when
+  Product artifacts or runtime behavior change.
+- Authority impact: state which builder authority path is changed or consumed, and whether any
+  Product/Runtime authority is affected.
+- Memory impact: state that builder learning is separate from runtime/user memory unless the work
+  explicitly changes a Product MEM/HKA contract.
+- Owner-doc impact: update this operating model for Builder System boundary changes; update Product
+  owner docs only when Product truth changes.
+- Transition debt and fitness rule impact: record unresolved Builder/Product misclassification or
+  CES-overload risk as transition debt or a candidate fitness rule when the PR discovers it.
+
+## 4. How new work is classified against SBS
 
 Run this procedure for any non-trivial change. It produces the SBS impact block used in the issue and PR templates and answers the self-sustaining questions above. Each step names where its answer comes from.
 
@@ -77,9 +175,9 @@ Run this procedure for any non-trivial change. It produces the SBS impact block 
    - **ephemeral/none** — no durable effect.
    → *whether a write is authority-bearing* and *whether a record is durable or rebuildable*.
 5. **Classify persistence vs derivation.** A record is **durable** when losing it loses human meaning or accountability (HKA/GOV/MEM-owned). It is **rebuildable** when it can be regenerated from durable sources (DRI/PDM projections). If a "derived" record is the only source of meaning, it is misclassified — reclassify to HKA/GOV/MEM (fitness rule "No DRI record that is non-rebuildable unless reclassified").
-6. **Decide owner-doc impact.** See §8. → *whether owner docs must be updated*.
-7. **Decide transition-debt impact.** See §9. Every slice either reduces a debt item, adds a bounded one, or states it does not affect debt. → *whether transition debt must be recorded*.
-8. **Decide fitness-rule impact.** See §10. Identify which existing rules apply to the boundary you touched and whether the change strengthens, weakens, or is neutral to enforcement. → *which fitness rules apply*.
+6. **Decide owner-doc impact.** See §9. → *whether owner docs must be updated*.
+7. **Decide transition-debt impact.** See §10. Every slice either reduces a debt item, adds a bounded one, or states it does not affect debt. → *whether transition debt must be recorded*.
+8. **Decide fitness-rule impact.** See §11. Identify which existing rules apply to the boundary you touched and whether the change strengthens, weakens, or is neutral to enforcement. → *which fitness rules apply*.
 
 The result of steps 1–8 is the SBS impact block. For issues it is the `SBS Impact` section of `.github/ISSUE_TEMPLATE/task.yml`; for PRs it is the `## SBS Impact` section of `.github/pull_request_template.md`.
 
@@ -89,11 +187,12 @@ Fourteen Level-2 control-boundary subsystems plus the CES stewardship practice (
 
 `HIX` human interaction & intent · `WSP` workspace, scope & principal context (ActiveContextSet, not a scalar active vault) · `HKA` human knowledge & artifact substrate · `SIP` semantic identity & provenance · `GOV` governance, policy, authority & receipts · `EBF` external boundary fabric · `PDM` persistence & data management · `DRI` derived representation & indexing · `RCA` retrieval & context assembly · `MEM` machine memory & learning · `CAO` cognitive capability & agent orchestration · `EXE` capability execution & automation · `SFC` synchronization, federation & consensus · `OEF` observability, evaluation & fitness · `CES` contract & evolution stewardship (practice, not runtime).
 
-## 4. Definition of Ready (SBS-relevant issues)
+## 5. Definition of Ready (SBS-relevant issues)
 
 An SBS-relevant issue is Ready (`agent:ready`, Status=Ready) only when its `SBS Impact` block resolves all of the following. Use "none"/"unaffected" explicitly rather than leaving a field blank.
 
-- **Primary SBS owner** named (one subsystem).
+- **Primary SBS owner** named (one subsystem), or `Builder System / CES boundary` for Builder System
+  work that does not change a Product/Runtime SBS subsystem.
 - **Secondary subsystem(s)** named or marked none.
 - **Durable vs rebuildable** classification stated for any record the work creates or changes.
 - **Authority-bearing write** classification stated (authority-bearing / mechanical / derived / none).
@@ -104,34 +203,34 @@ An SBS-relevant issue is Ready (`agent:ready`, Status=Ready) only when its `SBS 
 
 An issue that cannot resolve these is `agent:needs-human`, not Ready.
 
-## 5. Definition of Done (SBS-relevant PRs)
+## 6. Definition of Done (SBS-relevant PRs)
 
 An SBS-relevant PR is Done only when:
 
 - **Contract** is updated or explicitly recorded as unaffected.
-- **Owner-doc impact** is handled per §8 (no change implied / updated in this PR / follow-up issue created and linked) — the PR template owner-doc checklist is filled.
+- **Owner-doc impact** is handled per §9 (no change implied / updated in this PR / follow-up issue created and linked) — the PR template owner-doc checklist is filled.
 - **Transition debt** is recorded or resolved: the relevant row in `docs/architecture/SBS_TRANSITION_DEBT.md` is added, updated (containment/status), or the PR states no debt effect.
 - **Fitness rule** impact is handled: an applicable rule in `docs/architecture/SBS_FITNESS_RULES.md` is updated, or a follow-up issue is created to add/strengthen one, or the PR states no fitness effect.
-- **Validation evidence** is recorded in the PR (lane-appropriate checks per the template; see §11 if a required gate is unavailable).
+- **Validation evidence** is recorded in the PR (lane-appropriate checks per the template; see §12 if a required gate is unavailable).
 - **Delivery receipt** is posted on the linked issue/PR (the merge/closure note that records what landed; see the `verification-and-closure` practice).
 - **Status/roadmap impact** is handled when the change moves a tracked item: update `docs/architecture/SBS_ROADMAP.md` phase status and the `docs/ROADMAP.md` SBS initiative entry when applicable.
 
-## 6. Issue lifecycle expectations
+## 7. Issue lifecycle expectations
 
 - SBS-relevant work uses `.github/ISSUE_TEMPLATE/task.yml`. The `SBS Impact` section is a required section per `.github/github-governance.yml`.
-- Issues carry `agent:ready` only when the Definition of Ready (§4) holds; otherwise `agent:needs-human` or `agent:blocked`.
+- Issues carry `agent:ready` only when the Definition of Ready (§5) holds; otherwise `agent:needs-human` or `agent:blocked`.
 - Project Status is a projection of issue/PR truth (governance config): opened → Backlog; ready → Ready; PR open → Review; merged/closed → Done. Do not hand-edit Status to mask issue state.
 - Larger SBS work hangs off the tracking issue `#2337` (Operationalize Target SBS) and the delivery parent `#2355`. New initiative-level SBS work should reference the relevant `docs/architecture/SBS_ROADMAP.md` phase.
 
-## 7. PR lifecycle expectations
+## 8. PR lifecycle expectations
 
 - Every PR fills the `## SBS Impact` block in `.github/pull_request_template.md`, including the owner-doc writeback checklist.
 - Choose the correct lane (implementation / docs-authoring / governance). Operating-model, register, template, and policy changes are docs-authoring or governance lane.
 - Run lane-appropriate validation and paste evidence. For implementation lane touching shared/hot-path code, run the full `not pg` suite, not targeted tests only.
-- A required review gate must actually pass before merge. If it cannot run, apply the review-gate fallback policy (§11). Never record a gate as passed when it did not run.
-- On merge, post the delivery receipt and apply owner-doc writeback (§8) and roadmap/debt/fitness writeback (§5).
+- A required review gate must actually pass before merge. If it cannot run, apply the review-gate fallback policy (§12). Never record a gate as passed when it did not run.
+- On merge, post the delivery receipt and apply owner-doc writeback (§9) and roadmap/debt/fitness writeback (§6).
 
-## 8. Owner-doc writeback rule
+## 9. Owner-doc writeback rule
 
 When a change alters behavior, a contract, or turns a tracked backlog item into shipped reality, the corresponding **owner doc** must be brought back into truth. Owner docs include `docs/ARCHITECTURE.md`, `docs/STATUS.md`, subsystem owner docs, the relevant `docs/contracts/*.md`, and the SBS registers.
 
@@ -143,7 +242,7 @@ Resolve owner-doc impact to exactly one of:
 
 A comment, a placeholder marker, or a "to update later" note is **not** an acceptable resolution — it recreates the same drift the rule exists to prevent. The PR template encodes these three options as a checklist; exactly one must be checked.
 
-## 9. Transition debt lifecycle
+## 10. Transition debt lifecycle
 
 `docs/architecture/SBS_TRANSITION_DEBT.md` is the register of known and likely deviations from the target SBS.
 
@@ -152,7 +251,7 @@ A comment, a placeholder marker, or a "to update later" note is **not** an accep
 - **`to verify` discipline:** do not assert that a debt is confirmed in code unless it was inspected. A plausible-but-unverified deviation is recorded with status `to verify` and current location `to verify`.
 - **Closing:** a debt row moves to `resolved` only when the violated boundary is actually enforced (contract adopted on the path *and* a fitness rule or test prevents regression), with the resolving PR/issue linked.
 
-## 10. Fitness rule lifecycle
+## 11. Fitness rule lifecycle
 
 `docs/architecture/SBS_FITNESS_RULES.md` owns the rules and the prioritized rule roadmap (P0/P1/P2). Each rule has an enforcement posture:
 
@@ -167,7 +266,7 @@ Lifecycle:
 - Promoting a rule from manual to CI is itself SBS work: file an issue, add the test under `tests/architecture/`, and update the rule's posture and the prioritized roadmap.
 - Enforcement infrastructure (the fitness tests themselves) is in-scope for review and must fail loud; a check that cannot fail is not enforcement.
 
-## 11. Review-gate fallback policy
+## 12. Review-gate fallback policy
 
 This policy covers the scenario observed during `#2363` / PR `#2376`, where the Codex review gate could not run because usage limits were exhausted. It applies to **any** required automated review gate that becomes unavailable.
 
@@ -184,20 +283,20 @@ When a required automated review gate is unavailable:
 
 An unprotected `main` branch does **not** waive this gate: "autonomous merge" means running the full skill chain including the review wait, not bypassing it because branch protection is off.
 
-## 12. Relationship to roadmap and status
+## 13. Relationship to roadmap and status
 
 - **Strategic sequencing** of the SBS initiative lives in `docs/ROADMAP.md` (the SBS operationalization initiative entry under Baselines) and is expanded into phase intent/status in `docs/architecture/SBS_ROADMAP.md`. This operating model owns *process*, not sequencing — it points to the roadmap, it does not duplicate it.
-- **Shipped reality** is owned by `docs/STATUS.md` and `docs/ARCHITECTURE.md`. Classifying or readying work against the SBS never updates status; only delivery does, via owner-doc writeback (§8).
+- **Shipped reality** is owned by `docs/STATUS.md` and `docs/ARCHITECTURE.md`. Classifying or readying work against the SBS never updates status; only delivery does, via owner-doc writeback (§9).
 - **High-churn execution movement** (active issue, blocker, last movement) lives in BuilderOps operational records, not in this doc.
 
-## 13. Non-goals
+## 14. Non-goals
 
 - Do not instantiate fourteen physical modules/services/packages to satisfy the SBS.
 - Do not rewrite owner docs or registers to present target-state as shipped behavior.
 - Do not add review gates beyond those named here, or convert classification into an approval bureaucracy.
 - Do not duplicate the decomposition, the roadmap, or contract content into this doc — link to the owners in §2.
 - Do not treat SBS classification as proof that a subsystem exists in code; it is a routing and review aid only.
-- Do not claim a review gate passed when it did not (§11).
+- Do not claim a review gate passed when it did not (§12).
 
 ## Discoverability
 

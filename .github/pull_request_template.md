@@ -13,7 +13,7 @@ Required for implementation lane. Leave blank for docs authoring lane.
 Leave blank for governance lane when the PR stays within approved governance surfaces.
 
 ## SBS Impact
-Classify per `docs/architecture/SBS_OPERATING_MODEL.md` §3; use "none"/"unaffected" explicitly rather than leaving a field blank.
+Classify Product/Runtime System, Builder System, or boundary work per `docs/architecture/SBS_OPERATING_MODEL.md` §3, then fill SBS impact per §4; use "none"/"unaffected" explicitly rather than leaving a field blank.
 - Primary subsystem:
 - Secondary subsystem(s):
 - Write class:
@@ -32,7 +32,7 @@ Classify per `docs/architecture/SBS_OPERATING_MODEL.md` §3; use "none"/"unaffec
 - Boundary risk:
 
 ## Owner-Doc Writeback
-Resolve to exactly one (`docs/architecture/SBS_OPERATING_MODEL.md` §8). A comment or "to update later" note is not an acceptable resolution.
+Resolve to exactly one (`docs/architecture/SBS_OPERATING_MODEL.md` §9). A comment or "to update later" note is not an acceptable resolution.
 - [ ] No owner-doc change implied.
 - [ ] Owner-doc updated in this PR.
 - [ ] Owner-doc follow-up issue created and linked.

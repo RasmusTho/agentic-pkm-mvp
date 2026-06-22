@@ -42,7 +42,7 @@ body:
       label: SBS Impact
       description: |
         Target System Breakdown Structure classification for routing, boundary review, and follow-up ownership.
-        Run the classification procedure in docs/architecture/SBS_OPERATING_MODEL.md §3; use "none"/"unaffected" explicitly rather than leaving a field blank.
+        Run Product/Runtime System, Builder System, or boundary-work classification in docs/architecture/SBS_OPERATING_MODEL.md §3, then the SBS impact procedure in §4; use "none"/"unaffected" explicitly rather than leaving a field blank.
       placeholder: |
         - Primary subsystem:
         - Secondary subsystem(s):
