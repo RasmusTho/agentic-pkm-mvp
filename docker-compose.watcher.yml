@@ -6,7 +6,11 @@ services:
     command: ["python", "-m", "app.cli", "watcher", "run"]
     volumes:
       - ./:/app
-      - "${VAULT_ROOT:-./vault}:/app/vault"
+      # Legacy no-vault ./vault fallback removed (#2386, Slice 05D of #2311):
+      # this standalone watcher always watches a vault (WATCHER_ENABLE=1), so the
+      # mount source requires an explicitly bound VAULT_ROOT and errors rather
+      # than synthesizing a repo-local ./vault.
+      - "${VAULT_ROOT:?VAULT_ROOT must be set to bind /app/vault for the standalone watcher}:/app/vault"
       - watcher_state:/state
     environment:
       STORE_BACKEND: memory

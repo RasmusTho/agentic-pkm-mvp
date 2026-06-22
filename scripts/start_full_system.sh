@@ -817,6 +817,29 @@ else
   # source must come from VAULT_HOST_ROOT, not VAULT_ROOT (issue #2141).
   export VAULT_HOST_ROOT="$vault_host_path"
   apply_start_full_system_vault_defaults "$vault_host_path"
+  # Legacy /app/vault compatibility mount (#2386, Slice 05D of #2311): the base
+  # compose no longer binds /app/vault, so an explicitly bound vault includes the
+  # docker-compose.legacy-vault.yml overlay here. It is appended ONLY on this
+  # explicit-vault branch — never in the no-vault idle posture — and its source
+  # ${VAULT_HOST_ROOT:?...} errors rather than falling back to ./vault. Skip the
+  # duplicate append if COMPOSE_FILE already names the overlay (operator override).
+  # When COMPOSE_FILE is unset (no channel selected), seed the base compose first
+  # so the overlay augments rather than replaces it. Setting COMPOSE_FILE switches
+  # Compose from its implicit docker-compose.yaml + docker-compose.override.yml load
+  # to an explicit file list, which drops the automatic override; preserve it
+  # explicitly so a bare active-vault start keeps the override's worker env
+  # (OPENAI_BASE_URL / OPENAI_API_KEY).
+  if [ -z "${COMPOSE_FILE:-}" ]; then
+    COMPOSE_FILE="docker-compose.yaml"
+    if [ -f "docker-compose.override.yml" ]; then
+      COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.override.yml"
+    fi
+  fi
+  case ":${COMPOSE_FILE}:" in
+    *":docker-compose.legacy-vault.yml:"*) ;;
+    *) COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.legacy-vault.yml" ;;
+  esac
+  export COMPOSE_FILE
 fi
 
 # Full-host mounts (/Users, /Volumes) for in-process vault selection are

@@ -78,19 +78,22 @@ local_gid="${LOCAL_GID:-$(id -g)}"
 #   1. as the service `env_file:` — its values become the *container* environment
 #      read by resolve_vault_root(); that must be the in-container mount path.
 #   2. as the CLI `--env-file` (start_full_system.sh, cold_boot.sh,
-#      verify_runtime_stack.sh) — used to interpolate the bind-mount *source*
-#      `${VAULT_HOST_ROOT:-${VAULT_ROOT:-./vault}}:/app/vault`; that must be the
-#      *host* path, or the wrappers bind a non-existent host dir.
+#      verify_runtime_stack.sh) — used to interpolate the legacy compatibility
+#      bind-mount *source* `${VAULT_HOST_ROOT:?...}:/app/vault` in the explicit
+#      docker-compose.legacy-vault.yml overlay (#2386); that must be the *host*
+#      path, or the wrappers bind a non-existent host dir.
 # So emit both: VAULT_HOST_ROOT carries the host path for mount-source
 # interpolation; VAULT_ROOT carries the container mount path for the app. The
 # provider settings loader below still reads the host path from the shell
 # `VAULT_ROOT`. Writing the host path into the container's VAULT_ROOT is what made
 # resolve_vault_root() raise VaultRootMisconfiguredError and the API 503.
 #
-# The container path is the fixed compose mount target (/app/vault in all three
-# services); it is intentionally not operator-overridable, because the app
-# validates VAULT_ROOT exists and a value diverging from the hardcoded mount
-# target would re-introduce the same 503.
+# The container path is the fixed compose mount target (/app/vault in the legacy
+# overlay for all three services); it is intentionally not operator-overridable,
+# because the app validates VAULT_ROOT exists and a value diverging from the
+# fixed mount target would re-introduce the same 503. The base compose no longer
+# carries a ./vault fallback, so a no-vault startup omits both vars (above) and
+# start_full_system.sh does not include the legacy overlay.
 vault_host_root="$VAULT_ROOT"
 container_vault_root="/app/vault"
 

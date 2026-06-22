@@ -1,0 +1,30 @@
+# Legacy /app/vault compatibility overlay (#2386, Slice 05D of #2311).
+#
+# This overlay re-adds the legacy `/app/vault` bind mount for the api / worker /
+# watcher services. It is intentionally NOT part of the base docker-compose.yaml:
+# a no-vault idle startup (#2005) must never synthesize a repo-local `./vault`
+# bind. The mount remains only as a *compatibility* path for an EXPLICITLY bound
+# vault, until the remaining eager `resolve_vault_root()` consumers (Slices
+# 05A-05C of #2311) are fully migrated off `/app/vault`.
+#
+# The mount source uses the REQUIRED-variable form `${VAULT_HOST_ROOT:?...}`:
+# Compose errors out if `VAULT_HOST_ROOT` is unset rather than falling back to
+# `./vault`, so this overlay cannot be selected by a no-vault startup. The host
+# path is carried by `VAULT_HOST_ROOT` (issue #2141), keeping it independent of
+# the container-facing `VAULT_ROOT=/app/vault`.
+#
+# `scripts/start_full_system.sh` appends this overlay to `COMPOSE_FILE` ONLY on
+# the explicit-vault branch (NO_VAULT_MODE != 1). The `/Users` + `/Volumes`
+# same-path mounts (#2310) stay in the base compose and are unaffected.
+services:
+  api:
+    volumes:
+      - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault"
+
+  worker:
+    volumes:
+      - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault"
+
+  watcher:
+    volumes:
+      - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault"
