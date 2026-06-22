@@ -5,7 +5,7 @@ Owner: OEF / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-21
+Last reviewed: 2026-06-22
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_TRANSITION_DEBT.md
 
 # SBS Fitness Rules
@@ -48,7 +48,7 @@ These rules make the target SBS inspectable without claiming current implementat
 | Memory becomes hidden instruction | Unreviewed memory silently changes agent behavior. | CAO consumes memory without review/provenance/confidence posture. | MemoryRecord review/provenance plus GOV policy. |
 | Sync resolves meaning | Transport rules decide semantic conflicts. | SFC applies last-write-wins to authority-bearing records. | Stage conflicts; route policy decisions through GOV/HIX. |
 | UI state becomes authoritative | Client/UI state is the only place decisions or accepted changes exist. | HIX state is read as HKA/MEM/GOV truth. | Persist domain state in owner subsystem with receipts. |
-| Event envelope lacks delivery semantics | Events are shaped but can drop/reorder without visibility. | No idempotency, replay/backfill, ordering, or failure visibility. | Define SourceObservationEvent/ReplicationEnvelope semantics. |
+| Event envelope lacks delivery semantics | Events are shaped but can drop/reorder without visibility. | No idempotency, replay/backfill, ordering/causal placeholder, or failure visibility. | Use the SFC-owned `ReplicationEnvelope` contract for watcher/source-observation delivery semantics; keep `SourceObservationEvent` as an observed-source payload unless a future EBF payload contract is scheduled. |
 | OEF becomes control loop | Fitness or metrics mutate runtime behavior. | OEF writes to policy/memory/retrieval/knowledge/execution. | OEF observes, reports, and blocks CI when configured; remediation is governed. |
 | SIP becomes irreplaceable shadow store | Semantic projection holds only copy of meaning/accountability. | HKA/GOV cannot rebuild without SIP. | HKA owns artifact-origin facts; GOV owns receipts; SIP remains rebuildable. |
 | Provider-specific concepts leak into core semantics | Vendor/model/tool fields become HKA/SIP/GOV contract language. | Replacing provider changes semantic authority. | Translate provider details behind EBF/DRI/RCA/EXE. |
@@ -92,7 +92,7 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 | Rule | Owner | Rationale | Enforcement now | Target enforcement | Issue / status |
 |---|---|---|---|---|---|
 | No provider-specific fields in HKA/SIP/GOV public contracts. | EBF / OEF | Keeps vendor/model/tool choices out of core semantics. | Manual review now. | CI check later (provider-field scan on core contract files). | Debt D8 (unfiled — file when audited). |
-| No SFC semantic conflict resolution without GOV policy. | SFC / GOV | Prevents sync transport from deciding meaning. | Manual review now (SFC is no-op/single-node today). | Blocking invariant when federation is implemented. | Debt D7 / #2362. |
+| No SFC semantic conflict resolution without GOV policy. | SFC / GOV | Prevents sync transport from deciding meaning. | Manual review now for broad watcher/sync adoption; targeted tests cover the first `watcher.run` ReplicationEnvelope seam's idempotency, replay cursor, failure visibility, and conflict-staging placeholder. | Blocking invariant when federation is implemented. | Debt D7 / #2362 / #2411. |
 | No OEF automatic control loop mutating policy/memory/retrieval/knowledge/execution. | OEF / GOV | Keeps observability from becoming an ungoverned control loop. | Manual review now; OEF reports and blocks CI only. | Blocking invariant. | Roadmap-level; no loop exists yet. |
 | No Builder System artifact classified as Product runtime subsystem or runtime memory. | CES practice / Builder System | Keeps CES lean and prevents builder worklogs, skills, receipts, and BuilderOps records from becoming Product SBS or runtime MEM/HKA truth by shortcut. | Manual review now via SBS impact classification and PR review. | CI check later only if stable template/doc patterns justify mechanical detection. | Debt D11 / #2422; skill alignment follow-up #2420. |
 | No Builder learning or TCD signal bypasses governed Builder destinations. | Builder System / OEF | Keeps continuous-development learning useful without creating hidden runtime/user memory or untraceable prompt state. | Manual review now via receipts, BuilderOps routing, and PR review. | CI check later only after stable receipt/template patterns define mechanical completeness. | Debt D12; #2421 defines the first governance loop; mechanical completeness follow-up unfiled until checks or metrics schema are specified. |

@@ -1275,7 +1275,7 @@ These are conceptual contracts, not APIs.
 | SemanticIdentityContract | SIP | Defines rebuildable semantic identity, provenance views, relation, lineage, attribution, and ontology terms over HKA/GOV/MEM source anchors. |
 | PolicyDecision | GOV | States whether an actor/action/resource/context is admissible. |
 | AuthorityReceipt | GOV | Durable accountability record for governed decisions and mutations. |
-| SourceObservationEvent | EBF | Records observed external/local source changes with delivery semantics. |
+| SourceObservationEvent | EBF | Records observed external/local source changes and source binding. Watcher/source-observation delivery semantics are currently owned by SFC `ReplicationEnvelope`. |
 | StorePort | PDM | Abstracts persistence mechanics and migrations. |
 | DerivedRepresentationContract | DRI | Defines rebuildable projections, embeddings, indexes, and source sets. |
 | ContextBundle | RCA | Carries scoped candidate evidence with provenance and relevance explanation. |
@@ -1593,11 +1593,12 @@ A watcher or sync adapter emits well-shaped events but drops, reorders, or fails
 
 Detection:
 
-- SourceObservationEvent or ReplicationEnvelope lacks delivery guarantee, replay/backfill, ordering, idempotency, or failure visibility.
+- SourceObservationEvent lacks source binding, or ReplicationEnvelope lacks delivery guarantee,
+  replay/backfill, ordering, idempotency, or failure visibility.
 
 Mitigation:
 
-EBF/SFC event contracts specify delivery semantics.
+EBF source-observation payloads preserve source binding. SFC ReplicationEnvelope specifies delivery semantics.
 
 ### OEF becomes control loop
 
@@ -1942,7 +1943,7 @@ Use the repository's current eight-subsystem architecture as the bridge. Use thi
 - What exact fields belong in ActiveContextSet V1?
 - Which memory classes require explicit human review, agent review, or policy-only review?
 - What ReplicationEnvelope semantics are required before central/satellite deployment can be safe?
-- Which delivery guarantees must SourceObservationEvent provide for watchers and external connectors?
+- Which source-binding guarantees must SourceObservationEvent provide for watchers and external connectors, and when should those observations be wrapped in ReplicationEnvelope delivery semantics?
 - Which StorePort abstractions are sufficient to prevent storage leakage without hiding necessary operational detail?
 - Which OEF fitness checks can automatically detect hidden authority escalation?
 
