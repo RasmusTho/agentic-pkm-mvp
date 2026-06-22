@@ -50,3 +50,20 @@ def test_ask_enable_mcp_vault_requires_explicit_or_configured_vault(
     assert result.exit_code != 0
     assert "vault root is required" in result.output.lower()
     assert not (tmp_path / "vault" / "_mcp").exists()
+
+
+def test_ask_enable_mcp_vault_accepts_mcp_specific_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_vault_env(monkeypatch)
+    reset_plan_store()
+    mcp_vault = tmp_path / "mcp-vault"
+    mcp_vault.mkdir()
+    monkeypatch.setenv("MCP_VAULT_ROOT", str(mcp_vault))
+
+    result = CliRunner().invoke(cli, ["ask", "What should be saved?", "--enable-mcp-vault"])
+
+    assert result.exit_code == 0, result.output
+    files = list((mcp_vault / "_mcp").glob("*.md"))
+    assert len(files) == 1

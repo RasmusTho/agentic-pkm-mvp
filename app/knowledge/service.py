@@ -124,20 +124,23 @@ def _build_adapter(adapter: KnowledgeAdapter, *, fs_root: Path | None) -> Knowle
     raise KnowledgeConfigError(f"Unsupported knowledge adapter: {adapter}")
 
 
+def _build_fs_fallback(vault_root: Path | str | None, adapter: KnowledgeAdapter | None) -> KnowledgePort | None:
+    if adapter is None:
+        return None
+    fs_root = _resolve_fs_root(vault_root) if adapter == KnowledgeAdapter.FS_VAULT else None
+    return _build_adapter(adapter, fs_root=fs_root)
+
+
 def resolve_knowledge_port(
     *,
     vault_root: Path | str | None = None,
     settings: KnowledgeSettings | None = None,
 ) -> KnowledgePort:
     effective = settings or load_knowledge_settings()
-    fs_root = _resolve_fs_root(vault_root)
     if effective.primary_adapter == KnowledgeAdapter.FS_VAULT:
-        return _build_adapter(effective.primary_adapter, fs_root=fs_root)
+        return _build_adapter(effective.primary_adapter, fs_root=_resolve_fs_root(vault_root))
 
-    primary = _build_adapter(effective.primary_adapter, fs_root=fs_root)
-    fallback: KnowledgePort | None = None
-    if effective.allow_fallback and effective.fallback_adapter is not None:
-        fallback = _build_adapter(effective.fallback_adapter, fs_root=fs_root)
+    primary = _build_adapter(effective.primary_adapter, fs_root=None)
 
     status = obsidian_dependency_status()
     if effective.primary_adapter == KnowledgeAdapter.OBSIDIAN_CLI and not status.ok:
@@ -145,13 +148,22 @@ def resolve_knowledge_port(
             raise KnowledgeDependencyError(
                 f"Obsidian CLI adapter is not available: {status.details}"
             )
-        if effective.allow_fallback and fallback is not None:
+        if effective.allow_fallback and effective.fallback_adapter is not None:
+            fallback = _build_fs_fallback(vault_root, effective.fallback_adapter)
+            if fallback is None:
+                raise KnowledgeConfigError("Fallback knowledge adapter is not configured")
             logger.warning("Obsidian CLI unavailable; using fallback knowledge adapter")
             return fallback
 
-    if not effective.allow_fallback or fallback is None:
+    if not effective.allow_fallback or effective.fallback_adapter is None:
         return primary
 
+    try:
+        fallback = _build_fs_fallback(vault_root, effective.fallback_adapter)
+    except KnowledgeConfigError:
+        return primary
+    if fallback is None:
+        return primary
     return HybridKnowledgePort(
         primary=primary,
         fallback=fallback,

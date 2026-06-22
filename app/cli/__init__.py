@@ -161,6 +161,16 @@ def _require_vault_root_path(value: Path | None, *, purpose: str) -> Path:
     return resolved.expanduser().resolve()
 
 
+def _resolve_mcp_vault_root_path(value: Path | None) -> Path | None:
+    resolved = _resolve_vault_root_path(value, allow_env=True, fallback_to_default=False)
+    if resolved is not None:
+        return resolved
+    env_root = os.getenv("MCP_VAULT_ROOT") or os.getenv("VAULT_DIR")
+    if env_root and env_root.strip():
+        return Path(env_root).expanduser()
+    return None
+
+
 def _resolve_yggdrasil_root(path_override: Path | None) -> Path:
     if path_override is not None:
         return path_override
@@ -904,7 +914,7 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         raise click.BadParameter("Question must not be empty.")
 
     event = new_event(event_type=ASK_QUERY_RECEIVED, payload={"question": question_text}, source="cli")
-    resolved_root = _resolve_vault_root_path(vault_root)
+    resolved_root = _resolve_mcp_vault_root_path(vault_root)
     env_flag = os.getenv("MCP_VAULT_ENABLE")
     writes_enabled = enable_mcp_vault or _truthy_flag(env_flag)
     tool_settings: Dict[str, Any] = {}
