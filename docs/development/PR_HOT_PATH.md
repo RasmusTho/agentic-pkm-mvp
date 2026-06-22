@@ -39,6 +39,7 @@ Default rule:
 
 3. Review feedback triage
 - after CI is green and current, fetch existing review comments before any handoff or merge recommendation; do not park the PR as "awaiting human review" until posted comments are classified
+- branch protection is not the process gate: an unprotected branch or absent required-status-check rule does not waive the current-checks and review-feedback wait before merge
 - do not run GraphQL `reviewThreads` closure sweeps by default
 - run GraphQL review-thread closure checks only when triggered by a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback
 - blocking regression risk -> fix before merge
