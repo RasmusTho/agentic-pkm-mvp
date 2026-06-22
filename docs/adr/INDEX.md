@@ -21,3 +21,4 @@
 - [ADR-0022: Treat OEF as first-class but non-authoritative](./ADR-0022-oef-first-class-non-authoritative.md)
 - [ADR-0023: Embedding egress — Ollama-primary with dimension-matched, mixed-identity Gemini auto-fallback](./ADR-0023-embedding-egress-gemini-fallback.md)
 - [ADR-0024: Retrieval topology — in-memory hybrid serving, weighted linear fusion, durable-spine direction](./ADR-0024-retrieval-topology.md)
+- [ADR-0025: Memory authority & direct-write policy](./ADR-0025-memory-authority-direct-write-policy.md)
