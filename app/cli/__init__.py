@@ -162,13 +162,12 @@ def _require_vault_root_path(value: Path | None, *, purpose: str) -> Path:
 
 
 def _resolve_mcp_vault_root_path(value: Path | None) -> Path | None:
-    resolved = _resolve_vault_root_path(value, allow_env=True, fallback_to_default=False)
-    if resolved is not None:
-        return resolved
+    if value is not None:
+        return value
     env_root = os.getenv("MCP_VAULT_ROOT") or os.getenv("VAULT_DIR")
     if env_root and env_root.strip():
         return Path(env_root).expanduser()
-    return None
+    return _resolve_vault_root_path(None, allow_env=True, fallback_to_default=False)
 
 
 def _resolve_yggdrasil_root(path_override: Path | None) -> Path:

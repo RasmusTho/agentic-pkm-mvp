@@ -67,3 +67,23 @@ def test_ask_enable_mcp_vault_accepts_mcp_specific_env(
     assert result.exit_code == 0, result.output
     files = list((mcp_vault / "_mcp").glob("*.md"))
     assert len(files) == 1
+
+
+def test_ask_enable_mcp_vault_prefers_mcp_env_over_vault_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_vault_env(monkeypatch)
+    reset_plan_store()
+    normal_vault = tmp_path / "normal-vault"
+    mcp_vault = tmp_path / "mcp-vault"
+    normal_vault.mkdir()
+    mcp_vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(normal_vault))
+    monkeypatch.setenv("MCP_VAULT_ROOT", str(mcp_vault))
+
+    result = CliRunner().invoke(cli, ["ask", "What should be saved?", "--enable-mcp-vault"])
+
+    assert result.exit_code == 0, result.output
+    assert list((mcp_vault / "_mcp").glob("*.md"))
+    assert not (normal_vault / "_mcp").exists()
