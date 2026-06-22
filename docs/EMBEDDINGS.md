@@ -46,14 +46,14 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
   - Setting this changes the embedding **identity** (provider) and therefore requires a vector-index rebuild — see *Change policy* and the re-index path.
 - `EMBED_FALLBACK_PROVIDER`
-  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). An **identity-preserving** fallback is required — dimension-matched, normalization-matched, query==document identity. The sanctioned posture is Ollama-primary with a Gemini `text-embedding-004` @ 768 fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; see the disciplined-fallback / re-index path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
+  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). A **dimension-matched (768), L2-renormalized** fallback is required; its write is **MIXED-IDENTITY** (carries the fallback provider's identity) and **reconcilable**, with the query path always using the primary identity (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The sanctioned posture is Ollama-primary with a Gemini `gemini-embedding-001` @ `output_dimensionality=768` fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; see the disciplined-fallback / reconcile path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
   - Example (default local): `nomic-embed-text:latest`
 - `EMBED_DIM`
   - **Documented/operative default: `768`** — matching both the local `nomic-embed-text` native
-    dimension and the identity-preserving Gemini `text-embedding-004` @ 768 fallback
+    dimension and the dimension-matched Gemini `gemini-embedding-001` @ 768 fallback
     (`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`). This is the **configured/requested**
     dimension the runtime asserts against, and it must equal the active embedding identity's
     dimension.
@@ -124,7 +124,7 @@ The system maintains a stable identity record resolved by `get_embedding_identit
 
 - provider (e.g., `ollama`)
 - model (e.g., `nomic-embed-text:latest`)
-- expected dimension (the configured `EMBED_DIM` guardrail; documented default `768` to match `nomic-embed-text`'s native dimension and the identity-preserving Gemini `text-embedding-004` @ 768 fallback — see Configuration; the in-code `DEFAULT_EMBED_DIM` constant still reads `1536` pending #2296/#2297)
+- expected dimension (the configured `EMBED_DIM` guardrail, enforced for every provider per `docs/EMBEDDING_RELIABILITY/README.md` CTI-1; documented default `768` to match `nomic-embed-text`'s native dimension and the dimension-matched Gemini `gemini-embedding-001` @ 768 fallback — see Configuration; the in-code `DEFAULT_EMBED_DIM` constant still reads `1536` pending #2296/#2297)
 - normalize flag (e.g., `true`)
 - (optional) formatting mode policy version (if query/passage rules apply)
 
@@ -136,35 +136,43 @@ This identity must be:
 ### Fallback rule
 
 Embeddings do not allow **generic** provider fallback, but they **do** allow one sanctioned
-**identity-preserving** fallback. This reconciles the historical no-generic-fallback invariant with
-the owner-settled embedding-egress posture recorded in
+**dimension-matched, reconcilable** fallback. This reconciles the historical no-generic-fallback
+invariant with the owner-settled embedding-egress posture recorded in
 `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md` (decided 2026-06-20). ADR-0023 **supersedes**
-the absolute "never switch provider" wording of this rule — but only as a scoped, identity-preserving
-exception, **not** a blanket reversal. The comparability intent the rule protects is preserved.
+the absolute "never switch provider" wording of this rule — but only as a scoped, dimension-matched,
+reconcilable exception, **not** a blanket reversal. The comparability intent the rule protects is
+preserved via reconcile and a primary-identity query path, not via false identity-equality.
 
 The runtime may:
 - repair the endpoint for the chosen provider (for example, choose a Docker-reachable Ollama base URL),
 - keep using the same provider/model/identity, and
 - continue only if the resolved identity remains compatible.
 
-**Sanctioned identity-preserving fallback (ADR-0023).** On *primary-provider failure*, the runtime
-may fall back to a named secondary provider **only when the fallback preserves the resolved embedding
-identity**. The current sanctioned posture is **Ollama-primary with a Google Gemini
-`text-embedding-004` auto-fallback** that is:
-- **dimension-matched** — requested at `768` to match the local `nomic-embed-text` native dimension,
-- **normalization-matched** — L2-normalized to match `EMBED_NORMALIZE`,
-- **query==document identity** — the same identity embeds both indexed documents/chunks and the ASK
-  query (the RAG invariant in *Query vs Document embeddings*).
+**Sanctioned dimension-matched, mixed-identity fallback (ADR-0023).** On *primary-provider failure*,
+the runtime may fall back to a named secondary provider **only when the fallback is dimension-matched
+and its mixed-identity write is bound to reconcile discipline**. The current sanctioned posture is
+**Ollama-primary with a Google Gemini `gemini-embedding-001` auto-fallback** that is:
+- **dimension-matched** — `output_dimensionality=768` to match the local `nomic-embed-text` native
+  dimension and the `EMBED_DIM=768` guardrail enforced for every provider
+  (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1),
+- **normalization-matched** — L2-renormalized to match `EMBED_NORMALIZE`,
+- **MIXED-IDENTITY, not identity-preserving** — the fallback write carries the **Gemini identity**,
+  which differs from the Ollama primary identity even at equal dim (`nomic-embed-text` and
+  `gemini-embedding-001` occupy different vector spaces; cosine across them is meaningless). It is
+  **reconcilable, not done** (CTI-2): `index reconcile` re-embeds fallback-written objects under the
+  primary identity once Ollama recovers. The **query path always uses the primary identity** (CTI-3),
+  so fallback-written document vectors are knowingly-degraded matches until reconciled — never silently
+  treated as comparable.
 When the stored index mixes more than one identity (some objects under Ollama, some under the Gemini
-fallback), the system must **re-index on mixed identity** so comparability is restored under a single
+fallback), the system must **reconcile on mixed identity** so comparability is restored under a single
 identity. The fallback is a reliability bridge, not a license to leave a permanently heterogeneous
-index.
+index; `index doctor` surfaces the drift loudly.
 
 **Still forbidden.** The runtime must not silently switch to an embedding model/provider whose
-fallback would *change* dimension, normalization, or query/document identity in a way that breaks
-comparability. That generic fallback remains prohibited. If the preferred embedding identity is
-unavailable and no *identity-preserving* fallback exists, startup should fail or require an index
-rebuild.
+fallback would *change* dimension or normalization, or switch identity *without* the reconcile +
+primary-identity-query discipline above. That generic fallback remains prohibited. If the preferred
+embedding identity is unavailable and no *dimension-matched, reconcilable* fallback exists, startup
+should fail or require an index rebuild.
 
 > The runtime change that registers and wires the Gemini adapter and fallback orchestration is
 > tracked by #2292 / #2296 / #2297 and is out of scope for the ADR-0023 docs ratification; this

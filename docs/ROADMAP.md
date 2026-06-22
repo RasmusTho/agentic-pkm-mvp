@@ -218,8 +218,10 @@ RAG/memory decomposition epic #2314):
   `PgVectorIndex` as the forward **direction** (not yet the serving path). RRF / HyDE /
   low-trust-weights / eval remain named future work behind `SearchPort` (the items listed above).
 - **`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`** — ratifies Ollama-primary embedding
-  with an **identity-preserving** Gemini `text-embedding-004` @ 768 auto-fallback (normalization-
-  matched, query==document), re-index on mixed identity. It supersedes the no-generic-fallback
+  with a **dimension-matched (768)** Gemini `gemini-embedding-001` @ 768 auto-fallback (L2-renormalized,
+  query path uses the primary identity). The fallback write is **MIXED-IDENTITY / reconcilable** — the
+  Gemini vector carries the Gemini identity, reconciled via `index reconcile` once Ollama recovers
+  (see `docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). Supersedes the no-generic-fallback
   invariant as a scoped exception (not a blanket reversal).
 
 These are docs/decision-only ratifications (no behavior change). The runtime work they ratify against
