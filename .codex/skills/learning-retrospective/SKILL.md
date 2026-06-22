@@ -8,6 +8,12 @@ description: "Read BuilderOps LearningSignal records, include historical docs/le
 Periodic maintenance pass. Reads batched BuilderOps `LearningSignal` records and converts them into
 concrete, actionable edit proposals for upstream artifacts.
 
+This is Builder System learning governance. It may propose edits to `AGENTS.md`, `.codex/skills/**`,
+Builder System owner docs, issue/PR templates, transition debt, fitness rules, roadmap entries, or
+bounded GitHub Issues. It must not silently promote learning into runtime/user memory, HKA, MEM, or
+Product behavior; any Product/Runtime effect must be routed through the Product System authority path
+and SBS impact procedure in `docs/architecture/SBS_OPERATING_MODEL.md`.
+
 Cross-cutting: when a clustered learning shows a capability-routing mistake (a task class under- or
 over-modeled, or run at the wrong review/verification depth), surface it as a `tcd_retrospective` per
 `AGENTS.md :: Total Cost of Development` (single source — do not restate the policy or its fields here).

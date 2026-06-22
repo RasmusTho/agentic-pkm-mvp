@@ -5,6 +5,11 @@ State: Repo-local skill index for builder agents working in this repository.
 Use this file after reading the repository root `AGENTS.md`.
 
 These skills are workflow helpers, not replacements for the canonical builder-agent policy.
+They are Builder System artifacts: durable repo-governed workflow instructions for development-time
+agents, not Product/Runtime System agents and not runtime CAO/MEM capability contracts. For
+Product/Runtime work, route SBS impact through `docs/architecture/SBS_OPERATING_MODEL.md`. For skill,
+workflow, issue/PR, CI, release, BuilderOps, learning, or TCD work, route through the Builder System
+boundary and artifact map in `docs/architecture/SBS_OPERATING_MODEL.md`.
 
 ## Workflow map
 
@@ -69,6 +74,7 @@ and `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations). A reference lik
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
 - `issue-to-code`
   - implementation entrypoint for bounded GitHub Issue work
+  - classifies the issue as Product/Runtime System, Builder System, or boundary work before pickup
   - before coding, update lifecycle state truthfully: move active work to `In Progress` and remove `agent:ready`
   - use that transition as the minimal shared claim/lease compatibility signal in multi-agent environments
 - `issue-maintenance-change-control`
@@ -82,7 +88,7 @@ and `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations). A reference lik
 - `feature-breakdown`
   - break one docs-defined capability into a specification directory plus a parent feature issue and bounded child slice issues
 - `bug-to-issue`
-  - create a compliant GitHub Issue when a bug is discovered during analysis, testing, review, or runtime observation
+  - create a compliant GitHub Issue when a bug is discovered during analysis, testing, review, or runtime observation; classify Product/Runtime vs Builder System vs boundary before choosing labels, owner docs, and SBS Impact
 - `temporal-doc-governance`
   - audit and refresh time-sensitive current-state docs
 - `automation-maintenance`
@@ -98,7 +104,7 @@ and `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations). A reference lik
 - `backlog-reconciliation-drift-audit`
   - backlog and GitHub-state reconciliation support when doc/backlog drift is the main problem
 - `capture-learning`
-  - micro-skill: create one BuilderOps `LearningSignal` when a plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback
+  - micro-skill: create one BuilderOps `LearningSignal` when a builder-workflow plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback; never treat builder learning as runtime/user memory without Product System authority
 - `learning-retrospective`
   - cadence-triggered: read BuilderOps `LearningSignal` records and the generated learning-summary projection, include historical `docs/learning-log.md` compatibility entries only when needed, cluster by upstream artifact, and propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and recording a BuilderOps retrospective receipt
 - `learning-to-issue`

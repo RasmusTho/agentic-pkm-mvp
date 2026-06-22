@@ -20,6 +20,27 @@ Bounded direct repair PRs may proceed without a governing Issue when the PR body
 
 Before claiming an Issue or producing any implementation, answer the following. Stop as indicated if the answer is unresolvable.
 
+**System boundary** — classify the issue using
+`docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`:
+
+- Product/Runtime System work changes product behavior, runtime code, user-facing semantics,
+  Product SBS contracts, durable human knowledge authority, machine memory, retrieval, execution,
+  sync, persistence, or current shipped architecture. Route through the relevant Product owner docs,
+  `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, and the SBS impact procedure.
+- Builder System work changes development-time machinery such as `AGENTS.md`, `.codex/skills/**`,
+  issue/PR templates, GitHub governance, CI/fitness rails, release/promotion workflows,
+  BuilderOps records/projections, delivery receipts, TCD policy, or builder-agent workflow docs.
+  Route through the Builder System boundary and artifact map in
+  `docs/architecture/SBS_OPERATING_MODEL.md`.
+- Boundary work changes how Builder machinery affects Product/Runtime truth, such as owner-doc
+  writeback, issue/PR classification, release promotion, architecture fitness enforcement, Product
+  SBS contract updates, or BuilderOps promotion into repo artifacts. Route through both the Builder
+  System model and the affected Product/Runtime owner docs.
+
+Do not treat Builder System records, projections, skills, prompts, or delivery learning as
+runtime/user memory or Human Knowledge Artifacts unless a Product/Runtime authority path explicitly
+promotes them.
+
 **Artifact class** — which class does this change produce or mutate?
 
 - Human Knowledge Artifact (vault notes, plans, research)
@@ -44,6 +65,8 @@ Before claiming an Issue or producing any implementation, answer the following. 
 - Task touches `prod`, `stable`, migrations, vault paths, DSNs, or watcher execution without reading `docs/RELEASE_CHANNELS/README.md` and `docs/ENVIRONMENTS.md` first.
 - Task depends on target-state or spec docs as shipped behavior but no code path, passing test, or owner-doc acceptance record confirms the behavior is live.
 - Any Acceptance Criterion lacks a concrete `Verify:` target (a test pointer for behavioral ACs, a doc anchor / roadmap diff / runtime receipt for non-behavioral ACs).
+- Product/Runtime vs Builder System vs boundary classification cannot be stated from the issue and
+  source anchors, or from the PR Direct Repair block for bounded direct-repair work.
 
 Apply `docs/development/AGENT_OPERATING_PROTOCOL.md` for the full classification reference.
 
@@ -214,7 +237,10 @@ Only move to Review when the PR is the **explicit review handoff artifact** (nor
 
 - Read the full Issue first.
 - For a bounded direct repair PR, treat the PR body as the contract and validate the Direct Repair block directly instead of requiring a governing Issue.
-- Read the owner docs and source docs referenced by `Source Anchors` before editing code.
+- Read the owner docs and source docs referenced by `Source Anchors` before editing code. For
+  Product/Runtime System work this includes the relevant SBS/Product owner docs; for Builder System
+  work touching `.codex/skills/**`, issue/PR governance, CI, release workflows, BuilderOps, learning,
+  or TCD, include `docs/architecture/SBS_OPERATING_MODEL.md` and `.codex/skills/README.md`.
 - Stay strictly within Issue scope.
 - Do not expand scope without updating the Issue contract first.
 - Preserve architecture boundaries and event/outbox compatibility where relevant.

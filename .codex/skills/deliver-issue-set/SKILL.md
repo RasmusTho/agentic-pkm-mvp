@@ -21,6 +21,9 @@ This skill is a coordinator. It does not replace `issue-to-code`, `verification-
 6. `docs/development/AGENT_OPERATING_PROTOCOL.md`
 7. `docs/DOCS_INDEX.md`
 8. Owner docs and `Source Docs` referenced by the epic or candidate issues
+9. `docs/architecture/SBS_OPERATING_MODEL.md` when issues touch Product/Runtime SBS impact,
+   Builder System workflows, repo-local skills, issue/PR governance, CI/fitness, release/UAT,
+   BuilderOps, learning, or TCD
 
 Load secondary skills only when the work needs them:
 
@@ -68,6 +71,12 @@ Delivery rules:
 
 - Default to delivering one issue at a time.
 - You may claim multiple issues only when you are immediately assigning them to active sub-agents with isolated worktrees and the parallelization is rational from both token-budget and quality perspectives.
+- Before selecting or dispatching work, classify each candidate as Product/Runtime System,
+  Builder System, or boundary work using
+  `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`.
+  Product/Runtime issues must route SBS impact through the Product owner docs and SBS operating
+  procedure; Builder System issues route through the Builder System boundary/artifact map; boundary
+  issues name both sides.
 - Route the serial-vs-parallel dispatch and slot-count decision through `AGENTS.md :: Total Cost of Development` (parallelization and coordination are TCD cost terms); per-issue model and reasoning routing is owned by `issue-to-code`. Run every parallel sub-agent under `AGENTS.md :: Parallel-agent execution` — isolated worktree per issue, never the shared root; reconcile claim races on evidence rather than re-implementing.
 - Do not claim the whole epic or entire Kanban pool up front.
 - Do not claim more issues than there are ready sub-agent execution slots.
@@ -166,6 +175,8 @@ For each candidate issue, inspect:
 - Project Status
 - priority
 - linked PRs
+- Product/Runtime System vs Builder System vs boundary classification, with the owner docs required
+  by that classification
 - every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`)
 
 Classify each candidate as exactly one:
@@ -199,6 +210,7 @@ For each ready issue, produce an implementation card:
 - Issue
 - role in epic / parent feature
 - bounded outcome
+- Product/Runtime System vs Builder System vs boundary classification
 - owner docs to read before coding
 - likely files or modules touched
 - test-first targets from `Verify:`

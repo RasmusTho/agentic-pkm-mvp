@@ -36,6 +36,8 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - changed files
 - `Source Anchors`
 - owner docs
+- `docs/architecture/SBS_OPERATING_MODEL.md` when the work has Product/Runtime SBS impact, Builder
+  System impact, or a boundary between the two
 - roadmap / status / plan docs
 - CI results
 - merge state if already merged
@@ -44,6 +46,9 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 ## Validation Rules
 
 - Compare code and docs to the governing issue's `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, and `Suggested Validation`
+- Verify the PR's Product/Runtime System vs Builder System vs boundary classification. Product work
+  must satisfy the SBS impact and owner-doc path; Builder work must route through the Builder System
+  boundary/artifact map; boundary work must name and satisfy both sides.
 - Run the exact `Suggested Validation` commands where possible
 - Add focused extra checks if the touched surface obviously needs them
 - For every AC, resolve the declared `Verify:` target on the current PR head SHA
@@ -51,6 +56,8 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - If a non-behavioral `Verify:` target is absent, do not merge until the writeback exists
 - If any AC lacks a `Verify:` marker, route through issue maintenance before proceeding
 - Verify owner-doc writeback if shipped behavior or contracts changed and acceptance is complete
+- Verify Builder System work did not claim runtime/user memory or Product MEM/HKA authority unless a
+  Product System authority path is present in the issue/PR evidence.
 - Verify roadmap or plan wording was cleaned up if the item is now delivered
 - Verify no duplicate `planned` and `shipped` statements remain active at once
 - Verify the BuilderOps routing outcome per tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`):

@@ -31,6 +31,15 @@ Do not use this skill for:
 - **PRs**: task verification receipts.
 - **Owner docs**: promoted only when accepted truth changes.
 
+Before drafting specs or GitHub issues, classify the capability and each child task as
+Product/Runtime System, Builder System, or boundary work using
+`docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`.
+Product/Runtime tasks route through Product owner docs and the SBS impact procedure. Builder System
+tasks, including skill, issue/PR governance, CI/fitness, release/UAT, BuilderOps, learning, and TCD
+work, route through the Builder System boundary/artifact map. Boundary tasks name both sides and must
+not treat builder learning or BuilderOps records as runtime/user memory without Product System
+authority.
+
 Key distinction:
 - The specification describes **what the system needs to do**.
 - The GitHub issues describe **what work to pick up next**.

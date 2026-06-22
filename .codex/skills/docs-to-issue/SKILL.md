@@ -31,6 +31,18 @@ Use maintenance skills instead of this lane when the work is a repair, audit, or
 
 - GitHub Issues are the canonical backlog task contract.
 - GitHub Project is the canonical backlog state machine.
+- Before drafting an Issue, classify the work as Product/Runtime System, Builder System, or boundary
+  work using `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work
+  Classification`.
+- Product/Runtime System work must route through the relevant Product owner docs,
+  `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, and the SBS impact procedure.
+- Builder System work, including changes to `.codex/skills/**`, `AGENTS.md`, issue/PR templates,
+  GitHub governance, CI/fitness rails, release/UAT/promotion workflows, BuilderOps, delivery
+  receipts, learning workflows, or TCD policy, must route through the Builder System boundary and
+  artifact map in `docs/architecture/SBS_OPERATING_MODEL.md`.
+- Boundary work must name both the Builder System surface and the affected Product/Runtime owner
+  surface. Do not let builder learning, prompts, skills, or BuilderOps records become runtime/user
+  memory or HKA/MEM authority without an explicit Product System authority path.
 - A BuilderOps `PromotionIntent` can propose a GitHub Issue, but Issue creation is the explicit
   promotion into the GitHub task-contract surface. Preserve the `PromotionIntent` or receipt link
   in `Source Anchors` or `Applies learning (optional)` when present.
@@ -71,6 +83,9 @@ For every candidate doc item, determine exactly one state:
 ## When a doc item becomes a new Issue
 
 - Put traceability into the Issue body through `Source Anchors`.
+- Fill `SBS Impact` from the Product/Runtime, Builder System, or boundary classification. For
+  Builder System work that does not change Product/Runtime contracts, use
+  `Builder System / CES boundary` as the primary subsystem and cite the Builder System owner model.
 - Prefer the most local actionable source item.
 - Do not rely on unmerged inline doc edits as the primary backlog signal.
 

@@ -8,6 +8,10 @@ description: "Staged workflow: promote a test-verified candidate commit to prod/
 Use this skill to advance a **test-verified** candidate commit to the prod channel. This is the second and final stage of the normal promotion path.
 
 Read `docs/RELEASE_CHANNELS/README.md` (§Current direction, §Promotion contract, §Channel model) and `docs/ENVIRONMENTS.md` (§Code vs Environment Separation) before running.
+This is Builder System boundary work: promotion plans and receipts are Builder System governance
+artifacts, while the promoted code may change Product/Runtime behavior. Use
+`docs/architecture/SBS_OPERATING_MODEL.md` to classify owner-doc, SBS, release, and memory impacts
+before treating promotion evidence as Product truth.
 
 Do not use this skill to:
 - promote to the test channel (use `promote-to-test` first)

@@ -43,6 +43,14 @@ You operate between:
 ## Core rules
 
 - GitHub Issue is the canonical task contract.
+- Before making an Issue ready, blocked, or needs-human because of scope or authority, classify the
+  work as Product/Runtime System, Builder System, or boundary work using
+  `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`.
+- Product/Runtime work must keep SBS Impact, owner-doc writeback, transition debt, and fitness-rule
+  routing aligned to the Product owner docs; Builder System work must route through the Builder
+  System boundary/artifact map; boundary work must name both surfaces.
+- Do not reclassify builder learning, skills, prompts, or BuilderOps records as runtime/user memory
+  or HKA/MEM authority unless the Issue carries an explicit Product System authority path.
 - Issue state, truthful agent labels, linked PR state, and merge/delivery reality are the lifecycle authority.
 - GitHub Project is the shared operating board and lifecycle projection, not a stronger authority than Issue/PR truth.
 - Closed work must not remain in active queue states.

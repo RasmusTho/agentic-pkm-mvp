@@ -8,6 +8,10 @@ description: "Staged workflow: move a candidate commit into the isolated test ch
 Use this skill to advance a candidate commit into the **test channel** before considering prod promotion. This is the mandatory first stage of the normal promotion path.
 
 Read `docs/RELEASE_CHANNELS/README.md` (§Current direction: prod baseline before promotion hardening and §Channel model) and `docs/ENVIRONMENTS.md` (§Code vs Environment Separation) before running. Those docs define the channel model this skill consumes.
+This is Builder System boundary work: the skill and receipts are Builder System artifacts, while the
+candidate commit may affect Product/Runtime truth. Use
+`docs/architecture/SBS_OPERATING_MODEL.md` to keep release evidence, owner-doc writeback, and runtime
+authority separate.
 
 Do not use this skill to:
 - promote directly to prod (use `promote-test-to-prod` after this skill succeeds)

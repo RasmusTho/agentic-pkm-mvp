@@ -19,6 +19,11 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Search open issues for the same symptom/title. If a matching issue exists, comment with new evidence instead of creating a duplicate.
 3. Create or update Issue body:
    - Always use the canonical contract sections from `.codex/skills/_shared/ISSUE_CONTRACT.md`.
+   - Classify the defect as Product/Runtime System, Builder System, or boundary work using
+     `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`.
+     Product/runtime defects route through the Product owner docs and SBS impact procedure; builder
+     workflow defects route through the Builder System boundary/artifact map; boundary defects name
+     both sides.
    - Include exact repro steps and observed/expected results when available.
    - Do not create a micro-issue for routine repair, reconciliation, or bookkeeping churn; route those signals to the maintenance skills instead.
    - Acceptance Criteria must carry `Verify:` markers:
@@ -51,4 +56,8 @@ Force `agent:needs-human` per `AGENTS.md :: Agency default` — reserve it for i
 
 ## Capturing learning
 
-On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong),
+route it through `capture-learning` — it owns the invocation timing and the "name an upstream
+artifact or don't log" gate. Builder workflow learning remains Builder System material; do not
+classify it as runtime/user memory or HKA/MEM authority unless a Product System owner path explicitly
+promotes it.

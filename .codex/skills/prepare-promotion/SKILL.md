@@ -15,6 +15,11 @@ Do not use this skill to:
 ## Capability boundary
 
 The release-channels capability spec lives at `docs/RELEASE_CHANNELS/`. Read `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md` before running this skill — it is the authoritative contract for what a promotion plan must contain.
+Promotion planning is Builder System boundary work. The plan is a Builder System governance artifact;
+the code, migrations, settings, and runtime preconditions it summarizes may be Product/Runtime
+changes. Use `docs/architecture/SBS_OPERATING_MODEL.md` to route SBS impact, owner-doc writeback,
+transition debt, and fitness-rule evidence without treating the promotion plan itself as runtime
+memory or Product truth.
 
 ## What this skill does
 

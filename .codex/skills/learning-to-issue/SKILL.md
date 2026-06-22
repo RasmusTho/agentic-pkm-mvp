@@ -9,6 +9,14 @@ Convert retrospective learnings into bounded, verifiable GitHub Issues that matc
 
 This is the maintenance-learning intake lane. It is distinct from `docs-to-issue` (which converts active SoT docs into product-feature backlog) and from `capture-learning` (which creates a BuilderOps `LearningSignal`).
 
+Learning issues are Builder System or boundary work by default. Before creating or normalizing an
+Issue, classify whether the proposed repair changes only Builder System artifacts, changes
+Product/Runtime truth, or crosses the boundary. Use
+`docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification` and
+route Product/Runtime effects through the relevant Product owner docs and SBS impact procedure.
+Builder learning must not be promoted into runtime/user memory, HKA, or MEM merely because it was
+useful; that requires an explicit Product System authority path.
+
 ## When to invoke
 
 Invoke when:
@@ -53,6 +61,9 @@ Use the canonical contract shape from `.codex/skills/_shared/ISSUE_CONTRACT.md` 
 - `## Context` links the source record: `BuilderOps LearningSignal <id>`, `BuilderOps PromotionIntent <id>`, `docs/learning-log.md :: YYYY-MM-DD entry`, or `PR #N`.
 - `## Source Anchors` names the upstream artifact(s) that absorb the fix; use the most local actionable item.
 - `## Applies learning` is filled for learning issues (not left blank): link the BuilderOps LearningSignal/receipt, historical learning-log entry, or retro marker that produced this issue.
+- `## SBS Impact` names `Builder System / CES boundary` for Builder-only learning repairs, or names
+  both Builder and Product owner surfaces when the learning changes Product/Runtime contracts,
+  memory, or shipped behavior.
 
 If an AC cannot carry a resolvable `Verify:` target, refine or split before marking `agent:ready`.
 
