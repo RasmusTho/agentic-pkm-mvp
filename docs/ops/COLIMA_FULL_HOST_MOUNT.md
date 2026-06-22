@@ -55,8 +55,11 @@ cd <repo> && bash scripts/start_full_system.sh    # or the channel's start comma
 ## Verify
 
 ```bash
-# /Users and /Volumes are visible inside the api container at the same paths:
-docker exec pkm-api-1 ls -ld /Users /Volumes
+# /Users and /Volumes are visible inside the api container at the same paths.
+# Use the same compose project/files/env that started the stack; scripts such
+# as start_full_system.sh select channel-specific project names.
+docker compose ps api
+docker compose exec -T api ls -ld /Users /Volumes
 
 # Then in the UI: open a vault on the internal SSD and on /Volumes/T7 via the
 # picker; confirm a note opens from each. Record the receipt on #2310.
