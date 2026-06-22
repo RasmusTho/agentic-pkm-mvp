@@ -71,7 +71,7 @@ and final runtime mount cleanup can be verified independently.
 | --- | --- | --- | --- | --- |
 | 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | #2383 | capture/artifacts/canvas/debug and companion request helpers return picker/empty no-vault responses instead of `./vault` fallback | First pickup target; deliver before 05B/05C/05D unless explicitly parallelized |
 | 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | #2384 | outbox worker, watcher/health settings, inbox appenders, and vault path helpers idle or report no-vault when no vault is selected | Delivered (`outbox_worker.run_once` idles `no_vault`; watcher settings empty source; health reports `vault.status` none/not_selected; inbox appenders skip; vault path helpers raise `NoVaultSelectedError`; CWD `./vault` fallback removed; guarded by `tests/api/test_no_silent_cwd_vault_fallback.py::test_background_resolvers_do_not_fallback_to_cwd_vault`) |
-| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | #2385 | promotion queue import becomes lazy; CLI/agent/helper/MCP/knowledge callers make vault requirements explicit or optional | Blocked/backlog until 05A/05B sequencing is clear |
+| 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | #2385 | promotion queue import becomes lazy; CLI/agent/helper/MCP/knowledge callers make vault requirements explicit or optional | Delivered (promotion queue/agent lazy paths; CLI/MCP/knowledge no `./vault` fallback; guarded by `tests/api/test_no_silent_cwd_vault_fallback.py::test_promotion_cli_agent_mcp_knowledge_do_not_fallback_to_cwd_vault`) |
 | 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | #2386 | legacy `/app/vault` compose/runtime-env fallback is removed or re-baselined after resolver consumers no longer require it | Blocked/backlog until 05A-05C land |
 
 ## Cross-Task Invariants / Interaction Safety
@@ -93,8 +93,9 @@ and final runtime mount cleanup can be verified independently.
   endpoints may be safe while background/helper/CLI/MCP/knowledge and mount/runtime-env
   fallbacks remain tracked in 05B-05D. Do not claim the global no-fallback invariant until
   all four slices have posted evidence.
-- 05B, 05C, and 05D stay Backlog/blocked unless the coordinator updates the issue contract
-  and Project state; they must not become `agent:ready` just because 05A is in flight.
+- Undelivered follow-up slices stay Backlog/blocked unless the coordinator updates the issue
+  contract and Project state; they must not become `agent:ready` just because an earlier
+  slice is in flight.
 - If implementation discovers another runtime `./vault` fallback outside 05A-05D, stop,
   update #2311, and create or route a bounded child slice before claiming closure.
 - Each delivered child posts evidence to #2311. Posting the same evidence to #2003 is

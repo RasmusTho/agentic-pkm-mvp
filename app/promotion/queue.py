@@ -11,7 +11,7 @@ from typing import Any, Dict
 import yaml
 
 from .policy import pick_target as _pick_target
-from app.config.paths import resolve_system_settings_path, resolve_vault_root
+from app.config.paths import resolve_optional_vault_root, resolve_system_settings_path
 from app.events.types import (
     PROMOTE_DONE,
     PROMOTE_ERROR,
@@ -29,13 +29,65 @@ from app.settings.runtime import subscribe_settings
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 ROOT = Path().resolve()
-VAULT = resolve_vault_root()
-EVENTS = VAULT / "_system" / "events"
-QUEUE = EVENTS / "promote.queue.jsonl"
-LOG = EVENTS / "promote.log.jsonl"
-SETTINGS = resolve_system_settings_path()
+VAULT: Path | None = None
+EVENTS: Path | None = None
+QUEUE: Path | None = None
+LOG: Path | None = None
+SETTINGS: Path | None = None
 _PROMOTION_SETTINGS = PromotionSettings()
 _NOTE_MOVES_ENABLED = True
+
+
+class PromotionVaultNotConfiguredError(RuntimeError):
+    """Raised when a promotion write needs a vault but none is configured."""
+
+
+def _resolve_promotion_vault_root() -> Path | None:
+    if VAULT is not None:
+        return Path(VAULT).expanduser()
+    return resolve_optional_vault_root()
+
+
+def _events_dir(vault_root: Path | None = None) -> Path | None:
+    if EVENTS is not None:
+        return Path(EVENTS)
+    root = vault_root if vault_root is not None else _resolve_promotion_vault_root()
+    if root is None:
+        return None
+    return root / "_system" / "events"
+
+
+def _queue_path(*, require_vault: bool = False) -> Path | None:
+    if QUEUE is not None:
+        return Path(QUEUE)
+    events = _events_dir()
+    if events is not None:
+        return events / "promote.queue.jsonl"
+    if require_vault:
+        raise PromotionVaultNotConfiguredError(
+            "Vault root is required for promotion queue writes; configure VAULT_ROOT or pass an explicit queue path."
+        )
+    return None
+
+
+def _log_path(*, vault_root: Path | None = None, queue_path: Path | None = None) -> Path | None:
+    if LOG is not None:
+        return Path(LOG)
+    events = _events_dir(vault_root)
+    if events is not None:
+        return events / "promote.log.jsonl"
+    if queue_path is not None:
+        return queue_path.with_name("promote.log.jsonl")
+    return None
+
+
+def _settings_path(vault_root: Path | None = None) -> Path | None:
+    if SETTINGS is not None:
+        return Path(SETTINGS)
+    root = vault_root if vault_root is not None else _resolve_promotion_vault_root()
+    if root is None:
+        return None
+    return resolve_system_settings_path(vault_root=root)
 
 
 def _apply_promotion_settings(bundle: SettingsBundle) -> None:
@@ -62,8 +114,11 @@ def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
 
 
 def enqueue(path: Path, uuid: str, desired_state: str = "promoted") -> None:
+    queue_path = _queue_path(require_vault=True)
+    if queue_path is None:
+        raise PromotionVaultNotConfiguredError("Vault root is required for promotion queue writes.")
     _append_jsonl(
-        QUEUE,
+        queue_path,
         {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "trace_id": current_trace_id() or hashlib.sha256(f"{uuid}{path}".encode()).hexdigest()[:12],
@@ -75,10 +130,11 @@ def enqueue(path: Path, uuid: str, desired_state: str = "promoted") -> None:
     )
 
 
-def _load_settings() -> Dict[str, Any]:
-    if not SETTINGS or not Path(SETTINGS).exists():
+def _load_settings(vault_root: Path | None = None) -> Dict[str, Any]:
+    settings_path = _settings_path(vault_root)
+    if not settings_path or not Path(settings_path).exists():
         return {}
-    return yaml.safe_load(Path(SETTINGS).read_text(encoding="utf-8")) or {}
+    return yaml.safe_load(Path(settings_path).read_text(encoding="utf-8")) or {}
 
 
 def _safe_move(src: Path, dst_dir: Path) -> Path:
@@ -94,13 +150,15 @@ def _safe_move(src: Path, dst_dir: Path) -> Path:
     return dst
 
 
-def _resolve_target_dir(target: Path, note_path: Path) -> Path:
+def _resolve_target_dir(target: Path, note_path: Path, vault_root: Path | None = None) -> Path:
     if target.is_absolute():
         return target
-    try:
-        base = Path(VAULT)
-    except Exception:
-        base = note_path.parent
+    base = vault_root
+    if base is None:
+        try:
+            base = _resolve_promotion_vault_root()
+        except Exception:
+            base = None
     if base is None:
         base = note_path.parent
     return (base / target).resolve()
@@ -126,9 +184,12 @@ def _select_target(meta: Dict[str, Any], move_policy: Dict[str, Any], legacy_con
     return target_path, None
 
 
-def _write_note_via_port(path: Path, content: str) -> None:
+def _write_note_via_port(path: Path, content: str, vault_root: Path | None = None) -> None:
     resolved = path.resolve()
-    root_candidates = [Path(VAULT).resolve(), Path(resolved.anchor) if resolved.anchor else Path("/")]
+    root_candidates: list[Path] = []
+    if vault_root is not None:
+        root_candidates.append(Path(vault_root).resolve())
+    root_candidates.append(Path(resolved.anchor) if resolved.anchor else Path("/"))
     for root in root_candidates:
         try:
             write_note_from_absolute(resolved, content, vault_root=root)
@@ -143,9 +204,14 @@ subscribe_settings(_apply_global_settings)
 
 
 def run_once() -> int:
-    if not QUEUE.exists():
+    queue_path = _queue_path()
+    if queue_path is None or not queue_path.exists():
         return 0
-    legacy = (_load_settings().get("promotion") or {})
+    vault_root = _resolve_promotion_vault_root()
+    log_path = _log_path(vault_root=vault_root, queue_path=queue_path)
+    if log_path is None:
+        return 0
+    legacy = (_load_settings(vault_root).get("promotion") or {})
     promo_cfg = _PROMOTION_SETTINGS
     cooldown = int(legacy.get("cooldown_seconds", promo_cfg.cooldown_seconds))
     idle_req = int(legacy.get("require_idle_seconds", promo_cfg.require_idle_seconds))
@@ -153,8 +219,8 @@ def run_once() -> int:
     move_policy = _move_policy_dict(promo_cfg, legacy)
     note_moves_allowed = _NOTE_MOVES_ENABLED
 
-    lines = QUEUE.read_text(encoding="utf-8").splitlines()
-    QUEUE.unlink(missing_ok=True)
+    lines = queue_path.read_text(encoding="utf-8").splitlines()
+    queue_path.unlink(missing_ok=True)
     processed = 0
 
     for ln in lines:
@@ -165,7 +231,7 @@ def run_once() -> int:
                 p = Path(ev["path"])
                 if not p.exists():
                     _append_jsonl(
-                        LOG,
+                        log_path,
                         {
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "level": "warn",
@@ -180,7 +246,7 @@ def run_once() -> int:
                 st = p.stat()
                 age = time.time() - st.st_mtime
                 if age < cooldown or age < idle_req:
-                    _append_jsonl(QUEUE, ev)
+                    _append_jsonl(queue_path, ev)
                     continue
 
                 uuid = ev.get("uuid")
@@ -191,7 +257,7 @@ def run_once() -> int:
                 body_lines = [ln for ln in (body.splitlines()) if "Promote" not in ln.strip()]
                 body = "\n".join(body_lines).lstrip("\n")
                 updated_text = dump_frontmatter(meta, body)
-                _write_note_via_port(p, updated_text)
+                _write_note_via_port(p, updated_text, vault_root=vault_root)
 
                 if uuid:
                     try:
@@ -201,7 +267,7 @@ def run_once() -> int:
                         if allow_override:
                             ensure_object_has_relations(uuid, allow_orphans=True, override_reason=override_reason)
                             _append_jsonl(
-                                LOG,
+                                log_path,
                                 {
                                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                     "level": "info",
@@ -216,7 +282,7 @@ def run_once() -> int:
                             ensure_object_has_relations(uuid)
                     except OrphanPromotionError as rel_err:
                         _append_jsonl(
-                            LOG,
+                            log_path,
                             {
                                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                 "level": "warn",
@@ -232,7 +298,7 @@ def run_once() -> int:
                 target, reason = _select_target(meta, move_policy, legacy, note_moves_allowed)
                 if target is None:
                     _append_jsonl(
-                        LOG,
+                        log_path,
                         {
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "level": "warn",
@@ -246,11 +312,11 @@ def run_once() -> int:
                     processed += 1
                     continue
 
-                dst_dir = _resolve_target_dir(Path(target), p)
+                dst_dir = _resolve_target_dir(Path(target), p, vault_root=vault_root)
                 try:
                     new_path = _safe_move(p, dst_dir)
                     _append_jsonl(
-                        LOG,
+                        log_path,
                         {
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "level": "info",
@@ -263,7 +329,7 @@ def run_once() -> int:
                     )
                 except Exception as exc:
                     _append_jsonl(
-                        LOG,
+                        log_path,
                         {
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "level": "error",
@@ -280,7 +346,7 @@ def run_once() -> int:
                 processed += 1
         except Exception:
             _append_jsonl(
-                LOG,
+                log_path,
                 {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "level": "error",
@@ -294,4 +360,10 @@ def run_once() -> int:
     return processed
 
 
-__all__ = ["enqueue", "run_once", "_PROMOTION_SETTINGS", "_NOTE_MOVES_ENABLED"]
+__all__ = [
+    "PromotionVaultNotConfiguredError",
+    "enqueue",
+    "run_once",
+    "_PROMOTION_SETTINGS",
+    "_NOTE_MOVES_ENABLED",
+]

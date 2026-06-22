@@ -275,3 +275,36 @@ def test_background_resolvers_do_not_fallback_to_cwd_vault() -> None:
                 violations.append(f"{path}:{node.lineno}:Path('vault')")
     assert violations == []
 
+
+def test_promotion_cli_agent_mcp_knowledge_do_not_fallback_to_cwd_vault() -> None:
+    """AST guard for Vault Optional slice 05C (#2385).
+
+    These non-request surfaces may use an explicit CLI/root argument or a
+    configured vault root, but they must not synthesize the legacy CWD-relative
+    ``./vault`` fallback through no-argument ``resolve_vault_root()`` or
+    ``Path("vault")``.
+    """
+    target_files = [
+        Path("app/promotion/queue.py"),
+        Path("app/agents/promotion/agent.py"),
+        Path("app/cli/__init__.py"),
+        Path("app/agents/panel_agent/cognition.py"),
+        Path("app/agent_memory/recall_retrieval.py"),
+        Path("app/panel/checkbox_projection.py"),
+        Path("app/orchestrator/executor.py"),
+        Path("app/mcp/vault_tools.py"),
+        Path("app/knowledge/service.py"),
+    ]
+    violations: list[str] = []
+    for path in target_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "resolve_vault_root":
+                    violations.append(f"{path}:{node.lineno}:resolve_vault_root")
+                elif isinstance(func, ast.Attribute) and func.attr == "resolve_vault_root":
+                    violations.append(f"{path}:{node.lineno}:resolve_vault_root")
+            if _is_cwd_vault_literal(node):
+                violations.append(f"{path}:{node.lineno}:Path('vault')")
+    assert violations == []

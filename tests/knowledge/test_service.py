@@ -28,7 +28,10 @@ def test_resolve_knowledge_port_strict_raises_on_missing_obsidian(monkeypatch: p
         resolve_knowledge_port(settings=settings)
 
 
-def test_resolve_knowledge_port_can_fallback_when_non_strict(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_knowledge_port_can_fallback_when_non_strict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setattr("app.knowledge.service.obsidian_dependency_status", lambda: type("S", (), {"ok": False, "details": {}})())
     settings = KnowledgeSettings(
         primary_adapter=KnowledgeAdapter.OBSIDIAN_CLI,
@@ -36,7 +39,7 @@ def test_resolve_knowledge_port_can_fallback_when_non_strict(monkeypatch: pytest
         allow_fallback=True,
         strict_startup=False,
     )
-    port = resolve_knowledge_port(settings=settings)
+    port = resolve_knowledge_port(vault_root=tmp_path, settings=settings)
     assert isinstance(port, FsVaultAdapter)
 
 

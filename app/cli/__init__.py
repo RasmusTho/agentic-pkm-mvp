@@ -11,7 +11,6 @@ import click
 import httpx
 from watchfiles import watch
 
-from app.config.environment import active_environment
 from app.observability.status_service import get_system_status
 from app.promotion.consumer import consume_promotion_intents
 from app.ingest.config import DEFAULT_VAULT_ROOT
@@ -35,7 +34,7 @@ from app.cli.vault import vault as vault_cli
 from app.cli.ops import ops as ops_cli
 
 
-from app.config.paths import resolve_system_settings_path, resolve_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root, resolve_system_settings_path
 from app.services import settings as settings_service
 from app.watcher.vault_watcher import OutboxPathError as WatcherOutboxPathError, run_watcher_tick
 from app.runtime.runtime_loop import OutboxPathError, RuntimeLoopConfig, resolve_outbox_path, run_forever, run_once
@@ -142,12 +141,39 @@ def _resolve_vault_root_path(
     if value is not None:
         return value
     if allow_env:
-        env_root = os.getenv("VAULT_ROOT")
-        if env_root:
-            return Path(env_root)
+        try:
+            resolved = resolve_optional_vault_root()
+        except VaultRootMisconfiguredError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if resolved is not None:
+            return resolved
     if fallback_to_default:
         return DEFAULT_VAULT_ROOT
     return None
+
+
+def _require_vault_root_path(value: Path | None, *, purpose: str) -> Path:
+    resolved = _resolve_vault_root_path(value, allow_env=True, fallback_to_default=False)
+    if resolved is None:
+        raise click.ClickException(
+            f"Vault root is required for {purpose}; pass --vault-root or configure VAULT_ROOT."
+        )
+    return resolved.expanduser().resolve()
+
+
+def _resolve_mcp_vault_root_path(value: Path | None) -> Path | None:
+    if value is not None:
+        return value
+    for env_var in ("MCP_VAULT_ROOT", "VAULT_DIR"):
+        env_root = os.getenv(env_var)
+        if not env_root or not env_root.strip():
+            continue
+        resolved = Path(env_root).expanduser()
+        if not resolved.exists():
+            exc = VaultRootMisconfiguredError(env_var, resolved)
+            raise click.ClickException(str(exc)) from exc
+        return resolved.resolve()
+    return _resolve_vault_root_path(None, allow_env=True, fallback_to_default=False)
 
 
 def _resolve_yggdrasil_root(path_override: Path | None) -> Path:
@@ -310,7 +336,7 @@ def canvas_open(note_path: str, label: str, vault_root: str | None) -> None:
     from app.chat.session_log import SessionLogWriter
     from app.chat.session_store import SessionStore
 
-    root = Path(vault_root).expanduser().resolve() if vault_root else resolve_vault_root().expanduser().resolve()
+    root = _require_vault_root_path(Path(vault_root) if vault_root else None, purpose="canvas")
     note = Path(note_path).expanduser()
     if not note.is_absolute():
         note = root / note
@@ -334,7 +360,7 @@ def canvas_edit(session_id: str, body: str, summary: str, vault_root: str | None
     from app.chat.session_log import SessionLogWriter
     from app.chat.session_store import SessionStore
 
-    root = Path(vault_root).expanduser().resolve() if vault_root else resolve_vault_root().expanduser().resolve()
+    root = _require_vault_root_path(Path(vault_root) if vault_root else None, purpose="canvas")
     store = SessionStore(vault_root=root)
     session = store.load(session_id)
     if session is None:
@@ -359,7 +385,7 @@ def canvas_close(session_id: str, summary: str, vault_root: str | None) -> None:
     from app.chat.session_log import SessionLogWriter
     from app.chat.session_store import SessionStore
 
-    root = Path(vault_root).expanduser().resolve() if vault_root else resolve_vault_root().expanduser().resolve()
+    root = _require_vault_root_path(Path(vault_root) if vault_root else None, purpose="canvas")
     store = SessionStore(vault_root=root)
     session = store.load(session_id)
     if session is None:
@@ -893,14 +919,20 @@ def ask(question: str, vault_root: Path | None, enable_mcp_vault: bool) -> None:
         raise click.BadParameter("Question must not be empty.")
 
     event = new_event(event_type=ASK_QUERY_RECEIVED, payload={"question": question_text}, source="cli")
-    resolved_root = _resolve_vault_root_path(vault_root)
     env_flag = os.getenv("MCP_VAULT_ENABLE")
     writes_enabled = enable_mcp_vault or _truthy_flag(env_flag)
+    resolved_root = (
+        _resolve_mcp_vault_root_path(vault_root)
+        if writes_enabled or vault_root is not None
+        else None
+    )
     tool_settings: Dict[str, Any] = {}
     if resolved_root is not None:
         tool_settings["vault_root"] = str(resolved_root)
     elif writes_enabled:
-        tool_settings["vault_root"] = str(Path("vault"))
+        raise click.ClickException(
+            "Vault root is required for MCP vault writes; pass --vault-root or configure VAULT_ROOT."
+        )
     if writes_enabled:
         tool_settings["mcp_vault_enable"] = True
     else:
@@ -1679,8 +1711,7 @@ def go_live_check(
     max_notes: int,
     apply_changes: bool,
 ) -> None:
-    resolved_vault = resolve_vault_root(vault_root)
-    resolved_vault = resolved_vault.expanduser()
+    resolved_vault = _require_vault_root_path(vault_root, purpose="go-live-check")
     if not resolved_vault.exists() or not resolved_vault.is_dir():
         raise click.ClickException(f"Vault root not found or not a directory: {resolved_vault}")
 

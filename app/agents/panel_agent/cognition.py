@@ -15,12 +15,12 @@ Current concrete backends:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from app.agents.panel_agent.settings import DeciderMode
 from app.agents.panel_agent.state import PanelAgentState
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
 from app.components.settings.panel_actions_loader import (
     PanelActionCatalog,
@@ -93,10 +93,10 @@ class PanelCognitionBackend(Protocol):
 def _resolve_vault_root(state: PanelAgentState) -> Path | None:
     if state.vault_root is not None:
         return state.vault_root
-    env = os.getenv("VAULT_ROOT")
-    if env:
-        return Path(env).expanduser()
-    return None
+    try:
+        return resolve_optional_vault_root()
+    except VaultRootMisconfiguredError:
+        return None
 
 
 def _format_note_context(ctx: NoteContext) -> str:
