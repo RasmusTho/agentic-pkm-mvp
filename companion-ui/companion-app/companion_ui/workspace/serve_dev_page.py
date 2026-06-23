@@ -8147,6 +8147,22 @@ def _render_help_drawer() -> str:
        fixed siblings. */
     .workspace-bottom-bar{position:fixed;bottom:18px;right:18px;z-index:999;
       display:inline-flex;align-items:center;gap:8px}
+    /* Lift the composed bottom bar above the ~60px portrait-sheet peek line
+       (.portrait-sheet[data-current-snap="peek"]{height:60px;bottom:0;
+       z-index:20}) on narrow viewports so the two read as one composed bottom
+       edge instead of the bar layering over the peek (CUIDR-04 bottom-edge
+       collision, #2462).
+         Gated on a visible peek via :has() on <body>: when the sheet is closed
+       (display:none) or absent (orientation / no-sheet renders) the bar must
+       rest at the bottom edge, not float 60px up leaving a dead gap (#2462
+       AC2). :has() on the shared <body> ancestor keeps this independent of the
+       bar/sheet DOM sibling order, and its higher specificity (0,3,2 vs the
+       base rule's 0,1,0) wins the cascade — the earlier head-stylesheet
+       override lost to the base rule that _render_help_drawer() appends later
+       in the body at equal specificity. Co-located with the base rule above. */
+    @media (max-width: 899px){
+      body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar{bottom:calc(60px + 18px)}
+    }
     .help-toggle,.map-toggle{position:static;
       display:inline-flex;align-items:center;gap:6px;
       padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
@@ -10979,6 +10995,11 @@ def render_index_html(
       .agent-rail {{
         display: none;
       }}
+      /* The composed bottom bar's narrow-viewport offset (lift above the
+         portrait-sheet peek line, #2462) lives in the _render_help_drawer()
+         style block, co-located with its base rule so it wins the cascade —
+         see the comment there. Placing it here (head stylesheet, earlier in
+         source order) lost to the later drawer base rule at equal specificity. */
       /* Collapse three-col grid to single-column on narrow viewports.
          The 280px left pane and 320px agent-rail would otherwise crush the note
          center column behind overflow:hidden (Codex P1 review finding).
