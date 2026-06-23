@@ -43,12 +43,16 @@ tmp/index-outbox.jsonl
 /tmp/
 *.jsonl
 tmp/index.jsonl
-runtime/settings/
-runtime/builderops/
-runtime/dispatcher/
-runtime/orientation/
-runtime/panel/
-runtime/agent_memory/
+# Runtime artifact dirs — un-anchored so they match at the repo root AND nested
+# cwds (e.g. companion-ui/companion-app/runtime/panel/ from companion_ui tests).
+# Deliberately specific (not a broad **/runtime/) because app/runtime/ and
+# tests/runtime/ are tracked source dirs.
+**/runtime/settings/
+**/runtime/builderops/
+**/runtime/dispatcher/
+**/runtime/orientation/
+**/runtime/panel/
+**/runtime/agent_memory/
 # Promotion-plan receipts are local ops artifacts, not repo truth (#2081).
 # Scoped to ops/promotions/ only — tracked ops/** siblings (benchmarks, observability, quality) stay tracked.
 ops/promotions/
