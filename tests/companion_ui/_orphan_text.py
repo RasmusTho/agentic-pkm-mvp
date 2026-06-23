@@ -233,6 +233,9 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         "palette-blocked",
         "palette-receipt",
         "palette-title",
+        # Rail-vs-palette explicit role labels (CUIDR-09 / E2, #2453)
+        "palette-surface-role",
+        "rail-surface-role",
         # Guidance layer (#1788, SEP-06) — opt-in explanatory callouts plus
         # the ⓘ toggle affordance (topbar, overlay heads, re-entry card)
         "guidance-callout",

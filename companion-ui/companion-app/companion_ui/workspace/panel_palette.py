@@ -379,6 +379,14 @@ _PALETTE_CSS = """
       border-left: 2px solid var(--accent-dim);
       padding-left: 8px;
     }
+    /* E2 (#2453): explicit fast-path role label — the palette is the
+       keyboard-first counterpart to the ambient rail. */
+    .palette-surface-role {
+      margin: 0;
+      font-size: 0.72rem;
+      color: var(--fg-2);
+      letter-spacing: 0.02em;
+    }
     .palette-filter {
       width: 100%;
       box-sizing: border-box;
@@ -510,10 +518,12 @@ def panel_palette_markup(fields: Optional[dict[str, Any]]) -> str:
        {overlay_frame_root_attrs(overlay_id=PALETTE_OVERLAY_ID, position="center")}
        data-authority-surface="panel"
        data-presentation-of="panel-rail"
+       data-surface-role="fast-path"
        data-open="false"
        role="dialog" aria-modal="true" aria-label="Panel command palette">
     {overlay_frame_header(overlay_id=PALETTE_OVERLAY_ID, title="Panel", guidance_surface="cmd")}
     {guidance_callout_markup('cmd')}
+    <p class="palette-surface-role" data-testid="palette-surface-role" data-surface-role="fast-path">⌘K · keyboard-first fast path — the same governed proposals as the ambient rail; dismiss when done.</p>
     <p class="palette-not-chat" data-testid="palette-not-chat-callout">Panel ≠ Chat — a faster presentation of the same governed Panel proposals; no free-text generation, no conversation.</p>
     <input type="search" class="palette-filter" id="palette-filter-input"
            data-testid="palette-filter-input" data-input-role="filter"

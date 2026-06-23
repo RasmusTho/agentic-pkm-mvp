@@ -2377,10 +2377,15 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
       class="agent-rail"
       data-testid="workspace-agent-rail"
       data-region="agent-rail"
+      data-surface-role="ambient"
+      aria-label="Companion rail — the ambient, peripheral path. Same governed proposals as ⌘K, which is the keyboard-first fast path."
+      title="Ambient, peripheral path — same governed proposals as ⌘K (the keyboard-first fast path)."
       data-layout-desktop="side-rail">
       <div class="rail-header" data-testid="workspace-panel-column-header">
         <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>
         <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
+        <span class="rail-surface-role" data-testid="workspace-rail-surface-role"
+          data-surface-role="ambient" title="Same governed proposals as ⌘K — the rail is the ambient, peripheral path; ⌘K is the keyboard-first fast path.">ambient · peripheral</span>
       </div>
       {rail_posture_html}
       {rail_body_html}
@@ -6784,13 +6789,27 @@ def _render_orientation_index_html(
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
         _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
         _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
+        # NOTE (#2453 / E1, owner decision 2026-06-23): no "resume the thread?"
+        # continuity affordance is rendered on the long-absence cold surface. A
+        # true resume signal can't exist here by design — the only continuity
+        # pointer (leave_point) is TTL-capped at 7 days (ADR-0008), while
+        # cold_start is a >14d return, so a present leave_point never coincides
+        # with cold_start; recents_anchor is recency, not continuity. The owner
+        # accepted the existing calm anchor — the recents.open "Open your most
+        # recent note" link below — as E1's answer (no durable continuity signal,
+        # no dashboard; the system keeps its deliberate forget-fast posture).
+        # Recents-anchor sub-affordance (§6, design_handoff/implementation-contracts.md).
+        # The Find/recency link ("Open your most recent note"), declared by
+        # `recents_anchor` under the `recents.open` intent. It is NOT a
+        # resume/continuity claim. Rendered only when the runtime declares the
+        # field; never auto-opens.
         if _cold_recents_path and _cold_recents_label:
             _cold_recents_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
             _cold_recents_html = (
-                f'<p class="cold-start-recents-anchor" data-testid="cold-start-recents-anchor">'
+                '<p class="cold-start-recents-anchor" data-testid="cold-start-recents-anchor">'
                 f'<a data-intent="recents.open" href="{_e(_cold_recents_href)}">'
                 f"Open your most recent note: {_e(_cold_recents_label)}"
-                f"</a></p>"
+                "</a></p>"
             )
         else:
             _cold_recents_html = ""
@@ -7346,7 +7365,6 @@ def _render_orientation_index_html(
       gap: 10px;
       margin: 18px 0 0;
     }}
-    .cold-start-recents-anchor {{ margin: 10px 0 0; }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
@@ -10220,9 +10238,21 @@ def render_index_html(
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
       padding: 12px 16px;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+    }}
+    /* E2 (#2453): the rail's explicit role label. Same governed proposals as
+       ⌘K; the rail is the ambient/peripheral path, ⌘K the keyboard fast path.
+       Full-width footnote line so it never crowds the Panel label/badge. */
+    .rail-surface-role {{
+      flex: 1 1 100%;
+      margin-top: 4px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.04em;
+      color: var(--fg-3);
     }}
     .rail-label {{
       font-family: var(--font-mono);

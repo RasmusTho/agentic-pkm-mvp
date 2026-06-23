@@ -429,6 +429,81 @@ def test_palette_is_not_a_chat_surface() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CUIDR-09 / E2 (#2453, owner decision = Option A): rail and ⌘K palette present
+# ONE model with explicit roles — rail = ambient/peripheral, palette = the
+# keyboard-first fast path. Both share the same server-declared proposal set;
+# neither invents authority. No structural refactor: the role labels are the
+# only addition. (Shipped guardrail: the palette stays
+# data-presentation-of="panel-rail"; the rail keeps its safety-critical
+# expansion behaviour — exercised in test_right_rail_compaction.py.)
+# ---------------------------------------------------------------------------
+
+
+def test_rail_palette_single_model() -> None:
+    html = _render()
+    palette = _palette(html)
+
+    # --- Palette declares the fast-path role, explicitly. ---
+    root = re.search(r'<div[^>]*data-testid="panel-palette"[^>]*>', palette)
+    assert root, "palette root must render"
+    assert _attr(root.group(0), "data-surface-role") == "fast-path"
+    # Still a presentation of the rail — not a general launcher, not new authority.
+    assert _attr(root.group(0), "data-presentation-of") == "panel-rail"
+    assert _attr(root.group(0), "data-authority-surface") == "panel"
+
+    role_label = re.search(
+        r'<p[^>]*data-testid="palette-surface-role"[^>]*>(.*?)</p>', palette, re.S
+    )
+    assert role_label, "palette must render an explicit fast-path role label"
+    assert "fast path" in role_label.group(1).lower()
+    assert "⌘K" in role_label.group(1)
+
+    # --- Rail declares the ambient role, explicitly, in the same shell. ---
+    rail_aside = re.search(
+        r'<aside[^>]*data-testid="workspace-agent-rail"[^>]*>', html
+    )
+    assert rail_aside, "agent rail must render"
+    assert _attr(rail_aside.group(0), "data-surface-role") == "ambient"
+    # The role must be conveyed on the always-present rail container, not only
+    # in the header: in ambient mode the rail collapses to a 56px text-free
+    # strip and the header (with the visible role label) is CSS-hidden, so the
+    # ambient/peripheral role would otherwise only surface once the rail is
+    # active. The aria-label / title on the aside keeps the role discoverable
+    # (screen reader + hover) in the very state it names (#2453 E2, Codex).
+    rail_aria = _attr(rail_aside.group(0), "aria-label").lower()
+    assert "ambient" in rail_aria and "⌘k" in rail_aria, (
+        "the rail container must carry an accessible ambient/peripheral role "
+        "label so the role is conveyed in ambient mode (header hidden)"
+    )
+
+    rail_role = re.search(
+        r'<span[^>]*data-testid="workspace-rail-surface-role"[^>]*>(.*?)</span>',
+        html,
+        re.S,
+    )
+    assert rail_role, "rail must render an explicit ambient role label"
+    assert "ambient" in rail_role.group(1).lower()
+
+    # --- One model: same server-declared proposal ids in both surfaces. ---
+    rail_ids = set(
+        re.findall(
+            r'data-testid="workspace-panel-proposal-row"[^>]*?data-proposal-id="([^"]+)"',
+            html,
+        )
+    )
+    palette_ids = set(
+        re.findall(
+            r'data-testid="palette-proposal-row"[^>]*?data-proposal-id="([^"]+)"',
+            palette,
+        )
+    )
+    assert rail_ids
+    assert rail_ids == palette_ids, (
+        "rail and palette must present the identical server-declared proposal set"
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC5: proposal identity comes from data-proposal-id, never rendered position
 # ---------------------------------------------------------------------------
 

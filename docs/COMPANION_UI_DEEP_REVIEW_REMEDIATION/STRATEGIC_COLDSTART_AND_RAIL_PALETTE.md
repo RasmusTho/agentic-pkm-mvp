@@ -23,9 +23,16 @@ Two strategic questions surface from the deep review that cannot be resolved by 
 
 This task does **not** implement the chosen treatment. It is a holding spec for owner-gated decisions. Implementation follows in a child issue once the decisions are recorded.
 
+## Resolution (owner decisions recorded 2026-06-23, #2453)
+
+- **E2 — Option A, DELIVERED.** Keep both surfaces with explicit roles: the ⌘K palette is the keyboard-first **fast path** (`data-surface-role="fast-path"`); the right rail is the **ambient** path (`data-surface-role="ambient"`). Same server-declared proposal set; the palette stays a presentation of the rail (`data-presentation-of="panel-rail"`); no structural refactor. The role model is documented in the canonical shell spec (`companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` — Surface composition palette row + the `data-surface-role` data-attribute entry). Shipped in this slice (#2453); see `tests/companion_ui/test_panel_command_palette.py::test_rail_palette_single_model`.
+- **E1 — RESOLVED: keep the existing recency anchor (no durable continuity signal).** A true "resume the thread?" affordance is **architecturally impossible on the long-absence cold surface by design**: the only continuity pointer (`orientation.leave_point`) is TTL-capped at **7 days** (`app/orientation/leave_point_cursor.py` `MAX_TTL`; ADR-0008 scopes it as bounded operational trace, *not* restart-surviving continuity), while `cold_start` requires a **>14-day** gap — so a present leave_point never coincides with `cold_start`. `recents_anchor` is a Find/recency projection, not a continuity claim, and must not drive `entry.resume`. The owner (2026-06-23) **accepted the existing `recents.open` "Open your most recent note" link as E1's calm long-return anchor** — no durable continuity signal, no ADR-0008 amendment, no dashboard; the system keeps its deliberate forget-fast posture. The deep-review E1/J1 finding is addressed by this existing honest anchor. (The follow-up issue #2472, which had proposed commissioning a durable signal, is closed by this decision.) The original E1 framing below (absence-age / `absence_age_days` / a new resume affordance) is superseded and retained only for provenance.
+
 ## Open Decisions
 
 ### E1 — Long-absence re-entry orientation
+
+> **⛔ ARCHIVED — PROVENANCE ONLY. DO NOT IMPLEMENT.** This E1 sub-section (Problem → Options → Consequence → Recommended default → the `## Concretely` E1 bullet → E1-AC1/E1-AC2 below) describes the original absence-age / `absence_age_days` / `long_absence_calm_line` proposal, which the owner **rejected** on 2026-06-23. See **§Resolution** above: E1 is resolved as the existing `recents.open` "Open your most recent note" anchor — no `absence_age_days`, no resume-line branch, no new test. A docs-to-issue/governance run must **not** pick up any task text in this sub-section. Retained only to record what was considered.
 
 #### Problem
 
@@ -97,9 +104,9 @@ Option A. Keep both surfaces; confirm their roles in words. Palette = fast path.
 
 ## Concretely
 
-Once the owner decides on E1:
-- If Option A: add a `long_absence_calm_line` rendering branch. The runtime must supply `absence_age_days` on a `cold_start` response. The UI renders "Last here {N} days ago — resume the thread?" only when `absence_age_days` is present. No client-side threshold computation. New test: `test_cold_start_long_absence_renders_calm_resume_line` in `tests/companion_ui/test_reentry_orientation_treatment.py`.
-- If Option B: no implementation change; close the E1 branch as won't-fix-by-design.
+**E1 — ⛔ SUPERSEDED (provenance only; see §Resolution). Do NOT implement the bullet below.** E1 is resolved as the existing `recents.open` anchor; there is no `long_absence_calm_line`, no `absence_age_days`, and no new test.
+- ~~If Option A: add a `long_absence_calm_line` rendering branch. The runtime must supply `absence_age_days` on a `cold_start` response. The UI renders "Last here {N} days ago — resume the thread?" only when `absence_age_days` is present. No client-side threshold computation. New test: `test_cold_start_long_absence_renders_calm_resume_line` in `tests/companion_ui/test_reentry_orientation_treatment.py`.~~
+- ~~If Option B: no implementation change; close the E1 branch as won't-fix-by-design.~~
 
 Once the owner decides on E2:
 - If Option A: update the shell spec to name the two roles explicitly; audit the rail and palette labels to ensure they reflect the model; no structural change.
@@ -114,13 +121,15 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 **This task is owner-gated. The criteria below are conditional on the owner's decisions.**
 
-**E1-AC1 (conditional on decision):** Once the owner picks the long-absence treatment, a long return (> the cold_start cutoff, runtime-declared `absence_age_days` present) renders the chosen calm orientation without introducing a dashboard. Under the recommended default (Option A), a single "last here N days ago — resume the thread?" line appears and no orientation panels, governance tiles, or re-entry card are shown.
-- Verify: render the long-absence `cold_start` fixture with `absence_age_days` set. Assert `data-entry-state="cold_start"` and the calm resume line are present. Assert no `data-region="orientation-panel"`, no governance tiles, and no re-entry card render.
-- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_long_absence_renders_calm_resume_line`
+**E1-AC1 / E1-AC2 — ⛔ SUPERSEDED (provenance only; see §Resolution). Not acceptance criteria for any open work.** E1 is resolved as the existing `recents.open` anchor; the absence-age criteria below are retained only to record what was originally proposed and rejected. No agent should treat them as executable.
 
-**E1-AC2:** The cutoff and absence-age classification remain server-authoritative. The UI does not compute whether a gap crosses the cold_start threshold. The test suite must assert that the calm line renders only when the runtime supplies `absence_age_days`, not when it is absent.
-- Verify: render the same `cold_start` fixture without `absence_age_days`. Assert no calm resume line renders.
-- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_without_age_renders_no_resume_line`
+~~**E1-AC1 (conditional on decision):** Once the owner picks the long-absence treatment, a long return (> the cold_start cutoff, runtime-declared `absence_age_days` present) renders the chosen calm orientation without introducing a dashboard. Under the recommended default (Option A), a single "last here N days ago — resume the thread?" line appears and no orientation panels, governance tiles, or re-entry card are shown.~~
+- ~~Verify: render the long-absence `cold_start` fixture with `absence_age_days` set. Assert `data-entry-state="cold_start"` and the calm resume line are present. Assert no `data-region="orientation-panel"`, no governance tiles, and no re-entry card render.~~
+- ~~New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_long_absence_renders_calm_resume_line`~~
+
+~~**E1-AC2:** The cutoff and absence-age classification remain server-authoritative. The UI does not compute whether a gap crosses the cold_start threshold. The test suite must assert that the calm line renders only when the runtime supplies `absence_age_days`, not when it is absent.~~
+- ~~Verify: render the same `cold_start` fixture without `absence_age_days`. Assert no calm resume line renders.~~
+- ~~New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_without_age_renders_no_resume_line`~~
 
 **E2-AC1 (conditional on decision):** Once the owner decides, the rail and ⌘K palette present ONE coherent model. Under the recommended default (Option A), the palette is documented and labeled as the fast path and the rail as the ambient path; no proposal datum is invented by either surface beyond what the server declares.
 - Verify (static): inspect `test_panel_command_palette.py::test_palette_renders_same_proposals_as_rail` — it must continue to pass. Inspect shell render for explicit role labels on both surfaces.
@@ -128,9 +137,9 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 ## How to Verify (Pre-Merge)
 
-1. **Static — E1 (Option A):** Render `cold_start` fixtures with and without `absence_age_days`. Assert that the calm line appears only in the presence-of-age case and that no dashboard elements appear in either.
-2. **Static — E2 (Option A):** Run `test_panel_command_palette.py` and `test_right_rail_compaction.py` in full. Confirm both pass without modification. Inspect rendered shell for explicit role labels.
-3. **Live — E1:** Simulate a long-absence login in the test environment and confirm the calm line renders and Resume routes correctly.
+1. ~~**Static — E1 (Option A):** Render `cold_start` fixtures with and without `absence_age_days`…~~ **⛔ SUPERSEDED (provenance only; see §Resolution).** E1 is resolved as the existing `recents.open` anchor — there is no `absence_age_days` / calm-line branch to verify. The relevant invariant is simply that the long-absence `cold_start` surface renders **no** `entry.resume` continuity affordance (covered by `test_entry_state_gallery.py` / `test_reentry_orientation_treatment.py`).
+2. **Static — E2 (Option A):** Run `test_panel_command_palette.py` and `test_right_rail_compaction.py` in full. Confirm both pass without modification. Inspect rendered shell for explicit role labels (`data-surface-role` on palette + rail).
+3. ~~**Live — E1:** Simulate a long-absence login…~~ **⛔ SUPERSEDED (provenance only; see §Resolution).** No E1 resume affordance to exercise.
 4. **Live — E2:** Open ⌘K, confirm it shows the same proposals as the rail. Dismiss. Confirm rail returns to ambient posture.
 
 ## Out of Scope
@@ -152,4 +161,4 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 ## Related GitHub Issues
 
-Maps to child issue [Companion UI Deep-Review] strategic-coldstart-and-rail-palette; Wave 3; label `agent:needs-human` (two named owner decisions open: long-absence re-entry treatment; rail-vs-palette model).
+Maps to child issue #2453 [Companion UI Deep-Review] strategic-coldstart-and-rail-palette; Wave 3. Both owner decisions are **resolved** (2026-06-23, see §Resolution): E1 = keep the existing `recents.open` anchor (no durable continuity signal; #2472 closed not-planned); E2 = Option A explicit role labels (delivered). No open owner decision remains.
