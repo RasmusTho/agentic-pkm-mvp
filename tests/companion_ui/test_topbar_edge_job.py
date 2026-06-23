@@ -399,7 +399,13 @@ def test_operator_telemetry_absent_from_shell() -> None:
     region_open = re.search(
         r'<section class="workspace-operator-telemetry"[^>]*>', full_shell
     )
-    assert "hidden" in region_open.group(0), "region is hidden from the reading surface"
+    # The region carries no `hidden` attribute: it is rendered inside the
+    # operator drawer body, whose own open/close owns visibility — so the
+    # telemetry is genuinely reachable and interactive when the drawer opens,
+    # never stranded behind the backdrop with a hidden attr (Codex #2458).
+    assert "hidden" not in region_open.group(0), (
+        "region visibility is owned by the operator drawer, not a hidden attr"
+    )
     assert 'data-layer="operator"' in region_open.group(0)
     body = op_region.group(1)
     for marker in _FORBIDDEN_TELEMETRY_TESTIDS:
@@ -416,12 +422,26 @@ def test_operator_telemetry_absent_from_shell() -> None:
     )
     assert 'data-surface-id="operator"' in map_overlay
 
-    # The relocated telemetry is not dead markup: opening the operator layer
-    # reveals the operator-telemetry region (and closing re-hides it), so the
-    # relocated pill/freshness is actually reachable by the user.
-    assert "revealTelemetry(true)" in full_shell
-    assert "revealTelemetry(false)" in full_shell
+    # The relocated telemetry is not dead markup: it is rendered INSIDE the
+    # operator drawer host (above the lazy `/operator` fetch), so opening the
+    # drawer — the operator layer above the backdrop — exposes it. No reveal
+    # hack and no `hidden` toggle: the drawer owns its own visibility, and the
+    # telemetry is reachable/interactive, never behind the modal (Codex #2458).
+    assert "revealTelemetry" not in full_shell, (
+        "telemetry must not depend on a hidden/reveal hack"
+    )
     assert 'data-region="operator-telemetry"' in full_shell
+    drawer = re.search(
+        r'<div class="operator-drawer-host".*?</section>\s*'
+        r'<div class="operator-drawer-body"',
+        full_shell,
+        re.S,
+    )
+    assert drawer, (
+        "operator-telemetry must render inside the operator drawer host, above "
+        "the /operator fetch body"
+    )
+    assert 'class="workspace-operator-telemetry"' in drawer.group(0)
 
     # Operator access must not regress on entry-state pages: the operator node
     # is routable on every orientation render (the operator drawer ships there).

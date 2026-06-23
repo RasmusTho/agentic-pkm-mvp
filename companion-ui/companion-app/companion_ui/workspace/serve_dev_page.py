@@ -558,6 +558,86 @@ def _render_workspace_header_strip(
     coarse_posture = coarse_vault_posture(
         vault_state=vault_state, primary_posture=posture
     )
+    # CUIDR-04 (#2447): the runtime/diagnostic telemetry that left the front
+    # edge is built by `_render_operator_telemetry_block(fields, ...)` and
+    # rendered INSIDE the operator drawer body (the operator layer), not on
+    # the header. The header carries identity + Capture only.
+    return f"""
+      <header
+        class="workspace-header-strip primary-posture posture-tone-{posture}"
+        data-testid="workspace-primary-posture"
+        data-posture="{posture}"
+        data-region="workspace-header">
+        <div class="workspace-header-row" data-testid="workspace-header-row">
+          <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
+          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}">
+            <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
+            <span>{vault_name} · vault {vault_state}</span>
+          </a>
+          <!-- Vault settings is vault-config, identity-adjacent — it stays by
+               the vault chip (not in the displaced launcher cluster). #2447. -->
+          <button type="button" class="workspace-surface-icon workspace-vault-settings-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.settings.open" title="Vault settings" aria-label="Open vault settings" aria-controls="workspace-vault-settings-panel" aria-expanded="false">V</button>
+          <span class="workspace-anchor-pill" data-testid="workspace-anchor-pill" data-region="document-anchor" data-anchor-note-path="{_e(anchor_note_path)}" title="Document anchor">{_e(anchor_title)}</span>
+          <span class="workspace-posture-pill" data-testid="workspace-posture-pill" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" data-authority="local-ui" title="Posture emphasis (local rendering only)">{DEFAULT_POSTURE_EMPHASIS}</span>
+          <span class="workspace-header-spacer" aria-hidden="true"></span>
+          <!-- CUIDR-04 (#2447): the top edge keeps IDENTITY + ONE primary
+               action (Capture, ⌘N). Every other surface launcher (vault, map,
+               memory, receipts, settings, help) leaves the topbar and is
+               reachable via the System Map overlay (a never-clipping surface).
+               Operator/diagnostic telemetry (runtime pill, freshness, the
+               quick-open hint, the runtime-status popover) moves off the front
+               edge to the operator layer (System Map / operator drawer). -->
+          <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
+            <button type="button" class="workspace-surface-icon workspace-surface-icon--primary" data-testid="workspace-surface-icon-capture" data-surface="capture" data-intent="capture.open" title="Capture to inbox (⌘N)" aria-label="Capture to inbox" onclick="overlayHost.mount('capture')">&#43;</button>
+            {guidance_toggle_markup('topbar')}
+          </nav>
+          <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>
+          {dev_ribbon}
+        </div>
+      </header>
+      <!-- Guidance layer (#1788, SEP-06): the shell callout — explanation
+           only, hidden unless the shell root carries data-guidance="on". -->
+      {guidance_callout_markup('shell')}"""
+
+
+def _render_operator_telemetry_block(
+    *,
+    fields: dict,
+    posture: str,
+    posture_label: str,
+    runtime_environment: str,
+    runtime_channel: str,
+    runtime_trace_id: str,
+    vault_name: str,
+    vault_channel: str,
+    vault_provenance: str,
+    writeguard_status: str,
+    canvas_enabled: bool,
+    update_flow_available: bool,
+    guard_degraded: bool,
+    workspace_update_available: bool,
+    workspace_update_state: str,
+    workspace_update_reason: str,
+    workspace_update_scope: str,
+    workspace_update_governance_actions_enabled: bool,
+    workspace_update_config_mode: str,
+    orientation_freshness: str = "",
+    orientation_as_of: str = "",
+    orientation_trace_id: str = "",
+) -> str:
+    """The relocated runtime/diagnostic telemetry block (#2447, CUIDR-04).
+
+    Renders the runtime-status disclosure (pill + popover rows) and the
+    freshness string that left the front edge. It is rendered **inside the
+    operator drawer body** (the operator layer) — above the live ``/operator``
+    fetch — so it is genuinely reachable and interactive when the operator
+    drawer opens, never stranded behind the drawer backdrop. It keeps every
+    telemetry testid; the values still come from the runtime payload
+    (presentation only). Returns ``""`` when ``fields`` is absent.
+    """
+    if not fields:
+        return ""
+    freshness_label, freshness_title = _workspace_header_freshness(fields)
     canvas_token = "canvas off" if not canvas_enabled else "canvas on"
     runtime_token = (
         "runtime degraded"
@@ -648,9 +728,6 @@ def _render_workspace_header_strip(
         for row in telemetry_rows
         for testid, field, label, value in [row[:4]]
     )
-    # Relocated orientation telemetry (#2171/#2245): freshness/as_of/trace_id
-    # render as read-only projection rows when the orientation payload supplies
-    # them. Zero-state: omit entirely when absent — no placeholder row.
     _of = (orientation_freshness or "").strip()
     _oa = (orientation_as_of or "").strip()
     _ot = (orientation_trace_id or "").strip()
@@ -681,15 +758,15 @@ def _render_workspace_header_strip(
             <span class="workspace-runtime-popover-key">orientation trace</span>
             <code>{_e(_ot)}</code>
           </div>"""
-    # CUIDR-04 (#2447): the runtime-status disclosure is rendered OFF the front
-    # edge, inside the operator-telemetry region. It keeps every telemetry
-    # testid (the values still come from the runtime payload — presentation
-    # only) but no longer sits on the orientation/reading surface. The region
-    # is hidden by default and surfaced through the operator layer.
-    operator_telemetry_html = f"""
+    # Rendered open (the runtime-status popover content is always present so the
+    # operator can read it); the block sits inside the drawer body, above the
+    # live /operator fetch. No `hidden` — the drawer's own open/close owns
+    # visibility, so the telemetry is reachable and interactive, never behind
+    # the backdrop.
+    return f"""
       <section class="workspace-operator-telemetry" data-testid="workspace-operator-telemetry-region"
-        data-region="operator-telemetry" data-layer="operator" hidden aria-hidden="true">
-        <details class="workspace-runtime-status" data-testid="workspace-runtime-status">
+        data-region="operator-telemetry" data-layer="operator">
+        <details class="workspace-runtime-status" data-testid="workspace-runtime-status" open>
           <summary
             class="workspace-runtime-pill"
             data-testid="workspace-runtime-pill"
@@ -706,43 +783,6 @@ def _render_workspace_header_strip(
         </details>
         <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
       </section>"""
-    return f"""
-      <header
-        class="workspace-header-strip primary-posture posture-tone-{posture}"
-        data-testid="workspace-primary-posture"
-        data-posture="{posture}"
-        data-region="workspace-header">
-        <div class="workspace-header-row" data-testid="workspace-header-row">
-          <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
-          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}">
-            <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
-            <span>{vault_name} · vault {vault_state}</span>
-          </a>
-          <!-- Vault settings is vault-config, identity-adjacent — it stays by
-               the vault chip (not in the displaced launcher cluster). #2447. -->
-          <button type="button" class="workspace-surface-icon workspace-vault-settings-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.settings.open" title="Vault settings" aria-label="Open vault settings" aria-controls="workspace-vault-settings-panel" aria-expanded="false">V</button>
-          <span class="workspace-anchor-pill" data-testid="workspace-anchor-pill" data-region="document-anchor" data-anchor-note-path="{_e(anchor_note_path)}" title="Document anchor">{_e(anchor_title)}</span>
-          <span class="workspace-posture-pill" data-testid="workspace-posture-pill" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" data-authority="local-ui" title="Posture emphasis (local rendering only)">{DEFAULT_POSTURE_EMPHASIS}</span>
-          <span class="workspace-header-spacer" aria-hidden="true"></span>
-          <!-- CUIDR-04 (#2447): the top edge keeps IDENTITY + ONE primary
-               action (Capture, ⌘N). Every other surface launcher (vault, map,
-               memory, receipts, settings, help) leaves the topbar and is
-               reachable via the System Map overlay (a never-clipping surface).
-               Operator/diagnostic telemetry (runtime pill, freshness, the
-               quick-open hint, the runtime-status popover) moves off the front
-               edge to the operator layer (System Map / operator drawer). -->
-          <nav class="workspace-surface-icons" data-testid="workspace-surface-icons" data-region="surface-icons" aria-label="Surfaces">
-            <button type="button" class="workspace-surface-icon workspace-surface-icon--primary" data-testid="workspace-surface-icon-capture" data-surface="capture" data-intent="capture.open" title="Capture to inbox (⌘N)" aria-label="Capture to inbox" onclick="overlayHost.mount('capture')">&#43;</button>
-            {guidance_toggle_markup('topbar')}
-          </nav>
-          <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>
-          {dev_ribbon}
-        </div>
-      </header>
-      <!-- Guidance layer (#1788, SEP-06): the shell callout — explanation
-           only, hidden unless the shell root carries data-guidance="on". -->
-      {guidance_callout_markup('shell')}
-      {operator_telemetry_html}"""
 
 
 def _render_rail_empty_state(
@@ -1674,8 +1714,14 @@ def _plain_workspace_heading_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _render_note_section(fields: dict) -> str:
+def _render_note_section(fields: dict) -> tuple[str, str]:
     """Render the workspace shell from render_fields() output.
+
+    Returns ``(shell_html, operator_telemetry_html)``. The second element is
+    the relocated runtime/diagnostic telemetry block (#2447, CUIDR-04) — it is
+    built here where its derived inputs are in scope, but rendered by the
+    caller **inside the operator drawer** (the operator layer, above the
+    backdrop), off the front edge.
 
     Uses Yggdrasil design tokens. Stable data-testid / data-region attributes
     match the region constants in real_note_workspace_shell.py for future
@@ -1817,6 +1863,33 @@ def _render_note_section(fields: dict) -> str:
     )
     effective_vault_provenance = "unreachable" if vault_unreachable else str(vault_provenance)
     workspace_header_strip_html = _render_workspace_header_strip(
+        fields=fields,
+        posture=posture_token,
+        posture_label=posture_label,
+        runtime_environment=runtime_environment,
+        runtime_channel=runtime_channel,
+        runtime_trace_id=runtime_trace_id,
+        vault_name=vault_name,
+        vault_channel=vault_channel,
+        vault_provenance=effective_vault_provenance,
+        writeguard_status=writeguard_status,
+        canvas_enabled=canvas_enabled,
+        update_flow_available=update_flow_available,
+        guard_degraded=guard_degraded,
+        workspace_update_available=workspace_update_available,
+        workspace_update_state=workspace_update_state,
+        workspace_update_reason=workspace_update_reason,
+        workspace_update_scope=workspace_update_scope,
+        workspace_update_governance_actions_enabled=workspace_update_governance_actions_enabled,
+        workspace_update_config_mode=workspace_update_config_mode,
+        orientation_freshness=str(fields.get("orientation_freshness") or ""),
+        orientation_as_of=str(fields.get("orientation_as_of") or ""),
+        orientation_trace_id=str(fields.get("orientation_trace_id") or ""),
+    )
+    # CUIDR-04 (#2447): build the relocated runtime/diagnostic telemetry block
+    # for the operator drawer (the operator layer), off the front edge. Returned
+    # to the caller (render_index_html) which embeds it inside the drawer.
+    operator_telemetry_html = _render_operator_telemetry_block(
         fields=fields,
         posture=posture_token,
         posture_label=posture_label,
@@ -2172,8 +2245,9 @@ def _render_note_section(fields: dict) -> str:
             f"{rail_cards_inner}\n      </details></div>"
         )
 
-    return f"""
+    shell_html = f"""
   <div class="workspace-layout workspace-layout--three-col" data-rail-state="{rail_layout_state}">
+
     {left_context_panel_html}
     <div class="workspace-main">
       {workspace_header_strip_html}
@@ -2312,6 +2386,7 @@ def _render_note_section(fields: dict) -> str:
     </div>
     {portrait_sheet_html}
   </div>"""
+    return shell_html, operator_telemetry_html
 
 
 def _render_active_note_body_update_flow(
@@ -7382,7 +7457,7 @@ def _render_operator_toggle() -> str:
     return ""
 
 
-def _render_operator_drawer() -> str:
+def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
     """Server-declared in-shell Operator diagnostics drawer.
 
     A slide-over panel that embeds operator diagnostics fetched same-origin
@@ -7391,8 +7466,14 @@ def _render_operator_drawer() -> str:
 
     The drawer dims but does not dismiss the workspace: closing returns the
     user exactly where they were (identical contract to the Help drawer).
+
+    ``operator_telemetry_html`` (#2447, CUIDR-04): the relocated runtime/
+    diagnostic telemetry block. Rendered inside the drawer — above the lazy
+    ``/operator`` fetch, outside ``#workspace-operator-body`` so the fetch never
+    overwrites it — so it is part of the operator layer (above the backdrop),
+    genuinely reachable and interactive when the drawer opens.
     """
-    return """
+    return ("""
   <style>
     /* CUIDR-04 (#2447): the floating Operator pill is removed from the bottom
        edge. The operator drawer is reached from the System Map operator node;
@@ -7443,6 +7524,7 @@ def _render_operator_drawer() -> str:
                 aria-label="Close operator panel"
                 onclick="companionOperator.close()">&times;</button>
       </div>
+      """ + operator_telemetry_html + """
       <div class="operator-drawer-body" id="workspace-operator-body"
            data-testid="workspace-operator-body">
         <div class="operator-drawer-loading"
@@ -7480,30 +7562,17 @@ def _render_operator_drawer() -> str:
             + 'Operator panel unavailable: ' + String(err) + '</div>';
         });
     }
-    // CUIDR-04 (#2447): the relocated runtime-telemetry region (the runtime
-    // pill / freshness that left the front edge) is revealed when the operator
-    // layer opens, and re-hidden when it closes — it is reachable only through
-    // the operator layer, never on the reading surface.
-    function revealTelemetry(show) {
-      var region = document.querySelector('[data-region="operator-telemetry"]');
-      if (!region) { return; }
-      if (show) {
-        region.removeAttribute('hidden');
-        region.setAttribute('aria-hidden', 'false');
-      } else {
-        region.setAttribute('hidden', '');
-        region.setAttribute('aria-hidden', 'true');
-      }
-    }
+    // CUIDR-04 (#2447): the relocated runtime-telemetry block is rendered
+    // inside the drawer (above the live /operator fetch), so the drawer's own
+    // open/close owns its visibility — no separate reveal hack, and it sits
+    // above the backdrop where it is reachable and interactive.
     window.companionOperator = {
       open: function() {
         loadContent();
-        revealTelemetry(true);
         host.setAttribute('data-open', 'true');
         setExpanded(true);
       },
       close: function() {
-        revealTelemetry(false);
         host.setAttribute('data-open', 'false');
         setExpanded(false);
         if (toggle) { try { toggle.focus(); } catch (e) {} }
@@ -7519,7 +7588,7 @@ def _render_operator_drawer() -> str:
       }
     });
   }());
-  </script>"""
+  </script>""")
 
 
 # --- In-shell Help drawer ---------------------------------------------------
@@ -7822,6 +7891,12 @@ def render_index_html(
         )
 
     content_section = ""
+    # CUIDR-04 (#2447): the relocated runtime/diagnostic telemetry block lives
+    # inside the operator drawer (the operator layer). _render_note_section
+    # builds it where its derived inputs are in scope and hands it back so the
+    # drawer (rendered below, as a sibling of the shell above the backdrop) can
+    # embed it. Empty for error/vault-selection states (no runtime payload).
+    operator_telemetry_html = ""
     if vault_selection_required is not None:
         content_section = _render_vault_selection_required_section(vault_selection_required)
     elif error:
@@ -7832,7 +7907,7 @@ def render_index_html(
             route_error=route_error,
         )
     elif fields is not None:
-        content_section = _render_note_section(fields)
+        content_section, operator_telemetry_html = _render_note_section(fields)
     # When the runtime is unreachable the error banner already carries the only
     # truthful affordances (Retry, System map). The vault-setup form (open /
     # initialize / recent / settings flags) is a false affordance — the runtime
@@ -7883,7 +7958,8 @@ def render_index_html(
     # opened only by explicit `map.open` affordances (the topbar icon on the
     # shell; the calm affordance on the no_vault error page). On the active
     # workspace shell every routable surface is live; on the error page only
-    # the Vault Browser truthfully remains reachable.
+    # the Vault Browser and the Operator diagnostics drawer truthfully remain
+    # reachable.
     map_available_routes: tuple[str, ...] = (
         (
             "anchor",
@@ -7899,7 +7975,12 @@ def render_index_html(
             "operator",
         )
         if fields is not None
-        else ()
+        # CUIDR-04 (#2447): the operator drawer is mounted on the error/no-vault
+        # entry states too (it self-fetches /operator and degrades gracefully).
+        # With the floating operator pill removed, the System Map's `operator`
+        # node is the only pointer route into diagnostics — keep it routable
+        # here so diagnostics aren't lost exactly when the runtime is degraded.
+        else ("operator",)
     )
 
     return f"""<!DOCTYPE html>
@@ -11709,7 +11790,7 @@ def render_index_html(
   {vault_settings_panel_js}
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
-  {_render_operator_drawer()}
+  {_render_operator_drawer(operator_telemetry_html)}
 </body>
 </html>"""
 

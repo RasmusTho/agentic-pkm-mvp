@@ -443,8 +443,19 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
     no_vault_nodes = _nodes(_map_overlay(_render_no_vault_orientation()))
     assert no_vault_nodes["vault"].startswith("<button")
 
+    # On the fully-unreachable error page the live runtime surfaces render
+    # truthfully inert — EXCEPT the operator layer. The operator drawer is a
+    # client-rendered diagnostics surface that self-fetches `/operator` and
+    # degrades gracefully; with the floating operator pill removed (CUIDR-04,
+    # #2447), the System Map's `operator` node is the only pointer route into
+    # diagnostics, so it must stay routable exactly when the runtime is degraded
+    # (Codex review #2458).
     error_nodes = _nodes(_map_overlay(_render_no_vault_error_page()))
+    assert error_nodes["operator"].startswith("<button"), "operator"
+    assert 'data-intent="operator.open"' in error_nodes["operator"]
     for sid in routable_surface_ids():
+        if sid == "operator":
+            continue
         assert error_nodes[sid].startswith("<article"), sid
         assert 'data-routable="false"' in error_nodes[sid], sid
         assert "onclick" not in error_nodes[sid], sid
