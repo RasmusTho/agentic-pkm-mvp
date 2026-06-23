@@ -439,3 +439,31 @@ def test_open_loops_cta_hidden_in_ambient_strip():
     assert (
         '[data-rail-state="ambient"] .agent-rail .panel-rail-open-loops' in html
     )
+
+
+def test_populated_commitments_keep_rail_active():
+    # A populated commitments surface carries the user's active next/waiting/
+    # review responsibilities, rendered read-only inside .rail-placeholder-body.
+    # The ambient strip hides that body, so populated commitments must keep the
+    # rail active or the user's responsibilities become invisible (Codex P1).
+    html = _html(
+        commitments_surface={
+            "state": "populated",
+            "next_action": [{"title": "Reply to Anna", "note_path": "Inbox/anna.md"}],
+            "review_cycle": [],
+            "as_of": "2026-06-22T10:00:00Z",
+        }
+    )
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+
+
+def test_nonpopulated_commitments_states_stay_ambient():
+    # empty / not-shown / degraded are confident-zero or availability cues, not
+    # content the user must act on — they stay ambient (mirrors the reorient
+    # "real items only" rule).
+    for state in ("empty", "not-shown", "degraded"):
+        html = _html(commitments_surface={"state": state})
+        assert 'data-rail-state="ambient"' in _layout_open_tag(html), (
+            f"commitments state {state!r} must not force the rail active"
+        )

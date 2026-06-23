@@ -1872,14 +1872,26 @@ def _render_note_section(fields: dict) -> str:
     # orientation step), not when it is the idle/empty recall payload (#1419).
     _reorient = fields.get("reorient_sections") or {}
     reorient_actionable = any(_reorient.get(name) for name in _reorient)
+    # Commitments are read-only responsibilities the user must still *see*
+    # (delivered commitment-surfacing contract, #1960/#2075). Only the
+    # ``populated`` state carries active next/waiting/review items — the
+    # ``empty``/``not-shown``/``degraded`` states are confident-zero or
+    # availability cues, i.e. non-content, and stay ambient. This mirrors the
+    # reorient "real items only" rule above (Codex P1).
+    _commitments = fields.get("commitments_surface") or {}
+    commitments_actionable = (
+        str(_commitments.get("state") or "") == "populated"
+    )
     # CUIDR-03 (#2446) — rail ambient-until-active. The rail earns its width
     # only when it carries something the reader must act on. The governing
     # contract is: active iff the payload declares at least one suggestion,
     # proposal, or receipt. Safety-critical and actionable-orientation states
-    # (WriteGuard blocked, canvas recovery/conflict, reorient with real items)
+    # (WriteGuard blocked, canvas recovery/conflict, reorient with real items,
+    # a visible Panel block/no-match message, populated commitments)
     # stay expanded too — the binding forewarning on the spec PR — because
-    # collapsing them into the ambient strip would hide a write block or a
-    # recovery prompt. Presentation only: every input below is a runtime-
+    # collapsing them into the ambient strip would hide a write block, a
+    # recovery prompt, or the user's active responsibilities. Presentation
+    # only: every input below is a runtime-
     # declared payload field; the render never reclassifies or invents content.
     rail_has_proposal = proposal_count > 0 or bool(panel_proposals)
     rail_has_receipt = (
@@ -1916,6 +1928,7 @@ def _render_note_section(fields: dict) -> str:
         or rail_safety_critical
         or rail_panel_message_present
         or reorient_actionable
+        or commitments_actionable
     )
     # The ambient/active decision is carried on the layout grid as
     # ``data-rail-state`` so CSS can reclaim the rail column width for the note

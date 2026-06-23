@@ -51,6 +51,9 @@ the user must see*. This exception set is closed and enumerated — it is not "a
   is the trigger; transient no-message states such as `running`/`idle` stay ambient.)
 - An actionable `reorient_sections` payload with real items (an orientation step the user can act
   on); an empty-section reorient payload stays ambient.
+- A `populated` `commitments_surface` — the user's active next/waiting/review responsibilities,
+  shown read-only (delivered commitment-surfacing contract). The `empty`/`not-shown`/`degraded`
+  commitment states are confident-zero or availability cues, not content, and stay ambient.
 
 The overrides exist because the ambient strip *collapses the rail header and body to a thin
 presence cue* — any state rendered only inside that body would otherwise become invisible. They do
@@ -109,7 +112,8 @@ the widest, highest-contrast region on screen.
 **Rail-active-contract AC** — An explicit, closed rule governs expand/collapse: the rail is active
 if and only if the payload carries at least one suggestion, proposal, or receipt, **or** one of the
 enumerated visibility-critical overrides is set (WriteGuard blocked, canvas recovery/conflict, a
-Panel carrying a human-facing message, an actionable reorient with items). There is no state where
+Panel carrying a human-facing message, an actionable reorient with items, populated commitments).
+There is no state where
 content — or a visibility-critical reason — exists but the rail renders ambient, and no ordinary
 idle/capability state forces the rail active.
 
