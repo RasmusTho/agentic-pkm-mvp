@@ -137,9 +137,9 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 ## How to Verify (Pre-Merge)
 
-1. **Static — E1 (Option A):** Render `cold_start` fixtures with and without `absence_age_days`. Assert that the calm line appears only in the presence-of-age case and that no dashboard elements appear in either.
-2. **Static — E2 (Option A):** Run `test_panel_command_palette.py` and `test_right_rail_compaction.py` in full. Confirm both pass without modification. Inspect rendered shell for explicit role labels.
-3. **Live — E1:** Simulate a long-absence login in the test environment and confirm the calm line renders and Resume routes correctly.
+1. ~~**Static — E1 (Option A):** Render `cold_start` fixtures with and without `absence_age_days`…~~ **⛔ SUPERSEDED (provenance only; see §Resolution).** E1 is resolved as the existing `recents.open` anchor — there is no `absence_age_days` / calm-line branch to verify. The relevant invariant is simply that the long-absence `cold_start` surface renders **no** `entry.resume` continuity affordance (covered by `test_entry_state_gallery.py` / `test_reentry_orientation_treatment.py`).
+2. **Static — E2 (Option A):** Run `test_panel_command_palette.py` and `test_right_rail_compaction.py` in full. Confirm both pass without modification. Inspect rendered shell for explicit role labels (`data-surface-role` on palette + rail).
+3. ~~**Live — E1:** Simulate a long-absence login…~~ **⛔ SUPERSEDED (provenance only; see §Resolution).** No E1 resume affordance to exercise.
 4. **Live — E2:** Open ⌘K, confirm it shows the same proposals as the rail. Dismiss. Confirm rail returns to ambient posture.
 
 ## Out of Scope
@@ -161,4 +161,4 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 ## Related GitHub Issues
 
-Maps to child issue [Companion UI Deep-Review] strategic-coldstart-and-rail-palette; Wave 3; label `agent:needs-human` (two named owner decisions open: long-absence re-entry treatment; rail-vs-palette model).
+Maps to child issue #2453 [Companion UI Deep-Review] strategic-coldstart-and-rail-palette; Wave 3. Both owner decisions are **resolved** (2026-06-23, see §Resolution): E1 = keep the existing `recents.open` anchor (no durable continuity signal; #2472 closed not-planned); E2 = Option A explicit role labels (delivered). No open owner decision remains.
