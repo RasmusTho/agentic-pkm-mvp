@@ -1444,3 +1444,95 @@ def test_resume_restores_caret() -> None:
         "live AC — caret/scroll restore + proportional entrance require the "
         "running shell + motion; exercised in the parent #2443 live UAT pass"
     )
+
+
+# ---------------------------------------------------------------------------
+# CUIDR-09 / E1 (#2453, owner decision 2026-06-23): returning-user "resume the
+# thread?" line, gated SOLELY on a server-declared resumable thread/session.
+#
+# The owner correction dropped the original absence-age treatment entirely:
+# there is no `absence_age_days`, no "N days ago" count, and no client-side
+# threshold/age math. The UI renders the calm resume line iff the runtime
+# declares `orientation.resumable_session`, and nothing otherwise — the
+# server-authoritative boundary holds. First contact / no vault is the no_vault
+# vault picker (#2448), not a cold_start branch, so the line never appears
+# there. The returning surface remains the calm "Returning after a while"
+# cold_start variant — no orientation panels, governance tiles, or re-entry card.
+# ---------------------------------------------------------------------------
+
+
+def _resumable_session(
+    note_path: str = "Notes/resume.md",
+    label: str = "the runtime API contract",
+) -> dict[str, str]:
+    """A server-declared resumable thread/session for the orientation payload."""
+    return {
+        "note_path": note_path,
+        "label": label,
+        "session_id": "session-123",
+    }
+
+
+def test_returning_with_resumable_session_renders_resume_line() -> None:
+    """E1-AC1: a returning user with a server-declared resumable session gets a
+    single calm "resume the thread?" line — no panels, no tiles, no card."""
+    payload = _orientation_payload(gap=_GAP_COLD)
+    payload["resumable_session"] = _resumable_session()
+
+    html = _render(orientation=payload)
+
+    # The returning cold_start surface (not first contact).
+    assert 'data-entry-state="cold_start"' in html
+    assert "Returning after a while" in html
+    assert "First contact" not in html
+
+    # The calm resume line renders with the entry.resume intent and routes to
+    # the server-declared resume target.
+    assert 'data-testid="cold-start-resume-line"' in html
+    resume = html.split('data-testid="cold-start-resume-line"', 1)[1].split("</p>", 1)[0]
+    assert 'data-intent="entry.resume"' in resume
+    assert "Resume the thread?" in resume
+    assert "the runtime API contract" in resume
+    assert "/workspace?note_path=Notes%2Fresume.md" in resume
+
+    # No day-count / absence-age leakage of any kind.
+    lowered = resume.lower()
+    assert "days ago" not in lowered
+    assert "absence" not in lowered
+
+    # No dashboard: no orientation panels, no governance tiles, no re-entry card.
+    assert 'data-region="reentry-card"' not in html
+    assert 'data-region="orientation-panel"' not in html
+    assert 'data-testid="workspace-orientation-governance"' not in html
+    assert 'data-testid="governance-counts-row"' not in html
+    for marker in _OVERLAY_MARKERS:
+        assert marker not in html, marker
+
+
+def test_returning_without_resumable_session_renders_no_resume_line() -> None:
+    """E1-AC2: with no server-declared resumable session, no resume line renders.
+
+    The UI computes nothing — no absence-age, no threshold, no day-count. The
+    line is gated purely on the presence of the server field.
+    """
+    # Returning cold_start surface, but the runtime declares no resumable session.
+    html = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    assert 'data-entry-state="cold_start"' in html
+    assert "Returning after a while" in html
+    assert 'data-testid="cold-start-resume-line"' not in html
+    assert "Resume the thread?" not in html
+
+
+def test_first_contact_never_renders_resume_line_even_with_session_field() -> None:
+    """E1-AC3: first contact is the no_vault vault picker (#2448), not a
+    cold_start resume branch. The resume line is suppressed for first contact
+    even if a resumable_session field is somehow present (defensive boundary)."""
+    payload = _orientation_payload(leave_status="absent")  # genuinely empty vault
+    payload["resumable_session"] = _resumable_session()
+
+    html = _render(orientation=payload)
+
+    assert "First contact" in html
+    assert 'data-testid="cold-start-resume-line"' not in html
+    assert "Resume the thread?" not in html

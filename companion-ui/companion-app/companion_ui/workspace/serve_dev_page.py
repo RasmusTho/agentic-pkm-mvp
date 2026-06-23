@@ -2377,10 +2377,13 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
       class="agent-rail"
       data-testid="workspace-agent-rail"
       data-region="agent-rail"
+      data-surface-role="ambient"
       data-layout-desktop="side-rail">
       <div class="rail-header" data-testid="workspace-panel-column-header">
         <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>
         <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
+        <span class="rail-surface-role" data-testid="workspace-rail-surface-role"
+          data-surface-role="ambient" title="Same governed proposals as ⌘K — the rail is the ambient, peripheral path; ⌘K is the keyboard-first fast path.">ambient · peripheral</span>
       </div>
       {rail_posture_html}
       {rail_body_html}
@@ -6794,6 +6797,36 @@ def _render_orientation_index_html(
             )
         else:
             _cold_recents_html = ""
+        # E1 (#2453, owner decision 2026-06-23): a gentle "resume the thread?"
+        # affordance for a returning user. Gated SOLELY on a server-declared
+        # resumable thread/session being present — never on absence age. There is
+        # no day-count, no `absence_age_days`, and no client-side threshold/age
+        # math: the UI renders this line iff the runtime declares
+        # `orientation.resumable_session`, and renders nothing otherwise. First
+        # contact (no vault selected) is the no_vault vault picker (#2448), not a
+        # cold_start branch, so the line is suppressed for the first-contact
+        # variant. Presentation only — the server-authoritative boundary holds.
+        _resumable = _orientation_dict(orientation.get("resumable_session"))
+        if _resumable and not _is_first_contact:
+            _resume_path = _orientation_str(_resumable.get("note_path"))
+            _resume_label = _orientation_str(_resumable.get("label")) or "Resume the thread"
+            if _resume_path:
+                _resume_href = "/workspace?note_path=" + quote(_resume_path, safe="")
+            else:
+                # No anchor note declared: route back through the vault re-entry,
+                # never fabricate a target path the runtime did not declare.
+                _resume_href = "/workspace"
+            _cold_resume_html = (
+                '<p class="cold-start-resume-line" '
+                'data-region="cold-start-resume" '
+                'data-testid="cold-start-resume-line">'
+                f'<a class="cold-start-resume-link" data-testid="cold-start-resume-link" '
+                f'data-intent="entry.resume" href="{_e(_resume_href)}">'
+                f"Resume the thread? {_e(_resume_label)}"
+                "</a></p>"
+            )
+        else:
+            _cold_resume_html = ""
         cold_start_threshold_html = f"""
     <div data-region="cold-start-threshold">
       <div class="cold-start-vault-chip">
@@ -6803,7 +6836,7 @@ def _render_orientation_index_html(
       <div class="cold-start-headline-block">
         <div class="cold-start-eyebrow">{_e(_cold_eyebrow)}</div>
         <h1 class="cold-start-headline">{_e(_cold_headline)}</h1>
-      </div>
+      </div>{_cold_resume_html}
       <p data-region="cold-start-verbs" class="cold-start-verbs">
         <button type="button" class="btn btn--primary cold-start-verb" data-intent="vault.open" onclick="vaultBrowser.focus(); return false;">Find a note</button>
         <button type="button" class="btn btn--secondary cold-start-verb" data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;">Jot something down</button>
@@ -7347,6 +7380,11 @@ def _render_orientation_index_html(
       margin: 18px 0 0;
     }}
     .cold-start-recents-anchor {{ margin: 10px 0 0; }}
+    /* E1 (#2453): the returning-user resume affordance — one calm line, no
+       tile, no card. Quiet by default, accented only on the link. */
+    .cold-start-resume-line {{ margin: 14px 0 0; color: var(--fg-2, #7a9ab8); font-size: 0.92rem; }}
+    .cold-start-resume-link {{ color: var(--accent, #d4a843); text-decoration: none; }}
+    .cold-start-resume-link:hover {{ text-decoration: underline; }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
@@ -10204,9 +10242,21 @@ def render_index_html(
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
       padding: 12px 16px;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+    }}
+    /* E2 (#2453): the rail's explicit role label. Same governed proposals as
+       ⌘K; the rail is the ambient/peripheral path, ⌘K the keyboard fast path.
+       Full-width footnote line so it never crowds the Panel label/badge. */
+    .rail-surface-role {{
+      flex: 1 1 100%;
+      margin-top: 4px;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      letter-spacing: 0.04em;
+      color: var(--fg-3);
     }}
     .rail-label {{
       font-family: var(--font-mono);

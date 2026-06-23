@@ -27,35 +27,31 @@ This task does **not** implement the chosen treatment. It is a holding spec for 
 
 ### E1 — Long-absence re-entry orientation
 
+> **Owner decision recorded 2026-06-23 (supersedes the options below).** The spec
+> originally conflated two situations under `cold_start`; the owner split them and
+> dropped the absence-age treatment. The decision, not the options, is the contract.
+
 #### Problem
 
-The `cold_start` entry state applies to both first-ever contact and any return after more than 14 days. The intent is correct: do not show a dashboard to someone who has been away for weeks. But the consequence is that the moment of greatest re-entry need — the 21-day return — receives the least orientation of any gap, while a 1-day gap gets the full re-entry card. The REVIEW_RESPONSE (E2, J1) captures this directly:
+The `cold_start` entry state applies to both first-ever contact and any return after more than 14 days. The intent is correct: do not show a dashboard to someone who has been away for weeks. But the consequence is that the moment of greatest re-entry need — the long return — receives the least orientation, while a 1-day gap gets the full re-entry card. The REVIEW_RESPONSE (E2, J1) captures this directly:
 
 > "Because cold_start claims everything >14 days, the moment of greatest re-entry need — weeks away — receives the least orientation, while a one-day gap gets the full card."
 
-The existing test suite confirms this shape: `test_entry_state_gallery.py` lines 481–505 exercise `cold_start` fixtures; the cold_start treatment renders no re-entry card and no orientation panels. This is correct for first contact. It may not be correct for a 21-day return.
+The existing test suite confirms this shape: the cold_start treatment renders no re-entry card and no orientation panels. This is correct for first contact. It may not be correct for a long return.
 
-#### Options
+#### Decision (owner, 2026-06-23)
 
-**Option A — Add one calm orientation line for long returns (recommended default)**
-When the runtime declares `entry_state=cold_start` with an `absence_age` above the cold_start threshold (e.g. >14 days), render a single calm line in the entry surface: _"Last here N days ago — resume the thread?"_ with a Resume affordance. No panels. No card. No dashboard. The runtime declares both the rung and the age; the UI renders the line only when the runtime provides an age value. This is a presentation-only addition: the UI does not compute the cutoff or classify the gap client-side.
+Two situations were conflated under `cold_start`; they are now separate:
 
-**Option B — Keep the current cold_start treatment identical for all durations**
-First contact and a 21-day return remain visually identical. Accept the orientation gap as a deliberate trade-off in favour of the anti-dashboard posture. The review finding is acknowledged but not acted on.
+1. **Returning user (vault already selected, away a while).** Offer a gentle _"resume the thread?"_ pickup affordance. **There is no "last here N days ago" count and no `absence_age_days` field** — absence duration is irrelevant to the surface and there is **no client-side math, threshold, or age rendering**. The resume line is gated solely on a **server-declared resumable thread/session being present** in the orientation payload. When the runtime declares a resumable session, the UI renders the calm line; when it does not, the UI renders nothing extra. The UI computes nothing — the server-authoritative boundary holds.
 
-#### Consequence
+2. **First contact is NOT a calm-minimal `cold_start` greeting — it is the `no_vault` state.** With no vault selected the entry surface is the **vault picker**: a gentle choice between (a) initiate a new vault and (b) browse to an existing vault. Only after a vault is selected does the system bootstrap the vault-dependent subsystems. This is the `no_vault` entry state, owned by the vault picker (**E11 / #2448**, already merged) — distinct from the returning-user resume line, and it must not be folded into a cold_start calm line. See `FRONT_DOOR_AND_COPY_HYGIENE.md` and #2448.
 
-| | Option A | Option B |
-|---|---|---|
-| Re-entry orientation | Long returner gets one calm anchor | Long returner and first-timer are identical |
-| Anti-dashboard posture | Preserved — one line, no tiles, no panels | Fully preserved |
-| Server authority | Preserved — UI renders runtime-declared age and rung | Preserved |
-| Implementation cost | One new rendering branch + one new fixture + one new test | No change |
-| Risk | Adds a branch that could drift from the mist ladder if not tested | None |
+**Server-authoritative boundary unchanged:** the UI renders runtime-declared entry/vault/session state; it computes nothing. No `absence_age_days`, no day rendering, no new runtime age field.
 
-#### Recommended default
+#### Superseded options (historical)
 
-Option A. One calm "last here N days ago — resume the thread?" line for long returns, with no dashboard introduction. The constraint is non-negotiable: the absence-age classification stays server-authoritative. The UI renders the runtime-declared age; it does not compute the cutoff.
+The original framing offered: **Option A** — a "Last here N days ago — resume the thread?" line gated on a runtime `absence_age_days`; **Option B** — keep cold_start identical for all durations. The owner adopted a *modified Option A*: keep the gentle resume affordance but **drop the day-count and `absence_age_days` entirely**, gate it on a server-declared resumable session instead, and split first-contact out to the `no_vault` vault picker. Both original options are retained here only for provenance.
 
 ---
 
@@ -97,14 +93,15 @@ Option A. Keep both surfaces; confirm their roles in words. Palette = fast path.
 
 ## Concretely
 
-Once the owner decides on E1:
-- If Option A: add a `long_absence_calm_line` rendering branch. The runtime must supply `absence_age_days` on a `cold_start` response. The UI renders "Last here {N} days ago — resume the thread?" only when `absence_age_days` is present. No client-side threshold computation. New test: `test_cold_start_long_absence_renders_calm_resume_line` in `tests/companion_ui/test_reentry_orientation_treatment.py`.
-- If Option B: no implementation change; close the E1 branch as won't-fix-by-design.
+E1 (owner decision applied):
+- Render a single calm _"resume the thread?"_ line on the returning-user entry surface, gated **only** on a server-declared resumable thread/session being present in the orientation payload (`orientation.resumable_session`). No `absence_age_days`, no "N days ago" count, no client-side threshold or age math, no new runtime age field. When the field is absent, no line renders. The line carries the existing `entry.resume` intent and routes to the server-declared resume target.
+- First contact / no vault is the `no_vault` vault picker (E11 / #2448), not a cold_start branch — no cold_start first-contact resume line and no dashboard.
+- Tests in `tests/companion_ui/test_reentry_orientation_treatment.py`: returning fixture **with** a resumable session → the calm resume line renders and no orientation panels / governance tiles / re-entry card appear; returning fixture **without** a resumable session → no resume line.
 
-Once the owner decides on E2:
-- If Option A: update the shell spec to name the two roles explicitly; audit the rail and palette labels to ensure they reflect the model; no structural change.
-- If Option B: scoped refactor; requires a separate implementation issue.
-- If Option C: no action now; re-open after CUIDR-03.
+E2 (owner decision = Option A, applied):
+- Name the two roles explicitly in the shell: the ⌘K palette is the keyboard-first **fast path**; the right rail is the **ambient** path. Both present the same server-declared proposal set; neither invents authority. No structural change — the palette stays a presentation of the rail (`data-presentation-of="panel-rail"`) and the rail keeps its safety-critical expansion behaviour.
+- Concretely: the rail aside and the palette root each carry an explicit `data-surface-role` (`ambient` / `fast-path`) plus a visible role label. Test: `tests/companion_ui/test_panel_command_palette.py::test_rail_palette_single_model`.
+- E2 was sequenced after #2446 (rail calmed), which is merged.
 
 ## Why This Matters
 
@@ -112,30 +109,33 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 ## Acceptance Criteria
 
-**This task is owner-gated. The criteria below are conditional on the owner's decisions.**
+**The owner decided both questions on 2026-06-23. The criteria below reflect the recorded decision.**
 
-**E1-AC1 (conditional on decision):** Once the owner picks the long-absence treatment, a long return (> the cold_start cutoff, runtime-declared `absence_age_days` present) renders the chosen calm orientation without introducing a dashboard. Under the recommended default (Option A), a single "last here N days ago — resume the thread?" line appears and no orientation panels, governance tiles, or re-entry card are shown.
-- Verify: render the long-absence `cold_start` fixture with `absence_age_days` set. Assert `data-entry-state="cold_start"` and the calm resume line are present. Assert no `data-region="orientation-panel"`, no governance tiles, and no re-entry card render.
-- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_long_absence_renders_calm_resume_line`
+**E1-AC1 (resume affordance, gated on a resumable session):** A returning user (vault selected) whose orientation payload declares a resumable thread/session renders a single calm "resume the thread?" line, with no dashboard, no orientation panels, no governance tiles, and no re-entry card.
+- Verify: render the returning-user fixture **with** a server-declared `resumable_session`. Assert the calm resume line renders and carries the `entry.resume` intent. Assert no `data-region="orientation-panel"`, no governance tiles (`data-testid="workspace-orientation-governance"`), and no `data-region="reentry-card"` render.
+- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_returning_with_resumable_session_renders_resume_line`
 
-**E1-AC2:** The cutoff and absence-age classification remain server-authoritative. The UI does not compute whether a gap crosses the cold_start threshold. The test suite must assert that the calm line renders only when the runtime supplies `absence_age_days`, not when it is absent.
-- Verify: render the same `cold_start` fixture without `absence_age_days`. Assert no calm resume line renders.
-- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_cold_start_without_age_renders_no_resume_line`
+**E1-AC2 (server-authoritative gate, no age math):** The resume line renders **only** when the runtime declares a resumable session. The UI computes nothing — no absence-age, no threshold, no day-count, no `absence_age_days` field. With no resumable session declared, no resume line renders.
+- Verify: render the same returning-user fixture **without** a `resumable_session`. Assert no resume line renders.
+- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_returning_without_resumable_session_renders_no_resume_line`
 
-**E2-AC1 (conditional on decision):** Once the owner decides, the rail and ⌘K palette present ONE coherent model. Under the recommended default (Option A), the palette is documented and labeled as the fast path and the rail as the ambient path; no proposal datum is invented by either surface beyond what the server declares.
+**E1-AC3 (first contact is no_vault):** First contact is the `no_vault` vault picker (#2448), not a cold_start calm-greeting branch. No first-contact resume line and no dashboard are introduced by this task.
+
+**E2-AC1 (one model, explicit roles):** The rail and ⌘K palette present ONE coherent model with explicit roles: the palette is labeled the **fast path** and the rail the **ambient** path; no proposal datum is invented by either surface beyond what the server declares. No structural refactor.
 - Verify (static): inspect `test_panel_command_palette.py::test_palette_renders_same_proposals_as_rail` — it must continue to pass. Inspect shell render for explicit role labels on both surfaces.
 - Verify (live): confirm that ⌘K opens the palette and dismisses cleanly, and that the rail does not duplicate the palette's affordances in an active proposal state.
 
 ## How to Verify (Pre-Merge)
 
-1. **Static — E1 (Option A):** Render `cold_start` fixtures with and without `absence_age_days`. Assert that the calm line appears only in the presence-of-age case and that no dashboard elements appear in either.
-2. **Static — E2 (Option A):** Run `test_panel_command_palette.py` and `test_right_rail_compaction.py` in full. Confirm both pass without modification. Inspect rendered shell for explicit role labels.
-3. **Live — E1:** Simulate a long-absence login in the test environment and confirm the calm line renders and Resume routes correctly.
+1. **Static — E1:** Render the returning-user fixture with and without a server-declared `resumable_session`. Assert the calm resume line appears only in the presence case and that no dashboard / orientation panels / re-entry card appear in either.
+2. **Static — E2:** Run `test_panel_command_palette.py` and `test_right_rail_compaction.py` in full. Confirm both pass without behavioral change. Inspect the rendered shell for explicit role labels (rail=ambient, palette=fast-path).
+3. **Live — E1:** Simulate a returning login with a resumable session in the test environment and confirm the calm line renders and Resume routes correctly.
 4. **Live — E2:** Open ⌘K, confirm it shows the same proposals as the rail. Dismiss. Confirm rail returns to ambient posture.
 
 ## Out of Scope
 
-- Client-side computation of the cold_start threshold or absence age — server-authoritative, always.
+- Client-side computation of any absence age, cutoff, or threshold — server-authoritative, always. No `absence_age_days`, no day-count rendering.
+- First-contact / no-vault rendering — owned by the `no_vault` vault picker (#2448), not this task.
 - Any dashboard or orientation panel for long returns — the anti-dashboard posture is non-negotiable.
 - Merging the governed and body-edit agent lanes — that is CUIDR-05 (C2).
 - Rail compaction layout — that is CUIDR-03 (B1).
@@ -152,4 +152,4 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 ## Related GitHub Issues
 
-Maps to child issue [Companion UI Deep-Review] strategic-coldstart-and-rail-palette; Wave 3; label `agent:needs-human` (two named owner decisions open: long-absence re-entry treatment; rail-vs-palette model).
+Maps to child issue #2453 [Companion UI Deep-Review] strategic-coldstart-and-rail-palette. Both owner decisions are now recorded (2026-06-23) and applied: E1 = resume line gated on a server-declared resumable session (no absence-age math; first contact = the `no_vault` vault picker, #2448); E2 = Option A explicit role labels (rail=ambient, palette=fast-path), no refactor.
