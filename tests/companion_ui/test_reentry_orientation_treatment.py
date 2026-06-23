@@ -823,9 +823,7 @@ def test_cold_start_recents_anchor_renders_when_present_and_omits_when_absent() 
     When the server declares recents_anchor on the orientation payload the
     cold_start threshold must render a labeled "Open your most recent note"
     link routing via /workspace?note_path=…  When the field is absent the
-    link must not appear and the threshold must still render correctly. This is
-    a Find/recency link under `recents.open`, distinct from the leave_point-gated
-    E1 resume line (#2453); the two coexist when both fields are declared.
+    link must not appear and the threshold must still render correctly.
     """
     anchor = {"note_path": "Notes/recent.md", "display_label": "My Recent Note"}
 
@@ -843,8 +841,6 @@ def test_cold_start_recents_anchor_renders_when_present_and_omits_when_absent() 
     assert "Notes%2Frecent.md" in with_anchor
     # Must carry data-intent="recents.open".
     assert 'data-intent="recents.open"' in with_anchor
-    # leave_point is absent here, so no resume line — recents link is on its own.
-    assert 'data-testid="cold-start-resume-line"' not in with_anchor
     # The threshold itself must still render correctly.
     assert 'data-region="cold-start-threshold"' in with_anchor
     assert 'data-region="cold-start-verbs"' in with_anchor
@@ -1448,116 +1444,3 @@ def test_resume_restores_caret() -> None:
         "live AC — caret/scroll restore + proportional entrance require the "
         "running shell + motion; exercised in the parent #2443 live UAT pass"
     )
-
-
-# ---------------------------------------------------------------------------
-# CUIDR-09 / E1 (#2453, owner decision 2026-06-23): returning-user "resume the
-# thread?" line, gated SOLELY on a server-declared resumable thread.
-#
-# The owner correction dropped the original absence-age treatment entirely:
-# there is no `absence_age_days`, no "N days ago" count, and no client-side
-# threshold/age math. The UI renders the calm resume line iff the runtime
-# declares an `orientation.leave_point` with status == "present" — the
-# contract's true leave-point / continuity pointer
-# (WORKSPACE_ORIENTATION_CONTRACT.md §leave_point; WorkspaceOrientationResponse
-# in app/api/routes/companion.py), already produced on the cold_start payload so
-# E1 renders in the real API path, not only in tests. `recents_anchor` is a
-# Find/recency projection, explicitly NOT a leave_point and carrying no
-# continuity semantics — it must NOT drive an entry.resume affordance (Codex P2
-# on PR #2471); it keeps its own quieter "Open your most recent note" link under
-# `recents.open`, which coexists with the resume line. Only status == "present"
-# offers resume (absent/stale/artifact_missing/degraded never do). First contact
-# / no vault is the no_vault vault picker (#2448), not a cold_start branch, so
-# the line never appears there. The returning surface remains the calm
-# "Returning after a while" cold_start variant — no orientation panels,
-# governance tiles, or re-entry card.
-# ---------------------------------------------------------------------------
-
-
-def _recents_anchor(
-    note_path: str = "Notes/recent.md",
-    display_label: str = "My Recent Note",
-) -> dict[str, str]:
-    """A server-declared recents_anchor — the Find/recency projection (NOT a
-    resume/continuity signal)."""
-    return {"note_path": note_path, "display_label": display_label}
-
-
-def test_returning_with_present_leave_point_renders_resume_line() -> None:
-    """E1-AC1: a returning user whose orientation declares a `present`
-    leave_point gets a single calm "resume the thread?" line — no panels, no
-    tiles, no card. The line is driven by leave_point (NOT recents_anchor) and
-    coexists with the quieter recents.open link."""
-    # Present leave_point at a cold gap (>14d) → cold_start returning surface.
-    # leave_point routes to Notes/resume.md; the recents_anchor points at a
-    # DIFFERENT note (Notes/recent.md), so the resume target proves the line is
-    # gated on leave_point, not on recents_anchor (Codex P2 #2471 guard).
-    payload = _orientation_payload(gap=_GAP_COLD)  # leave_status="present" default
-    payload["recents_anchor"] = _recents_anchor()
-
-    html = _render(orientation=payload)
-
-    # The returning cold_start surface (not first contact).
-    assert 'data-entry-state="cold_start"' in html
-    assert "Returning after a while" in html
-    assert "First contact" not in html
-
-    # The calm resume line renders with the entry.resume intent and routes to
-    # the leave_point artifact (Notes/resume.md) — NOT the recents_anchor note.
-    assert 'data-testid="cold-start-resume-line"' in html
-    resume = html.split('data-testid="cold-start-resume-line"', 1)[1].split("</p>", 1)[0]
-    assert 'data-intent="entry.resume"' in resume
-    assert "Resume the thread?" in resume
-    assert "/workspace?note_path=Notes%2Fresume.md" in resume
-    assert "Notes%2Frecent.md" not in resume  # not driven by recents_anchor
-
-    # The recents.open link COEXISTS — a distinct Find affordance from a
-    # distinct field, routing to the recents_anchor note.
-    assert 'data-testid="cold-start-recents-anchor"' in html
-    assert 'data-intent="recents.open"' in html
-
-    # No day-count / absence-age leakage of any kind.
-    lowered = resume.lower()
-    assert "days ago" not in lowered
-    assert "absence" not in lowered
-
-    # No dashboard: no orientation panels, no governance tiles, no re-entry card.
-    assert 'data-region="reentry-card"' not in html
-    assert 'data-region="orientation-panel"' not in html
-    assert 'data-testid="workspace-orientation-governance"' not in html
-    assert 'data-testid="governance-counts-row"' not in html
-    for marker in _OVERLAY_MARKERS:
-        assert marker not in html, marker
-
-
-def test_returning_without_present_leave_point_renders_no_resume_line() -> None:
-    """E1-AC2: with no `present` leave_point, no resume line renders — even when
-    a recents_anchor is present. The UI computes nothing (no absence-age,
-    threshold, or day-count) and recents_anchor must NOT substitute for the
-    resume gate (Codex P2 #2471)."""
-    # Returning cold_start surface (vault non-empty via recents_anchor), but the
-    # leave_point is `stale`, not `present` — so no resumable thread is offered.
-    payload = _orientation_payload(gap=_GAP_COLD, leave_status="stale")
-    payload["recents_anchor"] = _recents_anchor()
-
-    html = _render(orientation=payload)
-
-    assert 'data-entry-state="cold_start"' in html
-    assert 'data-testid="cold-start-resume-line"' not in html
-    assert "Resume the thread?" not in html
-    # The quieter recents link still renders — it is a recency link, not a
-    # resume claim, so it is unaffected by the leave_point status.
-    assert 'data-testid="cold-start-recents-anchor"' in html
-
-
-def test_first_contact_never_renders_resume_line() -> None:
-    """E1-AC3: first contact is the no_vault vault picker (#2448), not a
-    cold_start resume branch. With an absent leave_point and no recents_anchor
-    (a genuinely empty vault) no resume line renders."""
-    payload = _orientation_payload(leave_status="absent")  # genuinely empty vault
-
-    html = _render(orientation=payload)
-
-    assert "First contact" in html
-    assert 'data-testid="cold-start-resume-line"' not in html
-    assert "Resume the thread?" not in html

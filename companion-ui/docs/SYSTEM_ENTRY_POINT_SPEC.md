@@ -93,17 +93,9 @@ boot ──▶ no_vault            (503)
 boot ──▶ cold_start          (leave_point absent)
 boot ──▶ orienting           (leave_point present)        [+degraded] [+stale]
 no_vault ──▶ boot            (entry.retry)
-cold_start ──▶ shell_active  (vault.open / vault.pick / recents.open / entry.resume / map→surface)
+cold_start ──▶ shell_active  (vault.open / vault.pick / recents.open / map→surface)
 orienting ──▶ shell_active   (entry.resume | entry.dismiss | vault.pick)
 ```
-
-`entry.resume` is valid from `cold_start` **only** for the cold-trajectory variant
-(> 14d gap with a server-declared `leave_point.status: present`) — the returning-user
-"resume the thread?" affordance (CUIDR-09 / E1, #2453). It is gated on a present
-`leave_point`, never on first contact (`leave_point.status: absent`) and never on the
-`recents_anchor` recency field; it routes to `leave_point.artifact_ref.logical_ref`. It
-is a single calm line, not a re-entry overlay — `cold_start` still renders no orientation
-grid or re-entry card.
 
 Within `shell_active`, surface overlays open and close without leaving the state:
 
@@ -157,7 +149,7 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | Intent | Surface | Effect | Routes through pipeline? |
 |---|---|---|---|
 | `entry.retry` | no_vault | re-request orientation (read-only) | no |
-| `entry.resume` | orienting; `cold_start` (cold-trajectory returning user, present `leave_point`, #2453) | → `shell_active` at the leave point | no (navigation) |
+| `entry.resume` | orienting | → `shell_active` at the leave point | no (navigation) |
 | `entry.dismiss` | orienting | → `shell_active`, fresh | no |
 | `vault.open` | shell / entry | open/focus the Vault Browser pane (narrow: modal) | no |
 | `vault.pick` | Vault Browser | re-anchor shell to a note via `GET /api/companion/workspace?note_path` (§Resolved Q8) | no (read) |

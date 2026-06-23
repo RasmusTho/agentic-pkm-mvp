@@ -6787,65 +6787,21 @@ def _render_orientation_index_html(
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
         _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
         _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
-        # E1 (#2453, owner decision 2026-06-23): a gentle "resume the thread?"
-        # affordance for a returning user. Gated SOLELY on a server-declared
-        # resumable thread being present — never on absence age. There is no
-        # day-count, no `absence_age_days`, and no client-side threshold/age
-        # math.
-        #   The resumable signal is the produced `orientation.leave_point` with
-        # status == "present" — the contract's true leave-point/continuity
-        # pointer (WORKSPACE_ORIENTATION_CONTRACT.md §leave_point;
-        # WorkspaceOrientationResponse.leave_point in app/api/routes/companion.py,
-        # projected from the admissible leave-point cursor). It already arrives on
-        # the cold_start payload, so E1 renders in the real API path, not only in
-        # tests. `recents_anchor` is a Find/recency projection, explicitly NOT a
-        # leave_point and carrying NO continuity semantics — it must not drive an
-        # `entry.resume` affordance (Codex P2, #2471); it keeps its own quieter
-        # "Open your most recent note" sub-affordance below under `recents.open`.
-        #   Only status == "present" offers resume: absent/stale/artifact_missing/
-        # degraded never claim a resumable thread (we never offer to resume a
-        # stale or missing leave point). First contact (no vault selected) is the
-        # no_vault vault picker (#2448), not a cold_start branch, so the line is
-        # suppressed there. Presentation only — the server-authoritative boundary
-        # holds; the UI computes nothing.
-        _resumable_present = (_cold_lp_status == "present") and not _is_first_contact
-        if _resumable_present:
-            _lp_artifact = _orientation_dict(_cold_lp.get("artifact_ref"))
-            # Mirror the warm re-entry card's field handling (_reentry_resume_
-            # affordance / _reentry_leave_label): the browser-safe path is
-            # `note_path` (test fixtures) or `logical_ref` (the v1 model), and
-            # the label prefers an explicit `label` then `artifact_ref.title`.
-            _resume_target = _orientation_str(
-                _lp_artifact.get("note_path") or _lp_artifact.get("logical_ref")
-            )
-            _resume_label = (
-                _orientation_str(_cold_lp.get("label") or _lp_artifact.get("title"))
-                or "Resume the thread"
-            )
-            if _resume_target:
-                _resume_href = "/workspace?note_path=" + quote(_resume_target, safe="")
-            else:
-                # leave_point present but no browser-safe logical ref declared:
-                # route through vault re-entry, never fabricate a target path
-                # (artifact_uuid is identity, not a routable path).
-                _resume_href = "/workspace"
-            _cold_resume_html = (
-                '<p class="cold-start-resume-line" '
-                'data-region="cold-start-resume" '
-                'data-testid="cold-start-resume-line">'
-                f'<a class="cold-start-resume-link" data-testid="cold-start-resume-link" '
-                f'data-intent="entry.resume" href="{_e(_resume_href)}">'
-                f"Resume the thread? {_e(_resume_label)}"
-                "</a></p>"
-            )
-        else:
-            _cold_resume_html = ""
+        # NOTE (#2453 / E1): the returning-user "resume the thread?" affordance
+        # is intentionally NOT rendered here. It requires a server-declared
+        # durable long-absence continuity signal that does not yet exist: the
+        # only continuity pointer (leave_point) is TTL-capped at 7 days by design
+        # (ADR-0008), so a cold_start (>14d) return never carries a present
+        # leave_point in production, and recents_anchor is a recency projection,
+        # not a continuity claim. Per the owner decision (2026-06-23) E1 is
+        # deferred to #2472 (durable re-entry continuity signal + ADR-0008
+        # amendment); only E2 (rail/palette roles) ships in this slice. The cold
+        # surface keeps its existing calm anchor — the recents.open link below.
         # Recents-anchor sub-affordance (§6, design_handoff/implementation-contracts.md).
-        # Distinct from the E1 resume line above: this is the Find/recency link
-        # ("Open your most recent note"), declared by `recents_anchor` under the
-        # `recents.open` intent. It is NOT a resume/continuity claim, so it
-        # coexists with the leave_point-gated resume line. Rendered only when the
-        # runtime declares the field; never auto-opens.
+        # The Find/recency link ("Open your most recent note"), declared by
+        # `recents_anchor` under the `recents.open` intent. It is NOT a
+        # resume/continuity claim. Rendered only when the runtime declares the
+        # field; never auto-opens.
         if _cold_recents_path and _cold_recents_label:
             _cold_recents_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
             _cold_recents_html = (
@@ -6865,7 +6821,7 @@ def _render_orientation_index_html(
       <div class="cold-start-headline-block">
         <div class="cold-start-eyebrow">{_e(_cold_eyebrow)}</div>
         <h1 class="cold-start-headline">{_e(_cold_headline)}</h1>
-      </div>{_cold_resume_html}
+      </div>
       <p data-region="cold-start-verbs" class="cold-start-verbs">
         <button type="button" class="btn btn--primary cold-start-verb" data-intent="vault.open" onclick="vaultBrowser.focus(); return false;">Find a note</button>
         <button type="button" class="btn btn--secondary cold-start-verb" data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;">Jot something down</button>
@@ -7408,11 +7364,6 @@ def _render_orientation_index_html(
       gap: 10px;
       margin: 18px 0 0;
     }}
-    /* E1 (#2453): the returning-user resume affordance — one calm line, no
-       tile, no card. Quiet by default, accented only on the link. */
-    .cold-start-resume-line {{ margin: 14px 0 0; color: var(--fg-2, #7a9ab8); font-size: 0.92rem; }}
-    .cold-start-resume-link {{ color: var(--accent, #d4a843); text-decoration: none; }}
-    .cold-start-resume-link:hover {{ text-decoration: underline; }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
