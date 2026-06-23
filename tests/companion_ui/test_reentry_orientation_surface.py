@@ -86,7 +86,12 @@ def _orientation_payload(*, degraded: bool = False) -> dict[str, Any]:
             "kind": "derived_only",
             "artifact_ref": _artifact_ref(),
             "label": "Resume the runtime API contract",
-            "last_interaction_at": "2026-05-31T11:45:00Z",
+            # CUIDR-06 (#2450): the orientation snapshot panels (leave point,
+            # open loops, notable changes, resurface) are subtractive — they
+            # render only from full_mist (>=2h gap) upward. as_of 12:00 minus a
+            # 5h gap (07:00) resolves to full_mist so these panel-mechanics
+            # tests exercise the rung where the panels actually live.
+            "last_interaction_at": "2026-05-31T07:00:00Z",
             "last_session_id": None,
             "authority_role": "derived",
             "source_ref": _source_ref(),
@@ -217,8 +222,11 @@ def test_renders_orientation_with_no_active_note() -> None:
     assert "Finish UI re-entry acceptance tests" in html
     assert "Recent orientation API merge" in html
     assert "Relevant because API contract just landed." in html
-    assert "pending proposals" in html
-    assert "logged" in html
+    # CUIDR-06 (#2450): the governance summary tile (pending proposals / latest
+    # receipt outcome) is operator telemetry and no longer renders on the
+    # orientation surface at any rung — it lives behind the System Map.
+    assert 'data-testid="workspace-orientation-governance"' not in html
+    assert "pending proposals" not in html
     assert 'data-authority-role="derived"' in html
     assert 'data-testid="workspace-orientation-vault-entry"' in html
     assert 'data-testid="workspace-vault-browser-note-link"' in html
@@ -267,7 +275,9 @@ def test_leave_point_renders_structured_api_shape() -> None:
             "logical_ref": "Notes/resume.md",
             "title": "Resume plan",
         },
-        "captured_at": "2026-05-31T11:45:00Z",
+        # CUIDR-06 (#2450): full_mist gap (5h) so the subtractive leave-point
+        # panel renders (panels appear from full_mist upward).
+        "captured_at": "2026-05-31T07:00:00Z",
         "last_session_id": "session-123",
         "authority_role": "operational_trace_pointer",
         "source_ref": {
@@ -285,7 +295,7 @@ def test_leave_point_renders_structured_api_shape() -> None:
     assert 'data-leave-point-kind="present"' in html
     assert 'href="/workspace?note_path=Notes%2Fresume.md"' in html
     assert 'data-artifact-id="artifact-resume"' in html
-    assert "Last signal: 2026-05-31T11:45:00Z" in html
+    assert "Last signal: 2026-05-31T07:00:00Z" in html
     assert 'data-source-ref="trace-leave"' in html
 
 
@@ -303,7 +313,17 @@ def test_degraded_state_rendered() -> None:
 
 
 def test_no_mutation_calls() -> None:
-    client = _OrientationClient(_orientation_payload())
+    # The orientation render itself must issue and embed no mutation. Pin a
+    # short-rung (soft_mist) gap so the re-entry card — and its card-attached
+    # governed memory-review drawer, which ships only from full_mist up and
+    # carries its own pull-based review POST — is not present; this isolates the
+    # orientation-surface no-mutation contract from the card occupant
+    # (CUIDR-06 #2450 makes the ladder subtractive, so the card no longer
+    # renders at the short rung this invariant tests).
+    payload = _orientation_payload()
+    # as_of 12:00 minus a 15-minute gap (11:45) → soft_mist: no card.
+    payload["leave_point"]["last_interaction_at"] = "2026-05-31T11:45:00Z"
+    client = _OrientationClient(payload)
 
     html = handle_get(
         query_string="",

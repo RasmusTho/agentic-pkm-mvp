@@ -65,7 +65,11 @@ def _orientation_payload(*, degraded: bool = False) -> dict[str, Any]:
             "kind": "derived_only",
             "artifact_ref": _artifact_ref(),
             "label": "Resume the state-map work",
-            "last_interaction_at": "2026-06-03T11:45:00Z",
+            # CUIDR-06 (#2450): orientation snapshot panels are subtractive and
+            # render only from full_mist (>=2h gap) upward. as_of 12:00 minus a
+            # 5h gap (07:00) → full_mist, so the leave-point/open-loop panels
+            # and their derived authority-role provenance render here.
+            "last_interaction_at": "2026-06-03T07:00:00Z",
             "last_session_id": None,
             "authority_role": "derived",
             "source_ref": _source_ref(),

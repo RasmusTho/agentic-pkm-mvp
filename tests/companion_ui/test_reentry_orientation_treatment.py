@@ -1232,3 +1232,193 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
         assert 'data-testid="reentry-changed-count"' not in page, (
             "cold_start must not render the _reentry_counts changed-count display (#2250)"
         )
+
+
+# ---------------------------------------------------------------------------
+# CUIDR-06 (#2450): the mist ladder is subtractive.
+#
+# Orientation snapshot panels (leave point, open loops, notable changes,
+# resurface) are NOT the floor of the ladder. They appear only from full_mist
+# upward, beneath the re-entry card, de-duplicated against the counts the card
+# already states. Short rungs (no_mist / thread_fade / soft_mist) render little
+# to nothing so the surface reads as continuity, not a re-entry console.
+# Governance/telemetry tiles never render on the orientation surface at any
+# rung. The whisper column's "DOING" slot clears the card's ⓘ glyph (D4).
+#
+# The shape is the server-resolved SEP-01 attribute; nothing here is derived in
+# the client — the renderer reads orientation.rung/snapshot/card/delta and
+# renders proportionally (presentation-only, server-authoritative boundary).
+# ---------------------------------------------------------------------------
+
+# Panel section markers that distinguish "orientation console" from "calm
+# re-entry". Present from full_mist up; absent at the short rungs.
+_PANEL_SECTION_MARKERS = (
+    'data-testid="workspace-orientation-open-loops"',
+    'data-testid="workspace-orientation-open-loop"',
+    'data-testid="workspace-orientation-notable-changes"',
+    'data-testid="workspace-orientation-notable-change"',
+    'data-testid="workspace-orientation-resurface"',
+    'data-testid="workspace-orientation-leave-point"',
+)
+
+# Every orienting + off-nominal rung fixture, for the no-telemetry scan.
+_ALL_RUNG_FIXTURES = {
+    "no_mist": _orientation_payload(gap=_GAP_NO_MIST),
+    "thread_fade": _orientation_payload(gap=_GAP_THREAD_FADE),
+    "soft_mist": _orientation_payload(gap=_GAP_SOFT_MIST),
+    "full_mist": _orientation_payload(gap=_GAP_FULL_MIST),
+    "long_mist": _orientation_payload(gap=_GAP_LONG_MIST),
+    "degraded": _orientation_payload(
+        gap=_GAP_FULL_MIST, degraded_reasons=["resurfacing_source_unavailable"]
+    ),
+}
+
+
+def test_mist_ladder_subtractive_no_panel_at_short_rungs() -> None:
+    """A1 (static): panels appear only at full_mist+; short rungs carry none.
+
+    no_mist / thread_fade / soft_mist must render no orientation snapshot
+    panels at all; full_mist / long_mist may. no_mist and thread_fade stay
+    visually distinguishable (thread_fade carries only the fractional rail
+    fade), and no count stated in the card is repeated as a panel headline.
+    """
+    # --- Short rungs: no panels of any kind. ---
+    for rung, gap in (
+        ("no_mist", _GAP_NO_MIST),
+        ("thread_fade", _GAP_THREAD_FADE),
+        ("soft_mist", _GAP_SOFT_MIST),
+    ):
+        html = _render(orientation=_orientation_payload(gap=gap))
+        for marker in _PANEL_SECTION_MARKERS:
+            assert marker not in html, f"{rung} must not render panel {marker!r}"
+
+    # --- no_mist vs thread_fade remain distinguishable (rail fade only). ---
+    no_mist = _render(orientation=_orientation_payload(gap=_GAP_NO_MIST))
+    thread_fade = _render(orientation=_orientation_payload(gap=_GAP_THREAD_FADE))
+    assert 'data-rail-fade="' not in no_mist
+    assert re.search(r'data-rail-fade="0\.\d+"', thread_fade)
+
+    # --- full_mist / long_mist: panels present, de-duplicated against card. ---
+    for gap in (_GAP_FULL_MIST, _GAP_LONG_MIST):
+        html = _render(orientation=_orientation_payload(gap=gap))
+        assert 'data-region="reentry-card"' in html
+        assert 'data-testid="workspace-orientation-open-loops"' in html
+        assert 'data-testid="workspace-orientation-notable-changes"' in html
+        # The card states the counts; the panels must not repeat them as
+        # headlines. The open-loop/notable-change panel headers therefore carry
+        # no <span class="orientation-count"> count badge when the card is up.
+        open_loops = html.split(
+            'data-testid="workspace-orientation-open-loops"', 1
+        )[1].split("</section>", 1)[0]
+        assert 'class="orientation-count"' not in open_loops, (
+            "open-loops panel must not repeat the count the card already states"
+        )
+        notable = html.split(
+            'data-testid="workspace-orientation-notable-changes"', 1
+        )[1].split("</section>", 1)[0]
+        assert 'class="orientation-count"' not in notable, (
+            "notable-changes panel must not repeat the count the card already states"
+        )
+        # Enumerations (the individual items) are still fine in the panels.
+        assert "Open loop label 0" in open_loops
+        assert "Notable change label 0" in notable
+
+
+# Issue #2450 names this Verify target for the A1 static AC; alias to the
+# spec's subtractive-panel test so both contracts resolve to one assertion.
+test_ladder_is_subtractive = test_mist_ladder_subtractive_no_panel_at_short_rungs
+
+
+def test_no_governance_tiles_on_orientation_surface() -> None:
+    """No-telemetry AC: governance summary absent on every rung.
+
+    Renders all rung fixtures (no_mist … long_mist plus degraded) and asserts
+    the governance/operator-telemetry tile is absent from every output —
+    neither the spec's data-region="governance-summary" nor the rendered
+    data-testid="workspace-orientation-governance", and none of its content
+    (pending-proposal/receipt counts, latest-outcome label). CUIDR-04 relocated
+    operator telemetry behind the System Map; CUIDR-06 ensures it is removed
+    from the orientation render, not relocated within it.
+    """
+    for rung, payload in _ALL_RUNG_FIXTURES.items():
+        html = _render(orientation=payload)
+        assert 'data-region="governance-summary"' not in html, rung
+        assert 'data-testid="workspace-orientation-governance"' not in html, rung
+        assert "pending proposals" not in html, rung
+        assert "pending receipts" not in html, rung
+        assert "latest receipt outcome" not in html, rung
+
+
+# Issue #2450 names test_no_telemetry_on_orientation for the no-governance AC.
+test_no_telemetry_on_orientation = test_no_governance_tiles_on_orientation_surface
+
+
+def test_long_mist_whisper_clears_info_glyph() -> None:
+    """D4 (static): the long_mist whisper column clears the card's ⓘ glyph.
+
+    The card's info glyph carries data-reentry-info-glyph. The whisper column
+    declares a right-side clearance from it (a clearance data-attribute and an
+    inline right-offset derived from the --card-info-glyph-width token plus a
+    gap) so the "DOING" whisper slot never overlaps the glyph's hit target at
+    any viewport where the column is not suppressed (E7).
+    """
+    html = _render(orientation=_orientation_payload(gap=_GAP_LONG_MIST))
+
+    # The card's ⓘ info glyph is marked for the clearance contract.
+    card = _reentry_card(html)
+    assert "data-reentry-info-glyph" in card
+
+    # The whisper column declares the clearance against that glyph.
+    whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
+    assert 'data-reentry-glyph-clearance="card-info-glyph"' in whisper
+    # The clearance is expressed as a right-offset derived from the glyph-width
+    # token plus a gap (nominally calc(var(--card-info-glyph-width) + 0.75rem)).
+    assert "var(--card-info-glyph-width)" in whisper
+    # The "DOING" slot specifically carries the clearance so it cannot collide.
+    doing = whisper.split('data-whisper-item="doing"', 1)[1].split("</div>", 1)[0]
+    assert 'data-reentry-glyph-clearance="card-info-glyph"' in doing
+
+    # The token itself is defined so the calc() resolves to a real width.
+    assert "--card-info-glyph-width:" in html
+
+
+# Issue #2450 names test_long_mist_no_glyph_collision for the D4 static AC.
+test_long_mist_no_glyph_collision = test_long_mist_whisper_clears_info_glyph
+
+
+def test_short_rungs_still_carry_their_calm_cue() -> None:
+    """Subtractive does not mean empty: each short rung keeps its one cue.
+
+    soft_mist keeps the single peripheral "where you stopped" line and the
+    caret echo; thread_fade keeps only the rail fade; no_mist carries no
+    overlay marker at all. This guards against over-subtraction (the ladder
+    must still grade, not collapse to nothing everywhere).
+    """
+    soft = _render(orientation=_orientation_payload(gap=_GAP_SOFT_MIST))
+    assert soft.count('data-region="reentry-peripheral-line"') == 1
+    assert 'data-testid="reentry-caret-echo"' in soft
+
+    thread = _render(orientation=_orientation_payload(gap=_GAP_THREAD_FADE))
+    assert 'data-region="reentry-peripheral-line"' not in thread
+    assert re.search(r'data-rail-fade="0\.\d+"', thread)
+
+    no_mist = _render(orientation=_orientation_payload(gap=_GAP_NO_MIST))
+    for marker in _OVERLAY_MARKERS:
+        assert marker not in no_mist, marker
+
+
+def test_resume_restores_caret() -> None:
+    """A1 (live): resume restores caret/scroll; entrance reads proportional.
+
+    Requires the running shell plus motion — caret/scroll restoration and the
+    proportional entrance cannot be asserted on a static server render. Flagged
+    for the owner's live UAT pass on the running Companion UI (recorded on the
+    parent validation hub #2443). Skipped here so the static suite stays
+    deterministic while the Verify target the issue names still resolves.
+    """
+    import pytest
+
+    pytest.skip(
+        "live AC — caret/scroll restore + proportional entrance require the "
+        "running shell + motion; exercised in the parent #2443 live UAT pass"
+    )

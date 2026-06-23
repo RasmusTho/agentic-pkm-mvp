@@ -5793,7 +5793,9 @@ def _orientation_capped_items(
     return capped, server_cap
 
 
-def _render_orientation_open_loops(open_loops: object, *, meta: object | None = None) -> str:
+def _render_orientation_open_loops(
+    open_loops: object, *, meta: object | None = None, dedup_count: bool = False
+) -> str:
     capped, server_cap = _orientation_capped_items(
         open_loops, meta=meta, cap_key="open_loops"
     )
@@ -5848,14 +5850,16 @@ def _render_orientation_open_loops(open_loops: object, *, meta: object | None = 
           data-display-overflow-count="{len(overflow)}">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Open loops</div>
-            <span class="orientation-count">{len(capped)}</span>
+            {"" if dedup_count else f'<span class="orientation-count">{len(capped)}</span>'}
           </div>
           {body}
           {overflow_html}
         </section>"""
 
 
-def _render_orientation_notable_changes(changes: object, *, meta: object | None = None) -> str:
+def _render_orientation_notable_changes(
+    changes: object, *, meta: object | None = None, dedup_count: bool = False
+) -> str:
     capped, server_cap = _orientation_capped_items(
         changes, meta=meta, cap_key="notable_changes"
     )
@@ -5908,7 +5912,7 @@ def _render_orientation_notable_changes(changes: object, *, meta: object | None 
           data-display-overflow-count="{len(overflow)}">
           <div class="orientation-section-header">
             <div class="orientation-section-kicker">Notable changes</div>
-            <span class="orientation-count">{len(capped)}</span>
+            {"" if dedup_count else f'<span class="orientation-count">{len(capped)}</span>'}
           </div>
           {body}
           {overflow_html}
@@ -6010,22 +6014,14 @@ def _render_orientation_resurface(
         </section>"""
 
 
-def _render_orientation_governance(governance: object) -> str:
-    payload = _orientation_dict(governance)
-    pending_proposals = _orientation_str(payload.get("pending_proposal_count"), "0")
-    pending_receipts = _orientation_str(payload.get("pending_receipt_count"), "0")
-    latest_outcome = _orientation_str(payload.get("latest_receipt_outcome"), "none")
-    return f"""
-        <section class="orientation-section orientation-governance"
-          data-testid="workspace-orientation-governance">
-          <div class="orientation-section-kicker">Governance</div>
-          <div class="orientation-governance-grid">
-            <div><span>{_e(pending_proposals)}</span><small>pending proposals</small></div>
-            <div><span>{_e(pending_receipts)}</span><small>pending receipts</small></div>
-            <div><span>{_e(latest_outcome)}</span><small>latest receipt outcome</small></div>
-          </div>
-          {_orientation_provenance(payload, testid="workspace-orientation-governance-provenance")}
-        </section>"""
+# CUIDR-06 (#2450) + cross-task invariant with CUIDR-04 (#2447): the
+# orientation governance summary tile (pending proposals / receipts / latest
+# outcome) is operator telemetry and no longer renders on the orientation
+# surface at any mist rung. It is reachable only via the System Map / operator
+# layer. The former `_render_orientation_governance` helper was removed here so
+# the tile cannot be silently re-introduced on this surface by a future call
+# site (the no-telemetry-on-orientation contract is test-enforced in
+# tests/companion_ui/test_reentry_orientation_treatment.py).
 
 
 # --------------------------------------------------------------------------
@@ -6245,7 +6241,8 @@ def _render_reentry_card(orientation: dict, *, shape: str, stale: bool) -> str:
       <div class="reentry-head">
         <span class="orientation-section-kicker">Re-entry</span>
         <span class="reentry-traj-pill" data-testid="reentry-traj-pill">{_e(traj_state)}</span>
-        {guidance_toggle_markup('reentry')}
+        <span class="reentry-info-glyph" data-reentry-info-glyph
+          data-testid="reentry-info-glyph">{guidance_toggle_markup('reentry')}</span>
       </div>
       {guidance_callout_markup('reentry')}
       <ol class="reentry-questions">
@@ -6315,8 +6312,11 @@ def _render_reentry_whisper_column(orientation: dict) -> str:
     return f"""
   <aside class="reentry-whisper-col" data-region="whisper-column"
     data-testid="reentry-whisper-column" data-narrow-mode="suppressed"
+    data-reentry-glyph-clearance="card-info-glyph"
+    style="right: calc(var(--card-info-glyph-width) + 0.75rem);"
     aria-hidden="true">
-    <div class="reentry-whisper" data-whisper-item="doing">
+    <div class="reentry-whisper" data-whisper-item="doing"
+      data-reentry-glyph-clearance="card-info-glyph">
       <span class="reentry-whisper-label">doing</span>
       <span class="reentry-whisper-text">{_e(_reentry_doing_label(leave))}</span>
     </div>
@@ -6529,6 +6529,24 @@ def _render_orientation_index_html(
         rail_fade_attr = f' data-rail-fade="{_REENTRY_RAIL_FADE}"'
         rail_fade_class = " orientation-shell--rail-faded"
     # no_mist, cold_start, and no_vault render no re-entry overlay of any kind.
+    #
+    # CUIDR-06 (#2450): the mist ladder is subtractive. The orientation
+    # snapshot panels (leave point, open loops, notable changes, resurface) are
+    # NOT the floor of the ladder — they appear only where the gap genuinely
+    # warrants them: from `full_mist` upward, beneath the re-entry card. Short
+    # rungs (`no_mist`, `thread_fade`, `soft_mist`) render little to nothing so
+    # the surface reads as continuity rather than a re-entry console. The
+    # off-nominal `degraded` rung keeps its resolved slices alongside the amber
+    # banner (the existing exemplary E8 behaviour). The shape is still the
+    # server-resolved SEP-01 attribute — no client-side gap or rung derivation.
+    panels_visible = shape in ("full_mist", "long_mist") or (degraded and not is_no_vault)
+    # De-duplication contract (CUIDR-06): when the re-entry card is present it
+    # already states the open-loop count and the change count as counts. The
+    # panels below it enumerate the individual items but must not repeat those
+    # counts as panel headlines. The card renders only at full/long mist, so
+    # the count headlines are suppressed exactly there; degraded (no card)
+    # keeps them.
+    dedup_card_counts = shape in ("full_mist", "long_mist")
     refresh_mode = "foreground_pull" if ambient_refresh_enabled else "manual"
     refresh_state = "degraded" if degraded else ("scheduled" if ambient_refresh_enabled and stale_after else "manual_refresh")
     refresh_copy = (
@@ -6715,6 +6733,11 @@ def _render_orientation_index_html(
       --destructive: #ff3d3d;
       --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      /* CUIDR-06 (#2450) D4: the rendered width of the re-entry card's ⓘ info
+         glyph. The long_mist whisper column offsets its right edge by this
+         token plus a gap so the "DOING" slot never overlaps the glyph's hit
+         target at any viewport where the column is not suppressed. */
+      --card-info-glyph-width: 1.5rem;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -6953,25 +6976,9 @@ def _render_orientation_index_html(
       font-size: 12px;
     }}
     .orientation-empty {{ color: var(--fg-3); margin: 0; }}
-    .orientation-governance-grid {{
-      display: grid;
-      gap: 10px;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }}
-    .orientation-governance-grid div {{
-      background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 10px;
-    }}
-    .orientation-governance-grid span {{ display: block; font-size: 20px; font-weight: 600; }}
-    .orientation-governance-grid small {{
-      color: var(--fg-2);
-      display: block;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      margin-top: 2px;
-    }}
+    /* CUIDR-06 (#2450): the .orientation-governance-grid rules were removed
+       with the governance tile — the orientation surface carries no governance
+       telemetry at any rung (it lives behind the System Map). */
     /* Degraded is a calm amber banner naming the missing source — never an
        alarm and never the destructive token (spec cross-flag treatment;
        BLOCKED_AND_STALE_STATE_SPEC.md visual contract). */
@@ -7101,12 +7108,17 @@ def _render_orientation_index_html(
     .reentry-delta-more {{ color: var(--fg-3); font-family: var(--font-mono); font-size: 12px; }}
     .reentry-delta-more a {{ color: var(--cyan); text-decoration: none; }}
     .reentry-peripheral-line {{ color: var(--fg-3); font-size: 13px; margin: 0; text-align: right; }}
+    .reentry-info-glyph {{ display: inline-flex; align-items: center; width: var(--card-info-glyph-width); }}
     .reentry-whisper-col {{
       display: grid;
       gap: 14px;
       pointer-events: none;
       position: fixed;
-      right: 18px;
+      /* CUIDR-06 (#2450) D4: default right offset clears the card's ⓘ glyph.
+         The inline style on the element repeats this so the clearance is
+         declared on the rendered node (test-asserted), and a future stylesheet
+         change cannot silently re-collide the "DOING" slot with the glyph. */
+      right: calc(var(--card-info-glyph-width) + 0.75rem);
       top: 25vh;
       width: 180px;
     }}
@@ -7124,7 +7136,6 @@ def _render_orientation_index_html(
     .orientation-shell--rail-faded .orientation-column--rail {{ opacity: {_REENTRY_RAIL_FADE}; }}
     @media (max-width: 860px) {{
       .orientation-grid {{ grid-template-columns: 1fr; }}
-      .orientation-governance-grid {{ grid-template-columns: 1fr; }}
       .orientation-shell {{ padding: 16px; }}
       /* Narrow mode: the whisper column is suppressed and collapses into the
          card, which carries the same four answers. */
@@ -7239,13 +7250,12 @@ def _render_orientation_index_html(
     {cold_start_threshold_html}
     {vault_unreachable_threshold_html}
     <div class="orientation-grid">
-      {"" if (is_cold or is_no_vault) else f'''<div class="orientation-column">
+      {"" if (is_cold or is_no_vault or not panels_visible) else f'''<div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"))}
-        {_render_orientation_open_loops(orientation.get("open_loops"), meta=meta)}
-        {_render_orientation_notable_changes(orientation.get("notable_changes"), meta=meta)}
+        {_render_orientation_open_loops(orientation.get("open_loops"), meta=meta, dedup_count=dedup_card_counts)}
+        {_render_orientation_notable_changes(orientation.get("notable_changes"), meta=meta, dedup_count=dedup_card_counts)}
       </div>
       <div class="orientation-column orientation-column--rail">
-        {_render_orientation_governance(orientation.get("governance"))}
         {_render_orientation_resurface(
             orientation.get("resurface"),
             meta=meta,
