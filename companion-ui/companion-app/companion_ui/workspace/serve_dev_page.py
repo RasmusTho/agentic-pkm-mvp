@@ -6787,16 +6787,15 @@ def _render_orientation_index_html(
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
         _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
         _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
-        # NOTE (#2453 / E1): the returning-user "resume the thread?" affordance
-        # is intentionally NOT rendered here. It requires a server-declared
-        # durable long-absence continuity signal that does not yet exist: the
-        # only continuity pointer (leave_point) is TTL-capped at 7 days by design
-        # (ADR-0008), so a cold_start (>14d) return never carries a present
-        # leave_point in production, and recents_anchor is a recency projection,
-        # not a continuity claim. Per the owner decision (2026-06-23) E1 is
-        # deferred to #2472 (durable re-entry continuity signal + ADR-0008
-        # amendment); only E2 (rail/palette roles) ships in this slice. The cold
-        # surface keeps its existing calm anchor — the recents.open link below.
+        # NOTE (#2453 / E1, owner decision 2026-06-23): no "resume the thread?"
+        # continuity affordance is rendered on the long-absence cold surface. A
+        # true resume signal can't exist here by design — the only continuity
+        # pointer (leave_point) is TTL-capped at 7 days (ADR-0008), while
+        # cold_start is a >14d return, so a present leave_point never coincides
+        # with cold_start; recents_anchor is recency, not continuity. The owner
+        # accepted the existing calm anchor — the recents.open "Open your most
+        # recent note" link below — as E1's answer (no durable continuity signal,
+        # no dashboard; the system keeps its deliberate forget-fast posture).
         # Recents-anchor sub-affordance (§6, design_handoff/implementation-contracts.md).
         # The Find/recency link ("Open your most recent note"), declared by
         # `recents_anchor` under the `recents.open` intent. It is NOT a
