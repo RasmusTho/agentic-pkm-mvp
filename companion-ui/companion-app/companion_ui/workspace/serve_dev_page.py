@@ -6787,34 +6787,29 @@ def _render_orientation_index_html(
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
         _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
         _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
-        if _cold_recents_path and _cold_recents_label:
-            _cold_recents_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
-            _cold_recents_html = (
-                f'<p class="cold-start-recents-anchor" data-testid="cold-start-recents-anchor">'
-                f'<a data-intent="recents.open" href="{_e(_cold_recents_href)}">'
-                f"Open your most recent note: {_e(_cold_recents_label)}"
-                f"</a></p>"
-            )
-        else:
-            _cold_recents_html = ""
         # E1 (#2453, owner decision 2026-06-23): a gentle "resume the thread?"
         # affordance for a returning user. Gated SOLELY on a server-declared
-        # resumable thread/session being present — never on absence age. There is
-        # no day-count, no `absence_age_days`, and no client-side threshold/age
-        # math: the UI renders this line iff the runtime declares
-        # `orientation.resumable_session`, and renders nothing otherwise. First
-        # contact (no vault selected) is the no_vault vault picker (#2448), not a
-        # cold_start branch, so the line is suppressed for the first-contact
-        # variant. Presentation only — the server-authoritative boundary holds.
-        _resumable = _orientation_dict(orientation.get("resumable_session"))
-        if _resumable and not _is_first_contact:
-            _resume_path = _orientation_str(_resumable.get("note_path"))
-            _resume_label = _orientation_str(_resumable.get("label")) or "Resume the thread"
-            if _resume_path:
-                _resume_href = "/workspace?note_path=" + quote(_resume_path, safe="")
+        # resumable thread being present — never on absence age. There is no
+        # day-count, no `absence_age_days`, and no client-side threshold/age
+        # math: the UI renders this line iff the runtime declares the produced
+        # `orientation.recents_anchor` field (presence ⇒ there is a recent thread
+        # to resume), and renders nothing otherwise. `recents_anchor` is the
+        # already-produced server signal (WorkspaceOrientationResponse in
+        # app/api/routes/companion.py) — the same field that drives the quieter
+        # "Open your most recent note" sub-affordance — so E1 renders in the real
+        # API path, not only in tests. First contact (no vault selected) is the
+        # no_vault vault picker (#2448), not a cold_start branch, so the line is
+        # suppressed for the first-contact variant. Presentation only — the
+        # server-authoritative boundary holds.
+        _resumable_present = bool(_cold_recents) and not _is_first_contact
+        if _resumable_present:
+            _resume_label = _cold_recents_label or "Resume the thread"
+            if _cold_recents_path:
+                _resume_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
             else:
-                # No anchor note declared: route back through the vault re-entry,
-                # never fabricate a target path the runtime did not declare.
+                # No anchor note path declared: route back through the vault
+                # re-entry, never fabricate a target path the runtime did not
+                # declare.
                 _resume_href = "/workspace"
             _cold_resume_html = (
                 '<p class="cold-start-resume-line" '
@@ -6827,6 +6822,15 @@ def _render_orientation_index_html(
             )
         else:
             _cold_resume_html = ""
+        # Dedup (#2453 Codex P2): the prominent E1 "resume the thread?" line and
+        # the older quieter "Open your most recent note" recents-anchor link both
+        # derive from `recents_anchor`. To avoid two redundant links to the same
+        # note, the E1 line SUPERSEDES the quieter link: it is now the single
+        # calm resume affordance derived from the produced field. The quieter
+        # recents-anchor sub-affordance is therefore no longer rendered (the
+        # `recents.open` intent remains a declared cold_start transition in
+        # SYSTEM_ENTRY_POINT_SPEC for any future surface, but this returning-user
+        # threshold emits exactly one calm affordance).
         cold_start_threshold_html = f"""
     <div data-region="cold-start-threshold">
       <div class="cold-start-vault-chip">
@@ -6841,7 +6845,7 @@ def _render_orientation_index_html(
         <button type="button" class="btn btn--primary cold-start-verb" data-intent="vault.open" onclick="vaultBrowser.focus(); return false;">Find a note</button>
         <button type="button" class="btn btn--secondary cold-start-verb" data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;">Jot something down</button>
         <button type="button" class="btn btn--secondary cold-start-verb" data-intent="map.open" onclick="overlayHost.mount('map'); return false;">See the map</button>
-      </p>{_cold_recents_html}
+      </p>
       <!-- Inline capture field (design item 4, #2172): on focus / ⌘N mounts
            the shipped governed capture occupant verbatim.  The warmth rule:
            the caret is the one saturated element; the door stays monochrome.
@@ -7379,7 +7383,6 @@ def _render_orientation_index_html(
       gap: 10px;
       margin: 18px 0 0;
     }}
-    .cold-start-recents-anchor {{ margin: 10px 0 0; }}
     /* E1 (#2453): the returning-user resume affordance — one calm line, no
        tile, no card. Quiet by default, accented only on the link. */
     .cold-start-resume-line {{ margin: 14px 0 0; color: var(--fg-2, #7a9ab8); font-size: 0.92rem; }}
