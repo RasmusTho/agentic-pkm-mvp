@@ -194,8 +194,17 @@ LANE_GOVERNED: Final[str] = "governed"
 #: Mandatory label line for a body-edit-lane card. The recorded/not-recorded
 #: distinction is the headline text on the card.
 LANE_LABEL_BODY_EDIT: Final[str] = "Apply · not recorded (no receipt)"
-#: Mandatory label line for a governed-lane card.
+#: Mandatory label line for a governed-lane card whose Apply writes the vault
+#: and produces a receipt directly (the Panel proposal / rail card).
 LANE_LABEL_GOVERNED: Final[str] = "Apply → vault change → receipt"
+#: Label for a governance-bearing *suggestion card* whose action only queues /
+#: routes the intent to Panel for a later governed decision — it does NOT apply
+#: a vault change or produce a receipt on this surface. Labeling it with the
+#: governed-apply line would overstate the recording guarantee (a Queue is not
+#: an Apply); this names the queue-then-record reality instead.
+LANE_LABEL_GOVERNANCE_QUEUE: Final[str] = (
+    "Queue → governed review · not recorded yet"
+)
 
 #: Fixed Defer consequence line. Prevents "Defer" from being a mystery action.
 #: This is a presentation string (not server-supplied) per the spec.
