@@ -84,7 +84,15 @@ def palette_row_model(
     evidence = proposal.get("evidence") or {}
     affordances = proposal.get("affordances") or {}
     status = str(proposal.get("status") or "staged")
-    available = status in {"staged", "corrected"} and not writeguard_blocked
+    block_payload = proposal.get("block_reason") or {}
+    # A3 (CUIDR-08): a proposal can be held by the GLOBAL WriteGuard banner OR by
+    # a proposal-level `status:"blocked"` (e.g. stale-source, identity-mismatch,
+    # same-turn) while the global guard is OK. Treat both as guard-held so the
+    # palette held row carries the reason/recourse rather than collapsing to the
+    # mute "unavailable" dead end. The block classification is server-declared.
+    proposal_blocked = status == "blocked" or bool(block_payload)
+    guard_held = writeguard_blocked or proposal_blocked
+    available = status in {"staged", "corrected"} and not guard_held
     actions: tuple[str, ...] = (
         tuple(label for label in _ACTION_ORDER if affordances.get(label))
         if available
@@ -100,7 +108,7 @@ def palette_row_model(
         "action_class": action_class,
         "status": status,
         "available": available,
-        "guard_held": writeguard_blocked,
+        "guard_held": guard_held,
         "actions": actions,
         # C2 — lane label (CUIDR-08): server-declared `lane` token / `governed`
         # flag, never inferred from colour or button count. The palette presents
@@ -111,7 +119,7 @@ def palette_row_model(
             proposal.get("lane"), governed=proposal.get("governed")
         ),
         # A3 — server-declared block payload for the held-state reason/recourse.
-        "block_reason": proposal.get("block_reason") or {},
+        "block_reason": block_payload,
         # Filter haystack (simple substring grammar; package Q12 deferred).
         # Include the humanised action-class label so typing the *visible* text
         # (e.g. "Move note") matches the row even when the description does not
@@ -275,8 +283,12 @@ def _blocked_html(response: dict[str, Any]) -> str:
     BLOCKED_AND_STALE_STATE_SPEC.md: gate named, reason shown, intent
     preserved — distinct from a generic failure treatment.
     """
+    # A blocked response is server-authoritative on `status` alone. When the
+    # runtime omits `block_reason`, fall through to the calm fallback helpers
+    # (blocked_reason({}) / blocked_recourse({})) so a blocked-without-detail
+    # still renders a calm blocked card + recourse instead of nothing.
     block_payload = response.get("block_reason") or {}
-    if str(response.get("status") or "") != "blocked" or not block_payload:
+    if str(response.get("status") or "") != "blocked":
         return ""
     gate = str(block_payload.get("gate") or "unknown")
     message = str(block_payload.get("message") or "")

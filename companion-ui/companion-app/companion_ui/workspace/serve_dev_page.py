@@ -4945,7 +4945,20 @@ def _render_panel_proposal_rows(
         affordances = proposal.get("affordances") or {}
         proposal_status = str(proposal.get("status") or "staged")
         proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
-        affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
+        # A proposal can be held by the GLOBAL WriteGuard banner OR by a
+        # proposal-level `status:"blocked"` (e.g. stale-source, identity-mismatch,
+        # same-turn) while the global guard is OK. Either routes the row to the
+        # calm reason/recourse card below — never the mute "unavailable" dead end.
+        proposal_blocked = proposal_status == "blocked" or bool(
+            proposal.get("block_reason")
+        )
+        affordance_status = (
+            "active"
+            if proposal_available
+            else "blocked"
+            if (writeguard_blocked or proposal_blocked)
+            else "unavailable"
+        )
         section_state = "active" if proposal_available else "idle"
         enabled_affordances = [
             label
@@ -5031,13 +5044,18 @@ def _render_panel_proposal_rows(
             )
             for label in enabled_affordances
         )
-        if not proposal_available:
+        if not proposal_available and not (writeguard_blocked or proposal_blocked):
+            # Only the genuinely-unavailable (non-blocked) case keeps the mute
+            # placeholder; a blocked row renders the calm reason/recourse card
+            # below instead of a dead-end "unavailable" message.
             buttons = (
                 '<span class="panel-proposal-unavailable" '
                 'data-testid="workspace-panel-proposal-unavailable" '
                 f'data-affordance-status="{affordance_status}">'
                 f"{_e(proposal_status)} proposal unavailable</span>"
             )
+        elif not proposal_available:
+            buttons = ""
         # C2 — lane label (CUIDR-08). The recorded/not-recorded distinction is
         # the headline of the card: rendered above the description. The lane is
         # server-declared (`lane` token / `governed` flag); the Panel rail is
@@ -5064,8 +5082,14 @@ def _render_panel_proposal_rows(
         # calm (held, not red) but states *why* it is held and *what unblocks
         # it*, humanised from the server-declared block payload — never a mute
         # "unavailable" dead end. block_reason is server-authoritative.
+        #
+        # The block can come from two server-declared sources: the GLOBAL
+        # WriteGuard banner (writeguard_blocked) OR a proposal-level
+        # `status:"blocked"` (proposal_blocked, computed above). Render the
+        # reason/recourse for either — otherwise a live proposal-level block
+        # falls through to the mute "unavailable" dead end removed above.
         blocked_recourse_html = ""
-        if writeguard_blocked:
+        if writeguard_blocked or proposal_blocked:
             block_payload = proposal.get("block_reason") or {}
             reason_text = blocked_reason(block_payload)
             recourse_text = blocked_recourse(block_payload)
@@ -5155,7 +5179,11 @@ def _render_panel_confirm_response(response: dict) -> str:
             {inverse_html}
           </div>"""
     blocked_html = ""
-    if status == "blocked" and block_reason:
+    # A3 (CUIDR-08): a blocked confirm is server-authoritative on `status` alone.
+    # When the runtime omits `block_reason`, fall through to the calm fallback
+    # copy (blocked_reason({}) / blocked_recourse({})) so a blocked-without-detail
+    # still renders a calm blocked card + recourse instead of nothing.
+    if status == "blocked":
         message = str(block_reason.get("message") or "")
         if block_reason.get("gate") == "same-turn" or "same-turn" in message.lower():
             message = (

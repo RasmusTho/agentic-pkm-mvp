@@ -19,10 +19,14 @@ from companion_ui.workspace.calm_degraded import (
     BLOCKED_REASON_FALLBACK,
     BLOCKED_RECOURSE_FALLBACK,
 )
+from companion_ui.workspace.panel_palette import _blocked_html
 from companion_ui.workspace.real_note_workspace_dev_page import (
     _proposal_rows_from_panel,
 )
-from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.serve_dev_page import (
+    _render_panel_confirm_response,
+    render_index_html,
+)
 
 
 def _fields(*, writeguard_blocked: bool, block_reason: dict | None) -> dict[str, Any]:
@@ -197,6 +201,98 @@ def test_normaliser_omits_undeclared_lane_and_block() -> None:
     assert "lane" not in rows[0]
     assert "governed" not in rows[0]
     assert "block_reason" not in rows[0]
+
+
+def test_proposal_level_blocked_without_global_writeguard_renders_recourse() -> None:
+    """A proposal-level ``status:"blocked"`` while the GLOBAL WriteGuard is OK
+    still shows the reason + recourse — not the mute "unavailable" dead end.
+
+    Covers the stale-source / identity-mismatch / same-turn case where the
+    runtime blocks one proposal but the global WriteGuard banner is fine.
+    """
+    fields = _fields(writeguard_blocked=False, block_reason=None)
+    # Global WriteGuard stays OK; only this proposal is server-declared blocked.
+    fields["guard_writeguard_status"] = "ok"
+    fields["panel_proposals"][0]["status"] = "blocked"
+    fields["panel_proposals"][0]["block_reason"] = {
+        "gate": "stale-source",
+        "recourse": "Reopen the note to refresh the proposal.",
+    }
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/panel.md",
+        fields=fields,
+    )
+
+    reason = _text_for_testid(html, "palette-blocked-reason")
+    recourse = _text_for_testid(html, "palette-blocked-recourse")
+
+    assert reason, "proposal-level blocked must still carry a reason"
+    assert recourse, "proposal-level blocked must still carry recourse"
+    assert "reopen the note" in recourse.lower()
+    # The calm reason/recourse card is present on the panel proposal row...
+    assert 'data-testid="workspace-panel-proposal-blocked"' in html
+    # ...and that row no longer emits the mute "unavailable" dead-end span.
+    assert 'data-testid="workspace-panel-proposal-unavailable"' not in html
+
+
+def test_palette_row_proposal_level_blocked_is_held_with_recourse() -> None:
+    """The palette row model treats a proposal-level ``status:"blocked"`` as
+    guard-held (even when the GLOBAL WriteGuard is OK), so its held row carries
+    the reason + recourse rather than collapsing to "unavailable"."""
+    from companion_ui.workspace.panel_palette import (
+        _row_actions_html,
+        palette_row_model,
+    )
+
+    proposal = {
+        "proposal_id": "prop-stale",
+        "artifact_id": "art-1",
+        "description": "Move note to Projects",
+        "status": "blocked",
+        "block_reason": {
+            "gate": "stale-source",
+            "recourse": "Reopen the note to refresh the proposal.",
+        },
+        "evidence": {
+            "trigger_summary": "Trigger",
+            "action_class": "lifecycle.move",
+            "cognition_route": "rule",
+        },
+        "affordances": {"confirm": True, "reject": True, "correct": True},
+    }
+    # Global WriteGuard is OK; the block is proposal-level only.
+    row = palette_row_model(proposal, writeguard_blocked=False)
+    assert row["guard_held"] is True
+    assert row["available"] is False
+
+    actions_html = _row_actions_html(row)
+    assert 'data-testid="palette-blocked-reason"' in actions_html
+    assert 'data-testid="palette-blocked-recourse"' in actions_html
+    assert "reopen the note" in actions_html.lower()
+    assert 'data-guard-gate="stale-source"' in actions_html
+
+
+def test_palette_blocked_without_reason_uses_fallback_copy() -> None:
+    """A confirm response blocked with NO ``block_reason`` still renders a calm
+    blocked card with the fallback reason + recourse (palette path)."""
+    html = _blocked_html({"status": "blocked", "proposal_id": "prop-z"})
+
+    assert 'data-testid="palette-blocked"' in html
+    assert BLOCKED_REASON_FALLBACK in html
+    assert BLOCKED_RECOURSE_FALLBACK in html
+
+
+def test_rail_confirm_blocked_without_reason_uses_fallback_copy() -> None:
+    """The rail confirm renderer mirrors the palette: a blocked response with no
+    ``block_reason`` still shows a calm blocked card + fallback recourse."""
+    html = _render_panel_confirm_response({"status": "blocked"})
+
+    assert 'data-testid="workspace-panel-blocked-reason"' in html
+    reason = _text_for_testid(html, "palette-blocked-reason")
+    recourse = _text_for_testid(html, "palette-blocked-recourse")
+    assert BLOCKED_REASON_FALLBACK in reason
+    assert BLOCKED_RECOURSE_FALLBACK in recourse
 
 
 def test_blocked_proposal_stays_calm_non_red() -> None:

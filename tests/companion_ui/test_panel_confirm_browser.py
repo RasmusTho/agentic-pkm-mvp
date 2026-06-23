@@ -366,6 +366,10 @@ def test_writeguard_blocked_panel_actions_are_marked_blocked() -> None:
 
     assert 'data-testid="workspace-guard-indicator"' in html
     assert "WriteGuard blocked" in html
-    assert 'data-testid="workspace-panel-proposal-unavailable"' in html
     assert 'data-affordance-status="blocked"' in html
     assert 'data-panel-action="confirm"' not in html
+    # A3 (CUIDR-08): a WriteGuard-held proposal no longer collapses to the mute
+    # "proposal unavailable" span; it renders the calm reason + recourse card.
+    assert 'data-testid="workspace-panel-proposal-blocked"' in html
+    assert 'data-testid="palette-blocked-reason"' in html
+    assert 'data-testid="palette-blocked-recourse"' in html
