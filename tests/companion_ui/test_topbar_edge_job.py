@@ -314,6 +314,25 @@ def test_narrow_shell_composed_edges_at_430() -> None:
         "on narrow viewports (bottom: calc(60px + 18px))"
     )
 
+    # Cascade guard (#2462 Codex P2): the narrow override and the base
+    # `.workspace-bottom-bar{bottom:18px}` rule have equal specificity (a media
+    # query adds none), so the override only wins at narrow width if no base
+    # `bottom:18px` declaration cascades *after* it. The base rule is appended
+    # late (the help-drawer style block at the end of the body), so the override
+    # must be co-located after it — not in an earlier head stylesheet. Assert
+    # the last-cascading `.workspace-bottom-bar` bottom declaration is the calc
+    # override, which fails if any base rule re-declares bottom after it.
+    bottom_decls = re.findall(
+        r"\.workspace-bottom-bar\s*\{[^}]*?bottom:\s*([^;}]+)", html
+    )
+    assert bottom_decls, ".workspace-bottom-bar bottom rule must render"
+    assert "calc(60px + 18px)" in bottom_decls[-1], (
+        "the last-cascading .workspace-bottom-bar bottom declaration must be "
+        "the narrow calc override so it wins over the base bottom:18px rule "
+        "at equal specificity (#2462 Codex P2 cascade fix); found order: "
+        f"{bottom_decls}"
+    )
+
     # No independently-positioned fixed element with `bottom` remains outside
     # the composed bar — the floating Operator pill is gone from the edge. The
     # rendered toggle element and its fixed-position CSS rule must both be
