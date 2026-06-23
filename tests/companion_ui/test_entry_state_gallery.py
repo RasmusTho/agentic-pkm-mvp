@@ -1243,11 +1243,13 @@ def test_no_ui_derived_authority() -> None:
 
     # Authority roles render verbatim from the fixture payload: flipping the
     # declared role flips the rendered attribute with no UI normalization.
-    custom = _render(
-        orientation=_orientation_payload(
-            gap=_GAP_FULL_MIST, governance_authority_role="fixture_declared_role"
-        )
-    )
+    # CUIDR-06 (#2450): the governance summary tile no longer renders on the
+    # orientation surface (operator telemetry lives behind the System Map), so
+    # this verbatim-authority contract is exercised on a panel that still
+    # renders from full_mist up — the open-loop provenance.
+    custom_payload = _orientation_payload(gap=_GAP_FULL_MIST)
+    custom_payload["open_loops"][0]["authority_role"] = "fixture_declared_role"
+    custom = _render(orientation=custom_payload)
     assert 'data-authority-role="fixture_declared_role"' in custom
     baseline = gallery["A4_full_mist"].html
     assert 'data-authority-role="fixture_declared_role"' not in baseline

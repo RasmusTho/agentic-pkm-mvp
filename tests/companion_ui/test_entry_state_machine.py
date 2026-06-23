@@ -382,7 +382,12 @@ def test_orienting_still_renders_dashboard_sections() -> None:
     )
     assert _entry_state(page) == "orienting"
     assert 'data-testid="workspace-orientation-leave-point"' in page
-    assert 'data-testid="workspace-orientation-governance"' in page
+    # CUIDR-06 (#2450): orientation panels appear at full_mist+ (5h = full_mist),
+    # but the governance/telemetry tile is removed from the orientation surface
+    # at every rung — it belongs behind the System Map (CUIDR-04 cross-task
+    # invariant). The open-loops panel stands in as the still-present section.
+    assert 'data-testid="workspace-orientation-open-loops"' in page
+    assert 'data-testid="workspace-orientation-governance"' not in page
     assert "Re-entry snapshot" in page
 
 
