@@ -9,11 +9,12 @@ could no-op (observed on PR #2376 and, after a connect_timeout-only attempt, on
 the #2377 fix's own CI run via the classifier audit path in test_uat_run_cli).
 
 ``connect_timeout`` bounds only the TCP connect, **not** DNS resolution, so it
-cannot stop a ``getaddrinfo`` stall. The fix gates the audit write on
-the store backend resolver: in memory/non-pg mode it does not attempt a
-connection at all (removing the stall at its source), while resolved Postgres
-backends keep writing audit rows (with the connect additionally bounded by
-``connect_timeout`` for an unreachable-but-resolvable host).
+cannot stop a ``getaddrinfo`` stall. The fix gates the audit write on an
+explicit pg backend or an already-known store-backend hint: in memory/non-pg
+mode it does not attempt a connection at all (removing the stall at its source),
+while resolved Postgres backends keep writing audit rows (with the connect
+additionally bounded by ``connect_timeout`` for an unreachable-but-resolvable
+host).
 """
 
 from __future__ import annotations
@@ -113,12 +114,37 @@ def test_audit_event_bounded_connect_on_pg_backend(
     )
 
 
-def test_audit_event_writes_when_backend_resolves_pg_without_store_backend_env(
+def test_audit_event_does_not_probe_backend_when_store_backend_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Auto-detected pg mode must write even when STORE_BACKEND is unset."""
+    """With no explicit backend, audit_event must not invoke auto-detect.
+
+    Auto-detect may perform a DNS/pg reachability probe, which is too expensive
+    and potentially unbounded for best-effort audit emission.
+    """
     monkeypatch.delenv("STORE_BACKEND", raising=False)
-    monkeypatch.setattr(audit_module, "resolve_store_backend", lambda: "pg")
+    monkeypatch.setenv("DATABASE_URL", _UNROUTABLE_DSN)
+    monkeypatch.setattr(audit_module, "resolved_store_backend_hint", lambda: None)
+
+    def _fail_if_called(*args: object, **kwargs: object):
+        raise AssertionError("audit_event must not open a DB connection without a pg hint")
+
+    monkeypatch.setattr(audit_module, "conn_rw", _fail_if_called)
+
+    start = time.monotonic()
+    result = audit_event(event="test.event", object_id=None, agent="tester", trace_id="t-2406")
+    elapsed = time.monotonic() - start
+
+    assert result is None
+    assert elapsed < 1.0, f"unhinted audit_event took {elapsed:.2f}s; expected an immediate skip"
+
+
+def test_audit_event_writes_when_cached_backend_hint_is_pg_without_store_backend_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A previously resolved pg backend keeps audit writes without another probe."""
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    monkeypatch.setattr(audit_module, "resolved_store_backend_hint", lambda: "pg")
     connection = _RecordingConnection()
 
     def _recording_conn_rw(*, connect_timeout: int) -> _RecordingConnection:
@@ -141,3 +167,37 @@ def test_audit_event_writes_when_backend_resolves_pg_without_store_backend_env(
     assert "INSERT INTO audit" in statement
     assert params[0] == "t-2406"
     assert params[1] == "test.event"
+
+
+def test_audit_event_writes_when_settings_backend_is_pg_without_store_backend_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings-backed pg selection is authoritative and needs no auto-detect."""
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    monkeypatch.setattr(audit_module.settings, "store_backend", "pg")
+    monkeypatch.setattr(
+        audit_module,
+        "resolved_store_backend_hint",
+        lambda: (_ for _ in ()).throw(AssertionError("must not inspect store hint")),
+    )
+    connection = _RecordingConnection()
+
+    def _recording_conn_rw(*, connect_timeout: int) -> _RecordingConnection:
+        assert connect_timeout == 1
+        return connection
+
+    monkeypatch.setattr(audit_module, "conn_rw", _recording_conn_rw)
+
+    result = audit_event(
+        event="test.settings",
+        object_id="object-2",
+        agent="tester",
+        trace_id="t-settings-pg",
+    )
+
+    assert result is None
+    assert len(connection.cursor_instance.statements) == 1
+    statement, params = connection.cursor_instance.statements[0]
+    assert "INSERT INTO audit" in statement
+    assert params[0] == "t-settings-pg"
+    assert params[1] == "test.settings"

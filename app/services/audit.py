@@ -3,9 +3,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 import json
+import os
 
 from app.db.db import conn_rw
-from app.stores import resolve_store_backend
+from app.settings import settings
+from app.stores import resolved_store_backend_hint
+
+
+def _audit_pg_backend_selected() -> bool:
+    explicit_backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    if explicit_backend:
+        return explicit_backend == "pg"
+    settings_backend = str(getattr(settings, "store_backend", "") or "").strip().lower()
+    if settings_backend == "pg":
+        return True
+    return resolved_store_backend_hint() == "pg"
 
 def audit_event(
     *,
@@ -19,13 +31,10 @@ def audit_event(
     Best-effort audit logger.
     Writes to audit table if DB is up, otherwise silently no-ops for pytest.
     """
-    # Skip the DB write entirely unless the store layer resolves to the durable
-    # Postgres backend. In memory/non-pg mode the resolved DSN may still be
-    # non-empty but point at the default unreachable host (db:5432), and
-    # ``psycopg.connect()`` can stall in ``socket.getaddrinfo()``. Use the same
-    # backend resolver as the store layer so auto-detected pg deployments still
-    # write audit rows while genuine memory mode avoids DB/DNS work.
-    if resolve_store_backend() != "pg":
+    # Skip unless pg is explicit or already known from the store layer. Calling
+    # the auto-detect resolver from this best-effort audit path can perform a
+    # DNS/pg probe before the offline no-op below gets a chance to catch it.
+    if not _audit_pg_backend_selected():
         return
 
     payload = {

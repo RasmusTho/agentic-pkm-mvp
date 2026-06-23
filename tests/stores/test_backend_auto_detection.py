@@ -6,7 +6,7 @@ import psycopg
 import pytest
 
 from app.db.dsn import resolve_dsn
-from app.stores import reset_store_backends, resolve_store_backend
+from app.stores import reset_store_backends, resolve_store_backend, resolved_store_backend_hint
 
 
 def _pg_available() -> bool:
@@ -54,6 +54,7 @@ def test_store_backend_auto_detects_pg_psycopg_dsn(monkeypatch):
     assert resolve_store_backend() == "pg"
     assert captured["dsn"] == "postgresql://user:pass@localhost:5432/db"
     assert captured["connect_timeout"] == 1
+    assert resolved_store_backend_hint() == "pg"
 
 
 def test_store_backend_auto_detects_pg_postgresql_dsn(monkeypatch):
@@ -79,3 +80,18 @@ def test_store_backend_defaults_to_memory(monkeypatch):
     monkeypatch.delenv("STORE_BACKEND", raising=False)
     monkeypatch.setenv("DATABASE_URL", "")
     assert resolve_store_backend() == "memory"
+    assert resolved_store_backend_hint() == "memory"
+
+
+def test_store_backend_hint_is_none_when_environment_changes(monkeypatch):
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(psycopg, "connect", _fake_connect(captured))
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
+
+    assert resolve_store_backend() == "pg"
+    assert resolved_store_backend_hint() == "pg"
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5433/db")
+
+    assert resolved_store_backend_hint() is None
