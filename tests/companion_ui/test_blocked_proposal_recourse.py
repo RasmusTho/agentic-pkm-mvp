@@ -236,6 +236,45 @@ def test_proposal_level_blocked_without_global_writeguard_renders_recourse() -> 
     assert 'data-testid="workspace-panel-proposal-unavailable"' not in html
 
 
+def test_block_reason_hold_with_staged_status_has_no_active_buttons() -> None:
+    """A server-declared ``block_reason`` is a hold even when the status still
+    reads ``staged`` — the rail must not render active Apply/Discard/Defer.
+
+    Parity with the palette row model (which folds the same condition into
+    guard_held before computing availability). Otherwise the two surfaces
+    diverge: active buttons next to a blocked reason/recourse card.
+    """
+    fields = _fields(writeguard_blocked=False, block_reason=None)
+    fields["guard_writeguard_status"] = "ok"
+    # Status stays staged; only block_reason marks the hold.
+    fields["panel_proposals"][0]["status"] = "staged"
+    fields["panel_proposals"][0]["block_reason"] = {
+        "gate": "identity-mismatch",
+    }
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/panel.md",
+        fields=fields,
+    )
+
+    # The panel proposal row is held: it carries the blocked affordance status
+    # and the calm reason/recourse card, and exposes no active panel action
+    # buttons (the rail's confirm buttons use data-testid="workspace-panel-action";
+    # the separate act-mode flow uses act-* test-ids and is out of scope).
+    assert 'data-testid="workspace-panel-proposal-blocked"' in html
+    assert 'data-testid="workspace-panel-action"' not in html
+    assert _text_for_testid(html, "palette-blocked-reason")
+    assert _text_for_testid(html, "palette-blocked-recourse")
+    # The row's own affordance status is blocked, not active.
+    row_match = re.search(
+        r'data-testid="workspace-panel-proposal-row"[^>]*'
+        r'data-affordance-status="([^"]+)"',
+        html,
+    )
+    assert row_match is not None
+    assert row_match.group(1) == "blocked"
+
+
 def test_palette_row_proposal_level_blocked_is_held_with_recourse() -> None:
     """The palette row model treats a proposal-level ``status:"blocked"`` as
     guard-held (even when the GLOBAL WriteGuard is OK), so its held row carries

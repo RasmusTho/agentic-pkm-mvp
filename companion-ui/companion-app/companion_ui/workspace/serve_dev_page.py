@@ -4944,13 +4944,21 @@ def _render_panel_proposal_rows(
         evidence = proposal.get("evidence") or {}
         affordances = proposal.get("affordances") or {}
         proposal_status = str(proposal.get("status") or "staged")
-        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
         # A proposal can be held by the GLOBAL WriteGuard banner OR by a
         # proposal-level `status:"blocked"` (e.g. stale-source, identity-mismatch,
-        # same-turn) while the global guard is OK. Either routes the row to the
-        # calm reason/recourse card below — never the mute "unavailable" dead end.
+        # same-turn) while the global guard is OK. A server-declared `block_reason`
+        # is a hold even when the status still reads staged/corrected. Either
+        # routes the row to the calm reason/recourse card below — never active
+        # Apply/Discard buttons and never the mute "unavailable" dead end.
         proposal_blocked = proposal_status == "blocked" or bool(
             proposal.get("block_reason")
+        )
+        # Fold proposal_blocked into availability (parity with the palette row
+        # model's guard_held) so a block_reason hold never leaves active buttons.
+        proposal_available = (
+            proposal_status in {"staged", "corrected"}
+            and not writeguard_blocked
+            and not proposal_blocked
         )
         affordance_status = (
             "active"
