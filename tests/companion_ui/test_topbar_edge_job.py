@@ -314,32 +314,18 @@ def test_narrow_shell_composed_edges_at_430() -> None:
         "on narrow viewports (bottom: calc(60px + 18px))"
     )
 
-    # Cascade guard (#2462 Codex P2): the narrow override and the base
-    # `.workspace-bottom-bar{bottom:18px}` rule have equal specificity (a media
-    # query adds none), so the override only wins at narrow width if no base
-    # `bottom:18px` declaration cascades *after* it. The base rule is appended
-    # late (the help-drawer style block at the end of the body), so the override
-    # must be co-located after it — not in an earlier head stylesheet. Assert
-    # the last-cascading `.workspace-bottom-bar` bottom declaration is the calc
-    # override, which fails if any base rule re-declares bottom after it.
-    bottom_decls = re.findall(
-        r"\.workspace-bottom-bar\s*\{[^}]*?bottom:\s*([^;}]+)", html
-    )
-    assert bottom_decls, ".workspace-bottom-bar bottom rule must render"
-    assert "calc(60px + 18px)" in bottom_decls[-1], (
-        "the last-cascading .workspace-bottom-bar bottom declaration must be "
-        "the narrow calc override so it wins over the base bottom:18px rule "
-        "at equal specificity (#2462 Codex P2 cascade fix); found order: "
-        f"{bottom_decls}"
-    )
-
-    # Peek-gating guard (#2462 Codex round-2 / AC2): the lift must be conditional
-    # on a visible peek sheet. With the sheet closed (display:none) or absent
-    # (orientation / no-sheet renders) an unconditional lift would float the bar
-    # 60px above the bottom edge — a permanent dead gap. Assert that EVERY
-    # `bottom: calc(60px + 18px)` lift rule is gated on a visible peek snap
-    # (`:has(.portrait-sheet[data-current-snap="peek"])`), so the bar returns to
-    # the bottom edge whenever no peek sheet is present.
+    # Cascade + peek-gating guard (#2462 Codex P2 round-1 & round-2 / AC2):
+    # assert the actual cascade-win mechanism, not source order. The lift rule
+    # uses `body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar`,
+    # whose specificity (0,3,2) is strictly higher than the base
+    # `.workspace-bottom-bar{bottom:18px}` rule (0,1,0). That higher specificity
+    # is what wins the cascade at narrow widths regardless of source order — so a
+    # harmless later base re-declaration would NOT defeat it (this replaces the
+    # earlier brittle "calc must be last" source-order check; Codex P3 on the
+    # round-2 head). The `:has()` peek qualifier also encodes AC2: with the sheet
+    # closed (display:none) or absent the rule does not match, so the bar rests
+    # at the bottom edge instead of floating 60px up. Assert EVERY calc-lift rule
+    # carries the higher-specificity visible-peek gate.
     lift_selectors = re.findall(
         r"([^{}]*?)\{[^{}]*bottom:\s*calc\(60px \+ 18px\)[^{}]*\}", html
     )
@@ -347,8 +333,10 @@ def test_narrow_shell_composed_edges_at_430() -> None:
     for sel in lift_selectors:
         assert ":has(" in sel and 'data-current-snap="peek"' in sel, (
             "every .workspace-bottom-bar calc(60px + 18px) lift must be gated "
-            "on a visible peek sheet so the bar rests at the bottom edge when "
-            f"no sheet is present (#2462 AC2); ungated selector: {sel.strip()!r}"
+            "on a visible peek sheet via the higher-specificity "
+            ":has(.portrait-sheet[data-current-snap=\"peek\"]) selector, so it "
+            "both wins the cascade by specificity and rests at the bottom edge "
+            f"when no sheet is present (#2462 AC2); ungated selector: {sel.strip()!r}"
         )
 
     # No independently-positioned fixed element with `bottom` remains outside
