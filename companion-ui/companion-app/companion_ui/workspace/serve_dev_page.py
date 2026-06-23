@@ -64,6 +64,8 @@ from companion_ui.renderer import (
 from companion_ui.renderer.link_resolver import VaultLinkResolver
 from companion_ui.workspace.calm_degraded import (
     DEFER_CONSEQUENCE,
+    LANE_BODY_EDIT,
+    LANE_GOVERNED,
     NOTHING_LOST,
     blocked_reason,
     blocked_recourse,
@@ -4502,13 +4504,30 @@ def _render_suggestion_cards(cards: list[dict]) -> str:
                 + _e(card.get("denial_reason"))
                 + "</div>"
             )
+        # C2 — lane label (CUIDR-08). The body-edit lane (S2) lives here. The
+        # card variant is server-declared (the UI never re-classifies it): a
+        # "body" variant is the body-edit lane (Apply not recorded), a
+        # "governance" variant is the governed lane (Apply → vault change →
+        # receipt). The blocked variant carries no Apply lane, so no label.
+        variant = str(card.get("data_variant", ""))
+        lane_label_html = ""
+        if variant in {"body", "governance"}:
+            label_text = lane_label(
+                LANE_BODY_EDIT if variant == "body" else LANE_GOVERNED
+            )
+            lane_label_html = (
+                '<div class="suggestion-card-lane-label" '
+                'data-testid="lane-label" '
+                f'data-lane="{_e(variant)}">{_e(label_text)}</div>'
+            )
         rows.append(
             f"""
         <div
           class="suggestion-card"
           data-testid="suggestion-card"
-          data-variant="{_e(card.get("data_variant", ""))}"
+          data-variant="{_e(variant)}"
           data-suggestion-id="{_e(card.get("data_suggestion_id", ""))}"{role}>
+          {lane_label_html}
           <div class="suggestion-card-title">{_e(card.get("title", ""))}</div>
           <div class="suggestion-card-preview">{_e(card.get("preview_text", ""))}</div>
           {notice}
@@ -10522,6 +10541,15 @@ def render_index_html(
       background: var(--destructive-muted);
       border-color: var(--destructive-dim);
       border-left-color: var(--au-blocked);
+    }}
+    /* C2 — the recorded/not-recorded lane label is the suggestion-card
+       headline: heavier weight than the title below it. */
+    .suggestion-card-lane-label {{
+      color: var(--fg-1);
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      margin-bottom: 4px;
     }}
     .suggestion-card-title {{
       color: var(--fg-1);

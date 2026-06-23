@@ -1095,7 +1095,24 @@ def _proposal_rows_from_panel(
                 reflected_receipt if isinstance(reflected_receipt, dict) else None
             ),
         )
-        rows.append(row.as_render_dict())
+        render_row = row.as_render_dict()
+        # Pass through the server-declared lane / governed / block_reason fields
+        # (CUIDR-08). These are presentation inputs the rail + palette humanise
+        # into the lane label and blocked reason/recourse; the UI never infers
+        # them. Surfaced only when the runtime declared them — an absent lane
+        # defaults to the governed label downstream (the rail/palette are the
+        # governed lane by construction), and an absent block_reason yields the
+        # calm fallback.
+        lane_raw = raw.get("lane")
+        if lane_raw is not None:
+            render_row["lane"] = str(lane_raw)
+        governed_raw = raw.get("governed")
+        if governed_raw is not None:
+            render_row["governed"] = bool(governed_raw)
+        block_reason_raw = raw.get("block_reason")
+        if isinstance(block_reason_raw, dict) and block_reason_raw:
+            render_row["block_reason"] = block_reason_raw
+        rows.append(render_row)
     return rows
 
 

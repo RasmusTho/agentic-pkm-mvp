@@ -19,6 +19,9 @@ from companion_ui.workspace.calm_degraded import (
     BLOCKED_REASON_FALLBACK,
     BLOCKED_RECOURSE_FALLBACK,
 )
+from companion_ui.workspace.real_note_workspace_dev_page import (
+    _proposal_rows_from_panel,
+)
 from companion_ui.workspace.serve_dev_page import render_index_html
 
 
@@ -131,6 +134,69 @@ def test_blocked_proposal_reason_falls_back_when_payload_absent() -> None:
     assert BLOCKED_REASON_FALLBACK in reason
     assert recourse, "fallback recourse must still be present"
     assert BLOCKED_RECOURSE_FALLBACK in recourse
+
+
+def test_normaliser_passes_through_server_declared_block_and_lane() -> None:
+    """The panel→rows normaliser preserves server-declared lane/governed/block.
+
+    Without this pass-through, live rail/palette cards would always fall back to
+    the default governed label and the calm block fallback even when the runtime
+    declared a specific lane or recourse (the live-path gap Codex flagged).
+    """
+    panel = {
+        "proposals": [
+            {
+                "proposal_id": "prop-x",
+                "artifact_id": "note-uuid-1",
+                "description": "Move note to Projects",
+                "status": "blocked",
+                "lane": "body_edit",
+                "governed": False,
+                "block_reason": {
+                    "gate": "stale-source",
+                    "recourse": "Reopen the note to refresh the proposal.",
+                },
+                "evidence": {
+                    "trigger_summary": "Trigger",
+                    "action_class": "lifecycle.move",
+                    "cognition_route": "rule",
+                },
+            }
+        ]
+    }
+    rows = _proposal_rows_from_panel(panel=panel, artifact_id="note-uuid-1")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["lane"] == "body_edit"
+    assert row["governed"] is False
+    assert row["block_reason"]["gate"] == "stale-source"
+    assert (
+        row["block_reason"]["recourse"]
+        == "Reopen the note to refresh the proposal."
+    )
+
+
+def test_normaliser_omits_undeclared_lane_and_block() -> None:
+    """Absent server fields are not invented — they stay off the row."""
+    panel = {
+        "proposals": [
+            {
+                "proposal_id": "prop-y",
+                "artifact_id": "note-uuid-1",
+                "description": "Move note to Projects",
+                "status": "staged",
+                "evidence": {
+                    "trigger_summary": "Trigger",
+                    "action_class": "lifecycle.move",
+                    "cognition_route": "rule",
+                },
+            }
+        ]
+    }
+    rows = _proposal_rows_from_panel(panel=panel, artifact_id="note-uuid-1")
+    assert "lane" not in rows[0]
+    assert "governed" not in rows[0]
+    assert "block_reason" not in rows[0]
 
 
 def test_blocked_proposal_stays_calm_non_red() -> None:

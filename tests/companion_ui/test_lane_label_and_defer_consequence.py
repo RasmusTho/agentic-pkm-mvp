@@ -103,8 +103,65 @@ def _lane_label_texts(html: str) -> list[str]:
     return [m.strip() for m in re.findall(pattern, html, re.S)]
 
 
+def _render_with_suggestion_card(variant: str) -> str:
+    fields = _fields(
+        _proposal(
+            lane="governed",
+            governed=True,
+            affordances={"confirm": True, "reject": True},
+        )
+    )
+    fields["suggestion_state"] = "staged_body" if variant == "body" else "staged_governance"
+    fields["suggestion_cards"] = [
+        {
+            "data_variant": variant,
+            "data_suggestion_id": "sugg-1",
+            "title": "Add summary paragraph",
+            "preview_text": "The project has entered…",
+            "available_intents": (
+                ["suggestion.apply", "suggestion.discard"]
+                if variant == "body"
+                else ["governance.queue", "suggestion.discard"]
+            ),
+        }
+    ]
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/panel.md",
+        fields=fields,
+    )
+
+
 def test_body_edit_lane_label_not_recorded() -> None:
-    """A body-edit-lane card labels Apply as not recorded (no receipt)."""
+    """A body-edit-lane card labels Apply as not recorded (no receipt).
+
+    Covers the *actual* body-edit lane surface: the S2 suggestion card rendered
+    by _render_suggestion_cards (variant="body"), not only the governed rail.
+    """
+    html = _render_with_suggestion_card("body")
+    # The suggestion card carries the lane label.
+    card_start = html.find('data-testid="suggestion-card"')
+    assert card_start != -1, "body-edit suggestion card must render"
+    card_html = html[card_start:]
+    labels = _lane_label_texts(card_html)
+    assert labels, "lane-label must render on the body-edit suggestion card"
+    assert any("not recorded" in label.lower() for label in labels)
+    assert LANE_LABEL_BODY_EDIT in html
+
+
+def test_governance_suggestion_card_lane_label_receipt() -> None:
+    """A governance-variant suggestion card labels Apply as producing a receipt."""
+    html = _render_with_suggestion_card("governance")
+    card_start = html.find('data-testid="suggestion-card"')
+    assert card_start != -1
+    card_html = html[card_start:]
+    labels = _lane_label_texts(card_html)
+    assert labels
+    assert any("receipt" in label.lower() for label in labels)
+
+
+def test_body_edit_lane_label_via_governed_payload() -> None:
+    """The governed rail card honours an explicit server-declared body-edit lane."""
     html = _render(
         _proposal(
             lane="body_edit",
