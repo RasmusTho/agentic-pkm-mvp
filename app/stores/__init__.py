@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 StoreClassification = Literal["durable", "rebuildable"]
 
 _OBJECT_STORE_REBUILD_SOURCE = "vault notes + companion notes via vault ingest/runtime projection"
+_LAST_RESOLVED_BACKEND: tuple[str, str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -48,15 +49,21 @@ def _pg_reachable(dsn: str) -> bool:
 
 
 def _resolve_backend() -> str:
+    global _LAST_RESOLVED_BACKEND
     override = os.getenv("STORE_BACKEND")
-    if override:
-        return override.lower()
-
+    normalized_override = (override or "").strip().lower()
     dsn = os.getenv("DATABASE_URL", "").strip()
+    if override:
+        _LAST_RESOLVED_BACKEND = (normalized_override, dsn, normalized_override)
+        return normalized_override
+
     if _pg_reachable(dsn):
+        _LAST_RESOLVED_BACKEND = (normalized_override, dsn, "pg")
         return "pg"
 
-    return getattr(settings, "store_backend", "memory").lower()
+    backend = getattr(settings, "store_backend", "memory").lower()
+    _LAST_RESOLVED_BACKEND = (normalized_override, dsn, backend)
+    return backend
 
 
 @lru_cache(maxsize=1)
@@ -87,6 +94,18 @@ def resolve_store_backend() -> str:
     return _resolve_backend()
 
 
+def resolved_store_backend_hint() -> str | None:
+    """Return the current store backend only if it is already known without probing."""
+    override = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    dsn = os.getenv("DATABASE_URL", "").strip()
+    if _LAST_RESOLVED_BACKEND is None:
+        return None
+    cached_override, cached_dsn, backend = _LAST_RESOLVED_BACKEND
+    if (cached_override, cached_dsn) != (override, dsn):
+        return None
+    return backend
+
+
 def get_object_store() -> ObjectStore:
     return _store_instances()[0]
 
@@ -114,6 +133,8 @@ def get_relation_index() -> RelationIndex:
 
 
 def reset_store_backends() -> None:
+    global _LAST_RESOLVED_BACKEND
+    _LAST_RESOLVED_BACKEND = None
     for cache in (_memory_instances, _pg_instances):
         try:
             cache.cache_clear()

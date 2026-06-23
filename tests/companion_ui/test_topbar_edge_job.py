@@ -302,6 +302,43 @@ def test_narrow_shell_composed_edges_at_430() -> None:
     # hint, and the Help control.
     assert 'data-testid="workspace-help-toggle"' in bar
 
+    # The composed bottom bar must clear the portrait-sheet peek line on narrow
+    # viewports so the Map/Help controls do not layer over the ~60px peek
+    # (#2462 bottom-edge collision). The offset lives in the @media block.
+    bar_offset = re.search(
+        r"\.workspace-bottom-bar\s*\{[^}]*bottom:\s*calc\(60px \+ 18px\)",
+        html,
+    )
+    assert bar_offset, (
+        "the composed bottom bar must clear the portrait-sheet peek line "
+        "on narrow viewports (bottom: calc(60px + 18px))"
+    )
+
+    # Cascade + peek-gating guard (#2462 Codex P2 round-1 & round-2 / AC2):
+    # assert the actual cascade-win mechanism, not source order. The lift rule
+    # uses `body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar`,
+    # whose specificity (0,3,2) is strictly higher than the base
+    # `.workspace-bottom-bar{bottom:18px}` rule (0,1,0). That higher specificity
+    # is what wins the cascade at narrow widths regardless of source order — so a
+    # harmless later base re-declaration would NOT defeat it (this replaces the
+    # earlier brittle "calc must be last" source-order check; Codex P3 on the
+    # round-2 head). The `:has()` peek qualifier also encodes AC2: with the sheet
+    # closed (display:none) or absent the rule does not match, so the bar rests
+    # at the bottom edge instead of floating 60px up. Assert EVERY calc-lift rule
+    # carries the higher-specificity visible-peek gate.
+    lift_selectors = re.findall(
+        r"([^{}]*?)\{[^{}]*bottom:\s*calc\(60px \+ 18px\)[^{}]*\}", html
+    )
+    assert lift_selectors, "the bottom-bar peek-clearing lift must render"
+    for sel in lift_selectors:
+        assert ":has(" in sel and 'data-current-snap="peek"' in sel, (
+            "every .workspace-bottom-bar calc(60px + 18px) lift must be gated "
+            "on a visible peek sheet via the higher-specificity "
+            ":has(.portrait-sheet[data-current-snap=\"peek\"]) selector, so it "
+            "both wins the cascade by specificity and rests at the bottom edge "
+            f"when no sheet is present (#2462 AC2); ungated selector: {sel.strip()!r}"
+        )
+
     # No independently-positioned fixed element with `bottom` remains outside
     # the composed bar — the floating Operator pill is gone from the edge. The
     # rendered toggle element and its fixed-position CSS rule must both be
