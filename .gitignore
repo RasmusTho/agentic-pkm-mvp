@@ -43,12 +43,25 @@ tmp/index-outbox.jsonl
 /tmp/
 *.jsonl
 tmp/index.jsonl
-runtime/settings/
-runtime/builderops/
-runtime/dispatcher/
-runtime/orientation/
-runtime/panel/
-runtime/agent_memory/
+# Runtime artifact dirs. Anchored to each known project root that produces them
+# rather than a broad **/runtime/<sub>/ glob: an un-anchored glob would also match
+# the tracked source/test trees app/runtime/ and tests/runtime/ and silently hide
+# any future file added under e.g. tests/runtime/panel/ or app/runtime/settings/.
+# Repo root:
+/runtime/settings/
+/runtime/builderops/
+/runtime/dispatcher/
+/runtime/orientation/
+/runtime/panel/
+/runtime/agent_memory/
+# companion-ui/companion-app (companion_ui tests run from this cwd and write
+# runtime/panel/panel_confirmation.sqlite3 etc. relative to it):
+/companion-ui/companion-app/runtime/settings/
+/companion-ui/companion-app/runtime/builderops/
+/companion-ui/companion-app/runtime/dispatcher/
+/companion-ui/companion-app/runtime/orientation/
+/companion-ui/companion-app/runtime/panel/
+/companion-ui/companion-app/runtime/agent_memory/
 # Promotion-plan receipts are local ops artifacts, not repo truth (#2081).
 # Scoped to ops/promotions/ only — tracked ops/** siblings (benchmarks, observability, quality) stay tracked.
 ops/promotions/
