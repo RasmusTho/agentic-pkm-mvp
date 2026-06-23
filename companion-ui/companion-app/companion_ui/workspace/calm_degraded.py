@@ -171,3 +171,152 @@ def is_mapped_token(token: object) -> bool:
     """True when ``token`` has an explicit entry in the enum map."""
     text = "" if token is None else str(token).strip()
     return text in _ENUM_MAP
+
+
+# ---------------------------------------------------------------------------
+# Agent-lane labeling (CUIDR-08 / C2).
+#
+# The two agent lanes differ on the single most trust-critical dimension in the
+# system — whether applying an action is *recorded* (produces a durable
+# receipt). That distinction is stated here in plain words so no surface infers
+# it from colour or button count. The lane itself is server-authoritative and
+# arrives in the runtime payload; this module only maps the declared lane token
+# to its label, exactly as the enum map does for degraded reasons.
+# ---------------------------------------------------------------------------
+
+#: The body-edit lane (S2): an in-memory edit to the active note body. Not
+#: recorded — no durable receipt is produced.
+LANE_BODY_EDIT: Final[str] = "body_edit"
+#: The governed lane (S3): a governed proposal whose Apply writes to the vault
+#: and produces a durable receipt.
+LANE_GOVERNED: Final[str] = "governed"
+
+#: Mandatory label line for a body-edit-lane card. The recorded/not-recorded
+#: distinction is the headline text on the card.
+LANE_LABEL_BODY_EDIT: Final[str] = "Apply · not recorded (no receipt)"
+#: Mandatory label line for a governed-lane card.
+LANE_LABEL_GOVERNED: Final[str] = "Apply → vault change → receipt"
+
+#: Fixed Defer consequence line. Prevents "Defer" from being a mystery action.
+#: This is a presentation string (not server-supplied) per the spec.
+DEFER_CONSEQUENCE: Final[str] = (
+    "Deferred proposals return the next time this note is active."
+)
+
+
+def lane_label(lane: object = None, *, governed: object = None) -> str:
+    """Map a server-declared agent lane to its recorded/not-recorded label.
+
+    The lane is sourced from the runtime payload's ``lane`` token (preferred) or
+    its boolean ``governed`` field; this function never infers the lane from
+    colour, button count, or proposal content. Resolution order:
+
+    - an explicit ``lane`` token (``"governed"`` / ``"body_edit"``) wins;
+    - otherwise the boolean ``governed`` flag selects the governed/body-edit
+      label;
+    - with neither declared, the governed label is returned, because the
+      surfaces that call this without a lane (the Panel rail / palette) *are* the
+      governed lane by construction — this is not a client-side classification,
+      it is the default label for an already-governed surface.
+    """
+    token = "" if lane is None else str(lane).strip().lower()
+    if token in {LANE_GOVERNED, "governed", "vault", "vault_change"}:
+        return LANE_LABEL_GOVERNED
+    if token in {LANE_BODY_EDIT, "body-edit", "body", "suggestion"}:
+        return LANE_LABEL_BODY_EDIT
+    if governed is not None:
+        return LANE_LABEL_GOVERNED if bool(governed) else LANE_LABEL_BODY_EDIT
+    return LANE_LABEL_GOVERNED
+
+
+# ---------------------------------------------------------------------------
+# Blocked-proposal reason + recourse (CUIDR-08 / A3).
+#
+# A WriteGuard-held proposal presents calm (held, not red) but must state, in
+# plain language, *why* the hold fired and *what would unblock it*. The reason
+# humanises the runtime ``block_reason.gate`` enum (or renders the supplied
+# ``message`` as-is); the recourse uses the runtime ``recourse`` field when
+# present, otherwise a per-gate canonical fallback. Neither collapses to a mute
+# "unavailable" dead end.
+# ---------------------------------------------------------------------------
+
+#: Calm fallback when the runtime declares a block but supplies no detail.
+BLOCKED_REASON_FALLBACK: Final[str] = (
+    "Proposal held — details unavailable. Nothing was mutated."
+)
+BLOCKED_RECOURSE_FALLBACK: Final[str] = (
+    "No action is needed now; the hold clears on its own or via an operator."
+)
+
+# Per-gate human reason + canonical recourse fallback. The gate value is
+# server-declared; an unmapped gate falls back to the calm grammar so a new
+# runtime gate enum never leaks raw.
+_BLOCK_GATE_COPY: Final[dict[str, tuple[str, str]]] = {
+    "writeguard": (
+        "Writes are temporarily held while the system is in safe mode.",
+        "Writes resume automatically once safe mode clears. "
+        "No action is needed now.",
+    ),
+    "safe-mode": (
+        "Writes are temporarily held while the system is in safe mode.",
+        "Writes resume automatically once safe mode clears. "
+        "No action is needed now.",
+    ),
+    "stale-source": (
+        "The note changed since this proposal was prepared, so it is held.",
+        "Reopen the note to prepare a fresh proposal against the current text.",
+    ),
+    "identity-mismatch": (
+        "This proposal targets a different version of the note than the one "
+        "open now, so it is held.",
+        "Reopen the intended note; the proposal re-prepares against it.",
+    ),
+    "same-turn": (
+        "This proposal cannot be confirmed in the same interaction it was "
+        "raised.",
+        "Confirm it on the next interaction; nothing was mutated.",
+    ),
+    "already-confirmed": (
+        "This proposal was already confirmed, so it cannot be applied again.",
+        "No action is needed — the recorded receipt already reflects the "
+        "change.",
+    ),
+}
+
+
+def blocked_reason(block_reason: object) -> str:
+    """Plain-language reason a proposal is held, humanised from the payload.
+
+    ``block_reason`` is the runtime's server-declared block object. The reason
+    is sourced, in order: the per-gate human copy for a known ``gate`` enum; an
+    explicit ``message`` field rendered as-is; otherwise the calm fallback
+    (:data:`BLOCKED_REASON_FALLBACK`). An unknown gate never leaks raw — it
+    falls back to the supplied message or the calm grammar.
+    """
+    block = block_reason if isinstance(block_reason, dict) else {}
+    gate = str(block.get("gate") or "").strip().lower()
+    mapped = _BLOCK_GATE_COPY.get(gate)
+    if mapped is not None:
+        return mapped[0]
+    message = str(block.get("message") or "").strip()
+    if message:
+        return message
+    return BLOCKED_REASON_FALLBACK
+
+
+def blocked_recourse(block_reason: object) -> str:
+    """Plain-language next step / recourse for a held proposal.
+
+    Sourced, in order: an explicit ``recourse`` field from the runtime payload;
+    the per-gate canonical recourse for a known ``gate`` enum; otherwise the calm
+    fallback (:data:`BLOCKED_RECOURSE_FALLBACK`).
+    """
+    block = block_reason if isinstance(block_reason, dict) else {}
+    recourse = str(block.get("recourse") or "").strip()
+    if recourse:
+        return recourse
+    gate = str(block.get("gate") or "").strip().lower()
+    mapped = _BLOCK_GATE_COPY.get(gate)
+    if mapped is not None:
+        return mapped[1]
+    return BLOCKED_RECOURSE_FALLBACK

@@ -63,10 +63,14 @@ from companion_ui.renderer import (
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
 from companion_ui.workspace.calm_degraded import (
+    DEFER_CONSEQUENCE,
     NOTHING_LOST,
+    blocked_reason,
+    blocked_recourse,
     calm_degraded,
     humanise_degraded_reason,
     humanise_token,
+    lane_label,
 )
 from companion_ui.workspace.capture_modal import (
     capture_modal_markup,
@@ -5015,6 +5019,51 @@ def _render_panel_proposal_rows(
                 f'data-affordance-status="{affordance_status}">'
                 f"{_e(proposal_status)} proposal unavailable</span>"
             )
+        # C2 — lane label (CUIDR-08). The recorded/not-recorded distinction is
+        # the headline of the card: rendered above the description. The lane is
+        # server-declared (`lane` token / `governed` flag); the Panel rail is
+        # the governed lane by construction, so an absent declaration defaults
+        # to the governed label — never inferred from colour or button count.
+        lane_label_text = lane_label(
+            proposal.get("lane"), governed=proposal.get("governed")
+        )
+        lane_label_html = (
+            '<div class="panel-proposal-lane-label" data-testid="lane-label" '
+            f'data-lane="{_e(str(proposal.get("lane") or "governed"))}">'
+            f"{_e(lane_label_text)}</div>"
+        )
+        # C2 — Defer consequence: a fixed presentation string adjacent to the
+        # Defer (correct) button so Defer is not a mystery action.
+        defer_consequence_html = ""
+        if "correct" in enabled_affordances:
+            defer_consequence_html = (
+                '<div class="panel-proposal-defer-consequence" '
+                'data-testid="defer-consequence">'
+                f"{_e(DEFER_CONSEQUENCE)}</div>"
+            )
+        # A3 — blocked reason + recourse (CUIDR-08). A guard-held proposal stays
+        # calm (held, not red) but states *why* it is held and *what unblocks
+        # it*, humanised from the server-declared block payload — never a mute
+        # "unavailable" dead end. block_reason is server-authoritative.
+        blocked_recourse_html = ""
+        if writeguard_blocked:
+            block_payload = proposal.get("block_reason") or {}
+            reason_text = blocked_reason(block_payload)
+            recourse_text = blocked_recourse(block_payload)
+            blocked_recourse_html = (
+                '<div class="panel-proposal-blocked" '
+                'data-testid="workspace-panel-proposal-blocked" '
+                'data-guard-held="true" '
+                f'data-guard-gate="{_e(str(block_payload.get("gate") or "writeguard"))}">'
+                '<span class="panel-blocked-reason-label">Why:</span> '
+                '<span data-testid="palette-blocked-reason">'
+                f"{_e(reason_text)}</span>"
+                '<span class="panel-blocked-recourse-label">'
+                "What unblocks this:</span> "
+                '<span data-testid="palette-blocked-recourse">'
+                f"{_e(recourse_text)}</span>"
+                "</div>"
+            )
         rows.append(
             f"""
         <div
@@ -5024,10 +5073,12 @@ def _render_panel_proposal_rows(
           data-affordance-status="{affordance_status}"
           data-proposal-id="{proposal_id}"
           data-artifact-id="{artifact_id}">
+          {lane_label_html}
           <div class="panel-section-title">{_e(proposal.get("description", ""))}</div>
           {provenance_html if proposal_available else ""}
           {origin_html}
           {reflected_receipt_html}
+          {blocked_recourse_html}
           <div class="panel-proposal-meta">
             <span data-testid="workspace-panel-proposal-id">{_e(humanise_token(proposal.get("proposal_id", "")))}</span>
             <span data-testid="workspace-panel-artifact-id">{_e(humanise_token(proposal.get("artifact_id", "")))}</span>
@@ -5042,6 +5093,7 @@ def _render_panel_proposal_rows(
           <div class="panel-proposal-affordances panel-action-row">
             {buttons}
           </div>
+          {defer_consequence_html}
         </div>"""
         )
     return "\n".join(rows)
@@ -5091,10 +5143,18 @@ def _render_panel_confirm_response(response: dict) -> str:
                 "Same-turn confirmation is not allowed. "
                 "The proposal must be confirmed in a later interaction."
             )
+        # A3 (CUIDR-08): a blocked confirm carries a plain-language reason and an
+        # explicit recourse humanised from the server-declared block payload.
+        reason_text = blocked_reason(block_reason)
+        recourse_text = blocked_recourse(block_reason)
         blocked_html = f"""
           <div class="panel-confirm-blocked" data-testid="workspace-panel-blocked-reason">
             <span data-testid="workspace-panel-block-gate">{_e(block_reason.get("gate") or "unknown")}</span>
             <span data-testid="workspace-panel-block-message">{_e(message)}</span>
+            <span class="panel-blocked-reason-label">Why:</span>
+            <span data-testid="palette-blocked-reason">{_e(reason_text)}</span>
+            <span class="panel-blocked-recourse-label">What unblocks this:</span>
+            <span data-testid="palette-blocked-recourse">{_e(recourse_text)}</span>
           </div>"""
     return f"""
         <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response">
@@ -10719,6 +10779,34 @@ def render_index_html(
     }}
     .panel-section[data-section-state="active"] .panel-section-title {{
       color: var(--au-proposal);
+    }}
+    /* C2 — the recorded/not-recorded lane label is the card headline: larger
+       weight and accent than the description line below it. */
+    .panel-proposal-lane-label {{
+      color: var(--fg-1);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }}
+    .panel-proposal-defer-consequence {{
+      color: var(--fg-3);
+      font-size: 12px;
+      margin-top: 4px;
+    }}
+    /* A3 — calm held-state reason + recourse block. Non-red, no alarm. */
+    .panel-proposal-blocked {{
+      color: var(--fg-2);
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 6px 0;
+    }}
+    .panel-proposal-blocked .panel-blocked-reason-label,
+    .panel-proposal-blocked .panel-blocked-recourse-label {{
+      color: var(--fg-3);
+      display: block;
+      margin-top: 4px;
     }}
     .panel-section-provenance {{
       color: var(--fg-3);
