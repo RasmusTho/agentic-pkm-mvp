@@ -1872,31 +1872,83 @@ def _render_note_section(fields: dict) -> str:
     # orientation step), not when it is the idle/empty recall payload (#1419).
     _reorient = fields.get("reorient_sections") or {}
     reorient_actionable = any(_reorient.get(name) for name in _reorient)
-    # Commitments count as actionable when the surface has something the human
-    # should see now: active commitments (populated) or an honest degraded /
-    # not-shown notice. A healthy-empty surface stays idle (#2075).
+    # Commitments are read-only responsibilities the user must still *see*
+    # (delivered commitment-surfacing contract, #1960/#2075). Only the
+    # ``populated`` state carries active next/waiting/review items — the
+    # ``empty``/``not-shown``/``degraded`` states are confident-zero or
+    # availability cues, i.e. non-content, and stay ambient. This mirrors the
+    # reorient "real items only" rule above (Codex P1).
     _commitments = fields.get("commitments_surface") or {}
-    commitments_actionable = str(_commitments.get("state") or "") in {
-        "populated",
-        "degraded",
-        "not-shown",
-    }
-    rail_actionable = bool(
-        rail_safety_critical
-        or proposal_count > 0
-        or bool(panel_proposals)
-        or bool(_panel_last_response)
-        or canvas_session_state_raw not in {"idle", "", "unknown"}
-        or panel_state_raw not in {"idle", "", "unknown"}
-        or bool(panel_message_raw)
-        or len(fields.get("find_candidates") or []) > 0
-        or reorient_actionable
-        or len(fields.get("resurface_candidates") or []) > 0
-        or commitments_actionable
-        or len(fields.get("governance_receipts") or []) > 0
-        or len(fields.get("suggestion_cards") or []) > 0
-        or str(fields.get("suggestion_state", "idle") or "idle") not in {"idle", "", "unknown"}
+    commitments_actionable = (
+        str(_commitments.get("state") or "") == "populated"
     )
+    # Find / Resurface candidate payloads are shipped read-side content the user
+    # can act on (a Find result to open, a why-now Resurface candidate). A
+    # *non-empty* candidate list is content — it must not collapse into the
+    # ambient strip where ``.rail-placeholder-body`` is hidden. (The doc's
+    # "find unavailable / resurface degraded stay ambient" refers to the
+    # unavailable/degraded states, i.e. an *empty* list, not populated results.)
+    # This mirrors the pre-CUIDR-03 ``_render_rail_empty_state`` contract, which
+    # already treated non-zero find/resurface counts as active (Codex P2).
+    candidates_actionable = (
+        len(fields.get("find_candidates") or []) > 0
+        or len(fields.get("resurface_candidates") or []) > 0
+    )
+    # CUIDR-03 (#2446) — rail ambient-until-active. The rail earns its width
+    # only when it carries something the reader must act on. The governing
+    # contract is: active iff the payload declares at least one suggestion,
+    # proposal, or receipt. Safety-critical and actionable-orientation states
+    # (WriteGuard blocked, canvas recovery/conflict, reorient with real items,
+    # a visible Panel block/no-match message, populated commitments, non-empty
+    # Find/Resurface candidate payloads)
+    # stay expanded too — the binding forewarning on the spec PR — because
+    # collapsing them into the ambient strip would hide a write block, a
+    # recovery prompt, the user's active responsibilities, or surfaced
+    # read-side candidates. Presentation
+    # only: every input below is a runtime-
+    # declared payload field; the render never reclassifies or invents content.
+    rail_has_proposal = proposal_count > 0 or bool(panel_proposals)
+    rail_has_receipt = (
+        bool(_panel_last_response)
+        or len(fields.get("governance_receipts") or []) > 0
+    )
+    # A suggestion is *content* only when there is an actual staged suggestion
+    # to act on — a suggestion card, or a staged suggestion state. The
+    # preparatory / non-content state-machine values ("thinking", "blocked",
+    # "idle"/""/"unknown") are not content: CUIDR-03 has no intermediate or
+    # "loading" expanded rail, so they must stay ambient. This mirrors the
+    # render's own ``_is_suggestion_idle`` content semantics
+    # (_render_suggestion_flow_region).
+    _suggestion_state = str(fields.get("suggestion_state", "idle") or "idle")
+    rail_has_suggestion = (
+        len(fields.get("suggestion_cards") or []) > 0
+        or _suggestion_state.startswith("staged")
+    )
+    # A Panel that carries a human-facing message (a blocked reason, a
+    # no-match reason, or any first-class visible Panel failure state) is
+    # content the user must see — it is the Panel-side analogue of a WriteGuard
+    # block. Treat a non-empty Panel message, and the explicit blocked state, as
+    # a visibility-critical override so the reason is never hidden behind the
+    # ambient strip's collapsed body (Codex P2). Transient/no-message states
+    # (running, idle) are not content and stay ambient.
+    rail_panel_message_present = panel_state_raw == "blocked" or bool(panel_message_raw)
+    rail_actionable = bool(
+        rail_has_proposal
+        or rail_has_receipt
+        or rail_has_suggestion
+        # Safety-critical / actionable-orientation overrides (must never
+        # collapse into the ambient strip even with no suggestion/proposal/
+        # receipt).
+        or rail_safety_critical
+        or rail_panel_message_present
+        or reorient_actionable
+        or commitments_actionable
+        or candidates_actionable
+    )
+    # The ambient/active decision is carried on the layout grid as
+    # ``data-rail-state`` so CSS can reclaim the rail column width for the note
+    # column when the rail is ambient (the note becomes the widest column).
+    rail_layout_state = "active" if rail_actionable else "ambient"
     rail_posture_token = "active" if rail_actionable else "idle"
     if rail_safety_critical:
         rail_posture_copy = "Companion &middot; needs attention"
@@ -2099,7 +2151,7 @@ def _render_note_section(fields: dict) -> str:
         )
 
     return f"""
-  <div class="workspace-layout workspace-layout--three-col">
+  <div class="workspace-layout workspace-layout--three-col" data-rail-state="{rail_layout_state}">
     {left_context_panel_html}
     <div class="workspace-main">
       {workspace_header_strip_html}
@@ -8068,11 +8120,55 @@ def render_index_html(
       min-height: 0;
       overflow: hidden;
     }}
-    /* Left-pane layout: vault browser left, note center, agent-rail right */
+    /* Left-pane layout: vault browser left, note center, agent-rail right.
+
+       CUIDR-03 (#2446) — rail ambient-until-active. The rail column only earns
+       its full width when it carries something to act on. In the ambient state
+       it demotes to a thin presence strip and the note (centre) column reclaims
+       the reclaimed width, becoming unambiguously the widest column. The
+       active/ambient switch is data-driven off ``data-rail-state`` set on this
+       element by the render path. */
     .workspace-layout--three-col {{
       display: grid;
       grid-template-columns: 280px 1fr 320px;
       grid-template-rows: 1fr;
+    }}
+    .workspace-layout--three-col[data-rail-state="active"] {{
+      grid-template-columns: 280px 1fr 320px;
+    }}
+    .workspace-layout--three-col[data-rail-state="ambient"] {{
+      /* Thin ambient strip: the rail keeps a minimal presence cue, the note
+         column (1fr) absorbs the reclaimed ~264px and is the widest region. */
+      grid-template-columns: 280px 1fr 56px;
+    }}
+    /* In the ambient strip the rail header / posture line / sub-module details
+       collapse to a quiet vertical cue — no idle header copy, no card stack
+       claiming reading width. The content stays in the DOM (presence cue +
+       state contract) but is visually demoted. */
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail {{
+      width: 56px;
+      overflow: hidden;
+    }}
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-header,
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-posture,
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .rail-placeholder-body,
+    /* The open-loops orientation CTA sits outside .rail-placeholder-body; it is
+       orientation metadata, not a suggestion/proposal/receipt, so it does not
+       force the rail active and must not survive as a clipped button in the
+       thin ambient strip (Codex P3). */
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail .panel-rail-open-loops {{
+      display: none;
+    }}
+    /* A minimal always-present vertical presence cue so the user can still see
+       a companion surface exists in the ambient strip. */
+    .workspace-layout--three-col[data-rail-state="ambient"] .agent-rail::before {{
+      content: "";
+      display: block;
+      width: 4px;
+      height: 28px;
+      margin: 16px auto 0;
+      border-radius: 2px;
+      background: var(--agent-muted);
     }}
     .vault-browser-left-pane {{
       background: var(--bg-surface);
@@ -10216,7 +10312,12 @@ def render_index_html(
         font-size: var(--text-xs);
         padding: 4px 10px;
       }}
-      .workspace-layout--three-col {{
+      /* Match the [data-rail-state] specificity (0,2,0) so the single-column
+         override wins over the CUIDR-03 ambient/active grid rules on narrow
+         viewports; a plain class selector (0,1,0) would lose and leave the
+         note crushed into the first 280px track (Codex P1). */
+      .workspace-layout--three-col[data-rail-state="active"],
+      .workspace-layout--three-col[data-rail-state="ambient"] {{
         grid-template-columns: 1fr;
       }}
       .vault-browser-left-pane, .agent-rail {{
@@ -10240,8 +10341,12 @@ def render_index_html(
       }}
       /* Collapse three-col grid to single-column on narrow viewports.
          The 280px left pane and 320px agent-rail would otherwise crush the note
-         center column behind overflow:hidden (Codex P1 review finding). */
-      .workspace-layout--three-col {{
+         center column behind overflow:hidden (Codex P1 review finding).
+         Qualified with [data-rail-state] to match the CUIDR-03 ambient/active
+         rules' specificity (0,2,0); a plain class selector would lose and keep
+         the 3-column template, re-crushing the note (Codex P1, re-review). */
+      .workspace-layout--three-col[data-rail-state="active"],
+      .workspace-layout--three-col[data-rail-state="ambient"] {{
         grid-template-columns: 1fr;
       }}
       .vault-browser-left-pane {{

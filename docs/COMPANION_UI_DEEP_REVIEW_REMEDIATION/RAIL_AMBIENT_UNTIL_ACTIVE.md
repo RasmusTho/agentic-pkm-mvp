@@ -26,12 +26,48 @@ Changes the render path for the right companion rail so it has exactly two visua
 - **Active** — full rail width, rendered only when the payload contains at least one suggestion,
   proposal, or receipt.
 
-The switch between states is governed by a single contract: `rail_is_active iff
-len(suggestions) + len(proposals) + len(receipts) >= 1`. Nothing else controls it.
+The switch between states is governed by one content rule plus a small, closed set of
+visibility-critical overrides:
 
-This is a **presentation-only** change. Which proposals, suggestions, and receipts exist is still
-declared by the runtime payload. The rail renders what it receives; it never reclassifies or
-invents content.
+```
+rail_is_active iff
+    len(suggestions) + len(proposals) + len(receipts) >= 1   # the content rule
+    OR any visibility-critical override is set                # never hidden in the strip
+```
+
+**The content rule** is the primary contract: the rail earns its width when the payload carries at
+least one suggestion, proposal, or receipt. Nothing about ordinary capability/availability state
+(canvas idle/disabled, find unavailable, resurface degraded, a "thinking"/"blocked" suggestion
+state with no staged card, an open-loops count) controls it — those stay ambient.
+
+**The visibility-critical overrides** keep the rail expanded even with zero
+suggestions/proposals/receipts, because collapsing them into the ambient strip would *hide a state
+the user must see*. This exception set is closed and enumerated — it is not "anything non-idle":
+
+- WriteGuard `blocked` — a write was refused; the reason must be visible.
+- Canvas `recovery_needed` / conflict — an unsaved-edit recovery or conflict prompt.
+- A Panel that carries a human-facing message — a `blocked` state, a `no-match` reason, or any
+  first-class visible Panel failure mapped into `panel_render.message`. (A non-empty Panel message
+  is the trigger; transient no-message states such as `running`/`idle` stay ambient.)
+- An actionable `reorient_sections` payload with real items (an orientation step the user can act
+  on); an empty-section reorient payload stays ambient.
+- A `populated` `commitments_surface` — the user's active next/waiting/review responsibilities,
+  shown read-only (delivered commitment-surfacing contract). The `empty`/`not-shown`/`degraded`
+  commitment states are confident-zero or availability cues, not content, and stay ambient.
+- A non-empty Find or Resurface candidate payload (`find_candidates` / `resurface_candidates`) —
+  shipped read-side content the user can act on (a result to open, a why-now candidate). An *empty*
+  candidate list (find unavailable / resurface degraded) stays ambient; the trigger is non-empty
+  results, not the section's mere presence.
+
+The overrides exist because the ambient strip *collapses the rail header and body to a thin
+presence cue* — any state rendered only inside that body would otherwise become invisible. They do
+not relax the content rule for ordinary idle states; they are the exhaustive list of states whose
+visibility is safety/clarity-critical. (This set was made binding by the Codex review of the spec
+PR; collapsing any of them is a regression — see `tests/companion_ui/test_right_rail_compaction.py`.)
+
+This is a **presentation-only** change. Which proposals, suggestions, receipts, messages, and guard
+states exist is still declared by the runtime payload. The rail renders what it receives; it never
+reclassifies or invents content.
 
 ## Concretely
 
@@ -77,14 +113,23 @@ the widest, highest-contrast region on screen.
   `tests/companion_ui/test_right_rail_compaction.py` — extend or add
   `test_idle_shell_rail_is_ambient_strip` and `test_active_payload_expands_rail`.
 
-**Rail-active-contract AC** — A single explicit rule governs expand/collapse: the rail is active
-if and only if the payload carries at least one suggestion, proposal, or receipt. There is no state
-where content exists but the rail renders ambient.
+**Rail-active-contract AC** — An explicit, closed rule governs expand/collapse: the rail is active
+if and only if the payload carries at least one suggestion, proposal, or receipt, **or** one of the
+enumerated visibility-critical overrides is set (WriteGuard blocked, canvas recovery/conflict, a
+Panel carrying a human-facing message, an actionable reorient with items, populated commitments, a
+non-empty Find/Resurface candidate payload).
+There is no state where
+content — or a visibility-critical reason — exists but the rail renders ambient, and no ordinary
+idle/capability state forces the rail active.
 
 - Verify: parametrize over (suggestion present, proposal present, receipt present, all absent) and
-  assert the rail's rendered state matches the contract in each case.
-  `tests/companion_ui/test_right_rail_compaction.py` — add
-  `test_rail_active_contract_parametrized`.
+  assert the rail's rendered state matches the content rule; separately assert each override keeps
+  the rail active with no suggestion/proposal/receipt, and that non-content states
+  (`thinking`/`blocked` suggestion with no card, open-loops count, idle Panel) stay ambient.
+  `tests/companion_ui/test_right_rail_compaction.py` — `test_rail_active_contract_parametrized`,
+  `test_safety_critical_states_stay_active_without_content`,
+  `test_panel_blocked_state_keeps_rail_active`, `test_panel_no_match_state_keeps_rail_active`,
+  `test_open_loops_cta_hidden_in_ambient_strip`.
 
 ## How to Verify (Pre-Merge)
 
