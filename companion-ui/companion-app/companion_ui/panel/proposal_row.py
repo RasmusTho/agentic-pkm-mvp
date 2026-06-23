@@ -83,6 +83,16 @@ class ProposalRow:
     # the UI invents no receipt and infers no success. None unless the server
     # supplied a reflected-receipt posture for this proposal.
     reflected_receipt: Optional[dict] = None
+    # Server-declared lane / governance posture and blocked-recourse payload
+    # (CUIDR-08). These are presentation inputs the rail + palette humanise into
+    # the recorded/not-recorded lane label and the blocked reason/recourse copy.
+    # The lane is server-authoritative — the UI never re-classifies it. None when
+    # the runtime did not declare them: an absent lane defaults to the governed
+    # label downstream (the rail/palette are the governed lane by construction)
+    # and an absent block_reason yields the calm fallback.
+    lane: Optional[str] = None
+    governed: Optional[bool] = None
+    block_reason: Optional[dict] = None
 
     def __post_init__(self) -> None:
         if not self.proposal_id:
@@ -108,7 +118,7 @@ class ProposalRow:
 
     def as_render_dict(self) -> dict:
         """Return a serialisable dict for UI layer consumption."""
-        return {
+        render: dict = {
             "proposal_id": self.proposal_id,
             "artifact_id": self.artifact_id,
             "description": self.description,
@@ -122,6 +132,16 @@ class ProposalRow:
                 "reject": self.can_reject(),
             },
         }
+        # Thread the server-declared lane / governed / block_reason through so
+        # the rail + palette label cards from runtime truth (CUIDR-08). Only
+        # emitted when the runtime declared them — the UI never invents a lane.
+        if self.lane is not None:
+            render["lane"] = self.lane
+        if self.governed is not None:
+            render["governed"] = self.governed
+        if self.block_reason:
+            render["block_reason"] = self.block_reason
+        return render
 
 
 @dataclass

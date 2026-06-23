@@ -33,7 +33,13 @@ from __future__ import annotations
 import html as _html
 from typing import Any, Optional
 
-from companion_ui.workspace.calm_degraded import humanise_token
+from companion_ui.workspace.calm_degraded import (
+    DEFER_CONSEQUENCE,
+    blocked_reason,
+    blocked_recourse,
+    humanise_token,
+    lane_label,
+)
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
     guidance_toggle_markup,
@@ -78,7 +84,15 @@ def palette_row_model(
     evidence = proposal.get("evidence") or {}
     affordances = proposal.get("affordances") or {}
     status = str(proposal.get("status") or "staged")
-    available = status in {"staged", "corrected"} and not writeguard_blocked
+    block_payload = proposal.get("block_reason") or {}
+    # A3 (CUIDR-08): a proposal can be held by the GLOBAL WriteGuard banner OR by
+    # a proposal-level `status:"blocked"` (e.g. stale-source, identity-mismatch,
+    # same-turn) while the global guard is OK. Treat both as guard-held so the
+    # palette held row carries the reason/recourse rather than collapsing to the
+    # mute "unavailable" dead end. The block classification is server-declared.
+    proposal_blocked = status == "blocked" or bool(block_payload)
+    guard_held = writeguard_blocked or proposal_blocked
+    available = status in {"staged", "corrected"} and not guard_held
     actions: tuple[str, ...] = (
         tuple(label for label in _ACTION_ORDER if affordances.get(label))
         if available
@@ -94,8 +108,18 @@ def palette_row_model(
         "action_class": action_class,
         "status": status,
         "available": available,
-        "guard_held": writeguard_blocked,
+        "guard_held": guard_held,
         "actions": actions,
+        # C2 — lane label (CUIDR-08): server-declared `lane` token / `governed`
+        # flag, never inferred from colour or button count. The palette presents
+        # the governed Panel lane, so an absent declaration defaults to the
+        # governed label.
+        "lane": str(proposal.get("lane") or "governed"),
+        "lane_label": lane_label(
+            proposal.get("lane"), governed=proposal.get("governed")
+        ),
+        # A3 — server-declared block payload for the held-state reason/recourse.
+        "block_reason": block_payload,
         # Filter haystack (simple substring grammar; package Q12 deferred).
         # Include the humanised action-class label so typing the *visible* text
         # (e.g. "Move note") matches the row even when the description does not
@@ -140,13 +164,26 @@ def _row_actions_html(row: dict[str, Any]) -> str:
         # Calm guard-held affordance (BLOCKED_AND_STALE_STATE_SPEC.md
         # §Blocked — WriteGuard / policy): named gate, intent preserved,
         # nothing mutated — never a dead button, never an alarm.
+        # A3 (CUIDR-08): the held row now also states *why* it is held and
+        # *what unblocks it*, humanised from the server-declared block payload.
+        block_payload = row.get("block_reason") or {}
+        gate = _e(str(block_payload.get("gate") or "writeguard"))
+        reason_text = blocked_reason(block_payload)
+        recourse_text = blocked_recourse(block_payload)
         return (
             '<span class="palette-proposal-held" '
             'data-testid="palette-proposal-held" '
             'data-guard-held="true" '
-            'data-guard-gate="writeguard" '
+            f'data-guard-gate="{gate}" '
             f'data-proposal-id="{proposal_id}">'
-            "guard-held — intent preserved; nothing was mutated</span>"
+            "guard-held — intent preserved; nothing was mutated"
+            '<span class="palette-held-reason" '
+            'data-testid="palette-blocked-reason">'
+            f"{_e(reason_text)}</span>"
+            '<span class="palette-held-recourse" '
+            'data-testid="palette-blocked-recourse">'
+            f"{_e(recourse_text)}</span>"
+            "</span>"
         )
     if not row["available"]:
         return (
@@ -201,6 +238,22 @@ def _rows_html(rows: list[dict[str, Any]]) -> str:
         )
     items: list[str] = []
     for row in rows:
+        # C2 — lane label: the recorded/not-recorded headline, rendered first
+        # (most prominent) on the row, above the description.
+        lane_label_html = (
+            '<span class="palette-row-lane-label" data-testid="lane-label" '
+            f'data-lane="{_e(str(row.get("lane") or "governed"))}">'
+            f"{_e(str(row.get('lane_label') or ''))}</span>"
+        )
+        # C2 — Defer consequence: fixed string adjacent to a Defer (correct)
+        # action so Defer is not a mystery; only when the row offers Defer.
+        defer_consequence_html = ""
+        if "correct" in row.get("actions", ()):
+            defer_consequence_html = (
+                '<span class="palette-row-defer-consequence" '
+                'data-testid="defer-consequence">'
+                f"{_e(DEFER_CONSEQUENCE)}</span>"
+            )
         items.append(
             '<li class="palette-proposal-row" '
             'data-testid="palette-proposal-row" '
@@ -208,13 +261,16 @@ def _rows_html(rows: list[dict[str, Any]]) -> str:
             f'data-artifact-id="{_e(row["artifact_id"])}" '
             f'data-proposal-status="{_e(row["status"])}" '
             f'data-action-class="{_e(row["action_class"])}" '
+            f'data-lane="{_e(str(row.get("lane") or "governed"))}" '
             f'data-filter-text="{_e(row["filter_text"])}">'
+            f"{lane_label_html}"
             f'<span class="palette-row-desc">{_e(row["description"])}</span>'
             '<span class="palette-row-class" '
             f'data-testid="palette-proposal-class">{_e(humanise_token(row["action_class"]))}</span>'
             '<span class="palette-row-status" '
             f'data-testid="palette-proposal-status">{_e(row["status"])}</span>'
             f'<span class="palette-row-actions">{_row_actions_html(row)}</span>'
+            f"{defer_consequence_html}"
             "</li>"
         )
     return "".join(items)
@@ -227,17 +283,26 @@ def _blocked_html(response: dict[str, Any]) -> str:
     BLOCKED_AND_STALE_STATE_SPEC.md: gate named, reason shown, intent
     preserved — distinct from a generic failure treatment.
     """
-    block_reason = response.get("block_reason") or {}
-    if str(response.get("status") or "") != "blocked" or not block_reason:
+    # A blocked response is server-authoritative on `status` alone. When the
+    # runtime omits `block_reason`, fall through to the calm fallback helpers
+    # (blocked_reason({}) / blocked_recourse({})) so a blocked-without-detail
+    # still renders a calm blocked card + recourse instead of nothing.
+    block_payload = response.get("block_reason") or {}
+    if str(response.get("status") or "") != "blocked":
         return ""
-    gate = str(block_reason.get("gate") or "unknown")
-    message = str(block_reason.get("message") or "")
+    gate = str(block_payload.get("gate") or "unknown")
+    message = str(block_payload.get("message") or "")
     # Mirror the rail's same-turn message normalization exactly.
     if gate == "same-turn" or "same-turn" in message.lower():
         message = (
             "Same-turn confirmation is not allowed. "
             "The proposal must be confirmed in a later interaction."
         )
+    # A3 (CUIDR-08): the blocked card now carries a plain-language reason and an
+    # explicit recourse, humanised from the server-declared block payload — no
+    # mute "unavailable" dead end.
+    reason_text = blocked_reason(block_payload)
+    recourse_text = blocked_recourse(block_payload)
     return (
         '<div class="palette-blocked" data-testid="palette-blocked" '
         'data-guard-held="true" '
@@ -245,6 +310,10 @@ def _blocked_html(response: dict[str, Any]) -> str:
         f'data-proposal-id="{_e(response.get("proposal_id") or "")}">'
         f'<span data-testid="palette-blocked-gate">{_e(gate)}</span>'
         f'<span data-testid="palette-blocked-message">{_e(message)}</span>'
+        '<span class="palette-blocked-reason-label">Why:</span> '
+        f'<span data-testid="palette-blocked-reason">{_e(reason_text)}</span>'
+        '<span class="palette-blocked-recourse-label">What unblocks this:</span> '
+        f'<span data-testid="palette-blocked-recourse">{_e(recourse_text)}</span>'
         '<span data-testid="palette-blocked-intent">'
         "Intent preserved — nothing was mutated; the proposal stays held."
         "</span></div>"
@@ -332,6 +401,32 @@ _PALETTE_CSS = """
       padding: 8px 10px;
     }
     .palette-proposal-row[data-filter-hit="false"] { display: none; }
+    /* C2 — the recorded/not-recorded lane label is the row headline: full-width,
+       heavier weight than the description below it. */
+    .palette-row-lane-label {
+      flex: 1 1 100%;
+      color: var(--fg-1);
+      font-weight: 700;
+      font-size: 0.82rem;
+      letter-spacing: 0.02em;
+    }
+    .palette-row-defer-consequence {
+      flex: 1 1 100%;
+      color: var(--fg-2);
+      font-size: 0.7rem;
+    }
+    .palette-held-reason, .palette-held-recourse {
+      display: block;
+      color: var(--fg-2);
+      font-size: 0.7rem;
+      margin-top: 2px;
+    }
+    .palette-blocked-reason-label, .palette-blocked-recourse-label {
+      display: block;
+      color: var(--fg-2);
+      font-size: 0.72rem;
+      margin-top: 4px;
+    }
     .palette-row-desc { color: var(--fg-1); flex: 1 1 100%; }
     .palette-row-class, .palette-row-status {
       font-family: 'JetBrains Mono', monospace;

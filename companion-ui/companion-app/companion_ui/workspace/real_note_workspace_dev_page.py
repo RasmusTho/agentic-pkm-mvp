@@ -1083,6 +1083,15 @@ def _proposal_rows_from_panel(
         # executed. Passed through verbatim; the UI invents no receipt and
         # infers no success. None unless the server declared it.
         reflected_receipt = raw.get("reflected_receipt")
+        # Server-declared lane / governance posture and blocked-recourse payload
+        # (CUIDR-08). Threaded through ProposalRow.as_render_dict() so the rail +
+        # palette label cards from runtime truth; the UI never invents a lane.
+        # Surfaced only when the runtime declared them — an absent lane defaults
+        # to the governed label downstream and an absent block_reason yields the
+        # calm fallback.
+        lane_raw = raw.get("lane")
+        governed_raw = raw.get("governed")
+        block_reason_raw = raw.get("block_reason")
         row = ProposalRow(
             proposal_id=raw.get("proposal_id", ""),
             artifact_id=raw.get("artifact_id") or artifact_id,
@@ -1093,6 +1102,13 @@ def _proposal_rows_from_panel(
             proposal_origin=str(proposal_origin) if proposal_origin else None,
             reflected_receipt=(
                 reflected_receipt if isinstance(reflected_receipt, dict) else None
+            ),
+            lane=str(lane_raw) if lane_raw is not None else None,
+            governed=bool(governed_raw) if governed_raw is not None else None,
+            block_reason=(
+                block_reason_raw
+                if isinstance(block_reason_raw, dict) and block_reason_raw
+                else None
             ),
         )
         rows.append(row.as_render_dict())

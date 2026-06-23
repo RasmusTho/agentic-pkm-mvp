@@ -63,10 +63,16 @@ from companion_ui.renderer import (
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
 from companion_ui.workspace.calm_degraded import (
+    DEFER_CONSEQUENCE,
+    LANE_BODY_EDIT,
+    LANE_GOVERNED,
     NOTHING_LOST,
+    blocked_reason,
+    blocked_recourse,
     calm_degraded,
     humanise_degraded_reason,
     humanise_token,
+    lane_label,
 )
 from companion_ui.workspace.capture_modal import (
     capture_modal_markup,
@@ -4390,8 +4396,26 @@ def _render_act_mode(
         artifact_id = _e(proposal.get("artifact_id", ""))
         affordances = proposal.get("affordances") or {}
         proposal_status = str(proposal.get("status") or "staged")
-        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
-        proposal_affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
+        # A3 (CUIDR-08): a proposal-level hold (status=="blocked" OR a
+        # server-declared block_reason) is unavailable even when the global
+        # WriteGuard is OK — parity with the rail/palette, so the Act surface
+        # does not leave active act-confirm/act-reject/act-correct buttons on a
+        # held proposal. The hold classification is server-authoritative.
+        proposal_blocked = proposal_status == "blocked" or bool(
+            proposal.get("block_reason")
+        )
+        proposal_available = (
+            proposal_status in {"staged", "corrected"}
+            and not writeguard_blocked
+            and not proposal_blocked
+        )
+        proposal_affordance_status = (
+            "active"
+            if proposal_available
+            else "blocked"
+            if (writeguard_blocked or proposal_blocked)
+            else "unavailable"
+        )
         actions = "".join(
             (
                 '<button type="button" class="act-panel-action" '
@@ -4408,6 +4432,29 @@ def _render_act_mode(
             for label in ("confirm", "correct", "reject")
             if affordances.get(label, True) and proposal_available
         )
+        # A3 (CUIDR-08): a held Act proposal must not be a mute dead end. When
+        # the block is server-declared (global WriteGuard OR a proposal-level
+        # block), render the same calm Why/recourse card the rail + palette use
+        # — humanised from the server-declared block payload, never invented.
+        blocked_recourse_html = ""
+        if writeguard_blocked or proposal_blocked:
+            block_payload = proposal.get("block_reason") or {}
+            reason_text = blocked_reason(block_payload)
+            recourse_text = blocked_recourse(block_payload)
+            blocked_recourse_html = (
+                '<div class="act-proposal-blocked" '
+                'data-testid="act-proposal-blocked" '
+                'data-guard-held="true" '
+                f'data-guard-gate="{_e(str(block_payload.get("gate") or "writeguard"))}">'
+                '<span class="panel-blocked-reason-label">Why:</span> '
+                '<span data-testid="act-blocked-reason">'
+                f"{_e(reason_text)}</span>"
+                '<span class="panel-blocked-recourse-label">'
+                "What unblocks this:</span> "
+                '<span data-testid="act-blocked-recourse">'
+                f"{_e(recourse_text)}</span>"
+                "</div>"
+            )
         if not proposal_available:
             actions = (
                 '<span class="act-panel-unavailable" '
@@ -4432,6 +4479,7 @@ def _render_act_mode(
             <div class="act-flow" data-testid="act-governed-flow">
               intent &rarr; propose &rarr; decide &rarr; execute &rarr; receipt
             </div>
+            {blocked_recourse_html}
             <div class="act-actions">{actions}</div>
           </article>"""
         )
@@ -4498,13 +4546,30 @@ def _render_suggestion_cards(cards: list[dict]) -> str:
                 + _e(card.get("denial_reason"))
                 + "</div>"
             )
+        # C2 — lane label (CUIDR-08). The body-edit lane (S2) lives here. The
+        # card variant is server-declared (the UI never re-classifies it): a
+        # "body" variant is the body-edit lane (Apply not recorded), a
+        # "governance" variant is the governed lane (Apply → vault change →
+        # receipt). The blocked variant carries no Apply lane, so no label.
+        variant = str(card.get("data_variant", ""))
+        lane_label_html = ""
+        if variant in {"body", "governance"}:
+            label_text = lane_label(
+                LANE_BODY_EDIT if variant == "body" else LANE_GOVERNED
+            )
+            lane_label_html = (
+                '<div class="suggestion-card-lane-label" '
+                'data-testid="lane-label" '
+                f'data-lane="{_e(variant)}">{_e(label_text)}</div>'
+            )
         rows.append(
             f"""
         <div
           class="suggestion-card"
           data-testid="suggestion-card"
-          data-variant="{_e(card.get("data_variant", ""))}"
+          data-variant="{_e(variant)}"
           data-suggestion-id="{_e(card.get("data_suggestion_id", ""))}"{role}>
+          {lane_label_html}
           <div class="suggestion-card-title">{_e(card.get("title", ""))}</div>
           <div class="suggestion-card-preview">{_e(card.get("preview_text", ""))}</div>
           {notice}
@@ -4921,8 +4986,29 @@ def _render_panel_proposal_rows(
         evidence = proposal.get("evidence") or {}
         affordances = proposal.get("affordances") or {}
         proposal_status = str(proposal.get("status") or "staged")
-        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
-        affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
+        # A proposal can be held by the GLOBAL WriteGuard banner OR by a
+        # proposal-level `status:"blocked"` (e.g. stale-source, identity-mismatch,
+        # same-turn) while the global guard is OK. A server-declared `block_reason`
+        # is a hold even when the status still reads staged/corrected. Either
+        # routes the row to the calm reason/recourse card below — never active
+        # Apply/Discard buttons and never the mute "unavailable" dead end.
+        proposal_blocked = proposal_status == "blocked" or bool(
+            proposal.get("block_reason")
+        )
+        # Fold proposal_blocked into availability (parity with the palette row
+        # model's guard_held) so a block_reason hold never leaves active buttons.
+        proposal_available = (
+            proposal_status in {"staged", "corrected"}
+            and not writeguard_blocked
+            and not proposal_blocked
+        )
+        affordance_status = (
+            "active"
+            if proposal_available
+            else "blocked"
+            if (writeguard_blocked or proposal_blocked)
+            else "unavailable"
+        )
         section_state = "active" if proposal_available else "idle"
         enabled_affordances = [
             label
@@ -5008,12 +5094,68 @@ def _render_panel_proposal_rows(
             )
             for label in enabled_affordances
         )
-        if not proposal_available:
+        if not proposal_available and not (writeguard_blocked or proposal_blocked):
+            # Only the genuinely-unavailable (non-blocked) case keeps the mute
+            # placeholder; a blocked row renders the calm reason/recourse card
+            # below instead of a dead-end "unavailable" message.
             buttons = (
                 '<span class="panel-proposal-unavailable" '
                 'data-testid="workspace-panel-proposal-unavailable" '
                 f'data-affordance-status="{affordance_status}">'
                 f"{_e(proposal_status)} proposal unavailable</span>"
+            )
+        elif not proposal_available:
+            buttons = ""
+        # C2 — lane label (CUIDR-08). The recorded/not-recorded distinction is
+        # the headline of the card: rendered above the description. The lane is
+        # server-declared (`lane` token / `governed` flag); the Panel rail is
+        # the governed lane by construction, so an absent declaration defaults
+        # to the governed label — never inferred from colour or button count.
+        lane_label_text = lane_label(
+            proposal.get("lane"), governed=proposal.get("governed")
+        )
+        lane_label_html = (
+            '<div class="panel-proposal-lane-label" data-testid="lane-label" '
+            f'data-lane="{_e(str(proposal.get("lane") or "governed"))}">'
+            f"{_e(lane_label_text)}</div>"
+        )
+        # C2 — Defer consequence: a fixed presentation string adjacent to the
+        # Defer (correct) button so Defer is not a mystery action.
+        defer_consequence_html = ""
+        if "correct" in enabled_affordances:
+            defer_consequence_html = (
+                '<div class="panel-proposal-defer-consequence" '
+                'data-testid="defer-consequence">'
+                f"{_e(DEFER_CONSEQUENCE)}</div>"
+            )
+        # A3 — blocked reason + recourse (CUIDR-08). A guard-held proposal stays
+        # calm (held, not red) but states *why* it is held and *what unblocks
+        # it*, humanised from the server-declared block payload — never a mute
+        # "unavailable" dead end. block_reason is server-authoritative.
+        #
+        # The block can come from two server-declared sources: the GLOBAL
+        # WriteGuard banner (writeguard_blocked) OR a proposal-level
+        # `status:"blocked"` (proposal_blocked, computed above). Render the
+        # reason/recourse for either — otherwise a live proposal-level block
+        # falls through to the mute "unavailable" dead end removed above.
+        blocked_recourse_html = ""
+        if writeguard_blocked or proposal_blocked:
+            block_payload = proposal.get("block_reason") or {}
+            reason_text = blocked_reason(block_payload)
+            recourse_text = blocked_recourse(block_payload)
+            blocked_recourse_html = (
+                '<div class="panel-proposal-blocked" '
+                'data-testid="workspace-panel-proposal-blocked" '
+                'data-guard-held="true" '
+                f'data-guard-gate="{_e(str(block_payload.get("gate") or "writeguard"))}">'
+                '<span class="panel-blocked-reason-label">Why:</span> '
+                '<span data-testid="palette-blocked-reason">'
+                f"{_e(reason_text)}</span>"
+                '<span class="panel-blocked-recourse-label">'
+                "What unblocks this:</span> "
+                '<span data-testid="palette-blocked-recourse">'
+                f"{_e(recourse_text)}</span>"
+                "</div>"
             )
         rows.append(
             f"""
@@ -5024,10 +5166,12 @@ def _render_panel_proposal_rows(
           data-affordance-status="{affordance_status}"
           data-proposal-id="{proposal_id}"
           data-artifact-id="{artifact_id}">
+          {lane_label_html}
           <div class="panel-section-title">{_e(proposal.get("description", ""))}</div>
           {provenance_html if proposal_available else ""}
           {origin_html}
           {reflected_receipt_html}
+          {blocked_recourse_html}
           <div class="panel-proposal-meta">
             <span data-testid="workspace-panel-proposal-id">{_e(humanise_token(proposal.get("proposal_id", "")))}</span>
             <span data-testid="workspace-panel-artifact-id">{_e(humanise_token(proposal.get("artifact_id", "")))}</span>
@@ -5042,6 +5186,7 @@ def _render_panel_proposal_rows(
           <div class="panel-proposal-affordances panel-action-row">
             {buttons}
           </div>
+          {defer_consequence_html}
         </div>"""
         )
     return "\n".join(rows)
@@ -5084,17 +5229,29 @@ def _render_panel_confirm_response(response: dict) -> str:
             {inverse_html}
           </div>"""
     blocked_html = ""
-    if status == "blocked" and block_reason:
+    # A3 (CUIDR-08): a blocked confirm is server-authoritative on `status` alone.
+    # When the runtime omits `block_reason`, fall through to the calm fallback
+    # copy (blocked_reason({}) / blocked_recourse({})) so a blocked-without-detail
+    # still renders a calm blocked card + recourse instead of nothing.
+    if status == "blocked":
         message = str(block_reason.get("message") or "")
         if block_reason.get("gate") == "same-turn" or "same-turn" in message.lower():
             message = (
                 "Same-turn confirmation is not allowed. "
                 "The proposal must be confirmed in a later interaction."
             )
+        # A3 (CUIDR-08): a blocked confirm carries a plain-language reason and an
+        # explicit recourse humanised from the server-declared block payload.
+        reason_text = blocked_reason(block_reason)
+        recourse_text = blocked_recourse(block_reason)
         blocked_html = f"""
           <div class="panel-confirm-blocked" data-testid="workspace-panel-blocked-reason">
             <span data-testid="workspace-panel-block-gate">{_e(block_reason.get("gate") or "unknown")}</span>
             <span data-testid="workspace-panel-block-message">{_e(message)}</span>
+            <span class="panel-blocked-reason-label">Why:</span>
+            <span data-testid="palette-blocked-reason">{_e(reason_text)}</span>
+            <span class="panel-blocked-recourse-label">What unblocks this:</span>
+            <span data-testid="palette-blocked-recourse">{_e(recourse_text)}</span>
           </div>"""
     return f"""
         <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response">
@@ -10463,6 +10620,15 @@ def render_index_html(
       border-color: var(--destructive-dim);
       border-left-color: var(--au-blocked);
     }}
+    /* C2 — the recorded/not-recorded lane label is the suggestion-card
+       headline: heavier weight than the title below it. */
+    .suggestion-card-lane-label {{
+      color: var(--fg-1);
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      margin-bottom: 4px;
+    }}
     .suggestion-card-title {{
       color: var(--fg-1);
       font-size: var(--text-sm);
@@ -10719,6 +10885,34 @@ def render_index_html(
     }}
     .panel-section[data-section-state="active"] .panel-section-title {{
       color: var(--au-proposal);
+    }}
+    /* C2 — the recorded/not-recorded lane label is the card headline: larger
+       weight and accent than the description line below it. */
+    .panel-proposal-lane-label {{
+      color: var(--fg-1);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }}
+    .panel-proposal-defer-consequence {{
+      color: var(--fg-3);
+      font-size: 12px;
+      margin-top: 4px;
+    }}
+    /* A3 — calm held-state reason + recourse block. Non-red, no alarm. */
+    .panel-proposal-blocked {{
+      color: var(--fg-2);
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 6px 0;
+    }}
+    .panel-proposal-blocked .panel-blocked-reason-label,
+    .panel-proposal-blocked .panel-blocked-recourse-label {{
+      color: var(--fg-3);
+      display: block;
+      margin-top: 4px;
     }}
     .panel-section-provenance {{
       color: var(--fg-3);

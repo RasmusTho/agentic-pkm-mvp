@@ -258,7 +258,9 @@ def test_writeguard_blocked_marks_mutating_affordances_blocked() -> None:
     assert "WriteGuard blocked" in html
     assert 'data-capability="canvas.applyBodyEdit"' in html
     assert 'data-affordance-status="blocked"' in html
-    assert 'data-testid="workspace-panel-proposal-unavailable"' in html
+    # A3 (CUIDR-08): the WriteGuard-held proposal renders the calm reason +
+    # recourse card rather than collapsing to the mute "unavailable" span.
+    assert 'data-testid="workspace-panel-proposal-blocked"' in html
 
 
 def test_help_toggle_is_early_in_workspace_source_order() -> None:
