@@ -280,6 +280,24 @@ def test_settings_time_inputs_on_dark_palette() -> None:
     assert "var(--bg-raised" in html
     assert "var(--fg-1" in html
 
+    # The S2 rail textarea (active-note body-update input) is brought onto the
+    # dark palette too — no default white textarea chrome inside the dark rail
+    # (#2448 D4 / S2-rail).
+    rail_textarea = re.search(
+        r'<textarea[^>]*data-testid="workspace-active-note-body-update-input"[^>]*>',
+        html,
+    )
+    assert rail_textarea, "the rail body-update textarea must render in the shell"
+    assert "rail-textarea" in rail_textarea.group(0), (
+        f"the rail textarea must carry the design-system class: {rail_textarea.group(0)}"
+    )
+    assert ".rail-textarea" in html
+    # The DS rule pins it to the dark palette via design-system variables.
+    rail_css = html.split(".rail-textarea {", 1)[1].split("}", 1)[0] if ".rail-textarea {" in html else ""
+    assert "var(--bg-raised" in rail_css and "var(--fg-1" in rail_css, (
+        "the .rail-textarea rule must use the dark-palette DS variables"
+    )
+
     # No input anywhere on the page carries an inline white background against
     # the dark theme.
     for white in ("background: white", "background:#fff", "background: #fff", "background:white"):

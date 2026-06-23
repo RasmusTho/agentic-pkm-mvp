@@ -2469,6 +2469,7 @@ def _render_active_note_body_update_flow(
           <label for="active_note_body_update_input">Active note body update</label>
           <textarea
             id="active_note_body_update_input"
+            class="rail-textarea"
             data-testid="workspace-active-note-body-update-input"
             oninput="{reveal_staged}"
             aria-label="Active note body update input"></textarea>
@@ -9295,6 +9296,24 @@ def render_index_html(
     }}
     .note-source-editor[hidden] {{ display: none; }}
     .note-source-editor:focus {{ outline: 1px solid var(--border-focus); }}
+    /* Rail textarea (#2448, D4 / S2-rail): the active-note body-update input
+       sits inside the dark agent rail; bring it onto the design-system palette
+       so it never renders default white textarea chrome. */
+    .rail-textarea {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      box-sizing: border-box;
+      color: var(--fg-1, #dce8f0);
+      font-family: var(--font-ui, system-ui, sans-serif);
+      font-size: var(--text-sm, 0.8125rem);
+      line-height: 1.5;
+      padding: 6px 8px;
+      resize: vertical;
+      width: 100%;
+    }}
+    .rail-textarea::placeholder {{ color: var(--fg-3, #3d5570); }}
+    .rail-textarea:focus {{ outline: 1px solid var(--border-focus, #00d4e8); }}
     /* Design review §6.1 — body column is a reading surface, not a card.
        Background matches the page; no inset border; line-length capped at 68ch.
        §3.3/§7 — the reading column does not own a second nested scroll and is
