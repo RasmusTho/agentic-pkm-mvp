@@ -2378,6 +2378,8 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
       data-testid="workspace-agent-rail"
       data-region="agent-rail"
       data-surface-role="ambient"
+      aria-label="Companion rail — the ambient, peripheral path. Same governed proposals as ⌘K, which is the keyboard-first fast path."
+      title="Ambient, peripheral path — same governed proposals as ⌘K (the keyboard-first fast path)."
       data-layout-desktop="side-rail">
       <div class="rail-header" data-testid="workspace-panel-column-header">
         <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>

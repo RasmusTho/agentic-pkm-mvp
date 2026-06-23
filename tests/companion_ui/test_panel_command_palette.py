@@ -464,6 +464,17 @@ def test_rail_palette_single_model() -> None:
     )
     assert rail_aside, "agent rail must render"
     assert _attr(rail_aside.group(0), "data-surface-role") == "ambient"
+    # The role must be conveyed on the always-present rail container, not only
+    # in the header: in ambient mode the rail collapses to a 56px text-free
+    # strip and the header (with the visible role label) is CSS-hidden, so the
+    # ambient/peripheral role would otherwise only surface once the rail is
+    # active. The aria-label / title on the aside keeps the role discoverable
+    # (screen reader + hover) in the very state it names (#2453 E2, Codex).
+    rail_aria = _attr(rail_aside.group(0), "aria-label").lower()
+    assert "ambient" in rail_aria and "⌘k" in rail_aria, (
+        "the rail container must carry an accessible ambient/peripheral role "
+        "label so the role is conveyed in ambient mode (header hidden)"
+    )
 
     rail_role = re.search(
         r'<span[^>]*data-testid="workspace-rail-surface-role"[^>]*>(.*?)</span>',
