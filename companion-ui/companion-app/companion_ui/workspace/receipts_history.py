@@ -44,7 +44,11 @@ from typing import Any
 
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
-    guidance_toggle_markup,
+    guidance_toggle_markup,  # noqa: F401
+)
+from companion_ui.workspace.overlay_frame import (
+    overlay_frame_header,
+    overlay_frame_root_attrs,
 )
 
 # The overlay-host id this surface occupies (declared in
@@ -350,8 +354,23 @@ def receipts_history_modal_markup() -> str:
     only. Styles are scoped here so the modal is self-contained. Blocked rows
     style through the guard-held attribute in the amber/staged family — never
     a destructive alarm treatment.
+
+    Header furniture is emitted by :func:`overlay_frame.overlay_frame_header`
+    (CUIDR-02, #2445) in the canonical order: title · status-pill · ⓘ · close.
     """
-    return """
+    _frame_root = overlay_frame_root_attrs(
+        overlay_id=RECEIPTS_OVERLAY_ID, position="center"
+    )
+    _frame_header = overlay_frame_header(
+        overlay_id=RECEIPTS_OVERLAY_ID,
+        title="Receipts",
+        status_pill="read-only",
+        status_pill_testid="receipts-history-readonly",
+        guidance_surface="receipts",
+    )
+    _guidance = guidance_callout_markup("receipts")
+    return (
+        """
   <!-- Receipts history modal (#1794, SEP-10) — read-only history over the
        existing runtime receipt projections. Receipts are never invented,
        edited, or re-derived by the UI; blocked rows render as calm held
@@ -469,20 +488,16 @@ def receipts_history_modal_markup() -> str:
        data-testid="receipts-history-modal" data-region="receipts-history"
        data-overlay-id="receipts" data-authority="receipt"
        data-read-only="true" role="dialog" aria-modal="true"
-       aria-label="Receipts history" hidden>
+       aria-label="Receipts history"
+       """
+        + _frame_root
+        + """
+       hidden>
     <div class="receipts-history-panel">
-      <div class="receipts-history-head">
-        <span class="receipts-history-title">Receipts</span>
-        <span class="receipts-history-readonly"
-              data-testid="receipts-history-readonly">read-only</span>
-        """ + guidance_toggle_markup("receipts") + """
-        <button type="button" class="receipts-history-close"
-                data-testid="receipts-history-close"
-                data-intent="overlay.dismiss"
-                aria-label="Close and return to the document"
-                onclick="overlayHost.dismiss()">&times;</button>
-      </div>
-      """ + guidance_callout_markup("receipts") + """
+      """
+        + _frame_header
+        + _guidance
+        + """
       <div class="receipts-history-body" id="receipts-history-body"
            data-testid="receipts-history-body" data-loaded="false">
         <p class="receipts-history-loading">Loading receipt history…</p>
@@ -490,6 +505,7 @@ def receipts_history_modal_markup() -> str:
     </div>
   </div>
   <!-- /receipts-history-modal -->"""
+    )
 
 
 def receipts_history_script() -> str:

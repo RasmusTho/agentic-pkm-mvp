@@ -49,7 +49,11 @@ import re as _re
 
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
-    guidance_toggle_markup,
+    guidance_toggle_markup,  # noqa: F401
+)
+from companion_ui.workspace.overlay_frame import (
+    overlay_frame_header,
+    overlay_frame_root_attrs,
 )
 
 # The drawer's four sections, in render order (SETTINGS_DRAWER.md §What This
@@ -386,8 +390,24 @@ def settings_drawer_markup(fields: dict) -> str:
     close → document anchor) is enforced in one place. The badge is a shell
     chip outside the drawer so divergence stays visible while the drawer is
     closed. Styles are scoped here so the drawer is self-contained.
+
+    Header furniture is emitted by :func:`overlay_frame.overlay_frame_header`
+    (CUIDR-02, #2445) in the canonical order: title · status-pill · ⓘ · close.
+    The root carries ``data-overlay-frame-position="right-drawer"``.
     """
     sections = " ".join(SETTINGS_SECTIONS)
+    _frame_root = overlay_frame_root_attrs(
+        overlay_id="settings", position="right-drawer"
+    )
+    _frame_header = overlay_frame_header(
+        overlay_id="settings",
+        title="Settings",
+        # status-pill: the read-only designation the spec requires for
+        # settings (OVERLAY_MODAL_FRAME_SPEC.md §Header furniture slots).
+        status_pill="read-only render",
+        status_pill_testid="settings-frame-status-pill",
+        guidance_surface="settings",
+    )
     return f"""
   <!-- Settings drawer (#1789, SEP-07) — Local UI preferences in one home.
        Preferences re-render identical content (canonical hash byte-
@@ -515,20 +535,11 @@ def settings_drawer_markup(fields: dict) -> str:
     data-canonical-line-height="{_e(DISPLAY_PREF_CANONICAL["lineHeight"])}"
     data-canonical-reading-width="{_e(DISPLAY_PREF_CANONICAL["readingWidth"])}"
     data-canonical-focus-mode="false"
+    {_frame_root}
     role="dialog" aria-modal="false" aria-hidden="true"
     inert
     aria-label="Settings">
-    <header class="settings-head">
-      <div>
-        <span class="settings-kicker">Settings</span>
-        <h2 class="settings-title">Local UI preferences</h2>
-      </div>
-      {guidance_toggle_markup('settings')}
-      <button type="button" class="settings-close"
-        data-testid="settings-close" data-intent="overlay.dismiss"
-        aria-label="Close and return to the document"
-        onclick="overlayHost.dismiss()">&times;</button>
-    </header>
+    {_frame_header}
     {guidance_callout_markup('settings')}
     <p class="settings-authority-note" data-testid="settings-authority-note">
       Preferences re-render identical content. They never touch the vault

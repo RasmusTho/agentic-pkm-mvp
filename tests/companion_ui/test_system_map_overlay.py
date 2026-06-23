@@ -670,8 +670,10 @@ def test_parked_surfaces_not_reachable() -> None:
 def test_map_is_a_host_occupant_with_dismiss_to_anchor() -> None:
     html = _render_workspace()
     overlay = _map_overlay(html)
+    # CUIDR-02: close button is now emitted by the shared overlay-frame header;
+    # testid is overlay-frame-close (was system-map-close pre-CUIDR-02).
     close = re.search(
-        r'<button[^>]*data-testid="system-map-close"[^>]*>', overlay
+        r'<button[^>]*data-testid="overlay-frame-close"[^>]*>', overlay
     )
     assert close, "the map must offer an explicit dismiss-to-anchor control"
     assert 'data-intent="overlay.dismiss"' in close.group(0)

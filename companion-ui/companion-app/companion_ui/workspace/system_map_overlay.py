@@ -38,7 +38,11 @@ from dataclasses import dataclass, field
 
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
-    guidance_toggle_markup,
+    guidance_toggle_markup,  # noqa: F401
+)
+from companion_ui.workspace.overlay_frame import (
+    overlay_frame_header,
+    overlay_frame_root_attrs,
 )
 
 # The overlay-host id this surface occupies (declared in
@@ -463,6 +467,14 @@ def system_map_overlay_markup(
         for node in MAP_SURFACES
     )
     parked = " ".join(PARKED_SURFACES)
+    _frame_root = overlay_frame_root_attrs(
+        overlay_id=SYSTEM_MAP_OVERLAY_ID, position="center"
+    )
+    _frame_header = overlay_frame_header(
+        overlay_id=SYSTEM_MAP_OVERLAY_ID,
+        title="System Map",
+        guidance_surface="map",
+    )
     # Relocated telemetry: freshness/as_of/trace_id render only when the
     # orientation payload supplies them (zero-state = omit, no placeholder).
     # data-authority="read-only-projection" — no mutation affordance.
@@ -577,19 +589,10 @@ def system_map_overlay_markup(
     data-testid="system-map-overlay" data-region="system-map-overlay"
     data-overlay-id="{SYSTEM_MAP_OVERLAY_ID}" data-open="false"
     data-authority="projection"
+    {_frame_root}
     role="dialog" aria-modal="false" aria-hidden="true"
     aria-label="System map">
-    <header class="system-map-head">
-      <div>
-        <span class="system-map-kicker">System map</span>
-        <h2 class="system-map-title">Every surface, one index</h2>
-      </div>
-      {guidance_toggle_markup('map')}
-      <button type="button" class="system-map-close"
-        data-testid="system-map-close" data-intent="overlay.dismiss"
-        aria-label="Close and return to the document"
-        onclick="overlayHost.dismiss()">&times;</button>
-    </header>
+    {_frame_header}
     {guidance_callout_markup('map')}
     <p class="system-map-note" data-testid="system-map-note">An index of the
       companion's surfaces — it renders and routes, nothing more. Everything

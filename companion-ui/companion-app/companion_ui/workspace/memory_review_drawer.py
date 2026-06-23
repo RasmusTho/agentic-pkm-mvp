@@ -42,7 +42,11 @@ from urllib.parse import quote
 
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
-    guidance_toggle_markup,
+    guidance_toggle_markup,  # noqa: F401
+)
+from companion_ui.workspace.overlay_frame import (
+    overlay_frame_header,
+    overlay_frame_root_attrs,
 )
 
 # The normative callout (SYSTEM_ENTRY_POINT_SPEC.md; ADR-0009). The runtime
@@ -433,8 +437,23 @@ def memory_review_drawer_markup() -> str:
     close → document anchor) is enforced in one place. Styles are scoped in
     the block below so the drawer is self-contained on both the workspace
     shell and the orientation surface.
+
+    Header furniture is emitted by :func:`overlay_frame.overlay_frame_header`
+    (CUIDR-02, #2445) in the canonical order: title · status-pill · ⓘ · close.
     """
     decided = " ".join(GOVERNED_DECIDED_STATUSES)
+    _frame_root = overlay_frame_root_attrs(
+        overlay_id="memory", position="right-drawer"
+    )
+    _frame_header = overlay_frame_header(
+        overlay_id="memory",
+        title="Memory",
+        # status-pill: the provenance authority designation (spec §Header
+        # furniture slots — "authority or read-only designation").
+        status_pill="unreviewed is not authority",
+        status_pill_testid="memory-frame-status-pill",
+        guidance_surface="memory",
+    )
     return f"""
   <!-- Memory candidate review drawer (#1793, SEP-09b) — the only admissible
        place where candidate -> memory promotion is decided. Governed
@@ -543,19 +562,10 @@ def memory_review_drawer_markup() -> str:
     data-overlay-id="memory" data-drawer-side="right" data-open="false"
     data-authority="proposal" data-decided-statuses="{decided}"
     data-reviewed-by="{_e(MEMORY_REVIEW_REVIEWER)}"
+    {_frame_root}
     role="dialog" aria-modal="false" aria-hidden="true"
     aria-label="Memory candidate review">
-    <header class="memory-review-head">
-      <div>
-        <span class="memory-review-kicker">Memory review</span>
-        <h2 class="memory-review-title">Pending candidates</h2>
-      </div>
-      {guidance_toggle_markup('memory')}
-      <button type="button" class="memory-review-close"
-        data-testid="memory-review-close" data-intent="overlay.dismiss"
-        aria-label="Close and return to the document"
-        onclick="overlayHost.dismiss()">&times;</button>
-    </header>
+    {_frame_header}
     {guidance_callout_markup('memory')}
     <p class="memory-review-callout" data-testid="memory-review-callout"
       data-tone="advisory">{MEMORY_REVIEW_CALLOUT}</p>
