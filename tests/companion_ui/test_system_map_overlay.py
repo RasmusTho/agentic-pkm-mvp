@@ -36,6 +36,7 @@ from companion_ui.workspace.overlay_host import (
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
 from companion_ui.workspace.system_map_overlay import (
     MAP_CENTER_NAME,
+    MAP_CENTER_SUB,
     MAP_SURFACES,
     NODE_STATUSES,
     PARKED_SURFACES,
@@ -322,6 +323,54 @@ def test_map_renders_composition_table_nodes() -> None:
     assert overlay.count('data-testid="system-map-node-status"') == len(MAP_SURFACES)
     for node in MAP_SURFACES:
         assert node.status_note in overlay, node.surface_id
+
+
+# ---------------------------------------------------------------------------
+# C4 (#2448): the System Map carries no bare internal issue numbers in
+# user-facing copy; each surface entry reads as identity + how-to-reach +
+# how-it-returns. The map is an honest index, not a changelog — internal
+# references (#1783, SEP-04, #1716+) belong in the operator/guidance layer,
+# never in the rendered node copy.
+# ---------------------------------------------------------------------------
+
+
+def test_system_map_no_issue_refs() -> None:
+    # Pure model: no node's user-facing copy (reached / returns / status_note)
+    # carries a bare internal issue number or SEP reference.
+    _bare_issue = re.compile(r"#\d{3,}")
+    _sep_ref = re.compile(r"\bSEP-\d+\b")
+    for node in MAP_SURFACES:
+        for field_name in ("reached", "returns", "status_note"):
+            value = getattr(node, field_name)
+            assert not _bare_issue.search(value), (
+                f"{node.surface_id}.{field_name} leaks a bare issue number: {value!r}"
+            )
+            assert not _sep_ref.search(value), (
+                f"{node.surface_id}.{field_name} leaks a SEP reference: {value!r}"
+            )
+        # The center node copy is also user-facing.
+    assert not _bare_issue.search(MAP_CENTER_NAME)
+    assert not _bare_issue.search(MAP_CENTER_SUB)
+
+    # Rendered overlay: no bare issue number appears anywhere a user can read
+    # it on the map surface (the rendered node copy + center + parked note).
+    # User-facing copy excludes the <style> block (CSS hex colours such as
+    # #152030 are not issue numbers) and HTML/source comments (not rendered to
+    # the user). Scan the visible copy, which is exactly the contract C4 fixes.
+    for render in _ALL_PAGES:
+        overlay = _map_overlay(render())
+        visible = re.sub(r"<style\b[^>]*>.*?</style>", "", overlay, flags=re.S)
+        visible = re.sub(r"<!--.*?-->", "", visible, flags=re.S)
+        # Numeric HTML character references (e.g. the ⓘ glyph &#9432;) are
+        # glyph encodings, not issue numbers — strip them before the scan.
+        visible = re.sub(r"&#\d+;", "", visible)
+        assert not _bare_issue.search(visible), (
+            "rendered system-map overlay copy must carry no bare internal issue "
+            f"numbers: {_bare_issue.search(visible)}"
+        )
+        assert not _sep_ref.search(visible), (
+            "rendered system-map overlay copy must carry no SEP references"
+        )
 
 
 # ---------------------------------------------------------------------------

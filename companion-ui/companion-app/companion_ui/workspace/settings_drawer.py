@@ -334,14 +334,16 @@ def _behaviour_section() -> str:
           <div class="settings-quiet-hours-window" data-testid="settings-quiet-hours-window">
             <label class="settings-control">
               <span>From</span>
-              <input type="time" data-testid="settings-quiet-hours-start"
+              <input type="time" class="settings-time-input"
+                data-testid="settings-quiet-hours-start"
                 data-intent="settings.set" name="quiet-hours-start"
                 value="{_e(SETTINGS_CANONICAL["quietHoursStart"])}"
                 aria-label="Quiet hours start">
             </label>
             <label class="settings-control">
               <span>Until</span>
-              <input type="time" data-testid="settings-quiet-hours-end"
+              <input type="time" class="settings-time-input"
+                data-testid="settings-quiet-hours-end"
                 data-intent="settings.set" name="quiet-hours-end"
                 value="{_e(SETTINGS_CANONICAL["quietHoursEnd"])}"
                 aria-label="Quiet hours end">
@@ -445,6 +447,18 @@ def settings_drawer_markup(fields: dict) -> str:
       background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
       border-radius: 4px; color: var(--fg-1, #dce8f0); font-size: 12px;
       padding: 4px 8px;
+    }}
+    /* Quiet-hours time inputs onto the dark palette (#2448, D4): the native
+       time field and its picker indicator default to white chrome; pin them to
+       the design-system tokens and invert the indicator so no input stands out
+       against the dark theme. */
+    .settings-time-input {{
+      background: var(--bg-raised, #111a2e);
+      color: var(--fg-1, #dce8f0);
+      color-scheme: dark;
+    }}
+    .settings-time-input::-webkit-calendar-picker-indicator {{
+      filter: invert(0.8);
     }}
     .settings-toggle {{
       align-items: center; color: var(--fg-2, #7a9ab8); display: flex;

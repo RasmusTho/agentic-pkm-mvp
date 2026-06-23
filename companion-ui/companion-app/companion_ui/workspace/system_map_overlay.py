@@ -164,7 +164,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="the entry substrate (orienting) — reached by returning, never by opening",
         returns="becomes the shell on resume",
         status="shipped",
-        status_note="shipped — re-entry surface; state machine #1783; mist treatments #1784",
+        status_note="shipped — re-entry surface with its mist treatments",
     ),
     MapNode(
         surface_id="anchor",
@@ -203,7 +203,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="command overlay (⌘K · cmd.open)",
         returns="dismisses to anchor",
         status="shipped",
-        status_note="shipped (#1786, SEP-04) — a Panel presentation, not new authority",
+        status_note="shipped — a Panel presentation, not new authority",
         routable=True,
     ),
     MapNode(
@@ -213,7 +213,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="margin rail slot (bottom sheet when narrow)",
         returns="dismisses to anchor",
         status="partial",
-        status_note="slot defined by the spec; occupant owned by the canvas-chat lane (#1716+)",
+        status_note="slot defined by the spec; occupant owned by the canvas-chat lane",
     ),
     MapNode(
         surface_id="suggestions",
@@ -231,7 +231,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="right drawer overlay (memory.open)",
         returns="dismisses to anchor",
         status="shipped",
-        status_note="shipped — endpoints #1792; drawer #1793; governed review outcomes",
+        status_note="shipped — governed review outcomes over the candidate drawer",
         routable=True,
     ),
     MapNode(
@@ -259,7 +259,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="topbar + cold-start affordance (map.open)",
         returns="dismisses to anchor; nodes route to surfaces",
         status="shipped",
-        status_note="shipped (#1787, SEP-05) — you are here",
+        status_note="shipped — you are here",
     ),
     MapNode(
         surface_id="settings",
@@ -268,7 +268,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="right drawer overlay (settings.open)",
         returns="dismisses to anchor",
         status="shipped",
-        status_note="shipped (#1789, SEP-07) — Local UI preferences; canonical hash untouched",
+        status_note="shipped — Local UI preferences; canonical hash untouched",
         routable=True,
     ),
     MapNode(
@@ -287,7 +287,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="top modal (⌘N · capture.open)",
         returns="dismisses to anchor",
         status="shipped",
-        status_note="shipped (#1791, SEP-08b) — governed append to the vault inbox",
+        status_note="shipped — governed append to the vault inbox",
         routable=True,
     ),
     MapNode(
@@ -297,7 +297,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="top modal (receipts.open)",
         returns="dismisses to anchor",
         status="shipped",
-        status_note="shipped (#1794, SEP-10) — runtime receipts rendered verbatim, never invented",
+        status_note="shipped — runtime receipts rendered verbatim, never invented",
         routable=True,
     ),
     MapNode(
@@ -307,7 +307,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="receipts surface (receipts.open) — counts header row on the receipts modal",
         returns="dismisses to anchor via receipts surface",
         status="shipped",
-        status_note="shipped (#2246, TELEMETRY_RELOCATION-02) — projection index; routes via receipts.open",
+        status_note="shipped — projection index; routes via receipts.open",
         routable=True,
     ),
     MapNode(
@@ -317,7 +317,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="shell resurface rail mode (_render_resurface_mode); navigated in shell, not via overlayHost.mount",
         returns="stays in shell",
         status="shipped",
-        status_note="shipped (#2249) — read-only index node; rail is navigated in shell, never via overlay route",
+        status_note="shipped — read-only index node; rail is navigated in shell, never via overlay route",
     ),
     MapNode(
         surface_id="guidance",
@@ -326,7 +326,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         reached="ⓘ toggle on topbar, overlay heads, re-entry card",
         returns="cross-cutting; persists nothing",
         status="shipped",
-        status_note="shipped (#1788, SEP-06) — cross-cutting local UI toggle",
+        status_note="shipped — cross-cutting local UI toggle",
     ),
     MapNode(
         surface_id="operator",
@@ -336,7 +336,7 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         returns="dims but does not dismiss; returns to anchor",
         status="shipped",
         status_note=(
-            "shipped (#2447, CUIDR-04) — operator/diagnostic telemetry "
+            "shipped — operator/diagnostic telemetry "
             "(runtime status, freshness, as-of) moved off the front edge to "
             "this operator layer; not a daily-use surface"
         ),

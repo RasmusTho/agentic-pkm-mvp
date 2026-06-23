@@ -254,6 +254,39 @@ def test_drawer_sections_render_and_display_prefs_work() -> None:
 
 
 # ---------------------------------------------------------------------------
+# White-input AC (#2448, D4): no input renders with default white chrome
+# against the dark theme. The settings time inputs are brought onto the dark
+# palette via a design-system class / variables; no inline white background.
+# ---------------------------------------------------------------------------
+
+
+def test_settings_time_inputs_on_dark_palette() -> None:
+    html = _render()
+    drawer = _drawer_markup(html)
+    behaviour = _section(drawer, "behaviour")
+
+    # Every <input type="time"> carries a design-system style hook — a DS class
+    # or a CSS variable — so it never renders default white chrome.
+    time_inputs = re.findall(r"<input[^>]*type=\"time\"[^>]*>", behaviour)
+    assert time_inputs, "the behaviour section must render the quiet-hours time inputs"
+    for tag in time_inputs:
+        assert "settings-time-input" in tag, (
+            f"every time input must carry the design-system class: {tag}"
+        )
+
+    # The DS class pins the time field onto the dark palette via design-system
+    # variables (background var(--bg-raised), color var(--fg-1)).
+    assert ".settings-time-input" in html
+    assert "var(--bg-raised" in html
+    assert "var(--fg-1" in html
+
+    # No input anywhere on the page carries an inline white background against
+    # the dark theme.
+    for white in ("background: white", "background:#fff", "background: #fff", "background:white"):
+        assert white not in html, f"no input may carry inline {white!r} on the dark theme"
+
+
+# ---------------------------------------------------------------------------
 # AC2: any preference change leaves the canonical Markdown/content hash
 # byte-unchanged
 # ---------------------------------------------------------------------------

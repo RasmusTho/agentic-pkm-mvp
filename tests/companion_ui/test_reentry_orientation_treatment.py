@@ -658,11 +658,12 @@ def test_residual_ambient_layer_persists_after_resume() -> None:
 
 
 def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
-    """AC2 verify: verb-line is inline affordances, not a button/card grid.
+    """AC2 verify: verb-line is ranked, on-palette affordances, not a card grid.
 
     Three intent affordances map 1:1 onto vault.open / capture.open / map.open
-    inside a data-region="cold-start-verbs" element.  The element is inline
-    prose — never a grid, card, or button.
+    inside a data-region="cold-start-verbs" element. Per #2448 (D2) the verbs
+    are ranked design-system buttons — one primary, two secondary — not inline
+    browser-blue links, and never an orientation grid/column/card layout.
     """
     # First-contact variant (leave_point absent)
     first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
@@ -689,9 +690,12 @@ def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
         # No "Reorient" verb on cold_start.
         assert "Reorient" not in html, label
 
-        # Verb-line is NOT a button/card grid — no grid wrapper around the verbs.
+        # Verb-line is ranked DS buttons (one primary, two secondary), not
+        # inline browser-blue links — and never an orientation grid/column/card.
         verb_region = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
-        assert "<button" not in verb_region, label
+        assert verb_region.count("btn--primary") == 1, label
+        assert verb_region.count("btn--secondary") == 2, label
+        assert "<a href" not in verb_region, label
         assert 'class="orientation-grid"' not in verb_region, label
         assert 'class="orientation-column"' not in verb_region, label
 
@@ -706,8 +710,9 @@ def test_cold_start_vault_open_targets_rendered_vault_browser() -> None:
     assert 'data-entry-state="cold_start"' in html
     assert 'id="workspace-orientation-vault-entry"' in html
     verb_region = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+    # #2448 (D2): the vault.open verb is now a ranked DS button whose onclick
+    # focuses the rendered orientation vault browser (no inline href anchor).
     assert 'data-intent="vault.open"' in verb_region
-    assert 'href="#workspace-orientation-vault-entry"' in verb_region
     assert "vaultBrowser.focus(); return false;" in verb_region
     assert "window.vaultBrowser = window.vaultBrowser || {};" in html
     assert "window.vaultBrowser.focus = focusOrientationVaultBrowser;" in html
