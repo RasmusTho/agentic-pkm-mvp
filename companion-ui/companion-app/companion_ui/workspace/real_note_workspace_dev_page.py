@@ -1083,6 +1083,15 @@ def _proposal_rows_from_panel(
         # executed. Passed through verbatim; the UI invents no receipt and
         # infers no success. None unless the server declared it.
         reflected_receipt = raw.get("reflected_receipt")
+        # Server-declared lane / governance posture and blocked-recourse payload
+        # (CUIDR-08). Threaded through ProposalRow.as_render_dict() so the rail +
+        # palette label cards from runtime truth; the UI never invents a lane.
+        # Surfaced only when the runtime declared them — an absent lane defaults
+        # to the governed label downstream and an absent block_reason yields the
+        # calm fallback.
+        lane_raw = raw.get("lane")
+        governed_raw = raw.get("governed")
+        block_reason_raw = raw.get("block_reason")
         row = ProposalRow(
             proposal_id=raw.get("proposal_id", ""),
             artifact_id=raw.get("artifact_id") or artifact_id,
@@ -1094,25 +1103,15 @@ def _proposal_rows_from_panel(
             reflected_receipt=(
                 reflected_receipt if isinstance(reflected_receipt, dict) else None
             ),
+            lane=str(lane_raw) if lane_raw is not None else None,
+            governed=bool(governed_raw) if governed_raw is not None else None,
+            block_reason=(
+                block_reason_raw
+                if isinstance(block_reason_raw, dict) and block_reason_raw
+                else None
+            ),
         )
-        render_row = row.as_render_dict()
-        # Pass through the server-declared lane / governed / block_reason fields
-        # (CUIDR-08). These are presentation inputs the rail + palette humanise
-        # into the lane label and blocked reason/recourse; the UI never infers
-        # them. Surfaced only when the runtime declared them — an absent lane
-        # defaults to the governed label downstream (the rail/palette are the
-        # governed lane by construction), and an absent block_reason yields the
-        # calm fallback.
-        lane_raw = raw.get("lane")
-        if lane_raw is not None:
-            render_row["lane"] = str(lane_raw)
-        governed_raw = raw.get("governed")
-        if governed_raw is not None:
-            render_row["governed"] = bool(governed_raw)
-        block_reason_raw = raw.get("block_reason")
-        if isinstance(block_reason_raw, dict) and block_reason_raw:
-            render_row["block_reason"] = block_reason_raw
-        rows.append(render_row)
+        rows.append(row.as_render_dict())
     return rows
 
 
