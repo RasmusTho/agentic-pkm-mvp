@@ -6,6 +6,7 @@ import json
 import os
 
 from app.db.db import conn_rw
+from app.settings import settings
 from app.stores import resolved_store_backend_hint
 
 
@@ -13,6 +14,9 @@ def _audit_pg_backend_selected() -> bool:
     explicit_backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
     if explicit_backend:
         return explicit_backend == "pg"
+    settings_backend = str(getattr(settings, "store_backend", "") or "").strip().lower()
+    if settings_backend == "pg":
+        return True
     return resolved_store_backend_hint() == "pg"
 
 def audit_event(

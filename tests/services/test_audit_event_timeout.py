@@ -167,3 +167,37 @@ def test_audit_event_writes_when_cached_backend_hint_is_pg_without_store_backend
     assert "INSERT INTO audit" in statement
     assert params[0] == "t-2406"
     assert params[1] == "test.event"
+
+
+def test_audit_event_writes_when_settings_backend_is_pg_without_store_backend_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings-backed pg selection is authoritative and needs no auto-detect."""
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    monkeypatch.setattr(audit_module.settings, "store_backend", "pg")
+    monkeypatch.setattr(
+        audit_module,
+        "resolved_store_backend_hint",
+        lambda: (_ for _ in ()).throw(AssertionError("must not inspect store hint")),
+    )
+    connection = _RecordingConnection()
+
+    def _recording_conn_rw(*, connect_timeout: int) -> _RecordingConnection:
+        assert connect_timeout == 1
+        return connection
+
+    monkeypatch.setattr(audit_module, "conn_rw", _recording_conn_rw)
+
+    result = audit_event(
+        event="test.settings",
+        object_id="object-2",
+        agent="tester",
+        trace_id="t-settings-pg",
+    )
+
+    assert result is None
+    assert len(connection.cursor_instance.statements) == 1
+    statement, params = connection.cursor_instance.statements[0]
+    assert "INSERT INTO audit" in statement
+    assert params[0] == "t-settings-pg"
+    assert params[1] == "test.settings"
