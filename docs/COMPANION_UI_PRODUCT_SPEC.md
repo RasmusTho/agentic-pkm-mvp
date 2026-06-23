@@ -133,8 +133,12 @@ Current shipped runtime truth is owned by:
   that is unmistakable from the amber "can't say" degraded state, and a withheld line that signals
   "more was held below the line" without any count or badge. The resurfacing runtime declares
   `scarce_count` and `more_held_back` and tags each candidate with a read-only `pinned` flag (always
-  false until pin persistence lands). The dismiss/snooze/pin actions remain disabled pending
-  persistence, and the underlying suggestion/ranking orchestration is still target-state.
+  false until pin persistence lands). With today's ≤3-signal evaluator the surfaced set never exceeds
+  the scarce count, so `more_held_back` stays false in practice and the withheld line and scarce cap
+  remain dormant until a richer relevance source surfaces more candidates than the cap; likewise the
+  pinned sort/tag does not fire while `pinned` is always false. The dismiss/snooze/pin actions remain
+  disabled pending persistence, and the underlying suggestion/ranking orchestration is still
+  target-state.
 
 ### 4) Act
 
