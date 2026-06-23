@@ -93,16 +93,19 @@ def test_only_one_default_vault_browser_surface():
 
 
 def test_browse_vault_focuses_left_panel_browse_mode():
+    # CUIDR-04 (#2447): the standalone header "Browse vault" launcher left the
+    # front edge (identity + Capture only). Vault browse is now reached via the
+    # vault identity chip, which routes to the canonical left-pane browse
+    # surface, and via the System Map's vault node — never a second non-Capture
+    # header button competing for topbar width.
     html = _html()
-    btn = re.search(
-        r'<button[^>]*data-testid="workspace-browse-vault"[^>]*>', html
+    chip = re.search(
+        r'<a[^>]*data-testid="workspace-vault-chip"[^>]*>', html
     )
-    assert btn, "header Browse vault button missing"
-    token = btn.group(0)
-    # The entrypoint routes to the canonical left-pane browse surface...
-    assert 'data-browse-target="vault-browser-pane"' in token
-    # ...by focusing it rather than opening the modal directly.
-    assert "vaultBrowser.focus()" in token
+    assert chip, "vault identity chip missing"
+    token = chip.group(0)
+    # The chip routes to the canonical left-pane browse surface, not the modal.
+    assert 'href="#vault-browser-left-pane"' in token
 
 
 # ---------------------------------------------------------------------------

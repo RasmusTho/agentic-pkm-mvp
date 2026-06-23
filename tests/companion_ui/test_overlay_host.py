@@ -211,11 +211,11 @@ def test_topbar_renders_declared_regions() -> None:
     # unchanged). The runtime-status pill, freshness string, and quick-open hint
     # are operator/diagnostic telemetry — CUIDR-04 moves them off the front edge
     # into the operator-telemetry region; they are no longer in the header.
-    for testid in (
-        "workspace-vault-chip",
-        "workspace-browse-vault",
-    ):
-        assert f'data-testid="{testid}"' in topbar
+    # CUIDR-04 (#2447): the vault identity chip stays on the header (identity);
+    # the standalone "Browse vault" launcher left the front edge (vault routes
+    # via the System Map / the chip now).
+    assert 'data-testid="workspace-vault-chip"' in topbar
+    assert 'data-testid="workspace-browse-vault"' not in topbar
     for relocated in (
         "workspace-runtime-pill",
         "workspace-runtime-status-popover",

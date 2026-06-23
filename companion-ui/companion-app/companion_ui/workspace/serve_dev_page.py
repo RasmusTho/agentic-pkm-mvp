@@ -591,7 +591,12 @@ def _render_workspace_header_strip(
             <button type="button" class="workspace-surface-icon workspace-surface-icon--primary" data-testid="workspace-surface-icon-capture" data-surface="capture" data-intent="capture.open" title="Capture to inbox (⌘N)" aria-label="Capture to inbox" onclick="overlayHost.mount('capture')">&#43;</button>
             {guidance_toggle_markup('topbar')}
           </nav>
-          <button class="workspace-browse-vault" data-testid="workspace-browse-vault" type="button" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus()">Browse vault</button>
+          <!-- CUIDR-04 (#2447): the standalone "Browse vault" launcher left the
+               header edge — vault is a displaced surface (OVERFLOW_TOPBAR_SURFACES)
+               reachable via the System Map overlay's vault node, never a second
+               non-Capture button competing for topbar width at 1280/1440px. The
+               vault chip above is identity (the vault name + state), not a
+               launcher. -->
           {dev_ribbon}
         </div>
       </header>
@@ -7514,7 +7519,8 @@ def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
          onclick="companionOperator.close()"></div>
     <aside class="operator-drawer" id="workspace-operator-drawer"
            data-testid="workspace-operator-drawer" role="dialog" aria-modal="true"
-           aria-label="Operator diagnostics">
+           aria-label="Operator diagnostics"
+           aria-hidden="true" inert>
       <div class="operator-drawer-head">
         <span class="operator-drawer-title">Operator diagnostics</span>
         <span class="operator-drawer-badge"
@@ -7536,11 +7542,27 @@ def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
   (function() {
     var host   = document.getElementById('workspace-operator-host');
     var body   = document.getElementById('workspace-operator-body');
+    var drawer = document.getElementById('workspace-operator-drawer');
     var toggle = document.querySelector('[data-testid="workspace-operator-toggle"]');
     if (!host || !body) { return; }
     var loaded = false;
     function setExpanded(state) {
       if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
+    }
+    // CUIDR-04 (#2447): the relocated runtime/diagnostic telemetry lives inside
+    // the drawer. While closed the drawer is only translated off-screen, so it
+    // must also be inert + aria-hidden — otherwise keyboard / screen-reader
+    // users could reach the runtime pill on the front surface before opening
+    // the System Map operator route (Codex #2458). Toggle both with open/close.
+    function setInert(open) {
+      if (!drawer) { return; }
+      if (open) {
+        drawer.removeAttribute('inert');
+        drawer.setAttribute('aria-hidden', 'false');
+      } else {
+        drawer.setAttribute('inert', '');
+        drawer.setAttribute('aria-hidden', 'true');
+      }
     }
     function loadContent() {
       if (loaded) { return; }
@@ -7570,10 +7592,12 @@ def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
       open: function() {
         loadContent();
         host.setAttribute('data-open', 'true');
+        setInert(true);
         setExpanded(true);
       },
       close: function() {
         host.setAttribute('data-open', 'false');
+        setInert(false);
         setExpanded(false);
         if (toggle) { try { toggle.focus(); } catch (e) {} }
       },

@@ -301,9 +301,11 @@ class TestWorkspaceHeaderStrip:
 
         # CUIDR-04 (#2447): the runtime pill, freshness string, and quick-open
         # hint are operator/diagnostic telemetry — removed from the front edge.
-        # The header now carries identity (wordmark, vault chip, vault-settings,
+        # The standalone "Browse vault" launcher also left the header (vault is
+        # a displaced surface reached via the System Map / the vault chip). The
+        # header now carries identity (wordmark, vault chip, vault-settings,
         # anchor pill, posture pill), the spacer, the single Capture launcher
-        # (surface-icons), Browse vault, and the dev ribbon, in that order.
+        # (surface-icons), and the dev ribbon — identity + Capture only.
         ordered_testids = [
             'data-testid="workspace-wordmark"',
             'data-testid="workspace-vault-chip"',
@@ -311,9 +313,10 @@ class TestWorkspaceHeaderStrip:
             'data-testid="workspace-posture-pill"',
             'class="workspace-header-spacer"',
             'data-testid="workspace-surface-icon-capture"',
-            'data-testid="workspace-browse-vault"',
             'data-testid="workspace-dev-ribbon"',
         ]
+        # The standalone Browse-vault launcher is no longer on the header edge.
+        assert 'data-testid="workspace-browse-vault"' not in header
         positions = [header.index(token) for token in ordered_testids]
         assert positions == sorted(positions)
         # The relocated telemetry is no longer in the header.
