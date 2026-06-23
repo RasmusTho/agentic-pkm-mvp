@@ -4396,8 +4396,26 @@ def _render_act_mode(
         artifact_id = _e(proposal.get("artifact_id", ""))
         affordances = proposal.get("affordances") or {}
         proposal_status = str(proposal.get("status") or "staged")
-        proposal_available = proposal_status in {"staged", "corrected"} and not writeguard_blocked
-        proposal_affordance_status = "active" if proposal_available else "blocked" if writeguard_blocked else "unavailable"
+        # A3 (CUIDR-08): a proposal-level hold (status=="blocked" OR a
+        # server-declared block_reason) is unavailable even when the global
+        # WriteGuard is OK — parity with the rail/palette, so the Act surface
+        # does not leave active act-confirm/act-reject/act-correct buttons on a
+        # held proposal. The hold classification is server-authoritative.
+        proposal_blocked = proposal_status == "blocked" or bool(
+            proposal.get("block_reason")
+        )
+        proposal_available = (
+            proposal_status in {"staged", "corrected"}
+            and not writeguard_blocked
+            and not proposal_blocked
+        )
+        proposal_affordance_status = (
+            "active"
+            if proposal_available
+            else "blocked"
+            if (writeguard_blocked or proposal_blocked)
+            else "unavailable"
+        )
         actions = "".join(
             (
                 '<button type="button" class="act-panel-action" '
@@ -4414,6 +4432,29 @@ def _render_act_mode(
             for label in ("confirm", "correct", "reject")
             if affordances.get(label, True) and proposal_available
         )
+        # A3 (CUIDR-08): a held Act proposal must not be a mute dead end. When
+        # the block is server-declared (global WriteGuard OR a proposal-level
+        # block), render the same calm Why/recourse card the rail + palette use
+        # — humanised from the server-declared block payload, never invented.
+        blocked_recourse_html = ""
+        if writeguard_blocked or proposal_blocked:
+            block_payload = proposal.get("block_reason") or {}
+            reason_text = blocked_reason(block_payload)
+            recourse_text = blocked_recourse(block_payload)
+            blocked_recourse_html = (
+                '<div class="act-proposal-blocked" '
+                'data-testid="act-proposal-blocked" '
+                'data-guard-held="true" '
+                f'data-guard-gate="{_e(str(block_payload.get("gate") or "writeguard"))}">'
+                '<span class="panel-blocked-reason-label">Why:</span> '
+                '<span data-testid="act-blocked-reason">'
+                f"{_e(reason_text)}</span>"
+                '<span class="panel-blocked-recourse-label">'
+                "What unblocks this:</span> "
+                '<span data-testid="act-blocked-recourse">'
+                f"{_e(recourse_text)}</span>"
+                "</div>"
+            )
         if not proposal_available:
             actions = (
                 '<span class="act-panel-unavailable" '
@@ -4438,6 +4479,7 @@ def _render_act_mode(
             <div class="act-flow" data-testid="act-governed-flow">
               intent &rarr; propose &rarr; decide &rarr; execute &rarr; receipt
             </div>
+            {blocked_recourse_html}
             <div class="act-actions">{actions}</div>
           </article>"""
         )

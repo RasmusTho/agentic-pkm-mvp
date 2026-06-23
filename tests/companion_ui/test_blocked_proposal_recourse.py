@@ -236,6 +236,50 @@ def test_proposal_level_blocked_without_global_writeguard_renders_recourse() -> 
     assert 'data-testid="workspace-panel-proposal-unavailable"' not in html
 
 
+def test_act_mode_block_reason_hold_has_no_active_buttons() -> None:
+    """The Act-mode surface also honours a proposal-level block_reason hold.
+
+    `render_index_html` renders `_render_act_mode` from the same panel_proposals;
+    a server-declared block_reason must suppress the active act-confirm /
+    act-reject / act-correct buttons there too, at parity with rail + palette.
+    """
+    from companion_ui.workspace.serve_dev_page import _render_act_mode
+
+    proposal = {
+        "proposal_id": "prop-act",
+        "artifact_id": "art-act",
+        "description": "Promote this note to evergreen.",
+        "status": "staged",
+        "block_reason": {"gate": "identity-mismatch"},
+        "evidence": {
+            "trigger_summary": "Trigger",
+            "action_class": "promotion",
+            "cognition_route": "rule",
+        },
+        "affordances": {"confirm": True, "correct": True, "reject": True},
+    }
+    html = _render_act_mode(
+        proposals=[proposal], response={}, writeguard_blocked=False
+    )
+    # No active act-mode action buttons on the held proposal.
+    assert 'data-testid="act-confirm"' not in html
+    assert 'data-testid="act-reject"' not in html
+    assert 'data-testid="act-correct"' not in html
+    # The Act proposal-review article itself is marked blocked, not active.
+    article_match = re.search(
+        r'data-testid="act-proposal-review"[^>]*'
+        r'data-affordance-status="([^"]+)"',
+        html,
+    )
+    assert article_match is not None
+    assert article_match.group(1) == "blocked"
+    # Parity with rail + palette: a calm Why/recourse card replaces the dead
+    # end, server-authoritative from the block payload.
+    assert 'data-testid="act-proposal-blocked"' in html
+    assert 'data-testid="act-blocked-reason"' in html
+    assert 'data-testid="act-blocked-recourse"' in html
+
+
 def test_block_reason_hold_with_staged_status_has_no_active_buttons() -> None:
     """A server-declared ``block_reason`` is a hold even when the status still
     reads ``staged`` — the rail must not render active Apply/Discard/Defer.
