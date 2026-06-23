@@ -570,9 +570,9 @@ def _render_workspace_header_strip(
         data-region="workspace-header">
         <div class="workspace-header-row" data-testid="workspace-header-row">
           <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
-          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}">
+          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus(); return false;">
             <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
-            <span>{vault_name} · vault {vault_state}</span>
+            <span class="workspace-vault-chip-label" data-testid="workspace-vault-chip-label" title="{vault_name} · vault {vault_state}">{vault_name} · vault {vault_state}</span>
           </a>
           <!-- Vault settings is vault-config, identity-adjacent — it stays by
                the vault chip (not in the displaced launcher cluster). #2447. -->
@@ -8475,7 +8475,6 @@ def render_index_html(
       line-height: 1;
       text-decoration: none;
     }}
-    .workspace-vault-chip,
     .workspace-runtime-pill,
     .workspace-freshness,
     .workspace-browse-vault,
@@ -8487,15 +8486,34 @@ def render_index_html(
       font-size: var(--text-xs);
       line-height: 1;
     }}
+    /* §B3/B2 — the vault chip carries a server-authoritative, unbounded
+       runtime_vault_name. It must shrink and clip (not stay flex-shrink:0)
+       so a long vault name cannot consume the 430px header row and push the
+       Capture launcher / dev ribbon off-screen. */
     .workspace-vault-chip {{
+      align-items: center;
       color: var(--fg-2);
+      display: inline-flex;
+      flex-shrink: 1;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
       gap: 6px;
+      line-height: 1;
+      max-width: 240px;
+      min-width: 0;
       text-decoration: none;
+    }}
+    .workspace-vault-chip-label {{
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }}
     .workspace-vault-dot {{
       background: var(--cyan);
       border-radius: 999px;
       display: inline-block;
+      flex-shrink: 0;
       height: 6px;
       width: 6px;
     }}

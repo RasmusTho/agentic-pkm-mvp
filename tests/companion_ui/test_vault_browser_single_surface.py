@@ -106,6 +106,12 @@ def test_browse_vault_focuses_left_panel_browse_mode():
     token = chip.group(0)
     # The chip routes to the canonical left-pane browse surface, not the modal.
     assert 'href="#vault-browser-left-pane"' in token
+    # Codex P2 (serve_dev_page:573): a bare fragment jump does NOT run
+    # vaultBrowser.focus(), so on collapsed/outline left panes or narrow
+    # viewports (modal fallback) the chip would target a hidden element and
+    # leave the vault browser unreachable. The chip must route through the
+    # browse controller so both the inline pane and the modal fallback work.
+    assert 'vaultBrowser.focus()' in token
 
 
 # ---------------------------------------------------------------------------

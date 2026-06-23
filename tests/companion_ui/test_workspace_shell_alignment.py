@@ -327,6 +327,28 @@ class TestWorkspaceHeaderStrip:
             assert relocated not in header, f"{relocated} must not sit on the header"
         assert 'data-testid="workspace-quick-open"' not in html
 
+    def test_vault_chip_is_bounded_against_long_names(self) -> None:
+        # Codex P2 (serve_dev_page:575): the chip emits an unbounded
+        # server-authoritative runtime_vault_name. If the chip stays
+        # flex-shrink:0 with no max-width/ellipsis, a long vault name consumes
+        # the 430px header row and pushes the Capture launcher / dev ribbon
+        # off-screen (the B3/B2 clipping bug). The chip must shrink and clip.
+        long_name = "A-Very-Long-Vault-Name-That-Would-Overflow-The-Header-Row"
+        html = _html(runtime_vault_name=long_name)
+        header = _header_strip(html)
+        assert 'data-testid="workspace-vault-chip-label"' in header
+        # The chip itself must allow shrinking and clip its overflow rather than
+        # holding the full intrinsic width of the name on the front edge.
+        assert ".workspace-vault-chip {" in html
+        chip_css = html.split(".workspace-vault-chip {", 1)[1].split("}", 1)[0]
+        assert "flex-shrink: 1" in chip_css
+        assert "min-width: 0" in chip_css
+        assert "max-width:" in chip_css
+        label_css = html.split(".workspace-vault-chip-label {", 1)[1].split("}", 1)[0]
+        assert "overflow: hidden" in label_css
+        assert "text-overflow: ellipsis" in label_css
+        assert "white-space: nowrap" in label_css
+
     def test_quick_open_hint_removed_from_front_edge(self) -> None:
         # CUIDR-04 (#2447): the quick-open hint is operator/diagnostic chrome —
         # removed from the front edge. ⌘K still mounts the palette via the host
