@@ -77,3 +77,62 @@ def test_start_fresh_dismisses_orienting_card_and_opens_shell() -> None:
     assert "siblingCues[i].remove()" in body
     assert "document.body.dataset.entryState = 'shell_active'" in body
     assert "data-entry-state', 'shell_active'" in body
+
+
+def _cold_orientation_payload() -> dict[str, Any]:
+    """A cold_start payload — first contact, no leave point to resume."""
+    payload = _orientation_payload()
+    payload["leave_point"] = {"status": "absent"}
+    payload["open_loops"] = []
+    return payload
+
+
+def _cold_start_action_row(html: str) -> str:
+    m = re.search(
+        r'<p data-region="cold-start-verbs"[^>]*>(.*?)</p>',
+        html,
+        re.S,
+    )
+    assert m, "cold_start must render the entry-screen action row"
+    return m.group(0)
+
+
+# ---------------------------------------------------------------------------
+# D2 (#2448): the cold_start / no_vault entry-screen action row is a set of
+# ranked, on-palette affordances — one primary, the rest secondary — not inline
+# browser-blue underlined links. The action set ("Find a note · Jot something
+# down · See the map") is unchanged; only the affordance treatment changes.
+# ---------------------------------------------------------------------------
+
+
+def test_entry_actions_ranked() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_orientation_payload(),
+    )
+    assert 'data-entry-state="cold_start"' in html
+
+    row = _cold_start_action_row(html)
+
+    # Exactly one primary affordance and two secondary affordances — ranked,
+    # not three equal inline links.
+    primary = re.findall(r'class="[^"]*\bbtn--primary\b[^"]*"', row)
+    secondary = re.findall(r'class="[^"]*\bbtn--secondary\b[^"]*"', row)
+    assert len(primary) == 1, f"action row must carry exactly one primary affordance: {row}"
+    assert len(secondary) == 2, f"action row must carry exactly two secondary affordances: {row}"
+
+    # The affordances are on-palette buttons, not inline browser-blue links.
+    assert "<a href" not in row and "<a data-intent" not in row, (
+        f"entry-screen actions must be ranked buttons, not <a href> links: {row}"
+    )
+
+    # The action set is unchanged — only the treatment changed.
+    assert "Find a note" in row
+    assert "Jot something down" in row
+    assert "See the map" in row
+
+    # The intents are preserved (the affordance treatment changed, not the
+    # routing): vault.open, capture.open, map.open still drive the row.
+    assert 'data-intent="vault.open"' in row
+    assert 'data-intent="capture.open"' in row
+    assert 'data-intent="map.open"' in row

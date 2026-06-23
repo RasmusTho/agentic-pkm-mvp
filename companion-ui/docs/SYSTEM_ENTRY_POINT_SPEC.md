@@ -135,7 +135,7 @@ Attributes follow the shipped renderer conventions (`data-testid` for test hooks
 | `data-guidance="on"` (absent = off) | shell root | Opt-in explanatory guidance layer; off is the established-user default. | same |
 | `data-region="capture-input"` | capture textarea | Friction-free capture field. | same |
 | `data-region="cold-start-threshold"` | `cold_start` container | Non-overlay structural region for the intent-declaration threshold. NOT registered with `overlay_host`; carries no continuity claim; suppressed under reduced-content/print. | (new; #2171) |
-| `data-region="cold-start-verbs"` | `cold_start` verb-line | Non-overlay structural region for the inline Find/Jot/Map verb sentence. NOT registered with `overlay_host`; carries no continuity claim. | (new; #2171) |
+| `data-region="cold-start-verbs"` | `cold_start` verb-line | Non-overlay structural region for the Find/Jot/Map entry-action row, rendered as ranked design-system affordances — one `btn--primary` (Find a note) plus two `btn--secondary` (Jot something down, See the map), on-palette, not inline browser-blue links (#2448 D2). NOT registered with `overlay_host`; carries no continuity claim. | (ranked affordances; #2171, #2448) |
 | `data-cognitive-mode` | shell root | Server-declared cognitive mode, rendered as supplied (§Resolved Q6). | (disambiguated) |
 | `data-posture-emphasis` | shell root | Local posture emphasis (Local UI) (§Resolved Q6). | (disambiguated) |
 | `data-intent="…"` | any actionable | The intent vocabulary below. | same |

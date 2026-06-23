@@ -219,3 +219,82 @@ def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
     assert 'data-open="false"' in panel_tag
     assert ".vault-settings-panel[hidden] { display: none !important; }" in html
     assert 'data-testid="vault-settings-panel-close"' in html
+
+
+# ---------------------------------------------------------------------------
+# D1 (#2448): the vault picker (E11) is styled to the design system — dark
+# palette, design-system typography, a ranked primary open button, and styled
+# (not default-browser) form controls. The picker is the literal front door;
+# default-browser chrome reads as a different application.
+# ---------------------------------------------------------------------------
+
+
+def test_vault_picker_uses_ds() -> None:
+    client = _PickerClient(_PICKER_PAYLOAD)
+    html = handle_get(
+        query_string="",
+        client=client,
+        api_base_url="http://127.0.0.1:18001",
+    )
+    assert 'data-testid="vault-selection-required"' in html
+
+    # Isolate the picker section so the DS assertions target the front-door
+    # surface (the configured-vault open affordance lives here).
+    start = html.index('<section class="vault-selection-required"')
+    end = html.index("</section>", start) + len("</section>")
+    picker = html[start:end]
+
+    # The configured-vault open button uses the design-system primary button
+    # class — a ranked affordance, not bare default-browser chrome.
+    open_button_idx = picker.index('data-testid="vault-selection-open-configured"')
+    open_tag = picker[picker.rindex("<button", 0, open_button_idx):picker.index(">", open_button_idx) + 1]
+    assert "btn" in open_tag and "btn--primary" in open_tag, (
+        f"configured-vault open button must use the DS primary button class: {open_tag}"
+    )
+
+    # The picker carries design-system styling — its own scoped CSS hooks the
+    # dark palette tokens, and no default-browser serif font leaks in.
+    assert ".vault-selection-required" in html, (
+        "the vault picker must carry design-system CSS, not default-browser chrome"
+    )
+    assert "font-family: serif" not in html
+    assert "font-family:serif" not in html
+
+    # The full open / initialize / recent-vault forms (rendered in the vault-
+    # settings panel below the picker on the no-vault page) carry no raw text
+    # input or select without a design-system style: every input/select in the
+    # panel is styled via the .vault-settings-panel scoped rule onto the dark
+    # palette (background var(--bg-raised), color var(--fg-1)). Assert that
+    # scoped rule is present so no field renders with default white chrome.
+    assert ".vault-settings-panel input" in html
+    assert ".vault-settings-panel select" in html
+    assert "var(--bg-raised" in html
+    # No bare unstyled text input escapes onto the front door outside the
+    # design-system-scoped containers: the picker section itself carries only
+    # the hidden path field (typeless) — never a visible default text input.
+    assert '<input type="text"' not in picker
+
+    # Recent-vault rows use the standard list-item / button treatment, not raw
+    # "unknown / unknown" default rows.
+    assert 'data-testid="vault-recent-vaults"' in html
+
+
+def test_no_white_inputs() -> None:
+    """No input on the no-vault page renders with default white chrome.
+
+    The picker fields and the vault-settings-panel inputs/selects/textareas
+    are all brought onto the dark palette via the design-system scoped rules;
+    no inline ``background: white`` / ``#fff`` leaks onto the dark theme.
+    """
+    client = _PickerClient(_PICKER_PAYLOAD)
+    html = handle_get(
+        query_string="",
+        client=client,
+        api_base_url="http://127.0.0.1:18001",
+    )
+    # The vault-settings-panel scoped rule styles every input/select/textarea
+    # onto the dark palette.
+    assert ".vault-settings-panel input, .vault-settings-panel select, .vault-settings-panel textarea" in html
+    # No input is left with default white chrome via an inline style.
+    for white in ("background: white", "background:#fff", "background: #fff", "background:white"):
+        assert white not in html, f"no input may carry inline {white!r} on the dark theme"

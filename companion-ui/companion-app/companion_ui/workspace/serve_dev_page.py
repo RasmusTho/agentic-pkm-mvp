@@ -2469,6 +2469,7 @@ def _render_active_note_body_update_flow(
           <label for="active_note_body_update_input">Active note body update</label>
           <textarea
             id="active_note_body_update_input"
+            class="rail-textarea"
             data-testid="workspace-active-note-body-update-input"
             oninput="{reveal_staged}"
             aria-label="Active note body update input"></textarea>
@@ -5172,13 +5173,55 @@ def _render_vault_selection_required_section(payload: object) -> str:
             '<form class="vault-selection-open-configured" data-intent="vault.select" '
             'data-api-method="POST" data-api-path="/api/companion/vault/select">'
             f'<input type="hidden" name="path" value="{_e(configured)}">'
-            '<button type="submit" data-testid="vault-selection-open-configured" '
+            '<button type="submit" class="btn btn--primary" '
+            'data-testid="vault-selection-open-configured" '
             f'data-vault-path="{_e(configured)}">Open {configured_name}</button>'
             "</form>"
         )
     else:
         open_configured_html = ""
+    # The vault picker is the literal front door (E11): styled fully to the
+    # design system so it never reads as default-browser chrome (#2448, D1).
+    # Dark palette, design-system typography, a ranked primary open affordance.
+    # Content is server-declared; this is presentation only.
     return f"""
+    <style>
+      .vault-selection-required {{
+        background: var(--bg-surface, #0c1220);
+        border: 1px solid var(--border-strong, #1e3050);
+        border-radius: 8px;
+        color: var(--fg-1, #dce8f0);
+        display: grid;
+        font-family: var(--font-ui, system-ui, sans-serif);
+        gap: 12px;
+        margin: 48px auto;
+        max-width: 560px;
+        padding: 28px 30px 30px;
+      }}
+      .vault-selection-headline {{
+        color: var(--fg-1, #dce8f0); font-size: var(--text-xl, 1.5rem);
+        font-weight: 500; margin: 0;
+      }}
+      .vault-selection-summary {{
+        color: var(--fg-2, #7a9ab8); font-size: var(--text-base, 0.9375rem);
+        margin: 0;
+      }}
+      .vault-selection-requested {{
+        color: var(--fg-2, #7a9ab8); font-size: var(--text-sm, 0.8125rem);
+        margin: 0;
+      }}
+      .vault-selection-requested code {{
+        background: var(--bg-raised, #111a2e);
+        border-radius: var(--radius-sm, 2px);
+        color: var(--accent, #d4a843);
+        font-family: var(--font-mono, monospace); padding: 1px 4px;
+      }}
+      .vault-selection-hint {{
+        color: var(--fg-3, #3d5570); font-size: var(--text-sm, 0.8125rem);
+        margin: 0;
+      }}
+      .vault-selection-open-configured {{ margin: 2px 0; }}
+    </style>
     <section class="vault-selection-required" data-region="vault-selection-required"
       data-testid="vault-selection-required" data-reason="{reason}"
       data-entry-state="no_vault">
@@ -6443,10 +6486,10 @@ def _render_orientation_index_html(
         if _cold_recents_path and _cold_recents_label:
             _cold_recents_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
             _cold_recents_html = (
-                f'<br><span class="cold-start-recents-anchor" data-testid="cold-start-recents-anchor">'
+                f'<p class="cold-start-recents-anchor" data-testid="cold-start-recents-anchor">'
                 f'<a data-intent="recents.open" href="{_e(_cold_recents_href)}">'
                 f"Open your most recent note: {_e(_cold_recents_label)}"
-                f"</a></span>"
+                f"</a></p>"
             )
         else:
             _cold_recents_html = ""
@@ -6461,13 +6504,10 @@ def _render_orientation_index_html(
         <h1 class="cold-start-headline">{_e(_cold_headline)}</h1>
       </div>
       <p data-region="cold-start-verbs" class="cold-start-verbs">
-        <a data-intent="vault.open" onclick="vaultBrowser.focus(); return false;" href="#workspace-orientation-vault-entry">Find a note</a>
-        &middot;
-        <a data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;" href="#">Jot something down</a>
-        &middot;
-        <a data-intent="map.open" onclick="overlayHost.mount('map'); return false;" href="#">See the map</a>
-        {_cold_recents_html}
-      </p>
+        <button type="button" class="btn btn--primary cold-start-verb" data-intent="vault.open" onclick="vaultBrowser.focus(); return false;">Find a note</button>
+        <button type="button" class="btn btn--secondary cold-start-verb" data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;">Jot something down</button>
+        <button type="button" class="btn btn--secondary cold-start-verb" data-intent="map.open" onclick="overlayHost.mount('map'); return false;">See the map</button>
+      </p>{_cold_recents_html}
       <!-- Inline capture field (design item 4, #2172): on focus / ⌘N mounts
            the shipped governed capture occupant verbatim.  The warmth rule:
            the caret is the one saturated element; the door stays monochrome.
@@ -6947,6 +6987,45 @@ def _render_orientation_index_html(
     .cold-start-capture-input:focus {{
       border-bottom-color: var(--accent);
     }}
+    /* ---- Design-system buttons (#2448, D2) — the cold_start / no_vault
+       entry-screen action row is ranked, on-palette affordances (one primary,
+       the rest secondary), not inline browser-blue links. ---- */
+    .btn {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      color: var(--fg-1, #dce8f0);
+      cursor: pointer;
+      font-family: var(--font-ui, system-ui, sans-serif);
+      font-size: var(--text-sm, 0.8125rem);
+      font-weight: 500;
+      line-height: 1.2;
+      padding: 8px 16px;
+      text-align: center;
+      text-decoration: none;
+    }}
+    .btn:hover {{ border-color: var(--accent, #d4a843); }}
+    .btn:focus-visible {{ outline: 1px solid var(--border-focus, #00d4e8); }}
+    .btn--primary {{
+      background: var(--accent, #d4a843);
+      border-color: var(--accent, #d4a843);
+      color: var(--bg-base, #070b12);
+      font-weight: 600;
+    }}
+    .btn--primary:hover {{ border-color: var(--fg-1, #dce8f0); }}
+    .btn--secondary {{
+      background: var(--bg-raised, #111a2e);
+      border-color: var(--border-strong, #1e3050);
+      color: var(--fg-1, #dce8f0);
+    }}
+    .cold-start-verbs {{
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 18px 0 0;
+    }}
+    .cold-start-recents-anchor {{ margin: 10px 0 0; }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" {entry_state_attributes(entry_resolution)}>
@@ -8082,6 +8161,38 @@ def render_index_html(
       flex-direction: column;
     }}
 
+    /* ---- Design-system buttons (#2448, D1/D2) — ranked on-palette
+       affordances: one primary, the rest secondary. Used by the vault picker
+       (E11) and the entry-screen action row. ---- */
+    .btn {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      color: var(--fg-1, #dce8f0);
+      cursor: pointer;
+      font-family: var(--font-ui, system-ui, sans-serif);
+      font-size: var(--text-sm, 0.8125rem);
+      font-weight: 500;
+      line-height: 1.2;
+      padding: 8px 16px;
+      text-align: center;
+      text-decoration: none;
+    }}
+    .btn:hover {{ border-color: var(--accent, #d4a843); }}
+    .btn:focus-visible {{ outline: 1px solid var(--border-focus, #00d4e8); }}
+    .btn--primary {{
+      background: var(--accent, #d4a843);
+      border-color: var(--accent, #d4a843);
+      color: var(--bg-base, #070b12);
+      font-weight: 600;
+    }}
+    .btn--primary:hover {{ border-color: var(--fg-1, #dce8f0); }}
+    .btn--secondary {{
+      background: var(--bg-raised, #111a2e);
+      border-color: var(--border-strong, #1e3050);
+      color: var(--fg-1, #dce8f0);
+    }}
+
     /* ---- Top bar ---- */
     .topbar {{
       display: flex;
@@ -9185,6 +9296,24 @@ def render_index_html(
     }}
     .note-source-editor[hidden] {{ display: none; }}
     .note-source-editor:focus {{ outline: 1px solid var(--border-focus); }}
+    /* Rail textarea (#2448, D4 / S2-rail): the active-note body-update input
+       sits inside the dark agent rail; bring it onto the design-system palette
+       so it never renders default white textarea chrome. */
+    .rail-textarea {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      box-sizing: border-box;
+      color: var(--fg-1, #dce8f0);
+      font-family: var(--font-ui, system-ui, sans-serif);
+      font-size: var(--text-sm, 0.8125rem);
+      line-height: 1.5;
+      padding: 6px 8px;
+      resize: vertical;
+      width: 100%;
+    }}
+    .rail-textarea::placeholder {{ color: var(--fg-3, #3d5570); }}
+    .rail-textarea:focus {{ outline: 1px solid var(--border-focus, #00d4e8); }}
     /* Design review §6.1 — body column is a reading surface, not a card.
        Background matches the page; no inset border; line-length capped at 68ch.
        §3.3/§7 — the reading column does not own a second nested scroll and is
