@@ -27,6 +27,14 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-quick-open",
         "workspace-browse-vault",
         "workspace-header-row",
+        # CUIDR-04 (#2447): Capture is the single topbar launcher; the operator
+        # telemetry region holds the relocated runtime disclosure; the composed
+        # bottom bar holds the Map + Help wayfinding controls.
+        "workspace-surface-icon-capture",
+        "workspace-surface-icon-vault-settings",
+        "workspace-operator-telemetry-region",
+        "workspace-bottom-bar",
+        "workspace-surface-icon-map",
         # Runtime status popover rows
         "workspace-runtime-status-popover",
         "workspace-runtime-channel",

@@ -470,16 +470,21 @@ def test_drawer_renders_candidates_and_governed_review_outcomes() -> None:
     # reachable from the topbar, and the controller routes decisions through
     # the #1792 endpoints (same-origin proxy).
     assert "memory" in SHIPPED_OVERLAY_OCCUPANTS
-    assert "memory" in SHIPPED_TOPBAR_SURFACES
+    # CUIDR-04 (#2447): the memory launcher is displaced off the topbar (which
+    # now keeps IDENTITY + Capture only). It is reachable via the System Map
+    # overlay's memory node (memory.open), a never-clipping surface.
+    assert "memory" not in SHIPPED_TOPBAR_SURFACES
     html = _render_workspace()
     drawer = _drawer(html)
     assert MEMORY_REVIEW_CALLOUT in drawer
-    icon = re.search(
-        r'<button[^>]*data-testid="workspace-surface-icon-memory"[^>]*>', html
+    assert 'data-testid="workspace-surface-icon-memory"' not in html, (
+        "the memory launcher must not sit on the topbar"
     )
-    assert icon, "topbar must render the memory surface icon"
-    assert 'data-intent="memory.open"' in icon.group(0)
-    assert "overlayHost.mount('memory')" in icon.group(0)
+    map_node = re.search(
+        r'<button[^>]*data-surface-id="memory"[^>]*>', html
+    )
+    assert map_node, "memory must be reachable via the System Map overlay node"
+    assert 'data-intent="memory.open"' in map_node.group(0)
     assert "register('memory'" in _drawer_script(html)
     script = _drawer_script(html)
     assert MEMORY_REVIEW_FRAGMENT_ROUTE in script

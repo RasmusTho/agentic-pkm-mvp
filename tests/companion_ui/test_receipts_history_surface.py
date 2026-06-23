@@ -300,17 +300,22 @@ def test_history_renders_runtime_receipt_projections() -> None:
     assert RECEIPTS_OVERLAY_ID == "receipts"
     assert RECEIPTS_OVERLAY_ID in DECLARED_OVERLAYS
     assert RECEIPTS_OVERLAY_ID in SHIPPED_OVERLAY_OCCUPANTS
-    assert RECEIPTS_OVERLAY_ID in SHIPPED_TOPBAR_SURFACES
+    # CUIDR-04 (#2447): the receipts launcher is displaced off the topbar
+    # (IDENTITY + Capture only). It is reachable via the System Map overlay's
+    # receipts node (receipts.open), a never-clipping surface.
+    assert RECEIPTS_OVERLAY_ID not in SHIPPED_TOPBAR_SURFACES
     html = _render_workspace()
     modal = _modal(html)
     assert 'data-overlay-id="receipts"' in modal
     assert 'data-authority="receipt"' in modal
-    icon = re.search(
-        r'<button[^>]*data-testid="workspace-surface-icon-receipts"[^>]*>', html
+    assert 'data-testid="workspace-surface-icon-receipts"' not in html, (
+        "the receipts launcher must not sit on the topbar"
     )
-    assert icon, "topbar must render the receipts surface icon"
-    assert 'data-intent="receipts.open"' in icon.group(0)
-    assert "overlayHost.mount('receipts')" in icon.group(0)
+    map_node = re.search(
+        r'<button[^>]*data-surface-id="receipts"[^>]*>', html
+    )
+    assert map_node, "receipts must be reachable via the System Map overlay node"
+    assert 'data-intent="receipts.open"' in map_node.group(0)
     script = _modal_script(html)
     assert "register('receipts'" in script
     assert RECEIPTS_HISTORY_FRAGMENT_ROUTE in script

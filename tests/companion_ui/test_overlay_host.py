@@ -187,31 +187,54 @@ def test_topbar_renders_declared_regions() -> None:
     body_tag = re.search(r"<body[^>]*>", html)
     assert body_tag and "data-posture-emphasis=" in body_tag.group(0)
 
-    # Surface icons — shipped surfaces only (no dead affordances).
+    # Surface icons — CUIDR-04 (#2447): the top edge keeps IDENTITY + ONE
+    # primary action (Capture). Every other launcher is displaced off the
+    # topbar into the never-clipping System Map overflow surface, so the bar
+    # stops clipping its own icons off-screen at ≤1440 px.
     icons = re.search(
         r'<nav[^>]*data-region="surface-icons".*?</nav>', topbar, re.S
     )
     assert icons, "topbar must render the surface-icons group"
     rendered_surfaces = set(re.findall(r'data-surface="([^"]+)"', icons.group(0)))
-    assert rendered_surfaces == set(SHIPPED_TOPBAR_SURFACES)
+    assert rendered_surfaces == set(SHIPPED_TOPBAR_SURFACES) == {"capture"}
+    # Every non-capture launcher leaves the topbar entirely (no icon anywhere
+    # on the front edge — reachable via the System Map / bottom bar instead).
     for surface in set(TOPBAR_SURFACES) - set(SHIPPED_TOPBAR_SURFACES):
-        assert f'data-surface="{surface}"' not in html, (
-            f"unshipped surface {surface!r} must not render an icon"
+        assert f'data-surface="{surface}"' not in topbar, (
+            f"displaced surface {surface!r} must not render a topbar icon"
         )
 
     # Vault-status dot present in the topbar.
     assert 'data-testid="workspace-vault-status-dot"' in topbar
 
-    # Shipped header contracts are preserved (testids unchanged).
-    for testid in (
-        "workspace-vault-chip",
+    # Shipped identity contracts are preserved on the topbar (testids
+    # unchanged). The runtime-status pill, freshness string, and quick-open hint
+    # are operator/diagnostic telemetry — CUIDR-04 moves them off the front edge
+    # into the operator-telemetry region; they are no longer in the header.
+    # CUIDR-04 (#2447): the vault identity chip stays on the header (identity);
+    # the standalone "Browse vault" launcher left the front edge (vault routes
+    # via the System Map / the chip now).
+    assert 'data-testid="workspace-vault-chip"' in topbar
+    assert 'data-testid="workspace-browse-vault"' not in topbar
+    for relocated in (
         "workspace-runtime-pill",
         "workspace-runtime-status-popover",
         "workspace-freshness",
-        "workspace-quick-open",
-        "workspace-browse-vault",
     ):
-        assert f'data-testid="{testid}"' in topbar
+        assert f'data-testid="{relocated}"' not in topbar, (
+            f"{relocated} is operator telemetry — it must not sit on the topbar"
+        )
+    # quick-open is removed outright (not relocated).
+    assert 'data-testid="workspace-quick-open"' not in html
+    # The relocated telemetry lives in the operator layer, off the front edge.
+    op_region = re.search(
+        r'<section class="workspace-operator-telemetry"[^>]*>.*?</section>',
+        html,
+        re.S,
+    )
+    assert op_region, "operator-telemetry region must render off the front edge"
+    assert 'data-testid="workspace-runtime-pill"' in op_region.group(0)
+    assert 'data-testid="workspace-freshness"' in op_region.group(0)
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +346,10 @@ def test_keyboard_map_routes_declared_intents() -> None:
     assert "Escape" in script and "overlay.dismiss" in script
 
     topbar = _topbar(html)
+    # CUIDR-04 (#2447): Capture is the single launcher intent kept on the top
+    # edge. Every other surface-open intent (vault/map/memory/receipts/settings)
+    # is displaced off the topbar into the System Map overflow surface.
+    assert 'data-intent="capture.open"' in topbar
     for intent in (
         "vault.open",
         "map.open",
@@ -330,19 +357,34 @@ def test_keyboard_map_routes_declared_intents() -> None:
         "receipts.open",
         "settings.open",
     ):
-        assert f'data-intent="{intent}"' in topbar
+        assert f'data-intent="{intent}"' not in topbar, (
+            f"{intent} is displaced off the topbar (reachable via the System Map)"
+        )
         assert intent in INTENT_OVERLAY_TARGETS
+    # The displaced open-intents are reachable via the System Map routing nodes.
+    map_overlay = re.search(
+        r"<!-- system-map-overlay start -->.*?<!-- system-map-overlay end -->",
+        html,
+        re.S,
+    )
+    assert map_overlay, "system map overlay must render in the shell"
+    for intent in ("vault.open", "memory.open", "receipts.open", "settings.open"):
+        assert f'data-intent="{intent}"' in map_overlay.group(0)
 
-    # No dead affordances: the palette and capture surfaces open through the
-    # host's ⌘K/⌘N wiring. Since the system map shipped (#1787, SEP-05) the
-    # only rendered controls advertising cmd.open / capture.open are the
-    # map's routing nodes — live host routes to shipped surfaces, never dead
-    # chrome.
-    for intent in ("cmd.open", "capture.open"):
-        for tag in re.findall(rf'<[a-z]+[^>]*data-intent="{intent}"[^>]*>', html):
-            assert 'data-testid="system-map-node"' in tag, (
-                f"only a live system-map routing node may advertise {intent}: {tag}"
-            )
+    # No dead affordances: the capture surface opens through the host's ⌘N
+    # wiring and the topbar's single Capture launcher; cmd.open is advertised
+    # only by the System Map's palette routing node — live host routes to
+    # shipped surfaces, never dead chrome.
+    for tag in re.findall(r'<[a-z]+[^>]*data-intent="cmd.open"[^>]*>', html):
+        assert 'data-testid="system-map-node"' in tag, (
+            f"only a live system-map routing node may advertise cmd.open: {tag}"
+        )
+    for tag in re.findall(r'<[a-z]+[^>]*data-intent="capture.open"[^>]*>', html):
+        assert (
+            'data-testid="system-map-node"' in tag
+            or 'data-testid="workspace-surface-icon-capture"' in tag
+            or 'data-intent="capture.open" onclick' in tag
+        ), f"capture.open must be a live topbar launcher or map node: {tag}"
 
 
 # ---------------------------------------------------------------------------

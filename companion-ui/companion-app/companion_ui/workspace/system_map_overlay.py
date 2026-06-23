@@ -74,6 +74,11 @@ ROUTE_INTENTS: dict[str, str] = {
     "receipts": "receipts.open",
     "governance": "receipts.open",
     "settings": "settings.open",
+    # Operator/diagnostics layer (#2447, CUIDR-04): the operator drawer is no
+    # longer a free-floating front-edge pill — it is reached from the System
+    # Map as the operator layer. The drawer carries all runtime/diagnostic
+    # telemetry (runtime status, freshness, as-of) that left the top edge.
+    "operator": "operator.open",
 }
 
 # Surfaces the map controller can route to via an existing affordance.
@@ -87,6 +92,7 @@ _ROUTABLE_SURFACE_IDS: tuple[str, ...] = (
     "receipts",
     "governance",
     "settings",
+    "operator",
 )
 
 # The entry-point center node (issue #1787: "the entry-point center node plus
@@ -321,6 +327,20 @@ MAP_SURFACES: tuple[MapNode, ...] = (
         returns="cross-cutting; persists nothing",
         status="shipped",
         status_note="shipped (#1788, SEP-06) — cross-cutting local UI toggle",
+    ),
+    MapNode(
+        surface_id="operator",
+        name="Operator diagnostics",
+        modes=(),
+        reached="System map (operator.open) — the operator layer",
+        returns="dims but does not dismiss; returns to anchor",
+        status="shipped",
+        status_note=(
+            "shipped (#2447, CUIDR-04) — operator/diagnostic telemetry "
+            "(runtime status, freshness, as-of) moved off the front edge to "
+            "this operator layer; not a daily-use surface"
+        ),
+        routable=True,
     ),
 )
 
@@ -651,6 +671,12 @@ def system_map_overlay_script() -> str:
         if (id === 'receipts') { window.overlayHost.mount('receipts'); return; }
         if (id === 'governance') { window.overlayHost.mount('receipts'); return; }
         if (id === 'settings') { window.overlayHost.mount('settings'); return; }
+        // Operator layer (#2447): the operator drawer is the home for the
+        // runtime/diagnostic telemetry that left the front edge.
+        if (id === 'operator') {
+          if (window.companionOperator) { window.companionOperator.open(); }
+          return;
+        }
       }
     };
   })();

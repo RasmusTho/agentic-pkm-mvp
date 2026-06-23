@@ -33,9 +33,15 @@ def test_production_profile_exposes_operator_overlay() -> None:
         },
     )
 
-    # Operator toggle present in production shell
-    assert 'data-testid="workspace-operator-toggle"' in html, (
-        "Production shell missing Operator toggle — violates no-dev/prod-feature-split constraint"
+    # CUIDR-04 (#2447): the floating Operator pill is removed from the front
+    # edge; the operator layer is reached from the System Map operator node
+    # (operator.open) in production too — no dev/prod feature split.
+    assert 'class="operator-toggle"' not in html, (
+        "the floating Operator pill must not render on the production front edge"
+    )
+    assert 'data-surface-id="operator"' in html and 'data-intent="operator.open"' in html, (
+        "Production shell missing System Map operator node — violates "
+        "no-dev/prod-feature-split constraint"
     )
 
     # Operator drawer host present

@@ -41,9 +41,14 @@ cause — the topbar's job is undefined:
 
 The settled design decision that bounds all three: **the top edge keeps IDENTITY + ONE primary
 action (Capture, ⌘N — the most-used launcher); ALL other surface launchers route into one
-resilient, never-clipping command/overflow surface** (the existing `cmd` overlay, ⌘K). Operator
-telemetry moves off the shell surface entirely — reachable only via the System Map / operator
-layer.
+resilient, never-clipping command/overflow surface.** That overflow surface is the **System Map
+overlay** — the real surface index — not the `cmd` Panel palette. (Codex review of this spec PR
+flagged the seam: the shipped `cmd.open` contract — `docs/SYSTEM_ENTRY_POINT/
+PANEL_COMMAND_PALETTE.md`, `tests/companion_ui/test_panel_command_palette.py` — defines `cmd` as a
+*presentation of the Panel rail's server-declared proposals* (`data-presentation-of="panel-rail"`),
+not a general launcher; broadening it fails closed. The displaced launchers therefore route to the
+System Map, which already indexes every surface.) Operator telemetry moves off the shell surface
+entirely — reachable only via the System Map / operator layer.
 
 ## Concretely
 
@@ -65,7 +70,9 @@ layer.
 | `ok Online` runtime status text | System Map / operator layer only |
 | `as-of HH:MM` freshness timestamp | System Map / operator layer only |
 | ⚠ Operator pill | System Map / operator layer only |
-| All non-Capture surface-launch icons (vault, map, memory, receipts, settings, help) | Routed into the `cmd` overlay (⌘K); the overflow surface is never-clipping |
+| All non-Capture surface-launch icons (vault, map, memory, receipts, settings) | Routed into the **System Map overlay** (the never-clipping surface index); its single opener lives in the composed bottom bar (`map.open`). NOT the `cmd` Panel palette. |
+| Help launcher | Composed bottom bar (the Help control), alongside the System Map opener |
+| Vault-settings launcher | Identity-adjacent, kept beside the vault chip (vault config, not a launcher) |
 
 **Presentation only.** The telemetry VALUES continue to come from the runtime payload;
 this task changes WHERE they render (operator layer, not the front edge). The server-side
@@ -104,15 +111,18 @@ where operators expect it.
 ## Acceptance Criteria
 
 **B2** — At 1280 px and 1440 px every surface launcher is either visible and clickable on the
-top edge, or reachable through the `cmd` overlay (⌘K), which never clips.
+top edge, or reachable through the **System Map overlay** (a never-clipping surface index).
 No launch icon sits behind the rail or off the viewport edge at either width.
 
-> Verify: static — render the shell at 1280 and 1440 px viewport widths via
-> `render_index_html`; for each launcher in `SHIPPED_TOPBAR_SURFACES` assert either
-> (a) `data-surface="{surface}"` is present inside the `data-region="surface-icons"` nav
-> and is not positioned beyond the viewport edge, or (b) the surface is reachable via the
-> `cmd` overlay and `data-surface="{surface}"` is absent from the topbar nav. Assert
-> `data-surface="capture"` remains on the topbar at both widths.
+> Verify: static — render the shell via `render_index_html`; assert
+> `SHIPPED_TOPBAR_SURFACES == ("capture",)` and that `data-surface="capture"` is present in the
+> `data-region="surface-icons"` nav. For each surface in `OVERFLOW_TOPBAR_SURFACES`
+> (vault/map/memory/receipts/settings/help) assert `data-surface="{surface}"` is absent from the
+> topbar nav; vault/map/memory/receipts/settings each carry a `data-surface-id="{surface}"` node in
+> the System Map overlay, and help is reachable via the composed bottom bar
+> (`data-testid="workspace-help-toggle"`). The render is width-independent server markup, so the
+> 1280/1440 contract holds structurally — a launcher reachable only via the never-clipping System
+> Map cannot clip off the topbar at any width.
 
 **B3** — At 430 px the status string carries `text-overflow: ellipsis` (or equivalent
 truncation CSS), the identity region never overflows the viewport, and all bottom-edge
@@ -131,17 +141,21 @@ render outside the operator/System Map overlay.
 
 > Verify: static — scan renders across entry states (cold_start, no_mist, thread_fade,
 > full_mist, long_mist, degraded) for the listed testids and data-intents; assert none
-> appear on the shell surface; assert the operator layer carries them.
+> appear on the shell/orientation front surface (the operator/System Map overlay region is
+> excluded from the scan); assert the operator layer carries them. The detailed runtime
+> telemetry is **relocated, not discarded**: it renders in the server-rendered
+> `data-region="operator-telemetry"` / `data-layer="operator"` region (hidden from the reading
+> surface) and is reachable via the System Map operator node (`operator.open`).
 
 ## How to Verify (Pre-Merge)
 
-1. **B2 pointer-hit-test** — `tests/companion_ui/test_topbar_edge_job.py::test_launchers_reachable_at_1280_and_1440`. Renders the shell fixture at both widths, walks `SHIPPED_TOPBAR_SURFACES`, and asserts each is either on the topbar or in the `cmd` overlay surface registry. Capture is always on the topbar; vault/map/memory/receipts/settings/help are always off it.
+1. **B2 pointer-hit-test** — `tests/companion_ui/test_topbar_edge_job.py::test_launchers_reachable_at_1280_and_1440`. Asserts `SHIPPED_TOPBAR_SURFACES == ("capture",)` (Capture is the single topbar launcher), each `OVERFLOW_TOPBAR_SURFACES` launcher is absent from the topbar nav, vault/map/memory/receipts/settings carry a System Map node, and help is reachable via the composed bottom bar.
 
-2. **B3 narrow-shell capture** — `tests/companion_ui/test_topbar_edge_job.py::test_narrow_shell_composed_edges_at_430`. Renders at 430 px; asserts truncation CSS on the identity region; asserts a single bottom-bar container; asserts no stray fixed-position bottom elements.
+2. **B3 narrow-shell capture** — `tests/companion_ui/test_topbar_edge_job.py::test_narrow_shell_composed_edges_at_430`. Asserts truncation CSS (`text-overflow: ellipsis; white-space: nowrap; overflow: hidden`) on the identity region; a single `data-region="bottom-bar"` container; no stray fixed-position operator pill at the bottom edge.
 
-3. **C1 telemetry scan** — `tests/companion_ui/test_topbar_edge_job.py::test_operator_telemetry_absent_from_shell`. Iterates entry-state fixtures; asserts the operator testids and runtime-pill intents are absent from the shell render; asserts they appear in the operator/System Map layer render.
+3. **C1 telemetry scan** — `tests/companion_ui/test_topbar_edge_job.py::test_operator_telemetry_absent_from_shell`. Iterates entry-state fixtures with the operator layer stripped; asserts the operator testids and `operator.open` intent are absent from the front surface; asserts the relocated telemetry lives in the hidden operator-telemetry region and the System Map operator node carries `operator.open`.
 
-All three are static (no live runtime required). A Playwright live UAT confirming pointer hit-tests at real viewport widths is a stretch goal, not a merge gate for this task.
+All three are static (no live runtime required). A Playwright live UAT confirming pointer hit-tests at real viewport widths is a stretch goal, not a merge gate for this task — defer to the parent (#2443) live UAT pass.
 
 ## Out of Scope
 
@@ -165,11 +179,15 @@ All three are static (no live runtime required). A Playwright live UAT confirmin
 - `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` — shell overlay grammar, keyboard map,
   data-attribute vocabulary (§Keyboard map, §Data-attribute vocabulary, §Resolved Q6)
 - `companion-ui/companion-app/companion_ui/workspace/overlay_host.py` — `TOPBAR_SURFACES`,
-  `SHIPPED_TOPBAR_SURFACES`, `KEYBOARD_MAP`, `INTENT_OVERLAY_TARGETS`; the `cmd` overlay
-  is already declared and shipped; this task removes icons from the topbar nav and confirms
-  they remain reachable via `cmd.open`
+  `SHIPPED_TOPBAR_SURFACES` (now `("capture",)`), `OVERFLOW_TOPBAR_SURFACES`, `KEYBOARD_MAP`,
+  `INTENT_OVERLAY_TARGETS`; this task removes the launcher icons from the topbar nav and confirms
+  they remain reachable via the System Map overlay (and the composed bottom bar for Help)
+- `companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py` — the never-clipping
+  surface index that absorbs the displaced launchers; this task adds the `operator` node so the
+  relocated operator/diagnostic telemetry is reachable from the map (`operator.open`)
 - `docs/COMPANION_UI_DEEP_REVIEW_REMEDIATION/OVERLAY_MODAL_FRAME_SPEC.md` — CUIDR-05,
-  the frame contract for the `cmd` overlay that absorbs the displaced launchers
+  the modal-frame contract for overlays (the `cmd` palette stays a Panel-rail presentation; it is
+  NOT broadened into a general launcher by this task)
 - `docs/COMPANION_UI_DEEP_REVIEW_REMEDIATION/RAIL_AMBIENT_UNTIL_ACTIVE.md` — CUIDR-03,
   the rail-collapse task that reclaims width; B2's overlap finding (rail header covers topbar
   icon cluster) is fixed by that task reducing rail extent, reinforced by this task moving

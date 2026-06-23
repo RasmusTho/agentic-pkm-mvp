@@ -179,6 +179,7 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | `capture.open` | shell (`⌘N`) / entry / map | open Capture modal | no |
 | `capture.save` | Capture | append the capture to the vault inbox | **yes — governed write (§Resolved Q17)** |
 | `receipts.open` | shell / map | open the read-only receipts/history surface | no |
+| `operator.open` | map | open the Operator diagnostics drawer (the operator layer; runtime/diagnostic telemetry lives here, off the front edge — CUIDR-04 #2447) | no (read-only diagnostics; never a mutation endpoint) |
 
 Reserved, **not implementable** until Q15–Q16 resolve (see §Parked): `context.open`, `location.enable`.
 

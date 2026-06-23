@@ -226,15 +226,18 @@ def test_drawer_sections_render_and_display_prefs_work() -> None:
     assert 'data-intent="settings.set"' in drawer
     assert 'data-intent="settings.reset"' in drawer
 
-    # Topbar affordance: settings is a shipped topbar surface with the
-    # declared settings.open intent mounting through the host.
-    assert "settings" in SHIPPED_TOPBAR_SURFACES
-    icon = re.search(
-        r'<button[^>]*data-testid="workspace-surface-icon-settings"[^>]*>', html
+    # CUIDR-04 (#2447): the settings launcher is displaced off the topbar
+    # (IDENTITY + Capture only). It is reachable via the System Map overlay's
+    # settings node with the declared settings.open intent.
+    assert "settings" not in SHIPPED_TOPBAR_SURFACES
+    assert 'data-testid="workspace-surface-icon-settings"' not in html, (
+        "the settings launcher must not sit on the topbar"
     )
-    assert icon, "topbar must render the settings surface icon"
-    assert 'data-intent="settings.open"' in icon.group(0)
-    assert "overlayHost.mount('settings')" in icon.group(0)
+    map_node = re.search(
+        r'<button[^>]*data-surface-id="settings"[^>]*>', html
+    )
+    assert map_node, "settings must be reachable via the System Map overlay node"
+    assert 'data-intent="settings.open"' in map_node.group(0)
 
     # Pure host model: settings mounts and dismisses back to the anchor with
     # the anchor context preserved by construction.

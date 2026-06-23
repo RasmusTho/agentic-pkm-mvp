@@ -119,7 +119,15 @@ TOPBAR_SURFACES: tuple[str, ...] = (
     "receipts",
     "help",
 )
-SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = (
+# CUIDR-04 (#2447): the top edge keeps IDENTITY + ONE primary action
+# (Capture, ⌘N). Every other surface launcher is displaced off the topbar into
+# the System Map overflow surface (never-clipping), so the bar stops clipping
+# its own icons off-screen at ≤1440 px. ``SHIPPED_TOPBAR_SURFACES`` is now the
+# truthful set of launchers that actually sit on the topbar — exactly Capture.
+SHIPPED_TOPBAR_SURFACES: tuple[str, ...] = ("capture",)
+# The launchers that left the topbar; each is reachable via the System Map
+# overlay (`map` node routes), never behind the rail or off the viewport edge.
+OVERFLOW_TOPBAR_SURFACES: tuple[str, ...] = (
     "vault",
     "map",
     "memory",

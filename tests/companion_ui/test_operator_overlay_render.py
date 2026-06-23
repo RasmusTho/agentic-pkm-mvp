@@ -168,10 +168,23 @@ def test_operator_overlay_is_operator_badged_and_dims_workspace() -> None:
     assert "op-badge" in html
 
 
-def test_operator_toggle_and_drawer_in_shell_html() -> None:
-    """The full shell HTML (render_index_html) must contain the Operator toggle
-    and drawer in both note view and orientation view — no dev/prod split."""
+def test_operator_layer_and_drawer_in_shell_html() -> None:
+    """The full shell HTML (render_index_html) must contain the Operator drawer
+    (the operator layer) reachable via the System Map operator node in both note
+    view and production profile — no dev/prod split.
+
+    CUIDR-04 (#2447): the floating Operator pill is removed from the front edge;
+    the operator layer is reached one level deeper, from the System Map's
+    operator node (operator.open). The drawer/host/badge must still be present.
+    """
+    import re
+
     from companion_ui.workspace.serve_dev_page import render_index_html
+
+    def _operator_node(html: str) -> str:
+        m = re.search(r'<button[^>]*data-surface-id="operator"[^>]*>', html)
+        assert m, "operator must be reachable via the System Map operator node"
+        return m.group(0)
 
     # Note view
     html_note = render_index_html(
@@ -189,12 +202,15 @@ def test_operator_toggle_and_drawer_in_shell_html() -> None:
             "guard_degraded": False,
         },
     )
-    assert 'data-testid="workspace-operator-toggle"' in html_note
+    # The floating front-edge operator pill is gone; the operator layer is
+    # reached from the System Map operator node instead.
+    assert 'class="operator-toggle"' not in html_note
+    assert 'data-intent="operator.open"' in _operator_node(html_note)
     assert 'data-testid="workspace-operator-host"' in html_note
     assert 'data-testid="workspace-operator-drawer"' in html_note
     assert 'data-testid="workspace-operator-badge"' in html_note
 
-    # Production profile — same drawer present (no dev/prod feature split)
+    # Production profile — same operator layer present (no dev/prod split)
     html_prod = render_index_html(
         api_base_url="http://127.0.0.1:18000",
         production_profile=True,
@@ -211,7 +227,8 @@ def test_operator_toggle_and_drawer_in_shell_html() -> None:
             "guard_degraded": False,
         },
     )
-    assert 'data-testid="workspace-operator-toggle"' in html_prod
+    assert 'class="operator-toggle"' not in html_prod
+    assert 'data-intent="operator.open"' in _operator_node(html_prod)
     assert 'data-testid="workspace-operator-host"' in html_prod
 
 
