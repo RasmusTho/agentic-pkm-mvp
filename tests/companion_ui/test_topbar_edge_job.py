@@ -333,6 +333,24 @@ def test_narrow_shell_composed_edges_at_430() -> None:
         f"{bottom_decls}"
     )
 
+    # Peek-gating guard (#2462 Codex round-2 / AC2): the lift must be conditional
+    # on a visible peek sheet. With the sheet closed (display:none) or absent
+    # (orientation / no-sheet renders) an unconditional lift would float the bar
+    # 60px above the bottom edge — a permanent dead gap. Assert that EVERY
+    # `bottom: calc(60px + 18px)` lift rule is gated on a visible peek snap
+    # (`:has(.portrait-sheet[data-current-snap="peek"])`), so the bar returns to
+    # the bottom edge whenever no peek sheet is present.
+    lift_selectors = re.findall(
+        r"([^{}]*?)\{[^{}]*bottom:\s*calc\(60px \+ 18px\)[^{}]*\}", html
+    )
+    assert lift_selectors, "the bottom-bar peek-clearing lift must render"
+    for sel in lift_selectors:
+        assert ":has(" in sel and 'data-current-snap="peek"' in sel, (
+            "every .workspace-bottom-bar calc(60px + 18px) lift must be gated "
+            "on a visible peek sheet so the bar rests at the bottom edge when "
+            f"no sheet is present (#2462 AC2); ungated selector: {sel.strip()!r}"
+        )
+
     # No independently-positioned fixed element with `bottom` remains outside
     # the composed bar — the floating Operator pill is gone from the edge. The
     # rendered toggle element and its fixed-position CSS rule must both be

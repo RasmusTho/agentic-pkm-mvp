@@ -8148,17 +8148,20 @@ def _render_help_drawer() -> str:
     .workspace-bottom-bar{position:fixed;bottom:18px;right:18px;z-index:999;
       display:inline-flex;align-items:center;gap:8px}
     /* Lift the composed bottom bar above the ~60px portrait-sheet peek line
-       (.portrait-sheet{bottom:0;z-index:20}) on narrow viewports so the two
-       read as one composed bottom edge instead of the bar layering over the
-       peek (CUIDR-04 bottom-edge collision, #2462). This override is
-       co-located with the base rule above — and NOT in the head stylesheet —
-       so it wins the cascade: the drawer style block is appended at the end of
-       the body, later than any head rule at equal specificity (a media query
-       adds no specificity), so a head-only override lost to this base rule.
-       Safe unconditionally: with no sheet present the bar just rests slightly
-       higher, so it does not depend on DOM sibling order. */
+       (.portrait-sheet[data-current-snap="peek"]{height:60px;bottom:0;
+       z-index:20}) on narrow viewports so the two read as one composed bottom
+       edge instead of the bar layering over the peek (CUIDR-04 bottom-edge
+       collision, #2462).
+         Gated on a visible peek via :has() on <body>: when the sheet is closed
+       (display:none) or absent (orientation / no-sheet renders) the bar must
+       rest at the bottom edge, not float 60px up leaving a dead gap (#2462
+       AC2). :has() on the shared <body> ancestor keeps this independent of the
+       bar/sheet DOM sibling order, and its higher specificity (0,3,2 vs the
+       base rule's 0,1,0) wins the cascade — the earlier head-stylesheet
+       override lost to the base rule that _render_help_drawer() appends later
+       in the body at equal specificity. Co-located with the base rule above. */
     @media (max-width: 899px){
-      .workspace-bottom-bar{bottom:calc(60px + 18px)}
+      body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar{bottom:calc(60px + 18px)}
     }
     .help-toggle,.map-toggle{position:static;
       display:inline-flex;align-items:center;gap:6px;
