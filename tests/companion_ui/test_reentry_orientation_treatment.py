@@ -1297,6 +1297,17 @@ def test_mist_ladder_subtractive_no_panel_at_short_rungs() -> None:
     thread_fade = _render(orientation=_orientation_payload(gap=_GAP_THREAD_FADE))
     assert 'data-rail-fade="' not in no_mist
     assert re.search(r'data-rail-fade="0\.\d+"', thread_fade)
+    # The distinction must be a *visible* rail-fade element, not merely a hidden
+    # data attribute: the subtractive ladder drops the panel rail at this rung,
+    # so thread_fade renders its own faded peripheral strip. no_mist renders no
+    # such element (it carries no overlay marker at all).
+    assert 'data-region="reentry-rail-fade"' in thread_fade
+    assert 'data-region="reentry-rail-fade"' not in no_mist
+    rail_strip = thread_fade.split('data-region="reentry-rail-fade"', 1)[1].split(">", 1)[0]
+    assert re.search(r"opacity:\s*0\.\d+", rail_strip), (
+        "thread_fade rail strip must carry the fractional opacity that makes it "
+        "visually distinct from no_mist"
+    )
 
     # --- full_mist / long_mist: panels present, de-duplicated against card. ---
     for gap in (_GAP_FULL_MIST, _GAP_LONG_MIST):
@@ -1369,17 +1380,28 @@ def test_long_mist_whisper_clears_info_glyph() -> None:
     assert "data-reentry-info-glyph" in card
 
     # The whisper column declares the clearance against that glyph.
+    whisper_open = html.split('data-region="whisper-column"', 1)[1].split(">", 1)[0]
     whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
     assert 'data-reentry-glyph-clearance="card-info-glyph"' in whisper
-    # The clearance is expressed as a right-offset derived from the glyph-width
-    # token plus a gap (nominally calc(var(--card-info-glyph-width) + 0.75rem)).
-    assert "var(--card-info-glyph-width)" in whisper
+    # The clearance is a right-offset derived from the glyph-width token plus a
+    # gap — and crucially anchored to the *card* edge, not the raw viewport
+    # edge. The shell is centered (max-width, margin auto), so on wide viewports
+    # the column must offset by the shell's right inset
+    # (max(0, (100vw - shell-max-width)/2)) plus the glyph clearance, otherwise
+    # the fixed column still overlaps the inset card's ⓘ glyph (D4 regression).
+    assert "var(--card-info-glyph-width)" in whisper_open
+    assert "var(--orientation-shell-max-width)" in whisper_open, (
+        "whisper clearance must anchor to the centered shell inset, not the "
+        "viewport edge, or the D4 collision returns on wide screens"
+    )
+    assert "100vw" in whisper_open and "max(" in whisper_open
     # The "DOING" slot specifically carries the clearance so it cannot collide.
     doing = whisper.split('data-whisper-item="doing"', 1)[1].split("</div>", 1)[0]
     assert 'data-reentry-glyph-clearance="card-info-glyph"' in doing
 
-    # The token itself is defined so the calc() resolves to a real width.
+    # The tokens themselves are defined so the calc() resolves to real values.
     assert "--card-info-glyph-width:" in html
+    assert "--orientation-shell-max-width:" in html
 
 
 # Issue #2450 names test_long_mist_no_glyph_collision for the D4 static AC.

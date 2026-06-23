@@ -6313,7 +6313,7 @@ def _render_reentry_whisper_column(orientation: dict) -> str:
   <aside class="reentry-whisper-col" data-region="whisper-column"
     data-testid="reentry-whisper-column" data-narrow-mode="suppressed"
     data-reentry-glyph-clearance="card-info-glyph"
-    style="right: calc(var(--card-info-glyph-width) + 0.75rem);"
+    style="right: calc(max(0px, (100vw - var(--orientation-shell-max-width)) / 2) + var(--card-info-glyph-width) + 0.75rem);"
     aria-hidden="true">
     <div class="reentry-whisper" data-whisper-item="doing"
       data-reentry-glyph-clearance="card-info-glyph">
@@ -6506,6 +6506,7 @@ def _render_orientation_index_html(
     whisper_html = ""
     rail_fade_attr = ""
     rail_fade_class = ""
+    rail_fade_html = ""
     memory_drawer_markup_html = ""
     memory_drawer_script_html = ""
     if shape in ("full_mist", "long_mist"):
@@ -6525,9 +6526,20 @@ def _render_orientation_index_html(
         reentry_overlay_html = _render_reentry_peripheral_line(orientation)
     elif shape == "thread_fade":
         # No card, no peripheral line: the rail pane fades a fraction and the
-        # trajectory stays implicit.
+        # trajectory stays implicit. CUIDR-06 (#2450): because the subtractive
+        # ladder no longer renders the orientation-column--rail at this rung,
+        # the fade needs its own ambient host element — a thin peripheral rail
+        # strip carrying the fractional opacity. Without it thread_fade would
+        # carry only the data-rail-fade attribute and be visually identical to
+        # no_mist (Codex P2: "Keep a rail target for thread_fade"). The strip
+        # is the visible distinction; it holds no snapshot panels.
         rail_fade_attr = f' data-rail-fade="{_REENTRY_RAIL_FADE}"'
         rail_fade_class = " orientation-shell--rail-faded"
+        rail_fade_html = (
+            f'<aside class="orientation-rail-fade" data-region="reentry-rail-fade"'
+            f' data-testid="reentry-rail-fade"'
+            f' style="opacity: {_REENTRY_RAIL_FADE};" aria-hidden="true"></aside>'
+        )
     # no_mist, cold_start, and no_vault render no re-entry overlay of any kind.
     #
     # CUIDR-06 (#2450): the mist ladder is subtractive. The orientation
@@ -6738,6 +6750,13 @@ def _render_orientation_index_html(
          token plus a gap so the "DOING" slot never overlaps the glyph's hit
          target at any viewport where the column is not suppressed. */
       --card-info-glyph-width: 1.5rem;
+      /* The centered orientation shell's max-width. The fixed whisper column
+         anchors its right offset to the shell's right *inset* (half the
+         leftover viewport) so the clearance is measured from the card edge —
+         where the ⓘ glyph actually sits — not the raw viewport edge, which on
+         wide screens would still let the column overlap the glyph (Codex P2:
+         "Anchor whisper clearance to the card edge"). */
+      --orientation-shell-max-width: 1180px;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -7114,11 +7133,18 @@ def _render_orientation_index_html(
       gap: 14px;
       pointer-events: none;
       position: fixed;
-      /* CUIDR-06 (#2450) D4: default right offset clears the card's ⓘ glyph.
-         The inline style on the element repeats this so the clearance is
-         declared on the rendered node (test-asserted), and a future stylesheet
-         change cannot silently re-collide the "DOING" slot with the glyph. */
-      right: calc(var(--card-info-glyph-width) + 0.75rem);
+      /* CUIDR-06 (#2450) D4: clear the card's ⓘ glyph at the *card* edge. The
+         shell is centered (max-width var, margin auto), so on wide viewports
+         the card's right edge is inset by half the leftover width. Anchor the
+         column's right offset to that inset plus the glyph clearance; clamp the
+         inset at 0 for viewports narrower than the shell. The inline style on
+         the element repeats this so the clearance is declared on the rendered
+         node (test-asserted) and a stylesheet change cannot silently re-collide
+         the "DOING" slot with the glyph. */
+      right: calc(
+        max(0px, (100vw - var(--orientation-shell-max-width)) / 2)
+        + var(--card-info-glyph-width) + 0.75rem
+      );
       top: 25vh;
       width: 180px;
     }}
@@ -7134,6 +7160,19 @@ def _render_orientation_index_html(
     /* Thread fade (90s–15m): the rail pane fades a fraction; no card, no
        line — the trajectory stays implicit. */
     .orientation-shell--rail-faded .orientation-column--rail {{ opacity: {_REENTRY_RAIL_FADE}; }}
+    /* CUIDR-06 (#2450): the subtractive ladder drops the panel rail at this
+       rung, so thread_fade renders its own thin peripheral fade strip as the
+       visible cue (distinct from no_mist, which renders nothing). A fixed
+       right-edge strip, faded, carrying no content. */
+    .orientation-rail-fade {{
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 3px;
+      height: 100vh;
+      background: linear-gradient(180deg, transparent, var(--border-strong), transparent);
+      pointer-events: none;
+    }}
     @media (max-width: 860px) {{
       .orientation-grid {{ grid-template-columns: 1fr; }}
       .orientation-shell {{ padding: 16px; }}
@@ -7246,6 +7285,7 @@ def _render_orientation_index_html(
     {refresh_html}
     {degraded_html}
     {reentry_overlay_html}
+    {rail_fade_html}
     {whisper_html}
     {cold_start_threshold_html}
     {vault_unreachable_threshold_html}
