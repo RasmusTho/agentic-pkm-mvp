@@ -467,3 +467,57 @@ def test_nonpopulated_commitments_states_stay_ambient():
         assert 'data-rail-state="ambient"' in _layout_open_tag(html), (
             f"commitments state {state!r} must not force the rail active"
         )
+
+
+def test_find_candidates_keep_rail_active():
+    # Non-empty Find results are shipped read-side content rendered inside
+    # .rail-placeholder-body; the ambient strip hides that body, so they must
+    # keep the rail active or the results become invisible (Codex P2 re-review).
+    html = _html(
+        find_candidates=[{"title": "Matching note", "note_path": "n.md"}],
+        find_payload_available=True,
+    )
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+
+
+def test_resurface_candidates_keep_rail_active():
+    # Non-empty Resurface (why-now) candidates are read-side content the user can
+    # act on; they must not collapse into the hidden ambient body (Codex P2).
+    html = _html(
+        resurface_candidates=[{"title": "Why now", "note_path": "n.md", "reason": "due"}]
+    )
+    assert 'data-rail-state="active"' in _layout_open_tag(html)
+    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+
+
+def test_empty_find_resurface_payloads_stay_ambient():
+    # An empty candidate list (find unavailable / resurface degraded) is an
+    # availability cue, not content — it stays ambient.
+    html = _html(find_candidates=[], resurface_candidates=[], find_payload_available=False)
+    assert 'data-rail-state="ambient"' in _layout_open_tag(html)
+
+
+def test_narrow_viewport_single_column_overrides_rail_state_grid():
+    # The CUIDR-03 ambient/active grid rules use an attribute selector
+    # ([data-rail-state=...], specificity 0,2,0). The narrow-viewport
+    # single-column overrides must match that specificity, or the 3-column
+    # template survives at <=899px and crushes the note into the 280px track
+    # (Codex P1 re-review). Assert the responsive overrides are qualified.
+    html = _html()
+    qualified = (
+        '.workspace-layout--three-col[data-rail-state="active"],\n'
+        '      .workspace-layout--three-col[data-rail-state="ambient"] {\n'
+        '        grid-template-columns: 1fr;'
+    )
+    # Both narrow-viewport media blocks (<800px and <=899px) carry the qualified
+    # override so it wins over the ambient/active grid rules' specificity.
+    assert html.count(qualified) >= 2, (
+        "both narrow-viewport single-column overrides must match the "
+        "[data-rail-state] specificity (0,2,0)"
+    )
+    # No bare single-column override should remain (specificity 0,1,0 would lose
+    # to the [data-rail-state] grid rules and re-crush the note).
+    assert (
+        ".workspace-layout--three-col {\n        grid-template-columns: 1fr;" not in html
+    )
