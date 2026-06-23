@@ -5199,6 +5199,101 @@ def _render_panel_proposal_rows(
     return "\n".join(rows)
 
 
+def _render_governed_receipt_card(response: dict) -> str:
+    """CUIDR-07 (#2451) — first-class in-place confirmation card.
+
+    Renders the "Applied · receipt recorded" confirmed state that replaces the
+    proposal card in-place in the rail active slot after a governed Apply whose
+    runtime confirmation carries ``status == "executed"`` **and** a non-null
+    ``receipt`` object.
+
+    Presentation only: every displayed value (outcome, timestamp, receipt_id)
+    is taken verbatim from the runtime confirmation payload — never synthesised
+    by the client. The server-authoritative boundary is unchanged.
+
+    The "View receipt" control fires ``receipts.open`` through the shared overlay
+    host (CUIDR-02 frame) pre-targeted at the matching receipt id, without
+    scrolling the rail or navigating away.
+
+    AC4 — no optimistic confirmation: this function is called only from
+    ``_render_panel_confirm_response`` after the runtime response arrived.
+    The caller guards on ``status == "executed"`` and ``receipt`` non-null.
+
+    AC5 — degraded path: the receipt card is a stable DOM element; the "View
+    receipt" control triggers a fetch inside the overlay host. If that fetch
+    fails, the overlay content shows the calm unavailable copy (existing JS
+    controller in ``receipts_history_script``). The confirmed card itself is
+    never removed or replaced — it has no dependency on the overlay fetch.
+    """
+    receipt = response.get("receipt") or {}
+    receipt_id = str(receipt.get("receipt_id") or receipt.get("id") or "")
+    outcome = str(receipt.get("outcome") or response.get("outcome") or response.get("status") or "")
+    timestamp = str(receipt.get("timestamp") or response.get("timestamp") or "")
+    secondary_line = f"{_e(outcome)} · {_e(timestamp)}" if outcome and timestamp else _e(outcome or timestamp)
+
+    # The "View receipt" control fires receipts.open via the overlay host
+    # (CUIDR-02 frame). The intent routes through the shared overlay host
+    # exactly as every other overlay affordance does; no bespoke mount logic.
+    open_call = f"overlayHost.mount('receipts', {{receiptId: {repr(receipt_id)}}})" if receipt_id else "overlayHost.mount('receipts')"
+    link_html = (
+        f'<button type="button" '
+        f'class="governed-receipt-view-link" '
+        f'data-testid="workspace-panel-receipt-link-to-history" '
+        f'data-intent="receipts.open" '
+        f'data-receipt-id="{_e(receipt_id)}" '
+        f'onclick="{_e(open_call)}">'
+        f"View receipt</button>"
+    )
+
+    # Developer disclosure: the raw outcome/message/timestamp values the prior
+    # dim monospace log line surfaced — now demoted to a <details> disclosure
+    # rather than being retired entirely, per spec §"may remain as a developer
+    # detail behind a disclosure".
+    corrected_badge = ""
+    if receipt.get("message") == "corrected" or receipt.get("corrected") or response.get("corrected"):
+        corrected_badge = (
+            '<span class="panel-confirm-corrected" '
+            'data-testid="workspace-panel-corrected-receipt">corrected</span>'
+        )
+    inverse_html = ""
+    inverse_action = receipt.get("inverse_action") or receipt.get("inverse_action_id")
+    if inverse_action:
+        inverse_html = (
+            '<div class="panel-confirm-inverse" '
+            'data-testid="workspace-panel-inverse-action" '
+            'data-affordance-status="read-only" '
+            'data-runtime-backed="false">'
+            + _e(inverse_action)
+            + "</div>"
+        )
+    developer_disclosure = f"""
+          <details class="panel-confirm-developer-disclosure">
+            <summary>Developer details</summary>
+            <div
+              class="panel-confirm-receipt"
+              data-testid="workspace-panel-receipt"
+              data-receipt-persistence="durable-runtime-projection">
+              <span data-testid="workspace-panel-receipt-outcome">{_e(receipt.get("outcome") or response.get("outcome") or response.get("status", ""))}</span>
+              <span data-testid="workspace-panel-receipt-message">{_e(receipt.get("message") or receipt.get("action_taken") or response.get("status", ""))}</span>
+              <span data-testid="workspace-panel-receipt-timestamp">{_e(receipt.get("timestamp") or response.get("timestamp") or "timestamp unavailable")}</span>
+              {corrected_badge}
+              {inverse_html}
+            </div>
+          </details>"""
+
+    return f"""
+        <div
+          class="governed-receipt-card panel-section"
+          data-testid="workspace-panel-receipt-card"
+          data-receipt-state="applied"
+          data-receipt-persistence="durable-runtime-projection">
+          <div class="governed-receipt-heading">Applied · receipt recorded</div>
+          <div class="governed-receipt-secondary">{secondary_line}</div>
+          {link_html}
+          {developer_disclosure}
+        </div>"""
+
+
 def _render_panel_confirm_response(response: dict) -> str:
     if not response:
         return ""
@@ -5206,7 +5301,19 @@ def _render_panel_confirm_response(response: dict) -> str:
     receipt = response.get("receipt") or {}
     block_reason = response.get("block_reason") or {}
     receipt_html = ""
-    if status in {"executed", "logged"} and receipt:
+    # CUIDR-07 (#2451): when the runtime confirms with status=="executed" and a
+    # non-null receipt, render the first-class "Applied · receipt recorded" card
+    # as the primary confirmation. The existing dim receipt values are demoted to
+    # a developer disclosure inside the card. The card is server-authoritative:
+    # only status=="executed" + non-null receipt produces the confirmed state;
+    # pending/staged/blocked/rejected must NOT render it (AC3, AC4).
+    if response.get("status") == "executed" and receipt:
+        return f"""
+        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response">
+          <span data-testid="workspace-panel-confirm-status">{status}</span>
+          {_render_governed_receipt_card(response)}
+        </div>"""
+    if status in {"logged"} and receipt:
         corrected_badge = ""
         if receipt.get("message") == "corrected" or receipt.get("corrected") or response.get("corrected"):
             corrected_badge = (
