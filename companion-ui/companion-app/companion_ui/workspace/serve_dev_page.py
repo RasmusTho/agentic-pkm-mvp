@@ -6791,25 +6791,43 @@ def _render_orientation_index_html(
         # affordance for a returning user. Gated SOLELY on a server-declared
         # resumable thread being present — never on absence age. There is no
         # day-count, no `absence_age_days`, and no client-side threshold/age
-        # math: the UI renders this line iff the runtime declares the produced
-        # `orientation.recents_anchor` field (presence ⇒ there is a recent thread
-        # to resume), and renders nothing otherwise. `recents_anchor` is the
-        # already-produced server signal (WorkspaceOrientationResponse in
-        # app/api/routes/companion.py) — the same field that drives the quieter
-        # "Open your most recent note" sub-affordance — so E1 renders in the real
-        # API path, not only in tests. First contact (no vault selected) is the
+        # math.
+        #   The resumable signal is the produced `orientation.leave_point` with
+        # status == "present" — the contract's true leave-point/continuity
+        # pointer (WORKSPACE_ORIENTATION_CONTRACT.md §leave_point;
+        # WorkspaceOrientationResponse.leave_point in app/api/routes/companion.py,
+        # projected from the admissible leave-point cursor). It already arrives on
+        # the cold_start payload, so E1 renders in the real API path, not only in
+        # tests. `recents_anchor` is a Find/recency projection, explicitly NOT a
+        # leave_point and carrying NO continuity semantics — it must not drive an
+        # `entry.resume` affordance (Codex P2, #2471); it keeps its own quieter
+        # "Open your most recent note" sub-affordance below under `recents.open`.
+        #   Only status == "present" offers resume: absent/stale/artifact_missing/
+        # degraded never claim a resumable thread (we never offer to resume a
+        # stale or missing leave point). First contact (no vault selected) is the
         # no_vault vault picker (#2448), not a cold_start branch, so the line is
-        # suppressed for the first-contact variant. Presentation only — the
-        # server-authoritative boundary holds.
-        _resumable_present = bool(_cold_recents) and not _is_first_contact
+        # suppressed there. Presentation only — the server-authoritative boundary
+        # holds; the UI computes nothing.
+        _resumable_present = (_cold_lp_status == "present") and not _is_first_contact
         if _resumable_present:
-            _resume_label = _cold_recents_label or "Resume the thread"
-            if _cold_recents_path:
-                _resume_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
+            _lp_artifact = _orientation_dict(_cold_lp.get("artifact_ref"))
+            # Mirror the warm re-entry card's field handling (_reentry_resume_
+            # affordance / _reentry_leave_label): the browser-safe path is
+            # `note_path` (test fixtures) or `logical_ref` (the v1 model), and
+            # the label prefers an explicit `label` then `artifact_ref.title`.
+            _resume_target = _orientation_str(
+                _lp_artifact.get("note_path") or _lp_artifact.get("logical_ref")
+            )
+            _resume_label = (
+                _orientation_str(_cold_lp.get("label") or _lp_artifact.get("title"))
+                or "Resume the thread"
+            )
+            if _resume_target:
+                _resume_href = "/workspace?note_path=" + quote(_resume_target, safe="")
             else:
-                # No anchor note path declared: route back through the vault
-                # re-entry, never fabricate a target path the runtime did not
-                # declare.
+                # leave_point present but no browser-safe logical ref declared:
+                # route through vault re-entry, never fabricate a target path
+                # (artifact_uuid is identity, not a routable path).
                 _resume_href = "/workspace"
             _cold_resume_html = (
                 '<p class="cold-start-resume-line" '
@@ -6822,15 +6840,22 @@ def _render_orientation_index_html(
             )
         else:
             _cold_resume_html = ""
-        # Dedup (#2453 Codex P2): the prominent E1 "resume the thread?" line and
-        # the older quieter "Open your most recent note" recents-anchor link both
-        # derive from `recents_anchor`. To avoid two redundant links to the same
-        # note, the E1 line SUPERSEDES the quieter link: it is now the single
-        # calm resume affordance derived from the produced field. The quieter
-        # recents-anchor sub-affordance is therefore no longer rendered (the
-        # `recents.open` intent remains a declared cold_start transition in
-        # SYSTEM_ENTRY_POINT_SPEC for any future surface, but this returning-user
-        # threshold emits exactly one calm affordance).
+        # Recents-anchor sub-affordance (§6, design_handoff/implementation-contracts.md).
+        # Distinct from the E1 resume line above: this is the Find/recency link
+        # ("Open your most recent note"), declared by `recents_anchor` under the
+        # `recents.open` intent. It is NOT a resume/continuity claim, so it
+        # coexists with the leave_point-gated resume line. Rendered only when the
+        # runtime declares the field; never auto-opens.
+        if _cold_recents_path and _cold_recents_label:
+            _cold_recents_href = "/workspace?note_path=" + quote(_cold_recents_path, safe="")
+            _cold_recents_html = (
+                '<p class="cold-start-recents-anchor" data-testid="cold-start-recents-anchor">'
+                f'<a data-intent="recents.open" href="{_e(_cold_recents_href)}">'
+                f"Open your most recent note: {_e(_cold_recents_label)}"
+                "</a></p>"
+            )
+        else:
+            _cold_recents_html = ""
         cold_start_threshold_html = f"""
     <div data-region="cold-start-threshold">
       <div class="cold-start-vault-chip">
@@ -6845,7 +6870,7 @@ def _render_orientation_index_html(
         <button type="button" class="btn btn--primary cold-start-verb" data-intent="vault.open" onclick="vaultBrowser.focus(); return false;">Find a note</button>
         <button type="button" class="btn btn--secondary cold-start-verb" data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;">Jot something down</button>
         <button type="button" class="btn btn--secondary cold-start-verb" data-intent="map.open" onclick="overlayHost.mount('map'); return false;">See the map</button>
-      </p>
+      </p>{_cold_recents_html}
       <!-- Inline capture field (design item 4, #2172): on focus / ⌘N mounts
            the shipped governed capture occupant verbatim.  The warmth rule:
            the caret is the one saturated element; the door stays monochrome.

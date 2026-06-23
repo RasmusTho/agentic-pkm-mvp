@@ -43,7 +43,7 @@ The existing test suite confirms this shape: the cold_start treatment renders no
 
 Two situations were conflated under `cold_start`; they are now separate:
 
-1. **Returning user (vault already selected, away a while).** Offer a gentle _"resume the thread?"_ pickup affordance. **There is no "last here N days ago" count and no `absence_age_days` field** — absence duration is irrelevant to the surface and there is **no client-side math, threshold, or age rendering**. The resume line is gated solely on a **server-declared resumable thread being present** in the orientation payload — specifically the already-produced `orientation.recents_anchor` field on `WorkspaceOrientationResponse` (its presence ⇒ there is a recent thread to resume). When the runtime declares `recents_anchor`, the UI renders the calm line; when it does not, the UI renders nothing extra. The UI computes nothing — the server-authoritative boundary holds.
+1. **Returning user (vault already selected, away a while).** Offer a gentle _"resume the thread?"_ pickup affordance. **There is no "last here N days ago" count and no `absence_age_days` field** — absence duration is irrelevant to the surface and there is **no client-side math, threshold, or age rendering**. The resume line is gated solely on a **server-declared resumable thread being present** in the orientation payload — specifically the already-produced `orientation.leave_point` field on `WorkspaceOrientationResponse` with `status == "present"` (the contract's true leave-point / continuity pointer, projected from the admissible leave-point cursor). When the runtime declares a `present` leave_point, the UI renders the calm line, routing to its `artifact_ref.logical_ref`; for any other status (`absent`/`stale`/`artifact_missing`/`degraded`) the UI renders nothing extra. `recents_anchor` is a Find/recency projection, explicitly **NOT** a leave_point and carrying no continuity semantics, so it does **not** drive this `entry.resume` affordance — it keeps its own quieter "Open your most recent note" link under `recents.open`. The UI computes nothing — the server-authoritative boundary holds.
 
 2. **First contact is NOT a calm-minimal `cold_start` greeting — it is the `no_vault` state.** With no vault selected the entry surface is the **vault picker**: a gentle choice between (a) initiate a new vault and (b) browse to an existing vault. Only after a vault is selected does the system bootstrap the vault-dependent subsystems. This is the `no_vault` entry state, owned by the vault picker (**E11 / #2448**, already merged) — distinct from the returning-user resume line, and it must not be folded into a cold_start calm line. See `FRONT_DOOR_AND_COPY_HYGIENE.md` and #2448.
 
@@ -51,7 +51,7 @@ Two situations were conflated under `cold_start`; they are now separate:
 
 #### Superseded options (historical)
 
-The original framing offered: **Option A** — a "Last here N days ago — resume the thread?" line gated on a runtime `absence_age_days`; **Option B** — keep cold_start identical for all durations. The owner adopted a *modified Option A*: keep the gentle resume affordance but **drop the day-count and `absence_age_days` entirely**, gate it on a server-declared resumable thread (the already-produced `orientation.recents_anchor` field) instead, and split first-contact out to the `no_vault` vault picker. Both original options are retained here only for provenance.
+The original framing offered: **Option A** — a "Last here N days ago — resume the thread?" line gated on a runtime `absence_age_days`; **Option B** — keep cold_start identical for all durations. The owner adopted a *modified Option A*: keep the gentle resume affordance but **drop the day-count and `absence_age_days` entirely**, gate it on a server-declared resumable thread (the already-produced `orientation.leave_point` field with `status == "present"`) instead, and split first-contact out to the `no_vault` vault picker. Both original options are retained here only for provenance.
 
 ---
 
@@ -94,7 +94,7 @@ Option A. Keep both surfaces; confirm their roles in words. Palette = fast path.
 ## Concretely
 
 E1 (owner decision applied):
-- Render a single calm _"resume the thread?"_ line on the returning-user entry surface, gated **only** on a server-declared resumable thread being present in the orientation payload (the already-produced `orientation.recents_anchor` field). No `absence_age_days`, no "N days ago" count, no client-side threshold or age math, no new runtime field — this slice adds the UI consumer and gates on the field the runtime already produces. When the field is absent, no line renders. The line carries the existing `entry.resume` intent and routes to the server-declared resume target (`recents_anchor.note_path`). The prominent E1 line **supersedes** the quieter "Open your most recent note" recents-anchor link — both derive from `recents_anchor`, so exactly one calm resume affordance renders.
+- Render a single calm _"resume the thread?"_ line on the returning-user entry surface, gated **only** on a server-declared resumable thread being present in the orientation payload (the already-produced `orientation.leave_point` field with `status == "present"`). No `absence_age_days`, no "N days ago" count, no client-side threshold or age math, no new runtime field — this slice adds the UI consumer and gates on the field the runtime already produces. When the leave_point is anything other than `present`, no line renders. The line carries the existing `entry.resume` intent and routes to the server-declared resume target (`leave_point.artifact_ref.logical_ref`). It is distinct from — and coexists with — the quieter `recents.open` "Open your most recent note" recents-anchor link, which is driven by the separate `recents_anchor` recency field.
 - First contact / no vault is the `no_vault` vault picker (E11 / #2448), not a cold_start branch — no cold_start first-contact resume line and no dashboard.
 - Tests in `tests/companion_ui/test_reentry_orientation_treatment.py`: returning fixture **with** a resumable session → the calm resume line renders and no orientation panels / governance tiles / re-entry card appear; returning fixture **without** a resumable session → no resume line.
 
@@ -111,13 +111,13 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 **The owner decided both questions on 2026-06-23. The criteria below reflect the recorded decision.**
 
-**E1-AC1 (resume affordance, gated on a resumable thread):** A returning user (vault selected) whose orientation payload declares a resumable thread (`recents_anchor`) renders a single calm "resume the thread?" line, with no dashboard, no orientation panels, no governance tiles, and no re-entry card. The prominent line supersedes the quieter recents-anchor link (both derive from the same field).
-- Verify: render the returning-user fixture **with** a server-declared `recents_anchor`. Assert the calm resume line renders and carries the `entry.resume` intent, and that the quieter `cold-start-recents-anchor` link does not also render. Assert no `data-region="orientation-panel"`, no governance tiles (`data-testid="workspace-orientation-governance"`), and no `data-region="reentry-card"` render.
-- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_returning_with_resumable_anchor_renders_resume_line`
+**E1-AC1 (resume affordance, gated on a resumable thread):** A returning user (vault selected) whose orientation payload declares a `present` leave_point renders a single calm "resume the thread?" line, with no dashboard, no orientation panels, no governance tiles, and no re-entry card. The resume line is driven by `leave_point` and coexists with the separate, quieter `recents.open` recents-anchor link (driven by `recents_anchor`).
+- Verify: render the returning-user fixture **with** a server-declared `leave_point` of `status == "present"`. Assert the calm resume line renders and carries the `entry.resume` intent. Assert no `data-region="orientation-panel"`, no governance tiles (`data-testid="workspace-orientation-governance"`), and no `data-region="reentry-card"` render.
+- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_returning_with_present_leave_point_renders_resume_line`
 
-**E1-AC2 (server-authoritative gate, no age math):** The resume line renders **only** when the runtime declares a resumable thread (`recents_anchor`). The UI computes nothing — no absence-age, no threshold, no day-count, no `absence_age_days` field. With no `recents_anchor` declared, no resume line renders.
-- Verify: render the same returning-user fixture **without** a `recents_anchor`. Assert no resume line renders.
-- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_returning_without_resumable_anchor_renders_no_resume_line`
+**E1-AC2 (server-authoritative gate, no age math):** The resume line renders **only** when the runtime declares a `present` leave_point. The UI computes nothing — no absence-age, no threshold, no day-count, no `absence_age_days` field. With no leave_point, or a non-`present` status (`absent`/`stale`/`artifact_missing`/`degraded`), no resume line renders. (A `recents_anchor` may still be present and renders only its own quieter recents link — it never substitutes for the resume gate.)
+- Verify: render the same returning-user fixture **without** a `present` leave_point (e.g. `status == "stale"`, or leave_point absent). Assert no resume line renders.
+- New test: `tests/companion_ui/test_reentry_orientation_treatment.py::test_returning_without_present_leave_point_renders_no_resume_line`
 
 **E1-AC3 (first contact is no_vault):** First contact is the `no_vault` vault picker (#2448), not a cold_start calm-greeting branch. No first-contact resume line and no dashboard are introduced by this task.
 
@@ -127,9 +127,9 @@ Both questions are about coherence of the interaction model, not surface polish.
 
 ## How to Verify (Pre-Merge)
 
-1. **Static — E1:** Render the returning-user fixture with and without a server-declared `recents_anchor`. Assert the calm resume line appears only in the presence case and that no dashboard / orientation panels / re-entry card appear in either.
+1. **Static — E1:** Render the returning-user fixture with and without a `present` server-declared `leave_point`. Assert the calm resume line appears only in the `present` case and that no dashboard / orientation panels / re-entry card appear in either.
 2. **Static — E2:** Run `test_panel_command_palette.py` and `test_right_rail_compaction.py` in full. Confirm both pass without behavioral change. Inspect the rendered shell for explicit role labels (rail=ambient, palette=fast-path).
-3. **Live — E1:** Simulate a returning login with a `recents_anchor` in the test environment and confirm the calm line renders and Resume routes correctly.
+3. **Live — E1:** Simulate a returning login with a `present` `leave_point` in the test environment and confirm the calm line renders and Resume routes correctly.
 4. **Live — E2:** Open ⌘K, confirm it shows the same proposals as the rail. Dismiss. Confirm rail returns to ambient posture.
 
 ## Out of Scope

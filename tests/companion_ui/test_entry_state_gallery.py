@@ -1117,8 +1117,26 @@ def test_cold_and_no_vault_have_no_reentry_overlay() -> None:
         assert _reentry_shape(page) is None, name
         for marker in _REENTRY_OVERLAY_MARKERS:
             assert marker not in page, f"{name}: {marker}"
-        # No continuity claim the system cannot back: no resume affordance.
+
+    # First contact / no vault have no present leave_point, so there is no
+    # continuity claim the system can back: no resume affordance.
+    for name in (
+        "A2_first_contact",
+        "A2_first_contact_null_leave",
+        "A6_no_vault",
+        "A6_no_vault_browser_down",
+    ):
+        page = gallery[name].html
         assert 'data-intent="entry.resume"' not in page, name
+
+    # CUIDR-09 / E1 (#2453): the cold *trajectory* (>14d) carries a PRESENT
+    # leave_point — it is a returning user, the moment of greatest re-entry need.
+    # It now gets one calm "resume the thread?" line (entry.resume), still with
+    # no re-entry card/overlay/shape — the subtractive long-absence treatment,
+    # not a dashboard.
+    cold_traj = gallery["A3_cold_trajectory_21d"].html
+    assert 'data-testid="cold-start-resume-line"' in cold_traj
+    assert 'data-intent="entry.resume"' in cold_traj
 
     # no_vault never fabricates a fresh successful snapshot (gallery A6
     # MUST NOT): the fixture's orientation content does not render.
