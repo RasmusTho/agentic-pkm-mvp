@@ -10979,6 +10979,15 @@ def render_index_html(
       .agent-rail {{
         display: none;
       }}
+      /* The composed bottom bar (bottom:18px; z-index:999) otherwise layers
+         on top of the portrait bottom sheet (bottom:0; ~60px peek; z-index:20)
+         at narrow widths. Lift it above the peek line so the two read as one
+         composed bottom edge (CUIDR-04 bottom-edge collision, #2462). Safe
+         unconditionally: with no sheet present the bar just rests slightly
+         higher, so it does not depend on DOM sibling order. */
+      .workspace-bottom-bar {{
+        bottom: calc(60px + 18px);
+      }}
       /* Collapse three-col grid to single-column on narrow viewports.
          The 280px left pane and 320px agent-rail would otherwise crush the note
          center column behind overflow:hidden (Codex P1 review finding).

@@ -302,6 +302,18 @@ def test_narrow_shell_composed_edges_at_430() -> None:
     # hint, and the Help control.
     assert 'data-testid="workspace-help-toggle"' in bar
 
+    # The composed bottom bar must clear the portrait-sheet peek line on narrow
+    # viewports so the Map/Help controls do not layer over the ~60px peek
+    # (#2462 bottom-edge collision). The offset lives in the @media block.
+    bar_offset = re.search(
+        r"\.workspace-bottom-bar\s*\{[^}]*bottom:\s*calc\(60px \+ 18px\)",
+        html,
+    )
+    assert bar_offset, (
+        "the composed bottom bar must clear the portrait-sheet peek line "
+        "on narrow viewports (bottom: calc(60px + 18px))"
+    )
+
     # No independently-positioned fixed element with `bottom` remains outside
     # the composed bar — the floating Operator pill is gone from the edge. The
     # rendered toggle element and its fixed-position CSS rule must both be
