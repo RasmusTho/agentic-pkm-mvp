@@ -49,7 +49,11 @@ cat ~/.colima/default/colima.yaml | grep -A20 'mounts:'
 colima restart --mount /Users:w --mount /Volumes:w
 
 # 3. Bring the dev stack back up (regenerates runtime env, re-arms watcher).
-cd <repo> && PKM_ENVIRONMENT=dev bash scripts/start_full_system.sh
+cd <repo> && \
+  PKM_ENVIRONMENT=dev \
+  COMPOSE_FILE=docker-compose.yaml:docker-compose.dev.yml \
+  COMPOSE_PROJECT_NAME=pkm-dev \
+  bash scripts/start_full_system.sh
 # For another channel, use that channel's start command/env instead.
 ```
 
