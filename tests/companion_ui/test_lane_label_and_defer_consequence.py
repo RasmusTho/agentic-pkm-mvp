@@ -149,15 +149,31 @@ def test_body_edit_lane_label_not_recorded() -> None:
     assert LANE_LABEL_BODY_EDIT in html
 
 
-def test_governance_suggestion_card_lane_label_receipt() -> None:
-    """A governance-variant suggestion card labels Apply as producing a receipt."""
+def test_governance_suggestion_card_labels_queue_not_apply_receipt() -> None:
+    """A governance-variant suggestion card only QUEUES (governance.queue) — it
+    must not borrow the governed-apply "→ receipt" label (that would overstate
+    the recording guarantee). It names the queue-then-record reality instead.
+    """
+    from companion_ui.workspace.calm_degraded import (
+        LANE_LABEL_GOVERNANCE_QUEUE,
+        LANE_LABEL_GOVERNED,
+    )
+
     html = _render_with_suggestion_card("governance")
     card_start = html.find('data-testid="suggestion-card"')
     assert card_start != -1
-    card_html = html[card_start:]
+    # Scope to the suggestion-card element only (the page also renders a
+    # separate governed rail proposal that legitimately carries the governed
+    # label).
+    card_end = html.find("</div>", html.find("suggestion-card-actions", card_start))
+    card_html = html[card_start : card_end if card_end != -1 else len(html)]
     labels = _lane_label_texts(card_html)
     assert labels
-    assert any("receipt" in label.lower() for label in labels)
+    # The queue label is shown on the suggestion card; the governed-apply line
+    # is NOT (a Queue is not an Apply→receipt).
+    assert any("queue" in label.lower() for label in labels)
+    assert LANE_LABEL_GOVERNANCE_QUEUE in card_html
+    assert LANE_LABEL_GOVERNED not in card_html
 
 
 def test_body_edit_lane_label_via_governed_payload() -> None:

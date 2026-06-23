@@ -65,7 +65,7 @@ from companion_ui.renderer.link_resolver import VaultLinkResolver
 from companion_ui.workspace.calm_degraded import (
     DEFER_CONSEQUENCE,
     LANE_BODY_EDIT,
-    LANE_GOVERNED,
+    LANE_LABEL_GOVERNANCE_QUEUE,
     NOTHING_LOST,
     blocked_reason,
     blocked_recourse,
@@ -4547,16 +4547,23 @@ def _render_suggestion_cards(cards: list[dict]) -> str:
                 + "</div>"
             )
         # C2 — lane label (CUIDR-08). The body-edit lane (S2) lives here. The
-        # card variant is server-declared (the UI never re-classifies it): a
-        # "body" variant is the body-edit lane (Apply not recorded), a
-        # "governance" variant is the governed lane (Apply → vault change →
-        # receipt). The blocked variant carries no Apply lane, so no label.
+        # card variant is server-declared (the UI never re-classifies it):
+        #   - "body": the body-edit lane — Apply is not recorded (no receipt).
+        #   - "governance": a governance-bearing suggestion whose action only
+        #     QUEUES/routes to Panel (governance.queue, a Queue button) — it does
+        #     NOT apply a vault change or produce a receipt on this surface, so it
+        #     must NOT borrow the governed-apply label (that would overstate the
+        #     recording guarantee). It names the queue-then-record reality.
+        #   - "blocked": no Apply lane, so no label.
         variant = str(card.get("data_variant", ""))
         lane_label_html = ""
-        if variant in {"body", "governance"}:
-            label_text = lane_label(
-                LANE_BODY_EDIT if variant == "body" else LANE_GOVERNED
-            )
+        if variant == "body":
+            label_text = lane_label(LANE_BODY_EDIT)
+        elif variant == "governance":
+            label_text = LANE_LABEL_GOVERNANCE_QUEUE
+        else:
+            label_text = ""
+        if label_text:
             lane_label_html = (
                 '<div class="suggestion-card-lane-label" '
                 'data-testid="lane-label" '
