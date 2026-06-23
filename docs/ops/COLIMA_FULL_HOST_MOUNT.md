@@ -58,8 +58,15 @@ cd <repo> && bash scripts/start_full_system.sh    # or the channel's start comma
 # /Users and /Volumes are visible inside the api container at the same paths.
 # Use the same compose project/files/env that started the stack; scripts such
 # as start_full_system.sh select channel-specific project names.
-docker compose ps api
-docker compose exec -T api ls -ld /Users /Volumes
+COMPOSE_FILE=docker-compose.yaml:docker-compose.dev.yml \
+COMPOSE_PROJECT_NAME=pkm-dev \
+  docker compose ps api
+COMPOSE_FILE=docker-compose.yaml:docker-compose.dev.yml \
+COMPOSE_PROJECT_NAME=pkm-dev \
+  docker compose exec -T api ls -ld /Users /Volumes
+
+# For test/prod verification, replace the compose file and project name with
+# the channel pair used by that start command.
 
 # Then in the UI: open a vault on the internal SSD and on /Volumes/T7 via the
 # picker; confirm a note opens from each. Record the receipt on #2310.
