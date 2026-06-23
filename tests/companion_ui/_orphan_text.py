@@ -237,6 +237,14 @@ CONTAINER_CLASSES: frozenset[str] = frozenset(
         # the ⓘ toggle affordance (topbar, overlay heads, re-entry card)
         "guidance-callout",
         "guidance-toggle",
+        # Overlay frame (CUIDR-02, #2445) — shared header furniture emitted by
+        # overlay_frame.py; every overlay title, status-pill, info, and close
+        # button routes through these classes (sole-source contract).
+        "overlay-frame-header",
+        "overlay-frame-title",
+        "overlay-frame-status-pill",
+        "overlay-frame-info",
+        "overlay-frame-close",
     }
 )
 

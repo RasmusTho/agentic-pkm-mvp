@@ -666,7 +666,9 @@ def test_reachable_from_reentry_and_dismisses_to_anchor() -> None:
     # Workspace shell: dismissal routes through the host back to the anchor.
     workspace = _render_workspace()
     drawer = _drawer(workspace)
-    close = re.search(r'<button[^>]*data-testid="memory-review-close"[^>]*>', drawer)
+    # CUIDR-02: close button is now emitted by the shared overlay-frame header;
+    # testid is overlay-frame-close (was memory-review-close pre-CUIDR-02).
+    close = re.search(r'<button[^>]*data-testid="overlay-frame-close"[^>]*>', drawer)
     assert close, "the drawer must offer an explicit dismiss-to-anchor control"
     assert 'data-intent="overlay.dismiss"' in close.group(0)
     assert "overlayHost.dismiss()" in close.group(0)

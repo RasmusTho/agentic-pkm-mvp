@@ -257,6 +257,45 @@ def overlay_host_markup(*, anchor_note_path: str = "") -> str:
     declared = " ".join(DECLARED_OVERLAYS)
     shipped = " ".join(SHIPPED_OVERLAY_OCCUPANTS)
     return f"""
+  <!-- Shared overlay-frame chrome (CUIDR-02, #2445) — the one header
+       furniture (title · status-pill · ⓘ · close) every overlay renders
+       through overlay_frame.overlay_frame_header. Dark-theme tokens only;
+       the frame introduces no white-on-dark chrome (spec D4 non-regression). -->
+  <style>
+    .overlay-frame-header {{
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+    }}
+    .overlay-frame-title {{
+      color: var(--fg-1, #dce8f0);
+      flex: 1 1 auto;
+      font-family: var(--font-ui, sans-serif);
+      font-size: var(--text-sm, 13px);
+      font-weight: 600;
+    }}
+    .overlay-frame-status-pill {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border, #152030);
+      border-radius: 4px;
+      color: var(--fg-2, #7a9ab8);
+      font-family: var(--font-mono, monospace);
+      font-size: var(--text-xs, 11px);
+      padding: 2px 7px;
+    }}
+    .overlay-frame-info {{ display: inline-flex; }}
+    .overlay-frame-close {{
+      background: transparent;
+      border: none;
+      color: var(--fg-2, #7a9ab8);
+      cursor: pointer;
+      font-size: 1.2rem;
+      line-height: 1;
+      padding: 0 4px;
+    }}
+    .overlay-frame-close:hover {{ color: var(--fg-1, #dce8f0); }}
+  </style>
   <!-- Shared overlay host (#1785, SEP-03) — the single mount/dismiss
        substrate for shell overlays. Esc and the scrim dismiss the topmost
        overlay back to the document anchor; no route reset, no data loss. -->
@@ -343,13 +382,43 @@ def overlay_host_script() -> str:
     //   meta+k -> cmd.open, meta+n -> capture.open, escape -> overlay.dismiss.
     // cmd.open mounts the shipped Panel command palette (#1786, SEP-04);
     // capture.open mounts the shipped capture occupant (#1791).
+    // Focus trap (CUIDR-02, #2445): while an overlay carrying
+    // data-overlay-focus-trap="true" is the topmost mount, keyboard focus
+    // cycles within it and never leaks to the document behind. The frame
+    // (overlay_frame.py) stamps the hook on every overlay root; the host owns
+    // the trap motion in one place (live-exercised in UAT).
+    function topmostTrapEl() {
+      var id = stack.length ? stack[stack.length - 1] : null;
+      if (!id) { return null; }
+      var el = document.querySelector('[data-overlay-id="' + id + '"][data-overlay-focus-trap="true"]');
+      return el || null;
+    }
+    function focusableWithin(el) {
+      var sel = 'a[href], button:not([disabled]), textarea:not([disabled]),' +
+        ' input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+      return Array.prototype.filter.call(el.querySelectorAll(sel), function(n) {
+        return n.offsetParent !== null || n === document.activeElement;
+      });
+    }
     document.addEventListener('keydown', function(e) {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
         var k = String(e.key || '').toLowerCase();
         if (k === 'k') { e.preventDefault(); window.overlayHost.mount('cmd'); return; }
         if (k === 'n') { e.preventDefault(); window.overlayHost.mount('capture'); return; }
       }
-      if (e.key === 'Escape') { window.overlayHost.dismiss(); }
+      if (e.key === 'Escape') { window.overlayHost.dismiss(); return; }
+      if (e.key === 'Tab') {
+        var trap = topmostTrapEl();
+        if (!trap) { return; }
+        var items = focusableWithin(trap);
+        if (!items.length) { e.preventDefault(); trap.focus && trap.focus(); return; }
+        var first = items[0];
+        var last = items[items.length - 1];
+        var active = document.activeElement;
+        if (!trap.contains(active)) { e.preventDefault(); first.focus(); return; }
+        if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+      }
     });
     // Shipped occupant: the narrow-mode vault-browser modal (#1785 scope).
     // Its open/close routes through the host so the dismiss rule (Esc /

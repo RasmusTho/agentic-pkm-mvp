@@ -364,7 +364,9 @@ def test_surface_is_strictly_read_only() -> None:
         "the receipts modal offers only dismiss and the guidance toggle"
     )
     assert 'data-intent="guidance.toggle"' in buttons[0]
-    assert 'data-testid="receipts-history-close"' in buttons[1]
+    # CUIDR-02: close button is now emitted by the shared overlay-frame header;
+    # testid is overlay-frame-close (was receipts-history-close pre-CUIDR-02).
+    assert 'data-testid="overlay-frame-close"' in buttons[1]
     for forbidden_element in ("<form", "<input", "<textarea", "<select"):
         assert forbidden_element not in modal
 
@@ -573,8 +575,10 @@ def test_dismisses_to_anchor() -> None:
     # the host, and Esc is host-owned (one Esc owner).
     html = _render_workspace()
     modal = _modal(html)
+    # CUIDR-02: close button is now emitted by the shared overlay-frame header;
+    # testid is overlay-frame-close (was receipts-history-close pre-CUIDR-02).
     close = re.search(
-        r'<button[^>]*data-testid="receipts-history-close"[^>]*>', modal
+        r'<button[^>]*data-testid="overlay-frame-close"[^>]*>', modal
     )
     assert close, "the modal must offer an explicit dismiss control"
     assert 'data-intent="overlay.dismiss"' in close.group(0)

@@ -40,9 +40,10 @@ from companion_ui.workspace.calm_degraded import (
     humanise_token,
     lane_label,
 )
-from companion_ui.workspace.guidance_layer import (
-    guidance_callout_markup,
-    guidance_toggle_markup,
+from companion_ui.workspace.guidance_layer import guidance_callout_markup
+from companion_ui.workspace.overlay_frame import (
+    overlay_frame_header,
+    overlay_frame_root_attrs,
 )
 
 # The overlay-host id the palette occupies (SYSTEM_ENTRY_POINT_SPEC.md
@@ -506,15 +507,12 @@ def panel_palette_markup(fields: Optional[dict[str, Any]]) -> str:
   <style>{_PALETTE_CSS}</style>
   <div class="panel-palette" id="panel-palette"
        data-testid="panel-palette" data-region="panel-palette"
-       data-overlay-id="{PALETTE_OVERLAY_ID}"
+       {overlay_frame_root_attrs(overlay_id=PALETTE_OVERLAY_ID, position="center")}
        data-authority-surface="panel"
        data-presentation-of="panel-rail"
        data-open="false"
        role="dialog" aria-modal="true" aria-label="Panel command palette">
-    <div class="palette-head" data-testid="palette-head">
-      <span class="palette-title">Panel</span>
-      {guidance_toggle_markup('cmd')}
-    </div>
+    {overlay_frame_header(overlay_id=PALETTE_OVERLAY_ID, title="Panel", guidance_surface="cmd")}
     {guidance_callout_markup('cmd')}
     <p class="palette-not-chat" data-testid="palette-not-chat-callout">Panel ≠ Chat — a faster presentation of the same governed Panel proposals; no free-text generation, no conversation.</p>
     <input type="search" class="palette-filter" id="palette-filter-input"

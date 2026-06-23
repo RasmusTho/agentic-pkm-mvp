@@ -39,7 +39,11 @@ from dataclasses import dataclass, field, replace
 
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
-    guidance_toggle_markup,
+    guidance_toggle_markup,  # noqa: F401 (re-exported for callers)
+)
+from companion_ui.workspace.overlay_frame import (
+    overlay_frame_header,
+    overlay_frame_root_attrs,
 )
 
 # The overlay-host id this surface occupies (declared in
@@ -168,8 +172,22 @@ def capture_modal_markup() -> str:
     ``capture.open``). The host scrim sits underneath; the panel renders as a
     top modal above it. Deliberately absent: any due-date field, any task
     state, any checkbox — a capture is vault intake, not a task.
+
+    Header furniture is emitted by :func:`overlay_frame.overlay_frame_header`
+    (CUIDR-02, #2445) in the canonical order: title · ⓘ · close. The root
+    carries ``data-overlay-frame-position="center"`` (the frame contract).
     """
-    return """
+    _frame_root = overlay_frame_root_attrs(
+        overlay_id=CAPTURE_OVERLAY_ID, position="center"
+    )
+    _frame_header = overlay_frame_header(
+        overlay_id=CAPTURE_OVERLAY_ID,
+        title="Capture",
+        guidance_surface="capture",
+    )
+    _guidance = guidance_callout_markup("capture")
+    return (
+        """
   <!-- Capture modal (#1791, SEP-08b) — friction-free intake appended to the
        vault inbox through the governed endpoint (#1790). A write is claimed
        only on the runtime acknowledgement; offline captures are plainly
@@ -201,18 +219,20 @@ def capture_modal_markup() -> str:
       pointer-events: auto;
       width: 100%;
     }
-    .capture-modal-header {
+    /* overlay-frame-header styles (CUIDR-02) — title/info/close in order */
+    .overlay-frame-header {
       align-items: center;
       display: flex;
+      gap: 6px;
       justify-content: space-between;
     }
-    .capture-modal-title {
+    .overlay-frame-title {
       color: var(--fg-1);
       font-family: var(--font-ui);
       font-size: var(--text-sm);
       font-weight: 600;
     }
-    .capture-modal-close {
+    .overlay-frame-close {
       background: transparent;
       border: none;
       color: var(--fg-2);
@@ -289,15 +309,16 @@ def capture_modal_markup() -> str:
   </style>
   <div class="capture-modal" id="capture-modal" data-testid="capture-modal"
        data-region="capture-modal" role="dialog" aria-modal="true"
-       aria-label="Capture to inbox" hidden>
+       aria-label="Capture to inbox"
+       """
+        + _frame_root
+        + """
+       hidden>
     <div class="capture-modal-panel">
-      <div class="capture-modal-header">
-        <span class="capture-modal-title">Capture</span>
-        """ + guidance_toggle_markup("capture") + """
-        <button class="capture-modal-close" data-testid="capture-close"
-                onclick="overlayHost.dismiss()" aria-label="Close">&times;</button>
-      </div>
-      """ + guidance_callout_markup("capture") + """
+      """
+        + _frame_header
+        + _guidance
+        + """
       <textarea class="capture-input" id="capture-input"
                 data-testid="capture-input" data-region="capture-input"
                 rows="4" placeholder="What needs taking care of?"
@@ -315,6 +336,7 @@ def capture_modal_markup() -> str:
     </div>
   </div>
   <!-- /capture-modal -->"""
+    )
 
 
 def capture_modal_script() -> str:
