@@ -128,6 +128,7 @@ from companion_ui.workspace.system_map_overlay import (
     system_map_overlay_script,
 )
 from companion_ui.workspace.vault_settings_panel import (
+    NO_ACTIVE_VAULT_STATUSES,
     VAULT_INITIALIZE_ENDPOINT,
     VAULT_RELOAD_ENDPOINT,
     VAULT_SELECT_ENDPOINT,
@@ -12762,8 +12763,13 @@ def make_handler(
                 # picker mode so the controller's reload()/after-action swap does
                 # not re-introduce the duplicate "No vault selected" heading or
                 # the "unknown / unknown" identity spans the hero already
-                # supersedes (#2485 D1). Presentation-only; status is the
-                # server-declared projection, never re-classified here.
+                # supersedes (#2485 D1). The picker presentation covers the full
+                # canonical set of "no active vault" statuses (none / missing /
+                # uninitialized) — not just ``none`` — so the single-surface
+                # guarantee holds across the open/init/reload path, not only on
+                # first paint. Presentation-only; status is the server-declared
+                # projection, never re-classified here, and flow semantics stay
+                # owned by the runtime (#2312).
                 fragment_context = (
                     data.get("context") if isinstance(data, dict) else None
                 )
@@ -12773,7 +12779,7 @@ def make_handler(
                     else "none"
                 )
                 body = vault_settings_panel_fragment(
-                    data, picker_mode=fragment_status == "none"
+                    data, picker_mode=fragment_status in NO_ACTIVE_VAULT_STATUSES
                 ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

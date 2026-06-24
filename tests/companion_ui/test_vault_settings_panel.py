@@ -270,3 +270,95 @@ def test_structured_value_parsed_before_post() -> None:
     import html as _html
 
     assert ["a", "b"] == json.loads(_html.unescape(textarea.group(1)))
+
+
+# ---------------------------------------------------------------------------
+# D1 (#2485): the no-vault picker presentation must survive the
+# /vault-settings fragment reload path for *every* "no active vault" status,
+# not just ``none``.
+#
+# Codex P2 (re-trigger of #2485): the front-door picker open/init/reload swap
+# re-fetches the /vault-settings fragment; that follow-up projection can carry
+# ``status == "missing"`` (selected path gone) or ``status == "uninitialized"``
+# (settings files absent). The first cut set ``picker_mode`` only for
+# ``status == "none"``, so the reload fell back to the regular settings panel
+# for missing/uninitialized — re-rendering the extra status header plus the raw
+# "unknown / unknown" identity spans under the no-vault hero, undoing the
+# single-surface / no-raw-unknown D1 guarantee after open/init/reload.
+#
+# This pins the fix: the fragment route renders the single DS picker surface
+# for the full canonical no-active-vault set. Presentation-only — the route
+# never re-classifies status, and selection/init/reload *semantics* stay
+# #2312's domain.
+# ---------------------------------------------------------------------------
+
+
+def _no_vault_projection(status: str) -> dict[str, Any]:
+    """A /vault-settings projection for a no-active-vault status.
+
+    The context carries no selected vault, so the non-picker render path would
+    default the identity spans to the literal "unknown" tokens — exactly what
+    the picker presentation must suppress on the reload path.
+    """
+    return {
+        "context": {"status": status},
+        "definitions": [],
+        "settings": [],
+        "validation_errors": [],
+        # A label-less recent that the non-picker path would render as
+        # "unknown / unknown".
+        "recent_vaults": [{"vault_name": None, "path": None}],
+    }
+
+
+def test_fragment_reload_keeps_picker_for_all_no_vault_statuses() -> None:
+    """The /vault-settings fragment renders the single DS picker surface for
+    every no-active-vault status (none / missing / uninitialized), so the D1
+    single-surface guarantee holds across the open/init/reload swap — not only
+    on first paint (#2485 Codex picker-mode-reload).
+
+    Asserted on the page server's real fragment route (the surface the
+    controller swaps in) and on *visible text* via the parser-based stripper,
+    so the test cannot stay green on the ``none``-only render: it was confirmed
+    RED for ``missing`` / ``uninitialized`` before the fix.
+    """
+    for status in ("none", "missing", "uninitialized"):
+        projection = _no_vault_projection(status)
+        client = _FakeClient(get_responses={VAULT_SETTINGS_ENDPOINT: projection})
+        handler_cls = make_handler(client=client, api_base_url="http://runtime")
+        body = _drive_get(handler_cls, VAULT_SETTINGS_FRAGMENT_ROUTE).decode("utf-8")
+
+        # The fragment is the single picker surface: it is exactly the pure
+        # helper's picker-mode output (no regular settings panel fallback).
+        assert body == vault_settings_panel_fragment(projection, picker_mode=True), (
+            f"status {status!r}: fragment reload must render the picker surface"
+        )
+
+        visible = _visible_text(body)
+
+        # No raw "unknown" identity/recent token leaks to the human — the
+        # picker suppresses the identity spans the non-picker path would emit.
+        assert "unknown" not in visible, (
+            f"status {status!r}: no literal 'unknown' may show on the reload picker"
+        )
+
+        # The duplicate status header is suppressed: in picker mode the hero
+        # owns the single heading, so the panel emits no status-label header.
+        assert 'data-testid="vault-status-label"' not in body, (
+            f"status {status!r}: the reload picker must not re-render a status header"
+        )
+
+        # No default-browser select/checkbox setting chrome leaks in: there is
+        # no selected vault, so the settings editor renders no fields.
+        assert 'data-testid="vault-setting-row"' not in body, (
+            f"status {status!r}: no settings-editor fields on the no-vault picker"
+        )
+
+        # Picker affordances are all preserved (presentation-only).
+        assert 'data-testid="vault-open-form"' in body
+        assert 'data-testid="vault-init-form"' in body
+        assert 'data-testid="vault-recent-vaults"' in body
+        assert 'data-testid="vault-settings-folder-open"' in body
+        # The fragment carries the no-vault status it was given (never
+        # re-classified by the route).
+        assert f'data-vault-status="{status}"' in body

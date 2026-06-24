@@ -22,6 +22,16 @@ VAULT_RELOAD_ENDPOINT = "/api/companion/vault/reload"
 # discarding it; rendering stays a pure, testable Python function.
 VAULT_SETTINGS_FRAGMENT_ROUTE = "/vault-settings"
 
+# Canonical set of runtime vault statuses that mean "no active vault is bound".
+# Each of these resolves to the no-vault front-door picker surface (#2485 D1):
+# the single DS picker with no legacy settings form, no duplicate "No vault
+# selected" heading, and no raw ``unknown`` identity spans. The front-door
+# render *and* the /vault-settings fragment reload path must agree on this set
+# so the single-surface guarantee survives open/init/reload, not just first
+# paint. Selection/init/reload *semantics* are owned by the runtime (#2312);
+# this constant only governs which statuses get the picker *presentation*.
+NO_ACTIVE_VAULT_STATUSES = frozenset({"none", "missing", "uninitialized"})
+
 
 def _e(value: object) -> str:
     return _html.escape(str(value if value is not None else ""), quote=True)
@@ -82,7 +92,7 @@ def _recent_vaults(recent_vaults: list[dict[str, Any]]) -> str:
 
 def _action_forms(context: dict[str, Any], recent_vaults: list[dict[str, Any]]) -> str:
     path = str(context.get("active_vault_path") or "")
-    can_initialize = str(context.get("status") or "") in {"none", "missing", "uninitialized"}
+    can_initialize = str(context.get("status") or "") in NO_ACTIVE_VAULT_STATUSES
     initialize_status = "available" if can_initialize else "disabled"
     initialize_disabled = "" if can_initialize else " disabled aria-disabled=\"true\""
     return f"""
