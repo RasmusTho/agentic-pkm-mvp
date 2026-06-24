@@ -124,7 +124,7 @@ A channel's compose overlay must bind `PKM_ENVIRONMENT`, `DATABASE_URL`, and `DB
 
 A `required: false` layer that is absent at preflight time contributes nothing, exactly as compose treats it; the preflight verifies the layering **as it stands at preflight time** — creating or editing env-file layers after the preflight and before stack start bypasses the guard. When no base compose file sits next to the overlay, the base layering is modeled as the single committed defaults file, preserving the #1655 contract.
 
-Omission is only acceptable when the chain-resolved value already binds the intended channel (e.g. `docker-compose.prod.yml` relies on the prod base defaults and a prod-channel runtime layer). This is channel-aware resolution of one shared rule, not a per-channel behavior split.
+Omission is only acceptable when the chain-resolved value already binds the intended channel. The prod overlay is explicit about prod/app DSNs because local dev startup also writes `tmp/runtime.env`; prod must not depend on that default optional layer being absent or already prod-shaped. Those explicit prod DSNs may use Compose interpolation defaults (for example, `${DATABASE_URL:-.../app}`) so intentional prod overrides remain reachable, but the preflight resolves the expression and still rejects `app_dev` / `app_test`. This is channel-aware resolution of one shared rule, not a per-channel behavior split.
 
 Explicit overlay DSNs do not suppress structural `env_file` chain validation. Even when
 `DATABASE_URL` and `DB_DSN` are declared with channel-correct values, the preflight still

@@ -943,14 +943,15 @@ def test_unsupported_env_file_path_expression_fails_closed(tmp_path: Path) -> No
     )
 
 
-def test_real_prod_compose_fails_when_runtime_layer_carries_test_dsn(
+def test_real_prod_compose_ignores_runtime_layer_test_dsn_when_overlay_is_explicit(
     tmp_path: Path,
 ) -> None:
     """The real merged model (docker-compose.yaml + prod overlay) is resolved.
 
-    Pointing WATCHER_RUNTIME_ENV_FILE at a layer carrying app_test DSNs must
-    fail the prod preflight: this is exactly the escape found in the codex
-    review of PR #1766.
+    Pointing WATCHER_RUNTIME_ENV_FILE at a layer carrying app_test DSNs must not
+    corrupt prod when the prod overlay explicitly declares channel-critical
+    DSNs. This is the fail-safe shape for local machines where a dev
+    tmp/runtime.env may legitimately exist.
     """
     layer = _write_env_layer(tmp_path, TEST_DSN, rel="runtime.env")
 
@@ -960,9 +961,23 @@ def test_real_prod_compose_fails_when_runtime_layer_carries_test_dsn(
         environ={"WATCHER_RUNTIME_ENV_FILE": str(layer)},
     )
 
+    assert result.ok, (
+        "Expected the explicit prod overlay to override a cross-channel runtime "
+        f"layer, but got:\n{result.summary()}"
+    )
+
+
+def test_real_prod_compose_fails_when_invoking_env_carries_test_dsn() -> None:
+    """Explicit prod DSN defaults must not hide a cross-channel caller override."""
+    result = check_compose_channel_isolation(
+        PROD_COMPOSE,
+        "prod",
+        environ={"DATABASE_URL": TEST_DSN, "DB_DSN": TEST_DSN},
+    )
+
     assert not result.ok, (
-        "Expected the real prod compose to FAIL when the runtime env layer "
-        "carries a test-channel DSN, but it passed."
+        "Expected prod preflight to reject caller-provided app_test DSNs, "
+        "but it passed."
     )
     violating = {(v.service, v.field) for v in result.violations}
     for svc in ("api", "worker", "watcher"):
@@ -1010,23 +1025,15 @@ def test_real_test_compose_passes_preflight() -> None:
 def test_real_prod_compose_passes_preflight() -> None:
     """The committed docker-compose.prod.yml must pass the prod channel preflight.
 
-    Regression guard for the committed prod-compose **fallback** path (issue
-    #2018): the prod overlay declares no DSNs, so every app service falls back
-    through its base ``env_file`` chain. The optional runtime layer
-    (``${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}``, ``required: false``)
-    is absent in the repo, so the effective binding is the committed
-    ``config/runtime.defaults.env`` — which carries prod ``app`` DSNs.
+    Regression guard for the committed prod-compose binding path: the prod
+    overlay declares channel-critical DSNs explicitly so a local dev
+    ``tmp/runtime.env`` cannot win through the base ``env_file`` chain.
 
-    Crucially this exercises the *committed* fallback and does NOT inject a
-    winning later layer (which would duplicate
-    ``test_real_prod_compose_passes_when_runtime_layer_carries_prod_dsn`` and
-    mask drift). It therefore fails closed if either:
+    Crucially this exercises the committed prod overlay and does NOT inject a
+    winning later layer. It therefore fails closed if either:
 
-    - ``config/runtime.defaults.env`` drifts to an ``app_test`` (cross-channel)
-      DSN, or
-    - the default optional runtime-layer handling regresses (e.g. the layer
-      becomes ``required`` and resolves to the missing ``./tmp/runtime.env``,
-      making the binding unverifiable).
+    - the prod overlay drifts away from prod/app DSNs, or
+    - the env_file chain becomes structurally unverifiable.
 
     ``environ={}`` plus ``load_dotenv=False`` keeps the resolution hermetic: a
     runner that happens to export ``WATCHER_RUNTIME_ENV_FILE`` — or that has a

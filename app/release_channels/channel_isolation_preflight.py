@@ -604,14 +604,28 @@ def _check_db_dsn(
     for key in CHANNEL_CRITICAL_DSN_KEYS:
         dsn = env.get(key)
         if dsn is not None:
-            expected_on_violation = _dsn_violation(dsn, spec)
+            resolved_dsn = _interpolate_env_file_path(dsn, lookup)
+            if resolved_dsn is None:
+                result.violations.append(
+                    BindingViolation(
+                        service=svc_name,
+                        field=key,
+                        expected=(
+                            f"resolvable {key} expression containing "
+                            f"{db_fragment!r}"
+                        ),
+                        actual=dsn,
+                    )
+                )
+                continue
+            expected_on_violation = _dsn_violation(resolved_dsn, spec)
             if expected_on_violation:
                 result.violations.append(
                     BindingViolation(
                         service=svc_name,
                         field=key,
                         expected=expected_on_violation,
-                        actual=dsn,
+                        actual=resolved_dsn,
                     )
                 )
             if chain_error is not None:
