@@ -41,7 +41,9 @@ The four senses:
 - A **set-but-missing** content vault is a misconfiguration that fails loud (`VaultRootMisconfiguredError`), not a no-vault state.
 - Vault-settings and the test vault are unaffected by the no-vault-at-initiation contract; only the runtime binding may legitimately be absent at boot.
 
-### Vault initialization and the personal-vault-write constraint {#vault-init}
+<a id="vault-init"></a>
+
+### Vault initialization and the personal-vault-write constraint
 
 **Vault initialization** is the act of writing the Design Handoff settings scaffold (`settings/vault.md`, `settings/local.md`, and companion files) into a folder so it becomes a fully *selected* (initialized) vault. Once initialized, the vault context resolves to `selected` and both reads and writes are enabled.
 
