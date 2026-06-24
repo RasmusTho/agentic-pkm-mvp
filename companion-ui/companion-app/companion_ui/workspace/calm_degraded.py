@@ -55,6 +55,13 @@ _ENUM_MAP: Final[dict[str, str]] = {
     "orientation_unavailable": "Orientation unavailable",
     "orientation_source_unavailable": "Orientation source unavailable",
     "lifecycle.move": "Move note",
+    # Orientation provenance / signal tokens that leaked raw into the re-entry
+    # and orientation footers (REVIEW_RESPONSE.txt C3). These are runtime
+    # provenance enums, never user-facing copy: map them to a human label so the
+    # footer reads as a sentence, not a machine token. The classified value
+    # still travels in the footer's data-* attributes.
+    "operational_trace_pointer": "from where you left off",
+    "artifact_activation": "from your last activity",
 }
 
 # Internal identifiers that must never appear as user-facing copy. They are
@@ -79,9 +86,71 @@ _SUPPRESS_ID_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
 # live outside these namespaces and pass through.
 _CLASSIFIED_TOKEN_NAMESPACES: Final[tuple[str, ...]] = ("lifecycle.",)
 
+# Runtime classified-token *shapes* (not namespaces) that are machine signal
+# encodings, never user-facing copy: e.g. ``signal=0`` resurface strength
+# encodings. An unmapped token matching one of these FAILS CLOSED (suppressed),
+# exactly like a classified-namespace token. The raw value still travels in the
+# surface's data-* attributes.
+_CLASSIFIED_TOKEN_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"^signal=[\w.-]*$"),
+)
+
+# Machine ``name=value`` signal-encoding shape used by the orientation/resurface
+# producer. The runtime emits every resurface signal as ``f"{signal.name}={signal.value}"``
+# (app/api/routes/companion.py::_orientation_resurface_candidates) — e.g.
+# ``worker_queue_pending=2``, ``recent_change=orientation``, ``signal=0``. NONE of
+# these are user-authored copy; they are correlation encodings. The chip render
+# path must fail closed on the WHOLE family, not just the fixture's ``signal=…``.
+#
+# The shape that identifies a machine encoding (and distinguishes it from human
+# copy such as "Resume the runtime API contract" or "from where you left off"):
+# a leading bare *identifier* token (``[a-z][\w.]*`` — snake/dotted, no spaces)
+# immediately followed by ``=`` and a value, with no surrounding prose. Human
+# labels never carry that ``identifier=value`` head, so this does not redact
+# legitimate copy that merely happens to contain an ``=`` mid-sentence.
+_SIGNAL_LABEL_ENCODING_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[A-Za-z][\w.]*=.*$"
+)
+
+# Embedded-identifier pattern for prose redaction. Matches an internal id
+# (``prop-*`` / ``proposal-*`` / ``art-*`` / ``artifact-*`` / ``note-*``) where
+# it appears *inside* free text (e.g. a runtime ``trigger_summary`` such as
+# "Trigger for prop-move-1 …"). Whole-string ids are handled by
+# :func:`humanise_token`; this catches the in-prose case the review flagged.
+#
+# CRITICAL — distinguish a real opaque ID from ordinary hyphenated prose.
+# ``humanise_prose`` runs on EVERY ``trigger_summary`` / provenance label, so an
+# over-broad matcher (any ``note-…`` / ``proposal-…`` hyphenated word) silently
+# rewrites legitimate copy: "note-taking follow-up", "proposal-worthy evidence",
+# "artifact-level context" would all collapse to "this item …". That corrupts
+# user-visible Evidence text.
+#
+# Real producer IDs in this codebase always carry an *opaque* segment — a purely
+# numeric run (``prop-move-1``, ``prop-cross-1``, ``art-123``, ``art-2075``) or a
+# long hex/uuid-like token — somewhere in the hyphen chain. Ordinary prose words
+# ("taking", "worthy", "level", "stub", "cross") never are. So the matcher only
+# fires when the token contains at least one numeric / hex-opaque segment, and
+# only then consumes the WHOLE hyphen chain (so multi-segment ids like
+# ``art-1187-empty`` / ``prop-move-1`` redact whole, leaving no ``-1`` residue).
+#
+# Shape (IGNORECASE):
+#   <prefix>(-<word>)* -<opaque> (-<word|opaque>)*
+# where <opaque> = a digit run (``1``, ``2075``) or a >=8-char hex/uuid token.
+_EMBEDDED_ID_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:prop|proposal|art|artifact|note)"  # producer prefix
+    r"(?:-[A-Za-z]+)*"  # optional leading word segments (move, cross, …)
+    r"-(?:\d+|[0-9a-f]{8,})"  # >=1 opaque segment: numeric run or hex/uuid token
+    r"(?:-[\w.]+)*",  # any trailing segments (art-1187-empty, …)
+    re.IGNORECASE,
+)
+
 
 def _is_suppressed_identifier(token: str) -> bool:
     return any(pattern.match(token) for pattern in _SUPPRESS_ID_PATTERNS)
+
+
+def _is_classified_pattern_token(token: str) -> bool:
+    return any(pattern.match(token) for pattern in _CLASSIFIED_TOKEN_PATTERNS)
 
 
 def _is_classified_namespace_token(token: str) -> bool:
@@ -147,7 +216,101 @@ def humanise_token(token: object) -> str:
     if _is_classified_namespace_token(text):
         # Unmapped machine enum in a classified namespace — fail closed.
         return ""
+    if _is_classified_pattern_token(text):
+        # Unmapped machine signal encoding (e.g. signal=0) — fail closed.
+        return ""
     return text
+
+
+def humanise_signal_label(token: object) -> str:
+    """Fail-closed humanisation for an orientation/resurface *signal chip* label.
+
+    The resurface/orientation chips render the runtime's resurface signal labels,
+    which the producer emits as machine ``name=value`` encodings (e.g.
+    ``worker_queue_pending=2``, ``recent_change=orientation``, ``signal=0``). Those
+    are correlation encodings, never user-authored copy, so an *unmapped*
+    ``name=value`` token must FAIL CLOSED (suppressed) rather than render raw —
+    otherwise the live (non-gallery) runtime leaks ``worker_queue_pending=2`` into
+    visible chip text, defeating the no-raw-enum constraint for REAL data.
+
+    Resolution:
+
+    - an explicitly mapped enum returns its human copy (via :func:`humanise_token`);
+    - any whole-string machine ``identifier=value`` encoding is suppressed (empty);
+    - any other value (legitimate human label) passes through unchanged via
+      :func:`humanise_token`, preserving its identifier/namespace fail-closed rules.
+
+    The raw signal label still travels server-authoritatively in the chip's
+    ``data-signal-token`` attribute. This is deliberately scoped to the signal
+    chip render path; it does NOT change :func:`humanise_token`, whose pass-through
+    contract other callers (evidence/proposal ``action_class`` labels) rely on.
+    """
+    text = "" if token is None else str(token).strip()
+    if not text:
+        return ""
+    if text in _ENUM_MAP:
+        return _ENUM_MAP[text]
+    if _SIGNAL_LABEL_ENCODING_RE.match(text):
+        # Unmapped machine name=value signal encoding — fail closed, never raw.
+        return ""
+    return humanise_token(text)
+
+
+def humanise_provenance_token(token: object, *, fallback: str) -> str:
+    """Fail-closed humanisation for an orientation *provenance* enum.
+
+    Unlike :func:`humanise_token` (which passes arbitrary human/free-text values
+    through unchanged), the provenance footer renders runtime-classified enums
+    only — ``authority_role`` and a ``source_ref`` kind/label. Those are machine
+    tokens, never user-authored copy, so an *unmapped* one must FAIL CLOSED to the
+    supplied calm ``fallback`` ("Derived" / "details withheld") rather than leak
+    the raw enum (Constraint: an unmapped token renders the safe fallback, never
+    the raw token).
+
+    Resolution:
+
+    - an explicitly mapped enum returns its human copy;
+    - an empty / missing token returns ``fallback``;
+    - any other token — including an allowed-but-unmapped provenance enum such as
+      ``derived_runtime_projection`` or a raw ``source_ref`` kind used as a label
+      — returns ``fallback`` (fail closed). The raw classified value still travels
+      server-authoritatively in the footer's ``data-*`` attributes.
+
+    This is deliberately scoped to the provenance render path; it does NOT change
+    :func:`humanise_token`, whose pass-through contract other callers (evidence
+    ``action_class``, resurface ``signal_labels``) still rely on.
+    """
+    text = "" if token is None else str(token).strip()
+    if not text:
+        return fallback
+    mapped = _ENUM_MAP.get(text)
+    if mapped is not None:
+        return mapped
+    # Unmapped provenance enum — fail closed to the calm fallback, never raw.
+    return fallback
+
+
+def humanise_prose(text: object) -> str:
+    """Redact embedded internal identifiers from free-text runtime copy.
+
+    Some runtime free-text fields (notably a proposal ``trigger_summary`` such
+    as "Trigger for prop-move-1 …") embed an internal correlation id *inside*
+    otherwise-human prose. :func:`humanise_token` only suppresses a whole-string
+    id; this scrubs the id where it appears mid-sentence so it never reaches
+    visible copy, while leaving the rest of the human sentence intact. The raw
+    id is still preserved in the surface's ``data-*`` attributes (this only
+    touches the visible copy string).
+
+    Only an *opaque correlation id* (a ``prop-*`` / ``art-*`` / ``note-*`` token
+    carrying a numeric or hex/uuid-like segment, e.g. ``prop-move-1`` /
+    ``art-123``) is replaced with "this item". Ordinary hyphenated prose that
+    merely starts with one of those words — "note-taking", "proposal-worthy",
+    "artifact-level" — is NOT an id and passes through verbatim.
+    """
+    raw = "" if text is None else str(text)
+    if not raw:
+        return ""
+    return _EMBEDDED_ID_RE.sub("this item", raw)
 
 
 def humanise_degraded_reason(token: object) -> str:

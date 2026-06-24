@@ -21,7 +21,12 @@ observable in ``data-*`` attributes on the rendered element.
 from __future__ import annotations
 
 import inspect
+import json
 import re
+import shutil
+import subprocess
+import textwrap
+from html.parser import HTMLParser
 from typing import Any
 
 import pytest
@@ -34,6 +39,8 @@ from companion_ui.workspace.calm_degraded import (
     NOTHING_MUTATED,
     calm_degraded,
     humanise_degraded_reason,
+    humanise_prose,
+    humanise_signal_label,
     humanise_token,
 )
 from companion_ui.workspace.real_note_workspace_dev_page import (
@@ -283,7 +290,7 @@ def test_enum_map_no_raw_token_on_degraded_surface() -> None:
 
 def test_enum_map_suppresses_internal_ids_on_proposal_surface() -> None:
     html = _render_proposal_html()
-    visible = _strip_data_attributes(html)
+    visible = _visible_text(html)
     # Internal identifiers and the raw action class must not appear as visible
     # copy. The proposal-id / artifact-id correlation IDs may remain only inside
     # pre-existing data-* attributes (server-authoritative correlation, exempt
@@ -324,6 +331,176 @@ def test_vault_browser_fetch_error_uses_calm_grammar() -> None:
     # (c) the classified error *state* still arrives from the payload — evidenced
     #     by the state-error element being present.
     assert 'data-testid="workspace-vault-browser-state-error"' in html
+
+
+# ---------------------------------------------------------------------------
+# AC3 / D3 (#2482) — the *live* client-side fetch-failure catch uses the calm
+# grammar. #2444 closed on the server-rendered fixture above, which never
+# invokes the overlay's JS .catch handler; that handler still concatenated
+# err.message. This test extracts and *executes* the real overlay catch with a
+# rejecting fetch and asserts on the runtime-produced visible status text.
+# ---------------------------------------------------------------------------
+_NODE = shutil.which("node")
+
+# The single calm-grammar string the server-rendered vault-browser error path
+# emits; the live catch must reuse it (not a second template).
+_EXPECTED_CALM_VAULT_COPY = calm_degraded(
+    what="Notes",
+    why="connection failed",
+    nothing_clause=NOTHING_LOST,
+    what_to_do="Refresh to retry",
+)
+
+
+class _ScriptBodyCollector(HTMLParser):
+    """Collect the text of every ``<script>`` element via a real HTML parser.
+
+    Used to pull the overlay IIFE out of the rendered page so it can be
+    *executed* under Node. A parser (not a regex tag-filter) is used so the
+    extraction is robust to upper-case / whitespace-padded ``</script>`` tags.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self._in_script = False
+        self._buf: list[str] = []
+        self.bodies: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag == "script":
+            self._in_script = True
+            self._buf = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_script:
+            self._buf.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._in_script:
+            self._in_script = False
+            self.bodies.append("".join(self._buf))
+
+
+def _script_bodies(html: str) -> list[str]:
+    collector = _ScriptBodyCollector()
+    collector.feed(html)
+    collector.close()
+    return collector.bodies
+
+
+def _vault_browser_overlay_script() -> str:
+    """Extract the vault-browser overlay IIFE (defines ``fetchNotes``)."""
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/panel.md",
+    )
+    for body in _script_bodies(html):
+        if "function fetchNotes" in body and "vault-browser-status" in body:
+            return body
+    raise AssertionError("vault-browser overlay script (fetchNotes) not found")
+
+
+def test_vault_browser_overlay_fetch_fail_catch_has_no_raw_error() -> None:
+    """Source guard: the live catch reuses calm grammar, not ``err.message``."""
+    script = _vault_browser_overlay_script()
+    catch = re.search(
+        r"\.catch\(function\s*\(err\)\s*\{(.*?)\}\);", script, flags=re.DOTALL
+    )
+    assert catch is not None, "vault-browser fetch catch handler not found"
+    body = catch.group(1)
+    assert (
+        json.dumps(_EXPECTED_CALM_VAULT_COPY) in body
+        or _EXPECTED_CALM_VAULT_COPY in body
+    ), "live catch must hand the calm-grammar string to setStatus"
+    assert "'Error: ' + err.message" not in body
+    assert "setStatus('Error:" not in body
+
+
+@pytest.mark.skipif(
+    _NODE is None, reason="node not available for live-catch execution"
+)
+def test_vault_browser_overlay_fetch_fail_uses_calm_grammar() -> None:
+    """Execute the *live* overlay catch with a rejecting fetch under Node.
+
+    Runs the real ``fetchNotes`` handler from the rendered page with the DOM and
+    ``fetch`` stubbed, forcing ``fetch`` to reject with a transport error
+    exactly as a browser would. Captures the string the handler writes via
+    ``setStatus`` (the DOM ``textContent``) and asserts on that runtime-produced
+    *visible* text — not a static fixture. This is the catch that #2444's
+    server-rendered fixture never exercised.
+    """
+    script = _vault_browser_overlay_script()
+    harness = textwrap.dedent(
+        """
+        'use strict';
+        const captured = {{ status: null }};
+        function makeEl() {{
+          return {{
+            _text: '', value: '', _html: '',
+            set textContent(v) {{ this._text = v; captured.status = v; }},
+            get textContent() {{ return this._text; }},
+            set innerHTML(v) {{ this._html = v; }},
+            get innerHTML() {{ return this._html; }},
+            appendChild() {{}}, addEventListener() {{}},
+            setAttribute() {{}}, removeAttribute() {{}},
+            classList: {{ add() {{}}, remove() {{}} }},
+            querySelector() {{ return null; }},
+            scrollIntoView() {{}}, focus() {{}}, style: {{}},
+          }};
+        }}
+        const elements = {{}};
+        global.document = {{
+          getElementById(id) {{
+            if (!elements[id]) elements[id] = makeEl();
+            return elements[id];
+          }},
+          addEventListener() {{}}, createElement() {{ return makeEl(); }},
+        }};
+        global.window = {{
+          matchMedia() {{ return {{ matches: false }}; }},
+          getComputedStyle() {{ return {{ display: 'block' }}; }},
+          console: {{ debug() {{}}, error() {{}} }},
+        }};
+        global.console = {{ debug() {{}}, error() {{}}, log() {{}} }};
+        // The real transport failure: fetch rejects with "Failed to fetch".
+        global.fetch = function() {{
+          return Promise.reject(new Error('Failed to fetch'));
+        }};
+        global.setTimeout = function(fn) {{ return 0; }};
+        global.clearTimeout = function() {{}};
+
+        {script}
+
+        Promise.resolve()
+          .then(function() {{ return window.vaultBrowser.open(); }})
+          .then(function() {{ return new Promise(function(r) {{ Promise.resolve().then(r); }}); }})
+          .then(function() {{ return new Promise(function(r) {{ Promise.resolve().then(r); }}); }})
+          .then(function() {{
+            process.stdout.write(JSON.stringify({{ status: captured.status }}));
+          }})
+          .catch(function(e) {{
+            process.stdout.write(JSON.stringify({{ error: String(e) }}));
+          }});
+        """
+    ).format(script=script)
+
+    result = subprocess.run(
+        [_NODE, "-e", harness], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, f"node failed: {result.stderr}"
+    payload = json.loads(result.stdout.strip())
+    assert "error" not in payload, f"harness error: {payload.get('error')}"
+    status = payload["status"]
+
+    # The live catch wrote a visible status: it must be the calm grammar, and it
+    # must NOT leak the raw transport error or echo err.message.
+    assert status is not None, "live overlay catch never set a status"
+    assert status == _EXPECTED_CALM_VAULT_COPY, (
+        f"live overlay catch produced {status!r}, expected the calm grammar"
+    )
+    assert RAW_TRANSPORT_ERROR not in status
+    assert "Failed to fetch" not in status
+    assert "Error:" not in status
 
 
 # ---------------------------------------------------------------------------
@@ -391,19 +568,126 @@ def test_humanise_token_fails_closed_on_unmapped_classified_namespace() -> None:
         assert humanise_token(unmapped) == "", f"{unmapped!r} must fail closed"
 
 
+def test_humanise_signal_label_fails_closed_on_machine_name_value() -> None:
+    # The resurface/orientation signal producer emits EVERY label as a machine
+    # name=value encoding (#2482 Codex finding). humanise_signal_label must fail
+    # closed on the WHOLE family, not just the fixture's signal=… token.
+    for token in [
+        "signal=0",
+        "worker_queue_pending=2",
+        "recent_change=orientation",
+        "pending_promotions=5",
+        "watcher_runs_24h=0",
+        "promote_created.24h=1",
+    ]:
+        assert humanise_signal_label(token) == "", (
+            f"machine signal encoding {token!r} must fail closed (not render raw)"
+        )
+
+
+def test_humanise_signal_label_keeps_mapped_and_human_labels() -> None:
+    # A mapped enum still humanises; a legitimate human label (no identifier=value
+    # head) passes through unchanged — so the generalisation does not suppress
+    # real copy. An empty token yields empty.
+    assert humanise_signal_label("orientation_unavailable") == "Orientation unavailable"
+    assert humanise_signal_label("Relevant now because the note changed") == (
+        "Relevant now because the note changed"
+    )
+    # A human sentence that merely contains an '=' mid-prose is NOT a machine
+    # name=value encoding (no leading bare identifier head) and is preserved.
+    assert humanise_signal_label("score was 3 = strong") == "score was 3 = strong"
+    assert humanise_signal_label("") == ""
+
+
+# ---------------------------------------------------------------------------
+# #2482 (Codex over-redaction finding) — humanise_prose must redact only REAL
+# opaque correlation ids, not ordinary hyphenated prose.
+#
+# The first #2482 fix widened the embedded-id regex to consume any hyphenated
+# word with a producer prefix. Because humanise_prose runs on every
+# trigger_summary / provenance label, that silently rewrote legitimate copy
+# ("note-taking follow-up" -> "this item follow-up"). The matcher must fire only
+# when the token carries a numeric / hex-opaque segment (the real id shape).
+# ---------------------------------------------------------------------------
+def test_humanise_prose_redacts_real_embedded_ids_whole() -> None:
+    # Real producer ids embedded in prose collapse to the human placeholder,
+    # whole — no raw token and no hyphen-suffix residue survive.
+    out = humanise_prose("Trigger for prop-move-1 and prop-cross-1 on art-123")
+    assert "prop-move-1" not in out
+    assert "prop-cross-1" not in out
+    assert "art-123" not in out
+    # Multi-segment ids redact whole — no "-1" / "move-1" residue.
+    assert "this item-1" not in out
+    assert "move-1" not in out
+    assert out == "Trigger for this item and this item on this item"
+    # The actual artifact id shapes used in fixtures also redact whole.
+    for raw in ["art-2075", "art-1130", "art-1139", "art-1187-empty", "art-1187-uncited"]:
+        red = humanise_prose(f"see {raw} here")
+        assert raw not in red, f"{raw!r} survived prose redaction"
+        assert red == "see this item here"
+
+
+def test_humanise_prose_preserves_legitimate_hyphenated_prose() -> None:
+    # Ordinary hyphenated prose that merely starts with a producer word is NOT an
+    # id (no numeric/opaque segment) and must pass through verbatim — never be
+    # rewritten to "this item".
+    for prose in [
+        "note-taking follow-up",
+        "proposal-worthy evidence",
+        "artifact-level context",
+        "note-level summary",
+        "note-worthy idea",
+        "cross-note proposal",
+    ]:
+        assert humanise_prose(prose) == prose, (
+            f"legitimate prose {prose!r} was over-redacted to {humanise_prose(prose)!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-_DATA_ATTR_RE = re.compile(r'\sdata-[\w-]+="[^"]*"')
+_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
+_VISIBLE_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
 
 
-def _strip_data_attributes(html: str) -> str:
-    """Remove data-* attribute values so the scan targets visible copy only.
+class _VisibleTextExtractor(HTMLParser):
+    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
+    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
+    cannot leak inert markup into the scanned copy."""
 
-    Server-authoritative classification tokens carried in data-* attributes
-    are exempt from the copy scan; stripping them isolates user-visible copy.
-    """
-    return _DATA_ATTR_RE.sub("", html)
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._chunks.append(data)
+
+
+def _visible_text(html: str) -> str:
+    """Rendered human-visible text: tags removed and <script>/<style>/<head>
+    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
+    extractor = _VisibleTextExtractor()
+    extractor.feed(html)
+    extractor.close()
+    return " ".join("".join(extractor._chunks).split()).lower()
 
 
 def _degraded_orientation_surface(html: str) -> str:

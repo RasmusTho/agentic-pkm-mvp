@@ -1528,3 +1528,111 @@ def test_orientation_header_has_no_asof_telemetry() -> None:
         assert "vault:" in header_text, (
             "vault identity must remain in the orientation header"
         )
+
+
+# ---------------------------------------------------------------------------
+# #2482 / C3 — no raw runtime enum/identifier in orientation footers.
+#
+# The orientation provenance footers render authority_role + source_label as
+# visible copy, and the resurface card renders signal_labels as chip copy. The
+# default fixtures carry the confirmed leak tokens
+# (operational_trace_pointer / artifact_activation on the leave-point footer,
+# signal=0 on the resurface chip). #2444 humanised the degraded-reason chips but
+# not these footers. The assertion is on *rendered visible text* (HTML tags AND
+# <script> bodies stripped, via the parser-based ``_visible_text`` above) so a
+# token in visible copy fails even when the matching data-* hook still carries
+# the raw value.
+# ---------------------------------------------------------------------------
+_RAW_ORIENTATION_ENUMS = [
+    "operational_trace_pointer",
+    "artifact_activation",
+    "signal=0",
+]
+
+
+def test_orientation_footers_have_no_raw_enum() -> None:
+    # full_mist renders the orientation panels (leave point + resurface), where
+    # the provenance footer and signal chips live.
+    html = _render(orientation=_orientation_payload(gap=_GAP_FULL_MIST))
+    visible = _visible_text(html)
+    for token in _RAW_ORIENTATION_ENUMS:
+        assert token not in visible, (
+            f"raw orientation enum {token!r} leaked into visible footer copy"
+        )
+    # The footers still read as human copy: the leave-point provenance humanises
+    # to a sentence (not a machine enum), and the resurface chip is suppressed
+    # rather than showing signal=0.
+    assert "from where you left off" in visible or "from your last activity" in visible  # lower-cased copy
+    # The classified values still arrive server-authoritatively in data-* hooks.
+    assert 'data-authority-role="operational_trace_pointer"' in html
+
+
+# The resurface signal producer (app/api/routes/companion.py::
+# _orientation_resurface_candidates) emits EVERY signal label as a machine
+# ``f"{signal.name}={signal.value}"`` encoding — e.g. ``worker_queue_pending=2``,
+# ``recent_change=orientation`` — NOT only the fixture's ``signal=0``. A
+# ``signal=``-only suppression leaves those real ``name=value`` encodings passing
+# through to visible chip copy, defeating the no-raw-enum AC for REAL data. This
+# test exercises the realistic producer shape and asserts NONE of the raw
+# ``name=value`` encodings appear in visible chip text; the chip renders the
+# humanised/withheld form while the raw value stays in data-signal-token.
+_REALISTIC_RESURFACE_SIGNAL_LABELS = [
+    "worker_queue_pending=2",
+    "recent_change=orientation",
+]
+
+
+def test_resurface_chips_have_no_raw_name_value_signal_encoding() -> None:
+    payload = _orientation_payload(gap=_GAP_FULL_MIST)
+    # Inject the realistic producer shape onto the rendered resurface candidate
+    # (replacing the fixture's signal=0). Both the resurface panel and the
+    # orientation panel render signal_labels as chip copy.
+    payload["resurface"]["candidates"][0]["signal_labels"] = list(
+        _REALISTIC_RESURFACE_SIGNAL_LABELS
+    )
+    html = _render(orientation=payload)
+    visible = _visible_text(html)
+    for token in _REALISTIC_RESURFACE_SIGNAL_LABELS:
+        assert token not in visible, (
+            f"raw name=value signal encoding {token!r} leaked into visible chip "
+            "copy (signal-chip render did not fail closed on the real producer "
+            "shape)"
+        )
+    # The raw classified values still travel server-authoritatively in data-*.
+    for token in _REALISTIC_RESURFACE_SIGNAL_LABELS:
+        assert f'data-signal-token="{token}"' in html
+
+
+# An *allowed-but-unmapped* provenance enum must fail closed: the constraint is
+# that the enum/id map renders the safe fallback ("Derived" / "details withheld")
+# for any unmapped token, never the raw enum. The footer renders authority_role
+# and source_ref.kind/label as visible copy; without fail-closed scoping an
+# unmapped enum like ``derived_runtime_projection`` (or a raw source_ref kind used
+# as a label) passes straight through to visible copy.
+_UNMAPPED_PROVENANCE_AUTHORITY = "derived_runtime_projection"
+_UNMAPPED_PROVENANCE_SOURCE_KIND = "operational_signal_projection"
+
+
+def test_orientation_footers_have_no_raw_enum_for_unmapped_provenance() -> None:
+    payload = _orientation_payload(gap=_GAP_FULL_MIST)
+    # Inject an unmapped authority_role + an unmapped source_ref kind with NO
+    # label (so the kind is used as the source label) on a rendered open-loop.
+    payload["open_loops"][0]["authority_role"] = _UNMAPPED_PROVENANCE_AUTHORITY
+    payload["open_loops"][0]["source_ref"] = {
+        "kind": _UNMAPPED_PROVENANCE_SOURCE_KIND,
+        "ref": "orientation.unmapped",
+    }
+    html = _render(orientation=payload)
+    visible = _visible_text(html)
+    # Neither unmapped enum leaks into visible footer copy.
+    for token in (_UNMAPPED_PROVENANCE_AUTHORITY, _UNMAPPED_PROVENANCE_SOURCE_KIND):
+        assert token not in visible, (
+            f"unmapped provenance enum {token!r} leaked into visible footer copy "
+            "(provenance render path did not fail closed)"
+        )
+    # Instead the calm fail-closed fallbacks render (lower-cased by _visible_text).
+    assert "derived" in visible
+    assert "details withheld" in visible
+    # The raw classified values still travel server-authoritatively in data-*.
+    assert f'data-authority-role="{_UNMAPPED_PROVENANCE_AUTHORITY}"' in html
+    assert f'data-source-kind="{_UNMAPPED_PROVENANCE_SOURCE_KIND}"' in html

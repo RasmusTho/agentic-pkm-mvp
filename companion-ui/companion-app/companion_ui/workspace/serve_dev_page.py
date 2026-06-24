@@ -71,6 +71,9 @@ from companion_ui.workspace.calm_degraded import (
     blocked_recourse,
     calm_degraded,
     humanise_degraded_reason,
+    humanise_prose,
+    humanise_provenance_token,
+    humanise_signal_label,
     humanise_token,
     lane_label,
 )
@@ -4007,13 +4010,22 @@ def _render_resurface_mode(
     held_back = more_held_back or len(shown) < total
     rows: list[str] = []
     for candidate in shown:
-        signals = "".join(
-            (
-                '<span class="resurface-signal" data-testid="resurface-signal">'
-                f"{_e(signal)}</span>"
+        # C3 (CUIDR-01 / #2482): a raw runtime signal encoding must not appear as
+        # visible chip copy. The producer emits EVERY signal label as a machine
+        # name=value pair (worker_queue_pending=2, recent_change=orientation,
+        # signal=0), not just the fixture's signal=0 — so humanise each label
+        # through the signal-chip map, which fails closed on ANY unmapped
+        # name=value encoding. The raw classified value still travels
+        # server-authoritatively in the data-signal-token attribute.
+        signal_chips = []
+        for signal in candidate.get("signal_labels", []):
+            human = humanise_signal_label(signal)
+            signal_chips.append(
+                '<span class="resurface-signal" data-testid="resurface-signal" '
+                f'data-signal-token="{_e(str(signal))}">'
+                f"{_e(human)}</span>"
             )
-            for signal in candidate.get("signal_labels", [])
-        )
+        signals = "".join(signal_chips)
         actions = "".join(
             (
                 '<button type="button" class="resurface-action" '
@@ -4484,7 +4496,7 @@ def _render_act_mode(
             data-artifact-id="{artifact_id}">
             <div class="act-proposal-title">{_e(proposal.get("description", ""))}</div>
             <div class="act-bundle" data-testid="act-action-bundle-context">
-              <span>{_e(evidence.get("trigger_summary", ""))}</span>
+              <span>{_e(humanise_prose(evidence.get("trigger_summary", "")))}</span>
               <span>{_e(humanise_token(evidence.get("action_class", "")))}</span>
               <span>{_e(evidence.get("cognition_route", ""))}</span>
             </div>
@@ -5198,7 +5210,7 @@ def _render_panel_proposal_rows(
           </div>
           <details class="panel-proposal-evidence" data-testid="workspace-panel-evidence" open>
             <summary data-testid="workspace-panel-evidence-disclosure">Evidence</summary>
-            <span data-testid="workspace-panel-trigger-summary">{_e(evidence.get("trigger_summary", ""))}</span>
+            <span data-testid="workspace-panel-trigger-summary">{_e(humanise_prose(evidence.get("trigger_summary", "")))}</span>
             <span data-testid="workspace-panel-action-class">{_e(humanise_token(evidence.get("action_class", "")))}</span>
             <span data-testid="workspace-panel-cognition-route">{_e(evidence.get("cognition_route", ""))}</span>
           </details>
@@ -5749,14 +5761,34 @@ def _orientation_provenance(item: object, *, testid: str) -> str:
     source_ref = _orientation_dict(data.get("source_ref"))
     authority_role = _orientation_str(data.get("authority_role"), "unknown")
     source_kind = _orientation_str(source_ref.get("kind"), "unknown")
-    source_label = _orientation_str(source_ref.get("label"), source_kind)
+    # A *present* source_ref.label is a runtime-supplied human label (e.g.
+    # "resurfacing signal 0"); it passes through as copy (any embedded id is still
+    # scrubbed). Only when the label is ABSENT does the footer fall back to the
+    # source_ref.kind, which is a raw runtime enum — that fallback path must fail
+    # closed exactly like authority_role.
+    source_label_raw = _orientation_str(source_ref.get("label"))
     source_ref_value = _orientation_str(source_ref.get("ref") or source_ref.get("trace_id"))
+    # C3 (CUIDR-01): the visible footer copy must never show a raw runtime enum.
+    # authority_role and the source *kind* are runtime-classified provenance
+    # enums, never user-authored copy: they go through the fail-closed provenance
+    # map (a mapped token humanises; an allowed-but-unmapped enum such as
+    # derived_runtime_projection / a raw source kind collapses to the calm
+    # fallback — "Derived" / "details withheld" — rather than leaking raw). A
+    # present human source label is not an enum and passes through (with embedded
+    # ids scrubbed). The raw classified values still travel server-authoritatively
+    # in the data-* attributes below, so the runtime declaration remains
+    # observable.
+    authority_copy = humanise_provenance_token(authority_role, fallback="Derived")
+    if source_label_raw:
+        source_copy = humanise_prose(source_label_raw) or "details withheld"
+    else:
+        source_copy = humanise_provenance_token(source_kind, fallback="details withheld")
     return (
         f'<div class="orientation-provenance" data-testid="{testid}" '
         f'data-authority-role="{_e(authority_role)}" '
         f'data-source-kind="{_e(source_kind)}" '
         f'data-source-ref="{_e(source_ref_value)}">'
-        f"{_e(authority_role)} · {_e(source_label)}</div>"
+        f"{_e(authority_copy)} · {_e(source_copy)}</div>"
     )
 
 
@@ -6037,10 +6069,23 @@ def _render_orientation_resurface(
 
     def _candidate_row(candidate: dict, *, testid: str, visible_default: bool) -> str:
         label = _orientation_str(candidate.get("label"), "Resurface candidate")
-        signals = "".join(
-            f'<span class="orientation-signal">{_e(_orientation_str(signal))}</span>'
-            for signal in _orientation_list(candidate.get("signal_labels"))
-        )
+        # C3 (CUIDR-01 / #2482): a raw runtime signal encoding must not appear as
+        # visible chip *copy*. The producer emits EVERY signal label as a machine
+        # name=value pair (worker_queue_pending=2, recent_change=orientation,
+        # signal=0), not just the fixture's signal=0 — so humanise each label
+        # through the signal-chip map, which fails closed on ANY unmapped
+        # name=value encoding. The raw classified value still travels
+        # server-authoritatively in the data-signal-token attribute (the test
+        # hook may keep the raw id; only visible copy is humanised).
+        signal_chips = []
+        for signal in _orientation_list(candidate.get("signal_labels")):
+            raw_signal = _orientation_str(signal)
+            human = humanise_signal_label(raw_signal)
+            signal_chips.append(
+                '<span class="orientation-signal" '
+                f'data-signal-token="{_e(raw_signal)}">{_e(human)}</span>'
+            )
+        signals = "".join(signal_chips)
         return f"""
             <article class="orientation-item"
               data-testid="{testid}"
@@ -11951,7 +11996,13 @@ def render_index_html(
           renderNotes(data.notes, data.vault_identity);
         }})
         .catch(function(err) {{
-          setStatus('Error: ' + err.message);
+          // D3 (CUIDR-01): a live fetch failure must not surface the raw
+          // transport error ("Error: Failed to fetch"). Reuse the single calm
+          // grammar template (the same string the server-rendered error path
+          // emits) instead of err.message. The raw error stays observable to
+          // diagnostics in the console only — never in user-visible copy.
+          try {{ if (window.console) console.debug('vault-browser fetch failed', err); }} catch (e) {{}}
+          setStatus({json.dumps(calm_degraded(what="Notes", why="connection failed", nothing_clause=NOTHING_LOST, what_to_do="Refresh to retry"))});
         }});
     }}
 
