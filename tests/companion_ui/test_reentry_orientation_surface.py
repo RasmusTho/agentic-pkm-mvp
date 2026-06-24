@@ -267,7 +267,12 @@ def test_root_keeps_vault_entry_when_orientation_unavailable() -> None:
 
 
 def test_leave_point_renders_structured_api_shape() -> None:
-    payload = _orientation_payload()
+    # A1 finish (#2483): at full_mist/long_mist the re-entry card owns the
+    # leave point, so the leave-point *panel* is suppressed beneath it. To
+    # assert the panel's structured API shape we use a short-gap degraded
+    # snapshot: degraded keeps the resolved slices (panel visible) while the
+    # soft_mist gap carries no card (no leave-point suppression).
+    payload = _orientation_payload(degraded=True)
     payload["leave_point"] = {
         "status": "present",
         "artifact_ref": {
@@ -275,9 +280,8 @@ def test_leave_point_renders_structured_api_shape() -> None:
             "logical_ref": "Notes/resume.md",
             "title": "Resume plan",
         },
-        # CUIDR-06 (#2450): full_mist gap (5h) so the subtractive leave-point
-        # panel renders (panels appear from full_mist upward).
-        "captured_at": "2026-05-31T07:00:00Z",
+        # soft_mist gap (1h, 15m–2h): panel renders, no re-entry card.
+        "captured_at": "2026-05-31T11:00:00Z",
         "last_session_id": "session-123",
         "authority_role": "operational_trace_pointer",
         "source_ref": {
@@ -295,7 +299,7 @@ def test_leave_point_renders_structured_api_shape() -> None:
     assert 'data-leave-point-kind="present"' in html
     assert 'href="/workspace?note_path=Notes%2Fresume.md"' in html
     assert 'data-artifact-id="artifact-resume"' in html
-    assert "Last signal: 2026-05-31T07:00:00Z" in html
+    assert "Last signal: 2026-05-31T11:00:00Z" in html
     assert 'data-source-ref="trace-leave"' in html
 
 
