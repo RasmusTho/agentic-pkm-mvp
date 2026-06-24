@@ -48,4 +48,6 @@ def configure_metrics(app: FastAPI) -> None:
     instrumentator.instrument(app).expose(app, include_in_schema=False, should_gzip=True)
 
 
+from app.observability.log import json_log, span, with_trace_id  # noqa: E402 — re-export from merged log module
+
 __all__ = ["configure_metrics", "setup_logging", "json_log", "span", "with_trace_id"]
