@@ -320,6 +320,70 @@ def test_uninitialized_selected_vault_reads_but_writes_route_to_picker(
     assert note.read_text(encoding="utf-8") == before
 
 
+# --- AC3 (#2312): uninitialized selected vault is readable without init ------
+
+
+def test_uninitialized_selected_vault_is_readable(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selecting an existing bare folder resolves to ``uninitialized`` and is readable.
+
+    Reads must NOT require initialization: a selected directory with no
+    Design Handoff settings must still be browsable/readable. Only
+    writes/permissions/watcher/index require initialization.
+
+    Confirms the ``_active_companion_vault_root`` selection-status gate allows
+    reads for the ``uninitialized`` status via ``_READABLE_SELECTED_STATUSES``
+    (#2309, #2312).
+    """
+    vault = tmp_path / "existing-bare-vault"
+    (vault / "notes").mkdir(parents=True, exist_ok=True)
+    (vault / "notes" / "a.md").write_text("# A\n\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    app_local_path = tmp_path / "app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
+    mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
+        delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
+    # Select the bare folder — must resolve to ``uninitialized`` (no scaffolding written).
+    mgr.select_vault(vault, remember=False)
+    assert mgr.context.status == "uninitialized", (
+        f"Expected uninitialized for a bare folder, got {mgr.context.status!r}"
+    )
+
+    # Read boundaries must work — no initialization required.
+    workspace = client.get("/api/companion/workspace", params={"note_path": "notes/a.md"})
+    assert workspace.status_code == 200, workspace.text
+    workspace_body = workspace.json()
+    # Must return the note artifact, not a picker state.
+    assert workspace_body.get("state") != "vault_selection_required", (
+        "Read boundary returned vault_selection_required for an uninitialized-but-selected vault; "
+        "reads must not require initialization (#2312 AC3)"
+    )
+    assert workspace_body.get("artifact", {}).get("note_path") == "notes/a.md"
+
+    # Vault browser must also be readable without initialization.
+    browser = client.get("/api/companion/vault-browser")
+    assert browser.status_code == 200, browser.text
+    browser_body = browser.json()
+    assert browser_body.get("state") != "vault_selection_required", (
+        "vault-browser returned vault_selection_required for an uninitialized-but-selected vault"
+    )
+
+    # Orientation must be readable.
+    orientation = client.get("/api/companion/orientation")
+    assert orientation.status_code == 200, orientation.text
+    orientation_body = orientation.json()
+    assert orientation_body.get("state") != "vault_selection_required", (
+        "orientation returned vault_selection_required for an uninitialized-but-selected vault"
+    )
+
+
 # --- AC2: watcher idled in no-vault boot (start_full_system.sh) --------------
 
 
