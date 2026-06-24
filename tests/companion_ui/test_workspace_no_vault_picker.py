@@ -9,22 +9,53 @@ fabricated ``cold_start`` orientation (home path). Server declares; UI renders.
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
 from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
+_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
+_VISIBLE_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
 
-def _strip_to_visible_text(markup: str) -> str:
-    """Reduce rendered markup to its visible text.
 
-    Strips ``<script>`` and ``<style>`` *contents* (not just the tags) and then
-    all remaining tags, so assertions scan only what a human would see on the
-    rendered front door — never an attribute value, data-* hook, placeholder,
-    or inline script string (#2485 verify-target requirement)."""
-    no_script = re.sub(r"<script\b.*?</script>", " ", markup, flags=re.S | re.I)
-    no_style = re.sub(r"<style\b.*?</style>", " ", no_script, flags=re.S | re.I)
-    return re.sub(r"<[^>]+>", " ", no_style)
+class _VisibleTextExtractor(HTMLParser):
+    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
+    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
+    cannot leak inert markup into the scanned copy."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._chunks.append(data)
+
+
+def _visible_text(html: str) -> str:
+    """Rendered human-visible text: tags removed and <script>/<style>/<head>
+    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
+    extractor = _VisibleTextExtractor()
+    extractor.feed(html)
+    extractor.close()
+    return " ".join("".join(extractor._chunks).split()).lower()
 
 _PICKER_PAYLOAD: dict[str, Any] = {
     "state": "vault_selection_required",
@@ -205,7 +236,7 @@ def test_vault_picker_is_design_system_only() -> None:
         note_path="",
         vault_selection_required=payload,
     )
-    visible = _strip_to_visible_text(html)
+    visible = _visible_text(html)
 
     # The literal front-door picker is the styled hero plus the inline
     # vault-settings panel folded beneath it. Scope the visible-text assertions
@@ -234,16 +265,16 @@ def test_vault_picker_is_design_system_only() -> None:
     hero_html = _balanced_section(html, '<section class="vault-selection-required"')
     panel_html = _balanced_section(html, '<section class="vault-settings-panel"')
     picker_html = hero_html + "\n" + panel_html
-    picker_visible = _strip_to_visible_text(picker_html)
+    picker_visible = _visible_text(picker_html)
 
     # Exactly one *visible* "No vault selected" heading — the styled hero owns
     # it; the picker form below must not repeat it.
-    assert picker_visible.count("No vault selected") == 1, (
+    assert picker_visible.count("no vault selected") == 1, (
         "exactly one visible 'No vault selected' heading must render"
     )
     # And across the whole front door there is still only one (no third copy
     # elsewhere on the page).
-    assert visible.count("No vault selected") == 1, (
+    assert visible.count("no vault selected") == 1, (
         "exactly one visible 'No vault selected' heading on the whole page"
     )
 
@@ -252,12 +283,12 @@ def test_vault_picker_is_design_system_only() -> None:
     assert "/path/to/vault" not in picker_html, (
         "no default-browser '/path/to/vault' placeholder may remain"
     )
-    assert "unknown" not in picker_visible.lower(), (
+    assert "unknown" not in picker_visible, (
         "no literal 'unknown' identity/recent token may show on the picker"
     )
     # The picker keeps a single settings-folder affordance, not a stray
     # duplicate.
-    assert picker_visible.count("Open settings folder") <= 1
+    assert picker_visible.count("open settings folder") <= 1
 
     # The picker is a single DS-styled surface: the styled hero plus the
     # tokenised vault-settings panel chrome (DS fonts/colours/controls), not

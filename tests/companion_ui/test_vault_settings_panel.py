@@ -20,7 +20,50 @@ from __future__ import annotations
 import io
 import json
 import re
+from html.parser import HTMLParser
 from typing import Any
+
+_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
+_VISIBLE_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+
+
+class _VisibleTextExtractor(HTMLParser):
+    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
+    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
+    cannot leak inert markup into the scanned copy."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._chunks.append(data)
+
+
+def _visible_text(html: str) -> str:
+    """Rendered human-visible text: tags removed and <script>/<style>/<head>
+    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
+    extractor = _VisibleTextExtractor()
+    extractor.feed(html)
+    extractor.close()
+    return " ".join("".join(extractor._chunks).split()).lower()
 
 from companion_ui.workspace.serve_dev_page import make_handler
 from companion_ui.workspace.vault_settings_panel import (
@@ -145,18 +188,6 @@ def test_panel_renders_fetched_projection() -> None:
     assert 'data-vault-status="selected"' in markup
 
 
-def _strip_to_visible_text(markup: str) -> str:
-    """Reduce rendered markup to its visible text.
-
-    Strips ``<script>`` and ``<style>`` *contents* (not just the tags) and then
-    all remaining tags, so assertions scan only what a human would see on the
-    surface — never an attribute value, data-* hook, or inline script string
-    (#2485 verify-target requirement)."""
-    no_script = re.sub(r"<script\b.*?</script>", " ", markup, flags=re.S | re.I)
-    no_style = re.sub(r"<style\b.*?</style>", " ", no_script, flags=re.S | re.I)
-    return re.sub(r"<[^>]+>", " ", no_style)
-
-
 def test_recents_empty_state_no_raw_unknown() -> None:
     """Recents with no known label render a calm empty state, never the literal
     "unknown / unknown" (#2485 D1).
@@ -179,23 +210,23 @@ def test_recents_empty_state_no_raw_unknown() -> None:
     }
     # The picker-mode markup is the no-vault front-door render.
     markup = vault_settings_panel_markup(projection, picker_mode=True)
-    visible = _strip_to_visible_text(markup)
+    visible = _visible_text(markup)
 
     # No label-less recent row leaks the raw "unknown" token to the human.
-    assert "unknown" not in visible.lower(), (
+    assert "unknown" not in visible, (
         "label-less recents must render a calm empty state, not raw 'unknown'"
     )
     # The recents region still renders (the affordance is preserved), and the
     # calm empty-state label is what shows for a label-less row.
     assert 'data-testid="vault-recent-vaults"' in markup
-    assert "Unnamed vault" in visible
+    assert "unnamed vault" in visible
 
     # A genuinely empty recents list keeps the existing calm prompt with no raw
     # "unknown".
     empty = vault_settings_panel_markup(
         {"context": {"status": "none"}, "recent_vaults": []}, picker_mode=True
     )
-    assert "unknown" not in _strip_to_visible_text(empty).lower()
+    assert "unknown" not in _visible_text(empty)
 
 
 def test_structured_value_parsed_before_post() -> None:
