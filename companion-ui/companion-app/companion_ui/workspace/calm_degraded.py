@@ -100,8 +100,13 @@ _CLASSIFIED_TOKEN_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
 # it appears *inside* free text (e.g. a runtime ``trigger_summary`` such as
 # "Trigger for prop-move-1 …"). Whole-string ids are handled by
 # :func:`humanise_token`; this catches the in-prose case the review flagged.
+#
+# The id may carry *multiple* hyphen-separated segments (``prop-move-1`` /
+# ``prop-cross-1``): the pattern consumes EVERY trailing ``-<segment>`` so the
+# full identifier is redacted, never just its first segment (which previously
+# left a visible ``-1`` / ``move-1`` suffix in user-facing copy).
 _EMBEDDED_ID_RE: Final[re.Pattern[str]] = re.compile(
-    r"\b(?:prop|proposal|art|artifact|note)-[\w.]+", re.IGNORECASE
+    r"\b(?:prop|proposal|art|artifact|note)(?:-[\w.]+)+", re.IGNORECASE
 )
 
 
@@ -180,6 +185,40 @@ def humanise_token(token: object) -> str:
         # Unmapped machine signal encoding (e.g. signal=0) — fail closed.
         return ""
     return text
+
+
+def humanise_provenance_token(token: object, *, fallback: str) -> str:
+    """Fail-closed humanisation for an orientation *provenance* enum.
+
+    Unlike :func:`humanise_token` (which passes arbitrary human/free-text values
+    through unchanged), the provenance footer renders runtime-classified enums
+    only — ``authority_role`` and a ``source_ref`` kind/label. Those are machine
+    tokens, never user-authored copy, so an *unmapped* one must FAIL CLOSED to the
+    supplied calm ``fallback`` ("Derived" / "details withheld") rather than leak
+    the raw enum (Constraint: an unmapped token renders the safe fallback, never
+    the raw token).
+
+    Resolution:
+
+    - an explicitly mapped enum returns its human copy;
+    - an empty / missing token returns ``fallback``;
+    - any other token — including an allowed-but-unmapped provenance enum such as
+      ``derived_runtime_projection`` or a raw ``source_ref`` kind used as a label
+      — returns ``fallback`` (fail closed). The raw classified value still travels
+      server-authoritatively in the footer's ``data-*`` attributes.
+
+    This is deliberately scoped to the provenance render path; it does NOT change
+    :func:`humanise_token`, whose pass-through contract other callers (evidence
+    ``action_class``, resurface ``signal_labels``) still rely on.
+    """
+    text = "" if token is None else str(token).strip()
+    if not text:
+        return fallback
+    mapped = _ENUM_MAP.get(text)
+    if mapped is not None:
+        return mapped
+    # Unmapped provenance enum — fail closed to the calm fallback, never raw.
+    return fallback
 
 
 def humanise_prose(text: object) -> str:

@@ -72,6 +72,7 @@ from companion_ui.workspace.calm_degraded import (
     calm_degraded,
     humanise_degraded_reason,
     humanise_prose,
+    humanise_provenance_token,
     humanise_token,
     lane_label,
 )
@@ -5781,16 +5782,28 @@ def _orientation_provenance(item: object, *, testid: str) -> str:
     source_ref = _orientation_dict(data.get("source_ref"))
     authority_role = _orientation_str(data.get("authority_role"), "unknown")
     source_kind = _orientation_str(source_ref.get("kind"), "unknown")
-    source_label = _orientation_str(source_ref.get("label"), source_kind)
+    # A *present* source_ref.label is a runtime-supplied human label (e.g.
+    # "resurfacing signal 0"); it passes through as copy (any embedded id is still
+    # scrubbed). Only when the label is ABSENT does the footer fall back to the
+    # source_ref.kind, which is a raw runtime enum — that fallback path must fail
+    # closed exactly like authority_role.
+    source_label_raw = _orientation_str(source_ref.get("label"))
     source_ref_value = _orientation_str(source_ref.get("ref") or source_ref.get("trace_id"))
-    # C3 (CUIDR-01): the visible footer copy must never show a raw runtime enum
-    # (e.g. operational_trace_pointer / artifact_activation). Humanise the
-    # authority-role and source-label *copy* through the single map; an unmapped
-    # classified token fails closed (suppressed) rather than leaking. The raw
-    # classified values still travel server-authoritatively in the data-*
-    # attributes below, so the runtime declaration remains observable.
-    authority_copy = humanise_token(authority_role) or "Derived"
-    source_copy = humanise_token(source_label) or "details withheld"
+    # C3 (CUIDR-01): the visible footer copy must never show a raw runtime enum.
+    # authority_role and the source *kind* are runtime-classified provenance
+    # enums, never user-authored copy: they go through the fail-closed provenance
+    # map (a mapped token humanises; an allowed-but-unmapped enum such as
+    # derived_runtime_projection / a raw source kind collapses to the calm
+    # fallback — "Derived" / "details withheld" — rather than leaking raw). A
+    # present human source label is not an enum and passes through (with embedded
+    # ids scrubbed). The raw classified values still travel server-authoritatively
+    # in the data-* attributes below, so the runtime declaration remains
+    # observable.
+    authority_copy = humanise_provenance_token(authority_role, fallback="Derived")
+    if source_label_raw:
+        source_copy = humanise_prose(source_label_raw) or "details withheld"
+    else:
+        source_copy = humanise_provenance_token(source_kind, fallback="details withheld")
     return (
         f'<div class="orientation-provenance" data-testid="{testid}" '
         f'data-authority-role="{_e(authority_role)}" '

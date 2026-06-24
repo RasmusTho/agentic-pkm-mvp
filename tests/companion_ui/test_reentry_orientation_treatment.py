@@ -1565,3 +1565,38 @@ def test_orientation_footers_have_no_raw_enum() -> None:
     assert "from where you left off" in visible or "from your last activity" in visible  # lower-cased copy
     # The classified values still arrive server-authoritatively in data-* hooks.
     assert 'data-authority-role="operational_trace_pointer"' in html
+
+
+# An *allowed-but-unmapped* provenance enum must fail closed: the constraint is
+# that the enum/id map renders the safe fallback ("Derived" / "details withheld")
+# for any unmapped token, never the raw enum. The footer renders authority_role
+# and source_ref.kind/label as visible copy; without fail-closed scoping an
+# unmapped enum like ``derived_runtime_projection`` (or a raw source_ref kind used
+# as a label) passes straight through to visible copy.
+_UNMAPPED_PROVENANCE_AUTHORITY = "derived_runtime_projection"
+_UNMAPPED_PROVENANCE_SOURCE_KIND = "operational_signal_projection"
+
+
+def test_orientation_footers_have_no_raw_enum_for_unmapped_provenance() -> None:
+    payload = _orientation_payload(gap=_GAP_FULL_MIST)
+    # Inject an unmapped authority_role + an unmapped source_ref kind with NO
+    # label (so the kind is used as the source label) on a rendered open-loop.
+    payload["open_loops"][0]["authority_role"] = _UNMAPPED_PROVENANCE_AUTHORITY
+    payload["open_loops"][0]["source_ref"] = {
+        "kind": _UNMAPPED_PROVENANCE_SOURCE_KIND,
+        "ref": "orientation.unmapped",
+    }
+    html = _render(orientation=payload)
+    visible = _visible_text(html)
+    # Neither unmapped enum leaks into visible footer copy.
+    for token in (_UNMAPPED_PROVENANCE_AUTHORITY, _UNMAPPED_PROVENANCE_SOURCE_KIND):
+        assert token not in visible, (
+            f"unmapped provenance enum {token!r} leaked into visible footer copy "
+            "(provenance render path did not fail closed)"
+        )
+    # Instead the calm fail-closed fallbacks render (lower-cased by _visible_text).
+    assert "derived" in visible
+    assert "details withheld" in visible
+    # The raw classified values still travel server-authoritatively in data-*.
+    assert f'data-authority-role="{_UNMAPPED_PROVENANCE_AUTHORITY}"' in html
+    assert f'data-source-kind="{_UNMAPPED_PROVENANCE_SOURCE_KIND}"' in html

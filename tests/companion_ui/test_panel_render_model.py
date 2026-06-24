@@ -374,6 +374,19 @@ def test_evidence_has_no_raw_proposal_id() -> None:
         assert token not in visible, (
             f"raw identifier {token!r} leaked into visible Evidence copy"
         )
+    # Multi-hyphen ids (prop-move-1 / prop-cross-1) must be redacted *whole* — no
+    # residual hyphen-suffix may survive. A regex that stops at the first hyphen
+    # redacts only the leading "prop-move" / "prop-cross" segment and leaves the
+    # trailing numeric segment behind as "this item-1" in visible copy. Assert
+    # that partial-redaction residue does not leak (the full identifier is
+    # consumed, segment by segment, to the human placeholder).
+    assert "this item-1" not in visible, (
+        "partial-redaction residue 'this item-1' survived prose redaction "
+        "(hyphenated identifier only partially redacted — trailing '-1' kept)"
+    )
+    # The trigger summary embeds three ids (prop-move-1, prop-cross-1, art-123);
+    # each collapses to the human placeholder, so it appears three times.
+    assert visible.count("this item") >= 3
     # The evidence still reads as human copy (the prose around the redacted ids
     # survives), and the proposal's human description is shown.
     assert "trigger for" in visible  # _visible_text lower-cases
