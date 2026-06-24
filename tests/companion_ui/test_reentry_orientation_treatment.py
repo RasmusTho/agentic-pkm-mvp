@@ -524,7 +524,7 @@ def test_cold_and_first_contact_render_no_overlay() -> None:
         _render(orientation=_orientation_payload(leave_status="absent")),
         # First contact: no leave point at all.
         _render(orientation=_orientation_payload(leave_status=None)),
-        # Cold trajectory: gap beyond 14 days.
+        # Cold trajectory: gap beyond 7 days (leave-point cursor TTL per ADR-0008).
         _render(orientation=_orientation_payload(gap=_GAP_COLD)),
     ]
     for page in pages:
@@ -1097,7 +1097,7 @@ def test_cold_start_headline_uses_returning_copy_when_vault_nonempty() -> None:
     assert "Nothing is open yet." in html_empty
     assert "Returning after a while" not in html_empty
 
-    # Case 4: cold trajectory (>14d) with leave_point present → always returning (unchanged)
+    # Case 4: cold trajectory (>7d — beyond leave-point cursor TTL, ADR-0008) with leave_point present → always returning (unchanged)
     payload_cold_traj = _orientation_payload(gap=_GAP_COLD)
     html_cold = _render(orientation=payload_cold_traj)
     assert "Returning after a while" in html_cold
@@ -1192,7 +1192,7 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
     Three cold_start variants are tested:
     - first contact (leave_point.status == "absent")
     - first contact (leave_point missing entirely)
-    - cold trajectory (gap > 14 d)
+    - cold trajectory (gap > 7d — leave-point cursor TTL per ADR-0008)
 
     Supplies notable_changes=5 and resurface_candidates=5 to the payload so
     that both the main sections and overflow blocks would render if the gates
@@ -1203,7 +1203,7 @@ def test_cold_start_omits_relocated_telemetry_regions() -> None:
         _render(orientation=_orientation_payload(leave_status="absent", notable_changes=5, resurface_candidates=5)),
         # First contact: no leave point at all.
         _render(orientation=_orientation_payload(leave_status=None, notable_changes=5, resurface_candidates=5)),
-        # Cold trajectory: gap beyond 14 days.
+        # Cold trajectory: gap beyond 7 days (leave-point cursor TTL per ADR-0008).
         _render(orientation=_orientation_payload(gap=_GAP_COLD, notable_changes=5, resurface_candidates=5)),
     ]
     for page in pages:

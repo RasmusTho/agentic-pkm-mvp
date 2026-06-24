@@ -1,4 +1,4 @@
-State: Populated draft — situations enumerated with grounded human intent. Settled rows link their governing decision; partial/forward-line rows are marked; genuinely-open product choices and two spec contradictions are collected in the Open Decisions register. Candidate for promotion to Core SoT once the owner has triaged that register.
+State: Populated — situations enumerated with grounded human intent. Settled rows link their governing decision; partial/forward-line rows are marked; open product choices are in the Open Decisions register. R1 (entry-state enum vs. vault-selection) and R2 (latency-ladder vs. leave-point TTL) resolved by #2488/#2489 (2026-06-24). Remaining register items are genuine open product choices or tracked in other issues.
 Doc role: Concept contract companion
 Authority: Canonical statement of what the human wants when meeting the system in a given situation/state. Upstream of the entry-point and vault-optional capability specs, which implement these situations; subordinate to the function-axis docs (`docs/HUMAN-FLOWS.md`, `docs/CONCEPTS/USER_NEEDS_MODEL.md`). Settled rows are binding and linked to their governing decision; forward-line rows are intent statements pending runtime, not current-state claims (`docs/STATUS.md` owns shipped reality).
 Owner: Product / human-function SoT
@@ -120,14 +120,18 @@ How the human first meets, leaves, and re-meets the system.
   boot path on a configured vault.
 - **Realized by:** `vault_selection_required` over `resolve_optional_vault_root()`; picker UI (#1867)
   — to be extended with a guided create-new-vault path.
-- **Status:** `settled` intent — vault selection is source of truth; system boots with no vault
+- **Status:** `settled` — vault selection is source of truth; system boots with no vault
   (`docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`; "Vault Optional at Runtime", #2004/#2006); the
-  cold-start flow is the **guided create-or-open chooser with no path typing** (owner decision,
-  2026-06-24, R1). **Reconciliation pending:** the entry-state enum still models `no_vault` as
-  *runtime unreachable (503)* and first contact as a `cold_start` greeting *with a vault already
-  selected*, while the vault-optional capability makes true no-vault-bound first contact a
-  `vault_selection_required` picker. The enum and the picker state must be unified around this one
-  guided flow — see register item R1.
+  first-contact flow is the **guided create-or-open chooser with no path typing** (owner decision,
+  2026-06-24, R1). **R1 reconciled (#2488):** the no-vault-bound first-contact picker resolves to
+  the **`no_vault`** state (not a `cold_start` sub-shape). The `vault_selection_required` sentinel
+  from `resolve_optional_vault_root()` maps to `data-entry-state="no_vault"` in the shipped
+  renderer (`serve_dev_page.py`; asserted by `test_workspace_no_vault_picker.py`). The `no_vault`
+  state covers two cases: (a) orientation HTTP 503 (runtime unreachable) and (b) orientation
+  returning `vault_selection_required` (no vault bound). `cold_start` is reserved for the
+  vault-bound cold trajectory only (>7d, leave_point absent). See `companion-ui/docs/
+  SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker`. Picker UI implementation
+  (#1867 + #2312) is downstream.
 
 ### A2. Boot / handshake in progress
 
@@ -169,12 +173,14 @@ How the human first meets, leaves, and re-meets the system.
   honestly; any recents anchor is an opt-in sub-affordance, never auto-opened.
 - **Bad:** a resume button pointing at expired/unreachable context; the renderer ignoring the resolved
   `cold_start` state and drawing the orientation grid anyway (the 2026-06-19 divergence).
-- **Realized by:** `cold_start` (leave_point absent OR cold trajectory > 14d).
-- **Status:** `settled` for the threshold (#2171/#2176; >14d cold return has no resume affordance,
-  #2453; #2472 closed as unreachable). **⚠ contradiction:** the latency ladder still describes a
-  recoverable `long_mist` re-entry out to 14d, but the leave-point cursor TTL (ADR-0008) is hard-capped
-  at 7d — so the 7–14d window the ladder promises is unbacked. Two specs disagree on whether 7–14d
-  re-entry has any trace behind it — see register item R2.
+- **Realized by:** `cold_start` (leave_point absent OR cold trajectory >7d — beyond the leave-point cursor TTL, ADR-0008).
+- **Status:** `settled` — threshold and cold boundary aligned (#2171/#2176; >7d cold return has no
+  resume affordance; #2453; #2472 closed as unreachable). **R2 resolved (#2489):** the latency
+  ladder's `long_mist` upper bound is now 7d (was 14d) in `companion-ui/docs/CONTINUITY_AND_DECAY.md`
+  and `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`; the 7–14d window that was unbacked by the
+  leave-point cursor TTL (ADR-0008) is no longer described as recoverable. No surface promises a
+  re-entry the trace cannot back. The leave-point TTL remains 7d (ADR-0008 unchanged); extending
+  resume to 14d would require a new ADR and is a separate product decision.
 
 ### A5. Active session — working in a document
 
@@ -208,7 +214,7 @@ How the human first meets, leaves, and re-meets the system.
   unresolved tension decay before it is resolved.
 - **Realized by:** `orienting → shell_active` via `entry.resume`; residual ambient layer; guard-held
   stale treatment (`companion-ui/docs/BLOCKED_AND_STALE_STATE_SPEC.md`).
-- **Status:** `settled` (SEP-02), subject to the same 7/14d boundary as A4 for longer interruptions.
+- **Status:** `settled` (SEP-02), subject to the same 7d leave-point cursor TTL as A4; interruptions longer than 7d resolve to `cold_start` (R2 resolved, #2489).
 
 ---
 
@@ -406,21 +412,22 @@ The point of this axis is to make situational decisions explicit. The items belo
 the model surfaced — grouped by what they actually need. They are candidates for `docs-to-issue`
 extraction, not decisions to make inside this doc.
 
-### Group 1 — Spec contradictions to fix (two specs disagree; product intent is settled)
+### Group 1 — Spec contradictions (resolved)
 
-- **R1 — Entry-state enum vs. vault-selection state (A1) — intent DECIDED, reconciliation pending.**
-  Owner decision (2026-06-24): first contact / cold start is a **guided initiation flow** offering
+- **R1 — Entry-state enum vs. vault-selection state (A1) — RESOLVED (#2488, 2026-06-24).**
+  Owner decision (2026-06-24): first contact without a vault bound is a **guided initiation flow** offering
   *create a new vault* or *open an existing one*, completed through a friendly visual chooser with
   **no manual path or search-string entry** (dyslexia-friendly; see the cross-cutting constraint).
-  Remaining work is mechanical: unify `SYSTEM_ENTRY_POINT_SPEC.md`'s `no_vault`/`cold_start` modelling
-  with the vault-optional `vault_selection_required` picker so the state model names this one flow
-  once, and extend the picker UI (#1867) with the guided create-new-vault path. **Tracked as #2488**
-  (docs/spec reconciliation; create-new picker implementation depends on #1867 + #2312).
-- **R2 — Latency ladder promises re-entry the leave-point TTL can't back (A4/A6).** The ladder describes
-  a recoverable `long_mist` out to 14d; the leave-point cursor TTL (ADR-0008) is hard-capped at 7d, and
-  #2453/#2472 already decided 7–14d returns are cold. Resolution: lower the ladder's `long_mist` bound
-  to 7d to match the existing decision (raising the TTL to 14d would be a separate new-ADR product
-  choice, not this fix). **Tracked as #2489.**
+  Resolved: the no-vault-bound first-contact picker resolves to the **`no_vault`** state (not a
+  `cold_start` sub-shape). `SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker` documents
+  that `no_vault` covers both the 503 (runtime unreachable) and `vault_selection_required` (no vault
+  bound) cases; `cold_start` is reserved for the vault-bound cold trajectory (>7d). The shipped renderer
+  and `test_workspace_no_vault_picker.py` are the ground truth. Picker UI (#1867 + #2312) downstream.
+- **R2 — Latency ladder promises re-entry the leave-point TTL can't back (A4/A6) — RESOLVED (#2489, 2026-06-24).**
+  The ladder described a recoverable `long_mist` out to 14d; the leave-point cursor TTL (ADR-0008) is
+  hard-capped at 7d. Resolved: `CONTINUITY_AND_DECAY.md` and `SYSTEM_ENTRY_POINT_SPEC.md` now align
+  `long_mist` to 3d–7d and cold (>7d) — no surface promises recoverable re-entry beyond the TTL. ADR-0008
+  unchanged; extending to 14d is a separate ADR decision.
 
 ### Group 2 — Open product choices (genuinely unowned)
 
