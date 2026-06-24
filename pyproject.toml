@@ -40,6 +40,7 @@ dependencies = [
     "pydantic-settings>=2.5",
     "python-dotenv>=1.0",
     "PyYAML>=6.0",
+    "jsonschema>=4.23",
     # LangGraph / LangChain
     "langchain-core>=0.3",
     "langgraph>=0.2",

@@ -34,6 +34,6 @@ def test_core_runtime_deps_declared():
         d.split(">=")[0].split("<=")[0].split("==")[0].split("[")[0].strip().lower()
         for d in deps
     }
-    required = {"fastapi", "uvicorn", "sqlalchemy", "psycopg", "langgraph", "alembic"}
+    required = {"fastapi", "uvicorn", "sqlalchemy", "psycopg", "langgraph", "alembic", "jsonschema"}
     missing = required - dep_names
     assert not missing, f"Missing core runtime deps in [project].dependencies: {missing}"
