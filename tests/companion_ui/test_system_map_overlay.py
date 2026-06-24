@@ -48,6 +48,7 @@ from companion_ui.workspace.system_map_overlay import (
     system_map_overlay_markup,
     system_map_overlay_script,
 )
+from tests.companion_ui._visible_text import visible_text as _visible_text
 
 # ---------------------------------------------------------------------------
 # Fixtures (mirror the proven fixtures in test_overlay_host /
@@ -338,7 +339,10 @@ def test_system_map_no_issue_refs() -> None:
     # Pure model: no node's user-facing copy (reached / returns / status_note)
     # carries a bare internal issue number or SEP reference.
     _bare_issue = re.compile(r"#\d{3,}")
-    _sep_ref = re.compile(r"\bSEP-\d+\b")
+    # Case-insensitive: the rendered-visible scan below runs over lower-cased
+    # text (the parser-based helper lower-cases), while the node-copy scan runs
+    # over original-case strings — re.IGNORECASE matches both.
+    _sep_ref = re.compile(r"\bSEP-\d+\b", re.IGNORECASE)
     for node in MAP_SURFACES:
         for field_name in ("reached", "returns", "status_note"):
             value = getattr(node, field_name)
@@ -359,11 +363,12 @@ def test_system_map_no_issue_refs() -> None:
     # the user). Scan the visible copy, which is exactly the contract C4 fixes.
     for render in _ALL_PAGES:
         overlay = _map_overlay(render())
-        visible = re.sub(r"<style\b[^>]*>.*?</style>", "", overlay, flags=re.S)
-        visible = re.sub(r"<!--.*?-->", "", visible, flags=re.S)
-        # Numeric HTML character references (e.g. the ⓘ glyph &#9432;) are
-        # glyph encodings, not issue numbers — strip them before the scan.
-        visible = re.sub(r"&#\d+;", "", visible)
+        # Scan the rendered visible copy only (parser-based). The helper drops
+        # the <style> block (CSS hex colours such as #152030 are not issue
+        # numbers), HTML/source comments (not rendered), and resolves numeric
+        # character references (glyphs such as &#9432; → ⓘ, never bare digits) —
+        # exactly the contract C4 fixes.
+        visible = _visible_text(overlay)
         assert not _bare_issue.search(visible), (
             "rendered system-map overlay copy must carry no bare internal issue "
             f"numbers: {_bare_issue.search(visible)}"
