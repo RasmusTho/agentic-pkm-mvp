@@ -69,7 +69,7 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 
 **Valid origins of the same seam (no new surfaces here):**
 - UI → `POST /api/companion/vault/settings` (surface=`'api'`) — **wired** (sole caller: `app/api/routes/companion.py:826`)
-- CLI → existing `app.cli vault` commands (surface=`'cli'`)
+- CLI → existing `app.cli vault` commands (surface=`'cli'`) — **NOT yet wired** (the `app.cli vault` group does init/preflight only; no command toggles runtime-gating settings through the seam; addable when a consumer exists)
 - File edit → watcher-detected `settings/local.md` delta (surface=`'file'`) — **NOT yet wired**;
   tracked by #2512
 - Future MCP/API → addable when there is a consumer (out of scope here)
