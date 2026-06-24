@@ -526,7 +526,19 @@ def receipts_history_script() -> str:
     var modal = document.getElementById('receipts-history-modal');
     if (!modal || !window.overlayHost) {{ return; }}
     var body = document.getElementById('receipts-history-body');
-    function load() {{
+    function focusReceipt(receiptId) {{
+      if (!receiptId) {{ return; }}
+      var rows = Array.prototype.slice.call(body.querySelectorAll('[data-receipt-id]'));
+      var row = rows.find(function(candidate) {{
+        return candidate.getAttribute('data-receipt-id') === String(receiptId);
+      }});
+      if (!row) {{ return; }}
+      row.setAttribute('data-targeted-receipt', 'true');
+      if (!row.hasAttribute('tabindex')) {{ row.setAttribute('tabindex', '-1'); }}
+      row.scrollIntoView({{block: 'center', inline: 'nearest'}});
+      row.focus({{preventScroll: true}});
+    }}
+    function load(targetReceiptId) {{
       body.setAttribute('data-loaded', 'false');
       fetch('{RECEIPTS_HISTORY_FRAGMENT_ROUTE}', {{method: 'GET'}})
         .then(function(r) {{
@@ -536,6 +548,7 @@ def receipts_history_script() -> str:
         .then(function(html) {{
           body.innerHTML = html;
           body.setAttribute('data-loaded', 'true');
+          focusReceipt(targetReceiptId || '');
         }})
         .catch(function() {{
           body.innerHTML = '<p class="receipts-history-unavailable" ' +
@@ -548,7 +561,10 @@ def receipts_history_script() -> str:
     // Host occupant: the host owns mount/dismiss (Esc / scrim / close ->
     // the document anchor; no route reset, no data loss).
     window.overlayHost.register('receipts', {{
-      open: function() {{ modal.removeAttribute('hidden'); load(); }},
+      open: function(detail) {{
+        modal.removeAttribute('hidden');
+        load(detail && detail.receiptId ? detail.receiptId : '');
+      }},
       close: function() {{ modal.setAttribute('hidden', ''); }}
     }});
     window.receiptsHistory = {{

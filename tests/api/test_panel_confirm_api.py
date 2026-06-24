@@ -6,6 +6,8 @@ each test starts with a clean slate.
 
 from __future__ import annotations
 
+import json
+import pathlib
 import time
 from unittest.mock import MagicMock
 
@@ -97,8 +99,10 @@ def _valid_body(
 
 
 def test_panel_confirm_endpoint_returns_receipt_on_success(
-    client: TestClient, monkeypatch
+    client: TestClient, monkeypatch, tmp_path: pathlib.Path
 ) -> None:
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     _stage()
     _mock_execute(monkeypatch)
     resp = client.post("/api/panel/confirm", json=_valid_body())
@@ -108,6 +112,17 @@ def test_panel_confirm_endpoint_returns_receipt_on_success(
     assert data["receipt"] is not None
     assert data["receipt"]["outcome"] == "success"
     assert data["proposal_id"] == "prop-1"
+
+    outbox_records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    receipt_record = next(
+        record for record in outbox_records if record.get("event") == "panel.action.logged"
+    )
+    assert data["receipt"]["receipt_id"] == receipt_record["event_id"]
+    assert data["receipt"]["receipt_id"] != "idem-key-1"
 
 
 def test_confirmed_panel_action_returns_receipt_visibility(

@@ -551,6 +551,23 @@ def test_history_fetch_guards_response_ok() -> None:
     )
 
 
+def test_open_can_focus_target_receipt() -> None:
+    """CUIDR-07: receipt-history opens can target the receipt from the applied card."""
+    html = _render_workspace()
+    script = _modal_script(html)
+    host_script = _host_script(html)
+
+    assert "mount: function(id, detail)" in host_script
+    assert "occ.open(detail || {})" in host_script
+    assert "open: function(detail)" in script
+    assert "detail && detail.receiptId ? detail.receiptId : ''" in script
+    assert "function focusReceipt(receiptId)" in script
+    assert "data-targeted-receipt" in script
+    assert "candidate.getAttribute('data-receipt-id') === String(receiptId)" in script
+    assert "row.scrollIntoView({block: 'center', inline: 'nearest'});" in script
+    assert "row.focus({preventScroll: true});" in script
+
+
 # ---------------------------------------------------------------------------
 # AC5: the modal dismisses to the anchor with no route reset
 # ---------------------------------------------------------------------------

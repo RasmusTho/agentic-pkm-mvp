@@ -155,6 +155,7 @@ class ConfirmRequest(BaseModel):
 
 
 class Receipt(BaseModel):
+    receipt_id: str | None = None
     action_taken: str
     outcome: str
     timestamp: str
@@ -544,7 +545,7 @@ def _emit_projection_event(
     payload: dict[str, Any],
     trace_id: str,
     outbox_path: Path | None = None,
-) -> None:
+) -> str:
     evt = make_outbox_event(
         event=event_name,
         source="panel_agent.confirmation",
@@ -567,6 +568,37 @@ def _emit_projection_event(
                 write_outbox_event(outbox_evt, idempotency_key=outbox_evt.event_id)
             except Exception as exc:
                 logger.debug("projection event db outbox write skipped event=%s err=%s", event_name, exc)
+    return evt.event_id
+
+
+def _event_name(event: Any) -> str:
+    if isinstance(event, dict):
+        return str(event.get("event") or event.get("event_type") or "")
+    return str(getattr(event, "event", None) or getattr(event, "event_type", None) or "")
+
+
+def _event_receipt_id(event: Any) -> str | None:
+    payload: Any = None
+    if isinstance(event, dict):
+        explicit = event.get("event_id")
+        payload = event.get("payload")
+    else:
+        explicit = getattr(event, "event_id", None)
+        payload = getattr(event, "payload", None)
+    if explicit:
+        return str(explicit)
+    if isinstance(payload, dict) and payload.get("receipt_id"):
+        return str(payload.get("receipt_id"))
+    return None
+
+
+def _first_event_receipt_id(events: list[Any], event_name: str) -> str | None:
+    for event in events:
+        if _event_name(event) == event_name:
+            receipt_id = _event_receipt_id(event)
+            if receipt_id:
+                return receipt_id
+    return None
 
 
 def _resolve_note_file(note_path: str | None) -> Path | None:
@@ -766,12 +798,8 @@ class PanelConfirmationService:
             result = _self_mod.execute_panel_intent(corrected_event)
         else:
             result = _self_mod.execute_panel_intent(proposal.intent_event)
-        events: list[str] = []
-        for e in result.emitted_events:
-            if isinstance(e, dict):
-                events.append(e.get("event", ""))
-            else:
-                events.append(getattr(e, "event", str(e)))
+        emitted_events = list(result.emitted_events or [])
+        events = [_event_name(e) for e in emitted_events]
 
         # Classify outcome: if all checked actions were logged (not triggered), surface as logged.
         checked_actions = [a for a in result.actions if a.checked]
@@ -786,7 +814,7 @@ class PanelConfirmationService:
         if all_logged and not any_triggered:
             # Logged outcome: emit panel.action.logged if not already present
             if "panel.action.logged" not in events:
-                _emit_projection_event(
+                receipt_id = _emit_projection_event(
                     "panel.action.logged",
                     {
                         "note_uuid": proposal.intent_event.payload.note.uuid,
@@ -796,7 +824,20 @@ class PanelConfirmationService:
                     trace_id=proposal.trace_id or request.idempotency_key,
                 )
                 events.append("panel.action.logged")
+            else:
+                receipt_id = _first_event_receipt_id(emitted_events, "panel.action.logged")
+                if receipt_id is None:
+                    receipt_id = _emit_projection_event(
+                        "panel.action.logged",
+                        {
+                            "note_uuid": proposal.intent_event.payload.note.uuid,
+                            "note_path": proposal.intent_event.payload.note.path,
+                            "proposal_id": request.proposal_id,
+                        },
+                        trace_id=proposal.trace_id or request.idempotency_key,
+                    )
             receipt = Receipt(
+                receipt_id=receipt_id,
                 action_taken="confirm",
                 outcome="logged",
                 timestamp=now_iso,
@@ -820,7 +861,25 @@ class PanelConfirmationService:
                     inverse_action = str(inv)
                     break
 
+            receipt_id = request.idempotency_key
+            if "panel.action.logged" not in events:
+                receipt_id = _emit_projection_event(
+                    "panel.action.logged",
+                    {
+                        "note_uuid": proposal.intent_event.payload.note.uuid,
+                        "note_path": proposal.intent_event.payload.note.path,
+                        "proposal_id": request.proposal_id,
+                        "status": "success",
+                        "outcome": "success",
+                    },
+                    trace_id=proposal.trace_id or request.idempotency_key,
+                )
+                events.append("panel.action.logged")
+            else:
+                receipt_id = _first_event_receipt_id(emitted_events, "panel.action.logged") or receipt_id
+
             receipt = Receipt(
+                receipt_id=receipt_id,
                 action_taken="confirm",
                 outcome="success",
                 timestamp=now_iso,
