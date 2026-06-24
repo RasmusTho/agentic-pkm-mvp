@@ -48,10 +48,13 @@ BUILDEROPS_DB_PATH=/path/to/intended/builderops.sqlite3 \
   --output-dir docs/generated/builderops
 ```
 
-**Fail-loud requirement:** if the selected store would shrink the existing checked-in projections
-(records present in `docs/generated/builderops/*.md` but absent from the selected store), the
-generator must fail before writing. Do not suppress this failure or work around it by hand-editing
-the generated files. Fix the store selection instead.
+**Fail-loud requirement:** if the selected store has fewer records than the existing checked-in
+projection, the generator's count-based shrink guard (`_guard_against_incomplete_projection_store`
+in `app/builderops/projections.py`) fails before writing. The guard compares record *counts*, not
+record IDs — a wrong store with an equal or greater count can still overwrite the projection while
+dropping specific record IDs, so selecting the intended store explicitly (above) is the primary
+safeguard, not the count guard. Do not suppress the failure or work around it by hand-editing the
+generated files; fix the store selection instead.
 
 A regen diff is expected — the backing store is non-reproducible over time. Treat missing records
 in the regenerated output as a store-selection signal, not data loss. See
