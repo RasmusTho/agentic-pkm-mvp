@@ -101,12 +101,30 @@ _CLASSIFIED_TOKEN_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
 # "Trigger for prop-move-1 …"). Whole-string ids are handled by
 # :func:`humanise_token`; this catches the in-prose case the review flagged.
 #
-# The id may carry *multiple* hyphen-separated segments (``prop-move-1`` /
-# ``prop-cross-1``): the pattern consumes EVERY trailing ``-<segment>`` so the
-# full identifier is redacted, never just its first segment (which previously
-# left a visible ``-1`` / ``move-1`` suffix in user-facing copy).
+# CRITICAL — distinguish a real opaque ID from ordinary hyphenated prose.
+# ``humanise_prose`` runs on EVERY ``trigger_summary`` / provenance label, so an
+# over-broad matcher (any ``note-…`` / ``proposal-…`` hyphenated word) silently
+# rewrites legitimate copy: "note-taking follow-up", "proposal-worthy evidence",
+# "artifact-level context" would all collapse to "this item …". That corrupts
+# user-visible Evidence text.
+#
+# Real producer IDs in this codebase always carry an *opaque* segment — a purely
+# numeric run (``prop-move-1``, ``prop-cross-1``, ``art-123``, ``art-2075``) or a
+# long hex/uuid-like token — somewhere in the hyphen chain. Ordinary prose words
+# ("taking", "worthy", "level", "stub", "cross") never are. So the matcher only
+# fires when the token contains at least one numeric / hex-opaque segment, and
+# only then consumes the WHOLE hyphen chain (so multi-segment ids like
+# ``art-1187-empty`` / ``prop-move-1`` redact whole, leaving no ``-1`` residue).
+#
+# Shape (IGNORECASE):
+#   <prefix>(-<word>)* -<opaque> (-<word|opaque>)*
+# where <opaque> = a digit run (``1``, ``2075``) or a >=8-char hex/uuid token.
 _EMBEDDED_ID_RE: Final[re.Pattern[str]] = re.compile(
-    r"\b(?:prop|proposal|art|artifact|note)(?:-[\w.]+)+", re.IGNORECASE
+    r"\b(?:prop|proposal|art|artifact|note)"  # producer prefix
+    r"(?:-[A-Za-z]+)*"  # optional leading word segments (move, cross, …)
+    r"-(?:\d+|[0-9a-f]{8,})"  # >=1 opaque segment: numeric run or hex/uuid token
+    r"(?:-[\w.]+)*",  # any trailing segments (art-1187-empty, …)
+    re.IGNORECASE,
 )
 
 
@@ -232,8 +250,11 @@ def humanise_prose(text: object) -> str:
     id is still preserved in the surface's ``data-*`` attributes (this only
     touches the visible copy string).
 
-    Fails closed: any ``prop-*`` / ``art-*`` / ``note-*``-shaped token in the
-    text is replaced with "this item" rather than surfaced raw.
+    Only an *opaque correlation id* (a ``prop-*`` / ``art-*`` / ``note-*`` token
+    carrying a numeric or hex/uuid-like segment, e.g. ``prop-move-1`` /
+    ``art-123``) is replaced with "this item". Ordinary hyphenated prose that
+    merely starts with one of those words — "note-taking", "proposal-worthy",
+    "artifact-level" — is NOT an id and passes through verbatim.
     """
     raw = "" if text is None else str(text)
     if not raw:

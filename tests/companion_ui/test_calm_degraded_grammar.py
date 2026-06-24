@@ -39,6 +39,7 @@ from companion_ui.workspace.calm_degraded import (
     NOTHING_MUTATED,
     calm_degraded,
     humanise_degraded_reason,
+    humanise_prose,
     humanise_token,
 )
 from companion_ui.workspace.real_note_workspace_dev_page import (
@@ -564,6 +565,51 @@ def test_humanise_token_fails_closed_on_unmapped_classified_namespace() -> None:
     assert humanise_token("lifecycle.move") == "Move note"
     for unmapped in ["lifecycle.archive", "lifecycle.delete", "lifecycle.split"]:
         assert humanise_token(unmapped) == "", f"{unmapped!r} must fail closed"
+
+
+# ---------------------------------------------------------------------------
+# #2482 (Codex over-redaction finding) — humanise_prose must redact only REAL
+# opaque correlation ids, not ordinary hyphenated prose.
+#
+# The first #2482 fix widened the embedded-id regex to consume any hyphenated
+# word with a producer prefix. Because humanise_prose runs on every
+# trigger_summary / provenance label, that silently rewrote legitimate copy
+# ("note-taking follow-up" -> "this item follow-up"). The matcher must fire only
+# when the token carries a numeric / hex-opaque segment (the real id shape).
+# ---------------------------------------------------------------------------
+def test_humanise_prose_redacts_real_embedded_ids_whole() -> None:
+    # Real producer ids embedded in prose collapse to the human placeholder,
+    # whole — no raw token and no hyphen-suffix residue survive.
+    out = humanise_prose("Trigger for prop-move-1 and prop-cross-1 on art-123")
+    assert "prop-move-1" not in out
+    assert "prop-cross-1" not in out
+    assert "art-123" not in out
+    # Multi-segment ids redact whole — no "-1" / "move-1" residue.
+    assert "this item-1" not in out
+    assert "move-1" not in out
+    assert out == "Trigger for this item and this item on this item"
+    # The actual artifact id shapes used in fixtures also redact whole.
+    for raw in ["art-2075", "art-1130", "art-1139", "art-1187-empty", "art-1187-uncited"]:
+        red = humanise_prose(f"see {raw} here")
+        assert raw not in red, f"{raw!r} survived prose redaction"
+        assert red == "see this item here"
+
+
+def test_humanise_prose_preserves_legitimate_hyphenated_prose() -> None:
+    # Ordinary hyphenated prose that merely starts with a producer word is NOT an
+    # id (no numeric/opaque segment) and must pass through verbatim — never be
+    # rewritten to "this item".
+    for prose in [
+        "note-taking follow-up",
+        "proposal-worthy evidence",
+        "artifact-level context",
+        "note-level summary",
+        "note-worthy idea",
+        "cross-note proposal",
+    ]:
+        assert humanise_prose(prose) == prose, (
+            f"legitimate prose {prose!r} was over-redacted to {humanise_prose(prose)!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
