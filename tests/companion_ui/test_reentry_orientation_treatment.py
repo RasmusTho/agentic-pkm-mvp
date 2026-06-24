@@ -1562,6 +1562,6 @@ def test_orientation_footers_have_no_raw_enum() -> None:
     # The footers still read as human copy: the leave-point provenance humanises
     # to a sentence (not a machine enum), and the resurface chip is suppressed
     # rather than showing signal=0.
-    assert "from where you left off" in visible or "from your last activity" in visible
+    assert "from where you left off" in visible or "from your last activity" in visible  # lower-cased copy
     # The classified values still arrive server-authoritatively in data-* hooks.
     assert 'data-authority-role="operational_trace_pointer"' in html

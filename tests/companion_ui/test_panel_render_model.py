@@ -229,7 +229,7 @@ class TestRenderPanelStateAdapter:
 # token in visible copy fails even when the matching data-* hook still carries
 # the raw id.
 # ---------------------------------------------------------------------------
-import re as _re  # noqa: E402
+from html.parser import HTMLParser  # noqa: E402
 
 from companion_ui.workspace.real_note_workspace_dev_page import (  # noqa: E402
     NoteLoadIntent,
@@ -239,18 +239,47 @@ from companion_ui.workspace.serve_dev_page import render_index_html  # noqa: E40
 
 _RAW_PROPOSAL_IDS = ["prop-move-1", "prop-cross-1", "art-123"]
 
-_TAG_RE = _re.compile(r"<[^>]+>")
-_SCRIPT_RE = _re.compile(r"<script\b[^>]*>.*?</script>", _re.DOTALL | _re.IGNORECASE)
+_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
+_VISIBLE_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+
+
+class _VisibleTextExtractor(HTMLParser):
+    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
+    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
+    cannot leak inert markup into the scanned copy."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._chunks.append(data)
 
 
 def _visible_text(html: str) -> str:
-    """Strip <script> bodies and HTML tags, leaving only user-visible copy.
-
-    data-* hooks and script bodies legitimately keep the raw correlation ids;
-    only the visible text is in scope for the no-raw-id assertion.
-    """
-    without_scripts = _SCRIPT_RE.sub(" ", html)
-    return _TAG_RE.sub(" ", without_scripts)
+    """Rendered human-visible text: tags removed and <script>/<style>/<head>
+    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
+    extractor = _VisibleTextExtractor()
+    extractor.feed(html)
+    extractor.close()
+    return " ".join("".join(extractor._chunks).split()).lower()
 
 
 class _ProposalClient:
@@ -347,8 +376,8 @@ def test_evidence_has_no_raw_proposal_id() -> None:
         )
     # The evidence still reads as human copy (the prose around the redacted ids
     # survives), and the proposal's human description is shown.
-    assert "Trigger for" in visible
-    assert "Move this note into Projects/" in visible
+    assert "trigger for" in visible  # _visible_text lower-cases
+    assert "move this note into projects/" in visible  # _visible_text lower-cases
     # The raw correlation ids still arrive server-authoritatively in the payload
     # (proof of authority is the payload + data-* hooks, not a visible echo).
     proposal = _leaky_evidence_workspace_payload()["panel"]["proposals"][0]
