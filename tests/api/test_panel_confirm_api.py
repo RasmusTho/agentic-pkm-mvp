@@ -106,6 +106,7 @@ def test_panel_confirm_endpoint_returns_receipt_on_success(
     data = resp.json()
     assert data["status"] == "executed"
     assert data["receipt"] is not None
+    assert data["receipt"]["receipt_id"] == "idem-key-1"
     assert data["receipt"]["outcome"] == "success"
     assert data["proposal_id"] == "prop-1"
 

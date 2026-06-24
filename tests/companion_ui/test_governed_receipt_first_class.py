@@ -218,6 +218,8 @@ def test_applied_card_in_place_state() -> None:
     assert 'data-testid="workspace-panel-receipt-link-to-history"' in html
     assert f'data-receipt-id="{_RECEIPT_ID}"' in html
     assert 'data-intent="receipts.open"' in html
+    assert "overlayHost.mount(&#x27;receipts&#x27;, {receiptId:" in html
+    assert _RECEIPT_ID in html
 
     # Apply/Discard/Defer are absent on the confirmed card (read-only state)
     assert 'data-panel-action="confirm"' not in html

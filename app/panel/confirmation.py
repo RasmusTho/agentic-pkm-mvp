@@ -155,6 +155,7 @@ class ConfirmRequest(BaseModel):
 
 
 class Receipt(BaseModel):
+    receipt_id: str | None = None
     action_taken: str
     outcome: str
     timestamp: str
@@ -797,6 +798,7 @@ class PanelConfirmationService:
                 )
                 events.append("panel.action.logged")
             receipt = Receipt(
+                receipt_id=request.idempotency_key,
                 action_taken="confirm",
                 outcome="logged",
                 timestamp=now_iso,
@@ -821,6 +823,7 @@ class PanelConfirmationService:
                     break
 
             receipt = Receipt(
+                receipt_id=request.idempotency_key,
                 action_taken="confirm",
                 outcome="success",
                 timestamp=now_iso,

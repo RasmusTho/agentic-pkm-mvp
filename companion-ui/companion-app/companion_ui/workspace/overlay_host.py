@@ -345,7 +345,7 @@ def overlay_host_script() -> str:
         assertDeclared(id);
         occupants[id] = adapter || {};
       },
-      mount: function(id) {
+      mount: function(id, detail) {
         assertDeclared(id);
         var occ = occupants[id];
         // Declared but unshipped: inert no-op — never invent a surface.
@@ -354,7 +354,7 @@ def overlay_host_script() -> str:
         if (at !== -1) { stack.splice(at, 1); }
         stack.push(id);
         sync();
-        if (occ.open) { occ.open(); }
+        if (occ.open) { occ.open(detail || {}); }
       },
       dismiss: function() {
         // overlay.dismiss — return to the document anchor. Pops only the
