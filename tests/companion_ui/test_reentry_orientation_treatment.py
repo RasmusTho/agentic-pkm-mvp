@@ -1905,3 +1905,97 @@ def test_no_mist_nonstale_still_distinct_from_thread_fade() -> None:
     # Non-stale no_mist keeps the quiet cue and carries no guard banner.
     assert 'data-testid="reentry-resume-guard"' not in no_mist
     assert _visible_text(no_mist) != _visible_text(thread_fade)
+
+
+@pytest.mark.parametrize(
+    "leave_status",
+    ["stale", "artifact_missing", "degraded"],
+)
+def test_off_nominal_leave_point_preserves_structured_detail_with_card(
+    leave_status: str,
+) -> None:
+    """Codex #2483 (off-nominal-details): with the re-entry card present, an
+    OFF-NOMINAL leave point must keep its structured status detail.
+
+    The de-dup of #2450 collapses the leave-point panel to provenance-only when
+    the card is present, because the card fully owns a NOMINAL leave point. But
+    for off-nominal leave points — status stale / artifact_missing / degraded
+    (E8/E9 rungs) — the structured status surface (``data-leave-point-kind``,
+    the "Last signal" line, the session detail) explains the held boundary and
+    the card does NOT restate it. Per MIST_LADDER_SUBTRACTIVE.md §"Off-nominal
+    rungs (preserve as-is)" these rungs are exemplary and must not be modified;
+    the de-dup contract is scoped to nominal full/long-mist renders only.
+
+    Collapsing them to provenance-only would drop that load-bearing detail. The
+    structured detail must survive ALONGSIDE the card + guarded resume.
+    """
+    html = _render(
+        orientation=_orientation_payload(
+            leave_status=leave_status, gap=_GAP_FULL_MIST
+        )
+    )
+
+    # The card is present at full_mist and carries the guarded (stale) resume.
+    assert 'data-region="reentry-card"' in html
+    assert 'data-testid="reentry-resume-guard"' in html
+
+    # RED-first: on current code the panel is collapsed to provenance-only and
+    # the structured detail is dropped. The structured leave-point panel must
+    # still render, carrying the off-nominal status detail.
+    assert 'data-testid="workspace-orientation-leave-point"' in html, (
+        f"off-nominal ({leave_status}) leave point must keep its structured "
+        f"panel even with the card present"
+    )
+    panel = html.split(
+        'data-testid="workspace-orientation-leave-point"', 1
+    )[1].split("</section>", 1)[0]
+
+    # data-leave-point-kind names the held boundary the card does not restate.
+    assert "data-leave-point-kind=" in panel, (
+        f"off-nominal ({leave_status}) must keep data-leave-point-kind"
+    )
+
+    # The "Last signal" line and the session detail survive.
+    panel_text = _region_visible_text(
+        html, 'data-testid="workspace-orientation-leave-point"', "</section>"
+    )
+    assert "Last signal" in panel_text, (
+        f"off-nominal ({leave_status}) must keep the Last signal line"
+    )
+    assert "session session-123" in panel_text, (
+        f"off-nominal ({leave_status}) must keep the session detail"
+    )
+
+    # Server-declared provenance is still present (round-2 preservation).
+    assert 'data-testid="workspace-orientation-leave-provenance"' in panel
+
+    # De-dup is still honoured: the duplicated LEAVE POINT kicker + label
+    # heading (the card already names the label) are NOT repeated in the panel.
+    assert "Leave point" not in panel_text, (
+        f"off-nominal ({leave_status}) must still suppress the duplicated "
+        f"LEAVE POINT kicker"
+    )
+    assert "Resume the runtime API contract" not in panel_text, (
+        f"off-nominal ({leave_status}) must still suppress the duplicated "
+        f"leave-point label heading the card states"
+    )
+
+
+def test_nominal_leave_point_with_card_still_collapses_to_provenance_only() -> None:
+    """The off-nominal preservation must NOT regress the nominal de-dup AC.
+
+    For a NOMINAL (present) leave point with the card, the leave-point panel is
+    still collapsed to provenance-only: no structured panel, no duplicated
+    LEAVE POINT heading / label / Last-signal line beneath the card (#2450).
+    """
+    for gap in (_GAP_FULL_MIST, _GAP_LONG_MIST):
+        html = _render(
+            orientation=_orientation_payload(leave_status="present", gap=gap)
+        )
+        assert 'data-region="reentry-card"' in html, gap
+        # No structured leave-point panel for the nominal case.
+        assert 'data-testid="workspace-orientation-leave-point"' not in html, (
+            f"nominal leave point must still suppress the structured panel at {gap}"
+        )
+        # Provenance-only element survives (round-2 provenance preservation).
+        assert 'data-testid="workspace-orientation-leave-provenance-only"' in html, gap

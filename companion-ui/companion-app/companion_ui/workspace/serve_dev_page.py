@@ -5865,17 +5865,63 @@ def _render_orientation_leave_point(
     # but carries no provenance, so when the panel is suppressed we still emit a
     # provenance-only element — no repeated heading, label, or notable lines, so
     # the de-dup AC (and #2450) hold while provenance is preserved.
+    #
+    # Codex (#2483, off-nominal-details): the provenance-only collapse is the
+    # right de-dup move ONLY for nominal leave points, where the card fully owns
+    # the leave point. For OFF-NOMINAL leave points — status `stale` /
+    # `artifact_missing` / `degraded` (E8/E9 rungs) — the structured status
+    # surface (`data-leave-point-kind`, the "Last signal" line, session detail)
+    # explains the held boundary and is NOT something the card restates. Per
+    # MIST_LADDER_SUBTRACTIVE.md §"Off-nominal rungs (preserve as-is)" these
+    # rungs "are exemplary and must not be modified"; the de-dup contract is
+    # scoped to full_mist/long_mist nominal renders only. So we keep the
+    # structured panel for off-nominal leave points (suppressing only the
+    # duplicated LEAVE POINT kicker + label heading the card already names),
+    # while nominal renders still collapse to provenance-only. This is
+    # presentation-only — the status is the server-declared `leave.status`; the
+    # UI does not classify off-nominal-ness.
     leave = _orientation_dict(leave_point)
     if suppress_when_card:
         if not leave:
             return ""
-        return (
-            '<div class="orientation-leave-provenance-only" '
-            'data-testid="workspace-orientation-leave-provenance-only" '
-            'data-region="reentry-leave-provenance">'
-            f'{_orientation_provenance(leave, testid="workspace-orientation-leave-provenance")}'
-            "</div>"
+        off_nominal = _orientation_str(leave.get("status")) in _REENTRY_STALE_CAUSES
+        if not off_nominal:
+            return (
+                '<div class="orientation-leave-provenance-only" '
+                'data-testid="workspace-orientation-leave-provenance-only" '
+                'data-region="reentry-leave-provenance">'
+                f'{_orientation_provenance(leave, testid="workspace-orientation-leave-provenance")}'
+                "</div>"
+            )
+        # Off-nominal: preserve the structured status/last-signal/session detail
+        # ALONGSIDE the card + guard. De-dup only removes the repeated LEAVE
+        # POINT kicker and the label heading (the card states the label/resume
+        # target); everything that explains the held boundary stays.
+        status = _orientation_str(leave.get("status"))
+        last_seen = _orientation_str(
+            leave.get("last_interaction_at") or leave.get("captured_at"),
+            "time unknown",
         )
+        session_id = _orientation_str(leave.get("last_session_id"))
+        session_html = (
+            f'<span class="orientation-muted">session {_e(session_id)}</span>'
+            if session_id
+            else ""
+        )
+        return f"""
+        <section class="orientation-section orientation-section--primary orientation-leave-off-nominal"
+          data-testid="workspace-orientation-leave-point"
+          data-region="reentry-leave-off-nominal"
+          data-leave-point-kind="{_e(_orientation_str(leave.get("kind") or status, "derived_only"))}">
+          <div class="orientation-artifact-row">
+            {_orientation_artifact_link(leave.get("artifact_ref"), testid="workspace-orientation-leave-link", suppress_when_text="")}
+          </div>
+          <div class="orientation-meta-row">
+            <span>Last signal: {_e(last_seen)}</span>
+            {session_html}
+          </div>
+          {_orientation_provenance(leave, testid="workspace-orientation-leave-provenance")}
+        </section>"""
     if not leave:
         return """
         <section class="orientation-section" data-testid="workspace-orientation-leave-point">
