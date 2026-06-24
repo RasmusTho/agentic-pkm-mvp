@@ -1,4 +1,4 @@
-State: Accepted (owner decision 2026-06-16) - pending merge via #2070. Defines code import-dependency direction as a directional, contract-based projection of DESIGN_PRINCIPLES §3 system layers onto `app.*` packages. v1 enforces one invariant — the interaction layer is import-protected — via a module-level import-linter `forbidden` contract, run non-blocking on PRs.
+State: Accepted and enforced (blocking). Flipped from advisory to blocking 2026-06-24 via #2481: all known violations cleared before flip, no allowlist required, contract exits 0 on every PR. Defines code import-dependency direction as a directional, contract-based projection of DESIGN_PRINCIPLES §3 system layers onto `app.*` packages. v1 enforces one invariant — the interaction layer is import-protected — via a module-level import-linter `forbidden` contract, run BLOCKING on PRs.
 Doc role: Decision record (ADR)
 Authority: Authoritative for code import-dependency direction; the governing rule for `importlinter.ini`.
 Owner: Architecture
@@ -9,7 +9,7 @@ Source of truth: This ADR (with `importlinter.ini` as the machine projection)
 # ADR-0013: Code Dependency Direction
 
 **Date:** 2026-06-16
-**Status:** Accepted (owner decision) - pending merge via #2070
+**Status:** Accepted and enforced (blocking) — merged via #2070; enforcement posture flipped to blocking via #2481 (2026-06-24)
 
 ---
 
@@ -37,7 +37,7 @@ Code import dependencies are **directional and contract-based**, as a projection
 2. **Interaction is import-protected.** No package outside the interaction layer may import an interaction-layer package. This is the primary invariant and the only one enforced in v1: nothing reaches *backward* into a human/agent-facing surface.
 3. **Depend on contracts, not internals.** Import another package through its public entrypoint, not a private submodule or underscore-prefixed symbol. Enforcement is **module-level** (import-linter catches cross-package imports of any submodule); symbol-level privacy (`_helper`) is a review convention on top.
 4. **Foundation is exempt.** Shared-kernel packages (`events`, `settings`, `schemas`, `config`, and similar pure contract/util modules) may be imported by any layer and carry no inward restriction. They must stay leaf-like (no upward imports) so they remain safe to depend on everywhere.
-5. **Enforcement posture.** The contract runs on every PR via `import-linter` (`.github/workflows/import-linter.yaml`), **non-blocking** (`continue-on-error: true`). It reports drift; it does not gate merges. Promotion to a required check is deferred until the known violations below are fixed and the contract runs clean.
+5. **Enforcement posture.** The contract runs on every PR via `import-linter` (`.github/workflows/import-linter.yaml`), **blocking** (no `continue-on-error`). It gates merges: a new backward import from a non-interaction package into the interaction layer (`app.api`, `app.chat`, `app.cli`, `app.web`) will fail the job. Flipped from advisory to blocking in #2481 (2026-06-24) after all known violations were confirmed cleared — the contract ran clean (exit 0, 0 violations) on the first run after the flip. No `ignore_imports` allowlist was required.
 
 ## Layer model — §3 layers mapped to `app.*` packages
 
@@ -58,28 +58,31 @@ Rationale notes:
 - **Governance depends downward** (reads memory, wraps execution) but nothing depends upward on it for non-governance reasons; it is cross-cutting, not a strict tier.
 - **Foundation must stay acyclic and upward-free.** The broad fan-out of `events` (~63 importers) and `settings` (~42 importers) is tolerable only because these are leaves; keeping them leaves is what makes them safe hubs.
 
-## Enforcement reality (v1)
+## Enforcement reality (v1, updated to blocking in #2481)
 
 - **One `forbidden` contract**, not a `layered` contract. A `layered` contract over package *groups* would forbid legitimate intra-layer imports (e.g. `orchestrator → services`, both execution) because import-linter treats sibling modules in a layer as mutually independent. The directional invariant that adds value without false positives is the single rule "nothing outside interaction imports interaction", expressed as `type = forbidden` (deeper packages → `app.api`/`chat`/`cli`/`web`). Fuller per-layer `layered`/`independence` contracts are a documented refinement, deferred.
-- **Namespace packages converted (#2085).** All 15 `app/` subdirectories that were implicit namespace packages (no `__init__.py`) now have empty `__init__.py` files, including `app.orientation` and `app.reasoning`. They are now included in `source_modules` in `importlinter.ini` and their inward leaks are machine-enforced. `app.orientation → app.api`/`app.chat` violations now appear in the contract report and are routed to #2083 for shared-helper extraction.
+- **Namespace packages converted (#2085).** All 15 `app/` subdirectories that were implicit namespace packages (no `__init__.py`) now have empty `__init__.py` files, including `app.orientation` and `app.reasoning`. They are now included in `source_modules` in `importlinter.ini` and their inward leaks are machine-enforced.
+- **Contract flipped to blocking (#2481, 2026-06-24).** By the time this flip landed, all known violations had been resolved (helpers extracted to `app.text.helpers`, cycle broken). The contract runs clean with no `ignore_imports` allowlist. Any new backward import now fails the job.
 
-## Known violations at adoption
+## Known violations at adoption (all resolved before blocking flip)
 
-The contract run (`lint-imports --config importlinter.ini`, exit 1 — expected under the non-blocking posture) reports these real backward/past-contract leaks. They are surfaced, not gated, and handed to follow-up FIX issues:
+The contract run at adoption reported these real backward/past-contract leaks.  All were resolved by the time the enforcement posture was flipped to blocking in #2481:
 
-**Machine-enforced (reported by the contract):**
-- `app.panel.checkbox_projection → app.api.routes.artifacts` (l.23) — cognition → interaction, into a private symbol (`_content_hash`).
-- `app.observability.status_service → app.cli.health` (l.983) — a documented "lazy to avoid circular import" cycle.
-- `app.resurfacing.runtime → app.observability.status_service → app.cli.health` — transitive consequence of the cycle above; clears once it is broken.
+**Resolved — helper extraction to `app.text.helpers`:**
+- `app.panel.checkbox_projection → app.api.routes.artifacts` — was cognition → interaction, private `_content_hash`. Migrated to `app.text.helpers.content_hash`.
+- `app.orientation.leave_point_cursor → app.api.routes.artifacts` — private `_content_hash`, `_extract_title`. Migrated to `app.text.helpers`.
+- `app.orientation.leave_point_cursor → app.chat.canvas_writer` — private `_split_frontmatter`. Migrated to `app.text.helpers`.
 
-**Now machine-enforced (converted by #2085):**
-- `app.orientation.leave_point_cursor → app.api.routes.artifacts` (private `_content_hash`, `_extract_title`) — now reported by the contract; routed to #2083.
-- `app.orientation.leave_point_cursor → app.chat.canvas_writer` (private `_split_frontmatter`) — now reported by the contract; routed to #2083.
+**Resolved — observability cycle broken:**
+- `app.observability.status_service → app.cli.health` — documented "lazy to avoid circular import" cycle. Broken; the status service no longer imports interaction-layer modules.
+- `app.resurfacing.runtime → app.observability.status_service → app.cli.health` — transitive consequence of the cycle above. Cleared when the cycle was broken.
 
-**Not yet machine-enforced (intra-interaction, below module granularity):**
-- `app.api.routes.companion` / `app.api.routes.canvas → app.chat.canvas_writer` (private `_split_frontmatter` / `_body_contains_frontmatter`) — intra-interaction, past-contract; module-level contract does not flag intra-layer.
+**Not machine-enforced (intra-interaction, below module granularity — unchanged):**
+- `app.api.routes.companion` / `app.api.routes.canvas → app.chat.canvas_writer` (private `_split_frontmatter` / `_body_contains_frontmatter`) — intra-interaction; module-level contract does not flag intra-layer. Tracked as a review convention.
 
-The shared text helpers (`_content_hash`, `_extract_title`, `_split_frontmatter`) should be extracted into a foundation util that both interaction routes and cognition consumers may import — turning a backward leak into a legitimate downward dependency.
+## No `ignore_imports` allowlist
+
+The blocking gate is clean. No `ignore_imports` section was added to `importlinter.ini` because all violations were resolved before the flip. If a future violation is temporarily allowlisted, it must be annotated with a FIX issue reference and a target resolution date.
 
 ## Consequences
 
@@ -95,7 +98,7 @@ The shared text helpers (`_content_hash`, `_extract_title`, `_split_frontmatter`
 
 - Fixing the known violations or breaking the `observability ↔ cli.health` cycle (→ follow-up FIX issue).
 - Making the 15 namespace packages regular (`__init__.py`) so the contract and mypy fully cover them (→ completed in #2085).
-- Making the import-linter check a required PR gate (deferred).
+- ~~Making the import-linter check a required PR gate (deferred).~~ **Done** — flipped to blocking in #2481 (2026-06-24).
 - A fuller `layered`/`independence` contract set across all layers.
 - De-coupling or re-homing the `events` / `settings` hubs beyond documenting the leaf obligation.
 - Any change under `companion-ui/`.
