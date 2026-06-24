@@ -490,7 +490,7 @@ activeContext:
 
 The exact data model can evolve. The architecture rule must not: active cognitive context is a governed set of bindings, not a scalar pointer.
 
-### Runtime lifecycle ownership
+##### Runtime lifecycle ownership
 
 Decision (2026-06-24, issue #2473): **runtime-process-lifecycle authority — start, stop, idle, boot, and the binding of each long-lived runtime process to the active vault/context — is owned by WSP, extended, not by a new physical subsystem.** This resolves the keystone gap where process supervision fell between EBF (watcher *adapter*), EXE (execution *effects*), and OEF (*observation*) and lived only in ops scripts (`scripts/start_full_system.sh`) deliberately outside the SBS.
 
