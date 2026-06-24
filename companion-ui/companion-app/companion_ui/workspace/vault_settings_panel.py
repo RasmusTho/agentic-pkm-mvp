@@ -272,11 +272,22 @@ def _panel_body(projection: dict[str, Any], *, picker_mode: bool = False) -> str
       <p data-testid="vault-validation-error">{_e(context.get("validation_error") or "")}</p>
     </header>"""
     )
+    # The no-vault picker surface (picker_mode) is the single front-door DS
+    # picker: open / init / recents / settings-folder affordances only. The
+    # Markdown settings editor (default-browser ``<form>`` chrome, inputs,
+    # Save buttons) belongs to a *selected* vault. The real /vault-settings
+    # endpoint builds ``definitions`` from the registry even for
+    # none/missing/uninitialized, so rendering ``_settings_editor`` in picker
+    # mode would regrow disabled settings rows / form chrome into the hero
+    # after every fragment reload — re-violating #2485 D1 ("no default-browser
+    # form chrome remains"). Suppress it entirely here; selected-vault
+    # rendering is unchanged.
+    editor = "" if picker_mode else _settings_editor(projection, status)
     return f"""{head}
     {_action_forms(context, recent_vaults)}
     {_identity_rows(context, picker_mode=picker_mode)}
     {_validation_errors(errors)}
-    {_settings_editor(projection, status)}"""
+    {editor}"""
 
 
 def _panel_status(projection: dict[str, Any]) -> str:

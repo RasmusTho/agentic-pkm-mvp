@@ -362,3 +362,136 @@ def test_fragment_reload_keeps_picker_for_all_no_vault_statuses() -> None:
         # The fragment carries the no-vault status it was given (never
         # re-classified by the route).
         assert f'data-vault-status="{status}"' in body
+
+
+# ---------------------------------------------------------------------------
+# D1 (#2485): Codex round 2 — the picker surface must NOT regrow the Markdown
+# settings editor (default-browser <form> chrome / inputs / Save buttons) even
+# when the projection carries non-empty ``definitions``.
+#
+# The real /vault-settings endpoint builds ``definitions`` from the registry
+# for EVERY status, including none/missing/uninitialized. The prior
+# fragment-reload test only proved the picker stays single-surface for *empty*
+# ``definitions`` — a static-pass / reality-fail gap: with real (non-empty)
+# definitions the picker render still appended ``_settings_editor(...)``, so
+# after the controller swaps the fragment in, the no-vault hero regrows
+# disabled settings rows and form chrome, re-violating D1 ("no default-browser
+# form chrome remains; single picker surface"). The fix suppresses
+# ``_settings_editor`` entirely in picker mode.
+# ---------------------------------------------------------------------------
+
+
+def _no_vault_projection_with_definitions(status: str) -> dict[str, Any]:
+    """A no-active-vault projection shaped like the REAL /vault-settings
+    endpoint: registry-built ``definitions`` are present even with no selected
+    vault. This is the reality the empty-``definitions`` tests never exercised.
+    """
+    return {
+        "context": {"status": status},
+        "definitions": [
+            {
+                "key": "workflowStatuses",
+                "type": "array",
+                "scope": "vault",
+                "editable": True,
+                "file": ".vault/settings.md",
+            },
+            {
+                "key": "autoLinkOnSave",
+                "type": "boolean",
+                "scope": "vault",
+                "editable": True,
+                "file": ".vault/settings.md",
+            },
+        ],
+        "settings": [],
+        "validation_errors": [],
+        "recent_vaults": [{"vault_name": None, "path": None}],
+    }
+
+
+def test_picker_mode_suppresses_settings_editor_with_real_definitions() -> None:
+    """Picker mode never renders the Markdown settings editor, even when the
+    projection carries non-empty registry ``definitions`` (the real endpoint
+    shape). RED before the fix (the editor was unconditionally appended);
+    GREEN after suppressing it in picker mode (#2485 D1, Codex round 2)."""
+    for status in ("none", "missing", "uninitialized"):
+        projection = _no_vault_projection_with_definitions(status)
+
+        # Exercise both render entrypoints (initial markup + reload fragment).
+        markup = vault_settings_panel_markup(projection, picker_mode=True)
+        fragment = vault_settings_panel_fragment(projection, picker_mode=True)
+
+        for surface_name, surface in (("markup", markup), ("fragment", fragment)):
+            # No settings-editor container and no per-setting form rows.
+            assert 'data-testid="vault-settings-editor"' not in surface, (
+                f"{surface_name} {status!r}: no settings editor in picker mode"
+            )
+            assert 'data-testid="vault-setting-row"' not in surface, (
+                f"{surface_name} {status!r}: no settings rows in picker mode"
+            )
+            # No default-browser settings-form chrome / inputs / Save buttons
+            # for the registry definitions.
+            assert 'class="vault-setting-row"' not in surface
+            assert "vault.settings.write" not in surface, (
+                f"{surface_name} {status!r}: no settings-write form chrome"
+            )
+            assert 'data-testid="vault-setting-input-workflowStatuses"' not in surface
+            assert 'data-testid="vault-setting-input-autoLinkOnSave"' not in surface
+            assert 'data-testid="vault-setting-save-workflowStatuses"' not in surface
+
+            # No Save button leaks to the human on the picker surface.
+            assert ">save</" not in _visible_text(surface), (
+                f"{surface_name} {status!r}: no settings 'Save' button visible"
+            )
+
+            # Picker affordances are all preserved (presentation-only).
+            assert 'data-testid="vault-open-form"' in surface
+            assert 'data-testid="vault-init-form"' in surface
+            assert 'data-testid="vault-recent-vaults"' in surface
+            assert 'data-testid="vault-settings-folder-open"' in surface
+
+
+def test_selected_vault_still_renders_settings_editor() -> None:
+    """Suppressing the editor is scoped to picker mode only: a selected vault
+    (non-picker render) still renders the Markdown settings editor unchanged
+    (#2485 D1, Codex round 2 — guard against over-suppression)."""
+    markup = vault_settings_panel_markup(_selected_projection())
+    assert 'data-testid="vault-settings-editor"' in markup
+    assert 'data-testid="vault-setting-row"' in markup
+    assert 'data-testid="vault-setting-input-workflowStatuses"' in markup
+
+
+def test_no_vault_picker_page_has_no_separating_margin() -> None:
+    """The picker hero + folded panel render as ONE continuous surface: the
+    consolidated head-level ``.vault-selection-required`` rule (``margin: 0
+    auto``) is the sole rule, and the old separating section-local
+    ``margin: 48px auto`` is gone (#2485 D1, Codex round 2 CSS finding).
+
+    Before the fix a section-local ``<style>`` with the SAME specificity was
+    emitted in the body *after* the head rule, so its ``margin: 48px auto`` won
+    on source order and separated the panel from the hero.
+    """
+    from companion_ui.workspace.serve_dev_page import render_index_html
+
+    payload = {
+        "state": "vault_selection_required",
+        "reason": "no_vault_bound",
+        "message": "No vault is selected. Open a vault to continue.",
+        "configured_vault_root": "/Users/me/Vaults/Niflheim",
+        "requested_note_path": "",
+        "context": {"status": "none"},
+        "recent_vaults": [],
+        "actions": [],
+    }
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        vault_selection_required=payload,
+    )
+    # The old separating margin is gone everywhere on the no-vault page.
+    assert "margin: 48px auto" not in html, (
+        "the separating 48px section margin must not reappear on the picker"
+    )
+    # The consolidated continuous-surface rule is present.
+    assert "margin: 0 auto" in html

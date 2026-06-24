@@ -5466,44 +5466,18 @@ def _render_vault_selection_required_section(payload: object) -> str:
     # design system so it never reads as default-browser chrome (#2448, D1).
     # Dark palette, design-system typography, a ranked primary open affordance.
     # Content is server-declared; this is presentation only.
+    #
+    # IMPORTANT (#2485 D1, Codex round 2): the picker hero + folded vault-
+    # settings panel must render as ONE continuous surface. The head-level
+    # consolidated rule (single `<style>` in `<head>`) owns the picker's
+    # spacing/layout — `margin: 0 auto` + the `~ .vault-settings-panel`
+    # continuity rule. A section-local `<style>` block with the SAME
+    # `.vault-selection-required` specificity, emitted here in the body
+    # *after* the head, would win on source order and reintroduce the old
+    # `margin: 48px auto` that separates the panel from the hero. So this
+    # section emits NO `<style>`: it carries markup only and inherits the
+    # head-level DS rules. Do not re-add a competing section-local style.
     return f"""
-    <style>
-      .vault-selection-required {{
-        background: var(--bg-surface, #0c1220);
-        border: 1px solid var(--border-strong, #1e3050);
-        border-radius: 8px;
-        color: var(--fg-1, #dce8f0);
-        display: grid;
-        font-family: var(--font-ui, system-ui, sans-serif);
-        gap: 12px;
-        margin: 48px auto;
-        max-width: 560px;
-        padding: 28px 30px 30px;
-      }}
-      .vault-selection-headline {{
-        color: var(--fg-1, #dce8f0); font-size: var(--text-xl, 1.5rem);
-        font-weight: 500; margin: 0;
-      }}
-      .vault-selection-summary {{
-        color: var(--fg-2, #7a9ab8); font-size: var(--text-base, 0.9375rem);
-        margin: 0;
-      }}
-      .vault-selection-requested {{
-        color: var(--fg-2, #7a9ab8); font-size: var(--text-sm, 0.8125rem);
-        margin: 0;
-      }}
-      .vault-selection-requested code {{
-        background: var(--bg-raised, #111a2e);
-        border-radius: var(--radius-sm, 2px);
-        color: var(--accent, #d4a843);
-        font-family: var(--font-mono, monospace); padding: 1px 4px;
-      }}
-      .vault-selection-hint {{
-        color: var(--fg-3, #3d5570); font-size: var(--text-sm, 0.8125rem);
-        margin: 0;
-      }}
-      .vault-selection-open-configured {{ margin: 2px 0; }}
-    </style>
     <section class="vault-selection-required" data-region="vault-selection-required"
       data-testid="vault-selection-required" data-reason="{reason}"
       data-entry-state="no_vault">
@@ -11778,13 +11752,26 @@ def render_index_html(
     /* ---- No-vault picker front door (#2485 D1) ----
        The styled hero owns the single no-vault heading; the vault-settings
        panel folds in beneath it as the picker body. Both read in the design
-       system's fonts/colours/spacing — no default-browser chrome. */
+       system's fonts/colours/spacing — no default-browser chrome.
+       This is the SOLE rule for `.vault-selection-required` spacing/surface:
+       the section renderer emits markup only (no competing section-local
+       `<style>`), so these head-level values are not overridden in the body
+       (Codex round 2: the old `48px auto` section style separated the panel
+       from the hero). */
     .vault-selection-required {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      color: var(--fg-1);
       display: grid;
+      font-family: var(--font-ui);
       gap: 12px;
       margin: 0 auto;
       max-width: 560px;
-      padding: 48px 24px 8px;
+      padding: 28px 30px 8px;
+    }}
+    .vault-selection-open-configured {{
+      margin: 2px 0;
     }}
     .vault-selection-headline {{
       color: var(--fg-1);
