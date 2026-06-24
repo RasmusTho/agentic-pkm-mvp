@@ -55,6 +55,13 @@ _ENUM_MAP: Final[dict[str, str]] = {
     "orientation_unavailable": "Orientation unavailable",
     "orientation_source_unavailable": "Orientation source unavailable",
     "lifecycle.move": "Move note",
+    # Orientation provenance / signal tokens that leaked raw into the re-entry
+    # and orientation footers (REVIEW_RESPONSE.txt C3). These are runtime
+    # provenance enums, never user-facing copy: map them to a human label so the
+    # footer reads as a sentence, not a machine token. The classified value
+    # still travels in the footer's data-* attributes.
+    "operational_trace_pointer": "from where you left off",
+    "artifact_activation": "from your last activity",
 }
 
 # Internal identifiers that must never appear as user-facing copy. They are
@@ -79,9 +86,31 @@ _SUPPRESS_ID_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
 # live outside these namespaces and pass through.
 _CLASSIFIED_TOKEN_NAMESPACES: Final[tuple[str, ...]] = ("lifecycle.",)
 
+# Runtime classified-token *shapes* (not namespaces) that are machine signal
+# encodings, never user-facing copy: e.g. ``signal=0`` resurface strength
+# encodings. An unmapped token matching one of these FAILS CLOSED (suppressed),
+# exactly like a classified-namespace token. The raw value still travels in the
+# surface's data-* attributes.
+_CLASSIFIED_TOKEN_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"^signal=[\w.-]*$"),
+)
+
+# Embedded-identifier pattern for prose redaction. Matches an internal id
+# (``prop-*`` / ``proposal-*`` / ``art-*`` / ``artifact-*`` / ``note-*``) where
+# it appears *inside* free text (e.g. a runtime ``trigger_summary`` such as
+# "Trigger for prop-move-1 …"). Whole-string ids are handled by
+# :func:`humanise_token`; this catches the in-prose case the review flagged.
+_EMBEDDED_ID_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:prop|proposal|art|artifact|note)-[\w.]+", re.IGNORECASE
+)
+
 
 def _is_suppressed_identifier(token: str) -> bool:
     return any(pattern.match(token) for pattern in _SUPPRESS_ID_PATTERNS)
+
+
+def _is_classified_pattern_token(token: str) -> bool:
+    return any(pattern.match(token) for pattern in _CLASSIFIED_TOKEN_PATTERNS)
 
 
 def _is_classified_namespace_token(token: str) -> bool:
@@ -147,7 +176,30 @@ def humanise_token(token: object) -> str:
     if _is_classified_namespace_token(text):
         # Unmapped machine enum in a classified namespace — fail closed.
         return ""
+    if _is_classified_pattern_token(text):
+        # Unmapped machine signal encoding (e.g. signal=0) — fail closed.
+        return ""
     return text
+
+
+def humanise_prose(text: object) -> str:
+    """Redact embedded internal identifiers from free-text runtime copy.
+
+    Some runtime free-text fields (notably a proposal ``trigger_summary`` such
+    as "Trigger for prop-move-1 …") embed an internal correlation id *inside*
+    otherwise-human prose. :func:`humanise_token` only suppresses a whole-string
+    id; this scrubs the id where it appears mid-sentence so it never reaches
+    visible copy, while leaving the rest of the human sentence intact. The raw
+    id is still preserved in the surface's ``data-*`` attributes (this only
+    touches the visible copy string).
+
+    Fails closed: any ``prop-*`` / ``art-*`` / ``note-*``-shaped token in the
+    text is replaced with "this item" rather than surfaced raw.
+    """
+    raw = "" if text is None else str(text)
+    if not raw:
+        return ""
+    return _EMBEDDED_ID_RE.sub("this item", raw)
 
 
 def humanise_degraded_reason(token: object) -> str:

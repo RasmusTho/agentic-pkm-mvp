@@ -21,7 +21,11 @@ observable in ``data-*`` attributes on the rendered element.
 from __future__ import annotations
 
 import inspect
+import json
 import re
+import shutil
+import subprocess
+import textwrap
 from typing import Any
 
 import pytest
@@ -324,6 +328,140 @@ def test_vault_browser_fetch_error_uses_calm_grammar() -> None:
     # (c) the classified error *state* still arrives from the payload — evidenced
     #     by the state-error element being present.
     assert 'data-testid="workspace-vault-browser-state-error"' in html
+
+
+# ---------------------------------------------------------------------------
+# AC3 / D3 (#2482) — the *live* client-side fetch-failure catch uses the calm
+# grammar. #2444 closed on the server-rendered fixture above, which never
+# invokes the overlay's JS .catch handler; that handler still concatenated
+# err.message. This test extracts and *executes* the real overlay catch with a
+# rejecting fetch and asserts on the runtime-produced visible status text.
+# ---------------------------------------------------------------------------
+_NODE = shutil.which("node")
+
+# The single calm-grammar string the server-rendered vault-browser error path
+# emits; the live catch must reuse it (not a second template).
+_EXPECTED_CALM_VAULT_COPY = calm_degraded(
+    what="Notes",
+    why="connection failed",
+    nothing_clause=NOTHING_LOST,
+    what_to_do="Refresh to retry",
+)
+
+
+def _vault_browser_overlay_script() -> str:
+    """Extract the vault-browser overlay IIFE (defines ``fetchNotes``)."""
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/panel.md",
+    )
+    for body in re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL):
+        if "function fetchNotes" in body and "vault-browser-status" in body:
+            return body
+    raise AssertionError("vault-browser overlay script (fetchNotes) not found")
+
+
+def test_vault_browser_overlay_fetch_fail_catch_has_no_raw_error() -> None:
+    """Source guard: the live catch reuses calm grammar, not ``err.message``."""
+    script = _vault_browser_overlay_script()
+    catch = re.search(
+        r"\.catch\(function\s*\(err\)\s*\{(.*?)\}\);", script, flags=re.DOTALL
+    )
+    assert catch is not None, "vault-browser fetch catch handler not found"
+    body = catch.group(1)
+    assert (
+        json.dumps(_EXPECTED_CALM_VAULT_COPY) in body
+        or _EXPECTED_CALM_VAULT_COPY in body
+    ), "live catch must hand the calm-grammar string to setStatus"
+    assert "'Error: ' + err.message" not in body
+    assert "setStatus('Error:" not in body
+
+
+@pytest.mark.skipif(
+    _NODE is None, reason="node not available for live-catch execution"
+)
+def test_vault_browser_overlay_fetch_fail_uses_calm_grammar() -> None:
+    """Execute the *live* overlay catch with a rejecting fetch under Node.
+
+    Runs the real ``fetchNotes`` handler from the rendered page with the DOM and
+    ``fetch`` stubbed, forcing ``fetch`` to reject with a transport error
+    exactly as a browser would. Captures the string the handler writes via
+    ``setStatus`` (the DOM ``textContent``) and asserts on that runtime-produced
+    *visible* text — not a static fixture. This is the catch that #2444's
+    server-rendered fixture never exercised.
+    """
+    script = _vault_browser_overlay_script()
+    harness = textwrap.dedent(
+        """
+        'use strict';
+        const captured = {{ status: null }};
+        function makeEl() {{
+          return {{
+            _text: '', value: '', _html: '',
+            set textContent(v) {{ this._text = v; captured.status = v; }},
+            get textContent() {{ return this._text; }},
+            set innerHTML(v) {{ this._html = v; }},
+            get innerHTML() {{ return this._html; }},
+            appendChild() {{}}, addEventListener() {{}},
+            setAttribute() {{}}, removeAttribute() {{}},
+            classList: {{ add() {{}}, remove() {{}} }},
+            querySelector() {{ return null; }},
+            scrollIntoView() {{}}, focus() {{}}, style: {{}},
+          }};
+        }}
+        const elements = {{}};
+        global.document = {{
+          getElementById(id) {{
+            if (!elements[id]) elements[id] = makeEl();
+            return elements[id];
+          }},
+          addEventListener() {{}}, createElement() {{ return makeEl(); }},
+        }};
+        global.window = {{
+          matchMedia() {{ return {{ matches: false }}; }},
+          getComputedStyle() {{ return {{ display: 'block' }}; }},
+          console: {{ debug() {{}}, error() {{}} }},
+        }};
+        global.console = {{ debug() {{}}, error() {{}}, log() {{}} }};
+        // The real transport failure: fetch rejects with "Failed to fetch".
+        global.fetch = function() {{
+          return Promise.reject(new Error('Failed to fetch'));
+        }};
+        global.setTimeout = function(fn) {{ return 0; }};
+        global.clearTimeout = function() {{}};
+
+        {script}
+
+        Promise.resolve()
+          .then(function() {{ return window.vaultBrowser.open(); }})
+          .then(function() {{ return new Promise(function(r) {{ Promise.resolve().then(r); }}); }})
+          .then(function() {{ return new Promise(function(r) {{ Promise.resolve().then(r); }}); }})
+          .then(function() {{
+            process.stdout.write(JSON.stringify({{ status: captured.status }}));
+          }})
+          .catch(function(e) {{
+            process.stdout.write(JSON.stringify({{ error: String(e) }}));
+          }});
+        """
+    ).format(script=script)
+
+    result = subprocess.run(
+        [_NODE, "-e", harness], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, f"node failed: {result.stderr}"
+    payload = json.loads(result.stdout.strip())
+    assert "error" not in payload, f"harness error: {payload.get('error')}"
+    status = payload["status"]
+
+    # The live catch wrote a visible status: it must be the calm grammar, and it
+    # must NOT leak the raw transport error or echo err.message.
+    assert status is not None, "live overlay catch never set a status"
+    assert status == _EXPECTED_CALM_VAULT_COPY, (
+        f"live overlay catch produced {status!r}, expected the calm grammar"
+    )
+    assert RAW_TRANSPORT_ERROR not in status
+    assert "Failed to fetch" not in status
+    assert "Error:" not in status
 
 
 # ---------------------------------------------------------------------------

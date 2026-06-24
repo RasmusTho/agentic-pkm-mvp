@@ -1528,3 +1528,40 @@ def test_orientation_header_has_no_asof_telemetry() -> None:
         assert "vault:" in header_text, (
             "vault identity must remain in the orientation header"
         )
+
+
+# ---------------------------------------------------------------------------
+# #2482 / C3 — no raw runtime enum/identifier in orientation footers.
+#
+# The orientation provenance footers render authority_role + source_label as
+# visible copy, and the resurface card renders signal_labels as chip copy. The
+# default fixtures carry the confirmed leak tokens
+# (operational_trace_pointer / artifact_activation on the leave-point footer,
+# signal=0 on the resurface chip). #2444 humanised the degraded-reason chips but
+# not these footers. The assertion is on *rendered visible text* (HTML tags AND
+# <script> bodies stripped, via the parser-based ``_visible_text`` above) so a
+# token in visible copy fails even when the matching data-* hook still carries
+# the raw value.
+# ---------------------------------------------------------------------------
+_RAW_ORIENTATION_ENUMS = [
+    "operational_trace_pointer",
+    "artifact_activation",
+    "signal=0",
+]
+
+
+def test_orientation_footers_have_no_raw_enum() -> None:
+    # full_mist renders the orientation panels (leave point + resurface), where
+    # the provenance footer and signal chips live.
+    html = _render(orientation=_orientation_payload(gap=_GAP_FULL_MIST))
+    visible = _visible_text(html)
+    for token in _RAW_ORIENTATION_ENUMS:
+        assert token not in visible, (
+            f"raw orientation enum {token!r} leaked into visible footer copy"
+        )
+    # The footers still read as human copy: the leave-point provenance humanises
+    # to a sentence (not a machine enum), and the resurface chip is suppressed
+    # rather than showing signal=0.
+    assert "from where you left off" in visible or "from your last activity" in visible
+    # The classified values still arrive server-authoritatively in data-* hooks.
+    assert 'data-authority-role="operational_trace_pointer"' in html
