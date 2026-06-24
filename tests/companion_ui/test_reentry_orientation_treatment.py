@@ -34,12 +34,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
-from html.parser import HTMLParser
 from typing import Any
 
 import pytest
 
 from companion_ui.workspace.serve_dev_page import render_index_html
+
+from tests.companion_ui._visible_text import visible_text as _visible_text
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1480,58 +1481,6 @@ def test_resume_restores_caret() -> None:
         "live AC — caret/scroll restore + proportional entrance require the "
         "running shell + motion; exercised in the parent #2443 live UAT pass"
     )
-
-
-# ---------------------------------------------------------------------------
-# Shared visible-text helper. Used by both the #2484 orientation-header
-# telemetry-removal test and the #2483 card/panel de-duplication tests. A real
-# HTML parser (no regex tag-filter) is used so whitespace-padded or upper-case
-# close tags (``</script >``, ``<SCRIPT>``) cannot leak inert markup into the
-# scanned copy. The scanned copy is lower-cased so callers compare against
-# lower-cased expectations (the #2483 de-dup tests scan card vs panel text and
-# both pass through this same lowering, so de-dup detection is case-insensitive).
-# ---------------------------------------------------------------------------
-_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
-_VISIBLE_VOID_TAGS = frozenset({
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
-})
-
-
-class _VisibleTextExtractor(HTMLParser):
-    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
-    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
-    cannot leak inert markup into the scanned copy."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self._skip_depth = 0
-        self._chunks: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: object) -> None:
-        if tag in _VISIBLE_VOID_TAGS:
-            return
-        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in _VISIBLE_VOID_TAGS:
-            return
-        if self._skip_depth:
-            self._skip_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if not self._skip_depth:
-            self._chunks.append(data)
-
-
-def _visible_text(html: str) -> str:
-    """Rendered human-visible text: tags removed and <script>/<style>/<head>
-    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
-    extractor = _VisibleTextExtractor()
-    extractor.feed(html)
-    extractor.close()
-    return " ".join("".join(extractor._chunks).split()).lower()
 
 
 def _orientation_header(html: str) -> str:
