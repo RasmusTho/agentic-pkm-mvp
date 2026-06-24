@@ -21,6 +21,13 @@ SBS_REGISTER = REPO_ROOT / "docs" / "architecture" / "SBS_BOUNDARY_REGISTER.md"
 # CES is a stewardship practice (no app/* embodiment); its anchor is intentionally absent.
 CES_PREFIX = "CES"
 
+# Canonical non-CES SBS Level-2 subsystems (docs/SYSTEM_BREAKDOWN_STRUCTURE.md ::
+# Level 2 control-boundary subsystems). The register must carry a row for every one of
+# these so a deleted or renamed row cannot silently shrink the module index.
+EXPECTED_NON_CES_SUBSYSTEMS = frozenset(
+    {"HIX", "WSP", "HKA", "SIP", "GOV", "EBF", "PDM", "DRI", "RCA", "MEM", "CAO", "EXE", "SFC", "OEF"}
+)
+
 # Sentinel used in the register for the CES row's current-modules cell.
 _CES_SENTINEL_RE = re.compile(r"stewardship practice", re.IGNORECASE)
 
@@ -134,11 +141,20 @@ def test_subsystem_module_anchors_exist() -> None:
 
 
 def test_every_non_ces_subsystem_has_at_least_one_anchor() -> None:
-    """Every non-CES subsystem row must have at least one app/* anchor.
+    """Every non-CES subsystem must have a register row with at least one app/* anchor.
 
-    This ensures a subsystem cannot be silently dropped from the index.
+    Guards two forms of silent index rot: (1) an entire subsystem row being deleted or
+    renamed away — caught by comparing parsed prefixes against the canonical SBS subsystem
+    set — and (2) a present row losing all of its anchors.
     """
     anchors = _parse_register()
+
+    missing_rows = EXPECTED_NON_CES_SUBSYSTEMS - set(anchors.keys())
+    assert not missing_rows, (
+        "The following canonical SBS subsystems have no row in SBS_BOUNDARY_REGISTER.md "
+        "(deleted, renamed, or unparsed) — the module index no longer covers every subsystem:\n\n"
+        + "\n".join(f"  {s}" for s in sorted(missing_rows))
+    )
 
     without_anchor = [
         subsystem
