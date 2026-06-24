@@ -42,6 +42,23 @@ def _status_copy(status: str) -> tuple[str, str]:
     }.get(status, ("Vault status unknown", "Reload the runtime vault context."))
 
 
+def _recent_label(item: dict[str, Any]) -> str:
+    """Calm visible label for a recent-vault row.
+
+    A recent entry can arrive with no known name and no usable path (or a
+    placeholder ``unknown`` label). Rather than surface the raw ``unknown``
+    token to the human, render a calm empty-state label (#2485 D1). Behaviour
+    (the ``data-vault-path`` the row selects) is unchanged.
+    """
+    name = str(item.get("vault_name") or "").strip()
+    if name and name.lower() != "unknown":
+        return name
+    path = str(item.get("path") or "").strip()
+    if path:
+        return path
+    return "Unnamed vault"
+
+
 def _recent_vaults(recent_vaults: list[dict[str, Any]]) -> str:
     if not recent_vaults:
         return (
@@ -54,7 +71,7 @@ def _recent_vaults(recent_vaults: list[dict[str, Any]]) -> str:
           data-testid="vault-recent-vault" data-intent="vault.select"
           data-api-method="POST" data-api-path="{VAULT_SELECT_ENDPOINT}"
           data-vault-path="{_e(item.get("path") or "")}">
-          <span>{_e(item.get("vault_name") or item.get("path") or "Recent vault")}</span>
+          <span>{_e(_recent_label(item))}</span>
           <code>{_e(item.get("path") or "")}</code>
         </button>"""
         for item in recent_vaults
@@ -75,7 +92,7 @@ def _action_forms(context: dict[str, Any], recent_vaults: list[dict[str, Any]]) 
           data-api-path="{VAULT_SELECT_ENDPOINT}">
           <label>Open existing vault
             <input data-testid="vault-open-path" name="path" value="{_e(path)}"
-              autocomplete="off" placeholder="/path/to/vault">
+              autocomplete="off" placeholder="Path to an existing vault">
           </label>
           <button type="submit" data-testid="vault-open-submit">Open</button>
         </form>
@@ -85,7 +102,7 @@ def _action_forms(context: dict[str, Any], recent_vaults: list[dict[str, Any]]) 
           data-affordance-status="{initialize_status}">
           <label>Create/init vault
             <input data-testid="vault-init-path" name="path" value="{_e(path)}"
-              autocomplete="off" placeholder="/path/to/vault">
+              autocomplete="off" placeholder="Path for a new vault">
           </label>
           <label>Role
             <select data-testid="vault-init-role" name="machineRole">
@@ -105,7 +122,21 @@ def _action_forms(context: dict[str, Any], recent_vaults: list[dict[str, Any]]) 
       </section>"""
 
 
-def _identity_rows(context: dict[str, Any]) -> str:
+def _identity_rows(context: dict[str, Any], *, picker_mode: bool = False) -> str:
+    # On the no-vault picker front door (picker_mode) there is, by definition,
+    # no selected vault — the name/path/role identity spans would render the
+    # literal "unknown / unknown" the design review flagged (#2485 D1). Suppress
+    # the identity spans there and keep only the settings-folder affordance,
+    # which the picker scope requires. Behaviour is unchanged; this is
+    # presentation-only.
+    if picker_mode:
+        return f"""
+      <section class="vault-settings-identity" data-testid="vault-settings-identity"
+        data-picker-mode="true">
+        <button type="button" data-testid="vault-settings-folder-open"
+          data-intent="vault.settingsFolder.open" data-affordance-status="ui-only"
+          data-settings-folder="{_e(context.get("settings_path") or "")}">Open settings folder</button>
+      </section>"""
     permissions = context.get("permissions") if isinstance(context.get("permissions"), dict) else {}
     permission_rows = "".join(
         f'<span class="vault-permission" data-testid="vault-permission-{_e(key)}" '
@@ -197,27 +228,43 @@ def _settings_editor(projection: dict[str, Any], status: str) -> str:
     return f'<section class="vault-settings-editor" data-testid="vault-settings-editor">{"".join(rows)}</section>'
 
 
-def _panel_body(projection: dict[str, Any]) -> str:
+def _panel_body(projection: dict[str, Any], *, picker_mode: bool = False) -> str:
     """Inner panel content rendered from the fetched projection.
 
     Shared by :func:`vault_settings_panel_markup` (initial server render) and
     :func:`vault_settings_panel_fragment` (the reload/after-action re-render),
     so the projection is applied on load and after every action — never
     discarded.
+
+    When ``picker_mode`` is set the panel renders as the no-vault front-door
+    picker folded beneath the styled ``vault-selection-required`` hero
+    (#2485 D1). The hero already owns the single "No vault selected" heading, so
+    the panel's own status header is suppressed to avoid a duplicate heading,
+    and the identity spans (which would read "unknown / unknown" with no vault)
+    are suppressed too. The open / init / recents / settings-folder affordances
+    all still render — this is presentation-only and does not change picker
+    behaviour (that is #2312's domain).
     """
     context = projection.get("context") if isinstance(projection.get("context"), dict) else {"status": "none"}
     status = str(context.get("status") or "none")
     title, summary = _status_copy(status)
     errors = projection.get("validation_errors") if isinstance(projection.get("validation_errors"), list) else []
     recent_vaults = projection.get("recent_vaults") if isinstance(projection.get("recent_vaults"), list) else []
-    return f"""
+    # The hero owns the single "No vault selected" heading in picker mode; emit
+    # no second status header here.
+    head = (
+        ""
+        if picker_mode
+        else f"""
     <header class="vault-settings-head" data-testid="vault-settings-head">
       <span data-testid="vault-status-label">{_e(title)}</span>
       <p data-testid="vault-status-summary">{_e(summary)}</p>
       <p data-testid="vault-validation-error">{_e(context.get("validation_error") or "")}</p>
-    </header>
+    </header>"""
+    )
+    return f"""{head}
     {_action_forms(context, recent_vaults)}
-    {_identity_rows(context)}
+    {_identity_rows(context, picker_mode=picker_mode)}
     {_validation_errors(errors)}
     {_settings_editor(projection, status)}"""
 
@@ -227,21 +274,34 @@ def _panel_status(projection: dict[str, Any]) -> str:
     return str(context.get("status") or "none")
 
 
-def vault_settings_panel_fragment(projection: dict[str, Any] | None = None) -> str:
+def vault_settings_panel_fragment(
+    projection: dict[str, Any] | None = None,
+    *,
+    picker_mode: bool = False,
+) -> str:
     """Server-rendered inner panel fragment from the fetched projection.
 
     Served at :data:`VAULT_SETTINGS_FRAGMENT_ROUTE`; the controller swaps this
     into the panel after load and after every action so the rendered panel
     reflects the runtime projection instead of discarding it.
+
+    ``picker_mode`` folds the panel into the no-vault picker front door: it
+    drops the duplicate status heading and the "unknown" identity spans while
+    preserving every picker affordance (#2485 D1).
     """
     projection = projection if isinstance(projection, dict) else {}
-    return f'<div class="vault-settings-body" data-testid="vault-settings-body" data-vault-status="{_e(_panel_status(projection))}">{_panel_body(projection)}</div>'
+    return (
+        '<div class="vault-settings-body" data-testid="vault-settings-body" '
+        f'data-vault-status="{_e(_panel_status(projection))}">'
+        f"{_panel_body(projection, picker_mode=picker_mode)}</div>"
+    )
 
 
 def vault_settings_panel_markup(
     projection: dict[str, Any] | None = None,
     *,
     hidden_by_default: bool = False,
+    picker_mode: bool = False,
 ) -> str:
     projection = projection if isinstance(projection, dict) else {}
     status = _panel_status(projection)
@@ -323,7 +383,7 @@ def vault_settings_panel_markup(
     data-fragment-path="{VAULT_SETTINGS_FRAGMENT_ROUTE}" data-api-method="GET"
     role="dialog" aria-label="Vault settings" tabindex="-1">
     {close_button}
-    {vault_settings_panel_fragment(projection)}
+    {vault_settings_panel_fragment(projection, picker_mode=picker_mode)}
   </section>"""
 
 

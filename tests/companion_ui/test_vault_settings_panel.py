@@ -145,6 +145,59 @@ def test_panel_renders_fetched_projection() -> None:
     assert 'data-vault-status="selected"' in markup
 
 
+def _strip_to_visible_text(markup: str) -> str:
+    """Reduce rendered markup to its visible text.
+
+    Strips ``<script>`` and ``<style>`` *contents* (not just the tags) and then
+    all remaining tags, so assertions scan only what a human would see on the
+    surface — never an attribute value, data-* hook, or inline script string
+    (#2485 verify-target requirement)."""
+    no_script = re.sub(r"<script\b.*?</script>", " ", markup, flags=re.S | re.I)
+    no_style = re.sub(r"<style\b.*?</style>", " ", no_script, flags=re.S | re.I)
+    return re.sub(r"<[^>]+>", " ", no_style)
+
+
+def test_recents_empty_state_no_raw_unknown() -> None:
+    """Recents with no known label render a calm empty state, never the literal
+    "unknown / unknown" (#2485 D1).
+
+    A recent-vault entry can arrive with neither a ``vault_name`` nor a usable
+    ``path`` (or a placeholder ``unknown`` label). The picker must render a calm
+    empty-state label for that row, not surface the raw ``unknown`` token to the
+    human. This asserts on *visible text* only, so a hidden data-* attribute
+    cannot keep the test green while the raw word renders on screen."""
+    projection = {
+        "context": {"status": "none"},
+        "recent_vaults": [
+            {"vault_name": None, "path": None},
+            {"vault_name": "unknown", "path": None},
+            {"vault_name": "", "path": ""},
+        ],
+        "definitions": [],
+        "settings": [],
+        "validation_errors": [],
+    }
+    # The picker-mode markup is the no-vault front-door render.
+    markup = vault_settings_panel_markup(projection, picker_mode=True)
+    visible = _strip_to_visible_text(markup)
+
+    # No label-less recent row leaks the raw "unknown" token to the human.
+    assert "unknown" not in visible.lower(), (
+        "label-less recents must render a calm empty state, not raw 'unknown'"
+    )
+    # The recents region still renders (the affordance is preserved), and the
+    # calm empty-state label is what shows for a label-less row.
+    assert 'data-testid="vault-recent-vaults"' in markup
+    assert "Unnamed vault" in visible
+
+    # A genuinely empty recents list keeps the existing calm prompt with no raw
+    # "unknown".
+    empty = vault_settings_panel_markup(
+        {"context": {"status": "none"}, "recent_vaults": []}, picker_mode=True
+    )
+    assert "unknown" not in _strip_to_visible_text(empty).lower()
+
+
 def test_structured_value_parsed_before_post() -> None:
     """Structured (array/object) settings post parsed JSON, not a raw string
     (#2016 AC4)."""

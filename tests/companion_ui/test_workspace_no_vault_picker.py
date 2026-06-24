@@ -8,10 +8,23 @@ fabricated ``cold_start`` orientation (home path). Server declares; UI renders.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
 from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
+
+
+def _strip_to_visible_text(markup: str) -> str:
+    """Reduce rendered markup to its visible text.
+
+    Strips ``<script>`` and ``<style>`` *contents* (not just the tags) and then
+    all remaining tags, so assertions scan only what a human would see on the
+    rendered front door — never an attribute value, data-* hook, placeholder,
+    or inline script string (#2485 verify-target requirement)."""
+    no_script = re.sub(r"<script\b.*?</script>", " ", markup, flags=re.S | re.I)
+    no_style = re.sub(r"<style\b.*?</style>", " ", no_script, flags=re.S | re.I)
+    return re.sub(r"<[^>]+>", " ", no_style)
 
 _PICKER_PAYLOAD: dict[str, Any] = {
     "state": "vault_selection_required",
@@ -157,6 +170,115 @@ def test_picker_without_configured_root_omits_one_click_open() -> None:
     assert 'data-testid="vault-selection-required"' in html
     # No configured root → no one-click "open configured" affordance.
     assert 'data-testid="vault-selection-open-configured"' not in html
+
+
+def test_vault_picker_is_design_system_only() -> None:
+    """The no-vault front door renders one DS-styled picker surface (#2485 D1).
+
+    After #2448 added the styled "No vault selected" hero, the original
+    unstyled default-browser picker still rendered beneath it: a second
+    "No vault selected" heading, ``/path/to/vault`` placeholder inputs, a system
+    role ``<select>``, "unknown / unknown" identity rows, and an "Open settings
+    folder" button. This pins the finished D1 state:
+
+    - exactly one "No vault selected" heading is *visible*;
+    - no raw ``/path/to/vault`` placeholder and no literal "unknown" leak to the
+      human; and
+    - the picker carries the DS panel chrome (its scoped tokenised stylesheet),
+      not default-browser form chrome.
+
+    Assertions scan *visible text* (script/style contents stripped) so the test
+    cannot stay green on the broken double-render that ships today."""
+    payload = {
+        "state": "vault_selection_required",
+        "reason": "no_vault_bound",
+        "message": "No vault is selected. Open a vault to continue.",
+        "configured_vault_root": "/Users/me/Vaults/Niflheim",
+        "requested_note_path": "",
+        "context": {"status": "none"},
+        # A label-less recent that previously rendered "unknown / unknown".
+        "recent_vaults": [{"vault_name": None, "path": None}],
+        "actions": [],
+    }
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        vault_selection_required=payload,
+    )
+    visible = _strip_to_visible_text(html)
+
+    # The literal front-door picker is the styled hero plus the inline
+    # vault-settings panel folded beneath it. Scope the visible-text assertions
+    # to that surface (not the whole page — the hidden settings/operator drawers
+    # are separate overlays out of D1's scope).
+    # The hero and the inline vault-settings panel are separate <body> siblings;
+    # other overlays (hidden settings/operator drawers) sit between them in
+    # source order. Extract each balanced <section> on its own and concatenate,
+    # so the scan covers only the picker surface — not the unrelated drawers.
+    def _balanced_section(text: str, open_marker: str, *, start: int = 0) -> str:
+        open_idx = text.index(open_marker, start)
+        depth = 0
+        i = open_idx
+        token = re.compile(r"<section\b|</section>", re.I)
+        while True:
+            m = token.search(text, i)
+            assert m is not None, "unbalanced <section> in picker markup"
+            if m.group(0).lower().startswith("<section"):
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return text[open_idx : m.end()]
+            i = m.end()
+
+    hero_html = _balanced_section(html, '<section class="vault-selection-required"')
+    panel_html = _balanced_section(html, '<section class="vault-settings-panel"')
+    picker_html = hero_html + "\n" + panel_html
+    picker_visible = _strip_to_visible_text(picker_html)
+
+    # Exactly one *visible* "No vault selected" heading — the styled hero owns
+    # it; the picker form below must not repeat it.
+    assert picker_visible.count("No vault selected") == 1, (
+        "exactly one visible 'No vault selected' heading must render"
+    )
+    # And across the whole front door there is still only one (no third copy
+    # elsewhere on the page).
+    assert visible.count("No vault selected") == 1, (
+        "exactly one visible 'No vault selected' heading on the whole page"
+    )
+
+    # No default-browser placeholder chrome and no raw enum placeholder leaks to
+    # the human on the picker surface.
+    assert "/path/to/vault" not in picker_html, (
+        "no default-browser '/path/to/vault' placeholder may remain"
+    )
+    assert "unknown" not in picker_visible.lower(), (
+        "no literal 'unknown' identity/recent token may show on the picker"
+    )
+    # The picker keeps a single settings-folder affordance, not a stray
+    # duplicate.
+    assert picker_visible.count("Open settings folder") <= 1
+
+    # The picker is a single DS-styled surface: the styled hero plus the
+    # tokenised vault-settings panel chrome (DS fonts/colours/controls), not
+    # default-browser form styling.
+    assert 'data-testid="vault-selection-required"' in html
+    assert 'data-testid="vault-settings-panel"' in html
+    # The DS panel stylesheet is present (scoped, tokenised controls), so the
+    # picker inputs/buttons are not raw browser chrome.
+    assert ".vault-settings-panel input" in html
+    # The picker renders inline (not the hidden drawer) on the no-vault page.
+    panel_start = html.index('<section class="vault-settings-panel"')
+    panel_tag = html[panel_start : html.index(">", panel_start)]
+    assert " hidden" not in panel_tag, "the no-vault picker panel renders visibly"
+    assert 'data-display-mode="inline"' in panel_tag
+
+    # Picker affordances are all preserved (presentation-only; behaviour is
+    # #2312's domain): open-existing, create/init, recents, settings-folder.
+    assert 'data-testid="vault-open-form"' in html
+    assert 'data-testid="vault-init-form"' in html
+    assert 'data-testid="vault-recent-vaults"' in html
+    assert 'data-testid="vault-settings-folder-open"' in html
 
 
 def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:

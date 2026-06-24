@@ -8383,10 +8383,18 @@ def render_index_html(
     # gates only on the server-declared error, it does not re-classify state.
     runtime_unreachable = _is_runtime_unreachable(error)
     suppress_vault_settings = runtime_unreachable or route_error
+    # The no-vault page folds the picker into the styled hero (#2485 D1): render
+    # the panel in picker_mode so it carries no duplicate "No vault selected"
+    # heading and no "unknown / unknown" identity spans. On a loaded note the
+    # panel is the hidden vault-settings drawer, not the front-door picker.
+    vault_settings_picker_mode = vault_selection_required is not None
     vault_settings_panel_html = (
         ""
         if suppress_vault_settings
-        else vault_settings_panel_markup(hidden_by_default=fields is not None)
+        else vault_settings_panel_markup(
+            hidden_by_default=fields is not None,
+            picker_mode=vault_settings_picker_mode,
+        )
     )
     vault_settings_panel_js = "" if suppress_vault_settings else vault_settings_panel_script()
     # Loaded note workspaces keep the settings panel mounted for controller
@@ -11765,6 +11773,60 @@ def render_index_html(
       font-size: var(--text-xs);
       text-align: center;
     }}
+
+    /* ---- No-vault picker front door (#2485 D1) ----
+       The styled hero owns the single no-vault heading; the vault-settings
+       panel folds in beneath it as the picker body. Both read in the design
+       system's fonts/colours/spacing — no default-browser chrome. */
+    .vault-selection-required {{
+      display: grid;
+      gap: 12px;
+      margin: 0 auto;
+      max-width: 560px;
+      padding: 48px 24px 8px;
+    }}
+    .vault-selection-headline {{
+      color: var(--fg-1);
+      font-family: var(--font-display);
+      font-size: var(--text-2xl);
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      margin: 0;
+    }}
+    .vault-selection-summary, .vault-selection-hint, .vault-selection-requested {{
+      color: var(--fg-2);
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
+      margin: 0;
+    }}
+    .vault-selection-hint {{
+      color: var(--fg-3);
+      font-size: var(--text-sm);
+    }}
+    .vault-selection-requested code, .vault-selection-required code {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }}
+    .vault-selection-open-configured button,
+    .vault-selection-required button {{
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-md);
+      color: var(--bg-base);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 8px 14px;
+    }}
+    /* The picker body (vault-settings panel) renders inline on the no-vault
+       page, directly under the hero, as one continuous DS surface. */
+    .vault-selection-required ~ .vault-settings-panel[data-display-mode="inline"] {{
+      border-top: none;
+      margin: 0 auto;
+      max-width: 560px;
+      padding-top: 4px;
+    }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
@@ -12695,7 +12757,24 @@ def make_handler(
                     data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
                 except WorkspaceClientError:
                     data = {}
-                body = vault_settings_panel_fragment(data).encode("utf-8")
+                # When no vault is selected this fragment is the no-vault picker
+                # front door folded beneath the styled hero. Render it in
+                # picker mode so the controller's reload()/after-action swap does
+                # not re-introduce the duplicate "No vault selected" heading or
+                # the "unknown / unknown" identity spans the hero already
+                # supersedes (#2485 D1). Presentation-only; status is the
+                # server-declared projection, never re-classified here.
+                fragment_context = (
+                    data.get("context") if isinstance(data, dict) else None
+                )
+                fragment_status = (
+                    str(fragment_context.get("status") or "none")
+                    if isinstance(fragment_context, dict)
+                    else "none"
+                )
+                body = vault_settings_panel_fragment(
+                    data, picker_mode=fragment_status == "none"
+                ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
