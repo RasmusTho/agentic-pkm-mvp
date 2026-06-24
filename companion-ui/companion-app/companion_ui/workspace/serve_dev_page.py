@@ -5854,11 +5854,28 @@ def _render_orientation_leave_point(
     # leave point entirely (the "What was I doing" / "Where did momentum stop"
     # questions plus the resume affordance). The leave-point panel would repeat
     # the same LEAVE POINT heading and leave-point label verbatim beneath the
-    # card, so it is suppressed exactly there. Short rungs (no card) and the
-    # off-nominal degraded rung still render it.
-    if suppress_when_card:
-        return ""
+    # card, so the duplicated heading/label/notable lines are suppressed exactly
+    # there. Short rungs (no card) and the off-nominal degraded rung still render
+    # the full panel.
+    #
+    # Codex P2 (#2483): suppressing the whole section also dropped the ONLY
+    # emitter of the leave point's server-declared provenance
+    # (`authority_role` / `source_ref`), which the workspace orientation
+    # contract requires the UI to surface. The card states the resume *target*
+    # but carries no provenance, so when the panel is suppressed we still emit a
+    # provenance-only element — no repeated heading, label, or notable lines, so
+    # the de-dup AC (and #2450) hold while provenance is preserved.
     leave = _orientation_dict(leave_point)
+    if suppress_when_card:
+        if not leave:
+            return ""
+        return (
+            '<div class="orientation-leave-provenance-only" '
+            'data-testid="workspace-orientation-leave-provenance-only" '
+            'data-region="reentry-leave-provenance">'
+            f'{_orientation_provenance(leave, testid="workspace-orientation-leave-provenance")}'
+            "</div>"
+        )
     if not leave:
         return """
         <section class="orientation-section" data-testid="workspace-orientation-leave-point">
@@ -6464,6 +6481,13 @@ def _render_reentry_whisper_column(orientation: dict) -> str:
     """
     leave = _orientation_dict(orientation.get("leave_point"))
     counts = _reentry_counts(orientation)
+    # Codex P2 (#2483): the card's "What was I doing" body already owns the
+    # leave-point `doing` label verbatim. The whisper must NOT restate it, or
+    # the same string renders in the card and again in the margin beneath it.
+    # The whisper's `doing` slot instead carries the server-declared trajectory
+    # state — non-duplicated enumerated detail the card states only as a pill,
+    # keeping the four named whisper items without repeating the card's label.
+    traj_state = _reentry_traj_state(leave)
     return f"""
   <aside class="reentry-whisper-col" data-region="whisper-column"
     data-testid="reentry-whisper-column" data-narrow-mode="suppressed"
@@ -6473,7 +6497,7 @@ def _render_reentry_whisper_column(orientation: dict) -> str:
     <div class="reentry-whisper" data-whisper-item="doing"
       data-reentry-glyph-clearance="card-info-glyph">
       <span class="reentry-whisper-label">doing</span>
-      <span class="reentry-whisper-text">{_e(_reentry_doing_label(leave))}</span>
+      <span class="reentry-whisper-text">{_e(traj_state)} thread</span>
     </div>
     <div class="reentry-whisper" data-whisper-item="unresolved">
       <span class="reentry-whisper-label">unresolved</span>

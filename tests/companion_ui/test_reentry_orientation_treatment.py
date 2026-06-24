@@ -253,7 +253,11 @@ def test_reentry_orientation_regions_do_not_duplicate_heading_and_body_without_l
     assert card.count("Resume plan") == 1  # title in stopped link, not in doing body
 
     whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
-    assert "Where you left off" in whisper
+    # A1 finish (#2483) Codex P2: the whisper no longer restates the card's
+    # leave-point 'doing' label — its doing slot carries the trajectory state
+    # ("… thread"), never the "Where you left off" / artifact-title body.
+    assert "Where you left off" not in whisper
+    assert "thread" in whisper
     assert whisper.count("Resume plan") == 0  # title no longer repeated in whisper doing slot
 
     open_loop = html.split('data-testid="workspace-orientation-open-loop"', 1)[1].split(
@@ -1713,6 +1717,42 @@ def test_card_and_panels_do_not_duplicate_datum() -> None:
         assert "resume the runtime api contract" in card_text, gap
         assert 'data-testid="workspace-orientation-leave-point"' not in html, (
             f"leave-point panel must not repeat the card's leave datum at {gap}"
+        )
+
+        # 1a) Round-2 mandate: compare the leave-point LABEL itself between the
+        #     card's visible text and EVERY panel/whisper's visible text — the
+        #     label must never appear verbatim outside the card. A count-only
+        #     check passed even while the whisper restated the label (Codex P2);
+        #     this asserts the datum, not just the count line.
+        leave_label = "Resume the runtime API contract"
+        for marker, end in (
+            ('data-testid="workspace-orientation-open-loops"', "</section>"),
+            ('data-region="whisper-column"', "</aside>"),
+            ('data-testid="workspace-orientation-notable-changes"', "</section>"),
+        ):
+            if marker not in html:
+                continue
+            panel_text = _region_visible_text(html, marker, end)
+            assert leave_label not in panel_text, (
+                f"leave-point label repeated verbatim in {marker} at {gap}"
+            )
+
+        # 1b) Codex P2: suppressing the leave-point panel must NOT drop the
+        #     server-declared leave-point PROVENANCE (authority_role /
+        #     source_ref). The card carries no provenance, so a provenance-only
+        #     element must still render the leave point's authority role even
+        #     though the duplicated heading/label are gone.
+        assert 'data-testid="workspace-orientation-leave-provenance-only"' in html, (
+            f"leave-point provenance must survive panel suppression at {gap}"
+        )
+        leave_prov = html.split(
+            'data-testid="workspace-orientation-leave-provenance-only"', 1
+        )[1].split("</div>", 1)[0]
+        assert 'data-authority-role="operational_trace_pointer"' in leave_prov, (
+            f"leave-point authority_role must be preserved at {gap}"
+        )
+        assert 'data-source-ref="trace-leave"' in leave_prov, (
+            f"leave-point source_ref must be preserved at {gap}"
         )
 
         # 2) The open-loop / change counts the card states must not reappear as
