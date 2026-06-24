@@ -5,8 +5,25 @@ services:
   api:
     environment:
       API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+      PKM_ENVIRONMENT: prod
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
+      DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
+
+  worker:
+    environment:
+      PKM_ENVIRONMENT: prod
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
+      DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
+
+  watcher:
+    environment:
+      PKM_ENVIRONMENT: prod
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
+      DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
 
   db:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-app}
     volumes:
       - pgdata_prod:/var/lib/postgresql/data
 
