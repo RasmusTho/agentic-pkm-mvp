@@ -162,15 +162,27 @@ def test_scaffolding_written_into_vault_folder_not_sidecar(
     body = resp.json()
     assert body["context"]["status"] == "selected"
 
-    # Every reported created_file must be inside the vault folder.
+    # Every reported created_file must be inside the vault folder. Reject
+    # absolute paths and parent-relative ('..') escapes *before* the
+    # containment check: ``Path.is_relative_to`` is purely lexical, so an
+    # unresolved ``<vault>/../sidecar/...`` would otherwise satisfy it while
+    # the resolved file lives outside the vault (a silent sidecar regression).
+    new_vault_resolved = new_vault.resolve()
     for rel_path in body["created_files"]:
-        absolute = new_vault / rel_path
+        candidate = Path(rel_path)
+        assert not candidate.is_absolute(), (
+            f"created_file {rel_path!r} is an absolute path, not vault-relative"
+        )
+        assert ".." not in candidate.parts, (
+            f"created_file {rel_path!r} contains a parent-relative '..' segment"
+        )
+        absolute = (new_vault / candidate).resolve()
         assert absolute.is_file(), (
             f"Scaffolding file {rel_path!r} was reported but does not exist at {absolute}"
         )
-        # Must not be a sidecar outside the vault folder.
-        assert absolute.is_relative_to(new_vault), (
-            f"Scaffolding file {absolute} is not inside the vault folder {new_vault}"
+        # Must not be a sidecar outside the vault folder (resolved, not lexical).
+        assert absolute.is_relative_to(new_vault_resolved), (
+            f"Scaffolding file {absolute} is not inside the vault folder {new_vault_resolved}"
         )
 
     # The settings dir is inside the vault folder (not in a sidecar location).
