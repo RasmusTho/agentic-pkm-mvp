@@ -1444,3 +1444,57 @@ def test_resume_restores_caret() -> None:
         "live AC — caret/scroll restore + proportional entrance require the "
         "running shell + motion; exercised in the parent #2443 live UAT pass"
     )
+
+
+def _visible_text(html: str) -> str:
+    """Reduce rendered HTML to its human-visible text.
+
+    Strips ``<script>``/``<style>`` *contents* (so a token that lives only in
+    inert JS/CSS or a ``data-*`` attribute does not count as on-screen copy)
+    then strips every remaining tag. The result is the text a reader actually
+    sees, lower-cased for a substring scan.
+    """
+    no_script = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.S | re.I)
+    no_style = re.sub(r"<style\b[^>]*>.*?</style>", " ", no_script, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", no_style)
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _orientation_header(html: str) -> str:
+    """Extract the orientation header region markup."""
+    m = re.search(
+        r'<header class="orientation-header">(.*?)</header>', html, re.S
+    )
+    assert m, "orientation header must render"
+    return m.group(0)
+
+
+def test_orientation_header_has_no_asof_telemetry() -> None:
+    """C1 finish (#2484): the orientation header carries no ``as-of`` /
+    ``trace`` / ``freshness`` line — vault identity only.
+
+    Asserts on rendered *visible text* (tags + script/style stripped) of the
+    orientation header, so the telemetry fails the scan even when the surface
+    still carries the data on a ``data-*`` attribute on the orientation shell
+    (which is the relocation target, not visible copy). The earlier round left
+    the ``as of …`` / ``trace …`` / ``freshness …`` meta line in the header;
+    this asserts the reader no longer sees it.
+
+    Presentation only: the runtime still declares freshness/as-of/trace and the
+    orientation shell still carries them as ``data-*`` for the operator layer;
+    only the visible header copy changes — no classification moves client-side.
+    """
+    # Re-entry snapshot states render the orientation header with vault
+    # identity. The telemetry meta line must be gone from the visible header.
+    for gap in (_GAP_FULL_MIST, _GAP_LONG_MIST):
+        html = _render(orientation=_orientation_payload(gap=gap))
+        header_text = _visible_text(_orientation_header(html))
+        for token in ("as of", "freshness", "trace:"):
+            assert token not in header_text, (
+                f"orientation header still shows {token!r} telemetry "
+                f"(gap={gap}); header visible text: {header_text!r}"
+            )
+        # Vault identity is preserved (Out of Scope: the identity string).
+        assert "vault:" in header_text, (
+            "vault identity must remain in the orientation header"
+        )

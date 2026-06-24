@@ -269,13 +269,15 @@ class TestPrimaryPostureSurface:
     def test_primary_posture_has_human_label(self) -> None:
         # CUIDR-04 (#2447): the runtime pill's human label ("Online") is
         # operator/diagnostic telemetry — it moved off the front edge into the
-        # operator-telemetry region. The header still declares the posture
-        # (data-posture) and renders the local posture-emphasis pill; the human
-        # runtime label lives one level deeper in the operator layer.
+        # operator-telemetry region. C1 (#2484): the local posture-emphasis
+        # pill (which rendered "recovery" as a RECOVERY indicator) is also gone
+        # from the front edge. The header still declares the posture
+        # (data-posture) server-side; the visible pill and the human runtime
+        # label live in the operator layer only.
         html = _html()
         header = _header_strip(html)
         assert 'data-posture=' in header
-        assert 'data-testid="workspace-posture-pill"' in header
+        assert 'data-testid="workspace-posture-pill"' not in header
         op_region = re.search(
             r'<section class="workspace-operator-telemetry"[^>]*>.*?</section>',
             html,
@@ -304,13 +306,13 @@ class TestWorkspaceHeaderStrip:
         # The standalone "Browse vault" launcher also left the header (vault is
         # a displaced surface reached via the System Map / the vault chip). The
         # header now carries identity (wordmark, vault chip, vault-settings,
-        # anchor pill, posture pill), the spacer, the single Capture launcher
-        # (surface-icons), and the dev ribbon — identity + Capture only.
+        # anchor pill), the spacer, the single Capture launcher (surface-icons),
+        # and the dev ribbon — identity + Capture only. C1 (#2484): the
+        # posture-emphasis pill ("RECOVERY") no longer sits on the front edge.
         ordered_testids = [
             'data-testid="workspace-wordmark"',
             'data-testid="workspace-vault-chip"',
             'data-testid="workspace-anchor-pill"',
-            'data-testid="workspace-posture-pill"',
             'class="workspace-header-spacer"',
             'data-testid="workspace-surface-icon-capture"',
             'data-testid="workspace-dev-ribbon"',

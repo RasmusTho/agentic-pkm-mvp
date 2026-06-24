@@ -174,16 +174,20 @@ def test_topbar_renders_declared_regions() -> None:
     assert 'data-anchor-note-path="Notes/note.md"' in anchor.group(0)
     assert anchor.group(1).strip() == "Note Title"
 
-    # Posture pill — local posture emphasis, rendering only (spec §Resolved Q6).
-    pill = re.search(r'<span[^>]*data-testid="workspace-posture-pill"[^>]*>', topbar)
-    assert pill, "topbar must render the posture pill"
-    emphasis = re.search(r'data-posture-emphasis="([^"]+)"', pill.group(0))
-    assert emphasis and emphasis.group(1) in POSTURE_EMPHASES
-    assert emphasis.group(1) == DEFAULT_POSTURE_EMPHASIS
-    assert DEFAULT_POSTURE_EMPHASIS in POSTURE_EMPHASES
+    # Posture pill — C1 (#2484): the local posture-emphasis pill (which
+    # rendered ``DEFAULT_POSTURE_EMPHASIS`` = ``recovery`` as a ``RECOVERY``
+    # indicator) is removed from the shell topbar. Recovery/posture is
+    # reachable only via the System Map / operator layer; it must not sit on
+    # this anti-dashboard front edge.
+    assert (
+        'data-testid="workspace-posture-pill"' not in topbar
+    ), "the posture pill must not render on the shell topbar (#2484)"
     # Rendering only: no posture.open affordance until the switch overlay ships.
     assert 'data-intent="posture.open"' not in html
-    # The shell root declares the same emphasis attribute.
+    # Presentation only: the emphasis is still declared on the shell root
+    # ``<body>`` data attribute (server-authoritative posture preserved); only
+    # the visible front-edge pill is gone.
+    assert DEFAULT_POSTURE_EMPHASIS in POSTURE_EMPHASES
     body_tag = re.search(r"<body[^>]*>", html)
     assert body_tag and "data-posture-emphasis=" in body_tag.group(0)
 

@@ -489,3 +489,60 @@ def test_operator_telemetry_absent_from_shell() -> None:
         )
         assert node, f"operator node must be routable on entry state {state}"
         assert 'data-intent="operator.open"' in node.group(0)
+
+
+# ---------------------------------------------------------------------------
+# C1 (finish, #2484) — RECOVERY indicator off the shell topbar
+# ---------------------------------------------------------------------------
+
+
+def _visible_text(html: str) -> str:
+    """Reduce rendered HTML to its human-visible text.
+
+    Strips ``<script>``/``<style>`` *contents* (so a token that lives only in
+    inert JS/CSS or a ``data-*`` hook does not count as on-screen copy) and
+    then strips every remaining tag. The result is the text a reader actually
+    sees, lower-cased for a substring scan. The earlier round's testid-only
+    scan stayed green while the visible ``RECOVERY`` pill and the orientation
+    ``as of …`` line still rendered — this scans what the reader sees.
+    """
+    no_script = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.S | re.I)
+    no_style = re.sub(r"<style\b[^>]*>.*?</style>", " ", no_script, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", no_style)
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def test_shell_topbar_has_no_recovery_telemetry() -> None:
+    """C1 finish (#2484): no ``RECOVERY`` (or other recovery/online/operator)
+    posture telemetry is visible on the shell topbar in any shell state.
+
+    Asserts on rendered *visible text* (tags + script/style stripped), so a
+    posture pill whose copy reads ``recovery`` fails even though a
+    ``data-posture-emphasis`` test hook may still carry the token. Recovery is
+    reachable only via the System Map / operator layer; the operator layer is
+    stripped before the scan so a legitimate occurrence there does not count.
+
+    Presentation only: the runtime still declares recovery/freshness; this only
+    moves WHERE the indicator renders, never the server-authoritative class.
+    """
+    # The posture pill renders ``DEFAULT_POSTURE_EMPHASIS`` (``recovery``) and
+    # the CSS upper-cases it to ``RECOVERY``. It must not render on the topbar.
+    shell_front = _strip_operator_layer(_shell())
+    assert 'data-testid="workspace-posture-pill"' not in shell_front, (
+        "the posture pill must not render on the shell topbar"
+    )
+
+    front_text = _visible_text(shell_front)
+    for token in ("recovery", "online"):
+        assert token not in front_text, (
+            f"operator/posture telemetry {token!r} must not be visible on the "
+            f"shell topbar; it is reachable only via the System Map / operator "
+            f"layer"
+        )
+
+    # Same guarantee across every entry-state orientation render.
+    for state, raw in _ENTRY_RENDERS.items():
+        front = _visible_text(_strip_operator_layer(raw))
+        assert "recovery" not in front, (
+            f"recovery telemetry leaked into visible text on entry state {state}"
+        )
