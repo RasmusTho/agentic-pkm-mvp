@@ -44,9 +44,11 @@ _SETTINGS_WRITE_ACTION = "settings.runtime_gating.write"
 class SettingsWriteReceipt:
     """Actor-tagged receipt emitted for every governed settings write.
 
-    Covers both the UI/API write path and the file-originated path
-    (watcher-detected settings/local.md delta). The file-originated path
-    currently logs at INFO level; a durable receipt store is a follow-on.
+    Currently wired for the **API/CLI surface only** — the sole production
+    caller is ``app/api/routes/companion.py:826`` with ``surface='api'``.
+    The file-originated door (watcher-detected ``settings/local.md`` delta)
+    is NOT yet wired; a receipt is NOT emitted when a human hand-edits
+    ``settings/local.md`` directly. Tracked by #2512.
     """
 
     key: str
