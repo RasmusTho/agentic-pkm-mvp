@@ -9,53 +9,12 @@ fabricated ``cold_start`` orientation (home path). Server declares; UI renders.
 from __future__ import annotations
 
 import re
-from html.parser import HTMLParser
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
 from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
-_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
-_VISIBLE_VOID_TAGS = frozenset({
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
-})
-
-
-class _VisibleTextExtractor(HTMLParser):
-    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
-    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
-    cannot leak inert markup into the scanned copy."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self._skip_depth = 0
-        self._chunks: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: object) -> None:
-        if tag in _VISIBLE_VOID_TAGS:
-            return
-        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in _VISIBLE_VOID_TAGS:
-            return
-        if self._skip_depth:
-            self._skip_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if not self._skip_depth:
-            self._chunks.append(data)
-
-
-def _visible_text(html: str) -> str:
-    """Rendered human-visible text: tags removed and <script>/<style>/<head>
-    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
-    extractor = _VisibleTextExtractor()
-    extractor.feed(html)
-    extractor.close()
-    return " ".join("".join(extractor._chunks).split()).lower()
+from tests.companion_ui._visible_text import visible_text as _visible_text
 
 _PICKER_PAYLOAD: dict[str, Any] = {
     "state": "vault_selection_required",
