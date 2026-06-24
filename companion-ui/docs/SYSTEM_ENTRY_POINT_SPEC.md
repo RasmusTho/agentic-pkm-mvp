@@ -66,7 +66,7 @@ The entry point is a small explicit state machine wrapping the existing renderer
 |---|---|---|
 | `boot` | Runtime handshake in progress. | request to `GET /api/companion/orientation` pending |
 | `no_vault` | Runtime aggregate unreachable. | HTTP 503 `runtime_unavailable` (`WORKSPACE_ORIENTATION_CONTRACT.md §Runtime Unavailable`) |
-| `cold_start` | First contact, or cold trajectory (> 14 days): no admissible `leave_point`. Renders the **intent-declaration threshold** (vault chip + honest headline + verb-line Find/Jot/Map + inline governed capture + provenance line). Does **NOT** render the orientation grid or any re-entry overlay; those are gated to `state in ('orienting', 'shell_active')`. | `leave_point.status: absent` (and no warm/dormant signals) |
+| `cold_start` | First contact (no vault bound — resolves to the `vault_selection_required` guided picker; see §First-contact / no-vault-bound picker), or cold trajectory (> 7 days — beyond the leave-point cursor TTL, ADR-0008): no admissible `leave_point`. Renders the **intent-declaration threshold** (vault chip + honest headline + verb-line Find/Jot/Map + inline governed capture + provenance line). Does **NOT** render the orientation grid or any re-entry overlay; those are gated to `state in ('orienting', 'shell_active')`. | `leave_point.status: absent` (and no warm/dormant signals); or no vault bound |
 | `orienting` | Returning with a recoverable trajectory; re-entry surface shown. | `leave_point.status: present` (or `stale`/`artifact_missing`/`degraded` with the stale cross-flag, see below) |
 | `shell_active` | Document anchor open; overlay layer available. | user resume / open action |
 
@@ -78,8 +78,8 @@ The entry point is a small explicit state machine wrapping the existing renderer
 | `thread_fade` | 90s – 15m | conversation/rail pane fades a fraction; no card; trajectory implicit |
 | `soft_mist` | 15m – 2h | residual ambient cues only; no re-entry card |
 | `full_mist` | 2h – 3d | the four fixed re-entry questions; canonical re-entry |
-| `long_mist` | 3d – 14d | full mist + delta strip + whisper column |
-| (cold) | > 14d | **not an `orienting` shape** — resolves to `cold_start`; no re-entry overlay |
+| `long_mist` | 3d – 7d | full mist + delta strip + whisper column |
+| (cold) | > 7d | **not an `orienting` shape** — resolves to `cold_start`; no re-entry overlay (leave-point cursor TTL hard-capped at 7d, ADR-0008) |
 
 Two **cross-flags** may decorate `orienting` and `shell_active` without being separate states:
 
@@ -226,7 +226,7 @@ Re-entry shapes follow the `CONTINUITY_AND_DECAY.md` latency ladder exactly (tab
 
 - **Default `items_per_orientation_moment` = 3 visible items per collection** (`open_loops`, `notable_changes`, `resurface.candidates`), matching the shipped resurfacing-card default (#1680). Deliberate expansion may reveal more, **never above the server caps** (8/8/5 per `WORKSPACE_ORIENTATION_CONTRACT.md §Bounded Collections`); the UI must not widen collections or enforce larger local caps.
 - **Soft mist (15m–2h) is minimal: residual ambient cues only — no re-entry card.** The latency ladder's one-line "where you stopped" sentence is normalized to a **peripheral one-line cue** (caret echo at the stop point plus the single sentence at the margin), consistent with the ladder's "no metadata" rule and the invariant that **no card ever centers on the document**. No four-questions card, no delta strip, no whisper column at this gap.
-- Cold (>14d) and first contact show **no re-entry overlay** of any kind — a continuity claim the system cannot back is forbidden.
+- Cold (>7d — leave-point cursor TTL expired per ADR-0008) and first contact (no vault bound, pre-vault-picker) show **no re-entry overlay** of any kind — a continuity claim the system cannot back is forbidden.
 
 ### Q6 — Two concepts that shared the name "posture"
 This spec names them distinctly and they must not be conflated:
@@ -275,6 +275,23 @@ Summary of render rules (normative detail in the owner doc):
 - The UI must **omit the sub-affordance entirely** when the field is absent.
 - The UI must **not** derive this field locally via a filesystem `mtime` probe — that would violate the "no direct vault I/O from the UI" invariant (ADR-0014, #2141).
 
+### First-contact / no-vault-bound picker (R1 reconciliation — decided 2026-06-24)
+
+Owner decision: first contact / cold start without a vault bound is a **guided create-or-open vault flow**, not a `cold_start` greeting that assumes a vault is already selected.
+
+When the runtime reports no vault is bound (no `VAULT_ROOT` / `vault_selection_required` from `resolve_optional_vault_root()`), `cold_start` renders a **guided vault picker** sub-shape that:
+
+- offers both **create a new vault** and **open an existing one** as clearly-labeled actions;
+- completes selection through a **friendly visual chooser only** (native folder/file chooser, recent-vaults list, browseable candidates) — the human must **never** type or paste a filesystem path or search string; this is the dyslexia-friendly constraint from `docs/HUMAN-FLOWS.md §0` ("Dyslexia-friendly surfaces and the dual user model");
+- on selection, re-resolves in-process and renders real note bodies without a full restart;
+- keeps the system usable without a vault for non-vault functions (`docs/VAULT_OPTIONAL_RUNTIME/BOOT_RUNTIME_WITHOUT_VAULT.md`).
+
+The companion boundary returns an explicit `vault_selection_required` sentinel (not a `cold_start` orientation payload) when no vault is bound (`docs/VAULT_OPTIONAL_RUNTIME/RESOLVE_NO_VAULT_STATE.md`). This is **not a separate state**: `cold_start` covers both the no-vault-bound first-contact picker shape and the cold trajectory (>7d) shape. The picker sub-shape is distinguished by the orientation response (`vault_selection_required` vs `leave_point.status: absent`), not by a new state enum value.
+
+This constraint applies to **human-facing surfaces only**. Agent-facing CLI/API surfaces (including `resolve_optional_vault_root()`) may use paths and structured identifiers — that is the agent half of the dual user model. See `docs/CONCEPTS/USER_SITUATION_MODEL.md §A1`.
+
+Picker implementation (guided create-new + open-existing UI) depends on #1867 and #2312 and is **out of scope for this spec**. This section encodes the decided human intent; the runtime contract for the `vault_selection_required` response lives in `docs/VAULT_OPTIONAL_RUNTIME/COMPANION_NO_VAULT_ROUTING.md`.
+
 ### Deferred to implementation issues (unchanged from the package)
 Q10 (ambient foreground refresh opt-in, gated on `COMPANION_ORIENTATION_AMBIENT_REFRESH` per ADR-0011), Q11 (bottom-sheet snap points), Q12 (command-palette input grammar), Q13 (off-palette Panel staging-shell migration), Q14 (fuller keyboard map), Q20 (read-back eligibility scope).
 
@@ -284,7 +301,7 @@ The validating implementation is **shipped** (#1795, SEP-11): `tests/companion_u
 
 - every declared entry-point transition, and rejection of undeclared transitions;
 - no UI-derived posture / class / authority anywhere — all classification server-declared;
-- `cold_start` (first contact and >14d) and `no_vault` show **no** re-entry overlay;
+- `cold_start` (first contact / no-vault-bound picker, and >7d cold trajectory) and `no_vault` show **no** re-entry overlay;
 - governed intents (`vault.queue`, `panel.confirm`, `memory.accept`, `memory.reject`, `memory.revise`, `capture.save`) route through the pipeline and surface receipts; body edits (`suggestion.apply`) and non-terminal `memory.defer` produce **no** governance receipt — the governed-vs-body-edit receipt asymmetry is asserted, not assumed;
 - blocked and stale present as guard-held states per `BLOCKED_AND_STALE_STATE_SPEC.md`, never generic errors;
 - the display budget caps visible items at or below the server caps, with the default scarce subset of §Resolved Q5;

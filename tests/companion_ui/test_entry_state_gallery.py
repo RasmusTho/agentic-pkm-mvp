@@ -9,7 +9,8 @@ expectations`, `docs/SYSTEM_ENTRY_POINT/STATE_GALLERY_VALIDATION.md`):
   rejected across the fixture matrix;
 - no UI-derived posture / class / authority anywhere — all classification
   server-declared (traceable to fixture-declared fields);
-- ``cold_start`` (first contact and >14d) and ``no_vault`` render no re-entry
+- ``cold_start`` (first contact / no-vault-bound picker, and >7d cold trajectory
+  per ADR-0008 leave-point cursor TTL) and ``no_vault`` render no re-entry
   overlay of any kind;
 - governed intents route through the pipeline and surface receipts; body
   edits and non-terminal ``memory.defer`` produce no governance receipt

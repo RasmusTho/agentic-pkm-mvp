@@ -23,7 +23,7 @@ Implements the `orienting` treatments per re-entry shape on the existing orienta
 - **Long mist** adds the **delta strip** (`data-region="delta-strip"`, from `notable_changes`) and the right-margin **whisper column** (suppressed in narrow mode, collapsing into the card).
 - **Soft mist** renders **no card**: residual ambient cues only — caret-echo cue at the leave point plus a single peripheral "where you stopped" line, per spec §Resolved Q5.
 - **Thread fade (90s–15m)** renders no card and no peripheral line: the conversation/rail pane fades a fraction and the trajectory stays implicit, per the `CONTINUITY_AND_DECAY.md` ladder row normalized in the spec's state-enum table.
-- **Cold / first contact**: no overlay; the existing calm empty/cold copy with Browse-the-vault and System-map affordances.
+- **Cold (>7d) / first contact (no vault bound)**: no overlay; the existing calm empty/cold copy with Browse-the-vault and System-map affordances. The leave-point cursor TTL is hard-capped at 7d (ADR-0008); re-entry beyond this window is always cold. First contact without a vault bound presents the guided vault picker (`SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker`).
 - **Degraded banner** (amber, names the missing source from `meta.degraded_reasons`); **stale leave point** renders the card with a qualified, guard-held resume affordance per `BLOCKED_AND_STALE_STATE_SPEC.md`.
 - **Residual ambient layer** after resume: caret echo at the stop point and marginalia dots persist into `shell_active`; dismissal never erases unresolved tension.
 - Display budget: default 3 visible items per collection; counts not enumerations; deliberate expansion never exceeds server caps (8/8/5).

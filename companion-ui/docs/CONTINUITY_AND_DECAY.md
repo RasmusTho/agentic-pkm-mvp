@@ -46,7 +46,7 @@ Define what must be preserved for low-cost re-entry and how that preservation we
 
 - The longer the gap, the higher the re-entry cost.
 - Re-entry cost should be offset proportionally by the surface — not minimized at all gaps, but calibrated.
-- Cold trajectories (>14 days) receive no re-entry overlay. Re-entry is through the vault and search.
+- Cold trajectories (>7 days — beyond the leave-point cursor TTL, ADR-0008) receive no re-entry overlay. Re-entry is through the vault and search.
 - Tension does not decay on the standard curve. Open synthesis and conflicting sources hold ambient visibility until resolved.
 
 ## Architectural constraints
@@ -65,8 +65,8 @@ Every thought-in-progress occupies one of four states. The system derives state 
 |---|---|---|
 | **Active** | < 90 seconds | Cursor pulse · live caret · breath animation |
 | **Warm** | 90s – 2 hours | Gold spine · open-loop chip · momentum trail |
-| **Dormant** | 2 hours – 14 days | Faint marginalia · decay arc · tension halo if pressured |
-| **Cold** | > 14 days | No surface trace · vault-canonical only · re-entry through search |
+| **Dormant** | 2 hours – 7 days | Faint marginalia · decay arc · tension halo if pressured |
+| **Cold** | > 7 days | No surface trace · vault-canonical only · re-entry through search |
 
 **Invariant:** State transitions are derived, never declared. The user never marks something dormant; the system never asks. Time does the work.
 
@@ -103,8 +103,8 @@ The latency ladder governs which re-entry shape the surface uses per gap. From `
 | 90s – 15m | **Thread fade** | Conversation pane fades a fraction. No card. Trajectory implicit. |
 | 15m – 2h | **Soft mist** | 1-line card: "where you stopped" sentence + cursor jump. No metadata. |
 | 2h – 3d | **Full mist** | All four questions answered. This is the canonical re-entry shape. |
-| 3d – 14d | **Long mist** | Card + delta strip: what changed in vault, agent-found context, decayed branches. |
-| > 14d | **Cold start** | No overlay. Document is ambient context only. User searches. |
+| 3d – 7d | **Long mist** | Card + delta strip: what changed in vault, agent-found context, decayed branches. |
+| > 7d | **Cold start** | No overlay. Document is ambient context only. User searches. (Leave-point cursor TTL is hard-capped at 7d, ADR-0008; re-entry beyond this window is through the vault.) |
 
 ---
 
@@ -128,9 +128,9 @@ From `reentry-analysis.jsx`, the settled composite recommendation.
 
 **2h – 3d:** Variant C alone — atmospheric recall. Warm tint over the document, corner glyphs glow once, gravity well at lower margin. Zero text added. The four questions are answered atmospherically, not structurally.
 
-**3d – 14d:** Variant C + Variant B's ghost sentence, but only when the stop-state was mid-text (unfinished sentence at cursor). If the user paused on a thought without an unfinished sentence, C alone is sufficient.
+**3d – 7d:** Variant C + Variant B's ghost sentence, but only when the stop-state was mid-text (unfinished sentence at cursor). If the user paused on a thought without an unfinished sentence, C alone is sufficient.
 
-**> 14d:** Variant A's whisper column appears in addition to C — four named items in a right-margin column, staggered in.
+**> 7d (cold — leave-point TTL expired):** No re-entry overlay. The leave-point cursor TTL is hard-capped at 7d (ADR-0008); the system does not promise recoverable re-entry beyond this boundary. Re-entry is through the vault and search.
 
 **Invariant (from the design):** No card ever centers on the document. Re-entry is felt at the periphery. Cognition returns to the document, not to the system.
 
@@ -148,7 +148,7 @@ Not everything about a trajectory decays at the same rate.
 **Decays at the trajectory state transitions:**
 - Active → Warm (90s): The live caret pulse transitions to a gold-spine warm marker
 - Warm → Dormant (2h): The open-loop chips and momentum trail contract to faint marginalia
-- Dormant → Cold (14d): Surface trace disappears entirely; vault-canonical only
+- Dormant → Cold (7d): Surface trace disappears entirely; vault-canonical only (leave-point cursor TTL, ADR-0008)
 
 **Tension does not decay on the standard curve.** An unresolved synthesis or conflicting source holds a mark at ambient visibility until the tension is resolved. See `RESURFACING_HEURISTICS.md` for the decay envelope model.
 

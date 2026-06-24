@@ -21,7 +21,7 @@ Prove the composition as a whole: render every state the spec declares from fixt
 - Asserts, across the gallery:
   - every declared entry-point transition renders, and undeclared transitions are rejected;
   - no UI-derived posture/class/authority anywhere;
-  - cold (>14d), first contact, and `no_vault` show no re-entry overlay;
+  - cold (>7d — leave-point cursor TTL per ADR-0008), first contact (no-vault-bound picker sub-shape), and `no_vault` show no re-entry overlay;
   - governed intents surface receipts; body edits do not (receipt asymmetry);
   - blocked/stale render as guard-held states;
   - the display budget caps visible items at or below server caps;

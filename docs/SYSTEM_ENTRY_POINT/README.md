@@ -66,7 +66,7 @@ All capability-level criteria are satisfied as of the #1795 state-gallery closur
 
 - [x] The shell root declares `data-entry-state` for exactly the five spec states, and undeclared transitions are rejected.
   Verify: `tests/companion_ui/test_entry_state_machine.py::test_undeclared_transitions_are_rejected`
-- [x] Cold start (first contact and >14d) and `no_vault` render no re-entry overlay.
+- [x] Cold start (first contact / no-vault-bound picker, and >7d cold trajectory) and `no_vault` render no re-entry overlay.
   Verify: `tests/companion_ui/test_entry_state_machine.py::test_cold_start_shows_no_reentry_overlay`
 - [x] Every overlay dismisses back to the document anchor with no route reset and no loss of staged suggestions or open-loop counts.
   Verify: `tests/companion_ui/test_overlay_host.py::test_overlay_dismiss_returns_to_anchor_without_route_reset`
