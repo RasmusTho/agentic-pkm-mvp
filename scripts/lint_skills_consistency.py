@@ -67,6 +67,7 @@ KNOWN_NON_SKILL_TERMS = {
     "ready-for-verification",  # workflow state phrase
     "stable-prev",  # release-channel ref name
     "test-candidate",  # promotion vocabulary
+    "generate-projections",  # builderops CLI subcommand
 }
 
 RETIRED_PHRASE = "Do not batch to end of task"
