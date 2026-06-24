@@ -1,11 +1,11 @@
-State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later. Updated 2026-06-24 (#2481): interaction-layer import-direction rule promoted to blocking CI check (ADR-0013 flip); deprecated-store-caller guard added as CI check now.
+State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later. Updated 2026-06-24 (#2481): interaction-layer import-direction rule promoted to blocking CI check (ADR-0013 flip); deprecated-store-caller guard added as CI check now. Updated 2026-06-25 (#2477): ExecutionRequest-authorization rule linked to follow-on CI-promotion issue #2516.
 Doc role: Fitness rule catalog
 Authority: Owns target SBS architecture fitness rules, enforcement posture, and failure-mode detection.
 Owner: OEF / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-24
+Last reviewed: 2026-06-25
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/CODE_INVENTORY.md, docs/adr/ADR-0013-code-dependency-direction.md
 
 # SBS Fitness Rules
@@ -93,7 +93,7 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 | No private platform store construction outside PDM. | PDM / OEF | Keeps storage technology from becoming architecture; centralizes migrations. | Manual review now. | CI check later (DSN/store-construction scan) once PDM seam inventoried. | Debt D3 / #2358. |
 | `ContextBundle` must carry scope and provenance. | RCA | Keeps retrieval output candidate-only and explainable, never truth. | CI check now for production retrieval bundle emission; manual review elsewhere. | Extend CI conformance coverage across remaining retrieval/search outputs. | Debt D4 / #2359. |
 | `MemoryRecord` must carry review state and provenance. | MEM | Stops unreviewed memory from becoming hidden instruction. | CI check now for review-entry and promoted-recall adapter projection; manual review elsewhere. | Extend CI conformance coverage across remaining memory lifecycle classes. | Debt D5 / #2360. |
-| `ExecutionRequest` must carry governed authorization for side effects. | EXE / GOV | Separates agents from side-effecting execution; ties effects to a decision. | Manual review now. | Blocking invariant (CI contract test once EXE seam exists). | Debt D6 / #2361. |
+| `ExecutionRequest` must carry governed authorization for side effects. | EXE / GOV | Separates agents from side-effecting execution; ties effects to a decision. | Manual review now. | Blocking invariant (CI contract test once EXE seam exists). | Debt D6 / #2361. Follow-on CI-promotion: #2516. |
 | Human-flow SBS allocation references resolve. | OEF / CES practice | Keeps allocation/verification rows useful for bounded future work without making the map a requirements database. | CI check now — `tests/architecture/test_sbs_fitness_rules.py::test_human_flow_sbs_allocation_references_resolve` validates local contract/SBS/test references, pytest node ids, and explicit non-mechanical wording. | CI check now for low-ambiguity references; manual review remains responsible for semantic correctness. | #2413. |
 
 ### P2 — provider, sync, and observability neutrality
