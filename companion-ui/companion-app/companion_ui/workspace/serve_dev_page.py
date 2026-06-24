@@ -128,10 +128,12 @@ from companion_ui.workspace.system_map_overlay import (
     system_map_overlay_script,
 )
 from companion_ui.workspace.vault_settings_panel import (
+    NO_ACTIVE_VAULT_STATUSES,
     VAULT_INITIALIZE_ENDPOINT,
     VAULT_RELOAD_ENDPOINT,
     VAULT_SELECT_ENDPOINT,
     VAULT_SETTINGS_ENDPOINT,
+    VAULT_SETTINGS_FRAGMENT_PICKER_PARAM,
     VAULT_SETTINGS_FRAGMENT_ROUTE,
     vault_settings_panel_fragment,
     vault_settings_panel_markup,
@@ -5465,44 +5467,18 @@ def _render_vault_selection_required_section(payload: object) -> str:
     # design system so it never reads as default-browser chrome (#2448, D1).
     # Dark palette, design-system typography, a ranked primary open affordance.
     # Content is server-declared; this is presentation only.
+    #
+    # IMPORTANT (#2485 D1, Codex round 2): the picker hero + folded vault-
+    # settings panel must render as ONE continuous surface. The head-level
+    # consolidated rule (single `<style>` in `<head>`) owns the picker's
+    # spacing/layout — `margin: 0 auto` + the `~ .vault-settings-panel`
+    # continuity rule. A section-local `<style>` block with the SAME
+    # `.vault-selection-required` specificity, emitted here in the body
+    # *after* the head, would win on source order and reintroduce the old
+    # `margin: 48px auto` that separates the panel from the hero. So this
+    # section emits NO `<style>`: it carries markup only and inherits the
+    # head-level DS rules. Do not re-add a competing section-local style.
     return f"""
-    <style>
-      .vault-selection-required {{
-        background: var(--bg-surface, #0c1220);
-        border: 1px solid var(--border-strong, #1e3050);
-        border-radius: 8px;
-        color: var(--fg-1, #dce8f0);
-        display: grid;
-        font-family: var(--font-ui, system-ui, sans-serif);
-        gap: 12px;
-        margin: 48px auto;
-        max-width: 560px;
-        padding: 28px 30px 30px;
-      }}
-      .vault-selection-headline {{
-        color: var(--fg-1, #dce8f0); font-size: var(--text-xl, 1.5rem);
-        font-weight: 500; margin: 0;
-      }}
-      .vault-selection-summary {{
-        color: var(--fg-2, #7a9ab8); font-size: var(--text-base, 0.9375rem);
-        margin: 0;
-      }}
-      .vault-selection-requested {{
-        color: var(--fg-2, #7a9ab8); font-size: var(--text-sm, 0.8125rem);
-        margin: 0;
-      }}
-      .vault-selection-requested code {{
-        background: var(--bg-raised, #111a2e);
-        border-radius: var(--radius-sm, 2px);
-        color: var(--accent, #d4a843);
-        font-family: var(--font-mono, monospace); padding: 1px 4px;
-      }}
-      .vault-selection-hint {{
-        color: var(--fg-3, #3d5570); font-size: var(--text-sm, 0.8125rem);
-        margin: 0;
-      }}
-      .vault-selection-open-configured {{ margin: 2px 0; }}
-    </style>
     <section class="vault-selection-required" data-region="vault-selection-required"
       data-testid="vault-selection-required" data-reason="{reason}"
       data-entry-state="no_vault">
@@ -8383,10 +8359,18 @@ def render_index_html(
     # gates only on the server-declared error, it does not re-classify state.
     runtime_unreachable = _is_runtime_unreachable(error)
     suppress_vault_settings = runtime_unreachable or route_error
+    # The no-vault page folds the picker into the styled hero (#2485 D1): render
+    # the panel in picker_mode so it carries no duplicate "No vault selected"
+    # heading and no "unknown / unknown" identity spans. On a loaded note the
+    # panel is the hidden vault-settings drawer, not the front-door picker.
+    vault_settings_picker_mode = vault_selection_required is not None
     vault_settings_panel_html = (
         ""
         if suppress_vault_settings
-        else vault_settings_panel_markup(hidden_by_default=fields is not None)
+        else vault_settings_panel_markup(
+            hidden_by_default=fields is not None,
+            picker_mode=vault_settings_picker_mode,
+        )
     )
     vault_settings_panel_js = "" if suppress_vault_settings else vault_settings_panel_script()
     # Loaded note workspaces keep the settings panel mounted for controller
@@ -11765,6 +11749,73 @@ def render_index_html(
       font-size: var(--text-xs);
       text-align: center;
     }}
+
+    /* ---- No-vault picker front door (#2485 D1) ----
+       The styled hero owns the single no-vault heading; the vault-settings
+       panel folds in beneath it as the picker body. Both read in the design
+       system's fonts/colours/spacing — no default-browser chrome.
+       This is the SOLE rule for `.vault-selection-required` spacing/surface:
+       the section renderer emits markup only (no competing section-local
+       `<style>`), so these head-level values are not overridden in the body
+       (Codex round 2: the old `48px auto` section style separated the panel
+       from the hero). */
+    .vault-selection-required {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      color: var(--fg-1);
+      display: grid;
+      font-family: var(--font-ui);
+      gap: 12px;
+      margin: 0 auto;
+      max-width: 560px;
+      padding: 28px 30px 8px;
+    }}
+    .vault-selection-open-configured {{
+      margin: 2px 0;
+    }}
+    .vault-selection-headline {{
+      color: var(--fg-1);
+      font-family: var(--font-display);
+      font-size: var(--text-2xl);
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      margin: 0;
+    }}
+    .vault-selection-summary, .vault-selection-hint, .vault-selection-requested {{
+      color: var(--fg-2);
+      font-family: var(--font-ui);
+      font-size: var(--text-base);
+      margin: 0;
+    }}
+    .vault-selection-hint {{
+      color: var(--fg-3);
+      font-size: var(--text-sm);
+    }}
+    .vault-selection-requested code, .vault-selection-required code {{
+      color: var(--fg-2);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }}
+    .vault-selection-open-configured button,
+    .vault-selection-required button {{
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-md);
+      color: var(--bg-base);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 8px 14px;
+    }}
+    /* The picker body (vault-settings panel) renders inline on the no-vault
+       page, directly under the hero, as one continuous DS surface. */
+    .vault-selection-required ~ .vault-settings-panel[data-display-mode="inline"] {{
+      border-top: none;
+      margin: 0 auto;
+      max-width: 560px;
+      padding-top: 4px;
+    }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
@@ -12695,7 +12746,45 @@ def make_handler(
                     data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
                 except WorkspaceClientError:
                     data = {}
-                body = vault_settings_panel_fragment(data).encode("utf-8")
+                # This fragment route is shared by two surfaces (#2485 Codex
+                # drawer-scope finding):
+                #   1. the inline no-vault *front-door picker* folded beneath the
+                #      styled hero, and
+                #   2. the hidden *Vault Settings drawer* on a normal workspace.
+                # Only the front-door picker tags its fetch with the picker
+                # marker (``?picker=1``). picker_mode folds the panel into the
+                # hero — dropping the duplicate "No vault selected" heading and
+                # the "unknown" identity spans — and is correct ONLY for that
+                # caller, so its reload()/after-action swap stays a single DS
+                # surface across the canonical no-active set (none / missing /
+                # uninitialized), not just on first paint. The drawer fetches the
+                # bare route; if its fetch fails (``data = {}`` → status defaults
+                # to ``none``) or transiently returns a no-active status, it must
+                # keep its self-contained calm panel (status header + context
+                # preserved), NEVER collapse into the headless picker. So scope
+                # picker_mode to the marked front-door request AND a no-active
+                # status. Presentation-only; status is the server-declared
+                # projection, never re-classified here, and flow semantics stay
+                # owned by the runtime (#2312).
+                fragment_query = parse_qs(parsed.query)
+                front_door_picker = "1" in fragment_query.get(
+                    VAULT_SETTINGS_FRAGMENT_PICKER_PARAM, []
+                )
+                fragment_context = (
+                    data.get("context") if isinstance(data, dict) else None
+                )
+                fragment_status = (
+                    str(fragment_context.get("status") or "none")
+                    if isinstance(fragment_context, dict)
+                    else "none"
+                )
+                picker_mode = (
+                    front_door_picker
+                    and fragment_status in NO_ACTIVE_VAULT_STATUSES
+                )
+                body = vault_settings_panel_fragment(
+                    data, picker_mode=picker_mode
+                ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
