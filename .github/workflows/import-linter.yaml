@@ -1,11 +1,15 @@
 ---
 name: import-linter
 
-# Non-blocking import-boundary check. Runs the directional import contract
+# Blocking import-boundary check. Runs the directional import contract
 # (importlinter.ini, governed by docs/adr/ADR-0013-code-dependency-direction.md)
-# on every PR. continue-on-error keeps it informational — it reports boundary
-# drift without gating merges. Promotion to a required check is deferred
-# (ADR-0013, Out of scope) until the known violations are fixed.
+# on every PR. Flipped from advisory to blocking in #2481: all known violations
+# at adoption were fixed by the time this PR landed, so the contract runs clean
+# (exit 0) and no allowlist is required.
+#
+# Any new backward/directional import from a non-interaction module into the
+# interaction layer (app.api, app.chat, app.cli, app.web) will now FAIL the job
+# and block merge.
 
 on:
   pull_request:
@@ -25,6 +29,5 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install import-linter==2.11
-      - name: Lint imports (non-blocking)
-        continue-on-error: true
+      - name: Lint imports (blocking)
         run: lint-imports --config importlinter.ini
