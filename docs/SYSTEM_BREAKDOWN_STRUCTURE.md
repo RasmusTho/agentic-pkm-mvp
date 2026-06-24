@@ -490,6 +490,24 @@ activeContext:
 
 The exact data model can evolve. The architecture rule must not: active cognitive context is a governed set of bindings, not a scalar pointer.
 
+##### Runtime lifecycle ownership
+
+Decision (2026-06-24, issue #2473): **runtime-process-lifecycle authority — start, stop, idle, boot, and the binding of each long-lived runtime process to the active vault/context — is owned by WSP, extended, not by a new physical subsystem.** This resolves the keystone gap where process supervision fell between EBF (watcher *adapter*), EXE (execution *effects*), and OEF (*observation*) and lived only in ops scripts (`scripts/start_full_system.sh`) deliberately outside the SBS.
+
+This is an **authority** assignment, not a mechanism relocation. The split is deliberate and must be preserved:
+
+- **WSP owns the lifecycle-binding decision.** WSP already owns "the active cognitive context as a governed set of bindings" including `device_or_node_posture` and topology posture, and exists to "replace `activeVault` as an architectural primitive." Deciding *whether a runtime process should be running* and *which vault/context it is bound to* is a context-binding decision, so it is WSP's. WSP answers: *should the watcher/worker be running for the current context, and bound to which vault?* The authoritative input is WSP's `ActiveContextSet` (vault is one source binding within it), never a free-standing `activeVault` scalar.
+- **WSP does not own the lifecycle mechanism.** WSP's charter explicitly does not own source observation or sync mechanics, and must not turn vault/root/device into cognitive identity. The *act* of starting, stopping, or re-pointing a process stays with the existing mechanism owners and is invoked under WSP's binding decision:
+  - **EBF** — the watcher/source-observation adapter that physically attaches to or detaches from a vault path (watcher adapter; see EBF charter).
+  - **EXE** — process start/stop and re-point as governed execution effects (`ExecutionRequest`), when those effects are authority-bearing.
+  - **PDM** — per-environment store/runtime-state lifecycle bound to the selected environment (store ports, runtime artifact paths).
+  - **OEF** — observes lifecycle state (running / idle / no-vault) and reports it; it does not drive the lifecycle (no OEF control loop).
+  - **GOV** — authorizes any authority-bearing lifecycle effect (a process re-point that changes which durable vault is written carries a DecisionToken/receipt like any governed write).
+
+**Non-goal honored:** no new physical module or process supervisor is instantiated to satisfy this boundary (per Part 1 non-goals — "Do not create fourteen new physical modules immediately" / "Do not instantiate physical modules to satisfy the boundary"). The change is a charter assignment plus a mapping row; current supervision continues to live in ops scripts as transition debt until a later, separately-gated slice routes it through these owners.
+
+**Current vs target.** Current reality: lifecycle is operated by ops scripts and `PKM_ENVIRONMENT` resolution (`docs/ENVIRONMENTS.md :: Runtime Control Surface`); the no-vault idle/boot posture is owned by `docs/VAULT_OPTIONAL_RUNTIME/README.md` (the runtime boots with no vault bound and idles until one is opened, #2003/#2005). Target: that same start/stop/idle/boot + vault-binding behavior is classified under WSP authority with the mechanism distributed as above. This decision is a docs/charter assignment only — see `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md :: Runtime lifecycle` for the mapping row and `docs/architecture/SBS_TRANSITION_DEBT.md` (D13, plus the D1 active-vault relationship) for the open transition debt.
+
 #### HKA - Human Knowledge & Artifact Substrate
 
 Purpose:
