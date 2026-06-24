@@ -1,11 +1,11 @@
-State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later. Updated 2026-06-24 (#2481): interaction-layer import-direction rule promoted to blocking CI check (ADR-0013 flip); deprecated-store-caller guard added as CI check now. Updated 2026-06-25 (#2477): ExecutionRequest-authorization rule linked to follow-on CI-promotion issue #2516.
+State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later. Updated 2026-06-24 (#2481): interaction-layer import-direction rule promoted to blocking CI check (ADR-0013 flip); deprecated-store-caller guard added as CI check now. Updated 2026-06-24 (#2477): ExecutionRequest-authorization rule linked to follow-on CI-promotion issue #2516.
 Doc role: Fitness rule catalog
 Authority: Owns target SBS architecture fitness rules, enforcement posture, and failure-mode detection.
 Owner: OEF / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-25
+Last reviewed: 2026-06-24
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/CODE_INVENTORY.md, docs/adr/ADR-0013-code-dependency-direction.md
 
 # SBS Fitness Rules

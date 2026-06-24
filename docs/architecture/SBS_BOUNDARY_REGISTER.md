@@ -5,7 +5,7 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-25
+Last reviewed: 2026-06-24
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/contracts/*.md
 
 # SBS Boundary Register

@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SBS_REGISTER = REPO_ROOT / "docs" / "architecture" / "SBS_BOUNDARY_REGISTER.md"
@@ -173,11 +172,13 @@ def test_every_subsystem_has_verification_owner() -> None:
     """Every canonical SBS subsystem row must have non-empty 'Verification owner'
     AND 'Expected receipts/artifacts' cells.
 
-    Two orthogonal checks are performed:
+    Three checks are performed:
     1. Canonical completeness: every subsystem in CANONICAL_SUBSYSTEMS is present in
        the parsed register (guards against a row being deleted or renamed).
-    2. Cell completeness: every parsed row has non-empty values in both cells
-       (guards against a row being left blank).
+    1b. No unexpected rows: the parsed set contains no prefix outside the canonical
+       set (guards against typos or silently added rows).
+    2. Cell completeness: every PARSED row has non-empty values in both cells
+       (guards against any row — canonical or newly added — being left blank).
     """
     parsed = _parse_register()
 
@@ -190,11 +191,21 @@ def test_every_subsystem_has_verification_owner() -> None:
         + "\n".join(f"  {s}" for s in sorted(missing_rows))
     )
 
-    # 2. Cell completeness check
+    # 1b. No unexpected rows — only the canonical 15 subsystems are allowed.
+    unexpected_rows = set(parsed.keys()) - CANONICAL_SUBSYSTEMS
+    assert not unexpected_rows, (
+        "Unexpected (non-canonical) subsystem rows parsed from "
+        "SBS_BOUNDARY_REGISTER.md. If a new subsystem was genuinely added, "
+        "update CANONICAL_SUBSYSTEMS in this test:\n\n"
+        + "\n".join(f"  {s}" for s in sorted(unexpected_rows))
+    )
+
+    # 2. Cell completeness check — iterate PARSED rows (not just the canonical set),
+    #    so a newly added row with blank cells is also caught.
     blank_vo: list[str] = []
     blank_er: list[str] = []
 
-    for subsystem in sorted(CANONICAL_SUBSYSTEMS):
+    for subsystem in sorted(parsed.keys()):
         row = parsed.get(subsystem, {})
         if not row.get("verification_owner"):
             blank_vo.append(subsystem)
