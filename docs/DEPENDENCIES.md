@@ -12,6 +12,21 @@ Authority: Practical dependency matrix for current code paths and environments; 
 
 Overview of tools and libraries required in each environment.
 
+<!-- dependency source-of-truth -->
+## Dependency Source of Truth
+
+`pyproject.toml` is the canonical source of truth for all runtime dependencies (`[project].dependencies`).
+Lower-bound version constraints are declared there; upper-bound constraints are added only when breakage
+is known or expected (e.g. major-version API breaks).
+
+`requirements.txt` is a **pinned lockfile** — exact versions produced by `pip-compile` or equivalent —
+used for reproducible installs in CI and production. It is **not** the authoritative list of required
+packages; that list lives in `pyproject.toml`. Do not add new runtime dependencies only to
+`requirements.txt` without a matching entry in `[project].dependencies`.
+
+Optional / dev-only packages (testing, linting, type-checking, browser automation) live in
+`[project.optional-dependencies]` and are not pinned in `requirements.txt`.
+
 <!-- SECTION:DEPENDENCIES:BEGIN -->
 ## System dependencies
 | Component | Purpose | Installation hint |

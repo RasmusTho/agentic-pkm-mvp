@@ -9,6 +9,7 @@ description = "Agentisk AI MVP"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    # CLI / media / retrieval
     "click>=8.1,<9",
     "faster-whisper>=1.0.0",
     "yt-dlp>=2024.7.2",
@@ -19,6 +20,40 @@ dependencies = [
     "pydantic>=2.7",
     "rapidfuzz>=3.0",
     "orjson>=3.11.6",
+    "ormsgpack>=1.12",
+    "xxhash>=3.6",
+    "zstandard>=0.25",
+    # Web / API layer
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30",
+    "starlette>=1.0",
+    "slowapi>=0.1.9",
+    "prometheus-fastapi-instrumentator>=6.0",
+    "prometheus-client>=0.20",
+    # Data / persistence
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "alembic>=1.13",
+    "aiosqlite>=0.20",
+    "redis>=5.0",
+    # Settings / config
+    "pydantic-settings>=2.5",
+    "python-dotenv>=1.0",
+    "PyYAML>=6.0",
+    "jsonschema>=4.23",
+    # LangGraph / LangChain
+    "langchain-core>=0.3",
+    "langgraph>=0.2",
+    "langgraph-checkpoint>=2.0",
+    "langgraph-checkpoint-sqlite>=2.0",
+    "langgraph-prebuilt>=0.3",
+    "langgraph-sdk>=0.1",
+    # Resilience / async
+    "tenacity>=8.0",
+    "watchfiles>=0.21",
+    "websockets>=13.0",
+    # HTTP / serialization utilities
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
@@ -39,7 +74,7 @@ browser = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "tests*"]
+include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.settings" = ["*.yaml"]
