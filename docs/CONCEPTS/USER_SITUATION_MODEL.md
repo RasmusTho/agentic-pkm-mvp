@@ -78,31 +78,51 @@ Two situations also carry a **⚠ contradiction** flag: the product intent is se
 downstream specs currently disagree on the mechanism. These are doc bugs to fix, collected in the
 Open Decisions register, not blanks to fill here.
 
+## Cross-cutting constraint — dyslexia-friendly input (no manual paths)
+
+The human is dyslexia-first. **No situation may require typing or pasting a filesystem path, search
+string, or other free-text identifier to proceed.** Wherever a situation needs the human to point at
+something — select a vault, locate a moved vault, open a recent note — it must be a *visual pick*:
+a native folder/file chooser, a list of recognizable candidates, recents, or browse — never a text
+field the human has to spell correctly. This is an accessibility requirement, not a preference
+(owner decision, 2026-06-24). It binds A1 (vault selection), B2 (vault recovery), and any future
+entry surface. It is the situational-input instance of the cognitive-load-reduction function in
+`docs/HUMAN-FLOWS.md` §0 — reduce friction around decoding, parsing, spelling, and text production.
+
 ---
 
 ## Cluster A — Entry and lifecycle situations
 
 How the human first meets, leaves, and re-meets the system.
 
-### A1. First contact — no vault selected yet ⚠
+### A1. First contact — no vault selected yet
 
 - **Situation:** the system has never been pointed at a vault, or none is currently selected.
-- **Human intent:** be routed to choose/open a vault, not greeted as if returning to known context.
-  First contact is a vault-picker situation. The system still boots and stays usable for everything
-  that does not require a vault (`docs/VAULT_OPTIONAL_RUNTIME/BOOT_RUNTIME_WITHOUT_VAULT.md`); the
+- **Human intent:** be guided through a short initiation flow that offers a clear choice — **create a
+  new vault** or **open an existing one** — and complete either path through a friendly *visual*
+  chooser. The human must never type or paste a path or search string; selection is always by
+  browse/pick (native folder chooser, recent-vaults list, visible candidates) per the cross-cutting
+  dyslexia-friendly constraint above. First contact is a guided create-or-open situation, not a
+  greeting and not a text-entry form. The system still boots and stays usable for everything that
+  does not require a vault (`docs/VAULT_OPTIONAL_RUNTIME/BOOT_RUNTIME_WITHOUT_VAULT.md`); the
   companion boundary returns an explicit `vault_selection_required` with recent vaults to open, never
   an empty or wrong fallback (`docs/VAULT_OPTIONAL_RUNTIME/RESOLVE_NO_VAULT_STATE.md`).
-- **Good:** a clear, low-ceremony picker; selecting a vault re-resolves in-process and renders real
-  note bodies with no restart; the system is usable without a vault for non-vault functions.
-- **Bad:** a fabricated "welcome back" snapshot; falling back to a CWD-relative `./vault`; gating the
-  whole boot path on a configured vault.
-- **Realized by:** `vault_selection_required` over `resolve_optional_vault_root()`; picker UI (#1867).
-- **Status:** `settled` — vault selection is source of truth; system boots with no vault
-  (`docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`; "Vault Optional at Runtime", #2004/#2006).
-  **⚠ contradiction:** the entry-state enum defines `no_vault` as *runtime unreachable (503)* and
-  treats first-contact as a `cold_start` greeting *with a vault already selected*, while the
-  vault-optional capability makes true no-vault-bound first contact a `vault_selection_required`
-  picker. The enum and the picker state are not unified — see register item R1.
+- **Good:** a guided flow where both *create new* and *open existing* are reachable without typing a
+  path; selection is by visual pick / recents / browse; selecting re-resolves in-process and renders
+  real note bodies with no restart; the system is usable without a vault for non-vault functions.
+- **Bad:** asking the human to type or paste a path/search string anywhere in selection or creation;
+  a fabricated "welcome back" snapshot; falling back to a CWD-relative `./vault`; gating the whole
+  boot path on a configured vault.
+- **Realized by:** `vault_selection_required` over `resolve_optional_vault_root()`; picker UI (#1867)
+  — to be extended with a guided create-new-vault path.
+- **Status:** `settled` intent — vault selection is source of truth; system boots with no vault
+  (`docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`; "Vault Optional at Runtime", #2004/#2006); the
+  cold-start flow is the **guided create-or-open chooser with no path typing** (owner decision,
+  2026-06-24, R1). **Reconciliation pending:** the entry-state enum still models `no_vault` as
+  *runtime unreachable (503)* and first contact as a `cold_start` greeting *with a vault already
+  selected*, while the vault-optional capability makes true no-vault-bound first contact a
+  `vault_selection_required` picker. The enum and the picker state must be unified around this one
+  guided flow — see register item R1.
 
 ### A2. Boot / handshake in progress
 
@@ -220,10 +240,12 @@ Which vault is active, and what happens when that changes or is unavailable.
   state; invalid settings are reported, not applied
   (`docs/ENVIRONMENTS.md`; `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`).
 - **Good:** distinct statuses (`missing` / `invalid` / `uninitialized`) each with a non-destructive
-  recovery (locate, choose another, reload settings, initialize); set-but-missing fails loud across
-  resolver, watcher, and start path.
-- **Bad:** silent resolution to `./vault` so the UI looks empty/wrong (the "notes won't render"
-  incident); a recovery action overwriting user files; invalid/conflicted settings applied silently.
+  recovery (locate, choose another, reload settings, initialize) — where "locate"/"choose another"
+  is a visual folder chooser, never a path field (cross-cutting constraint); set-but-missing fails
+  loud across resolver, watcher, and start path.
+- **Bad:** asking the human to type the correct path to recover; silent resolution to `./vault` so
+  the UI looks empty/wrong (the "notes won't render" incident); a recovery action overwriting user
+  files; invalid/conflicted settings applied silently.
 - **Realized by:** `VaultStatus` (`none`/`selected`/`missing`/`invalid`/`uninitialized`) +
   `VaultRootMisconfiguredError`.
 - **Status:** `settled` (fail-loud on set-but-missing; recovery matrix). `partial` residual: migrating
@@ -381,11 +403,14 @@ extraction, not decisions to make inside this doc.
 
 ### Group 1 — Spec contradictions to fix (two specs disagree; product intent is settled)
 
-- **R1 — Entry-state enum vs. vault-selection state are not unified (A1).** `SYSTEM_ENTRY_POINT_SPEC.md`
-  defines `no_vault` as *runtime unreachable (503)* and treats first contact as a `cold_start` greeting
-  with a vault already selected, while the vault-optional capability makes true no-vault-bound first
-  contact a `vault_selection_required` picker. Decide where the picker lives in the state model and
-  reconcile the two docs. *Doc fix, low ambiguity.*
+- **R1 — Entry-state enum vs. vault-selection state (A1) — intent DECIDED, reconciliation pending.**
+  Owner decision (2026-06-24): first contact / cold start is a **guided initiation flow** offering
+  *create a new vault* or *open an existing one*, completed through a friendly visual chooser with
+  **no manual path or search-string entry** (dyslexia-friendly; see the cross-cutting constraint).
+  Remaining work is mechanical: unify `SYSTEM_ENTRY_POINT_SPEC.md`'s `no_vault`/`cold_start` modelling
+  with the vault-optional `vault_selection_required` picker so the state model names this one flow
+  once, and extend the picker UI (#1867) with the guided create-new-vault path. Ready for
+  docs-to-issue + an implementation slice.
 - **R2 — Latency ladder promises re-entry the leave-point TTL can't back (A4/A6).** The ladder describes
   a recoverable `long_mist` out to 14d; the leave-point cursor TTL (ADR-0008) is hard-capped at 7d, and
   #2453/#2472 already decided 7–14d returns are cold. Either lower the ladder's `long_mist` bound to 7d
