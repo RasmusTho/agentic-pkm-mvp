@@ -237,6 +237,34 @@ Authority comes from:
 - explicit human decisions;
 - owner docs.
 
+## Runtime control actions
+
+The UI transports human intent into the system across multiple interaction origins (UI, CLI, file
+edit, and future MCP/API). The authoritative register for which control actions the UI may initiate
+and how they route is maintained in `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Control-action
+register` and in
+`docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_RUNTIME_CONTROL_ACTION_BOUNDARY.md`.
+
+The canonical two-tier classification:
+
+1. **Vault binding (pre-init)** — vault select / init / reload. Routes through app-local / WSP
+   binding, not vault-scoped governance. The vault is not yet initialized, so this is the human's
+   only surface.
+
+2. **Runtime gating (post-init)** — `enableVaultWatcher` / `enableAutoIndexing`. These are
+   authority-bearing: they reconfigure whether the watcher/indexing runtime runs. Writes route
+   through the single server-side governed seam: WriteGuard health-gate + actor-tagged
+   `SettingsWriteReceipt` (who / surface / when). No human/agent approval loop — a human may
+   already flip these via a direct hand-edit of `settings/local.md` (the file-originated door).
+   The receipt covers both doors.
+
+3. **External-boundary enable** — TTS provider enable. EBF applies; not re-decided here
+   (`#2086`/`#1699`).
+
+The UI is the **transport** of human intent; it is not itself the authority. The server classifies
+the write and applies the deterministic governance gate. The UI never re-derives authority from the
+response.
+
 ## Safe Onboarding Path
 
 1. Find with citations.

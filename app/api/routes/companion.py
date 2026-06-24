@@ -823,7 +823,7 @@ def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSetti
     if blocked_reason:
         raise HTTPException(status_code=403, detail=blocked_reason)
     try:
-        updated = service.update_setting(context, req.key, req.value)
+        updated, _receipt = service.update_setting(context, req.key, req.value, surface="api", actor="human")
     except SettingsWriteError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     refreshed = manager.select_vault(Path(context.active_vault_path), remember=False)

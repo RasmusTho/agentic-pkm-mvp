@@ -53,8 +53,71 @@
   bind/exposure posture. Remote exposure of the UI origin remains an explicit
   operator choice, independent of this proxy path.
 
+## Control-action register
+
+The UI is a **transport** of human intent. The same intent may arrive on any valid surface — UI,
+CLI, a direct hand-edit of `settings/local.md`, or (later) MCP/API. The server-side governed seam
+is the single classification and enforcement point; the UI never re-derives authority.
+
+### Tier 1 — Vault binding (pre-init)
+
+These actions happen before a vault is initialized and selected. They route through app-local / WSP
+binding, not vault-scoped governance.
+
+| Action | API route | Gov/EXE routing | Receipt |
+|--------|-----------|-----------------|---------|
+| Vault select | `POST /api/companion/vault/select` | WSP binding (app-local) | None (binding logged) |
+| Vault init | `POST /api/companion/vault/initialize` | WSP init (app-local) | None (init logged) |
+| Vault reload | `POST /api/companion/vault/reload` | WSP refresh | None |
+
+The UI is the human's only interaction surface at this stage (the vault does not yet exist).
+No write guard applies to the binding itself.
+
+### Tier 2 — Runtime gating (post-init, authority-bearing)
+
+These writes reconfigure whether the watcher/indexing runtime runs. They are **authority-bearing**
+in the proportional sense (#1881 tiers): reversible, local, no external boundary — so **no
+approval loop** (consistent with a human being able to flip the same flag via a direct
+`settings/local.md` hand-edit with no gate). The governed seam applies the WriteGuard
+health-gate and emits an actor-tagged receipt.
+
+| Setting key | Effect | Authority class | Governed seam |
+|-------------|--------|-----------------|---------------|
+| `enableVaultWatcher` | Gates watcher startup (`registry.py:734`, `config.py:92`) | Authority-bearing | WriteGuard + `SettingsWriteReceipt` |
+| `enableAutoIndexing` | Gates auto-indexing runtime | Authority-bearing | WriteGuard + `SettingsWriteReceipt` |
+
+**Governed seam** (`app/vault/settings_service.py :: SettingsService.update_setting`):
+1. `RUNTIME_GATING_SETTINGS` classifies the key as authority-bearing.
+2. `DEFAULT_WRITE_GUARD.assert_writes_allowed()` is called; raises `SettingsWriteError` if
+   `state in WRITE_BLOCKED_STATES` (i.e. `safe_mode` or `unhealthy`).
+3. The markdown write is applied to `settings/local.md`.
+4. A `SettingsWriteReceipt(key, value, surface, actor, timestamp, is_runtime_gating=True)` is
+   emitted and logged at INFO level.
+
+**Receipt covers both doors:**
+- **API/UI/CLI origin** (`surface='api'` or `'cli'`, `actor='human'`): receipt emitted immediately.
+- **File-originated origin** (`surface='file'`, `actor='human'`): when the watcher detects a
+  `settings/local.md` delta on next start/reload, a receipt must also be emitted. Currently logged
+  at INFO level; durable receipt store is a follow-on.
+
+**Valid origins of the same seam:** UI (via `POST /api/companion/vault/settings`), CLI (existing
+`app.cli vault` commands), and future MCP/API surfaces. No new surfaces are added here.
+
+### Tier 3 — External-boundary enable
+
+TTS provider enable crosses an external boundary (EBF applies). Not re-decided here; governed by
+`#2086` / `#1699`.
+
+### Server-authoritative classification rule
+
+The UI never re-derives authority from the server response. Classification lives server-side in
+`RUNTIME_GATING_SETTINGS` (settings_service.py). If a key is promoted to runtime-gating in the
+future, only the server-side constant and the governed seam need to change.
+
 ## Related docs
 - `SYSTEM_OVERVIEW.md`
 - `EVENT_MODEL_SUMMARY.md`
 - `CONTINUITY_AND_DECAY.md`
 - `TEMPORAL_PROVENANCE.md`
+- `docs/COMPANION_UI_PRODUCT_SPEC.md :: Runtime control actions`
+- `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_RUNTIME_CONTROL_ACTION_BOUNDARY.md`

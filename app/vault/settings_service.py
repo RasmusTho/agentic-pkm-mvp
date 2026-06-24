@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Mapping, NamedTuple, TypeAlias, cast
 
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import MarkdownSettingsDocument, MarkdownSettingsError, MarkdownSettingsStore
+
+
+logger = logging.getLogger(__name__)
 
 
 SettingScope = Literal["built-in", "app-local", "vault-shared", "vault-local", "runtime"]
@@ -24,6 +29,34 @@ VAULT_SHARED_SETTING_FILES = (
 )
 VAULT_LOCAL_SETTING_FILES = ("local.md",)
 VALID_SOURCE_SCOPES = {"app-local", "vault-shared", "vault-local"}
+
+# Runtime-gating settings: authority-bearing writes that reconfigure whether
+# the watcher/indexing runtime runs (registry.py:734, config.py:92).
+# These must route through the governed write seam (WriteGuard + actor receipt).
+# See docs/COMPANION_UI_PRODUCT_SPEC.md :: Runtime control actions and
+# companion-ui/docs/UI_RUNTIME_BOUNDARIES.md :: Control-action register.
+RUNTIME_GATING_SETTINGS: frozenset[str] = frozenset({"enableVaultWatcher", "enableAutoIndexing"})
+
+_SETTINGS_WRITE_ACTION = "settings.runtime_gating.write"
+
+
+@dataclass(frozen=True)
+class SettingsWriteReceipt:
+    """Actor-tagged receipt emitted for every governed settings write.
+
+    Covers both the UI/API write path and the file-originated path
+    (watcher-detected settings/local.md delta). The file-originated path
+    currently logs at INFO level; a durable receipt store is a follow-on.
+    """
+
+    key: str
+    value: Any
+    surface: str
+    """Origin surface: 'api', 'cli', 'file' (watcher-detected), or 'mcp'."""
+    actor: str
+    """Stable actor identifier; 'human' for all UI/API/CLI/file origins."""
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    is_runtime_gating: bool = False
 
 
 @dataclass(frozen=True)
@@ -192,7 +225,27 @@ class SettingsService:
     def reload(self, context: VaultContext) -> SettingsResolution:
         return self.resolve(context)
 
-    def update_setting(self, context: VaultContext, key: str, value: Any) -> EffectiveSetting:
+    def update_setting(
+        self,
+        context: VaultContext,
+        key: str,
+        value: Any,
+        *,
+        surface: str = "api",
+        actor: str = "human",
+    ) -> tuple[EffectiveSetting, SettingsWriteReceipt]:
+        """Write a single setting and return (effective_setting, receipt).
+
+        Runtime-gating settings (``enableVaultWatcher``, ``enableAutoIndexing``)
+        are authority-bearing and route through the governed write seam:
+        WriteGuard health-gate is asserted first, then an actor-tagged receipt
+        is emitted.  Non-runtime-gating settings follow the same path but are
+        not write-guarded.
+
+        ``surface`` names the interaction origin (``'api'``, ``'cli'``,
+        ``'file'``, ``'mcp'``); ``actor`` is the stable actor identity
+        (``'human'`` for all UI/API/CLI/file origins).
+        """
         definition = self.registry.get(key)
         if definition is None:
             raise SettingsWriteError(f"unknown setting: {key}")
@@ -207,6 +260,21 @@ class SettingsService:
         valid, message = _validate_value(definition, value)
         if not valid:
             raise SettingsWriteError(message or f"invalid value for {key}")
+
+        is_runtime_gating = key in RUNTIME_GATING_SETTINGS
+
+        # Governed write seam: apply WriteGuard for runtime-gating settings.
+        # Import is deferred to avoid a circular dependency between vault and
+        # write_guard at module load time.
+        if is_runtime_gating:
+            from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError  # noqa: PLC0415
+
+            try:
+                DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION)
+            except WritesBlockedError as exc:
+                raise SettingsWriteError(
+                    f"runtime-gating setting write blocked by health gate: {exc}"
+                ) from exc
 
         path = Path(context.settings_path) / definition.file
         try:
@@ -226,13 +294,33 @@ class SettingsService:
         frontmatter = dict(document.frontmatter)
         frontmatter[key] = value
         self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
-        return EffectiveSetting(
+
+        effective = EffectiveSetting(
             key=key,
             value=value,
             scope=source_scope,
             source=str(path),
             source_file=str(path),
         )
+
+        # Emit actor-tagged receipt for all governed writes.
+        receipt = SettingsWriteReceipt(
+            key=key,
+            value=value,
+            surface=surface,
+            actor=actor,
+            is_runtime_gating=is_runtime_gating,
+        )
+        logger.info(
+            "settings.write surface=%s actor=%s key=%s runtime_gating=%s ts=%s",
+            receipt.surface,
+            receipt.actor,
+            receipt.key,
+            receipt.is_runtime_gating,
+            receipt.timestamp,
+        )
+
+        return effective, receipt
 
     def resolve(self, context: VaultContext) -> SettingsResolution:
         values = {
@@ -441,6 +529,7 @@ def _validate_value(definition: SettingDefinition, value: Any) -> _ValidationRes
 
 __all__ = [
     "EffectiveSetting",
+    "RUNTIME_GATING_SETTINGS",
     "SETTING_DEFINITIONS",
     "SettingDefinition",
     "SettingsRegistry",
@@ -448,4 +537,5 @@ __all__ = [
     "SettingsService",
     "SettingsValidationError",
     "SettingsWriteError",
+    "SettingsWriteReceipt",
 ]
