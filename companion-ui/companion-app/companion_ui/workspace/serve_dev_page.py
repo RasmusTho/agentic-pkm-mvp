@@ -584,7 +584,12 @@ def _render_workspace_header_strip(
                the vault chip (not in the displaced launcher cluster). #2447. -->
           <button type="button" class="workspace-surface-icon workspace-vault-settings-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.settings.open" title="Vault settings" aria-label="Open vault settings" aria-controls="workspace-vault-settings-panel" aria-expanded="false">V</button>
           <span class="workspace-anchor-pill" data-testid="workspace-anchor-pill" data-region="document-anchor" data-anchor-note-path="{_e(anchor_note_path)}" title="Document anchor">{_e(anchor_title)}</span>
-          <span class="workspace-posture-pill" data-testid="workspace-posture-pill" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" data-authority="local-ui" title="Posture emphasis (local rendering only)">{DEFAULT_POSTURE_EMPHASIS}</span>
+          <!-- C1 (#2484): the RECOVERY posture pill (DEFAULT_POSTURE_EMPHASIS,
+               local-ui rendering only) is removed from the shell topbar. The
+               runtime still declares posture/recovery; the indicator is
+               reachable only via the System Map / operator layer, not on this
+               anti-dashboard front edge. Presentation only — no classification
+               moves client-side. -->
           <span class="workspace-header-spacer" aria-hidden="true"></span>
           <!-- CUIDR-04 (#2447): the top edge keeps IDENTITY + ONE primary
                action (Capture, ⌘N). Every other surface launcher (vault, map,
@@ -7402,10 +7407,13 @@ def _render_orientation_index_html(
       {"" if (is_cold or is_no_vault) else f'''<div class="orientation-meta">
         <span>vault: {_e(_orientation_str(scope.get("vault_id"), "unknown"))}</span>
         <span>channel: {_e(_orientation_str(scope.get("channel"), "unknown"))}</span>
-        <span>freshness: {_e(freshness)}</span>
-        <span>as of: {_e(as_of or "unknown")}</span>
-        <span>trace: {_e(trace_id)}</span>
       </div>'''}
+      <!-- C1 (#2484): the as-of / trace / freshness telemetry line is removed
+           from the visible orientation header — vault identity only. The
+           runtime still declares freshness/as_of/trace_id; they remain on the
+           orientation-shell data-* attributes (data-freshness / data-as-of /
+           data-trace-id above) for the operator layer. Presentation only — no
+           classification moves client-side. -->
     </header>
     {refresh_html}
     {degraded_html}

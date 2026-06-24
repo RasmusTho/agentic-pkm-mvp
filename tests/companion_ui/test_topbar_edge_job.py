@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Any
 
 from companion_ui.workspace.overlay_host import (
@@ -489,3 +490,87 @@ def test_operator_telemetry_absent_from_shell() -> None:
         )
         assert node, f"operator node must be routable on entry state {state}"
         assert 'data-intent="operator.open"' in node.group(0)
+
+
+# ---------------------------------------------------------------------------
+# C1 (finish, #2484) — RECOVERY indicator off the shell topbar
+# ---------------------------------------------------------------------------
+
+
+_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
+_VISIBLE_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+
+
+class _VisibleTextExtractor(HTMLParser):
+    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
+    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
+    cannot leak inert markup into the scanned copy."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._chunks.append(data)
+
+
+def _visible_text(html: str) -> str:
+    """Rendered human-visible text: tags removed and <script>/<style>/<head>
+    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
+    extractor = _VisibleTextExtractor()
+    extractor.feed(html)
+    extractor.close()
+    return " ".join("".join(extractor._chunks).split()).lower()
+
+
+def test_shell_topbar_has_no_recovery_telemetry() -> None:
+    """C1 finish (#2484): no ``RECOVERY`` (or other recovery/online/operator)
+    posture telemetry is visible on the shell topbar in any shell state.
+
+    Asserts on rendered *visible text* (tags + script/style stripped), so a
+    posture pill whose copy reads ``recovery`` fails even though a
+    ``data-posture-emphasis`` test hook may still carry the token. Recovery is
+    reachable only via the System Map / operator layer; the operator layer is
+    stripped before the scan so a legitimate occurrence there does not count.
+
+    Presentation only: the runtime still declares recovery/freshness; this only
+    moves WHERE the indicator renders, never the server-authoritative class.
+    """
+    # The posture pill renders ``DEFAULT_POSTURE_EMPHASIS`` (``recovery``) and
+    # the CSS upper-cases it to ``RECOVERY``. It must not render on the topbar.
+    shell_front = _strip_operator_layer(_shell())
+    assert 'data-testid="workspace-posture-pill"' not in shell_front, (
+        "the posture pill must not render on the shell topbar"
+    )
+
+    front_text = _visible_text(shell_front)
+    for token in ("recovery", "online"):
+        assert token not in front_text, (
+            f"operator/posture telemetry {token!r} must not be visible on the "
+            f"shell topbar; it is reachable only via the System Map / operator "
+            f"layer"
+        )
+
+    # Same guarantee across every entry-state orientation render.
+    for state, raw in _ENTRY_RENDERS.items():
+        front = _visible_text(_strip_operator_layer(raw))
+        assert "recovery" not in front, (
+            f"recovery telemetry leaked into visible text on entry state {state}"
+        )

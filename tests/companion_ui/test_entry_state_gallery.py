@@ -1254,15 +1254,20 @@ def test_no_ui_derived_authority() -> None:
     baseline = gallery["A4_full_mist"].html
     assert 'data-authority-role="fixture_declared_role"' not in baseline
 
-    # The posture pill is Local UI emphasis only (§Resolved Q6): rendering
-    # only, declared default, no switch affordance (the posture-switch
-    # overlay has not shipped), and never conflated with a cognitive mode.
+    # The posture pill is removed from the shell topbar (C1, #2484): it
+    # rendered ``DEFAULT_POSTURE_EMPHASIS`` = ``recovery`` as a ``RECOVERY``
+    # indicator on the anti-dashboard front edge. Recovery/posture is reachable
+    # only via the System Map / operator layer. Presentation only — the
+    # server-declared default emphasis is still carried on the shell root
+    # ``<body>`` data attribute, just not as a visible pill, and the
+    # posture-switch overlay still has not shipped (no switch affordance).
     shell = gallery["B1_shell_active_anchor"].html
-    pill = re.search(r'<span[^>]*data-testid="workspace-posture-pill"[^>]*>', shell)
-    assert pill and 'data-authority="local-ui"' in pill.group(0)
-    emphasis = re.search(r'data-posture-emphasis="([^"]+)"', pill.group(0))
-    assert emphasis and emphasis.group(1) == DEFAULT_POSTURE_EMPHASIS
+    assert (
+        'data-testid="workspace-posture-pill"' not in shell
+    ), "the posture pill must not render on the shell topbar (#2484)"
     assert DEFAULT_POSTURE_EMPHASIS in POSTURE_EMPHASES
+    body_tag = re.search(r"<body[^>]*>", shell)
+    assert body_tag and "data-posture-emphasis=" in body_tag.group(0)
     for name, state in gallery.items():
         # No fixture declares a cognitive mode, so no page may invent one.
         assert "data-cognitive-mode" not in state.html, name

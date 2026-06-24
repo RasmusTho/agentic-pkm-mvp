@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import render_index_html
@@ -1444,3 +1445,86 @@ def test_resume_restores_caret() -> None:
         "live AC — caret/scroll restore + proportional entrance require the "
         "running shell + motion; exercised in the parent #2443 live UAT pass"
     )
+
+
+_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
+_VISIBLE_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+
+
+class _VisibleTextExtractor(HTMLParser):
+    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
+    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
+    cannot leak inert markup into the scanned copy."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._chunks.append(data)
+
+
+def _visible_text(html: str) -> str:
+    """Rendered human-visible text: tags removed and <script>/<style>/<head>
+    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
+    extractor = _VisibleTextExtractor()
+    extractor.feed(html)
+    extractor.close()
+    return " ".join("".join(extractor._chunks).split()).lower()
+
+
+def _orientation_header(html: str) -> str:
+    """Extract the orientation header region markup."""
+    m = re.search(
+        r'<header class="orientation-header">(.*?)</header>', html, re.S
+    )
+    assert m, "orientation header must render"
+    return m.group(0)
+
+
+def test_orientation_header_has_no_asof_telemetry() -> None:
+    """C1 finish (#2484): the orientation header carries no ``as-of`` /
+    ``trace`` / ``freshness`` line — vault identity only.
+
+    Asserts on rendered *visible text* (tags + script/style stripped) of the
+    orientation header, so the telemetry fails the scan even when the surface
+    still carries the data on a ``data-*`` attribute on the orientation shell
+    (which is the relocation target, not visible copy). The earlier round left
+    the ``as of …`` / ``trace …`` / ``freshness …`` meta line in the header;
+    this asserts the reader no longer sees it.
+
+    Presentation only: the runtime still declares freshness/as-of/trace and the
+    orientation shell still carries them as ``data-*`` for the operator layer;
+    only the visible header copy changes — no classification moves client-side.
+    """
+    # Re-entry snapshot states render the orientation header with vault
+    # identity. The telemetry meta line must be gone from the visible header.
+    for gap in (_GAP_FULL_MIST, _GAP_LONG_MIST):
+        html = _render(orientation=_orientation_payload(gap=gap))
+        header_text = _visible_text(_orientation_header(html))
+        for token in ("as of", "freshness", "trace:"):
+            assert token not in header_text, (
+                f"orientation header still shows {token!r} telemetry "
+                f"(gap={gap}); header visible text: {header_text!r}"
+            )
+        # Vault identity is preserved (Out of Scope: the identity string).
+        assert "vault:" in header_text, (
+            "vault identity must remain in the orientation header"
+        )
