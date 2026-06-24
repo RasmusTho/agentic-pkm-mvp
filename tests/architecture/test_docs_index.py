@@ -129,18 +129,22 @@ def _extract_headings(text: str) -> set[str]:
 def test_no_broken_intra_repo_anchors() -> None:
     """Assert that every intra-repo `file.md#anchor` link in DOCS_INDEX resolves.
 
-    Parses DOCS_INDEX.md for Markdown links of the form [text](path/file.md#anchor)
-    and bare inline references of the form `path/file.md#anchor`. For each, checks
+    Parses DOCS_INDEX.md for Markdown links of the form [text](path/file.md#anchor),
+    bare parenthesized references of the form (path/file.md#anchor), and bare
+    backtick-wrapped references of the form `path/file.md#anchor`. For each, checks
     that the target file exists and that the heading anchor is present in that file.
     """
     index_text = DOCS_INDEX.read_text(encoding="utf-8")
 
-    # Match both Markdown link targets and bare backtick references that contain #
+    # Match Markdown link targets, bare (file.md#anchor) fallback, and
+    # bare backtick-wrapped `file.md#anchor` inline references.
     anchor_re = re.compile(
         r"(?:"
         r"\[(?:[^\]]*)\]\(([^)]+\.md#[^\s)]+)\)"  # [text](file.md#anchor)
         r"|"
         r"\(([^)]+\.md#[^\s)]+)\)"  # bare (file.md#anchor) fallback
+        r"|"
+        r"`([^`]+\.md#[^`\s]+)`"  # bare `file.md#anchor` backtick form
         r")"
     )
 
@@ -148,7 +152,7 @@ def test_no_broken_intra_repo_anchors() -> None:
     seen: set[str] = set()
 
     for m in anchor_re.finditer(index_text):
-        raw = m.group(1) or m.group(2)
+        raw = m.group(1) or m.group(2) or m.group(3)
         if not raw:
             continue
         raw = raw.rstrip(")")
