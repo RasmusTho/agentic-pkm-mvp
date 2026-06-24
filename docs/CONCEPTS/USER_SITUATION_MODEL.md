@@ -80,14 +80,19 @@ Open Decisions register, not blanks to fill here.
 
 ## Cross-cutting constraint — dyslexia-friendly input (no manual paths)
 
-The human is dyslexia-first. **No situation may require typing or pasting a filesystem path, search
-string, or other free-text identifier to proceed.** Wherever a situation needs the human to point at
-something — select a vault, locate a moved vault, open a recent note — it must be a *visual pick*:
-a native folder/file chooser, a list of recognizable candidates, recents, or browse — never a text
-field the human has to spell correctly. This is an accessibility requirement, not a preference
-(owner decision, 2026-06-24). It binds A1 (vault selection), B2 (vault recovery), and any future
-entry surface. It is the situational-input instance of the cognitive-load-reduction function in
-`docs/HUMAN-FLOWS.md` §0 — reduce friction around decoding, parsing, spelling, and text production.
+The human is dyslexia-first. **No human-facing situation may require typing or pasting a filesystem
+path, search string, or other free-text identifier to proceed.** Wherever a situation needs the human
+to point at something — select a vault, locate a moved vault, open a recent note — it must be a
+*visual pick*: a native folder/file chooser, a list of recognizable candidates, recents, or browse —
+never a text field the human has to spell correctly. This is an accessibility requirement, not a
+preference (owner decision, 2026-06-24). It binds A1 (vault selection), B2 (vault recovery), and any
+future human entry surface.
+
+This is the **human** half of the dual user model: it constrains human-facing surfaces only.
+Agent-facing CLI/API surfaces are unaffected — paths and structured identifiers are appropriate
+there. The canonical statement of the dual user model and the dyslexia-friendly boundary lives in
+`docs/HUMAN-FLOWS.md` §0 ("Dyslexia-friendly surfaces and the dual user model"); this constraint is
+its situational-input instance.
 
 ---
 

@@ -98,6 +98,30 @@ accessibility techniques can help implement the function, but the owning product
 authority-preserving cognitive offloading. The projection boundary for this work is
 `docs/COGNITIVE_LOAD_PROJECTION_LAYER.md`.
 
+### Dyslexia-friendly surfaces and the dual user model
+
+Human-facing surfaces must be dyslexia-friendly by design, not as a later accommodation. They should
+be visual and low-text — the human points and recognizes rather than spells. In particular, **no
+human-facing surface may require typing or pasting a filesystem path, search string, or other
+free-text identifier to proceed**; selection is always a visual pick (chooser, recents, recognizable
+candidates, browse). Reading and text-production friction is a first-class design constraint on every
+entry, selection, and recovery surface, not an edge case.
+
+The system always has a **dual user model**, and the two kinds of user meet different surfaces:
+- the **one human** meets dyslexia-friendly, visual, authorship-preserving surfaces;
+- **AI agents acting on the human's behalf** meet machine-friendly CLI/API surfaces, where paths,
+  identifiers, and structured text are entirely appropriate.
+
+Both serve the same human and the same vault artifacts; the agent-facing contract is owned downstream
+by `docs/AGENT-FLOWS.md`. A surface intended for the human is judged by the dyslexia-friendly
+constraint; a surface intended for agents is not. This division is a design rule, not an asymmetry to
+be smoothed away.
+
+**Single-user means one human per instance — it does not limit the number of agents.** "Single-user"
+is a statement about the human: one human owner per instance, with one coherent set of contexts and
+authorship. It does not exclude a multitude of AI agents operating on that human's behalf; many agents
+serving one human is the expected runtime shape, not a multi-user configuration.
+
 ## 1. What the system is meant to do
 
 The system is meant to function as a human-first cognitive work environment.
@@ -845,6 +869,13 @@ The following boundaries protect the functions above.
 
 The system may assist, suggest, structure, and automate bounded work.
 It must not silently become the owner of interpretation, commitment, or truth.
+
+### Human-facing interaction must be dyslexia-friendly
+
+Surfaces the human uses must not require typing or pasting paths, search strings, or other free-text
+identifiers; the human selects by visual pick. Agent-facing CLI/API surfaces are exempt — the
+constraint protects the human channel, not the machine channel (see §0, "Dyslexia-friendly surfaces
+and the dual user model").
 
 ### External representations support cognition; they do not replace it
 
