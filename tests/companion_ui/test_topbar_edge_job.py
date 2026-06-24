@@ -506,8 +506,8 @@ def _visible_text(html: str) -> str:
     scan stayed green while the visible ``RECOVERY`` pill and the orientation
     ``as of …`` line still rendered — this scans what the reader sees.
     """
-    no_script = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.S | re.I)
-    no_style = re.sub(r"<style\b[^>]*>.*?</style>", " ", no_script, flags=re.S | re.I)
+    no_script = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", html, flags=re.S | re.I)
+    no_style = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", no_script, flags=re.S | re.I)
     text = re.sub(r"<[^>]+>", " ", no_style)
     return re.sub(r"\s+", " ", text).strip().lower()
 

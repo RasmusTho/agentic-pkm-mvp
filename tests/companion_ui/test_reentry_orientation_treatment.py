@@ -1454,8 +1454,8 @@ def _visible_text(html: str) -> str:
     then strips every remaining tag. The result is the text a reader actually
     sees, lower-cased for a substring scan.
     """
-    no_script = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.S | re.I)
-    no_style = re.sub(r"<style\b[^>]*>.*?</style>", " ", no_script, flags=re.S | re.I)
+    no_script = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", html, flags=re.S | re.I)
+    no_style = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", no_script, flags=re.S | re.I)
     text = re.sub(r"<[^>]+>", " ", no_style)
     return re.sub(r"\s+", " ", text).strip().lower()
 
