@@ -414,13 +414,13 @@ extraction, not decisions to make inside this doc.
   **no manual path or search-string entry** (dyslexia-friendly; see the cross-cutting constraint).
   Remaining work is mechanical: unify `SYSTEM_ENTRY_POINT_SPEC.md`'s `no_vault`/`cold_start` modelling
   with the vault-optional `vault_selection_required` picker so the state model names this one flow
-  once, and extend the picker UI (#1867) with the guided create-new-vault path. Ready for
-  docs-to-issue + an implementation slice.
+  once, and extend the picker UI (#1867) with the guided create-new-vault path. **Tracked as #2488**
+  (docs/spec reconciliation; create-new picker implementation depends on #1867 + #2312).
 - **R2 — Latency ladder promises re-entry the leave-point TTL can't back (A4/A6).** The ladder describes
   a recoverable `long_mist` out to 14d; the leave-point cursor TTL (ADR-0008) is hard-capped at 7d, and
-  #2453/#2472 already decided 7–14d returns are cold. Either lower the ladder's `long_mist` bound to 7d
-  to match, or raise the TTL to 14d via a new ADR. Today the docs contradict each other. *Doc fix +
-  one-line policy choice.*
+  #2453/#2472 already decided 7–14d returns are cold. Resolution: lower the ladder's `long_mist` bound
+  to 7d to match the existing decision (raising the TTL to 14d would be a separate new-ADR product
+  choice, not this fix). **Tracked as #2489.**
 
 ### Group 2 — Open product choices (genuinely unowned)
 
