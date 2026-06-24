@@ -102,6 +102,27 @@ Editing a generated projection by hand does not update BuilderOps Vault and must
 an authority transfer. Repo docs, ADRs, skills, GitHub Issues, PRs, and product/runtime truth still
 change only through their explicit owner workflows and promotion gates.
 
+## Non-Authoritative and Non-Reproducible
+
+Checked-in BuilderOps projections under `docs/generated/builderops/` are **non-authoritative
+repo-readable views** over a gitignored, machine-local, mutable SQLite store
+(`runtime/builderops/builderops.sqlite3`). They are **not reproducible** across devices or over
+time.
+
+Consequences:
+
+- A regen diff (records appearing or disappearing between regeneration runs) is **expected, not data
+  loss**. The backing store is ephemeral and may not contain the same records on a different machine,
+  in a different worktree, or at a different time.
+- Checked-in projection records are not a durable authority surface. Records that were once visible
+  in a checked-in projection may be absent in the current local store; this is the designed behaviour
+  of a non-persistent view over an ephemeral backing store.
+- Only promotion through a real authority path (GitHub Issue, PR, ADR, or owner doc) makes material
+  durable. A projection record that has not been promoted through such a path carries no durability
+  guarantee.
+- Do not treat a regen diff as a signal to recover or supersede projection records. Do not
+  hand-edit generated projection files to restore records that are absent from the local store.
+
 ## Out Of Scope
 
 This slice intentionally does not implement:

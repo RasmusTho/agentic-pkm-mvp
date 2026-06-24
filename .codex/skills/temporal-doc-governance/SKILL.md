@@ -31,6 +31,33 @@ Generated BuilderOps projections are review views, not authority. `docs/DOCS_IND
 stable document role/routing authority, and `docs/ROADMAP.md` remains the strategic sequencing
 authority. Do not rewrite either file solely to capture high-churn operational state.
 
+## BuilderOps projection regeneration — store selection and fail-loud rule
+
+When this audit runs a `generate-projections` command to regenerate checked-in projections under
+`docs/generated/builderops/`, it **must** select the intended BuilderOps store explicitly before
+writing. The default store (`runtime/builderops/builderops.sqlite3`) is gitignored, machine-local,
+and not shared across devices or worktrees; regenerating from a partial or wrong store will silently
+drop records.
+
+**Required:** set `BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, or `--db-path` to the canonical
+store before invoking `generate-projections`. Use the wrapper:
+
+```bash
+BUILDEROPS_DB_PATH=/path/to/intended/builderops.sqlite3 \
+  scripts/builderops_cli.sh builderops generate-projections \
+  --output-dir docs/generated/builderops
+```
+
+**Fail-loud requirement:** if the selected store would shrink the existing checked-in projections
+(records present in `docs/generated/builderops/*.md` but absent from the selected store), the
+generator must fail before writing. Do not suppress this failure or work around it by hand-editing
+the generated files. Fix the store selection instead.
+
+A regen diff is expected — the backing store is non-reproducible over time. Treat missing records
+in the regenerated output as a store-selection signal, not data loss. See
+`docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md :: Non-Authoritative and Non-Reproducible` and
+`docs/builderops/BUILDEROPS_VAULT_STORE.md :: Store Location`.
+
 ## First context to load
 
 - Read `AGENTS.md` first.

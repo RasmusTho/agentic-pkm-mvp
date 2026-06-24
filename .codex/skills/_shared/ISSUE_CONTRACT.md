@@ -30,6 +30,26 @@ Issue bodies must contain exactly these sections:
 Parent feature issues additionally carry `## Implementation Tasks`, `## Verification Path`, and
 `## Validation / Acceptance Path` (see `feature-breakdown`).
 
+## Issue self-sufficiency rule
+
+An Issue must be self-sufficient on info and context. Every agent or human who picks it up must be
+able to understand and execute the bounded task from the Issue body alone — without requiring access
+to machine-local ephemeral state (SQLite stores, local caches, worktree state, in-memory runtime
+data, or any artefact that is not reproducible from the checked-in repo plus public GitHub data).
+
+**Prohibited in Issue bodies:**
+
+- Instructions that depend on a specific local file path, local DB, or local runtime state that is
+  not reproducible across devices (e.g. "reconcile records in my local sqlite", "check the
+  worktree-local store").
+- Context that references ephemeral operational state as if it were shared fact (e.g. "the June 18
+  records in the local BuilderOps store").
+- Scope or acceptance criteria that can only be verified on the machine that authored the Issue.
+
+**Correct pattern:** promote the relevant material to a durable authority surface (GitHub Issue
+body, linked PR, owner doc) before authoring the Issue that depends on it. If the material cannot be
+promoted, the Issue should not depend on it.
+
 ## Verify: marker rule
 
 Every Acceptance Criterion declares its verification inline with a `Verify:` marker:
