@@ -94,6 +94,17 @@ worktrees that regenerate checked-in projection views should set the intended st
 generator may fail loud before overwriting existing generated projections with records from an empty
 or incomplete worktree-local store.
 
+**Store durability and regen diff expectations:** The default store at `runtime/builderops/` is
+gitignored, machine-local, and mutable. It is not shared across devices, not preserved across
+worktree pruning, and not reproducible over time. Checked-in projections under
+`docs/generated/builderops/` are non-authoritative views over this ephemeral store; records that
+appear in a checked-in projection may be absent in the current local store after any store rotation,
+device change, or worktree lifecycle event. A regen diff — records appearing or disappearing between
+runs — is expected, not data loss. Only promotion through a real authority path (GitHub Issue, PR,
+ADR, or owner doc) makes BuilderOps material durable; a projection record alone carries no
+durability guarantee. See `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md ::
+Non-Authoritative and Non-Reproducible` for the full consequences.
+
 ## CLI
 
 Examples:
