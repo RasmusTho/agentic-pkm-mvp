@@ -5,8 +5,8 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-21
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md
+Last reviewed: 2026-06-24
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/ENVIRONMENTS.md, docs/VAULT_OPTIONAL_RUNTIME/README.md
 
 # SBS Current-To-Target Mapping
 
@@ -28,6 +28,7 @@ Use this map when changing an existing area and classifying target SBS impact. T
 | Persistence/storage | PDM, HKA, GOV, MEM, DRI, SFC | Stores and migrations are PDM mechanics; state-owning subsystems own semantics. | Direct DSN/table construction outside PDM creates storage leak. |
 | Runtime projection | DRI, PDM, OEF | DB/index/projection state is rebuildable unless explicitly classified otherwise. | Derived records can carry non-rebuildable meaning. |
 | Watchers | EBF, SFC, DRI, OEF | Watchers are source observation adapters; delivery semantics must be explicit. | Events can be well-shaped but lack delivery, replay, or idempotency semantics. |
+| Runtime lifecycle | WSP, EBF, EXE, PDM, OEF | Start/stop/idle/boot of long-lived runtime processes (watcher, worker) and their binding to the active vault. **WSP owns the lifecycle-binding authority** (should a process run, bound to which context — input is `ActiveContextSet`, not `activeVault`); the **mechanism** stays distributed: EBF watcher adapter attach/detach, EXE process start/stop/re-point as governed effects, PDM per-environment store/runtime-state lifecycle, OEF observes (no control loop). See `docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Runtime lifecycle ownership` (decision #2473). Current reality lives in ops scripts + `PKM_ENVIRONMENT` (`docs/ENVIRONMENTS.md :: Runtime Control Surface`) and the no-vault idle/boot posture (`docs/VAULT_OPTIONAL_RUNTIME/README.md`). | Process supervision falls between EBF/EXE/OEF and stays outside the SBS as ops-script-only (transition debt D13); lifecycle decisions can leak a scalar `activeVault` instead of consuming `ActiveContextSet` (D1). |
 | Sync | SFC, WSP, GOV, PDM, HKA, SIP, OEF | Current single-node posture maps to SFC as a no-op/single-authoritative-node boundary. | Sync can be postponed until it resolves meaning through ad hoc rules. |
 | Observability | OEF, GOV, CES practice | Health, traces, metrics, evals, and CI fitness map to OEF and stewardship. | OEF findings can mutate behavior without governance if control loops are introduced. |
 | Docs / roadmap / issue processes | CES practice, OEF, all owners | ADRs, contracts, registers, roadmap, PR template, and issues are the stewardship surface. | Documentation can drift back into implementation structure without owner checks. |
