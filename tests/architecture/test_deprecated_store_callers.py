@@ -6,7 +6,8 @@ These packages are deprecated per docs/CODE_INVENTORY.md §Deprecated Packages:
 
 The test walks app/**/*.py and detects any file that imports from either deprecated
 package (both ``import app.store...`` / ``from app.store... import ...`` forms,
-including submodules).  Files in app/store/ and app/stores/ themselves are excluded.
+including submodules AND relative imports that resolve to those packages).
+Files in app/store/ and app/stores/ themselves are excluded.
 
 ALLOWLIST contains the set of files that existed as callers on origin/main at the
 time ADR-0013 was flipped to blocking (2026-06-24, issue #2481).  A new file that
@@ -87,8 +88,51 @@ ALLOWLIST: frozenset[str] = frozenset(
 )
 
 
+def _resolve_relative_import(file_path: Path, level: int, module: str | None) -> str:
+    """Resolve a relative import to its absolute dotted module path.
+
+    Given a file at e.g. ``app/agents/classifier/agent.py`` and a relative
+    import ``from ..store import Foo`` (level=2, module="store"), compute the
+    absolute dotted path ``app.store``.
+
+    Algorithm:
+      1. Derive the file's package as its parent dirs relative to REPO_ROOT,
+         joined with dots (e.g. ``app.agents.classifier``).
+      2. Split into components; drop ``level - 1`` trailing components to find
+         the anchor package (level=1 → same package; level=2 → parent; etc.).
+      3. Append ``module`` (if present) to the anchor components.
+      4. Return the joined dotted string.
+    """
+    rel_parts = list(file_path.parent.relative_to(REPO_ROOT).parts)
+    # level=1 means current package; drop (level-1) trailing components
+    drop = max(0, level - 1)
+    if drop:
+        anchor_parts = rel_parts[:-drop] if drop < len(rel_parts) else []
+    else:
+        anchor_parts = rel_parts
+
+    if module:
+        anchor_parts = anchor_parts + module.split(".")
+
+    return ".".join(anchor_parts)
+
+
+def _is_deprecated_module(dotted: str) -> bool:
+    """Return True if ``dotted`` refers to app.store or app.stores (or a submodule)."""
+    return dotted in ("app.store", "app.stores") or dotted.startswith(
+        ("app.store.", "app.stores.")
+    )
+
+
 def _imports_deprecated_store(path: Path) -> bool:
-    """Return True if the file contains any import of app.store or app.stores."""
+    """Return True if the file contains any import of app.store or app.stores.
+
+    Detects:
+    - Absolute ``import app.store...`` / ``from app.store... import ...``
+    - Relative imports that resolve to app.store / app.stores, e.g.
+      ``from .store import X`` inside app/something/ or
+      ``from ..stores.foo import Bar`` from a nested package.
+    """
     try:
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -101,17 +145,19 @@ def _imports_deprecated_store(path: Path) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                name = alias.name
-                if name in ("app.store", "app.stores") or name.startswith(
-                    ("app.store.", "app.stores.")
-                ):
+                if _is_deprecated_module(alias.name):
                     return True
         elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            if module in ("app.store", "app.stores") or module.startswith(
-                ("app.store.", "app.stores.")
-            ):
-                return True
+            if node.level and node.level > 0:
+                # Relative import — resolve to absolute dotted path first
+                resolved = _resolve_relative_import(path, node.level, node.module)
+                if _is_deprecated_module(resolved):
+                    return True
+            else:
+                # Absolute import
+                module = node.module or ""
+                if _is_deprecated_module(module):
+                    return True
     return False
 
 
@@ -132,6 +178,10 @@ def test_no_new_store_callers() -> None:
 
     These are deprecated packages (docs/CODE_INVENTORY.md §Deprecated Packages).
     New callers extend a deprecated surface.  Migrate instead.
+
+    Both absolute imports (``from app.store import X``) and relative imports that
+    resolve to the deprecated packages (``from .store import X`` inside app/) are
+    detected.
     """
     violations: list[str] = []
 
@@ -155,18 +205,46 @@ def test_no_new_store_callers() -> None:
 
 
 def test_allowlist_entries_still_exist() -> None:
-    """Every file in the allowlist still exists.
+    """Every allowlisted file still exists AND still imports from app.store / app.stores.
 
-    If a file is removed or migrated, remove it from the allowlist to keep
-    the guard minimal and accurate.
+    Two conditions are checked for each entry:
+
+    1. **File existence** — if the file was deleted, remove it from the allowlist.
+    2. **Deprecated import still present** — if the file no longer imports from
+       the deprecated packages, it has been migrated.  Remove it from the allowlist
+       so it is no longer skipped by ``test_no_new_store_callers`` (an allowlisted
+       file is invisible to that test, so a reintroduced import would go undetected).
+
+    Failing either check means the allowlist is stale.  Fix it to keep the guard
+    minimal and accurate.
     """
-    stale: list[str] = []
-    for rel in ALLOWLIST:
-        if not (REPO_ROOT / rel).exists():
-            stale.append(rel)
+    missing_files: list[str] = []
+    migrated_files: list[str] = []
 
-    assert not stale, (
+    for rel in ALLOWLIST:
+        abs_path = REPO_ROOT / rel
+        if not abs_path.exists():
+            missing_files.append(rel)
+            continue
+        # File exists — confirm it still imports a deprecated package
+        if not _imports_deprecated_store(abs_path):
+            migrated_files.append(rel)
+
+    messages: list[str] = []
+    if missing_files:
+        messages.append(
+            "Allowlist entries whose files no longer exist"
+            " — remove them from ALLOWLIST:\n"
+            + "\n".join(f"  {s}" for s in sorted(missing_files))
+        )
+    if migrated_files:
+        messages.append(
+            "Allowlist entries that no longer import a deprecated package"
+            " — the file has been migrated, remove it from ALLOWLIST:\n"
+            + "\n".join(f"  {s}" for s in sorted(migrated_files))
+        )
+
+    assert not (missing_files or migrated_files), (
         "Stale allowlist entries found in test_deprecated_store_callers.py.\n"
-        "These files no longer exist — remove them from ALLOWLIST:\n"
-        + "\n".join(f"  {s}" for s in sorted(stale))
+        + "\n".join(messages)
     )
