@@ -9,30 +9,43 @@ Verify that dev and prod environments use distinct paths for:
 
 import pytest
 from pathlib import Path
-from app.config.paths import resolve_vault_root, resolve_runtime_artifact_path, resolve_paths
+from app.config.paths import VaultRootNotBoundError, resolve_vault_root, resolve_runtime_artifact_path, resolve_paths
 from app.settings.watcher_settings import load_watcher_settings
 
 
 class TestVaultPathSeparation:
     """Test vault path separation by environment."""
 
-    def test_prod_vault_uses_base_path(self):
+    def test_prod_vault_uses_base_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Production environment uses base vault path."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        monkeypatch.setenv("VAULT_ROOT", str(vault))
         prod_path = resolve_vault_root(environment="prod")
-        assert str(prod_path) == "vault"
+        assert prod_path == vault
 
-    def test_dev_vault_uses_dev_suffix(self):
+    def test_dev_vault_uses_dev_suffix(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Development environment uses -dev suffixed vault path."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        dev_vault = tmp_path / "vault-dev"
+        dev_vault.mkdir()
+        monkeypatch.setenv("VAULT_ROOT", str(vault))
         dev_path = resolve_vault_root(environment="dev")
-        assert str(dev_path) == "vault-dev"
+        assert dev_path == dev_vault
 
-    def test_vault_paths_are_distinct(self):
+    def test_vault_paths_are_distinct(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Dev and prod vault paths are distinct."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        dev_vault = tmp_path / "vault-dev"
+        dev_vault.mkdir()
+        monkeypatch.setenv("VAULT_ROOT", str(vault))
         prod = resolve_vault_root(environment="prod")
         dev = resolve_vault_root(environment="dev")
         assert prod != dev
-        assert prod == Path("vault")
-        assert dev == Path("vault-dev")
+        assert prod == vault
+        assert dev == dev_vault
 
     def test_explicit_override_bypasses_environment_scoping(self):
         """Explicit vault root override bypasses environment scoping."""
@@ -41,6 +54,14 @@ class TestVaultPathSeparation:
         dev = resolve_vault_root(cli_override=override, environment="dev")
         assert prod == override
         assert dev == override
+
+    def test_unset_vault_root_raises_not_bound_error(self, monkeypatch: pytest.MonkeyPatch):
+        """resolve_vault_root raises VaultRootNotBoundError when VAULT_ROOT is unset."""
+        monkeypatch.delenv("VAULT_ROOT", raising=False)
+        monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+        monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+        with pytest.raises(VaultRootNotBoundError):
+            resolve_vault_root()
 
 
 class TestRuntimeArtifactPathSeparation:
@@ -91,22 +112,35 @@ class TestRuntimeArtifactPathSeparation:
 class TestResolvedPathsWithEnvironment:
     """Test ResolvedPaths structure includes environment."""
 
-    def test_resolved_paths_includes_environment(self):
+    def test_resolved_paths_includes_environment(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """ResolvedPaths includes environment field."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        dev_vault = tmp_path / "vault-dev"
+        dev_vault.mkdir()
+        monkeypatch.setenv("VAULT_ROOT", str(vault))
         resolved = resolve_paths(environment="dev")
         assert resolved.environment == "dev"
 
-    def test_resolved_paths_prod_vault(self):
+    def test_resolved_paths_prod_vault(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """ResolvedPaths for prod has base vault root."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        monkeypatch.setenv("VAULT_ROOT", str(vault))
         resolved = resolve_paths(environment="prod")
         assert resolved.environment == "prod"
-        assert resolved.vault_root == Path("vault")
+        assert resolved.vault_root == vault
 
-    def test_resolved_paths_dev_vault(self):
+    def test_resolved_paths_dev_vault(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """ResolvedPaths for dev has -dev suffixed vault root."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        dev_vault = tmp_path / "vault-dev"
+        dev_vault.mkdir()
+        monkeypatch.setenv("VAULT_ROOT", str(vault))
         resolved = resolve_paths(environment="dev")
         assert resolved.environment == "dev"
-        assert resolved.vault_root == Path("vault-dev")
+        assert resolved.vault_root == dev_vault
 
 
 class TestWatcherSettingsEnvironmentScoping:
@@ -162,12 +196,23 @@ class TestWatcherSettingsEnvironmentScoping:
 class TestImplicitEnvironmentResolution:
     """Test that environment resolution works when not explicitly provided."""
 
-    def test_vault_implicit_prod_default(self):
-        """Without explicit environment, vault defaults to prod path."""
-        # This depends on PKM_ENVIRONMENT and PKM_SETTINGS_PROFILE not being set in test
+    def test_vault_implicit_prod_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Without explicit environment, vault resolves to the configured VAULT_ROOT path."""
+        vault = tmp_path / "my-vault"
+        vault.mkdir()
+        monkeypatch.setenv("VAULT_ROOT", str(vault))
         path = resolve_vault_root()
-        # Should resolve to base path (default prod)
+        # Should resolve to the configured vault, not a -dev variant
         assert "dev" not in str(path)
+        assert path == vault
+
+    def test_vault_implicit_raises_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """Without VAULT_ROOT configured, resolve_vault_root raises VaultRootNotBoundError."""
+        monkeypatch.delenv("VAULT_ROOT", raising=False)
+        monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+        monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+        with pytest.raises(VaultRootNotBoundError):
+            resolve_vault_root()
 
 
 if __name__ == "__main__":

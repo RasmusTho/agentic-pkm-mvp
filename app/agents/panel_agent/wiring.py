@@ -8,6 +8,8 @@ from typing import Dict, Iterable
 
 import yaml
 
+from app.config.paths import resolve_optional_vault_root
+
 DEFAULT_PANEL_ACTION_WIRING_PATH = Path("docs/settings/panel-action-wiring.yaml")
 VAULT_WIRING_RELATIVE = Path("System/Config/panel-action-wiring.yaml")
 
@@ -30,9 +32,12 @@ def _candidate_paths(path: Path | None = None) -> Iterable[Path]:
     env_path = os.getenv("PANEL_ACTION_WIRING_PATH")
     if env_path:
         yield Path(env_path)
-    vault_root = os.getenv("VAULT_ROOT")
-    if vault_root:
-        yield Path(vault_root).expanduser() / VAULT_WIRING_RELATIVE
+    # Route through the canonical optional resolver rather than reading VAULT_ROOT
+    # directly, so wiring-config discovery honours the same no-vault semantics as
+    # the HTTP path (#2476: non-HTTP vault readers funnel through canonical resolver).
+    vault_root = resolve_optional_vault_root()
+    if vault_root is not None:
+        yield vault_root.expanduser() / VAULT_WIRING_RELATIVE
     yield DEFAULT_PANEL_ACTION_WIRING_PATH
 
 

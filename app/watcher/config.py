@@ -1,3 +1,30 @@
+"""Watcher runtime configuration.
+
+HTTP-vs-background split rationale (#2476)
+------------------------------------------
+The watcher resolves its vault via ``WATCHER_VAULT_PATH`` (not ``VAULT_ROOT``)
+and builds a throwaway ``VaultManager`` to validate the path.  This is an
+*intentional* HTTP-vs-background split, not a split-brain bug:
+
+1. The watcher is a background process with an independent lifecycle — it does
+   not participate in the HTTP vault-selection state machine managed by
+   ``VaultManager`` singleton + ``AppLocalSettingsStore``.
+2. ``WATCHER_VAULT_PATH`` lets operators bind the watcher to a vault
+   independently of the user-facing ``VAULT_ROOT`` / selection flow (e.g. a
+   fixed mount path inside a container).
+3. Converging onto ``resolve_active_vault_root`` (the HTTP-path canonical
+   resolver) would require the watcher to call back into the FastAPI process or
+   share the in-memory singleton — coupling a background daemon to an HTTP
+   runtime boundary that it must not own.
+4. Converging onto ``resolve_optional_vault_root`` would remove the
+   ``WATCHER_VAULT_PATH`` override capability and the VaultManager validation
+   step that checks settings-level ``enable_vault_watcher``.
+
+Verdict: document the split, do not converge.  The watcher vault binding is
+governed by ``WATCHER_VAULT_PATH``; the HTTP path is governed by
+``VAULT_ROOT`` + selection.  Both read from independent source-binding slots.
+"""
+
 from __future__ import annotations
 
 import os

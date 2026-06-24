@@ -27,10 +27,15 @@ def test_resolve_vault_root_prefers_cli(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert result == cli_root
 
 
-def test_resolve_vault_root_test_environment_appends_test_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("VAULT_ROOT", raising=False)
+def test_resolve_vault_root_test_environment_appends_test_suffix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # VAULT_ROOT must be set; resolve_vault_root no longer silently defaults to ./vault
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    test_vault = tmp_path / "vault-test"
+    test_vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
     monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
-    assert resolve_vault_root(environment="test") == Path("vault-test")
+    assert resolve_vault_root(environment="test") == test_vault
 
 
 def test_resolve_vault_root_test_environment_honours_explicit_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
