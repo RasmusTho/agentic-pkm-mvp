@@ -6544,7 +6544,7 @@ def _render_reentry_peripheral_line(orientation: dict) -> str:
     )
 
 
-def _render_reentry_resume_line(orientation: dict) -> str:
+def _render_reentry_resume_line(orientation: dict, *, stale: bool = False) -> str:
     """no_mist quiet resume line (A1 finish, #2483).
 
     The shortest non-zero rung. ``no_mist`` is treated as continuity — the
@@ -6554,11 +6554,35 @@ def _render_reentry_resume_line(orientation: dict) -> str:
     nothing a card would own. Its only job is to keep ``no_mist`` distinct
     from ``thread_fade`` (peripheral rail cue only) instead of pixel-identical.
 
-    Presentation-only: the rung is the server-declared shape; this renderer
-    derives no gap, staleness, or classification.
+    Stale-guard (Codex #2483 follow-up): ``no_mist`` can be assigned by GAP
+    even when the leave point's ``status`` is ``stale`` / ``artifact_missing``
+    / ``degraded`` (``entry_resolution.stale`` true). Short rungs show no
+    leave-point panel and no card, so the quiet resume line is the ONLY leave
+    cue at this rung. Emitting the unqualified "Pick up where you left off"
+    there would hide the held-boundary / missing-artifact / source-changed
+    condition that full/long mist surface via the guarded resume affordance —
+    dropping a load-bearing calm-degraded guard. When stale, render the SAME
+    qualified guard the card uses (``_reentry_resume_affordance``) instead: it
+    names the cause, states nothing was mutated, and offers a non-silent path
+    forward. Non-stale ``no_mist`` keeps its lighter quiet cue, so the
+    no_mist-vs-thread_fade differentiation is preserved.
+
+    Presentation-only: the rung and the staleness flag are server-declared;
+    this renderer derives no gap, staleness, or classification.
     """
     leave = _orientation_dict(orientation.get("leave_point"))
     status = _orientation_str(leave.get("status"))
+    if stale or status in _REENTRY_STALE_CAUSES:
+        # Reuse the card's guard-held qualified resume so the only leave cue at
+        # this rung still names the stale/missing/degraded boundary instead of
+        # masking it behind a generic "pick up where you left off".
+        guard = _reentry_resume_affordance(leave, stale=True)
+        return (
+            f'<div class="reentry-resume-line reentry-resume-line--guarded" '
+            f'data-region="reentry-resume-line" '
+            f'data-testid="reentry-resume-line" data-read-only="true" '
+            f'data-stale="true">{guard}</div>'
+        )
     artifact = _orientation_dict(leave.get("artifact_ref"))
     note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
     if status == "present" and note_path:
@@ -6744,7 +6768,9 @@ def _render_orientation_index_html(
         # the two shortest rungs are not pixel-identical. Presentation-only —
         # the rung is the server-declared shape; the line restates nothing the
         # absent card would have owned (there is no card at this rung).
-        reentry_overlay_html = _render_reentry_resume_line(orientation)
+        reentry_overlay_html = _render_reentry_resume_line(
+            orientation, stale=entry_resolution.stale
+        )
     elif shape == "thread_fade":
         # No card, no peripheral line: the rail pane fades a fraction and the
         # trajectory stays implicit. CUIDR-06 (#2450): because the subtractive

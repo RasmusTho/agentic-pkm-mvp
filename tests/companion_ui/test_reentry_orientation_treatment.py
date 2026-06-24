@@ -37,6 +37,8 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any
 
+import pytest
+
 from companion_ui.workspace.serve_dev_page import render_index_html
 
 # ---------------------------------------------------------------------------
@@ -1824,3 +1826,82 @@ def test_no_mist_distinct_from_thread_fade() -> None:
     assert no_mist_text != thread_fade_text, (
         "no_mist and thread_fade must be visually distinguishable"
     )
+
+
+@pytest.mark.parametrize(
+    ("leave_status", "cause_token"),
+    [
+        ("stale", "Source changed since this was captured"),
+        ("degraded", "Source resolution degraded since this was captured"),
+        ("artifact_missing", "The artifact this leave point referenced is missing"),
+    ],
+)
+def test_no_mist_stale_leave_point_qualifies_resume_cue(
+    leave_status: str, cause_token: str
+) -> None:
+    """Codex #2483 follow-up: a stale ``no_mist`` short-gap leave point must NOT
+    show the unqualified "Pick up where you left off" cue.
+
+    ``no_mist`` is assigned by GAP and can carry a leave point whose
+    ``status`` is stale / artifact_missing / degraded
+    (``entry_resolution.stale`` true). Short rungs show no leave-point panel
+    and no card, so the quiet resume line is the ONLY leave cue here. Emitting
+    the generic cue would HIDE the held-boundary / missing-artifact /
+    source-changed condition that full/long mist surface via the guarded
+    resume affordance — dropping a load-bearing calm-degraded guard.
+
+    The cue must instead surface the SAME qualified guard the card uses: name
+    the cause and state nothing was mutated. Asserted on rendered *visible
+    text* via the parser-based ``_visible_text`` (not raw markup).
+    """
+    html = _render(
+        orientation=_orientation_payload(
+            leave_status=leave_status, gap=_GAP_NO_MIST
+        )
+    )
+    visible = _visible_text(html)
+
+    # RED-first: the unqualified cue must be gone at this rung.
+    assert "Pick up where you left off" not in visible, (
+        f"stale no_mist ({leave_status}) must not show the unqualified resume "
+        f"cue; visible text: {visible!r}"
+    )
+
+    # The qualified guard names the cause and reassures nothing was mutated.
+    assert cause_token in visible, (
+        f"stale no_mist ({leave_status}) must name the guard cause "
+        f"{cause_token!r}; visible text: {visible!r}"
+    )
+    assert "Nothing was mutated" in visible
+
+    # It reuses the card's guard-held affordance (same data-testid / flag).
+    assert 'data-testid="reentry-resume-guard"' in html
+    assert 'data-guard-held="true"' in html
+
+    # No card and no snapshot panels at this rung (do not regress #2450).
+    assert 'data-region="reentry-card"' not in html
+    assert 'data-testid="workspace-orientation-open-loops"' not in html
+
+    # Never a generic error.
+    assert 'data-testid="workspace-error-state"' not in html
+
+    # A missing artifact still gets a non-silent forward path, never a silent
+    # resume link into the missing artifact.
+    if leave_status == "artifact_missing":
+        assert 'data-testid="reentry-resume-reenter"' in html
+        assert "/workspace?note_path=Notes%2Fresume.md" not in html
+
+
+def test_no_mist_nonstale_still_distinct_from_thread_fade() -> None:
+    """The stale-guard qualification must not regress the #2483 no_mist vs
+    thread_fade differentiation for the non-stale (present) leave point.
+
+    A non-stale ``no_mist`` keeps its lighter quiet cue; thread_fade still
+    renders only the fractional rail cue. Their visible text must still differ.
+    """
+    no_mist = _render(orientation=_orientation_payload(gap=_GAP_NO_MIST))
+    thread_fade = _render(orientation=_orientation_payload(gap=_GAP_THREAD_FADE))
+
+    # Non-stale no_mist keeps the quiet cue and carries no guard banner.
+    assert 'data-testid="reentry-resume-guard"' not in no_mist
+    assert _visible_text(no_mist) != _visible_text(thread_fade)
