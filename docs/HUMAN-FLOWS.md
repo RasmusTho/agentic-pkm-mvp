@@ -20,11 +20,18 @@ support, and the functions it must preserve across implementation changes.
 It is not primarily a document about watchers, pipelines, or current internals.
 Those matter only insofar as they help or hinder the human functions described here.
 
+This document owns the **function axis** — what the human is trying to do. The dual **situation
+axis** — the condition the human is in when they meet the system (first contact / no vault, warm vs
+cold return, vault switch, degraded runtime, device role) — is owned by
+`docs/CONCEPTS/USER_SITUATION_MODEL.md`, so that situational intent has an upstream home without
+being narrated here.
+
 For the broader ontology of the system as a second-brain environment, see:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/CONTEXT_TERMINOLOGY_CONTRACT.md`
 - `docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md`
 - `docs/CONCEPTS/USER_NEEDS_MODEL.md`
+- `docs/CONCEPTS/USER_SITUATION_MODEL.md`
 - `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
 - `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`
 - `docs/CONCEPTS/STATE_AXES_CONTRACT.md`
