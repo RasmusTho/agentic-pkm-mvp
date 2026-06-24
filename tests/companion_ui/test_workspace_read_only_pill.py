@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui._visible_text import visible_text as _visible_text
 
 
 def _render(**overrides) -> str:
@@ -62,14 +63,12 @@ class TestReadOnlyPill:
         assert re.search(r"\.workspace-read-only-pill\s*\{[^}]*height:\s*24px", html, re.DOTALL)
 
     def test_read_only_appears_in_at_most_three_surfaces(self) -> None:
-        import re as _re
         html = _render(guard_canvas_enabled=False)
-        # Strip style/script blocks so we only count user-visible text and data-* attrs
-        stripped = _re.sub(r"<style[^>]*>.*?</style[^>]*>", "", html, flags=_re.DOTALL | _re.IGNORECASE)
-        stripped = _re.sub(r"<script[^>]*>.*?</script[^>]*>", "", stripped, flags=_re.DOTALL | _re.IGNORECASE)
-        # Remove HTML tags, leaving only text and attribute values
-        text_only = _re.sub(r"<[^>]+>", " ", stripped)
-        count = text_only.lower().count("read-only")
+        # Count only user-visible text occurrences. The parser-based helper
+        # drops script/style subtrees and every tag/attribute, so data-* attrs
+        # such as data-testid="workspace-read-only-pill" never inflate the count
+        # (it lower-cases too, matching the lower-cased needle below).
+        count = _visible_text(html).count("read-only")
         # Five surfaces are acceptable (CUIDR-02 / #2445 adds settings frame status-pill):
         #   1) vault-browser-read-only span (vault browser status, always shown)
         #   2) reorient-mode rail-state-value "read-only" (panel affordance, empty state)

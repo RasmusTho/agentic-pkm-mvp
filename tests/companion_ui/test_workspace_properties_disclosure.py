@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from companion_ui.workspace.serve_dev_page import render_index_html
+from tests.companion_ui._visible_text import visible_text as _visible_text
 
 
 _FRONTMATTER_BODY = """\
@@ -138,11 +139,9 @@ class TestArtifactAndHashInsideDisclosure:
         )
         assert disc_m
         outside = html.replace(disc_m.group(), "")
-        # Strip style/script blocks before checking
-        import re as _re
-        outside = _re.sub(r"<style[^>]*>.*?</style[^>]*>", "", outside, flags=_re.DOTALL | _re.IGNORECASE)
-        outside = _re.sub(r"<script[^>]*>.*?</script[^>]*>", "", outside, flags=_re.DOTALL | _re.IGNORECASE)
-        assert "art-unique-7777" not in outside, (
+        # A human restatement is visible copy, never a data-* attribute; scan the
+        # rendered visible text only (parser-based, drops script/style + tags).
+        assert "art-unique-7777" not in _visible_text(outside), (
             "artifact_id appears outside the disclosure (restatement violation)"
         )
 
@@ -152,28 +151,21 @@ class TestNoFactRestatement:
 
     def test_no_fact_restatement_for_key_fields(self) -> None:
         html = _render(body=_FRONTMATTER_BODY, artifact_id="art-unique-xzy", content_hash="sha256-unique-abc")
-        import re as _re
-        # Exclude the closed details subtree (not visible on default render)
-        html_outside_details = _re.sub(
+        # Exclude the closed details subtree (not visible on default render),
+        # then scan the rendered visible text only. The parser-based helper drops
+        # the direct editor's textarea data-content-hash (a machine optimistic-
+        # concurrency token in an attribute, not human-visible restatement) for
+        # free, so no per-element strip is needed.
+        html_outside_details = re.sub(
             r'<details[^>]*data-testid="workspace-properties-disclosure".*?</details>',
             "",
             html,
-            flags=_re.DOTALL,
+            flags=re.DOTALL,
         )
-        # Strip style/script
-        stripped = _re.sub(r"<style[^>]*>.*?</style[^>]*>", "", html_outside_details, flags=_re.DOTALL | _re.IGNORECASE)
-        stripped = _re.sub(r"<script[^>]*>.*?</script[^>]*>", "", stripped, flags=_re.DOTALL | _re.IGNORECASE)
-        # Strip the direct editor's textarea: its data-content-hash is a machine
-        # optimistic-concurrency token, not human-visible fact restatement.
-        stripped = _re.sub(
-            r'<textarea[^>]*data-testid="workspace-note-source-editor".*?</textarea>',
-            "",
-            stripped,
-            flags=_re.DOTALL,
-        )
+        visible = _visible_text(html_outside_details)
         # These unique values should NOT appear outside the disclosure
-        assert "art-unique-xzy" not in stripped, "artifact_id leaked outside disclosure"
-        assert "sha256-unique-abc" not in stripped, "content_hash leaked outside disclosure"
+        assert "art-unique-xzy" not in visible, "artifact_id leaked outside disclosure"
+        assert "sha256-unique-abc" not in visible, "content_hash leaked outside disclosure"
 
 
 class TestRendererContractPreserved:
