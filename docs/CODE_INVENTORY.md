@@ -1,4 +1,4 @@
-State: SoT v5.6 baseline (audit pass 2026-05-18: residual-caller map and cleanup follow-ups added; package status unchanged). Updated 2026-05-22: `app/agent`, `app/plugins`, and `run_agent.py` removed (#1171).
+State: SoT v5.6 baseline (audit pass 2026-05-18: residual-caller map and cleanup follow-ups added; package status unchanged). Updated 2026-05-22: `app/agent`, `app/plugins`, and `run_agent.py` removed (#1171). Updated 2026-06-24: `api/app.py` (fake WS stub) and `app/indexer/runner.py` (disabled stub) deleted; `app/obs/` merged into `app/observability/`; `app/memory/` renamed to `app/memory_kv/` (#2480).
 Doc role: Reference
 Authority: Canonical map of app/ package status for the current baseline; use it to determine whether a package is canonical runtime, deprecated, planned, or production support. Wins over ad-hoc comments or import graphs on current-state package classification questions.
 
@@ -134,7 +134,7 @@ These issues are not yet created in GitHub. When created, they should be `type:r
 
 Production-support packages active in the runtime but not on the primary data path. Extend with care; keep changes bounded to their named concern.
 
-Notable support packages include: `app/auth`, `app/capture`, `app/chat`, `app/components`, `app/config`, `app/context_dimensions`, `app/deps`, `app/diarization`, `app/domain`, `app/eval`, `app/fitness`, `app/guardrails`, `app/io`, `app/jobs`, `app/knowledge`, `app/langgraph`, `app/llm`, `app/mcp`, `app/media`, `app/memory`, `app/middleware`, `app/obs`, `app/observability`, `app/orchestrator`, `app/planner`, `app/policy`, `app/ports`, `app/promotion`, `app/quality`, `app/reasoning`, `app/release_channels`, `app/runtime`, `app/schemas`, `app/services`, `app/tracing`, `app/web`, `app/write_guard`.
+Notable support packages include: `app/auth`, `app/capture`, `app/chat`, `app/components`, `app/config`, `app/context_dimensions`, `app/deps`, `app/diarization`, `app/domain`, `app/eval`, `app/fitness`, `app/guardrails`, `app/io`, `app/jobs`, `app/knowledge`, `app/langgraph`, `app/llm`, `app/mcp`, `app/media`, `app/memory_kv` (KV memory substrate; renamed from `app/memory` in #2480), `app/middleware`, `app/observability` (now includes `log.py` and `redaction.py` merged from former `app/obs/` in #2480), `app/orchestrator`, `app/planner`, `app/policy`, `app/ports`, `app/promotion`, `app/quality`, `app/reasoning`, `app/release_channels`, `app/runtime`, `app/schemas`, `app/services`, `app/tracing`, `app/web`, `app/write_guard`.
 
 Agent surfaces: `app/agents`, `app/a2a`.
 

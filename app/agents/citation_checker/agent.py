@@ -4,7 +4,7 @@ from typing import Any
 from datetime import datetime, timezone
 
 from app.events.types import CURATION_CITATION_CHECK_DONE
-from app.memory.store import remember
+from app.memory_kv.store import remember
 from app.services.decisions import latest_decision
 from app.objects import ObjectStore
 

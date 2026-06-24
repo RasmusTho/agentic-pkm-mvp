@@ -5,7 +5,7 @@ from typing import Any
 from app.agents.base.audit import audit_log
 from app.agents.base.graph import AgentState, PERSpec, build_graph
 from app.agents.reviewer.agent import run as reviewer_run, AGENT
-from app.memory.store import recall
+from app.memory_kv.store import recall
 
 
 def _plan(state: AgentState) -> AgentState:

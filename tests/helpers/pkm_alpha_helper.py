@@ -12,7 +12,7 @@ from uuid import UUID
 
 import app.store.object_store as legacy_store
 from app.ingest.vault_root import _ingest_file
-from app.obs.log import with_trace_id
+from app.observability.log import with_trace_id
 from app.stores import get_object_store, reset_store_backends
 from app.vault.layout import load_layout
 from app.vault.paths import get_vault_inbox_dir_rel

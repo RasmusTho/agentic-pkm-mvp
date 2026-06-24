@@ -62,7 +62,7 @@ from app.orchestrator.runtime import Orchestrator
 from app.orchestrator.executor import MockPlanExecutor
 from app.a2a.schema import AgentRequest, new_response
 from app.media.transcribe import transcribe_source
-from app.obs.log import with_trace_id
+from app.observability.log import with_trace_id
 from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all

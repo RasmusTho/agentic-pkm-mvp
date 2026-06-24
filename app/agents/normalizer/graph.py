@@ -5,7 +5,7 @@ from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
 from app.events.types import INGEST_NORMALIZE_DONE
 from app.agents.normalizer.agent import run as normalizer_run
-from app.memory.store import recall
+from app.memory_kv.store import recall
 from app.objects import ObjectStore
 
 AGENT = "normalizer"

@@ -20,7 +20,7 @@ from app.knowledge.errors import KnowledgeConfigError
 from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
 from app.cli.settings_explain import mask_dsn
-from app.obs.log import span, with_trace_id
+from app.observability.log import span, with_trace_id
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores.db_health import ping_postgres, resolve_dsn

@@ -5,7 +5,7 @@ from app.agents.base.graph import PERSpec, build_graph, AgentState
 from app.agents.base.audit import audit_log
 from app.events.types import CURATION_CLASSIFY_DONE
 from app.agents.classifier.agent import run as classifier_run
-from app.memory.store import recall
+from app.memory_kv.store import recall
 
 AGENT = "classifier"
 

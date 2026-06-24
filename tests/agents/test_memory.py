@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from app.memory.store import remember, recall, decay
+from app.memory_kv.store import remember, recall, decay
 
 
 def test_memory_store_roundtrip():
