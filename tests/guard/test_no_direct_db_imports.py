@@ -27,7 +27,7 @@ ALLOW_FILES = (
     'app/store/vector_store.py',
     'app/store/relation_index.py',
     'app/store/object_store.py',
-    'app/memory/store.py',
+    'app/memory_kv/store.py',
     'app/agent/repository.py',
     'app/api/routes/search.py',
 )

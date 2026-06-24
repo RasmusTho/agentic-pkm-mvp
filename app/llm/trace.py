@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.obs.redaction import safe_preview
+from app.observability.redaction import safe_preview
 
 TRACE_ENABLED = os.getenv("LLM_TRACE_ENABLE", "0") == "1"
 TRACE_PATH = Path(os.getenv("LLM_TRACE_PATH", "tmp/llm-trace.jsonl"))

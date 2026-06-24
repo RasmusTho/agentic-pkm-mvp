@@ -241,9 +241,8 @@ alpha-e2e-smoke:
 ci-smoke: smoke
 
 indexer-run:
-	@echo "indexer-run no longer consumes INDEX_OUTBOX_PATH as a queue."
+	@echo "indexer-run: app.indexer.runner has been removed (#2480)."
 	@echo "Use the DB outbox worker path instead: PYTHONPATH=\"$(PWD)\" $(PYTHON) -m app.workers.outbox_worker"
-	PYTHONPATH="$(PWD)" $(PYTHON) -m app.indexer.runner
 
 setup-merge-driver:
 	git config merge.semanticmd.name "Semantic Markdown merge"

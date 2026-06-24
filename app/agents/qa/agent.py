@@ -4,7 +4,7 @@ import os
 from typing import Dict, List, Optional
 
 from app.components.llm.fabric import LLMTaskIntent, get_chat_client
-from app.obs.log import span, with_trace_id
+from app.observability.log import span, with_trace_id
 from app.quality.guardrails import enforce_quality
 from app.retrieval.hybrid import hybrid_search
 from app.settings.models import QaSettings, SettingsBundle

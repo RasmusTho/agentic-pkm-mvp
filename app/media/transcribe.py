@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover
 
 from app.diarization.hook import apply_diarization
 from app.index.outbox import append_jsonl
-from app.obs.log import span, with_trace_id
+from app.observability.log import span, with_trace_id
 
 _MODEL_CACHE: Dict[Tuple[str, str], WhisperModel] = {}
 

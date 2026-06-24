@@ -14,7 +14,7 @@ from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.index.outbox import append_jsonl
 from app.knowledge.write_ops import write_note_from_absolute
-from app.obs.log import with_trace_id
+from app.observability.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
 from app.services.companion_note import companion_path

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
 import app.api.routes.companion as companion_module
-import app.memory.store as memory_store
+import app.memory_kv.store as memory_store
 import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.observability.status_model import EventCounters, IngestionStatus, WorkerQueueStatus

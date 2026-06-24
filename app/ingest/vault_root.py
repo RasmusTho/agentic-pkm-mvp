@@ -11,7 +11,7 @@ from app.agents.normalizer.agent import run as normalize_run
 from app.agents.panel.filters import strip_ai_panels
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
-from app.obs.log import with_trace_id
+from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store
 from app.stores.provider import get_stores

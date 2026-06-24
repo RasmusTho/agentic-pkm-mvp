@@ -7,6 +7,7 @@ from typing import Iterable
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = [REPO_ROOT / "app", REPO_ROOT / "tests", REPO_ROOT / "scripts"]
 FORBIDDEN_IMPORTS = {
+    "app.indexer.runner",
     "app._legacy.main",
     "app._legacy.deps",
     "app._legacy.models",
@@ -53,6 +54,16 @@ def _imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module)
     return modules
+
+
+def test_dead_stubs_removed() -> None:
+    """api/app.py and app/indexer/runner.py must not exist."""
+    assert not (REPO_ROOT / "api" / "app.py").exists(), (
+        "api/app.py (fake WS stub) should have been deleted"
+    )
+    assert not (REPO_ROOT / "app" / "indexer" / "runner.py").exists(), (
+        "app/indexer/runner.py (disabled stub) should have been deleted"
+    )
 
 
 def test_removed_legacy_entrypoints_are_not_imported() -> None:

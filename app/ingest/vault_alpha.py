@@ -18,7 +18,7 @@ from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import resolve_ingest_config
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_run
-from app.obs.log import with_trace_id
+from app.observability.log import with_trace_id
 from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
 from app.settings.runtime import get_settings_bundle
