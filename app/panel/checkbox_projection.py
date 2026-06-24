@@ -489,6 +489,7 @@ class CheckboxProjectionService:
             run_panel_note_execution(
                 request.artifact_id,
                 trace_id=request.idempotency_key,
+                vault_root=vault_root,
                 trigger="companion",
             )
         except Exception as exc:

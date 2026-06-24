@@ -33,6 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NAMED_READER_MODULES = (
     REPO_ROOT / "app" / "agents" / "panel_agent" / "wiring.py",
     REPO_ROOT / "app" / "agents" / "panel_agent" / "cognition.py",
+    REPO_ROOT / "app" / "agents" / "panel_agent" / "runtime.py",
     REPO_ROOT / "app" / "agent_memory" / "recall_retrieval.py",
 )
 
@@ -45,25 +46,70 @@ CANONICAL_RESOLVER_NAMES = frozenset(
     }
 )
 
+# Vault-identity env vars a named non-HTTP reader must NOT read directly.
+# watcher/config.py owns the documented WATCHER_VAULT_PATH split and is excluded
+# from this module list, so the panel/recall readers may not honor it either.
+_VAULT_ENV_VAR_NAMES = frozenset(
+    {
+        "VAULT_ROOT",
+        "VAULT_ROOT_DEV",
+        "VAULT_ROOT_TEST",
+        "WATCHER_VAULT_PATH",
+    }
+)
 
-def _has_bare_vault_root_getenv(tree: ast.AST) -> list[int]:
-    """Return line numbers of ``os.getenv("VAULT_ROOT")`` calls in *tree*."""
-    hits: list[int] = []
+
+def _is_os_environ(node: ast.AST) -> bool:
+    """Return True if *node* is the ``os.environ`` attribute access."""
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
+def _vault_env_literal(node: ast.AST) -> str | None:
+    """Return the vault env-var name if *node* is a vault-identity string literal."""
+    if isinstance(node, ast.Constant) and node.value in _VAULT_ENV_VAR_NAMES:
+        return node.value
+    return None
+
+
+def _has_bare_vault_root_getenv(tree: ast.AST) -> list[str]:
+    """Return ``"<lineno>: <detail>"`` for every direct vault-env read in *tree*.
+
+    Detects, for any of the vault-identity env vars in ``_VAULT_ENV_VAR_NAMES``:
+      * ``os.getenv("VAULT_ROOT")`` / ``os.getenv("WATCHER_VAULT_PATH")`` etc.
+      * ``os.environ.get("VAULT_ROOT")``
+      * ``os.environ["VAULT_ROOT"]`` subscript access
+
+    The pre-#2476 ``os.getenv("VAULT_ROOT") or os.getenv("WATCHER_VAULT_PATH")``
+    pattern in panel_agent/runtime.py must trip this.
+    """
+    hits: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        # os.getenv("VAULT_ROOT") / os.environ.get("VAULT_ROOT")
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and node.args:
+                env_var = _vault_env_literal(node.args[0])
+                if env_var is not None:
+                    is_os_getenv = (
+                        func.attr == "getenv"
+                        and isinstance(func.value, ast.Name)
+                        and func.value.id == "os"
+                    )
+                    is_environ_get = func.attr == "get" and _is_os_environ(func.value)
+                    if is_os_getenv or is_environ_get:
+                        accessor = "os.getenv" if is_os_getenv else "os.environ.get"
+                        hits.append(f"{node.lineno}: {accessor}('{env_var}')")
             continue
-        func = node.func
-        is_getenv = (
-            isinstance(func, ast.Attribute)
-            and func.attr == "getenv"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "os"
-        )
-        if not is_getenv or not node.args:
-            continue
-        first_arg = node.args[0]
-        if isinstance(first_arg, ast.Constant) and first_arg.value == "VAULT_ROOT":
-            hits.append(node.lineno)
+        # os.environ["VAULT_ROOT"] subscript
+        if isinstance(node, ast.Subscript) and _is_os_environ(node.value):
+            env_var = _vault_env_literal(node.slice)
+            if env_var is not None:
+                hits.append(f"{node.lineno}: os.environ['{env_var}']")
     return hits
 
 
@@ -82,16 +128,28 @@ def _imports_canonical_resolver(tree: ast.AST) -> bool:
 
 
 def test_vault_readers_funnel_through_resolver() -> None:
-    """Named non-HTTP readers must not read VAULT_ROOT directly outside canonical resolver.
+    """Named non-HTTP readers must funnel vault identity through a canonical resolver.
 
-    Each named module must either:
-    (a) not contain a bare ``os.getenv("VAULT_ROOT")`` call, OR
-    (b) import a canonical resolver alongside any ``os.getenv("VAULT_ROOT")``
-        usage (indicating transitional dual-read or a legitimate override path
-        that still acknowledges the canonical resolver).
+    Two positive requirements, both enforced per named module:
 
-    The watcher (``app/watcher/config.py``) is excluded: it carries an explicit
-    documented HTTP-vs-background split with rationale in its module docstring.
+    1. **No direct vault-env reads.** The module must not read any vault-identity
+       env var directly — ``VAULT_ROOT``, ``VAULT_ROOT_DEV``, ``VAULT_ROOT_TEST``,
+       or ``WATCHER_VAULT_PATH`` — via ``os.getenv(...)``, ``os.environ.get(...)``,
+       or ``os.environ[...]`` subscript.
+    2. **Positive resolver import.** The module must import one of the canonical
+       active-vault resolvers (``resolve_optional_vault_root``,
+       ``resolve_active_vault_root``, ``ActiveContextResolver``).
+
+    Requirement 2 closes the weak-guard gap (flagged by adversarial review): the
+    previous test passed *trivially* for a module with no bare env read, without
+    ever asserting that vault identity actually flows through the canonical
+    resolver. A module that silently stopped resolving a vault — or resolved one
+    via some other un-converged path — would have slipped through. Now every
+    named reader must positively demonstrate convergence.
+
+    The watcher (``app/watcher/config.py``) is excluded from ``NAMED_READER_MODULES``:
+    it carries an explicit documented HTTP-vs-background split (``WATCHER_VAULT_PATH``)
+    with rationale in its module docstring, guarded separately below.
     """
     violations: list[str] = []
 
@@ -100,28 +158,30 @@ def test_vault_readers_funnel_through_resolver() -> None:
             violations.append(f"{path.relative_to(REPO_ROOT)}: file not found")
             continue
 
+        relative = path.relative_to(REPO_ROOT)
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
 
-        bare_getenv_lines = _has_bare_vault_root_getenv(tree)
-        if not bare_getenv_lines:
-            # No direct env reads — compliant
-            continue
+        # (1) No direct vault-env reads of any vault-identity env var.
+        for hit in _has_bare_vault_root_getenv(tree):
+            violations.append(
+                f"{relative}:{hit}: direct vault-env read; must route through a "
+                f"canonical resolver ({sorted(CANONICAL_RESOLVER_NAMES)})"
+            )
 
-        # Has direct env reads: must also import the canonical resolver
+        # (2) Positively require a canonical resolver import.
         if not _imports_canonical_resolver(tree):
-            relative = path.relative_to(REPO_ROOT)
-            for lineno in bare_getenv_lines:
-                violations.append(
-                    f"{relative}:{lineno}: bare os.getenv('VAULT_ROOT') without "
-                    f"canonical resolver import ({sorted(CANONICAL_RESOLVER_NAMES)})"
-                )
+            violations.append(
+                f"{relative}: does not import a canonical active-vault resolver "
+                f"({sorted(CANONICAL_RESOLVER_NAMES)}); vault identity must flow "
+                "through the canonical resolver, not an un-converged path"
+            )
 
     assert not violations, (
         "Named non-HTTP vault readers must funnel through the canonical "
         "active-vault resolver (resolve_optional_vault_root, "
-        "resolve_active_vault_root, or ActiveContextResolver) or have an "
-        "explicit documented HTTP-vs-background split. Violations:\n"
+        "resolve_active_vault_root, or ActiveContextResolver) and must not read "
+        "any vault-identity env var directly. Violations:\n"
         + "\n".join(violations)
     )
 
