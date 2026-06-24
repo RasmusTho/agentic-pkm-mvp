@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Any
 
 from companion_ui.workspace.overlay_host import (
@@ -496,20 +497,47 @@ def test_operator_telemetry_absent_from_shell() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _visible_text(html: str) -> str:
-    """Reduce rendered HTML to its human-visible text.
+_VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
+_VISIBLE_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
 
-    Strips ``<script>``/``<style>`` *contents* (so a token that lives only in
-    inert JS/CSS or a ``data-*`` hook does not count as on-screen copy) and
-    then strips every remaining tag. The result is the text a reader actually
-    sees, lower-cased for a substring scan. The earlier round's testid-only
-    scan stayed green while the visible ``RECOVERY`` pill and the orientation
-    ``as of …`` line still rendered — this scans what the reader sees.
-    """
-    no_script = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", html, flags=re.S | re.I)
-    no_style = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", no_script, flags=re.S | re.I)
-    text = re.sub(r"<[^>]+>", " ", no_style)
-    return re.sub(r"\s+", " ", text).strip().lower()
+
+class _VisibleTextExtractor(HTMLParser):
+    """Collect on-screen text via a real HTML parser (no regex tag-filter), so
+    whitespace-padded or upper-case close tags (``</script >``, ``<SCRIPT>``)
+    cannot leak inert markup into the scanned copy."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth or tag in _VISIBLE_SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VISIBLE_VOID_TAGS:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            self._chunks.append(data)
+
+
+def _visible_text(html: str) -> str:
+    """Rendered human-visible text: tags removed and <script>/<style>/<head>
+    bodies dropped. Whitespace-collapsed and lower-cased for substring scans."""
+    extractor = _VisibleTextExtractor()
+    extractor.feed(html)
+    extractor.close()
+    return " ".join("".join(extractor._chunks).split()).lower()
 
 
 def test_shell_topbar_has_no_recovery_telemetry() -> None:
