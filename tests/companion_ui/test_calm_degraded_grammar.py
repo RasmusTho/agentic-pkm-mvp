@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import textwrap
+from html.parser import HTMLParser
 from typing import Any
 
 import pytest
@@ -349,13 +350,49 @@ _EXPECTED_CALM_VAULT_COPY = calm_degraded(
 )
 
 
+class _ScriptBodyCollector(HTMLParser):
+    """Collect the text of every ``<script>`` element via a real HTML parser.
+
+    Used to pull the overlay IIFE out of the rendered page so it can be
+    *executed* under Node. A parser (not a regex tag-filter) is used so the
+    extraction is robust to upper-case / whitespace-padded ``</script>`` tags.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self._in_script = False
+        self._buf: list[str] = []
+        self.bodies: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag == "script":
+            self._in_script = True
+            self._buf = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_script:
+            self._buf.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._in_script:
+            self._in_script = False
+            self.bodies.append("".join(self._buf))
+
+
+def _script_bodies(html: str) -> list[str]:
+    collector = _ScriptBodyCollector()
+    collector.feed(html)
+    collector.close()
+    return collector.bodies
+
+
 def _vault_browser_overlay_script() -> str:
     """Extract the vault-browser overlay IIFE (defines ``fetchNotes``)."""
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         note_path="Notes/panel.md",
     )
-    for body in re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL):
+    for body in _script_bodies(html):
         if "function fetchNotes" in body and "vault-browser-status" in body:
             return body
     raise AssertionError("vault-browser overlay script (fetchNotes) not found")
@@ -532,8 +569,6 @@ def test_humanise_token_fails_closed_on_unmapped_classified_namespace() -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-from html.parser import HTMLParser
-
 _VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
 _VISIBLE_VOID_TAGS = frozenset({
     "area", "base", "br", "col", "embed", "hr", "img", "input",
