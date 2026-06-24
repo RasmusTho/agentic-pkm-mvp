@@ -348,7 +348,7 @@ def test_full_mist_renders_four_fixed_questions_with_counts() -> None:
 
     # "What changed since" is a delta count, never a timeline.
     assert "2 changes" in card
-    assert "notable change label 0" not in card
+    assert "Notable change label 0" not in card
 
     # Deliberate inspect affordance always emits the declared entry/shell
     # intent. Even with zero candidates, the owner vocabulary stays
@@ -403,7 +403,7 @@ def test_long_mist_renders_four_fixed_questions_with_counts() -> None:
         "</span>", 1
     )[0]
     assert "2 changes while you were away" in re.sub(r"\s+", " ", changed)
-    assert "notable change label 0" not in changed
+    assert "Notable change label 0" not in changed
 
     whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
     whisper_text = re.sub(r"\s+", " ", whisper)
@@ -433,7 +433,7 @@ def test_long_mist_adds_delta_strip_and_whisper_column() -> None:
     # notable-changes panel — it no longer enumerates the change labels
     # verbatim (those live only in the panel, de-duplicated against the card).
     assert 'data-region="delta-strip"' in card
-    assert "notable change label 0" not in card
+    assert "Notable change label 0" not in card
     delta = card.split('data-region="delta-strip"', 1)[1].split("</div>", 1)[0]
     assert 'data-testid="reentry-delta-summary"' in delta
     assert "2 deltas since you left" in re.sub(r"\s+", " ", delta)
@@ -1368,7 +1368,7 @@ def test_mist_ladder_subtractive_no_panel_at_short_rungs() -> None:
         )
         # Enumerations (the individual items) are still fine in the panels.
         assert "Open loop label 0" in open_loops
-        assert "notable change label 0" in notable
+        assert "Notable change label 0" in notable
 
 
 # Issue #2450 names this Verify target for the A1 static AC; alias to the
@@ -1726,7 +1726,7 @@ def test_card_and_panels_do_not_duplicate_datum() -> None:
         #     label must never appear verbatim outside the card. A count-only
         #     check passed even while the whisper restated the label (Codex P2);
         #     this asserts the datum, not just the count line.
-        leave_label = "Resume the runtime API contract"
+        leave_label = "resume the runtime api contract"
         for marker, end in (
             ('data-testid="workspace-orientation-open-loops"', "</section>"),
             ('data-region="whisper-column"', "</aside>"),
@@ -1831,9 +1831,9 @@ def test_no_mist_distinct_from_thread_fade() -> None:
 @pytest.mark.parametrize(
     ("leave_status", "cause_token"),
     [
-        ("stale", "Source changed since this was captured"),
-        ("degraded", "Source resolution degraded since this was captured"),
-        ("artifact_missing", "The artifact this leave point referenced is missing"),
+        ("stale", "source changed since this was captured"),
+        ("degraded", "source resolution degraded since this was captured"),
+        ("artifact_missing", "the artifact this leave point referenced is missing"),
     ],
 )
 def test_no_mist_stale_leave_point_qualifies_resume_cue(
@@ -1862,7 +1862,7 @@ def test_no_mist_stale_leave_point_qualifies_resume_cue(
     visible = _visible_text(html)
 
     # RED-first: the unqualified cue must be gone at this rung.
-    assert "Pick up where you left off" not in visible, (
+    assert "pick up where you left off" not in visible, (
         f"stale no_mist ({leave_status}) must not show the unqualified resume "
         f"cue; visible text: {visible!r}"
     )
@@ -1872,7 +1872,7 @@ def test_no_mist_stale_leave_point_qualifies_resume_cue(
         f"stale no_mist ({leave_status}) must name the guard cause "
         f"{cause_token!r}; visible text: {visible!r}"
     )
-    assert "Nothing was mutated" in visible
+    assert "nothing was mutated" in visible
 
     # It reuses the card's guard-held affordance (same data-testid / flag).
     assert 'data-testid="reentry-resume-guard"' in html
@@ -1959,7 +1959,7 @@ def test_off_nominal_leave_point_preserves_structured_detail_with_card(
     panel_text = _region_visible_text(
         html, 'data-testid="workspace-orientation-leave-point"', "</section>"
     )
-    assert "Last signal" in panel_text, (
+    assert "last signal" in panel_text, (
         f"off-nominal ({leave_status}) must keep the Last signal line"
     )
     assert "session session-123" in panel_text, (
@@ -1971,11 +1971,11 @@ def test_off_nominal_leave_point_preserves_structured_detail_with_card(
 
     # De-dup is still honoured: the duplicated LEAVE POINT kicker + label
     # heading (the card already names the label) are NOT repeated in the panel.
-    assert "Leave point" not in panel_text, (
+    assert "leave point" not in panel_text, (
         f"off-nominal ({leave_status}) must still suppress the duplicated "
         f"LEAVE POINT kicker"
     )
-    assert "Resume the runtime API contract" not in panel_text, (
+    assert "resume the runtime api contract" not in panel_text, (
         f"off-nominal ({leave_status}) must still suppress the duplicated "
         f"leave-point label heading the card states"
     )
