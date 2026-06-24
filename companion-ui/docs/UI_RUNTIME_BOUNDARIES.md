@@ -94,15 +94,17 @@ health-gate and emits an actor-tagged receipt.
 4. A `SettingsWriteReceipt(key, value, surface, actor, timestamp, is_runtime_gating=True)` is
    emitted and logged at INFO level.
 
-**Receipt covers the API/CLI door (only):**
-- **API/UI/CLI origin** (`surface='api'` or `'cli'`, `actor='human'`): receipt emitted immediately
+**Receipt covers the API door (only):**
+- **API/UI origin** (`surface='api'`, `actor='human'`): receipt emitted immediately
   (sole production caller: `app/api/routes/companion.py:826`).
+- **CLI origin** (`surface='cli'`): NOT yet wired. The `app.cli vault` group exposes `init`/`preflight`
+  only; no command toggles runtime-gating settings through the seam. Addable when a consumer exists.
 - **File-originated origin** (`surface='file'`): NOT yet wired. The watcher does NOT call the
   governed seam on a `settings/local.md` delta, so a human hand-editing that file produces no
   receipt. Closing this door is tracked by #2512.
 
-**Valid origins of the same seam:** UI (via `POST /api/companion/vault/settings`), CLI (existing
-`app.cli vault` commands), and future MCP/API surfaces. No new surfaces are added here.
+**Valid origins of the same seam:** UI (via `POST /api/companion/vault/settings`, wired), CLI (existing
+`app.cli vault` commands — NOT yet wired, see above), and future MCP/API surfaces. No new surfaces are added here.
 
 ### Tier 3 — External-boundary enable
 

@@ -256,7 +256,7 @@ The canonical two-tier classification:
    through the single server-side governed seam: WriteGuard health-gate + actor-tagged
    `SettingsWriteReceipt` (who / surface / when). No human/agent approval loop — a human may
    already flip these via a direct hand-edit of `settings/local.md` (the file-originated door).
-   The receipt is wired for the **API/CLI door only** (caller: `app/api/routes/companion.py:826`).
+   The receipt is wired for the **API door only** (caller: `app/api/routes/companion.py:826`); the CLI (`app.cli vault`, init/preflight only) is NOT yet wired.
    The file-originated door (watcher-detected delta → `surface='file'`) is NOT yet wired; tracked
    by #2512.
 

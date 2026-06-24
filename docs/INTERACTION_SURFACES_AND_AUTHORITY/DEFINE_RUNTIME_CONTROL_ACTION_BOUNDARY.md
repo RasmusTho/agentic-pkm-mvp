@@ -82,7 +82,7 @@ TTS provider enable crosses an external boundary. EBF applies. Not re-decided he
 ## Audit blind-spot — partially closed
 
 A direct hand-edit of `settings/local.md` previously produced no receipt — only the watcher
-picking it up at next start. This PR closes the blind-spot for the **API/CLI door** only.
+picking it up at next start. This PR closes the blind-spot for the **API door** only (the CLI `app.cli vault` group is init/preflight only and not yet wired).
 The **file-originated door** (watcher-detected `settings/local.md` delta → `surface='file'`)
 is NOT yet wired: the watcher does not call `update_setting`, so a human hand-edit still produces
 no receipt. Closing that door is tracked by #2512.
