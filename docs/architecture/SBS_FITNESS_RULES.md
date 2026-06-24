@@ -1,12 +1,12 @@
-State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later.
+State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later. Updated 2026-06-24 (#2481): interaction-layer import-direction rule promoted to blocking CI check (ADR-0013 flip); deprecated-store-caller guard added as CI check now.
 Doc role: Fitness rule catalog
 Authority: Owns target SBS architecture fitness rules, enforcement posture, and failure-mode detection.
 Owner: OEF / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-22
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_TRANSITION_DEBT.md
+Last reviewed: 2026-06-24
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/CODE_INVENTORY.md, docs/adr/ADR-0013-code-dependency-direction.md
 
 # SBS Fitness Rules
 
@@ -24,6 +24,8 @@ These rules make the target SBS inspectable without claiming current implementat
 | Rule | Classification | Detection | Response |
 |---|---|---|---|
 | No global `activeVault` as architecture contract outside WSP/EBF/HIX adapters. | CI check now for target SBS contract stubs; manual review elsewhere | `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity` scans target public SBS contracts outside WSP for active-vault/vault-path/root contract terms. | Replace with ActiveContextSet and source binding. |
+| No backward import from non-interaction `app.*` module into the interaction layer (`app.api`, `app.chat`, `app.cli`, `app.web`). | **Blocking invariant — CI blocking now** | `.github/workflows/import-linter.yaml` (blocking, no `continue-on-error`) runs `lint-imports --config importlinter.ini` on every PR. All known violations resolved before flip; no allowlist. Governed by ADR-0013. | Extract shared helpers to `app.text` or another Foundation package; remove the backward import. |
+| No new callers of deprecated `app.store` or `app.stores` packages. | **CI check now (blocking)** | `tests/architecture/test_deprecated_store_callers.py::test_no_new_store_callers` walks `app/**/*.py`, detects imports of `app.store`/`app.stores`, and fails if any importer outside the documented allowlist appears. | Migrate to `app.objects` (for `DomainObject`/`ObjectStore` types) or to service+outbox boundaries. See `docs/CODE_INVENTORY.md` §Cleanup follow-ups. |
 | Human-flow SBS allocation references resolve. | CI check now for low-ambiguity local references | `tests/architecture/test_sbs_fitness_rules.py::test_human_flow_sbs_allocation_references_resolve` scans allocation tables in `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md` that carry `Verification anchor(s)` and validates referenced `docs/contracts/*.md`, `docs/architecture/SBS_*.md`, and concrete `tests/*.py` paths / pytest node ids. | Fix the broken reference, or use explicit `to define` / `manual review now` wording when verification is not mechanical yet. |
 | No authority-bearing durable write without GOV DecisionToken and receipt. | Blocking invariant target; manual review now | Durable mutation path lacks pre-mutation token or post-mutation AuthorityReceipt. | Route through GovernedWriteProtocol. |
 | No direct HKA write from RCA, MEM, CAO, EXE, EBF, or HIX. | Blocking invariant target; CI check later | Non-HKA owner writes accepted human artifact state directly. | Use HKA-owned mutation under GOV decision. |
@@ -63,8 +65,10 @@ These rules make the target SBS inspectable without claiming current implementat
 - Shipped first rail: `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity` is a read-only pytest check for new public `activeVault`/`vaultPath`/vault-root contract usage in target SBS contracts outside WSP ActiveContextSet.
 - Shipped second rail: `tests/architecture/test_sbs_fitness_rules.py::test_non_hka_contracts_do_not_claim_direct_hka_mutation` is a read-only contract-doc check that the non-HKA target contracts (RCA/MEM/CAO/EXE) do not claim direct durable HKA/artifact mutation and route knowledge mutation through GOV / GovernedWriteProtocol.
 - Shipped allocation-reference rail: `tests/architecture/test_sbs_fitness_rules.py::test_human_flow_sbs_allocation_references_resolve` is a read-only docs check that the human-flow SBS allocation view does not point at missing contract docs, SBS architecture docs, concrete test files, or concrete pytest node ids, and that rows without a mechanical proof say `to define` or `manual review now`.
+- **Shipped import-direction blocking gate (#2481):** `.github/workflows/import-linter.yaml` now runs blocking (no `continue-on-error`). Any backward import from non-interaction into interaction layer fails the PR. Governed by ADR-0013.
+- **Shipped deprecated-store-caller guard (#2481):** `tests/architecture/test_deprecated_store_callers.py::test_no_new_store_callers` prevents new callers of `app.store`/`app.stores`; allowlist documents the 31 known callers to migrate.
 - Contract tests for authority-bearing write paths once DecisionToken and AuthorityReceipt exist in code.
-- Dependency checks that prevent RCA/MEM/CAO/EXE direct HKA writes once those subsystems have stable physical modules (a literal code import-direction map; the contract-doc rail above is the interim enforcement).
+- Dependency checks that prevent RCA/MEM/CAO/EXE direct HKA writes once those subsystems have stable physical modules (a literal dependency/import-direction check; the contract-doc rail above is the interim enforcement).
 - Provider-field checks for HKA/SIP/GOV contract files.
 - Docs/PR template checks requiring SBS impact classification for major work.
 
@@ -79,6 +83,8 @@ This roadmap orders rules by how load-bearing the boundary is and how mechanical
 | No global `activeVault`/`vaultPath` in target public contracts outside WSP. | WSP / OEF | Prevents scope collapse into a storage/source location; keeps `ActiveContextSet` the context seam. | CI check now — `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity`. | CI check now (extend coverage as contracts grow). | #2363 shipped (PR #2376); coverage extension under #2381. |
 | Authority-bearing durable writes require `DecisionToken` and `AuthorityReceipt`. | GOV | Stops governance from being advisory; makes accountability non-skippable. | Manual review now; first adapter on the capture path (#2357). | Blocking invariant (CI contract test once tokens exist on enough paths in code). | Token-dependent; tracked by #2381 (deferred portion) + debt D2. |
 | No direct HKA mutation from RCA/MEM/CAO/EXE/EBF/HIX. | HKA / OEF | Prevents retrieval/memory/agents/UI from becoming knowledge authority. | CI check now — `tests/architecture/test_sbs_fitness_rules.py::test_non_hka_contracts_do_not_claim_direct_hka_mutation` (contract-doc level: RCA/MEM/CAO/EXE contracts disclaim direct HKA mutation and route through GOV / GovernedWriteProtocol). | Blocking invariant; extend toward a literal dependency/import-direction check once subsystems have stable physical modules (Boundary Register shows Partial/No today). | #2381 — first contract-doc CI rail shipped; literal module-import map deferred. |
+| No backward import from non-interaction `app.*` into the interaction layer. | Architecture / OEF | Prevents cognition/execution/memory modules from reaching backward into human/agent-facing surfaces; enforces ADR-0013 directional contract. | **Blocking CI check now** — `.github/workflows/import-linter.yaml` (blocking, runs on every PR). All known violations cleared before flip; no allowlist required. | Blocking invariant — already at target enforcement. Extend `source_modules` in `importlinter.ini` as new packages are added. | #2481 flipped to blocking (2026-06-24); governed by ADR-0013. |
+| No new callers of deprecated `app.store` / `app.stores`. | Architecture / PDM | Stops growth of the deprecated store surface; keeps migration progress measurable. | **CI check now** (blocking) — `tests/architecture/test_deprecated_store_callers.py::test_no_new_store_callers`. Allowlist documents known callers; shrinks as migrations land. | CI check now — maintain until allowlist is empty and both packages are removed. | #2481 shipped (2026-06-24); see `docs/CODE_INVENTORY.md` §Cleanup follow-ups for migration issues. |
 
 ### P1 — substrate and cognitive contract integrity
 

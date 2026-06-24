@@ -41,6 +41,24 @@ The four senses:
 - A **set-but-missing** content vault is a misconfiguration that fails loud (`VaultRootMisconfiguredError`), not a no-vault state.
 - Vault-settings and the test vault are unaffected by the no-vault-at-initiation contract; only the runtime binding may legitimately be absent at boot.
 
+<a id="vault-init"></a>
+
+### Vault initialization and the personal-vault-write constraint
+
+**Vault initialization** is the act of writing the Design Handoff settings scaffold (`settings/vault.md`, `settings/local.md`, and companion files) into a folder so it becomes a fully *selected* (initialized) vault. Once initialized, the vault context resolves to `selected` and both reads and writes are enabled.
+
+**Two distinct flows from the picker** must be distinguished:
+
+1. **"Open existing vault"** — the human selects a pre-existing folder via `POST /api/companion/vault/select`. This is a *read-only selection*: the manager validates the folder and sets the in-process context (`selected` if already initialized, `uninitialized` if the folder exists but has no Design Handoff settings). **No scaffolding is written**, and an `uninitialized` folder — the personal-vault / not-yet-adopted case — is left entirely untouched: `validate_vault` returns before any write. (An *already-initialized* vault may have an absent `vaultId`/`localInstanceId` back-filled into its existing `settings/` during validation; that is identifier repair on a vault we already own — never new scaffolding, and never a write into an unadopted folder.) This preserves the contract: reads work on any existing folder (`uninitialized` is readable via `_READABLE_SELECTED_STATUSES`), but the human's personal vault files are never modified without an explicit, understood gesture.
+
+2. **"Initialize new vault"** — the human explicitly chooses to create/init a folder via `POST /api/companion/vault/initialize`. This writes the Design Handoff settings scaffold into the chosen folder and then selects it. The choice is explicit and visible: the UI exposes the init form as a separate affordance (`data-intent="vault.initialize"`) distinct from the open/select affordance.
+
+**Scaffolding placement decision (Option A, resolved #2312).** The settings scaffold is written *inside the vault folder* (`<vault>/settings/`), not in an app-local sidecar. Rationale: the Design Handoff settings are the vault's *identity manifest* — intended to be visible to the human, committable alongside vault notes, and shareable across machines via Git. They are not hidden system state. Writing them into the vault folder is the expected, correct behavior for a folder the human is deliberately initializing *as* a vault. Option B (app-local sidecar, vault folder untouched) was considered but rejected because it would decouple vault identity from the vault itself, breaking the committability/shareability requirement and creating split-brain risk if the sidecar is lost. Option C (hidden `.system/` dir) was considered but rejected: a hidden dir still writes into the human's folder and adds discovery friction without removing the write.
+
+**Hard constraint preserved across both flows.** The hard constraint — "must not write into a human's personal vault without an explicit, understood choice" — is satisfied by flow separation, not by hiding files. The `select` endpoint writes no scaffolding and never writes into an `uninitialized` (unadopted) folder — at most it back-fills a missing identifier into an *already-initialized* vault's existing `settings/`; only the `initialize` endpoint writes the settings scaffold, and it is reached only through a deliberate human gesture ("Initialize"). The UI panel (`vault_settings_panel.py :: _action_forms`) exposes the init form as `data-affordance-status="available"` only when the current status is `none`, `missing`, or `uninitialized`, making the affordance boundary visible.
+
+**Read before write posture.** An `uninitialized` vault (existing folder with no Design Handoff settings) is readable but not writable. The `_active_companion_vault_root` gate uses `_READABLE_SELECTED_STATUSES = {"selected", "uninitialized"}` for read boundaries, so a human can browse notes before committing to initialization. Write boundaries pass `require_initialized=True`, which raises `VaultUninitializedError` and routes the write to the picker with reason `"uninitialized"` so the UI can surface the init affordance. This is the correct no-surprise behavior: reads always work on a selected folder; only writes require initialization.
+
 ### Host mount source vs in-container binding (containerized runtime)
 
 When the runtime runs in containers, the `VAULT_ROOT` runtime binding has **two process perspectives on the same content vault**. They must not be conflated (issue #2141); both still name one content vault, neither is a separate sense of "vault":
