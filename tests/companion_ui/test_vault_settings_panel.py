@@ -68,10 +68,17 @@ def _visible_text(html: str) -> str:
 from companion_ui.workspace.serve_dev_page import make_handler
 from companion_ui.workspace.vault_settings_panel import (
     VAULT_SETTINGS_ENDPOINT,
+    VAULT_SETTINGS_FRAGMENT_PICKER_PARAM,
     VAULT_SETTINGS_FRAGMENT_ROUTE,
     vault_settings_panel_fragment,
     vault_settings_panel_markup,
     vault_settings_panel_script,
+)
+
+# The front-door no-vault picker tags its fragment fetch with the picker marker;
+# the hidden settings drawer fetches the bare route (#2485 drawer-scope).
+_FRONT_DOOR_FRAGMENT_ROUTE = (
+    f"{VAULT_SETTINGS_FRAGMENT_ROUTE}?{VAULT_SETTINGS_FRAGMENT_PICKER_PARAM}=1"
 )
 
 
@@ -326,7 +333,10 @@ def test_fragment_reload_keeps_picker_for_all_no_vault_statuses() -> None:
         projection = _no_vault_projection(status)
         client = _FakeClient(get_responses={VAULT_SETTINGS_ENDPOINT: projection})
         handler_cls = make_handler(client=client, api_base_url="http://runtime")
-        body = _drive_get(handler_cls, VAULT_SETTINGS_FRAGMENT_ROUTE).decode("utf-8")
+        # The front-door picker tags its fetch with the picker marker (the drawer
+        # path is covered separately, below): only the marked request may fold
+        # into picker_mode (#2485 drawer-scope).
+        body = _drive_get(handler_cls, _FRONT_DOOR_FRAGMENT_ROUTE).decode("utf-8")
 
         # The fragment is the single picker surface: it is exactly the pure
         # helper's picker-mode output (no regular settings panel fallback).
@@ -362,6 +372,94 @@ def test_fragment_reload_keeps_picker_for_all_no_vault_statuses() -> None:
         # The fragment carries the no-vault status it was given (never
         # re-classified by the route).
         assert f'data-vault-status="{status}"' in body
+
+
+def test_drawer_fragment_keeps_self_contained_panel_on_no_active_status() -> None:
+    """The /vault-settings fragment fetched WITHOUT the front-door picker marker
+    (i.e. the hidden settings drawer's reload of the same route) must render the
+    self-contained calm panel — status header + identity context preserved — for
+    a no-active / empty status, NEVER the headless front-door picker (#2485 Codex
+    drawer-scope finding).
+
+    Regression: this PR's first cut set ``picker_mode`` for EVERY no-active
+    fragment response, so a drawer fetch that failed (``data = {}`` → status
+    defaults to ``none``) or transiently returned a no-active status collapsed
+    the drawer into the headless open/init picker, dropping its status header and
+    context. Confirmed RED before the marker-scoping fix (the drawer path got
+    picker_mode); GREEN after.
+
+    Asserted on the page server's real fragment route (the surface the controller
+    swaps in), driving the bare route (no ``?picker=1``) and — for the failure
+    case — an unreachable client so ``data`` defaults to ``{}`` → status ``none``.
+    """
+    no_active_statuses = ("none", "missing", "uninitialized")
+
+    # 1) Drawer reload of a no-active projection (bare route): self-contained
+    #    panel, NOT picker_mode.
+    for status in no_active_statuses:
+        projection = _no_vault_projection(status)
+        client = _FakeClient(get_responses={VAULT_SETTINGS_ENDPOINT: projection})
+        handler_cls = make_handler(client=client, api_base_url="http://runtime")
+        body = _drive_get(handler_cls, VAULT_SETTINGS_FRAGMENT_ROUTE).decode("utf-8")
+
+        # The drawer fragment is exactly the pure helper's *non-picker* output:
+        # the self-contained calm panel, not the folded front-door picker.
+        assert body == vault_settings_panel_fragment(projection, picker_mode=False), (
+            f"status {status!r}: drawer fragment must stay the self-contained panel"
+        )
+        # The self-contained panel keeps its status header (which the headless
+        # picker suppresses).
+        assert 'data-testid="vault-status-label"' in body, (
+            f"status {status!r}: drawer panel must keep its status header"
+        )
+        # The fragment carries the no-vault status it was given (never
+        # re-classified by the route).
+        assert f'data-vault-status="{status}"' in body
+        # And it is NOT the front-door picker the marked route would render.
+        assert body != vault_settings_panel_fragment(projection, picker_mode=True)
+
+    # 2) Drawer reload whose fetch FAILS: data defaults to {} → status "none";
+    #    still the self-contained calm panel, never the headless picker.
+    class _ErrClient(_FakeClient):
+        def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+            from companion_ui.workspace.workspace_http_client import (
+                WorkspaceClientError,
+            )
+
+            raise WorkspaceClientError("connection refused")
+
+    err_handler = make_handler(client=_ErrClient(), api_base_url="http://runtime")
+    err_body = _drive_get(err_handler, VAULT_SETTINGS_FRAGMENT_ROUTE).decode("utf-8")
+    assert err_body == vault_settings_panel_fragment({}, picker_mode=False)
+    assert 'data-testid="vault-status-label"' in err_body, (
+        "drawer fetch-failure panel must keep its status header (calm panel, "
+        "not the headless picker)"
+    )
+    assert 'data-vault-status="none"' in err_body
+
+    # 3) Same failure on the FRONT-DOOR marked route still folds into picker_mode
+    #    (the round-1/round-2 single-surface behaviour is not regressed).
+    front_door_err_handler = make_handler(
+        client=_ErrClient(), api_base_url="http://runtime"
+    )
+    front_door_err_body = _drive_get(
+        front_door_err_handler, _FRONT_DOOR_FRAGMENT_ROUTE
+    ).decode("utf-8")
+    assert front_door_err_body == vault_settings_panel_fragment({}, picker_mode=True)
+    assert 'data-testid="vault-status-label"' not in front_door_err_body, (
+        "front-door picker suppresses the status header even on fetch failure"
+    )
+
+    # 4) The two render entrypoints tag their fragment path correctly: the inline
+    #    front-door picker carries the marker; the hidden drawer does not.
+    no_active = _no_vault_projection("none")
+    picker_markup = vault_settings_panel_markup(no_active, picker_mode=True)
+    drawer_markup = vault_settings_panel_markup(
+        _selected_projection(), hidden_by_default=True, picker_mode=False
+    )
+    assert f'data-fragment-path="{_FRONT_DOOR_FRAGMENT_ROUTE}"' in picker_markup
+    assert f'data-fragment-path="{VAULT_SETTINGS_FRAGMENT_ROUTE}"' in drawer_markup
+    assert VAULT_SETTINGS_FRAGMENT_PICKER_PARAM not in drawer_markup
 
 
 # ---------------------------------------------------------------------------

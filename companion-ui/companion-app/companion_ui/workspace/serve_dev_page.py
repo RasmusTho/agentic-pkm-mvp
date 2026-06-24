@@ -133,6 +133,7 @@ from companion_ui.workspace.vault_settings_panel import (
     VAULT_RELOAD_ENDPOINT,
     VAULT_SELECT_ENDPOINT,
     VAULT_SETTINGS_ENDPOINT,
+    VAULT_SETTINGS_FRAGMENT_PICKER_PARAM,
     VAULT_SETTINGS_FRAGMENT_ROUTE,
     vault_settings_panel_fragment,
     vault_settings_panel_markup,
@@ -12745,18 +12746,30 @@ def make_handler(
                     data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
                 except WorkspaceClientError:
                     data = {}
-                # When no vault is selected this fragment is the no-vault picker
-                # front door folded beneath the styled hero. Render it in
-                # picker mode so the controller's reload()/after-action swap does
-                # not re-introduce the duplicate "No vault selected" heading or
-                # the "unknown / unknown" identity spans the hero already
-                # supersedes (#2485 D1). The picker presentation covers the full
-                # canonical set of "no active vault" statuses (none / missing /
-                # uninitialized) — not just ``none`` — so the single-surface
-                # guarantee holds across the open/init/reload path, not only on
-                # first paint. Presentation-only; status is the server-declared
+                # This fragment route is shared by two surfaces (#2485 Codex
+                # drawer-scope finding):
+                #   1. the inline no-vault *front-door picker* folded beneath the
+                #      styled hero, and
+                #   2. the hidden *Vault Settings drawer* on a normal workspace.
+                # Only the front-door picker tags its fetch with the picker
+                # marker (``?picker=1``). picker_mode folds the panel into the
+                # hero — dropping the duplicate "No vault selected" heading and
+                # the "unknown" identity spans — and is correct ONLY for that
+                # caller, so its reload()/after-action swap stays a single DS
+                # surface across the canonical no-active set (none / missing /
+                # uninitialized), not just on first paint. The drawer fetches the
+                # bare route; if its fetch fails (``data = {}`` → status defaults
+                # to ``none``) or transiently returns a no-active status, it must
+                # keep its self-contained calm panel (status header + context
+                # preserved), NEVER collapse into the headless picker. So scope
+                # picker_mode to the marked front-door request AND a no-active
+                # status. Presentation-only; status is the server-declared
                 # projection, never re-classified here, and flow semantics stay
                 # owned by the runtime (#2312).
+                fragment_query = parse_qs(parsed.query)
+                front_door_picker = "1" in fragment_query.get(
+                    VAULT_SETTINGS_FRAGMENT_PICKER_PARAM, []
+                )
                 fragment_context = (
                     data.get("context") if isinstance(data, dict) else None
                 )
@@ -12765,8 +12778,12 @@ def make_handler(
                     if isinstance(fragment_context, dict)
                     else "none"
                 )
+                picker_mode = (
+                    front_door_picker
+                    and fragment_status in NO_ACTIVE_VAULT_STATUSES
+                )
                 body = vault_settings_panel_fragment(
-                    data, picker_mode=fragment_status in NO_ACTIVE_VAULT_STATUSES
+                    data, picker_mode=picker_mode
                 ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

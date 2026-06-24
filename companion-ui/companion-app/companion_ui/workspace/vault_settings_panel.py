@@ -22,6 +22,18 @@ VAULT_RELOAD_ENDPOINT = "/api/companion/vault/reload"
 # discarding it; rendering stays a pure, testable Python function.
 VAULT_SETTINGS_FRAGMENT_ROUTE = "/vault-settings"
 
+# Query marker the front-door no-vault picker appends to its fragment fetch so
+# the page server can distinguish *its* reload from the hidden settings drawer's
+# reload of the same route (#2485 Codex drawer-scope finding). Both surfaces
+# share VAULT_SETTINGS_FRAGMENT_ROUTE, but only the inline front-door picker may
+# fold the panel into picker_mode on a no-active status. The drawer — which only
+# legitimately opens over a selected vault — must keep its self-contained calm
+# panel (status header + context preserved) on a fetch failure / transient
+# no-active response, never collapse into the headless picker. Presentation-only
+# marker; it never re-classifies status or changes open/init/reload semantics
+# (#2312).
+VAULT_SETTINGS_FRAGMENT_PICKER_PARAM = "picker"
+
 # Canonical set of runtime vault statuses that mean "no active vault is bound".
 # Each of these resolves to the no-vault front-door picker surface (#2485 D1):
 # the single DS picker with no legacy settings form, no duplicate "No vault
@@ -333,6 +345,14 @@ def vault_settings_panel_markup(
     )
     display_mode = "drawer" if hidden_by_default else "inline"
     open_state = "false" if hidden_by_default else "true"
+    # Only the inline front-door picker tags its fragment fetch with the picker
+    # marker; the hidden drawer fetches the bare route so a transient no-active
+    # response never collapses it into the headless picker (#2485 drawer-scope).
+    fragment_path = (
+        f"{VAULT_SETTINGS_FRAGMENT_ROUTE}?{VAULT_SETTINGS_FRAGMENT_PICKER_PARAM}=1"
+        if picker_mode
+        else VAULT_SETTINGS_FRAGMENT_ROUTE
+    )
     close_button = (
         """
     <button type="button" class="vault-settings-panel-close"
@@ -401,7 +421,7 @@ def vault_settings_panel_markup(
     data-testid="vault-settings-panel"{hidden_attrs}
     data-display-mode="{display_mode}" data-open="{open_state}"
     data-vault-status="{_e(status)}" data-api-path="{VAULT_SETTINGS_ENDPOINT}"
-    data-fragment-path="{VAULT_SETTINGS_FRAGMENT_ROUTE}" data-api-method="GET"
+    data-fragment-path="{fragment_path}" data-api-method="GET"
     role="dialog" aria-label="Vault settings" tabindex="-1">
     {close_button}
     {vault_settings_panel_fragment(projection, picker_mode=picker_mode)}
@@ -573,6 +593,7 @@ __all__ = [
     "VAULT_SELECT_ENDPOINT",
     "VAULT_SETTINGS_ENDPOINT",
     "VAULT_SETTINGS_FRAGMENT_ROUTE",
+    "VAULT_SETTINGS_FRAGMENT_PICKER_PARAM",
     "vault_settings_panel_fragment",
     "vault_settings_panel_markup",
     "vault_settings_panel_script",
