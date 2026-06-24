@@ -37,6 +37,8 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any
 
+import pytest
+
 from companion_ui.workspace.serve_dev_page import render_index_html
 
 # ---------------------------------------------------------------------------
@@ -239,12 +241,11 @@ def test_reentry_orientation_regions_do_not_duplicate_heading_and_body_without_l
 
     html = _render(orientation=payload)
 
-    leave_section = html.split('data-testid="workspace-orientation-leave-point"', 1)[1].split(
-        "</section>", 1
-    )[0]
-    assert leave_section.count("Resume plan") == 1
-    assert 'data-testid="workspace-orientation-leave-link"' in leave_section
-    assert "Open artifact" in leave_section
+    # A1 finish (#2483): at long_mist the card owns the leave point, so the
+    # leave-point panel is suppressed beneath it (no repeated LEAVE POINT
+    # heading / leave label). The panel's own heading-vs-body de-dup (#2241) is
+    # asserted below on the degraded rung, where the panel still renders.
+    assert 'data-testid="workspace-orientation-leave-point"' not in html
 
     card = _reentry_card(html)
     # The 'doing' question now shows "Where you left off" (not the artifact title)
@@ -254,7 +255,11 @@ def test_reentry_orientation_regions_do_not_duplicate_heading_and_body_without_l
     assert card.count("Resume plan") == 1  # title in stopped link, not in doing body
 
     whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
-    assert "Where you left off" in whisper
+    # A1 finish (#2483) Codex P2: the whisper no longer restates the card's
+    # leave-point 'doing' label — its doing slot carries the trajectory state
+    # ("… thread"), never the "Where you left off" / artifact-title body.
+    assert "Where you left off" not in whisper
+    assert "thread" in whisper
     assert whisper.count("Resume plan") == 0  # title no longer repeated in whisper doing slot
 
     open_loop = html.split('data-testid="workspace-orientation-open-loop"', 1)[1].split(
@@ -286,6 +291,25 @@ def test_reentry_orientation_regions_do_not_duplicate_heading_and_body_without_l
         "</p>", 1
     )[0]
     assert peripheral.count("Resume plan") == 1
+
+    # Leave-point panel heading-vs-body de-dup (#2241) on a rung that still
+    # renders the panel: a degraded short-gap snapshot keeps its resolved
+    # slices (panels visible) but carries no re-entry card (no leave-point
+    # suppression), so the panel renders and must not duplicate title in both
+    # heading and artifact link.
+    degraded_payload = _orientation_payload(
+        gap=_GAP_SOFT_MIST, degraded_reasons=["resurfacing_source_unavailable"]
+    )
+    assert degraded_payload["leave_point"] is not None
+    degraded_payload["leave_point"].pop("label", None)
+    degraded_html = _render(orientation=degraded_payload)
+    assert 'data-region="reentry-card"' not in degraded_html
+    leave_section = degraded_html.split(
+        'data-testid="workspace-orientation-leave-point"', 1
+    )[1].split("</section>", 1)[0]
+    assert leave_section.count("Resume plan") == 1
+    assert 'data-testid="workspace-orientation-leave-link"' in leave_section
+    assert "Open artifact" in leave_section
 
 
 _OVERLAY_MARKERS = (
@@ -383,9 +407,13 @@ def test_long_mist_renders_four_fixed_questions_with_counts() -> None:
 
     whisper = html.split('data-region="whisper-column"', 1)[1].split("</aside>", 1)[0]
     whisper_text = re.sub(r"\s+", " ", whisper)
-    assert "3 open loops · 1 staged" in whisper_text
-    assert "2 deltas since you left" in whisper_text
-    assert "1 why-now candidates" in whisper_text
+    # A1 finish (#2483): the whisper echoes the same answers in the margin but
+    # must not restate a card field verbatim. Its lines are phrased distinctly
+    # from the card's unresolved/changed/resurface lines.
+    assert "3 loops, 1 staged" in whisper_text
+    assert "3 open loops · 1 staged" not in whisper_text
+    assert "2 since you left" in whisper_text
+    assert "1 why-now" in whisper_text
 
 
 # ---------------------------------------------------------------------------
@@ -400,9 +428,16 @@ def test_long_mist_adds_delta_strip_and_whisper_column() -> None:
     card = _reentry_card(html)
     assert len(re.findall(r'data-reentry-question="', card)) == 4
 
-    # Delta strip from notable_changes, inside the card region.
+    # Delta strip from notable_changes, inside the card region. A1 finish
+    # (#2483): the strip states the change count with a pointer into the
+    # notable-changes panel — it no longer enumerates the change labels
+    # verbatim (those live only in the panel, de-duplicated against the card).
     assert 'data-region="delta-strip"' in card
-    assert "Notable change label 0" in card
+    assert "Notable change label 0" not in card
+    delta = card.split('data-region="delta-strip"', 1)[1].split("</div>", 1)[0]
+    assert 'data-testid="reentry-delta-summary"' in delta
+    assert "2 deltas since you left" in re.sub(r"\s+", " ", delta)
+    assert 'href="#workspace-orientation-notable-changes"' in delta
 
     # Right-margin whisper column with the four named items.
     assert 'data-region="whisper-column"' in html
@@ -1447,6 +1482,15 @@ def test_resume_restores_caret() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Shared visible-text helper. Used by both the #2484 orientation-header
+# telemetry-removal test and the #2483 card/panel de-duplication tests. A real
+# HTML parser (no regex tag-filter) is used so whitespace-padded or upper-case
+# close tags (``</script >``, ``<SCRIPT>``) cannot leak inert markup into the
+# scanned copy. The scanned copy is lower-cased so callers compare against
+# lower-cased expectations (the #2483 de-dup tests scan card vs panel text and
+# both pass through this same lowering, so de-dup detection is case-insensitive).
+# ---------------------------------------------------------------------------
 _VISIBLE_SKIP_TAGS = frozenset({"head", "script", "style", "template"})
 _VISIBLE_VOID_TAGS = frozenset({
     "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -1636,3 +1680,322 @@ def test_orientation_footers_have_no_raw_enum_for_unmapped_provenance() -> None:
     # The raw classified values still travel server-authoritatively in data-*.
     assert f'data-authority-role="{_UNMAPPED_PROVENANCE_AUTHORITY}"' in html
     assert f'data-source-kind="{_UNMAPPED_PROVENANCE_SOURCE_KIND}"' in html
+
+
+# ---------------------------------------------------------------------------
+# A1 finish (#2483): card vs panels de-duplication + no_mist/thread_fade
+# differentiation. All assertions on rendered *visible text* — script
+# contents and HTML tags are stripped before scanning, so a datum that only
+# appears inside an attribute, comment, or <script> never counts as a repeat.
+# ---------------------------------------------------------------------------
+
+
+def _region_visible_text(html: str, marker: str, end: str) -> str:
+    assert marker in html, marker
+    fragment = html.split(marker, 1)[1].split(end, 1)[0]
+    return _visible_text(fragment)
+
+
+def test_card_and_panels_do_not_duplicate_datum() -> None:
+    """At full_mist/long_mist no card datum is repeated verbatim by a panel.
+
+    The four-question card OWNS the leave-point label, the notable-change
+    summary, and the counts. The panels/whisper beneath it carry only
+    enumerated detail the card did not already state — no repeated LEAVE POINT
+    heading, no repeated notable-change line, no whisper line that restates a
+    card field verbatim. Round 1 only did per-rung presence checks; this
+    compares CARD visible text against PANEL visible text directly.
+    """
+    for gap in (_GAP_FULL_MIST, _GAP_LONG_MIST):
+        html = _render(orientation=_orientation_payload(gap=gap))
+
+        card_text = _region_visible_text(
+            html, 'data-region="reentry-card"', "</section>"
+        )
+
+        # 1) The leave-point label the card states (doing body / stop link)
+        #    must not be repeated by a leave-point panel heading beneath it.
+        #    The card owns the leave point at these rungs.
+        assert "resume the runtime api contract" in card_text, gap
+        assert 'data-testid="workspace-orientation-leave-point"' not in html, (
+            f"leave-point panel must not repeat the card's leave datum at {gap}"
+        )
+
+        # 1a) Round-2 mandate: compare the leave-point LABEL itself between the
+        #     card's visible text and EVERY panel/whisper's visible text — the
+        #     label must never appear verbatim outside the card. A count-only
+        #     check passed even while the whisper restated the label (Codex P2);
+        #     this asserts the datum, not just the count line.
+        leave_label = "resume the runtime api contract"
+        for marker, end in (
+            ('data-testid="workspace-orientation-open-loops"', "</section>"),
+            ('data-region="whisper-column"', "</aside>"),
+            ('data-testid="workspace-orientation-notable-changes"', "</section>"),
+        ):
+            if marker not in html:
+                continue
+            panel_text = _region_visible_text(html, marker, end)
+            assert leave_label not in panel_text, (
+                f"leave-point label repeated verbatim in {marker} at {gap}"
+            )
+
+        # 1b) Codex P2: suppressing the leave-point panel must NOT drop the
+        #     server-declared leave-point PROVENANCE (authority_role /
+        #     source_ref). The card carries no provenance, so a provenance-only
+        #     element must still render the leave point's authority role even
+        #     though the duplicated heading/label are gone.
+        assert 'data-testid="workspace-orientation-leave-provenance-only"' in html, (
+            f"leave-point provenance must survive panel suppression at {gap}"
+        )
+        leave_prov = html.split(
+            'data-testid="workspace-orientation-leave-provenance-only"', 1
+        )[1].split("</div>", 1)[0]
+        assert 'data-authority-role="operational_trace_pointer"' in leave_prov, (
+            f"leave-point authority_role must be preserved at {gap}"
+        )
+        assert 'data-source-ref="trace-leave"' in leave_prov, (
+            f"leave-point source_ref must be preserved at {gap}"
+        )
+
+        # 2) The open-loop / change counts the card states must not reappear as
+        #    panel count headlines (the enumerated rows stay).
+        open_loops_text = _region_visible_text(
+            html, 'data-testid="workspace-orientation-open-loops"', "</section>"
+        )
+        # The card states "3 open loops"; the panel enumerates rows but must
+        # not restate that count as a headline.
+        assert "3 open loops" in card_text, gap
+        assert "3 open loops" not in open_loops_text, (
+            f"open-loops panel must not restate the card's count at {gap}"
+        )
+
+        # 3) Notable-change lines: the change labels are enumerated detail and
+        #    live only in the notable-changes panel. The long_mist delta strip
+        #    on the card states the change *count* with a pointer, never the
+        #    labels verbatim, so no notable-change line is repeated between the
+        #    card and the panel.
+        if gap == _GAP_LONG_MIST:
+            assert "notable change label 0" not in card_text, (
+                "the card's delta strip must state a count, not the change "
+                "label the panel already enumerates"
+            )
+            changes_text = _region_visible_text(
+                html,
+                'data-testid="workspace-orientation-notable-changes"',
+                "</section>",
+            )
+            # The panel owns the enumerated labels.
+            assert "notable change label 0" in changes_text
+
+        # 4) Whisper column (long_mist): no whisper line may restate a card
+        #    field verbatim. The card's unresolved line reads
+        #    "3 open loops · 1 staged"; the whisper must phrase its echo
+        #    differently rather than repeat that exact string.
+        if gap == _GAP_LONG_MIST:
+            whisper_text = _region_visible_text(
+                html, 'data-region="whisper-column"', "</aside>"
+            )
+            assert "3 open loops · 1 staged" in card_text
+            assert "3 open loops · 1 staged" not in whisper_text, (
+                "whisper column must not restate the card's unresolved line "
+                "verbatim"
+            )
+
+
+def test_no_mist_distinct_from_thread_fade() -> None:
+    """no_mist and thread_fade render distinguishable orientation surfaces.
+
+    Per the design SoT (A1 / J4): no_mist ≈ the shell with at most a quiet
+    resume line; thread_fade ≈ the peripheral rail cue only. Their rendered
+    *visible text* must differ — the two shortest rungs were pixel-identical
+    before this change.
+    """
+    no_mist = _render(orientation=_orientation_payload(gap=_GAP_NO_MIST))
+    thread_fade = _render(orientation=_orientation_payload(gap=_GAP_THREAD_FADE))
+
+    no_mist_text = _visible_text(no_mist)
+    thread_fade_text = _visible_text(thread_fade)
+
+    # Neither renders the orientation snapshot panels (do not regress #2450).
+    assert 'data-testid="workspace-orientation-open-loops"' not in no_mist
+    assert 'data-testid="workspace-orientation-open-loops"' not in thread_fade
+    assert 'data-region="reentry-card"' not in no_mist
+    assert 'data-region="reentry-card"' not in thread_fade
+
+    # The rendered visible text of the two rungs must differ (non-empty diff).
+    assert no_mist_text != thread_fade_text, (
+        "no_mist and thread_fade must be visually distinguishable"
+    )
+
+
+@pytest.mark.parametrize(
+    ("leave_status", "cause_token"),
+    [
+        ("stale", "source changed since this was captured"),
+        ("degraded", "source resolution degraded since this was captured"),
+        ("artifact_missing", "the artifact this leave point referenced is missing"),
+    ],
+)
+def test_no_mist_stale_leave_point_qualifies_resume_cue(
+    leave_status: str, cause_token: str
+) -> None:
+    """Codex #2483 follow-up: a stale ``no_mist`` short-gap leave point must NOT
+    show the unqualified "Pick up where you left off" cue.
+
+    ``no_mist`` is assigned by GAP and can carry a leave point whose
+    ``status`` is stale / artifact_missing / degraded
+    (``entry_resolution.stale`` true). Short rungs show no leave-point panel
+    and no card, so the quiet resume line is the ONLY leave cue here. Emitting
+    the generic cue would HIDE the held-boundary / missing-artifact /
+    source-changed condition that full/long mist surface via the guarded
+    resume affordance — dropping a load-bearing calm-degraded guard.
+
+    The cue must instead surface the SAME qualified guard the card uses: name
+    the cause and state nothing was mutated. Asserted on rendered *visible
+    text* via the parser-based ``_visible_text`` (not raw markup).
+    """
+    html = _render(
+        orientation=_orientation_payload(
+            leave_status=leave_status, gap=_GAP_NO_MIST
+        )
+    )
+    visible = _visible_text(html)
+
+    # RED-first: the unqualified cue must be gone at this rung.
+    assert "pick up where you left off" not in visible, (
+        f"stale no_mist ({leave_status}) must not show the unqualified resume "
+        f"cue; visible text: {visible!r}"
+    )
+
+    # The qualified guard names the cause and reassures nothing was mutated.
+    assert cause_token in visible, (
+        f"stale no_mist ({leave_status}) must name the guard cause "
+        f"{cause_token!r}; visible text: {visible!r}"
+    )
+    assert "nothing was mutated" in visible
+
+    # It reuses the card's guard-held affordance (same data-testid / flag).
+    assert 'data-testid="reentry-resume-guard"' in html
+    assert 'data-guard-held="true"' in html
+
+    # No card and no snapshot panels at this rung (do not regress #2450).
+    assert 'data-region="reentry-card"' not in html
+    assert 'data-testid="workspace-orientation-open-loops"' not in html
+
+    # Never a generic error.
+    assert 'data-testid="workspace-error-state"' not in html
+
+    # A missing artifact still gets a non-silent forward path, never a silent
+    # resume link into the missing artifact.
+    if leave_status == "artifact_missing":
+        assert 'data-testid="reentry-resume-reenter"' in html
+        assert "/workspace?note_path=Notes%2Fresume.md" not in html
+
+
+def test_no_mist_nonstale_still_distinct_from_thread_fade() -> None:
+    """The stale-guard qualification must not regress the #2483 no_mist vs
+    thread_fade differentiation for the non-stale (present) leave point.
+
+    A non-stale ``no_mist`` keeps its lighter quiet cue; thread_fade still
+    renders only the fractional rail cue. Their visible text must still differ.
+    """
+    no_mist = _render(orientation=_orientation_payload(gap=_GAP_NO_MIST))
+    thread_fade = _render(orientation=_orientation_payload(gap=_GAP_THREAD_FADE))
+
+    # Non-stale no_mist keeps the quiet cue and carries no guard banner.
+    assert 'data-testid="reentry-resume-guard"' not in no_mist
+    assert _visible_text(no_mist) != _visible_text(thread_fade)
+
+
+@pytest.mark.parametrize(
+    "leave_status",
+    ["stale", "artifact_missing", "degraded"],
+)
+def test_off_nominal_leave_point_preserves_structured_detail_with_card(
+    leave_status: str,
+) -> None:
+    """Codex #2483 (off-nominal-details): with the re-entry card present, an
+    OFF-NOMINAL leave point must keep its structured status detail.
+
+    The de-dup of #2450 collapses the leave-point panel to provenance-only when
+    the card is present, because the card fully owns a NOMINAL leave point. But
+    for off-nominal leave points — status stale / artifact_missing / degraded
+    (E8/E9 rungs) — the structured status surface (``data-leave-point-kind``,
+    the "Last signal" line, the session detail) explains the held boundary and
+    the card does NOT restate it. Per MIST_LADDER_SUBTRACTIVE.md §"Off-nominal
+    rungs (preserve as-is)" these rungs are exemplary and must not be modified;
+    the de-dup contract is scoped to nominal full/long-mist renders only.
+
+    Collapsing them to provenance-only would drop that load-bearing detail. The
+    structured detail must survive ALONGSIDE the card + guarded resume.
+    """
+    html = _render(
+        orientation=_orientation_payload(
+            leave_status=leave_status, gap=_GAP_FULL_MIST
+        )
+    )
+
+    # The card is present at full_mist and carries the guarded (stale) resume.
+    assert 'data-region="reentry-card"' in html
+    assert 'data-testid="reentry-resume-guard"' in html
+
+    # RED-first: on current code the panel is collapsed to provenance-only and
+    # the structured detail is dropped. The structured leave-point panel must
+    # still render, carrying the off-nominal status detail.
+    assert 'data-testid="workspace-orientation-leave-point"' in html, (
+        f"off-nominal ({leave_status}) leave point must keep its structured "
+        f"panel even with the card present"
+    )
+    panel = html.split(
+        'data-testid="workspace-orientation-leave-point"', 1
+    )[1].split("</section>", 1)[0]
+
+    # data-leave-point-kind names the held boundary the card does not restate.
+    assert "data-leave-point-kind=" in panel, (
+        f"off-nominal ({leave_status}) must keep data-leave-point-kind"
+    )
+
+    # The "Last signal" line and the session detail survive.
+    panel_text = _region_visible_text(
+        html, 'data-testid="workspace-orientation-leave-point"', "</section>"
+    )
+    assert "last signal" in panel_text, (
+        f"off-nominal ({leave_status}) must keep the Last signal line"
+    )
+    assert "session session-123" in panel_text, (
+        f"off-nominal ({leave_status}) must keep the session detail"
+    )
+
+    # Server-declared provenance is still present (round-2 preservation).
+    assert 'data-testid="workspace-orientation-leave-provenance"' in panel
+
+    # De-dup is still honoured: the duplicated LEAVE POINT kicker + label
+    # heading (the card already names the label) are NOT repeated in the panel.
+    assert "leave point" not in panel_text, (
+        f"off-nominal ({leave_status}) must still suppress the duplicated "
+        f"LEAVE POINT kicker"
+    )
+    assert "resume the runtime api contract" not in panel_text, (
+        f"off-nominal ({leave_status}) must still suppress the duplicated "
+        f"leave-point label heading the card states"
+    )
+
+
+def test_nominal_leave_point_with_card_still_collapses_to_provenance_only() -> None:
+    """The off-nominal preservation must NOT regress the nominal de-dup AC.
+
+    For a NOMINAL (present) leave point with the card, the leave-point panel is
+    still collapsed to provenance-only: no structured panel, no duplicated
+    LEAVE POINT heading / label / Last-signal line beneath the card (#2450).
+    """
+    for gap in (_GAP_FULL_MIST, _GAP_LONG_MIST):
+        html = _render(
+            orientation=_orientation_payload(leave_status="present", gap=gap)
+        )
+        assert 'data-region="reentry-card"' in html, gap
+        # No structured leave-point panel for the nominal case.
+        assert 'data-testid="workspace-orientation-leave-point"' not in html, (
+            f"nominal leave point must still suppress the structured panel at {gap}"
+        )
+        # Provenance-only element survives (round-2 provenance preservation).
+        assert 'data-testid="workspace-orientation-leave-provenance-only"' in html, gap

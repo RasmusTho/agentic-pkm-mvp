@@ -5847,8 +5847,81 @@ def _orientation_unavailable_frame(error: str) -> dict:
     }
 
 
-def _render_orientation_leave_point(leave_point: object) -> str:
+def _render_orientation_leave_point(
+    leave_point: object, *, suppress_when_card: bool = False
+) -> str:
+    # A1 finish (#2483): at full_mist/long_mist the re-entry card owns the
+    # leave point entirely (the "What was I doing" / "Where did momentum stop"
+    # questions plus the resume affordance). The leave-point panel would repeat
+    # the same LEAVE POINT heading and leave-point label verbatim beneath the
+    # card, so the duplicated heading/label/notable lines are suppressed exactly
+    # there. Short rungs (no card) and the off-nominal degraded rung still render
+    # the full panel.
+    #
+    # Codex P2 (#2483): suppressing the whole section also dropped the ONLY
+    # emitter of the leave point's server-declared provenance
+    # (`authority_role` / `source_ref`), which the workspace orientation
+    # contract requires the UI to surface. The card states the resume *target*
+    # but carries no provenance, so when the panel is suppressed we still emit a
+    # provenance-only element — no repeated heading, label, or notable lines, so
+    # the de-dup AC (and #2450) hold while provenance is preserved.
+    #
+    # Codex (#2483, off-nominal-details): the provenance-only collapse is the
+    # right de-dup move ONLY for nominal leave points, where the card fully owns
+    # the leave point. For OFF-NOMINAL leave points — status `stale` /
+    # `artifact_missing` / `degraded` (E8/E9 rungs) — the structured status
+    # surface (`data-leave-point-kind`, the "Last signal" line, session detail)
+    # explains the held boundary and is NOT something the card restates. Per
+    # MIST_LADDER_SUBTRACTIVE.md §"Off-nominal rungs (preserve as-is)" these
+    # rungs "are exemplary and must not be modified"; the de-dup contract is
+    # scoped to full_mist/long_mist nominal renders only. So we keep the
+    # structured panel for off-nominal leave points (suppressing only the
+    # duplicated LEAVE POINT kicker + label heading the card already names),
+    # while nominal renders still collapse to provenance-only. This is
+    # presentation-only — the status is the server-declared `leave.status`; the
+    # UI does not classify off-nominal-ness.
     leave = _orientation_dict(leave_point)
+    if suppress_when_card:
+        if not leave:
+            return ""
+        off_nominal = _orientation_str(leave.get("status")) in _REENTRY_STALE_CAUSES
+        if not off_nominal:
+            return (
+                '<div class="orientation-leave-provenance-only" '
+                'data-testid="workspace-orientation-leave-provenance-only" '
+                'data-region="reentry-leave-provenance">'
+                f'{_orientation_provenance(leave, testid="workspace-orientation-leave-provenance")}'
+                "</div>"
+            )
+        # Off-nominal: preserve the structured status/last-signal/session detail
+        # ALONGSIDE the card + guard. De-dup only removes the repeated LEAVE
+        # POINT kicker and the label heading (the card states the label/resume
+        # target); everything that explains the held boundary stays.
+        status = _orientation_str(leave.get("status"))
+        last_seen = _orientation_str(
+            leave.get("last_interaction_at") or leave.get("captured_at"),
+            "time unknown",
+        )
+        session_id = _orientation_str(leave.get("last_session_id"))
+        session_html = (
+            f'<span class="orientation-muted">session {_e(session_id)}</span>'
+            if session_id
+            else ""
+        )
+        return f"""
+        <section class="orientation-section orientation-section--primary orientation-leave-off-nominal"
+          data-testid="workspace-orientation-leave-point"
+          data-region="reentry-leave-off-nominal"
+          data-leave-point-kind="{_e(_orientation_str(leave.get("kind") or status, "derived_only"))}">
+          <div class="orientation-artifact-row">
+            {_orientation_artifact_link(leave.get("artifact_ref"), testid="workspace-orientation-leave-link", suppress_when_text="")}
+          </div>
+          <div class="orientation-meta-row">
+            <span>Last signal: {_e(last_seen)}</span>
+            {session_html}
+          </div>
+          {_orientation_provenance(leave, testid="workspace-orientation-leave-provenance")}
+        </section>"""
     if not leave:
         return """
         <section class="orientation-section" data-testid="workspace-orientation-leave-point">
@@ -6306,32 +6379,39 @@ def _reentry_resume_affordance(leave: dict, *, stale: bool) -> str:
 
 
 def _render_reentry_delta_strip(orientation: dict) -> str:
-    """Long-mist delta strip from notable_changes (display budget 3)."""
+    """Long-mist delta strip from notable_changes.
+
+    A1 finish (#2483): the strip is a card-attached *delta cue*, not a second
+    copy of the notable-changes panel. Earlier it enumerated the first three
+    change labels verbatim — the exact strings the panel beneath then repeated.
+    It now states the delta as a count with a deliberate pointer into the
+    notable-changes panel, which owns the enumerated labels. The card keeps the
+    "changed since" datum; the labels themselves live in exactly one place.
+    """
     capped, server_cap = _orientation_capped_items(
         orientation.get("notable_changes"),
         meta=orientation.get("meta"),
         cap_key="notable_changes",
     )
-    visible = capped[: _ORIENTATION_DISPLAY_BUDGET]
-    remaining = len(capped) - len(visible)
-    items = "".join(
-        f'<span class="reentry-delta-item" data-testid="reentry-delta-item">'
+    count = len(capped)
+    noun = "delta" if count == 1 else "deltas"
+    summary = (
+        f'<span class="reentry-delta-summary" data-testid="reentry-delta-summary">'
         f'<span class="reentry-delta-dot" aria-hidden="true"></span>'
-        f"{_e(_orientation_str(change.get('label'), 'Notable change'))}</span>"
-        for change in visible
+        f"{count} {noun} since you left</span>"
     )
-    more = (
-        f'<span class="reentry-delta-more" data-testid="reentry-delta-more">'
-        f'+{remaining} more under <a href="#workspace-orientation-notable-changes">'
-        f"notable changes</a></span>"
-        if remaining
+    pointer = (
+        '<a class="reentry-delta-more" data-testid="reentry-delta-more" '
+        'href="#workspace-orientation-notable-changes">review</a>'
+        if count
         else ""
     )
     return (
         f'<div class="reentry-delta-strip" data-region="delta-strip" '
         f'data-testid="reentry-delta-strip" '
         f'data-display-default-budget="{_ORIENTATION_DISPLAY_BUDGET}" '
-        f'data-server-cap="{server_cap or len(capped)}">{items}{more}</div>'
+        f'data-change-count="{count}" '
+        f'data-server-cap="{server_cap or len(capped)}">{summary}{pointer}</div>'
     )
 
 
@@ -6447,6 +6527,13 @@ def _render_reentry_whisper_column(orientation: dict) -> str:
     """
     leave = _orientation_dict(orientation.get("leave_point"))
     counts = _reentry_counts(orientation)
+    # Codex P2 (#2483): the card's "What was I doing" body already owns the
+    # leave-point `doing` label verbatim. The whisper must NOT restate it, or
+    # the same string renders in the card and again in the margin beneath it.
+    # The whisper's `doing` slot instead carries the server-declared trajectory
+    # state — non-duplicated enumerated detail the card states only as a pill,
+    # keeping the four named whisper items without repeating the card's label.
+    traj_state = _reentry_traj_state(leave)
     return f"""
   <aside class="reentry-whisper-col" data-region="whisper-column"
     data-testid="reentry-whisper-column" data-narrow-mode="suppressed"
@@ -6456,19 +6543,19 @@ def _render_reentry_whisper_column(orientation: dict) -> str:
     <div class="reentry-whisper" data-whisper-item="doing"
       data-reentry-glyph-clearance="card-info-glyph">
       <span class="reentry-whisper-label">doing</span>
-      <span class="reentry-whisper-text">{_e(_reentry_doing_label(leave))}</span>
+      <span class="reentry-whisper-text">{_e(traj_state)} thread</span>
     </div>
     <div class="reentry-whisper" data-whisper-item="unresolved">
       <span class="reentry-whisper-label">unresolved</span>
-      <span class="reentry-whisper-text">{counts["open_loops"]} open loops · {counts["staged"]} staged</span>
+      <span class="reentry-whisper-text">{counts["open_loops"]} loops, {counts["staged"]} staged</span>
     </div>
     <div class="reentry-whisper" data-whisper-item="changed">
       <span class="reentry-whisper-label">changed</span>
-      <span class="reentry-whisper-text">{counts["notable_changes"]} deltas since you left</span>
+      <span class="reentry-whisper-text">{counts["notable_changes"]} since you left</span>
     </div>
     <div class="reentry-whisper" data-whisper-item="resurfaced">
       <span class="reentry-whisper-label">resurfaced</span>
-      <span class="reentry-whisper-text">{counts["resurface_candidates"]} why-now candidates</span>
+      <span class="reentry-whisper-text">{counts["resurface_candidates"]} why-now</span>
     </div>
   </aside>"""
 
@@ -6500,6 +6587,65 @@ def _render_reentry_peripheral_line(orientation: dict) -> str:
         f'<p class="reentry-peripheral-line" data-region="reentry-peripheral-line" '
         f'data-testid="reentry-peripheral-line">Where you stopped: '
         f"{target}{_reentry_caret_echo()}</p>"
+    )
+
+
+def _render_reentry_resume_line(orientation: dict, *, stale: bool = False) -> str:
+    """no_mist quiet resume line (A1 finish, #2483).
+
+    The shortest non-zero rung. ``no_mist`` is treated as continuity — the
+    shell with at most a single quiet "resume where you left off" line. It is
+    deliberately lighter than ``soft_mist``'s peripheral cue (no caret echo,
+    no "where you stopped" framing) and carries no card, so it restates
+    nothing a card would own. Its only job is to keep ``no_mist`` distinct
+    from ``thread_fade`` (peripheral rail cue only) instead of pixel-identical.
+
+    Stale-guard (Codex #2483 follow-up): ``no_mist`` can be assigned by GAP
+    even when the leave point's ``status`` is ``stale`` / ``artifact_missing``
+    / ``degraded`` (``entry_resolution.stale`` true). Short rungs show no
+    leave-point panel and no card, so the quiet resume line is the ONLY leave
+    cue at this rung. Emitting the unqualified "Pick up where you left off"
+    there would hide the held-boundary / missing-artifact / source-changed
+    condition that full/long mist surface via the guarded resume affordance —
+    dropping a load-bearing calm-degraded guard. When stale, render the SAME
+    qualified guard the card uses (``_reentry_resume_affordance``) instead: it
+    names the cause, states nothing was mutated, and offers a non-silent path
+    forward. Non-stale ``no_mist`` keeps its lighter quiet cue, so the
+    no_mist-vs-thread_fade differentiation is preserved.
+
+    Presentation-only: the rung and the staleness flag are server-declared;
+    this renderer derives no gap, staleness, or classification.
+    """
+    leave = _orientation_dict(orientation.get("leave_point"))
+    status = _orientation_str(leave.get("status"))
+    if stale or status in _REENTRY_STALE_CAUSES:
+        # Reuse the card's guard-held qualified resume so the only leave cue at
+        # this rung still names the stale/missing/degraded boundary instead of
+        # masking it behind a generic "pick up where you left off".
+        guard = _reentry_resume_affordance(leave, stale=True)
+        return (
+            f'<div class="reentry-resume-line reentry-resume-line--guarded" '
+            f'data-region="reentry-resume-line" '
+            f'data-testid="reentry-resume-line" data-read-only="true" '
+            f'data-stale="true">{guard}</div>'
+        )
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    note_path = _orientation_str(artifact.get("note_path") or artifact.get("logical_ref"))
+    if status == "present" and note_path:
+        href = "/workspace?note_path=" + quote(note_path, safe="")
+        target = (
+            f'<a class="reentry-resume-line-link" '
+            f'data-testid="reentry-resume-line-link" '
+            f'data-intent="entry.resume" data-note-path="{_e(note_path)}" '
+            f'href="{_e(href)}">Resume</a>'
+        )
+    else:
+        # Never a silent link into a moved/missing artifact from the quiet cue.
+        target = '<span class="reentry-resume-line-text">Pick up where you left off</span>'
+    return (
+        f'<p class="reentry-resume-line" data-region="reentry-resume-line" '
+        f'data-testid="reentry-resume-line" data-read-only="true">'
+        f"{target}</p>"
     )
 
 
@@ -6662,6 +6808,15 @@ def _render_orientation_index_html(
             whisper_html = _render_reentry_whisper_column(orientation)
     elif shape == "soft_mist":
         reentry_overlay_html = _render_reentry_peripheral_line(orientation)
+    elif shape == "no_mist":
+        # A1 finish (#2483): no_mist ≈ the shell with at most a quiet resume
+        # line, differentiated from thread_fade (peripheral rail cue only) so
+        # the two shortest rungs are not pixel-identical. Presentation-only —
+        # the rung is the server-declared shape; the line restates nothing the
+        # absent card would have owned (there is no card at this rung).
+        reentry_overlay_html = _render_reentry_resume_line(
+            orientation, stale=entry_resolution.stale
+        )
     elif shape == "thread_fade":
         # No card, no peripheral line: the rail pane fades a fraction and the
         # trajectory stays implicit. CUIDR-06 (#2450): because the subtractive
@@ -6678,7 +6833,9 @@ def _render_orientation_index_html(
             f' data-testid="reentry-rail-fade"'
             f' style="opacity: {_REENTRY_RAIL_FADE};" aria-hidden="true"></aside>'
         )
-    # no_mist, cold_start, and no_vault render no re-entry overlay of any kind.
+    # cold_start and no_vault render no re-entry overlay of any kind. no_mist
+    # renders only the quiet resume line above (A1 finish, #2483) so it stays
+    # distinct from thread_fade's peripheral rail cue.
     #
     # CUIDR-06 (#2450): the mist ladder is subtractive. The orientation
     # snapshot panels (leave point, open loops, notable changes, resurface) are
@@ -6697,6 +6854,13 @@ def _render_orientation_index_html(
     # the count headlines are suppressed exactly there; degraded (no card)
     # keeps them.
     dedup_card_counts = shape in ("full_mist", "long_mist")
+    # A1 finish (#2483): when the card is present it owns the leave point (the
+    # "doing"/"stopped" questions + resume). The leave-point panel beneath
+    # would repeat the LEAVE POINT heading and the leave label verbatim, so it
+    # is suppressed exactly there; the notable-change labels live only in the
+    # panel (the long_mist delta strip now states a count, not verbatim
+    # labels — see _render_reentry_delta_strip).
+    card_present = shape in ("full_mist", "long_mist")
     refresh_mode = "foreground_pull" if ambient_refresh_enabled else "manual"
     refresh_state = "degraded" if degraded else ("scheduled" if ambient_refresh_enabled and stale_after else "manual_refresh")
     refresh_copy = (
@@ -7445,7 +7609,7 @@ def _render_orientation_index_html(
     {vault_unreachable_threshold_html}
     <div class="orientation-grid">
       {"" if (is_cold or is_no_vault or not panels_visible) else f'''<div class="orientation-column">
-        {_render_orientation_leave_point(orientation.get("leave_point"))}
+        {_render_orientation_leave_point(orientation.get("leave_point"), suppress_when_card=card_present)}
         {_render_orientation_open_loops(orientation.get("open_loops"), meta=meta, dedup_count=dedup_card_counts)}
         {_render_orientation_notable_changes(orientation.get("notable_changes"), meta=meta, dedup_count=dedup_card_counts)}
       </div>

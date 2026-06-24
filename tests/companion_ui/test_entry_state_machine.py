@@ -381,7 +381,11 @@ def test_orienting_still_renders_dashboard_sections() -> None:
         orientation=_orientation_payload(leave_status="present", gap=timedelta(hours=5))
     )
     assert _entry_state(page) == "orienting"
-    assert 'data-testid="workspace-orientation-leave-point"' in page
+    # A1 finish (#2483): at full_mist the re-entry card owns the leave point,
+    # so the leave-point panel is suppressed beneath it (de-dup). The card
+    # carries the leave-point datum instead.
+    assert 'data-region="reentry-card"' in page
+    assert 'data-testid="workspace-orientation-leave-point"' not in page
     # CUIDR-06 (#2450): orientation panels appear at full_mist+ (5h = full_mist),
     # but the governance/telemetry tile is removed from the orientation surface
     # at every rung — it belongs behind the System Map (CUIDR-04 cross-task
