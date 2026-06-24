@@ -45,7 +45,7 @@ Every other task in this capability (re-entry shapes, overlay host, state-galler
 
 - [ ] The shell root declares `data-entry-state` with exactly one of the five spec values in every render path (orientation page, workspace page, error page).
   Verify: `tests/companion_ui/test_entry_state_machine.py::test_shell_root_declares_entry_state_in_all_render_paths`
-- [ ] `leave_point.status: absent` or no vault bound resolves to `cold_start`; first contact (no-vault-bound picker sub-shape — `vault_selection_required`) and >7d cold trajectories render no re-entry overlay region. The no-vault-bound picker sub-shape presents the guided create-or-open vault flow with a visual chooser only (no manual path entry per `SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker`); picker UI implementation depends on #1867 and #2312.
+- [ ] `leave_point.status: absent` (vault is bound) resolves to `cold_start`; no vault bound (`vault_selection_required`) resolves to `no_vault`. Both `cold_start` and `no_vault` render no re-entry overlay region. The `no_vault` picker presents the guided create-or-open vault flow with a visual chooser only (no manual path entry per `SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker`); picker UI implementation depends on #1867 and #2312.
   Verify: `tests/companion_ui/test_entry_state_machine.py::test_cold_start_shows_no_reentry_overlay`
 - [ ] Orientation HTTP 503 resolves to `no_vault` with a retry affordance and no fabricated snapshot content.
   Verify: `tests/companion_ui/test_entry_state_machine.py::test_runtime_unavailable_resolves_to_no_vault`

@@ -122,14 +122,16 @@ How the human first meets, leaves, and re-meets the system.
   — to be extended with a guided create-new-vault path.
 - **Status:** `settled` — vault selection is source of truth; system boots with no vault
   (`docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`; "Vault Optional at Runtime", #2004/#2006); the
-  cold-start flow is the **guided create-or-open chooser with no path typing** (owner decision,
-  2026-06-24, R1). **R1 reconciled (#2488):** `SYSTEM_ENTRY_POINT_SPEC.md` now names `cold_start`
-  as covering both the no-vault-bound first-contact picker sub-shape (`vault_selection_required`
-  sentinel) and the cold trajectory (>7d) shape. The `vault_selection_required` picker is not a
-  separate state — it is distinguished within `cold_start` by the orientation response type. The
-  `no_vault` state remains runtime-unreachable (503) only; no-vault-bound first contact routes
-  through the `cold_start` picker sub-shape. See `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md
-  §First-contact / no-vault-bound picker`. Picker UI implementation (#1867 + #2312) is downstream.
+  first-contact flow is the **guided create-or-open chooser with no path typing** (owner decision,
+  2026-06-24, R1). **R1 reconciled (#2488):** the no-vault-bound first-contact picker resolves to
+  the **`no_vault`** state (not a `cold_start` sub-shape). The `vault_selection_required` sentinel
+  from `resolve_optional_vault_root()` maps to `data-entry-state="no_vault"` in the shipped
+  renderer (`serve_dev_page.py`; asserted by `test_workspace_no_vault_picker.py`). The `no_vault`
+  state covers two cases: (a) orientation HTTP 503 (runtime unreachable) and (b) orientation
+  returning `vault_selection_required` (no vault bound). `cold_start` is reserved for the
+  vault-bound cold trajectory only (>7d, leave_point absent). See `companion-ui/docs/
+  SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker`. Picker UI implementation
+  (#1867 + #2312) is downstream.
 
 ### A2. Boot / handshake in progress
 
@@ -413,13 +415,14 @@ extraction, not decisions to make inside this doc.
 ### Group 1 — Spec contradictions (resolved)
 
 - **R1 — Entry-state enum vs. vault-selection state (A1) — RESOLVED (#2488, 2026-06-24).**
-  Owner decision (2026-06-24): first contact / cold start is a **guided initiation flow** offering
+  Owner decision (2026-06-24): first contact without a vault bound is a **guided initiation flow** offering
   *create a new vault* or *open an existing one*, completed through a friendly visual chooser with
   **no manual path or search-string entry** (dyslexia-friendly; see the cross-cutting constraint).
-  Resolved: `SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker` now names the
-  `vault_selection_required` picker as a sub-shape of `cold_start` (not a separate state); the
-  spec unifies the no-vault-bound first-contact flow with the vault-optional `vault_selection_required`
-  sentinel. `no_vault` remains runtime-unreachable (503) only. Picker UI (#1867 + #2312) downstream.
+  Resolved: the no-vault-bound first-contact picker resolves to the **`no_vault`** state (not a
+  `cold_start` sub-shape). `SYSTEM_ENTRY_POINT_SPEC.md §First-contact / no-vault-bound picker` documents
+  that `no_vault` covers both the 503 (runtime unreachable) and `vault_selection_required` (no vault
+  bound) cases; `cold_start` is reserved for the vault-bound cold trajectory (>7d). The shipped renderer
+  and `test_workspace_no_vault_picker.py` are the ground truth. Picker UI (#1867 + #2312) downstream.
 - **R2 — Latency ladder promises re-entry the leave-point TTL can't back (A4/A6) — RESOLVED (#2489, 2026-06-24).**
   The ladder described a recoverable `long_mist` out to 14d; the leave-point cursor TTL (ADR-0008) is
   hard-capped at 7d. Resolved: `CONTINUITY_AND_DECAY.md` and `SYSTEM_ENTRY_POINT_SPEC.md` now align

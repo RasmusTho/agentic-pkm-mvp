@@ -9,9 +9,10 @@ expectations`, `docs/SYSTEM_ENTRY_POINT/STATE_GALLERY_VALIDATION.md`):
   rejected across the fixture matrix;
 - no UI-derived posture / class / authority anywhere — all classification
   server-declared (traceable to fixture-declared fields);
-- ``cold_start`` (first contact / no-vault-bound picker, and >7d cold trajectory
-  per ADR-0008 leave-point cursor TTL) and ``no_vault`` render no re-entry
-  overlay of any kind;
+- ``cold_start`` (vault-bound >7d cold trajectory per ADR-0008 leave-point
+  cursor TTL) and ``no_vault`` (runtime unreachable OR no vault bound —
+  including the first-contact vault picker) render no re-entry overlay of any
+  kind; the no-vault-bound picker resolves to ``no_vault``, not ``cold_start``;
 - governed intents route through the pipeline and surface receipts; body
   edits and non-terminal ``memory.defer`` produce no governance receipt
   (the receipt asymmetry is asserted, not assumed);
@@ -397,6 +398,33 @@ def _render_no_vault(*, vault_browser_down: bool = False) -> str:
     )
 
 
+# Fixture picker payload — the runtime's vault_selection_required sentinel.
+# This is the no-vault-bound first-contact case; the renderer emits
+# data-entry-state="no_vault" (NOT cold_start) per the settled owner decision
+# (#2453; verified by test_workspace_no_vault_picker.py:test_home_picker_payload_renders_picker_not_cold_start).
+_PICKER_PAYLOAD: dict[str, Any] = {
+    "state": "vault_selection_required",
+    "reason": "no_vault_bound",
+    "message": "No vault is selected. Open the configured vault to continue.",
+    "configured_vault_root": "/Users/gallery/Vaults/Niflheim",
+    "requested_note_path": None,
+    "context": {"status": "none"},
+    "recent_vaults": [],
+    "actions": [],
+}
+
+
+def _render_no_vault_picker() -> str:
+    """Render the no-vault-bound first-contact picker (resolves to no_vault, not cold_start)."""
+    return handle_get(
+        query_string="",
+        client=_FakeClient(  # type: ignore[arg-type]
+            orientation=_PICKER_PAYLOAD,
+        ),
+        api_base_url="http://127.0.0.1:18001",
+    )
+
+
 # ---------------------------------------------------------------------------
 # The state gallery — every state from the handoff package's state-gallery.md
 # that shipped, rendered from a fixture orientation snapshot
@@ -475,6 +503,32 @@ def _gallery() -> dict[str, GalleryState]:
     # A1 boot is the pre-resolution handshake: the resolver declares it when
     # no orientation outcome exists; server-rendered pages always resolve the
     # fetch first, so A1 has no fixture page (asserted directly in the tests).
+    #
+    # A2_no_vault_picker: first contact with NO vault bound.
+    # The runtime returns vault_selection_required; the renderer declares
+    # data-entry-state="no_vault" (NOT cold_start). Ground truth:
+    #   serve_dev_page.py → EntryStateResolution(state="no_vault")
+    #   test_workspace_no_vault_picker.py::test_home_picker_payload_renders_picker_not_cold_start
+    add(
+        "A2_no_vault_picker",
+        GalleryState(
+            gallery_id="A2",
+            entry_state="no_vault",
+            reentry_shape=None,
+            html=_render_no_vault_picker(),
+            required=(
+                'data-testid="vault-selection-required"',
+                'data-entry-state="no_vault"',
+            ),
+            forbidden=_REENTRY_OVERLAY_MARKERS
+            + (
+                'data-region="cold-start-threshold"',
+                'data-region="reentry-card"',
+            ),
+        ),
+    )
+    # A2_first_contact: vault IS bound but leave_point absent (cold trajectory).
+    # Resolves to cold_start, NOT the vault picker case.
     add(
         "A2_first_contact",
         GalleryState(
@@ -1050,6 +1104,9 @@ def test_undeclared_transitions_rejected_across_fixtures() -> None:
 
     # Declared transitions render across the matrix:
     # boot → cold_start / orienting / no_vault per the fixture signal …
+    # … no vault bound (vault_selection_required) → no_vault (NOT cold_start) …
+    assert _entry_state(gallery["A2_no_vault_picker"].html) == "no_vault"
+    # … vault bound, leave_point absent → cold_start …
     assert _entry_state(gallery["A2_first_contact"].html) == "cold_start"
     assert _entry_state(gallery["A4_full_mist"].html) == "orienting"
     assert _entry_state(gallery["A6_no_vault"].html) == "no_vault"
@@ -1107,6 +1164,7 @@ def test_undeclared_transitions_rejected_across_fixtures() -> None:
 def test_cold_and_no_vault_have_no_reentry_overlay() -> None:
     gallery = _gallery()
     no_overlay_states = (
+        "A2_no_vault_picker",     # no vault bound → no_vault (NOT cold_start)
         "A2_first_contact",
         "A2_first_contact_null_leave",
         "A3_cold_trajectory_21d",
@@ -1120,6 +1178,14 @@ def test_cold_and_no_vault_have_no_reentry_overlay() -> None:
             assert marker not in page, f"{name}: {marker}"
         # No continuity claim the system cannot back: no resume affordance.
         assert 'data-intent="entry.resume"' not in page, name
+
+    # A2_no_vault_picker: the picker resolves to no_vault, NOT cold_start.
+    # This is the settled owner decision confirmed by test_workspace_no_vault_picker.py.
+    picker_page = gallery["A2_no_vault_picker"].html
+    assert 'data-entry-state="no_vault"' in picker_page, "picker must be no_vault"
+    assert 'data-entry-state="cold_start"' not in picker_page, "picker must NOT be cold_start"
+    assert 'data-testid="vault-selection-required"' in picker_page, "picker UI must be present"
+    assert 'data-region="cold-start-threshold"' not in picker_page, "picker must not show cold-start threshold"
 
     # no_vault never fabricates a fresh successful snapshot (gallery A6
     # MUST NOT): the fixture's orientation content does not render.
