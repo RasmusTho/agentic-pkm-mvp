@@ -95,6 +95,23 @@ _CLASSIFIED_TOKEN_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"^signal=[\w.-]*$"),
 )
 
+# Machine ``name=value`` signal-encoding shape used by the orientation/resurface
+# producer. The runtime emits every resurface signal as ``f"{signal.name}={signal.value}"``
+# (app/api/routes/companion.py::_orientation_resurface_candidates) — e.g.
+# ``worker_queue_pending=2``, ``recent_change=orientation``, ``signal=0``. NONE of
+# these are user-authored copy; they are correlation encodings. The chip render
+# path must fail closed on the WHOLE family, not just the fixture's ``signal=…``.
+#
+# The shape that identifies a machine encoding (and distinguishes it from human
+# copy such as "Resume the runtime API contract" or "from where you left off"):
+# a leading bare *identifier* token (``[a-z][\w.]*`` — snake/dotted, no spaces)
+# immediately followed by ``=`` and a value, with no surrounding prose. Human
+# labels never carry that ``identifier=value`` head, so this does not redact
+# legitimate copy that merely happens to contain an ``=`` mid-sentence.
+_SIGNAL_LABEL_ENCODING_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[A-Za-z][\w.]*=.*$"
+)
+
 # Embedded-identifier pattern for prose redaction. Matches an internal id
 # (``prop-*`` / ``proposal-*`` / ``art-*`` / ``artifact-*`` / ``note-*``) where
 # it appears *inside* free text (e.g. a runtime ``trigger_summary`` such as
@@ -203,6 +220,40 @@ def humanise_token(token: object) -> str:
         # Unmapped machine signal encoding (e.g. signal=0) — fail closed.
         return ""
     return text
+
+
+def humanise_signal_label(token: object) -> str:
+    """Fail-closed humanisation for an orientation/resurface *signal chip* label.
+
+    The resurface/orientation chips render the runtime's resurface signal labels,
+    which the producer emits as machine ``name=value`` encodings (e.g.
+    ``worker_queue_pending=2``, ``recent_change=orientation``, ``signal=0``). Those
+    are correlation encodings, never user-authored copy, so an *unmapped*
+    ``name=value`` token must FAIL CLOSED (suppressed) rather than render raw —
+    otherwise the live (non-gallery) runtime leaks ``worker_queue_pending=2`` into
+    visible chip text, defeating the no-raw-enum constraint for REAL data.
+
+    Resolution:
+
+    - an explicitly mapped enum returns its human copy (via :func:`humanise_token`);
+    - any whole-string machine ``identifier=value`` encoding is suppressed (empty);
+    - any other value (legitimate human label) passes through unchanged via
+      :func:`humanise_token`, preserving its identifier/namespace fail-closed rules.
+
+    The raw signal label still travels server-authoritatively in the chip's
+    ``data-signal-token`` attribute. This is deliberately scoped to the signal
+    chip render path; it does NOT change :func:`humanise_token`, whose pass-through
+    contract other callers (evidence/proposal ``action_class`` labels) rely on.
+    """
+    text = "" if token is None else str(token).strip()
+    if not text:
+        return ""
+    if text in _ENUM_MAP:
+        return _ENUM_MAP[text]
+    if _SIGNAL_LABEL_ENCODING_RE.match(text):
+        # Unmapped machine name=value signal encoding — fail closed, never raw.
+        return ""
+    return humanise_token(text)
 
 
 def humanise_provenance_token(token: object, *, fallback: str) -> str:

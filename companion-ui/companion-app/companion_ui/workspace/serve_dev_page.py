@@ -73,6 +73,7 @@ from companion_ui.workspace.calm_degraded import (
     humanise_degraded_reason,
     humanise_prose,
     humanise_provenance_token,
+    humanise_signal_label,
     humanise_token,
     lane_label,
 )
@@ -4007,14 +4008,16 @@ def _render_resurface_mode(
     held_back = more_held_back or len(shown) < total
     rows: list[str] = []
     for candidate in shown:
-        # C3 (CUIDR-01): a raw runtime signal encoding (e.g. "signal=0") must not
-        # appear as visible chip copy. Humanise each label through the single map
-        # — an unmapped machine signal token fails closed, so the visible text is
-        # suppressed — while the raw classified value still travels
+        # C3 (CUIDR-01 / #2482): a raw runtime signal encoding must not appear as
+        # visible chip copy. The producer emits EVERY signal label as a machine
+        # name=value pair (worker_queue_pending=2, recent_change=orientation,
+        # signal=0), not just the fixture's signal=0 — so humanise each label
+        # through the signal-chip map, which fails closed on ANY unmapped
+        # name=value encoding. The raw classified value still travels
         # server-authoritatively in the data-signal-token attribute.
         signal_chips = []
         for signal in candidate.get("signal_labels", []):
-            human = humanise_token(signal)
+            human = humanise_signal_label(signal)
             signal_chips.append(
                 '<span class="resurface-signal" data-testid="resurface-signal" '
                 f'data-signal-token="{_e(str(signal))}">'
@@ -6090,16 +6093,18 @@ def _render_orientation_resurface(
 
     def _candidate_row(candidate: dict, *, testid: str, visible_default: bool) -> str:
         label = _orientation_str(candidate.get("label"), "Resurface candidate")
-        # C3 (CUIDR-01 / #2482): a raw runtime signal encoding (e.g. "signal=0")
-        # must not appear as visible chip *copy*. Humanise each label through the
-        # single map — an unmapped machine signal token fails closed, so the
-        # visible text is suppressed — while the raw classified value still
-        # travels server-authoritatively in the data-signal-token attribute (the
-        # test hook may keep the raw id; only visible copy is humanised).
+        # C3 (CUIDR-01 / #2482): a raw runtime signal encoding must not appear as
+        # visible chip *copy*. The producer emits EVERY signal label as a machine
+        # name=value pair (worker_queue_pending=2, recent_change=orientation,
+        # signal=0), not just the fixture's signal=0 — so humanise each label
+        # through the signal-chip map, which fails closed on ANY unmapped
+        # name=value encoding. The raw classified value still travels
+        # server-authoritatively in the data-signal-token attribute (the test
+        # hook may keep the raw id; only visible copy is humanised).
         signal_chips = []
         for signal in _orientation_list(candidate.get("signal_labels")):
             raw_signal = _orientation_str(signal)
-            human = humanise_token(raw_signal)
+            human = humanise_signal_label(raw_signal)
             signal_chips.append(
                 '<span class="orientation-signal" '
                 f'data-signal-token="{_e(raw_signal)}">{_e(human)}</span>'

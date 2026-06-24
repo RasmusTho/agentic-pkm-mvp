@@ -40,6 +40,7 @@ from companion_ui.workspace.calm_degraded import (
     calm_degraded,
     humanise_degraded_reason,
     humanise_prose,
+    humanise_signal_label,
     humanise_token,
 )
 from companion_ui.workspace.real_note_workspace_dev_page import (
@@ -565,6 +566,37 @@ def test_humanise_token_fails_closed_on_unmapped_classified_namespace() -> None:
     assert humanise_token("lifecycle.move") == "Move note"
     for unmapped in ["lifecycle.archive", "lifecycle.delete", "lifecycle.split"]:
         assert humanise_token(unmapped) == "", f"{unmapped!r} must fail closed"
+
+
+def test_humanise_signal_label_fails_closed_on_machine_name_value() -> None:
+    # The resurface/orientation signal producer emits EVERY label as a machine
+    # name=value encoding (#2482 Codex finding). humanise_signal_label must fail
+    # closed on the WHOLE family, not just the fixture's signal=… token.
+    for token in [
+        "signal=0",
+        "worker_queue_pending=2",
+        "recent_change=orientation",
+        "pending_promotions=5",
+        "watcher_runs_24h=0",
+        "promote_created.24h=1",
+    ]:
+        assert humanise_signal_label(token) == "", (
+            f"machine signal encoding {token!r} must fail closed (not render raw)"
+        )
+
+
+def test_humanise_signal_label_keeps_mapped_and_human_labels() -> None:
+    # A mapped enum still humanises; a legitimate human label (no identifier=value
+    # head) passes through unchanged — so the generalisation does not suppress
+    # real copy. An empty token yields empty.
+    assert humanise_signal_label("orientation_unavailable") == "Orientation unavailable"
+    assert humanise_signal_label("Relevant now because the note changed") == (
+        "Relevant now because the note changed"
+    )
+    # A human sentence that merely contains an '=' mid-prose is NOT a machine
+    # name=value encoding (no leading bare identifier head) and is preserved.
+    assert humanise_signal_label("score was 3 = strong") == "score was 3 = strong"
+    assert humanise_signal_label("") == ""
 
 
 # ---------------------------------------------------------------------------

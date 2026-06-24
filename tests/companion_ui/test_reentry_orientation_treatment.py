@@ -1567,6 +1567,42 @@ def test_orientation_footers_have_no_raw_enum() -> None:
     assert 'data-authority-role="operational_trace_pointer"' in html
 
 
+# The resurface signal producer (app/api/routes/companion.py::
+# _orientation_resurface_candidates) emits EVERY signal label as a machine
+# ``f"{signal.name}={signal.value}"`` encoding — e.g. ``worker_queue_pending=2``,
+# ``recent_change=orientation`` — NOT only the fixture's ``signal=0``. A
+# ``signal=``-only suppression leaves those real ``name=value`` encodings passing
+# through to visible chip copy, defeating the no-raw-enum AC for REAL data. This
+# test exercises the realistic producer shape and asserts NONE of the raw
+# ``name=value`` encodings appear in visible chip text; the chip renders the
+# humanised/withheld form while the raw value stays in data-signal-token.
+_REALISTIC_RESURFACE_SIGNAL_LABELS = [
+    "worker_queue_pending=2",
+    "recent_change=orientation",
+]
+
+
+def test_resurface_chips_have_no_raw_name_value_signal_encoding() -> None:
+    payload = _orientation_payload(gap=_GAP_FULL_MIST)
+    # Inject the realistic producer shape onto the rendered resurface candidate
+    # (replacing the fixture's signal=0). Both the resurface panel and the
+    # orientation panel render signal_labels as chip copy.
+    payload["resurface"]["candidates"][0]["signal_labels"] = list(
+        _REALISTIC_RESURFACE_SIGNAL_LABELS
+    )
+    html = _render(orientation=payload)
+    visible = _visible_text(html)
+    for token in _REALISTIC_RESURFACE_SIGNAL_LABELS:
+        assert token not in visible, (
+            f"raw name=value signal encoding {token!r} leaked into visible chip "
+            "copy (signal-chip render did not fail closed on the real producer "
+            "shape)"
+        )
+    # The raw classified values still travel server-authoritatively in data-*.
+    for token in _REALISTIC_RESURFACE_SIGNAL_LABELS:
+        assert f'data-signal-token="{token}"' in html
+
+
 # An *allowed-but-unmapped* provenance enum must fail closed: the constraint is
 # that the enum/id map renders the safe fallback ("Derived" / "details withheld")
 # for any unmapped token, never the raw enum. The footer renders authority_role
