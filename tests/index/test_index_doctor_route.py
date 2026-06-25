@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import os
+from uuid import uuid4
+
 import pytest
 
-from app.index.doctor import diagnose_index
+from app.index.doctor import diagnose_index, reset_diagnose_cache
 from app.settings.models import SettingsBundle
+
+
+def _pg_available() -> bool:
+    import psycopg
+
+    from app.db.dsn import resolve_dsn
+
+    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    try:
+        conn = psycopg.connect(url, connect_timeout=1)
+        conn.close()
+        return True
+    except Exception:
+        return False
 
 
 @pytest.fixture(autouse=True)
@@ -34,3 +51,72 @@ def test_index_doctor_reports_rebuild_fields(monkeypatch) -> None:
     assert "rebuild_required" in result
     assert "compatible_identity" in result
     assert "empty_index" in result
+
+
+@pytest.mark.pg
+def test_doctor_reports_indexed(tmp_path, monkeypatch) -> None:
+    """Gate-0 AC2: after a seeded embedded vault, doctor reports a healthy index.
+
+    Drives the durable spine (save -> request -> consumer embed/upsert into the
+    Postgres ``store_vector_index``) and asserts ``diagnose_index()`` reports
+    ``rebuild_required=False`` and ``empty_index=False`` for the seeded,
+    identity-compatible index.
+    """
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from datetime import datetime, timezone
+
+    from app.objects import DomainObject, ObjectStore
+    from app.outbox import events
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drain_db_outbox_embedding_spine,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    reset_diagnose_cache()
+    monkeypatch.setenv("EMBED_MODEL", "embed-test")
+    try:
+        import app.store.object_store as legacy_object_store
+
+        legacy_object_store._MEMORY_STORE.clear()
+
+        store = ObjectStore()
+        oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(oid),
+                kind="note",
+                payload={"text": "doctor seed payload", "content": "doctor seed payload"},
+                source_ref="unit-test:doctor-indexed",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-doctor-indexed",
+        )
+        events.emit_index_embedding_requested(
+            {"object_id": oid, "trace_id": "trace-doctor-indexed", "source": "test"}
+        )
+
+        legacy_object_store._MEMORY_STORE.clear()
+
+        # Drain ONLY this object's seeded embedding-request row, scoped by object_id
+        # on the nested envelope path, through the same consumer entrypoint the
+        # production worker dispatches to. A global ``poll_outbox_one`` loop would
+        # ack pre-existing foreign rows on a shared/operator DB — destructive.
+        processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
+        assert processed_total >= 1
+
+        reset_diagnose_cache()
+        result = diagnose_index()
+
+        assert result["empty_index"] is False
+        assert result["rebuild_required"] is False
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)

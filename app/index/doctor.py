@@ -102,6 +102,15 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
             wrong_rows = pg_state.get("rows_wrong_dim")
             if isinstance(wrong_rows, int) and wrong_rows > 0:
                 issues.append(f"{wrong_rows} rows have embeddings not matching the recorded dimension.")
+            unembedded_count, unembedded_samples = inspect_unembedded_pg_objects()
+            if unembedded_count:
+                sample_text = ", ".join(unembedded_samples)
+                if unembedded_count > len(unembedded_samples):
+                    sample_text = f"{sample_text}, ..." if sample_text else "..."
+                issues.append(
+                    f"{unembedded_count} store_objects rows have no embedded "
+                    f"store_vector_index row: {sample_text}"
+                )
 
     status = "ok"
     if issues:
@@ -145,4 +154,102 @@ def reset_diagnose_cache() -> None:
         _diagnose_cache = None
 
 
-__all__ = ["diagnose_index", "reset_diagnose_cache"]
+class IndexDriftError(AssertionError):
+    """Raised when durable objects exist with no embedded vector-index row.
+
+    This is the #2252-class stall: a ``store_objects`` row is present but the
+    outbox never drained, so no ``store_vector_index`` row with a non-empty
+    embedding was written. The condition must fail loud rather than pass
+    silently.
+    """
+
+
+def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
+    """Return count and sample object ids present in ``store_objects`` but unembedded."""
+    if PgVectorIndex is None:
+        return 0, []
+
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT count(*) AS total
+                FROM store_objects AS o
+                LEFT JOIN store_vector_index AS v
+                  ON v.object_id = o.object_id
+                 AND v.embedding IS NOT NULL
+                 AND array_length(v.embedding, 1) > 0
+                WHERE v.object_id IS NULL
+                """
+            )
+            row = cur.fetchone()
+            total = int((row.get("total") if isinstance(row, dict) else row[0]) or 0) if row else 0
+            if not total:
+                return 0, []
+            cur.execute(
+                """
+                SELECT o.object_id AS object_id
+                FROM store_objects AS o
+                LEFT JOIN store_vector_index AS v
+                  ON v.object_id = o.object_id
+                 AND v.embedding IS NOT NULL
+                 AND array_length(v.embedding, 1) > 0
+                WHERE v.object_id IS NULL
+                ORDER BY o.updated_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return total, [
+                str(sample.get("object_id") if isinstance(sample, dict) else sample[0])
+                for sample in cur.fetchall()
+            ]
+
+
+def verify_object_embedded(object_id: str) -> None:
+    """Fail loud when ``object_id`` is present in ``store_objects`` but unembedded.
+
+    Drives the durable Postgres backend (the same ``store_vector_index`` table the
+    consumer writes and recall reads). Raises :class:`IndexDriftError` when the
+    object has no ``store_vector_index`` row carrying a non-empty embedding.
+
+    This is the production verification entrypoint for the objects-present /
+    no-vector drift the worker stall produces; ``make verify`` style drift checks
+    and the indexer regression tests call it rather than re-implementing the
+    assertion inline.
+    """
+    if PgVectorIndex is None:
+        raise RuntimeError("Postgres backend is required to verify embedding drift.")
+
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM store_objects WHERE object_id = %s LIMIT 1", (object_id,))
+            if cur.fetchone() is None:
+                return
+            cur.execute(
+                "SELECT 1 FROM store_vector_index "
+                "WHERE object_id = %s "
+                "AND embedding IS NOT NULL AND array_length(embedding, 1) > 0 "
+                "LIMIT 1",
+                (object_id,),
+            )
+            embedded = cur.fetchone() is not None
+
+    if not embedded:
+        raise IndexDriftError(
+            f"object {object_id} present in store_objects but has no embedded "
+            "store_vector_index row (processed_total=0; #2252-class stall)"
+        )
+
+
+__all__ = [
+    "diagnose_index",
+    "reset_diagnose_cache",
+    "inspect_unembedded_pg_objects",
+    "verify_object_embedded",
+    "IndexDriftError",
+]
