@@ -131,3 +131,29 @@ def test_frontmatter_fixture() -> None:
         assert rendered.html
         assert properties.html
         assert properties.write_calls == ()
+
+
+def test_properties_disclosure_has_no_readonly_badge() -> None:
+    """#2526 AC1 — the properties disclosure renders no `read-only` badge.
+
+    The note body is always directly editable (the misleading note-body
+    read-only pill was removed in #1447). The per-note properties-disclosure
+    badge claimed read-only unconditionally next to a working Edit button; it
+    is a false trust signal and is removed. The inert `data-readonly="true"`
+    projection attribute (a machine attribute, not a human-visible badge) is
+    retained.
+    """
+    from tests.companion_ui._visible_text import visible_text
+
+    # Valid frontmatter path and malformed-diagnostic path both render the
+    # properties header; neither must carry the visible badge.
+    for fixture_name in ("frontmatter-properties.md", "malformed-frontmatter.md"):
+        _rendered, properties = _render_properties(_fixture(fixture_name))
+
+        # The badge markup is gone entirely (class + visible value).
+        assert 'class="vault-properties-mode"' not in properties.html
+        assert ">read-only</span>" not in properties.html
+        assert "read-only" not in visible_text(properties.html)
+
+        # The inert projection attribute is preserved (not a visible badge).
+        assert 'data-readonly="true"' in properties.html

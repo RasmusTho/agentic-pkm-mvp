@@ -97,7 +97,6 @@ class PropertiesRenderer:
             'data-readonly="true">'
             '<div class="vault-properties-header">'
             '<span class="vault-properties-label">Properties</span>'
-            '<span class="vault-properties-mode">read-only</span>'
             "</div>"
             f'<ul class="vault-properties-diagnostics">{items}</ul>'
             "</section>"
@@ -116,7 +115,6 @@ class PropertiesRenderer:
             'data-readonly="true">'
             '<div class="vault-properties-header">'
             '<span class="vault-properties-label">Properties</span>'
-            '<span class="vault-properties-mode">read-only</span>'
             "</div>"
             f'<dl class="vault-properties-list">{rows}</dl>'
             "</section>"

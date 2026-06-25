@@ -3363,23 +3363,14 @@ def _render_vault_note_row(note: dict, filename: str, path: str, note_path: str)
     nav_hidden = _should_hide_note_by_default(note)
     row_hidden_attr = " hidden" if nav_hidden else ""
     row_nav_attr = ' data-nav-visible="false"' if nav_hidden else ""
-    selection_control = (
-        f'<input type="checkbox" class="vault-browser-selection-toggle" '
-        f'data-testid="workspace-vault-browser-selection-toggle" '
-        f'data-mode="ui_only" data-selected="false" data-note-path="{_e(path)}" '
-        f'aria-label="Select {_e(stem)}" '
-        f'onclick="vaultBrowserToggleSelection(event, this)">'
-    )
 
     # Obsidian-clean row: the visible label is the filename stem (disambiguates
     # same-titled notes); the frontmatter title is the tooltip. The full path and
     # raw metadata stay in hidden elements (data-* preserved for tests).
     return (
         f'<li class="vault-browser-row{row_extra_class}" '
-        f'data-testid="workspace-vault-browser-note-row" data-active="{active}" '
-        f'data-selected="false"'
+        f'data-testid="workspace-vault-browser-note-row" data-active="{active}"'
         f'{row_kind_attr}{row_companion_attr}{row_nav_attr}{row_hidden_attr}>'
-        f'{selection_control}'
         f'<a href="{href}" class="vault-browser-row-title" '
         f'data-testid="workspace-vault-browser-note-link" title="{title}">{_e(stem)}</a>'
         f'<code class="vault-browser-row-path" data-testid="workspace-vault-browser-note-path" '
@@ -3465,10 +3456,11 @@ def _render_vault_browser_pagination(
         f'data-mode="{_e(str(pagination.get("mode") or "cursor"))}" '
         f'data-has-next="{str(has_next).lower()}" '
         f'data-has-previous="{str(has_previous).lower()}">'
-        f'<span data-testid="workspace-vault-browser-pagination-summary">'
+        f'<span class="vault-browser-pagination-summary" '
+        f'data-testid="workspace-vault-browser-pagination-summary">'
         f"{returned} shown from {total} matches"
         "</span>"
-        f"{previous_html}{next_html}"
+        f'<span class="vault-browser-pagination-controls">{previous_html}{next_html}</span>'
         "</nav>"
     )
 
@@ -3574,15 +3566,6 @@ def _render_vault_browser(
         active_filters=active_filters or {},
         pagination=pagination or {},
     )
-    selection_summary_html = (
-        '<div class="vault-browser-selection-summary" '
-        'data-testid="workspace-vault-browser-selection-summary" '
-        'data-mode="ui_only" data-selected-count="0" aria-live="polite">'
-        "0 selected"
-        "</div>"
-        if notes
-        else ""
-    )
     selected_note = next((n for n in notes if str(n.get("note_path") or "").strip() == note_path), None)
     # #1427 — keep the inspector out of the default browse view. The tree is the
     # surface; the inspector metadata/actions sit behind a collapsed disclosure
@@ -3624,7 +3607,6 @@ def _render_vault_browser(
           {hidden_html}
           {filters_html}
           {state_html}
-          {selection_summary_html}
           {list_html}
           {pagination_html}
           {inspector_html}
@@ -7263,9 +7245,6 @@ def _render_orientation_index_html(
       gap: 8px;
       min-height: 28px;
     }}
-    .orientation-vault-entry .vault-browser-selection-toggle {{
-      flex: 0 0 auto;
-    }}
     .orientation-vault-entry .vault-browser-row-title {{
       color: var(--cyan);
       min-width: 0;
@@ -7669,35 +7648,6 @@ def _orientation_vault_browser_script() -> str:
     window.vaultBrowser.focus = focusOrientationVaultBrowser;
     window.vaultBrowser.open = window.vaultBrowser.open || focusOrientationVaultBrowser;
   })();
-
-  function vaultBrowserSelectionControls() {
-    return Array.prototype.slice.call(
-      document.querySelectorAll('[data-testid="workspace-vault-browser-selection-toggle"]')
-    );
-  }
-
-  function vaultBrowserUpdateSelectionSummary() {
-    var controls = vaultBrowserSelectionControls();
-    var selected = controls.filter(function(control) { return control.checked; });
-    var summary = document.querySelector('[data-testid="workspace-vault-browser-selection-summary"]');
-    if (!summary) return;
-    summary.dataset.selectedCount = String(selected.length);
-    summary.textContent = selected.length === 1 ? '1 selected' : selected.length + ' selected';
-  }
-
-  function vaultBrowserToggleSelection(event, control) {
-    if (event) { event.stopPropagation(); }
-    if (!control) return;
-    var row = control.closest('[data-testid="workspace-vault-browser-note-row"]');
-    var selected = !!control.checked;
-    control.dataset.selected = selected ? 'true' : 'false';
-    if (row) {
-      row.dataset.selected = selected ? 'true' : 'false';
-    }
-    vaultBrowserUpdateSelectionSummary();
-  }
-
-  document.addEventListener('DOMContentLoaded', vaultBrowserUpdateSelectionSummary);
 
   function vbToggleFilter(el) {
     var key = el.dataset.key;
@@ -11729,31 +11679,27 @@ def render_index_html(
       box-sizing: border-box;
       display: grid;
       gap: 4px;
-      grid-template-columns: 18px minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr);
       list-style: none;
       min-width: 0;
     }}
-    .vault-browser-selection-summary {{
+    .vault-browser-pagination {{
+      align-items: center;
+      column-gap: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      padding: 6px 2px 2px;
+    }}
+    .vault-browser-pagination-summary {{
       color: var(--fg-3);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
-      line-height: 18px;
-      min-height: 18px;
-      padding: 2px 2px 6px;
     }}
-    .vault-browser-selection-toggle {{
-      appearance: auto;
-      cursor: pointer;
-      height: 14px;
-      margin: 0;
-      width: 14px;
-    }}
-    .vault-browser-row[data-selected="true"] > .vault-browser-selection-toggle {{
-      accent-color: var(--accent);
-    }}
-    .vault-tree .vault-browser-row[data-selected="true"] {{
-      background: var(--bg-raised);
-      border-radius: var(--radius-sm);
+    .vault-browser-pagination-controls {{
+      align-items: center;
+      display: inline-flex;
+      gap: 12px;
     }}
     .vault-tree .vault-browser-row-title {{
       border-left: 2px solid transparent;
@@ -12487,35 +12433,6 @@ def render_index_html(
         action.setAttribute('data-blocked-reason', error.message);
       }});
   }}
-
-  function vaultBrowserSelectionControls() {{
-    return Array.prototype.slice.call(
-      document.querySelectorAll('[data-testid="workspace-vault-browser-selection-toggle"]')
-    );
-  }}
-
-  function vaultBrowserUpdateSelectionSummary() {{
-    var controls = vaultBrowserSelectionControls();
-    var selected = controls.filter(function(control) {{ return control.checked; }});
-    var summary = document.querySelector('[data-testid="workspace-vault-browser-selection-summary"]');
-    if (!summary) return;
-    summary.dataset.selectedCount = String(selected.length);
-    summary.textContent = selected.length === 1 ? '1 selected' : selected.length + ' selected';
-  }}
-
-  function vaultBrowserToggleSelection(event, control) {{
-    if (event) {{ event.stopPropagation(); }}
-    if (!control) return;
-    var row = control.closest('[data-testid="workspace-vault-browser-note-row"]');
-    var selected = !!control.checked;
-    control.dataset.selected = selected ? 'true' : 'false';
-    if (row) {{
-      row.dataset.selected = selected ? 'true' : 'false';
-    }}
-    vaultBrowserUpdateSelectionSummary();
-  }}
-
-  document.addEventListener('DOMContentLoaded', vaultBrowserUpdateSelectionSummary);
 
   function vbToggleFilter(el) {{
     var key = el.dataset.key;

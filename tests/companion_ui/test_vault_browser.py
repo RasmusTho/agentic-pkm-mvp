@@ -727,3 +727,100 @@ def test_vault_provenance_attribute_is_escaped() -> None:
     )
     assert 'data-vault-provenance="env&quot; onmouseover=&quot;alert(1)"' in html
     assert 'data-vault-provenance="env" onmouseover=' not in html
+
+
+def _pagination(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "mode": "cursor",
+        "page_size": 50,
+        "returned_notes": 51,
+        "total_filtered_notes": 51,
+        "has_next": False,
+        "has_previous": False,
+        "next_cursor": "",
+        "previous_cursor": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_pagination_summary_separated_from_controls() -> None:
+    """#2526 AC2 — the pagination summary and the Previous/Next controls are
+    separated so the visible text never renders as ``matchesPreviousNext``.
+
+    The defect was the summary span concatenated directly with the controls
+    (``...51 matches</span>Previous Next``) inside a nav with no spacing. The
+    fix wraps the controls in their own element so the summary closes cleanly
+    before the controls, and the nav lays them out with a gap.
+    """
+    page = _load_page(
+        browser_payload=_vault_browser_payload(
+            total_notes=51,
+            filtered_notes=51,
+            pagination=_pagination(),
+        ),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    nav_m = re.search(r'<nav class="vault-browser-pagination".*?</nav>', html, re.DOTALL)
+    assert nav_m, "pagination nav not found"
+    nav = nav_m.group()
+
+    # The summary text is a distinct, closed element ...
+    assert "51 shown from 51 matches</span>" in nav
+    # ... and the Previous/Next controls live in their own wrapper, so the
+    # summary value never abuts the control text in the markup.
+    assert '<span class="vault-browser-pagination-controls">' in nav
+    assert "matches</span>Previous" not in nav
+    assert "matchesPrevious" not in nav
+
+    # Structural ordering: summary closes before the controls wrapper opens.
+    summary_end = nav.index("matches</span>") + len("matches</span>")
+    controls_start = nav.index('<span class="vault-browser-pagination-controls">')
+    assert summary_end <= controls_start
+
+
+def test_browse_list_has_no_selection_checkboxes() -> None:
+    """#2526 AC3 — the browse list renders no per-note selection checkbox and
+    no "N selected" summary; the dead ``ui_only`` toggle wiring is removed.
+    """
+    notes = [
+        {"note_path": "notes/a.md", "title": "Alpha", "zone": "notes"},
+        {"note_path": "notes/b.md", "title": "Beta", "zone": "notes"},
+    ]
+    page = _load_page(
+        browser_payload=_vault_browser_payload(notes=notes, total_notes=2, filtered_notes=2),
+    )
+    fields = page.render_fields()
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+
+    # The list still renders rows (sanity) ...
+    assert html.count('data-testid="workspace-vault-browser-note-row"') == 2
+    # ... but no per-note selection checkbox, no "N selected" summary, and no
+    # dead toggle/summary JS wiring.
+    assert 'data-testid="workspace-vault-browser-selection-toggle"' not in html
+    assert 'data-testid="workspace-vault-browser-selection-summary"' not in html
+    assert 'class="vault-browser-selection-toggle"' not in html
+    assert 'data-mode="ui_only"' not in html
+    assert "selected</div>" not in html
+    assert "vaultBrowserToggleSelection" not in html
+    assert "vaultBrowserUpdateSelectionSummary" not in html
+
+    # And no checkbox lives inside a browse-list row (other unrelated page
+    # checkboxes — settings/display prefs — are out of scope here).
+    row_blocks = re.findall(
+        r'<li[^>]+data-testid="workspace-vault-browser-note-row".*?</li>',
+        html,
+        re.DOTALL,
+    )
+    assert row_blocks
+    assert all('type="checkbox"' not in block for block in row_blocks)
