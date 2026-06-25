@@ -169,6 +169,38 @@ def test_private_child_vault_notes_never_leak_through_any_read_surface(
         assert leaked == [], f"{name} leaked child-vault content: {leaked}"
 
 
+def test_direct_workspace_read_of_child_vault_note_is_not_found(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Direct read-by-path must not bypass the boundary (#2313).
+
+    Enumeration pruning hides child-vault notes from listings, but the
+    confidentiality invariant also has to hold on a direct
+    ``GET /api/companion/workspace?note_path=...`` where the caller already
+    knows/guesses a child-vault-relative path. The parent-selected workspace
+    read (and the read-then-write edit path that shares ``_find_workspace_note``)
+    must resolve a child-vault note as not-found.
+    """
+    bind_selected_vault(monkeypatch, tmp_path)
+    _build_parent_with_nested_child(tmp_path)
+    client = TestClient(app)
+
+    # Parent-owned note is readable.
+    ok = client.get(
+        "/api/companion/workspace", params={"note_path": "notes/Parent Note.md"}
+    )
+    assert ok.status_code == 200, ok.text
+
+    # Direct read of a CHILD-vault note must be 404 (boundary), never the body.
+    for child_path in (
+        "projects/private-child/Secret Plan.md",
+        "projects/private-child/deep/Deeper Secret.md",
+    ):
+        resp = client.get("/api/companion/workspace", params={"note_path": child_path})
+        assert resp.status_code == 404, f"{child_path}: {resp.status_code} {resp.text}"
+        assert resp.json()["detail"]["error"] == "note_not_found"
+
+
 # --- AC2: owning vault = nearest enclosing vault root -----------------------
 
 

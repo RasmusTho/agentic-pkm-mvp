@@ -1581,6 +1581,16 @@ def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
         )
     if not os.path.isfile(target_real):
         return None
+    # Nested-vault boundary (#2313): even on a direct read-by-path, a note owned
+    # by a deeper nested vault root must NOT be served through the parent-selected
+    # vault — otherwise a caller who knows/guesses a child-vault-relative path
+    # bypasses the enumeration prune and reads (or edits) a private child note.
+    # Resolve to not-found so the parent acts as if the child subtree does not
+    # exist (the confidentiality invariant; this also gates the read-then-write
+    # workspace path, not just listings).
+    selected_root = Path(root_real)
+    if nearest_enclosing_vault_root(Path(target_real), search_root=selected_root) != selected_root:
+        return None
     return Path(target_real)
 
 
