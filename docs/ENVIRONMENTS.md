@@ -59,6 +59,20 @@ The four senses:
 
 **Read before write posture.** An `uninitialized` vault (existing folder with no Design Handoff settings) is readable but not writable. The `_active_companion_vault_root` gate uses `_READABLE_SELECTED_STATUSES = {"selected", "uninitialized"}` for read boundaries, so a human can browse notes before committing to initialization. Write boundaries pass `require_initialized=True`, which raises `VaultUninitializedError` and routes the write to the picker with reason `"uninitialized"` so the UI can surface the init affordance. This is the correct no-surprise behavior: reads always work on a selected folder; only writes require initialization.
 
+<a id="nested-vault-boundary"></a>
+
+### Nested vault boundary (a vault may contain privately-initiated sub-vaults)
+
+With full-host filesystem access and in-process selection, a content vault may contain **other initialized vaults as subfolders** — a parent vault whose subtree includes child folders that are themselves vaults (their own `settings/vault.md`, possibly private). The boundary rule below keeps a parent's read surfaces from leaking a child vault's notes (#2313).
+
+- **Vault-root marker.** A folder is a **vault root** iff `(<folder>/settings/vault.md)` exists — the same marker `validate_vault` keys on, building directly on the Option A scaffolding placement above. `app.vault.manager.is_vault_root(path)` is the cheap check: a single `stat`, no schema read, no healing.
+- **Boundary rule.** Enumeration of a parent vault **stops at any nested vault root strictly below it**. The selected root is the floor and is never pruned; only deeper marked roots are boundaries. A pruned child subtree is treated as if it does not exist.
+- **Child privacy (primary invariant).** A private child vault's contents must **never** surface through a parent vault's read surfaces. The parent acts as if the child subtree does not exist — this is a confidentiality boundary.
+- **Owning-vault identity.** A note's owning vault is its **nearest enclosing vault root**, not the selected root if a deeper marker encloses it (`app.vault.manager.nearest_enclosing_vault_root`).
+- **Navigation/UX.** Nested vault roots appear as **selectable boundaries (drill-in)** in the browser (`VaultBrowserStateResponse.nested_vault_roots`), never merged into the parent's note listing.
+- **Cheap on large trees.** Detection prunes **during traversal** — the companion read surfaces enumerate via `os.walk` with in-place directory pruning (`_iter_vault_note_files`), so a nested child vault's subtree is never descended into (one `stat` per directory, no per-note ancestor rescan). This replaced the prior `rglob('*.md')` scans that ignored vault boundaries.
+- **Scope.** The boundary is applied across the companion read/enumeration paths (`_select_vault_notes`, `_collect_vault_note_paths`, the vault browser, the vault-link-index, `/vault/notes`, the relation/Find surface, and the recents anchor). Indexing/watcher boundary enforcement (do not ingest a child's notes under the parent identity) and multi-vault binding (#2143) are tracked separately.
+
 ### Host mount source vs in-container binding (containerized runtime)
 
 When the runtime runs in containers, the `VAULT_ROOT` runtime binding has **two process perspectives on the same content vault**. They must not be conflated (issue #2141); both still name one content vault, neither is a separate sense of "vault":
