@@ -535,6 +535,12 @@ def vault_settings_panel_script() -> str:
     }}
     function renderInitConfirm(form, detail) {{
       clearInitConfirm(form);
+      // Bind the confirmation to the exact path it is shown for (Codex #2520
+      // P1): if the human edits the path after a 409 and then clicks the
+      // still-visible Confirm, the new folder must get its own warning, not
+      // silently inherit this confirmation.
+      var pathInput = form.querySelector('[name="path"]');
+      form.setAttribute('data-init-confirm-path', pathInput ? pathInput.value : '');
       var wrap = document.createElement('div');
       wrap.className = 'vault-init-confirm';
       wrap.setAttribute('data-testid', 'vault-init-confirm');
@@ -557,9 +563,14 @@ def vault_settings_panel_script() -> str:
     }}
     function submitVaultInitialize(form, endpoint, basePayload) {{
       var payload = Object.assign({{}}, basePayload);
-      if (form.getAttribute('data-init-confirmed') === 'true') {{ payload.confirm = true; }}
-      // One-shot: clear the flag so editing the path re-warns on the next submit.
+      // Honor a prior confirmation only if it was granted for THIS exact path
+      // (Codex #2520 P1): a stale confirm must never initialize a different,
+      // unwarned folder.
+      var confirmedFor = form.getAttribute('data-init-confirm-path');
+      if (form.getAttribute('data-init-confirmed') === 'true' && confirmedFor !== null && confirmedFor === basePayload.path) {{ payload.confirm = true; }}
+      // One-shot: clear the confirmation so any later submit re-evaluates.
       form.removeAttribute('data-init-confirmed');
+      form.removeAttribute('data-init-confirm-path');
       fetch(endpoint, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},

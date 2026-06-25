@@ -586,6 +586,13 @@ def test_init_form_surfaces_nonempty_confirm_gesture() -> None:
     assert "payload.confirm = true" in script
     assert "data-init-confirmed" in script
 
+    # Codex #2520 P1: the confirmation is bound to the exact path it was shown
+    # for. confirm:true is sent only when the stored confirm-path matches the
+    # path now being submitted, so editing the path after a 409 and clicking the
+    # stale Confirm re-warns for the new folder instead of bypassing the guard.
+    assert "data-init-confirm-path" in script
+    assert "confirmedFor === basePayload.path" in script
+
     # The select form keeps the generic reload-chaining path (init's dedicated
     # path must not remove it): an action still chains through reload().
     assert ".then(reload)" in script

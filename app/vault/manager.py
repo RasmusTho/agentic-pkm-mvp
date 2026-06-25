@@ -103,6 +103,12 @@ def existing_init_target_entries(vault_path: Path) -> tuple[str, ...]:
     expanded = vault_path.expanduser()
     if not expanded.is_dir():
         return ()
+    # ``vault_path`` is the operator-selected vault location from the loopback-
+    # authed picker (#2310 full-host selection), so listing it is by design and
+    # is strictly weaker than ``initialize_vault``'s existing mkdir/write at the
+    # same path. A CodeQL py/path-injection alert here is accepted on that basis
+    # (the picker's whole purpose is choosing an arbitrary local path; there is
+    # no containing root to validate against, and only top-level names are read).
     names = [
         child.name
         for child in expanded.iterdir()
