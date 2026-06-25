@@ -1649,6 +1649,20 @@ def _iter_vault_note_files(vault_root: Path) -> "Iterator[tuple[Path, str]]":
             if not filename.endswith(".md"):
                 continue
             candidate = Path(dirpath) / filename
+            # os.walk prunes nested-vault *directories*, but a .md *symlink* in the
+            # parent can point into a pruned child vault (or outside the selected
+            # vault) and read_text() would follow it — leaking the child note
+            # through the parent's enumeration even though the direct /workspace
+            # read now rejects the same real target. Gate symlinks on real-path
+            # ownership so only parent-owned notes are yielded (#2313). Non-symlink
+            # files are parent-owned by construction (child dirs already pruned).
+            if candidate.is_symlink():
+                try:
+                    real = candidate.resolve()
+                except OSError:
+                    continue
+                if nearest_enclosing_vault_root(real, search_root=vault_root) != vault_root.resolve():
+                    continue
             safe_path = _vault_relative(candidate, vault_root)
             if safe_path is None:
                 continue

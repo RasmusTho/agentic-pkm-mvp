@@ -201,6 +201,44 @@ def test_direct_workspace_read_of_child_vault_note_is_not_found(
         assert resp.json()["detail"]["error"] == "note_not_found"
 
 
+def test_symlink_into_child_vault_does_not_leak_through_enumeration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A ``.md`` symlink in the parent pointing into a child vault must not leak.
+
+    ``os.walk`` prunes child-vault *directories*, but a file symlink can point
+    past the boundary and ``read_text()`` would follow it. Enumeration gates
+    symlinks on real-path ownership so the child note never surfaces through the
+    parent's listings, and the direct ``/workspace`` read rejects it via realpath.
+    """
+    bind_selected_vault(monkeypatch, tmp_path)
+    child = _build_parent_with_nested_child(tmp_path)
+    # Symlink in the parent's own (non-pruned) area pointing into the child vault.
+    link = tmp_path / "notes" / "link-to-secret.md"
+    link.symlink_to(child / "Secret Plan.md")
+
+    # Direct helper: the symlink is not yielded.
+    collected, _ = _collect_vault_note_paths(tmp_path, limit=5000)
+    assert "notes/link-to-secret.md" not in collected, collected
+
+    client = TestClient(app)
+    browser = {
+        n["note_path"]
+        for n in client.get(
+            "/api/companion/vault-browser", params={"limit": 1000}
+        ).json()["notes"]
+    }
+    assert "notes/link-to-secret.md" not in browser
+    link_index = set(client.get("/api/companion/vault-link-index").json()["note_paths"])
+    assert "notes/link-to-secret.md" not in link_index
+
+    # Direct /workspace read of the symlink resolves to the child target -> 404.
+    resp = client.get(
+        "/api/companion/workspace", params={"note_path": "notes/link-to-secret.md"}
+    )
+    assert resp.status_code == 404, resp.text
+
+
 # --- AC2: owning vault = nearest enclosing vault root -----------------------
 
 
