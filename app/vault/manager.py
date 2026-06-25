@@ -77,28 +77,33 @@ def no_vault_context() -> VaultContext:
 
 
 # OS-noise entries that do not indicate a populated personal vault. A folder
-# holding only these (or only the Design Handoff scaffold) is treated as empty
-# for the initialize-confirmation gate (#2518). ``.DS_Store`` is macOS Finder
-# noise that routinely appears in a folder the human believes is empty; warning
-# on it alone would make a fresh-folder init feel broken.
+# holding only these is treated as empty for the initialize-confirmation gate
+# (#2518). ``.DS_Store`` is macOS Finder noise that routinely appears in a folder
+# the human believes is empty; warning on it alone would make a fresh-folder init
+# feel broken.
 INIT_TARGET_IGNORED_ENTRIES = frozenset({".DS_Store"})
 
 
 def existing_init_target_entries(vault_path: Path) -> tuple[str, ...]:
     """Top-level entry names that mean ``vault_path`` is already populated.
 
-    Returns the sorted names of entries that are neither the Design Handoff
-    scaffold dir (:data:`SETTINGS_DIR_NAME`) nor ignorable OS noise
+    Returns the sorted names of every entry that is not ignorable OS noise
     (:data:`INIT_TARGET_IGNORED_ENTRIES`). A non-empty result means initializing
-    would add the settings scaffold into a folder that already holds the human's
-    content, so the picker must obtain an explicit, understood confirmation
-    before the write (#2518: "must not write into a human's personal vault
-    without an explicit, understood choice").
+    would add the settings scaffold into a folder that already holds content, so
+    the picker must obtain an explicit, understood confirmation before the write
+    (#2518: "must not write into a human's personal vault without an explicit,
+    understood choice").
 
-    A missing path, an empty directory, or a directory holding only the scaffold
-    returns ``()`` — those initialize friction-free (preserves #2312 AC1). A path
-    that exists but is not a directory also returns ``()``; ``initialize_vault``
-    owns that error surface.
+    Notably a ``settings/`` directory is **counted**, not assumed to be the
+    Design Handoff scaffold: a human's own ``settings/`` folder must not be
+    silently written into (Codex #2520 P2). A folder holding only a partial DH
+    scaffold therefore also requires a one-time confirm to complete via the
+    picker — a safe, rare edge — while a fully-initialized vault is ``selected``
+    and never reaches this gate.
+
+    A missing path or an empty directory returns ``()`` — those initialize
+    friction-free (preserves #2312 AC1). A path that exists but is not a
+    directory also returns ``()``; ``initialize_vault`` owns that error surface.
     """
     expanded = vault_path.expanduser()
     if not expanded.is_dir():
@@ -112,8 +117,7 @@ def existing_init_target_entries(vault_path: Path) -> tuple[str, ...]:
     names = [
         child.name
         for child in expanded.iterdir()
-        if child.name != SETTINGS_DIR_NAME
-        and child.name not in INIT_TARGET_IGNORED_ENTRIES
+        if child.name not in INIT_TARGET_IGNORED_ENTRIES
     ]
     return tuple(sorted(names))
 

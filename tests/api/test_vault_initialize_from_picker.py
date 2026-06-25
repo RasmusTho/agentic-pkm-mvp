@@ -347,3 +347,34 @@ def test_initialize_empty_target_needs_no_confirmation(
     assert resp.status_code == 200, resp.text
     assert resp.json()["context"]["status"] == "selected"
     assert (empty_vault / SETTINGS_DIR_NAME).is_dir()
+
+
+def test_initialize_target_with_only_user_settings_dir_requires_confirmation(
+    client: TestClient,
+    manager_no_vault: VaultManager,
+    tmp_path: Path,
+) -> None:
+    """A folder whose only entry is the human's own ``settings/`` still confirms.
+
+    The non-empty guard must not assume a top-level ``settings/`` directory is
+    the Design Handoff scaffold (Codex #2520 P2). A human's own ``settings/``
+    folder is content too: initializing must require an explicit confirm rather
+    than silently writing ``vault.md``/``paths.md``/... into it.
+    """
+    vault = tmp_path / "UserSettingsVault"
+    (vault / SETTINGS_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (vault / SETTINGS_DIR_NAME / "my-prefs.md").write_text(
+        "# My prefs\n", encoding="utf-8"
+    )
+    before = set(vault.rglob("*"))
+
+    resp = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(vault)},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["error"] == "vault_init_confirmation_required"
+    # No Design Handoff scaffold written into the human's settings dir.
+    assert not (vault / SETTINGS_DIR_NAME / "vault.md").exists()
+    assert set(vault.rglob("*")) == before, "init refusal must not write into the folder"
