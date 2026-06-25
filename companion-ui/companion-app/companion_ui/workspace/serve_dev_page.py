@@ -3460,7 +3460,14 @@ def _render_vault_browser_pagination(
         f'data-testid="workspace-vault-browser-pagination-summary">'
         f"{returned} shown from {total} matches"
         "</span>"
-        f'<span class="vault-browser-pagination-controls">{previous_html}{next_html}</span>'
+        # Real whitespace text nodes (not just CSS gap) between the summary and
+        # the controls, and between Previous/Next, so any visible-text /
+        # textContent extraction reads "… matches Previous Next" instead of the
+        # run-together "matchesPreviousNext" (#2526; Codex review on PR #2529).
+        # Whitespace-only runs between flex items are not rendered, so the
+        # layout is unchanged.
+        " "
+        f'<span class="vault-browser-pagination-controls">{previous_html} {next_html}</span>'
         "</nav>"
     )
 

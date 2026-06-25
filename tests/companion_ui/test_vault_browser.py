@@ -750,8 +750,10 @@ def test_pagination_summary_separated_from_controls() -> None:
 
     The defect was the summary span concatenated directly with the controls
     (``...51 matches</span>Previous Next``) inside a nav with no spacing. The
-    fix wraps the controls in their own element so the summary closes cleanly
-    before the controls, and the nav lays them out with a gap.
+    fix wraps the controls in their own element AND inserts real whitespace
+    text nodes between summary/controls and Previous/Next, so the user-visible
+    text (parser-extracted, not just CSS-spaced) reads "… matches Previous
+    Next" rather than the run-together "matchesPreviousNext".
     """
     page = _load_page(
         browser_payload=_vault_browser_payload(
@@ -783,6 +785,18 @@ def test_pagination_summary_separated_from_controls() -> None:
     summary_end = nav.index("matches</span>") + len("matches</span>")
     controls_start = nav.index('<span class="vault-browser-pagination-controls">')
     assert summary_end <= controls_start
+
+    # And the *user-visible* text never runs together once markup is stripped.
+    # CSS gap alone leaves the text nodes abutting, so the shared parser-based
+    # extractor would still read "matchespreviousnext"; real whitespace text
+    # nodes between summary/controls and Previous/Next fix that (#2526 — Codex
+    # review on PR #2529).
+    from tests.companion_ui._visible_text import visible_text
+
+    nav_text = visible_text(nav)
+    assert "matchespreviousnext" not in nav_text
+    assert "51 shown from 51 matches" in nav_text
+    assert "matches previous" in nav_text
 
 
 def test_browse_list_has_no_selection_checkboxes() -> None:
