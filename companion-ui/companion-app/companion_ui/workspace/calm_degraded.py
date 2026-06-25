@@ -492,3 +492,62 @@ def blocked_recourse(block_reason: object) -> str:
     if mapped is not None:
         return mapped[1]
     return BLOCKED_RECOURSE_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# recents_anchor display-label humanisation (#2525).
+#
+# `recents_anchor.display_label` is "derived from the note's first H1 heading,
+# or its filename stem when no heading is present" (WORKSPACE_ORIENTATION_
+# CONTRACT.md §recents_anchor). When the runtime had to fall back to the
+# filename stem, the cold_start door surfaced a raw machine-ish token such as
+# `uat-prod-action-parse-20260515T175952Z` as "your most recent note". The
+# server is authoritative for *which* note; this is a pure presentation
+# transform of the label it declared — no vault I/O, no re-classification.
+# ---------------------------------------------------------------------------
+
+# A trailing capture/run timestamp segment a filename stem commonly carries,
+# e.g. `...-20260515T175952Z`, `..._20260515`, `...-20260515T175952`. Stripped
+# from the humanised label (the timestamp is noise, not a title).
+_RECENTS_TRAILING_TIMESTAMP_RE: Final[re.Pattern[str]] = re.compile(
+    r"[\s_-]*\d{8}(?:[tT]\d{6}[zZ]?)?$"
+)
+
+# A label that is a filename stem rather than a human H1: no whitespace and made
+# of separator-joined tokens (hyphen/underscore), optionally with a trailing
+# timestamp. Already-human titles contain spaces (an H1 heading) and are left
+# untouched.
+_RECENTS_STEM_SHAPE_RE: Final[re.Pattern[str]] = re.compile(r"^[^\s]+$")
+
+
+def humanise_recents_label(label: object) -> str:
+    """Humanise a ``recents_anchor.display_label`` that is a bare filename stem.
+
+    - When the runtime-declared label is already a human title (an H1 heading —
+      it contains whitespace), return it unchanged.
+    - When it is a filename stem (no whitespace, separator-joined tokens, often
+      with a trailing capture timestamp such as ``-20260515T175952Z``), strip a
+      trailing timestamp, replace ``-``/``_`` separators with spaces, collapse
+      whitespace, and title-case the result so the door never surfaces a raw
+      stem as "your most recent note".
+    - An empty / whitespace-only value returns the empty string (the caller
+      omits the sub-affordance entirely when it has no honest label).
+
+    Pure presentation transform of a server-declared label — never a re-read of
+    the vault and never a new identity claim.
+    """
+    text = "" if label is None else str(label).strip()
+    if not text:
+        return ""
+    # Already a human H1 title (carries whitespace) — leave it untouched.
+    if not _RECENTS_STEM_SHAPE_RE.match(text):
+        return text
+    # Filename-stem shape: drop a trailing timestamp segment, then split on the
+    # stem separators and title-case the remaining words.
+    stem = _RECENTS_TRAILING_TIMESTAMP_RE.sub("", text)
+    words = [w for w in re.split(r"[\s_-]+", stem) if w]
+    if not words:
+        # The stem was nothing but a timestamp — fall back to the original
+        # (timestamp-stripped) text rather than emitting an empty label.
+        return stem or text
+    return " ".join(word[:1].upper() + word[1:] for word in words)

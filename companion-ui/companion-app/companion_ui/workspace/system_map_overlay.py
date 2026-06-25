@@ -435,6 +435,8 @@ def system_map_overlay_markup(
     orientation_freshness: str = "",
     orientation_as_of: str = "",
     orientation_trace_id: str = "",
+    entry_trajectory: str = "",
+    entry_leave_point: str = "",
     open_loops_count: int = 0,
 ) -> str:
     """The system map overlay markup — closed by default, never unbidden.
@@ -450,6 +452,16 @@ def system_map_overlay_markup(
     row (#2171/#2245). When present and non-empty they render as a read-only
     projection row in the entry-point center node. When absent nothing renders
     — no placeholder, no zero-state row.
+
+    ``entry_trajectory``, ``entry_leave_point`` carry the relocated cold_start
+    provenance diagnostic (#2525): the cold trajectory token (e.g.
+    ``cold (>14d)``) and the server-declared ``leave_point`` status (e.g.
+    ``absent`` / ``present``) that the door's provenance line used to surface as
+    raw runtime tokens. They render as a read-only projection row in the
+    entry-point center node — same ``data-authority="read-only-projection"``
+    contract as the freshness row, pull-only, no zero-state (omitted when both
+    are empty). The map re-classifies nothing; this is a projection of the
+    server-declared orientation payload.
 
     ``open_loops_count`` — when non-zero, renders a read-only index count
     annotation on the memory map node (#2247, TELEMETRY_RELOCATION-03).
@@ -491,6 +503,23 @@ def system_map_overlay_markup(
         {(f'<span data-testid="map-entry-point-meta-trace-id"><code>{_html.escape(_t)}</code></span>') if _t else ''}
       </div>"""
         if (_f or _a or _t)
+        else ""
+    )
+    # Relocated cold_start provenance (#2525): the cold trajectory + the
+    # server-declared leave_point status that the door's provenance line used
+    # to surface as raw tokens. Same read-only-projection contract as the
+    # freshness row; omitted entirely when neither is supplied (no zero-state).
+    _traj = entry_trajectory.strip()
+    _lp = entry_leave_point.strip()
+    entry_point_provenance_html = (
+        f"""
+      <div class="map-center-meta" data-testid="map-entry-point-provenance"
+        data-authority="read-only-projection"
+        data-region="map-entry-point-provenance">
+        {(f'<span data-testid="map-entry-point-provenance-trajectory">trajectory: <code>{_html.escape(_traj)}</code></span>') if _traj else ''}
+        {(f'<span data-testid="map-entry-point-provenance-leave-point">leave_point: <code>{_html.escape(_lp)}</code></span>') if _lp else ''}
+      </div>"""
+        if (_traj or _lp)
         else ""
     )
     return f"""
@@ -603,6 +632,7 @@ def system_map_overlay_markup(
       <div class="map-center-name">{_e(MAP_CENTER_NAME)}</div>
       <div class="map-center-sub">{_e(MAP_CENTER_SUB)}</div>
       {entry_point_meta_html}
+      {entry_point_provenance_html}
     </div>
     <div class="system-map-grid" data-testid="system-map-grid">
       {nodes}

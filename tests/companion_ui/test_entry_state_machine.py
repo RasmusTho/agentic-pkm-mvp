@@ -372,8 +372,14 @@ def test_cold_start_shows_no_dashboard_sections() -> None:
 def test_cold_start_shows_vault_and_map_affordances() -> None:
     page = _render(orientation=_orientation_payload(leave_status="absent"))
     assert _entry_state(page) == "cold_start"
+    # The map is reachable from the verb-line "See the map" (map.open).
     assert 'data-intent="map.open"' in page
-    assert 'data-testid="workspace-orientation-ambient-refresh"' in page
+    # #2525: the ambient-refresh / System-map bar is no longer on the cold_start
+    # door — on cold_start the vault is already resolved, so the manual-refresh
+    # affordance is an orienting/shell leak and the standalone System-map button
+    # duplicates the verb-line opener. The bar still renders in no_vault
+    # (entry.retry) and orienting (ambient refresh).
+    assert 'data-testid="workspace-orientation-ambient-refresh"' not in page
 
 
 def test_orienting_still_renders_dashboard_sections() -> None:
