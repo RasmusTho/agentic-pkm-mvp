@@ -794,6 +794,7 @@ def handle_panel_scan_requested(
         note_uuid,
         trace_id=trace_id,
         outbox_path=_outbox_audit_path(),
+        vault_root=resolved_root,
         persist_created_to_db=_use_db_outbox(),
     )
     emitted = execution.emitted_count
