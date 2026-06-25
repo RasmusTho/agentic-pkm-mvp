@@ -552,3 +552,47 @@ def test_no_vault_picker_page_has_no_separating_margin() -> None:
     )
     # The consolidated continuous-surface rule is present.
     assert "margin: 0 auto" in html
+
+
+def test_init_form_surfaces_nonempty_confirm_gesture() -> None:
+    """The init form surfaces an in-band confirm gesture for the non-empty 409 (#2518).
+
+    Initializing a non-empty existing folder returns
+    ``409 vault_init_confirmation_required``. The controller must NOT swallow
+    that as a generic submit error: the init submit has its own confirm-aware
+    path that reads the structured response, renders a confirm affordance
+    carrying the server message, and re-submits the init with ``confirm: true``
+    only after the human confirms. A first (unconfirmed) submit forces no
+    confirm, so an empty/new target is unaffected (preserves #2312 AC1).
+    """
+    script = vault_settings_panel_script()
+
+    # The init submit is a dedicated, confirm-aware path (not the generic
+    # jsonFetch(...).then(reload) the select form uses).
+    assert "function submitVaultInitialize" in script
+    # It reads the structured 409 reason rather than treating every non-ok
+    # response as an opaque submit error.
+    assert "vault_init_confirmation_required" in script
+    assert "res.status === 409" in script
+    # It renders an in-band confirm affordance (container + message + confirm
+    # control) instead of failing silently. The container testid appears in the
+    # querySelector form; the message/submit testids appear as setAttribute
+    # values.
+    assert 'data-testid="vault-init-confirm"' in script
+    assert "vault-init-confirm-message" in script
+    assert "vault-init-confirm-submit" in script
+    # The confirm control re-submits the init with confirm:true, and the flag is
+    # one-shot (cleared each submit) so changing the path re-warns.
+    assert "payload.confirm = true" in script
+    assert "data-init-confirmed" in script
+
+    # Codex #2520 P1: the confirmation is bound to the exact path it was shown
+    # for. confirm:true is sent only when the stored confirm-path matches the
+    # path now being submitted, so editing the path after a 409 and clicking the
+    # stale Confirm re-warns for the new folder instead of bypassing the guard.
+    assert "data-init-confirm-path" in script
+    assert "confirmedFor === basePayload.path" in script
+
+    # The select form keeps the generic reload-chaining path (init's dedicated
+    # path must not remove it): an action still chains through reload().
+    assert ".then(reload)" in script

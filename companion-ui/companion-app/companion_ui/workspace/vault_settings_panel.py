@@ -522,6 +522,76 @@ def vault_settings_panel_script() -> str:
       }}
       return raw;
     }}
+    // #2518: in-band confirm gesture for initializing into a NON-EMPTY folder.
+    // The init endpoint returns 409 vault_init_confirmation_required when the
+    // chosen folder already holds the human's content; the init submit reads
+    // that structured response and surfaces a confirm affordance instead of
+    // failing silently. Confirming re-submits with confirm:true (the human's
+    // explicit, understood choice — a single-actor, in-band guard, not a
+    // governance approval loop).
+    function clearInitConfirm(form) {{
+      var existing = form.querySelector('[data-testid="vault-init-confirm"]');
+      if (existing && existing.parentNode) {{ existing.parentNode.removeChild(existing); }}
+    }}
+    function renderInitConfirm(form, detail) {{
+      clearInitConfirm(form);
+      // Bind the confirmation to the exact path it is shown for (Codex #2520
+      // P1): if the human edits the path after a 409 and then clicks the
+      // still-visible Confirm, the new folder must get its own warning, not
+      // silently inherit this confirmation.
+      var pathInput = form.querySelector('[name="path"]');
+      form.setAttribute('data-init-confirm-path', pathInput ? pathInput.value : '');
+      var wrap = document.createElement('div');
+      wrap.className = 'vault-init-confirm';
+      wrap.setAttribute('data-testid', 'vault-init-confirm');
+      wrap.setAttribute('role', 'alert');
+      var msg = document.createElement('p');
+      msg.setAttribute('data-testid', 'vault-init-confirm-message');
+      msg.textContent = (detail && detail.message) || 'This folder already contains files. Initializing will add a settings/ scaffold to your existing vault.';
+      var confirmButton = document.createElement('button');
+      confirmButton.setAttribute('type', 'button');
+      confirmButton.setAttribute('data-testid', 'vault-init-confirm-submit');
+      confirmButton.textContent = 'Confirm initialize';
+      confirmButton.addEventListener('click', function() {{
+        form.setAttribute('data-init-confirmed', 'true');
+        if (typeof form.requestSubmit === 'function') {{ form.requestSubmit(); }}
+        else {{ form.dispatchEvent(new Event('submit', {{ cancelable: true, bubbles: true }})); }}
+      }});
+      wrap.appendChild(msg);
+      wrap.appendChild(confirmButton);
+      form.appendChild(wrap);
+    }}
+    function submitVaultInitialize(form, endpoint, basePayload) {{
+      var payload = Object.assign({{}}, basePayload);
+      // Honor a prior confirmation only if it was granted for THIS exact path
+      // (Codex #2520 P1): a stale confirm must never initialize a different,
+      // unwarned folder.
+      var confirmedFor = form.getAttribute('data-init-confirm-path');
+      if (form.getAttribute('data-init-confirmed') === 'true' && confirmedFor !== null && confirmedFor === basePayload.path) {{ payload.confirm = true; }}
+      // One-shot: clear the confirmation so any later submit re-evaluates.
+      form.removeAttribute('data-init-confirmed');
+      form.removeAttribute('data-init-confirm-path');
+      fetch(endpoint, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload)
+      }}).then(function(response) {{
+        return response.text().then(function(text) {{
+          var data = null;
+          try {{ data = text ? JSON.parse(text) : null; }} catch (e) {{ data = null; }}
+          return {{ ok: response.ok, status: response.status, data: data, text: text }};
+        }});
+      }}).then(function(res) {{
+        if (res.ok) {{ clearInitConfirm(form); form.removeAttribute('data-submit-error'); reload(); return; }}
+        var detail = res.data && res.data.detail;
+        if (res.status === 409 && detail && detail.error === 'vault_init_confirmation_required') {{
+          renderInitConfirm(form, detail);
+          return;
+        }}
+        var message = (detail && (detail.message || (typeof detail === 'string' ? detail : null))) || res.text || String(res.status);
+        form.setAttribute('data-submit-error', message);
+      }}).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
+    }}
     document.addEventListener('submit', function(event) {{
       var form = event.target;
       if (!form || !form.matches('[data-intent="vault.select"],[data-intent="vault.initialize"],[data-intent="vault.settings.write"]')) {{ return; }}
@@ -544,13 +614,20 @@ def vault_settings_panel_script() -> str:
       var path = form.querySelector('[name="path"]');
       var role = form.querySelector('[name="machineRole"]');
       var endpoint = form.getAttribute('data-api-path');
+      var basePayload = {{
+        path: path ? path.value : '',
+        machine_role: role ? role.value : undefined,
+        machineRole: role ? role.value : undefined
+      }};
+      // Initialize has its own confirm-aware path (#2518); select keeps the
+      // generic reload-chaining submit.
+      if (form.getAttribute('data-intent') === 'vault.initialize') {{
+        submitVaultInitialize(form, endpoint, basePayload);
+        return;
+      }}
       jsonFetch(endpoint, {{
         method: 'POST',
-        body: JSON.stringify({{
-          path: path ? path.value : '',
-          machine_role: role ? role.value : undefined,
-          machineRole: role ? role.value : undefined
-        }})
+        body: JSON.stringify(basePayload)
       }}).then(reload).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
     }});
     // Delegated on document so the handlers survive fragment swaps:

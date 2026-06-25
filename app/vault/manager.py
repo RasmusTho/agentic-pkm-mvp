@@ -83,6 +83,52 @@ def no_vault_context() -> VaultContext:
     return VaultContext(status="none")
 
 
+# OS-noise entries that do not indicate a populated personal vault. A folder
+# holding only these is treated as empty for the initialize-confirmation gate
+# (#2518). ``.DS_Store`` is macOS Finder noise that routinely appears in a folder
+# the human believes is empty; warning on it alone would make a fresh-folder init
+# feel broken.
+INIT_TARGET_IGNORED_ENTRIES = frozenset({".DS_Store"})
+
+
+def existing_init_target_entries(vault_path: Path) -> tuple[str, ...]:
+    """Top-level entry names that mean ``vault_path`` is already populated.
+
+    Returns the sorted names of every entry that is not ignorable OS noise
+    (:data:`INIT_TARGET_IGNORED_ENTRIES`). A non-empty result means initializing
+    would add the settings scaffold into a folder that already holds content, so
+    the picker must obtain an explicit, understood confirmation before the write
+    (#2518: "must not write into a human's personal vault without an explicit,
+    understood choice").
+
+    Notably a ``settings/`` directory is **counted**, not assumed to be the
+    Design Handoff scaffold: a human's own ``settings/`` folder must not be
+    silently written into (Codex #2520 P2). A folder holding only a partial DH
+    scaffold therefore also requires a one-time confirm to complete via the
+    picker — a safe, rare edge — while a fully-initialized vault is ``selected``
+    and never reaches this gate.
+
+    A missing path or an empty directory returns ``()`` — those initialize
+    friction-free (preserves #2312 AC1). A path that exists but is not a
+    directory also returns ``()``; ``initialize_vault`` owns that error surface.
+    """
+    expanded = vault_path.expanduser()
+    if not expanded.is_dir():
+        return ()
+    # ``vault_path`` is the operator-selected vault location from the loopback-
+    # authed picker (#2310 full-host selection), so listing it is by design and
+    # is strictly weaker than ``initialize_vault``'s existing mkdir/write at the
+    # same path. A CodeQL py/path-injection alert here is accepted on that basis
+    # (the picker's whole purpose is choosing an arbitrary local path; there is
+    # no containing root to validate against, and only top-level names are read).
+    names = [
+        child.name
+        for child in expanded.iterdir()
+        if child.name not in INIT_TARGET_IGNORED_ENTRIES
+    ]
+    return tuple(sorted(names))
+
+
 def is_vault_root(path: Path) -> bool:
     """Return True iff ``path`` is an initialized vault root (#2313).
 
@@ -620,6 +666,7 @@ def _bool_setting(value: object, *, default: bool) -> bool:
 
 
 __all__ = [
+    "INIT_TARGET_IGNORED_ENTRIES",
     "MachineRole",
     "VaultChangedEvent",
     "VaultContext",
@@ -629,6 +676,7 @@ __all__ = [
     "VaultRequiredError",
     "VaultStatus",
     "VAULT_ROOT_MARKER_REL",
+    "existing_init_target_entries",
     "get_vault_manager",
     "is_vault_root",
     "nearest_enclosing_vault_root",

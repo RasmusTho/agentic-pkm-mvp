@@ -229,3 +229,152 @@ def test_select_existing_folder_does_not_write_scaffolding(
         f"select_vault wrote new files into an existing folder: "
         f"added={current_entries - original_entries}"
     )
+
+
+# ---------------------------------------------------------------------------
+# #2518: explicit, understood confirmation before initializing into a
+# NON-EMPTY folder.
+#
+# The picker offers "Initialize" for any none/missing/uninitialized folder, so
+# an existing *personal* Obsidian vault (notes present, no Design Handoff
+# settings/) is a valid init target — initializing writes the settings/ scaffold
+# INTO that folder. The hard constraint ("must not write into a human's personal
+# vault without an explicit, understood choice") is hardened here: a non-empty
+# target requires an explicit confirm before the scaffold is written. A
+# brand-new/missing or empty target still initializes friction-free (preserves
+# #2312 AC1: test_initialize_new_folder_selects_it).
+# ---------------------------------------------------------------------------
+
+
+def _populated_personal_vault(tmp_path: Path) -> Path:
+    """An existing personal Obsidian vault: notes present, no Design Handoff settings."""
+    vault = tmp_path / "PersonalVault"
+    (vault / "notes").mkdir(parents=True, exist_ok=True)
+    (vault / "notes" / "my-note.md").write_text(
+        "# My Note\n\nPersonal content\n", encoding="utf-8"
+    )
+    (vault / ".obsidian").mkdir(parents=True, exist_ok=True)
+    return vault
+
+
+def test_initialize_nonempty_target_requires_confirmation(
+    client: TestClient,
+    manager_no_vault: VaultManager,
+    tmp_path: Path,
+) -> None:
+    """Initializing a non-empty folder without ``confirm`` returns 409, no write.
+
+    The picker may target a populated personal vault. Without an explicit
+    confirm, the init endpoint must refuse with ``409
+    vault_init_confirmation_required`` and write *nothing* — the human's folder
+    is left byte-for-byte unchanged.
+    """
+    vault = _populated_personal_vault(tmp_path)
+    before = set(vault.rglob("*"))
+
+    resp = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(vault), "vault_name": "Personal"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error"] == "vault_init_confirmation_required"
+    assert detail["existing_entry_count"] >= 1
+    assert detail["requires_confirmation"] is True
+    assert detail["path"] == str(vault)
+    # No scaffolding written — the personal folder is untouched.
+    assert not (vault / SETTINGS_DIR_NAME).exists()
+    assert set(vault.rglob("*")) == before, "init refusal must not write into the folder"
+    # A refused init never flips the in-process context to ``selected``.
+    assert manager_no_vault.context.status != "selected"
+
+
+def test_initialize_nonempty_target_with_confirm_writes_scaffold(
+    client: TestClient,
+    manager_no_vault: VaultManager,
+    tmp_path: Path,
+) -> None:
+    """With ``confirm=true`` the same non-empty folder initializes and selects.
+
+    The explicit, understood choice is expressed by ``confirm``: the scaffold is
+    written into the chosen folder, the vault resolves to ``selected``, and the
+    human's existing notes are preserved (idempotent ``write_missing``).
+    """
+    vault = _populated_personal_vault(tmp_path)
+
+    resp = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(vault), "vault_name": "Personal", "confirm": True},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["context"]["status"] == "selected", body
+    assert (vault / SETTINGS_DIR_NAME).is_dir()
+    for fname in REQUIRED_SETTINGS_FILES:
+        assert (vault / SETTINGS_DIR_NAME / fname).is_file(), (
+            f"expected scaffolding file {fname} after confirmed initialize"
+        )
+    # The human's existing content is preserved, not overwritten.
+    assert (vault / "notes" / "my-note.md").read_text(encoding="utf-8").startswith(
+        "# My Note"
+    )
+
+
+def test_initialize_empty_target_needs_no_confirmation(
+    client: TestClient,
+    manager_no_vault: VaultManager,
+    tmp_path: Path,
+) -> None:
+    """An empty existing folder initializes with no confirmation (preserves #2312 AC1).
+
+    The folder exists but holds no human content — only OS noise (a lone
+    ``.DS_Store``). Initializing must proceed without a confirm gesture, exactly
+    like a brand-new/missing target. This pins the empty-vs-non-empty boundary so
+    the confirm gate never adds friction to a genuinely empty folder.
+    """
+    empty_vault = tmp_path / "EmptyButExists"
+    empty_vault.mkdir(parents=True, exist_ok=True)
+    # A lone .DS_Store is macOS Finder noise, not human content — still no confirm.
+    (empty_vault / ".DS_Store").write_bytes(b"\x00")
+
+    resp = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(empty_vault)},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["context"]["status"] == "selected"
+    assert (empty_vault / SETTINGS_DIR_NAME).is_dir()
+
+
+def test_initialize_target_with_only_user_settings_dir_requires_confirmation(
+    client: TestClient,
+    manager_no_vault: VaultManager,
+    tmp_path: Path,
+) -> None:
+    """A folder whose only entry is the human's own ``settings/`` still confirms.
+
+    The non-empty guard must not assume a top-level ``settings/`` directory is
+    the Design Handoff scaffold (Codex #2520 P2). A human's own ``settings/``
+    folder is content too: initializing must require an explicit confirm rather
+    than silently writing ``vault.md``/``paths.md``/... into it.
+    """
+    vault = tmp_path / "UserSettingsVault"
+    (vault / SETTINGS_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (vault / SETTINGS_DIR_NAME / "my-prefs.md").write_text(
+        "# My prefs\n", encoding="utf-8"
+    )
+    before = set(vault.rglob("*"))
+
+    resp = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(vault)},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["error"] == "vault_init_confirmation_required"
+    # No Design Handoff scaffold written into the human's settings dir.
+    assert not (vault / SETTINGS_DIR_NAME / "vault.md").exists()
+    assert set(vault.rglob("*")) == before, "init refusal must not write into the folder"
