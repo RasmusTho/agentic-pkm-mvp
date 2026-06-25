@@ -24,6 +24,13 @@ REQUIRED_SETTINGS_FILES = (
     "local.md",
 )
 LOCAL_GITIGNORE = "# Design Handoff local settings\nlocal.md\n*.local.md\nlocal/\nruntime/\ncache/\n"
+# The single committed marker that makes a folder a vault root. Aligned with
+# ``validate_vault`` (which requires ``settings/vault.md`` among the Design
+# Handoff settings) but used as a *cheap* boundary test: one ``stat`` per
+# folder, no schema read, no healing. Boundary detection (#2313) must stay cheap
+# on large trees, so callers prune subtrees during traversal rather than
+# enumerating everything and validating each candidate.
+VAULT_ROOT_MARKER_REL = (SETTINGS_DIR_NAME, "vault.md")
 logger = logging.getLogger(__name__)
 
 
@@ -120,6 +127,68 @@ def existing_init_target_entries(vault_path: Path) -> tuple[str, ...]:
         if child.name not in INIT_TARGET_IGNORED_ENTRIES
     ]
     return tuple(sorted(names))
+
+
+def is_vault_root(path: Path) -> bool:
+    """Return True iff ``path`` is an initialized vault root (#2313).
+
+    A folder is a vault root iff it carries the committed vault marker
+    ``settings/vault.md`` — the same marker ``validate_vault`` requires. This is
+    a deliberately *cheap* check (a single ``stat`` via ``Path.is_file``), not a
+    full validation: it does not read the file, check the schema, or heal
+    identity. That keeps nested-vault boundary detection inexpensive on large
+    trees, where it is called once per directory during a pruned walk.
+
+    The boundary rule: enumeration of a parent vault STOPS at any nested vault
+    root strictly below the parent. The parent must act as if a private child
+    vault's subtree does not exist, so its contents never surface through the
+    parent's read surfaces.
+    """
+    marker = path.joinpath(*VAULT_ROOT_MARKER_REL)
+    return marker.is_file()
+
+
+def nearest_enclosing_vault_root(
+    note_path: Path, *, search_root: Path
+) -> Path | None:
+    """Return the nearest enclosing vault root for ``note_path`` (#2313).
+
+    A note's owning vault is the NEAREST ENCLOSING vault root — the deepest
+    ancestor directory (walking up from the note) that carries the vault marker,
+    bounded below by ``search_root``. If a deeper nested vault root encloses the
+    note, that nested root owns the note, NOT the selected/search root.
+
+    ``search_root`` is treated as a vault root regardless of marker presence
+    (the selected root is the floor of the search) and is returned as the
+    fallback owner when no deeper marker exists between it and the note. Returns
+    ``None`` when ``note_path`` is not contained within ``search_root``.
+
+    The walk is bounded by the depth of ``note_path`` below ``search_root``;
+    callers that need owning-vault identity for many notes should prefer the
+    pruned-walk enumeration, which establishes ownership during traversal
+    without an O(notes x depth) per-note ancestor rescan.
+    """
+    try:
+        search_root = search_root.resolve()
+        candidate = note_path.resolve()
+    except OSError:
+        return None
+    try:
+        candidate.relative_to(search_root)
+    except ValueError:
+        return None
+    # Walk up from the note's directory to (and including) the search root,
+    # returning the first (deepest) directory that carries the vault marker.
+    current = candidate if candidate.is_dir() else candidate.parent
+    while True:
+        if current == search_root:
+            return search_root
+        if is_vault_root(current):
+            return current
+        parent = current.parent
+        if parent == current:  # filesystem root guard
+            return None
+        current = parent
 
 
 class VaultManager:
@@ -606,7 +675,10 @@ __all__ = [
     "VaultPermissions",
     "VaultRequiredError",
     "VaultStatus",
+    "VAULT_ROOT_MARKER_REL",
     "existing_init_target_entries",
     "get_vault_manager",
+    "is_vault_root",
+    "nearest_enclosing_vault_root",
     "no_vault_context",
 ]

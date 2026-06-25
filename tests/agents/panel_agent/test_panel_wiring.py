@@ -144,6 +144,30 @@ def test_vault_wiring_used_when_env_missing(tmp_path: Path, monkeypatch: pytest.
     assert wiring.get("promote.evergreen") == "vault.event"
 
 
+def test_set_but_missing_vault_root_does_not_abort_wiring_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale HTTP VAULT_ROOT (set-but-missing) must not abort wiring discovery.
+
+    Regression for #2476: optional wiring discovery routes through
+    ``resolve_optional_vault_root()``, which raises ``VaultRootMisconfiguredError``
+    on a set-but-missing ``VAULT_ROOT``. Wiring config has a DEFAULT fallback, so
+    a stale UI binding must not stop watcher/worker-bound background panel
+    execution (the worker threads its own resolved vault into
+    ``execute_panel_intent`` separately). ``get_action_wiring()`` must fall back
+    to the default rather than propagate the misconfiguration error.
+    """
+    missing_vault = tmp_path / "does-not-exist"
+    assert not missing_vault.exists()
+
+    monkeypatch.delenv("PANEL_ACTION_WIRING_PATH", raising=False)
+    monkeypatch.setenv("VAULT_ROOT", str(missing_vault))
+
+    # Must not raise VaultRootMisconfiguredError; falls through to the default.
+    wiring = get_action_wiring()
+    assert wiring.get("promote.evergreen") == "promote.intent.created"
+
+
 def test_invalid_yaml_warns_and_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     bad_path = tmp_path / "bad.yaml"
     bad_path.write_text("not: [valid", encoding="utf-8")

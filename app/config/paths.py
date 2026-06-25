@@ -16,9 +16,6 @@ class ResolvedPaths:
     environment: Literal["dev", "prod", "test"] = "prod"
 
 
-_DEFAULT_VAULT = Path("vault")
-
-
 class VaultRootMisconfiguredError(RuntimeError):
     """Raised when an explicitly configured vault root cannot be used."""
 
@@ -28,6 +25,19 @@ class VaultRootMisconfiguredError(RuntimeError):
         super().__init__(
             f"{env_var} is set to a missing vault root: {configured_path}"
         )
+
+
+class VaultRootNotBoundError(RuntimeError):
+    """Raised when VAULT_ROOT is not set and no explicit override is provided.
+
+    Distinct from :class:`VaultRootMisconfiguredError` (which fires for a
+    *set-but-missing* path): this error signals "no vault is configured at
+    all" — an explicit no-vault state rather than a silent CWD-relative
+    ``./vault`` fallback.
+
+    Callers that must tolerate no-vault should use
+    :func:`resolve_optional_vault_root` instead.
+    """
 
 
 def _clean_path(value: str | Path | None) -> Optional[Path]:
@@ -42,12 +52,21 @@ def _clean_path(value: str | Path | None) -> Optional[Path]:
 def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal["dev", "prod", "test"] | None = None) -> Path:
     """Resolve vault root path, optionally scoped to environment.
 
+    Requires a vault to be configured — raises :class:`VaultRootNotBoundError`
+    when ``VAULT_ROOT`` (and any env-scoped override) is unset.  Use
+    :func:`resolve_optional_vault_root` instead for callers that must tolerate
+    a no-vault state (e.g. idle boot, background producers).
+
     Args:
-        cli_override: Explicit override (takes precedence)
+        cli_override: Explicit override (takes precedence over env vars)
         environment: If 'dev' or 'test', appends matching suffix; if 'prod' or None, uses base path
 
     Returns:
         Vault root path, environment-scoped if requested
+
+    Raises:
+        VaultRootNotBoundError: VAULT_ROOT is not set and no cli_override is given.
+        VaultRootMisconfiguredError: VAULT_ROOT is set but the path does not exist.
     """
     if cli_override is not None:
         return Path(cli_override)
@@ -70,12 +89,19 @@ def resolve_vault_root(cli_override: Path | None = None, *, environment: Literal
             raise VaultRootMisconfiguredError(env_var, env_specific)
         return env_specific
 
-    if env_root is not None:
-        if not env_root.exists():
-            raise VaultRootMisconfiguredError("VAULT_ROOT", env_root)
-        base = env_root
-    else:
-        base = _DEFAULT_VAULT
+    if env_root is None:
+        # No vault configured at all — signal the explicit no-vault state
+        # rather than silently defaulting to a CWD-relative ./vault.
+        # That silent fallback was the "provenance=fallback" footgun behind
+        # the 2026-06-09 "notes won't render" incident (#2476).
+        raise VaultRootNotBoundError(
+            "VAULT_ROOT is not set. Configure a vault path or use "
+            "resolve_optional_vault_root() to handle the no-vault state."
+        )
+
+    if not env_root.exists():
+        raise VaultRootMisconfiguredError("VAULT_ROOT", env_root)
+    base = env_root
 
     if environment == "dev":
         return base.parent / f"{base.name}-dev"
@@ -176,13 +202,17 @@ def resolve_system_settings_path(
     if env_override is not None:
         return env_override
 
-    vault = resolve_vault_root(vault_root)
+    # Use the optional resolver: return None gracefully when no vault is bound
+    # rather than letting resolve_vault_root raise VaultRootNotBoundError.
+    vault = vault_root if vault_root is not None else resolve_optional_vault_root()
     ygg = yggdrasil_root or resolve_yggdrasil_root()
 
     for candidate in _candidate_settings_paths(vault, ygg):
         if candidate.exists():
             return candidate
 
+    if vault is None:
+        return None
     return vault / "_system" / "settings" / "system-settings.yaml"
 
 
@@ -192,7 +222,11 @@ def resolve_flow_settings_path(path: Path | None = None, vault_root: Path | None
     env_path = _clean_path(os.getenv("FLOW_SETTINGS_PATH"))
     if env_path is not None:
         return env_path
-    vault = resolve_vault_root(vault_root)
+    # Use the optional resolver: tolerate no-vault rather than raising.
+    vault = vault_root if vault_root is not None else resolve_optional_vault_root()
+    if vault is None:
+        fallback = Path("docs/settings/flows.settings.yaml")
+        return fallback if fallback.exists() else None
     default_path = vault / "_system" / "settings" / "flows.settings.yaml"
     if default_path.exists():
         return default_path
@@ -242,7 +276,18 @@ def resolve_paths(
     environment: Literal["dev", "prod", "test"] | None = None,
 ) -> ResolvedPaths:
     env = environment or active_environment()
-    vault = resolve_vault_root(vault_root, environment=env)
+    # Accept an explicit vault_root; otherwise use the optional resolver so
+    # that no-vault mode (idle boot, background producers) does not raise.
+    vault: Path
+    if vault_root is not None:
+        vault = resolve_vault_root(vault_root, environment=env)
+    else:
+        optional = resolve_optional_vault_root(environment=env)
+        if optional is None:
+            raise VaultRootNotBoundError(
+                "VAULT_ROOT is not set. Configure a vault path or pass vault_root explicitly."
+            )
+        vault = optional
     ygg = yggdrasil_root or resolve_yggdrasil_root()
     system_settings = resolve_system_settings_path(explicit=settings_path, vault_root=vault, yggdrasil_root=ygg)
     return ResolvedPaths(vault_root=vault, yggdrasil_root=ygg, system_settings_path=system_settings, environment=env)
@@ -251,6 +296,7 @@ def resolve_paths(
 __all__ = [
     "ResolvedPaths",
     "VaultRootMisconfiguredError",
+    "VaultRootNotBoundError",
     "resolve_vault_root",
     "resolve_optional_vault_root",
     "resolve_yggdrasil_root",

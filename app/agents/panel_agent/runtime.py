@@ -25,6 +25,7 @@ from app.agents.panel_agent.settings import get_panel_agent_decider, get_panel_a
 from app.agents.panel_agent.state import PanelAgentState
 from app.agents.panel_agent.wiring import get_default_action_wiring
 from app.components.settings.panel_actions_loader import load_panel_action_catalog
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRuntimeActionResult
 from app.events.schema import make_outbox_event
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -110,6 +111,7 @@ def execute_panel_intent(
     intent_event: PanelIntentEvent,
     *,
     outbox_path: Path | None = None,
+    vault_root: Path | None = None,
     allow_legacy_promotion_without_trust_verb: bool = False,
 ) -> PanelRuntimeResult:
     policy_flags = {
@@ -145,8 +147,30 @@ def execute_panel_intent(
     panel_hints = [
         {"id": action.id, "label": action.label, "checked": action.checked} for action in actions
     ]
-    vault_root_env = os.getenv("VAULT_ROOT") or os.getenv("WATCHER_VAULT_PATH")
-    vault_root = Path(vault_root_env).expanduser() if vault_root_env else None
+    # Vault resolution (#2476): prefer an explicitly-passed, already-resolved
+    # ``vault_root`` (the watcher/outbox-worker path threads the vault it resolved
+    # through its own canonical resolver — see app/workers/outbox_worker.py) and
+    # otherwise funnel through the canonical optional resolver. This removes the
+    # pre-#2476 bare ``os.getenv("VAULT_ROOT") or os.getenv("WATCHER_VAULT_PATH")``
+    # read that silently bypassed the canonical resolver and could bind a stale
+    # vault. The same shape (prefer the passed-in vault, else resolve) is used by
+    # cognition._resolve_vault_root, which prefers state.vault_root.
+    #
+    # Note dedup (_resolve_note_file) and writeback (_apply_note_writeback /
+    # write_companion) all consume this value, so a convergent source is
+    # load-bearing for write-to-correct-vault. resolve_optional_vault_root()
+    # returns None when no vault is bound and raises only on a set-but-missing
+    # path (caught here and treated as no-vault, mirroring cognition.py).
+    #
+    # The standalone WATCHER_VAULT_PATH fallback that used to live here is dropped:
+    # WATCHER_VAULT_PATH is the watcher's env var (app/watcher/config.py), and the
+    # watcher-driven chain now passes its already-resolved vault down explicitly
+    # rather than having the panel runtime re-read the env directly.
+    if vault_root is None:
+        try:
+            vault_root = resolve_optional_vault_root()
+        except VaultRootMisconfiguredError:
+            vault_root = None
     decider_mode = get_panel_agent_decider()
     initial_state = PanelAgentState(
         trace_id=intent_event.trace_id,
