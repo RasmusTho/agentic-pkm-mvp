@@ -549,16 +549,21 @@ def test_map_reachable_from_cold_and_no_vault_states() -> None:
     _map_overlay(shell)
     _map_script(shell)
 
-    # cold_start: calm affordance + the overlay present on the entry surface.
+    # cold_start: the map is reached from the verb-line "See the map" button
+    # (#2525 removed the duplicate refresh-bar System-map affordance from the
+    # door; the verb-line map.open is the calm cold_start opener). The overlay +
+    # script still ship on the entry surface.
     cold = _render_cold_start()
     assert _entry_state(cold) == "cold_start"
-    affordance = re.search(
-        r'<button[^>]*data-testid="workspace-orientation-map-affordance"[^>]*>',
-        cold,
+    # The duplicate refresh-bar/System-map affordance is gone from the door.
+    assert 'data-testid="workspace-orientation-map-affordance"' not in cold
+    verb_region = cold.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+    map_verb = re.search(
+        r'<button[^>]*data-intent="map\.open"[^>]*>',
+        verb_region,
     )
-    assert affordance, "cold_start must offer the calm map affordance"
-    assert 'data-intent="map.open"' in affordance.group(0)
-    assert "overlayHost.mount('map')" in affordance.group(0)
+    assert map_verb, "cold_start verb-line must offer the See-the-map opener"
+    assert "overlayHost.mount('map')" in map_verb.group(0)
     _map_overlay(cold)
     _map_script(cold)
     assert 'data-region="overlay-host"' in cold
@@ -770,6 +775,53 @@ def test_entry_point_map_and_runtime_status_render_relocated_telemetry() -> None
     # The map is pull-only — the meta row is present inside the (closed) overlay.
     assert 'data-testid="map-entry-point-freshness"' in cold_center_html
     assert 'data-authority="read-only-projection"' in cold_center_html
+
+
+def test_entry_point_node_renders_provenance_projection() -> None:
+    """#2525: the cold_start provenance line (trajectory + leave_point status,
+    formerly raw runtime tokens on the door) is relocated behind the System map
+    as a read-only projection in the entry-point center node — the #2174
+    pattern (data-authority="read-only-projection", counts/values not tiles, no
+    zero-state, map stays pull-only)."""
+    # --- Pure-function path: the markup accepts the provenance params ---
+    fragment = system_map_overlay_markup(
+        available_routes=("vault",),
+        entry_trajectory="cold (>14d)",
+        entry_leave_point="present",
+    )
+    center_start = fragment.find('data-testid="system-map-center"')
+    center_end = fragment.find('data-testid="system-map-grid"')
+    assert center_start >= 0 and center_end > center_start
+    center_html = fragment[center_start:center_end]
+    prov_row = re.search(
+        r'<div[^>]*data-testid="map-entry-point-provenance"[^>]*>',
+        center_html,
+    )
+    assert prov_row, "provenance projection must render in the entry-point node"
+    # Read-only projection authority — no mutation affordance, mirrors #2174.
+    assert 'data-authority="read-only-projection"' in prov_row.group(0)
+    assert "cold (&gt;14d)" in center_html or "cold (>14d)" in center_html
+    assert "present" in center_html
+
+    # No zero-state: with neither token supplied, the row is omitted entirely.
+    empty = system_map_overlay_markup(available_routes=("vault",))
+    assert 'data-testid="map-entry-point-provenance"' not in empty
+
+    # --- Cold_start full-render path: the projection rides the pull-only map ---
+    cold = _render_cold_start()  # leave_point absent (first contact)
+    cold_overlay = _map_overlay(cold)
+    cold_center_start = cold_overlay.find('data-testid="system-map-center"')
+    cold_center_end = cold_overlay.find('data-testid="system-map-grid"')
+    cold_center_html = cold_overlay[cold_center_start:cold_center_end]
+    assert 'data-testid="map-entry-point-provenance"' in cold_center_html
+    assert 'data-authority="read-only-projection"' in cold_center_html
+    # First contact declares the real (absent) leave_point status.
+    assert "absent" in cold_center_html
+    # The map remains pull-only — the overlay ships closed.
+    overlay_root = re.search(
+        r'<div class="system-map-overlay"[^>]*data-open="([^"]*)"', cold
+    )
+    assert overlay_root and overlay_root.group(1) == "false"
 
 
 def test_note_workspace_map_entry_point_receives_relocated_telemetry() -> None:

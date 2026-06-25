@@ -817,36 +817,211 @@ def test_cold_start_threshold_vault_chip() -> None:
     assert "dev-vault" in html  # from scope.vault_id in _orientation_payload fixture
 
 
-def test_cold_start_threshold_provenance_line() -> None:
-    """Provenance line content matches the variant."""
+def test_cold_start_threshold_provenance_relocated_off_door() -> None:
+    """#2525: the raw provenance line is removed from the cold_start door (it
+    leaked raw runtime tokens). Its content is relocated behind the System map
+    as a read-only projection — asserted in test_system_map_overlay.py
+    (test_entry_point_node_renders_provenance_projection). Here we only pin that
+    the *door* no longer carries the provenance line/tokens."""
     first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
     cold_traj = _render(orientation=_orientation_payload(gap=_GAP_COLD))
 
-    assert "leave_point: absent" in first_contact
-    assert "read-only · server-declared" in first_contact
-
-    assert "trajectory: cold" in cold_traj
-    assert "leave_point: present" in cold_traj
-    assert "read-only · server-declared" in cold_traj
+    for html in (first_contact, cold_traj):
+        # The dedicated door provenance element is gone.
+        assert 'class="cold-start-provenance"' not in html
+        # And its raw-token copy is no longer on the door's visible text.
+        visible = _visible_text(html)
+        assert "read-only · server-declared".lower() not in visible
+        assert "server-declared" not in visible
 
 
 def test_cold_start_provenance_omits_present_when_leave_point_absent() -> None:
-    """#2309: the "Returning after a while" copy is also used for a non-empty
+    """#2309/#2525: the "Returning after a while" copy is used for a non-empty
     vault whose leave_point is *absent* (recents_anchor present, no leave
-    point). The provenance must declare the real (absent) status, never
-    fabricate "present"."""
+    point). The relocated provenance projection (System map node) must declare
+    the real (absent) status, never fabricate "present". The door itself no
+    longer carries the provenance line at all (#2525)."""
     html = _render(
         orientation=_orientation_payload(
             leave_status=None,  # leave_point absent
-            recents_anchor={"note_path": "Inbox/inbox.md", "display_label": "inbox"},
+            recents_anchor={"note_path": "Inbox/inbox.md", "display_label": "Inbox"},
         )
     )
     # Returning copy is used (non-empty vault), not first-contact.
     assert "Returning after a while" in html
     assert "Re-entry is through the vault." in html
-    # Provenance reflects the actual declared leave_point status — not "present".
-    assert "leave_point: absent" in html
-    assert "leave_point: present" not in html
+    # The door no longer carries the provenance line.
+    assert 'class="cold-start-provenance"' not in html
+    # The relocated System-map projection declares the actual (absent) status —
+    # never fabricated "present".
+    map_provenance = html.split(
+        'data-testid="map-entry-point-provenance"', 1
+    )[1].split("</div>", 1)[0]
+    assert "absent" in map_provenance
+    assert "present" not in map_provenance
+
+
+# ---------------------------------------------------------------------------
+# AC (#2525): complete the cold_start intent-declaration threshold —
+# drop the refresh/System-map bar + always-on vault panel from the door.
+# ---------------------------------------------------------------------------
+
+# The ambient-refresh / System-map bar lives in the `orientation-refresh`
+# section (data-testid="workspace-orientation-ambient-refresh").
+_REFRESH_BAR_TESTID = 'data-testid="workspace-orientation-ambient-refresh"'
+
+
+def _render_no_vault_orientation() -> str:
+    """no_vault via the orientation-unavailable frame: orientation fetch failed
+    but the vault browser is still reachable (handle_get's 503 orientation
+    path). resolve_entry_state returns `no_vault`."""
+    return _render(
+        orientation=_orientation_payload(leave_status=None),
+        orientation_error="connection refused",
+        orientation_vault_browser=_vault_browser_payload(),
+    )
+
+
+def test_cold_start_omits_refresh_and_map_bar() -> None:
+    """#2525: cold_start (and the >14d cold trajectory) render no ambient-refresh
+    / System-map bar — on cold_start the vault is already resolved, so the
+    manual-refresh affordance is an orienting/shell leak and the standalone
+    "System map" button duplicates the verb-line "See the map". The bar still
+    renders as the entry.retry refresh in no_vault and as the ambient-refresh
+    affordance in orienting."""
+    first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
+    cold_traj = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    for html, label in [(first_contact, "first-contact"), (cold_traj, "cold-trajectory")]:
+        assert 'data-entry-state="cold_start"' in html, label
+        # The refresh/System-map bar is gone from the door.
+        assert _REFRESH_BAR_TESTID not in html, label
+        assert 'data-testid="workspace-orientation-map-affordance"' not in html, label
+        assert 'data-testid="workspace-orientation-manual-refresh"' not in html, label
+        # The map is still reachable from the verb-line "See the map".
+        verb_region = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+        assert 'data-intent="map.open"' in verb_region, label
+
+    # no_vault: the bar IS the declared entry.retry refresh affordance.
+    no_vault = _render_no_vault_orientation()
+    assert 'data-entry-state="no_vault"' in no_vault
+    assert _REFRESH_BAR_TESTID in no_vault
+    refresh_section = no_vault.split(_REFRESH_BAR_TESTID, 1)[1].split("</section>", 1)[0]
+    assert 'data-intent="entry.retry"' in refresh_section
+
+    # orienting: the bar is the ambient-refresh affordance.
+    orienting = _render(orientation=_orientation_payload(gap=_GAP_FULL_MIST))
+    assert 'data-entry-state="orienting"' in orienting
+    assert _REFRESH_BAR_TESTID in orienting
+
+
+def test_cold_start_omits_vault_browser_panel() -> None:
+    """#2525: the full vault-browser panel is not on the door. On cold_start the
+    vault is reached only via the verb-line `vault.open` ("Find a note"); the
+    orientation vault browser is the declared landing but renders collapsed
+    (hidden, data-browse-focused="false") so its internal chrome ("read-only",
+    filesystem-index/match-count labels) is not on the door until the verb pulls
+    it open. The no_vault picker front door renders no panel at all."""
+    cold = _render(
+        orientation=_orientation_payload(leave_status="absent"),
+        orientation_vault_browser=_vault_browser_payload(),
+    )
+    assert 'data-entry-state="cold_start"' in cold
+    # The panel still exists in the DOM (it is the vault.open landing) but is
+    # collapsed/pulled, not shown on the door.
+    panel = cold.split('id="workspace-orientation-vault-entry"', 1)[1].split(">", 1)[0]
+    assert "hidden" in panel
+    assert 'data-browse-focused="false"' in panel
+    assert 'data-vault-entry-collapsed="true"' in panel
+    # The verb-line vault.open reveals it via the existing reveal script.
+    assert "removeAttribute('hidden')" in cold
+    verb_region = cold.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+    assert 'data-intent="vault.open"' in verb_region
+    assert "vaultBrowser.focus()" in verb_region
+
+    # no_vault picker front door: a wholly separate render path with no panel.
+    picker_payload = {
+        "state": "vault_selection_required",
+        "reason": "no_vault_bound",
+        "message": "No vault is selected.",
+        "configured_vault_root": "/Users/me/Vaults/Niflheim",
+        "requested_note_path": "",
+        "context": {"status": "none"},
+        "recent_vaults": [],
+        "actions": [],
+    }
+    picker = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        vault_selection_required=picker_payload,
+    )
+    assert 'data-entry-state="no_vault"' in picker
+    assert 'id="workspace-orientation-vault-entry"' not in picker
+    assert 'data-testid="workspace-orientation-vault-entry"' not in picker
+
+
+def test_recents_anchor_humanises_h1less_filename() -> None:
+    """#2525: the recents anchor must never surface a bare H1-less filename stem
+    with a timestamp (observed: uat-prod-action-parse-20260515T175952Z) as "your
+    most recent note". The stem is humanised (timestamp stripped, separators →
+    spaces, title-cased); an already-human H1 title passes through unchanged."""
+    # H1-less filename stem with a trailing capture timestamp.
+    raw_stem = "uat-prod-action-parse-20260515T175952Z"
+    html = _render(
+        orientation=_orientation_payload(
+            leave_status="absent",
+            recents_anchor={
+                "note_path": "Inbox/uat-prod-action-parse-20260515T175952Z.md",
+                "display_label": raw_stem,
+            },
+        )
+    )
+    anchor = html.split(
+        'data-testid="cold-start-recents-anchor"', 1
+    )[1].split("</p>", 1)[0]
+    # The visible label must not be the raw stem / timestamp. (The note_path
+    # deep-link in the href legitimately still carries the real path — identity
+    # is server-owned; humanisation only touches the visible label.) Assert on
+    # visible text via the shared parser-based helper.
+    anchor_visible = _visible_text(anchor)
+    assert raw_stem.lower() not in anchor_visible
+    assert "20260515t175952z" not in anchor_visible
+    # It is humanised (the visible label).
+    assert "uat prod action parse" in anchor_visible
+    # The server-declared note_path (identity) is still used for the deep-link —
+    # humanisation touches only the visible label, never the routing target.
+    assert "note_path=" in anchor
+
+    # An already-human H1 title passes through unchanged.
+    human = _render(
+        orientation=_orientation_payload(
+            leave_status="absent",
+            recents_anchor={
+                "note_path": "Notes/current-work.md",
+                "display_label": "Current Work",
+            },
+        )
+    )
+    human_anchor = human.split(
+        'data-testid="cold-start-recents-anchor"', 1
+    )[1].split("</p>", 1)[0]
+    assert "Current Work" in human_anchor
+
+    # A single-token H1 title is already human copy, not a filename stem.
+    for label in ("iPhone", "eBay", "macOS"):
+        single_word_h1 = _render(
+            orientation=_orientation_payload(
+                leave_status="absent",
+                recents_anchor={
+                    "note_path": f"Notes/{label}.md",
+                    "display_label": label,
+                },
+            )
+        )
+        single_word_anchor = single_word_h1.split(
+            'data-testid="cold-start-recents-anchor"', 1
+        )[1].split("</p>", 1)[0]
+        assert label in single_word_anchor
 
 
 # ---------------------------------------------------------------------------

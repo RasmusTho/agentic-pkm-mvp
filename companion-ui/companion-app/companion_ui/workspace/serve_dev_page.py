@@ -73,6 +73,7 @@ from companion_ui.workspace.calm_degraded import (
     humanise_degraded_reason,
     humanise_prose,
     humanise_provenance_token,
+    humanise_recents_label,
     humanise_signal_label,
     humanise_token,
     lane_label,
@@ -6643,6 +6644,7 @@ def _render_orientation_vault_entry(
     *,
     error: str = "",
     resolved_vault_id: str | None = None,
+    collapsed: bool = False,
 ) -> str:
     """Render a concrete vault entrypoint on the no-active-note surface.
 
@@ -6652,6 +6654,13 @@ def _render_orientation_vault_entry(
 
     `resolved_vault_id` — when provided (cold_start path), the card uses the
     scope-resolved vault name so it matches the cold_start chip (#2240-b).
+
+    `collapsed` — when True (cold_start, #2525), the panel is the declared
+    `vault.open` landing but is *pulled, not always shown*: it renders with the
+    `hidden` attribute and `data-browse-focused="false"`, so none of its panel
+    chrome (kicker/labels/match counts) is on the cold_start door until the
+    "Find a note" verb's `vaultBrowser.focus()` reveals it (the existing script
+    removes `hidden` and sets `data-browse-focused="true"`). Presentation-only.
     """
     if vault_browser is None and not error:
         return ""
@@ -6686,11 +6695,16 @@ def _render_orientation_vault_entry(
         active_filters=dict(payload.get("active_filters") or {}),
         pagination=dict(payload.get("pagination") or {}),
     )
+    _collapsed_attrs = (
+        ' hidden data-browse-focused="false" data-vault-entry-collapsed="true"'
+        if collapsed
+        else ""
+    )
     return f"""
         <section class="orientation-section orientation-vault-entry"
           id="workspace-orientation-vault-entry"
           data-testid="workspace-orientation-vault-entry"
-          data-read-only="true">
+          data-read-only="true"{_collapsed_attrs}>
           <div class="orientation-section-header">
             <div>
               <div class="orientation-section-kicker">Vault</div>
@@ -6877,10 +6891,34 @@ def _render_orientation_index_html(
             onclick="overlayHost.mount('map')">System map</button>
         </section>"""
     ambient_script = _orientation_ambient_refresh_script() if ambient_refresh_enabled else ""
+    # #2525: the full vault-browser panel is not part of the cold_start
+    # intent-declaration threshold (operator review 2026-06-25) — it leaked
+    # internal labels ("· filesystem index", "read-only", "N system/companion
+    # notes hidden", match counts) onto the door. The vault is reached via the
+    # verb-line `vault.open` ("Find a note") — pulled, not always shown.
+    #
+    # cold_start: the orientation vault browser is the declared `vault.open`
+    #   landing (the inline `window.vaultBrowser.focus()` reveal — there is no
+    #   off-door browse-only route on this surface). It must stay in the DOM so
+    #   the verb keeps working, but render *collapsed* (`hidden`,
+    #   `data-browse-focused="false"`) so none of its panel chrome is on the
+    #   door until the verb pulls it open. Presentation-only: the verb already
+    #   removes `hidden` / sets `data-browse-focused` via the existing script.
+    # no_vault: NOT suppressed here. The only `no_vault` case that reaches this
+    #   renderer is the orientation-unavailable frame, where the vault browser is
+    #   the *single reachable surface* and must keep rendering to preserve the
+    #   active vault identity (#2309,
+    #   test_orientation_unavailable_preserves_vault_browser_identity); the
+    #   design-handoff §no_vault contract suppresses only the inline capture
+    #   field and the grid/overlay there, not the browser. The no_vault *picker*
+    #   front door (`vault_selection_required`) is a different render path that
+    #   never builds `vault_entry_html` at all.
+    vault_entry_collapsed = is_cold
     vault_entry_html = _render_orientation_vault_entry(
         vault_browser,
         error=vault_browser_error,
         resolved_vault_id=_orientation_str(scope.get("vault_id")) or None,
+        collapsed=vault_entry_collapsed,
     )
     vault_browser_script = _orientation_vault_browser_script() if vault_entry_html else ""
     # The system map overlay (#1787, SEP-05) is reachable from every entry
@@ -6895,6 +6933,25 @@ def _render_orientation_index_html(
     orientation_map_routes = ("operator",) + (
         ("vault",) if vault_entry_html else ()
     )
+    # #2525: the cold_start door no longer surfaces the raw provenance line.
+    # Its diagnostic content — the cold trajectory and the server-declared
+    # leave_point status — is relocated behind the System map as a read-only
+    # projection in the entry-point center node (the #2174 pattern). Compute the
+    # tokens here from the same server-declared orientation payload the door
+    # used; no client-side re-classification. Only cold_start carries this
+    # diagnostic; other states pass empty strings (no zero-state row).
+    _map_entry_trajectory = ""
+    _map_entry_leave_point = ""
+    if is_cold:
+        _prov_lp = _orientation_dict(orientation.get("leave_point"))
+        _prov_lp_status = _prov_lp.get("status") if _prov_lp else None
+        _prov_recents = _orientation_dict(orientation.get("recents_anchor"))
+        _prov_leave_absent = (not _prov_lp) or _prov_lp_status == "absent"
+        _prov_first_contact = _prov_leave_absent and not bool(_prov_recents)
+        # First contact carries no trajectory token (the door line did not
+        # either); the cold-trajectory variant declares "cold (>14d)".
+        _map_entry_trajectory = "" if _prov_first_contact else "cold (>14d)"
+        _map_entry_leave_point = "absent" if _prov_leave_absent else "present"
     overlay_host_overlays_html = (
         overlay_host_markup(anchor_note_path="")
         + memory_drawer_markup_html
@@ -6903,6 +6960,8 @@ def _render_orientation_index_html(
             orientation_freshness=freshness if freshness not in ("unknown", "") else "",
             orientation_as_of=as_of,
             orientation_trace_id=trace_id if trace_id != "unknown" else "",
+            entry_trajectory=_map_entry_trajectory,
+            entry_leave_point=_map_entry_leave_point,
             open_loops_count=len(_orientation_list(orientation.get("open_loops"))),
         )
         # Capture modal (#1791, SEP-08b): the inline capture field on the
@@ -6951,23 +7010,25 @@ def _render_orientation_index_html(
         if _is_first_contact:
             _cold_eyebrow = "First contact"
             _cold_headline = "Nothing is open yet."
-            _cold_provenance = "leave_point: absent · read-only · server-declared"
         else:
             _cold_eyebrow = "Returning after a while"
             _cold_headline = "Re-entry is through the vault."
-            # Server declares, UI renders: derive the leave_point token from the
-            # actual declared status. The "returning" copy is also used for a
-            # non-empty vault whose leave_point is *absent* (recents present, no
-            # leave point) — claiming "present" there would fabricate state
-            # (#2309). Only assert "present" when the leave point truly is.
-            _cold_lp_token = "absent" if _leave_point_absent else "present"
-            _cold_provenance = (
-                f"trajectory: cold (&gt;14d) · leave_point: {_cold_lp_token} · "
-                "read-only · server-declared"
-            )
+        # #2525: the door no longer renders the raw provenance line; the
+        # trajectory / leave_point diagnostic it carried is relocated behind the
+        # System map (computed above as _map_entry_trajectory /
+        # _map_entry_leave_point from this same server-declared payload).
         _cold_vault_id = _e(_orientation_str(scope.get("vault_id"), "unknown"))
         _cold_recents_path = _orientation_str(_cold_recents.get("note_path")) if _cold_recents else ""
-        _cold_recents_label = _orientation_str(_cold_recents.get("display_label")) if _cold_recents else ""
+        # #2525: humanise the server-declared label when the runtime fell back to
+        # a bare filename stem (no H1) — e.g. `uat-prod-action-parse-20260515T175952Z`
+        # must never surface as "your most recent note". A label that is already a
+        # human H1 title passes through unchanged. Presentation-only; the server
+        # still owns which note this is (_cold_recents_path is unchanged).
+        _cold_recents_label = (
+            humanise_recents_label(_cold_recents.get("display_label"))
+            if _cold_recents
+            else ""
+        )
         # NOTE (#2453 / E1, owner decision 2026-06-23): no "resume the thread?"
         # continuity affordance is rendered on the long-absence cold surface. A
         # true resume signal can't exist here by design — the only continuity
@@ -7018,7 +7079,11 @@ def _render_orientation_index_html(
                onfocus="overlayHost.mount('capture'); this.blur();"
                autocomplete="off" aria-label="Leave a note for future-you" />
       </div>
-      <p class="cold-start-provenance">{_cold_provenance}</p>
+      <!-- #2525: the provenance line (trajectory / leave_point / read-only /
+           server-declared) is no longer on the door — it leaked raw runtime
+           tokens. It is relocated behind the System map as a read-only
+           projection in the entry-point center node (see
+           system_map_overlay_markup entry_trajectory / entry_leave_point). -->
     </div>"""
 
     vault_unreachable_threshold_html = (
@@ -7586,7 +7651,7 @@ def _render_orientation_index_html(
            data-trace-id above) for the operator layer. Presentation only — no
            classification moves client-side. -->
     </header>
-    {refresh_html}
+    {"" if is_cold else refresh_html}
     {degraded_html}
     {reentry_overlay_html}
     {rail_fade_html}
@@ -7626,6 +7691,9 @@ def _orientation_vault_browser_script() -> str:
     function focusOrientationVaultBrowser() {
       var target = document.getElementById('workspace-orientation-vault-entry');
       if (!target) return;
+      // #2525: on cold_start the panel renders collapsed (hidden) so its chrome
+      // is not on the door; the vault.open verb pulls it open here.
+      target.removeAttribute('hidden');
       target.setAttribute('data-browse-focused', 'true');
       if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
       var details = target.querySelector('details');
