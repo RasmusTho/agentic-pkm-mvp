@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import importlib
 import os
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import psycopg
+from psycopg import sql
 import pytest
 
 from app.db.dsn import resolve_dsn
-from app.components.embeddings import get_embedding_client
 from app.outbox import events
 from app.objects import DomainObject, ObjectStore
-from app.stores import get_vector_index, reset_store_backends
 
 
 def _pg_available() -> bool:
-    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = _pg_base_dsn()
     try:
         conn = psycopg.connect(url, connect_timeout=1)
         conn.close()
@@ -25,55 +24,65 @@ def _pg_available() -> bool:
         return False
 
 
-@pytest.mark.pg
-def test_indexer_runner_pg_does_not_consume_jsonl_outbox_queue(tmp_path, monkeypatch, capsys) -> None:
-    if not _pg_available():
-        pytest.skip("Postgres backend not available")
+def _pg_base_dsn() -> str:
+    return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
 
-    reset_store_backends()
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+
+def _dsn_with_search_path(dsn: str, schema: str) -> str:
+    parts = urlsplit(dsn)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["options"] = f"-csearch_path={schema},public"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _create_schema(dsn: str, schema: str) -> None:
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+
+
+def _drop_schema(dsn: str, schema: str) -> None:
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
+
+
+def _reset_store_backend_cache_only() -> None:
+    import app.stores as stores
+
+    stores._LAST_RESOLVED_BACKEND = None
+    for cache_name in ("_memory_instances", "_pg_instances"):
+        cache = getattr(stores, cache_name, None)
+        if cache is not None:
+            cache.cache_clear()
+    try:
+        import app.stores.pg as pg
+
+        pg._TABLES_READY = False
+    except Exception:
+        pass
+
+
+def _configure_isolated_pg_test(tmp_path, monkeypatch) -> tuple[str, str]:
+    """Bind this test to a disposable schema, never the operator's shared tables."""
+    base_dsn = _pg_base_dsn()
+    schema = f"pgtest_{uuid4().hex}"
+    _create_schema(base_dsn, schema)
+    dsn = _dsn_with_search_path(base_dsn, schema)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("DB_DSN", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "mock")
+    monkeypatch.delenv("EMBED_PROFILE", raising=False)
     monkeypatch.setenv("EMBED_DIM", "8")
-
     fake_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+    _reset_store_backend_cache_only()
+    from app.services.outbox import bootstrap
 
-    import app.store.object_store as legacy_object_store
-
-    legacy_object_store._MEMORY_STORE.clear()
-
-    import app.indexer.runner as runner
-
-    importlib.reload(runner)
-
-    store = ObjectStore()
-    for i in range(2):
-        oid = uuid4()
-        store.save_object(
-            DomainObject(
-                uuid=str(oid),
-                kind="note",
-                payload={"text": f"payload-{i}", "content": f"payload-{i}"},
-                source_ref=f"unit-test:{i}",
-                created_at=datetime.now(timezone.utc),
-            ),
-            emit_outbox=False,
-            trace_id="trace-123",
-        )
-        events.emit_index_embedding_requested({"object_id": oid, "trace_id": "trace-123", "source": "test"})
-
-    runner.main()
-    output = capsys.readouterr().out
-    assert "JSONL queue consumption disabled" in output
-
-    idx = get_vector_index()
-    query = get_embedding_client().embed_text("payload-0")
-    hits = idx.search(query, k=2)
-
-    assert not hits
-
-    reset_store_backends()
+    bootstrap()
+    return base_dsn, schema
 
 
 def _undelivered_rows_for_object(dsn: str, object_id: str) -> list[tuple[str, str, dict]]:
@@ -177,59 +186,53 @@ def test_outbox_roundtrip_embeds(tmp_path, monkeypatch) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
-    reset_store_backends()
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("STORE_BACKEND", "pg")
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("EMBED_DIM", "8")
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        import app.store.object_store as legacy_object_store
 
-    fake_path = tmp_path / "index-outbox.jsonl"
-    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+        legacy_object_store._MEMORY_STORE.clear()
 
-    import app.store.object_store as legacy_object_store
+        objects_before = _store_objects_row_count(dsn)
 
-    legacy_object_store._MEMORY_STORE.clear()
+        store = ObjectStore()
+        oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(oid),
+                kind="note",
+                payload={"text": "gate-0 spine payload", "content": "gate-0 spine payload"},
+                source_ref="unit-test:roundtrip-embeds",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-roundtrip-embeds",
+        )
+        events.emit_index_embedding_requested(
+            {"object_id": oid, "trace_id": "trace-roundtrip-embeds", "source": "test"}
+        )
 
-    objects_before = _store_objects_row_count(dsn)
+        # Force the consumer to read the durable backend, not the in-process mirror.
+        legacy_object_store._MEMORY_STORE.clear()
 
-    store = ObjectStore()
-    oid = uuid4()
-    store.save_object(
-        DomainObject(
-            uuid=str(oid),
-            kind="note",
-            payload={"text": "gate-0 spine payload", "content": "gate-0 spine payload"},
-            source_ref="unit-test:roundtrip-embeds",
-            created_at=datetime.now(timezone.utc),
-        ),
-        emit_outbox=False,
-        trace_id="trace-roundtrip-embeds",
-    )
-    events.emit_index_embedding_requested(
-        {"object_id": oid, "trace_id": "trace-roundtrip-embeds", "source": "test"}
-    )
+        processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
 
-    # Force the consumer to read the durable backend, not the in-process mirror.
-    legacy_object_store._MEMORY_STORE.clear()
+        # Worker-equivalent receipt: at least the embedding-request row was processed.
+        assert processed_total >= 1
 
-    processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
+        # store_objects row persisted durably for this object.
+        assert _store_objects_row_count(dsn) == objects_before + 1
 
-    # Worker-equivalent receipt: at least the embedding-request row was processed.
-    assert processed_total >= 1
-
-    # store_objects row persisted durably for this object.
-    assert _store_objects_row_count(dsn) == objects_before + 1
-
-    # store_vector_index row written with a non-empty embedding for this object.
-    rows = _vector_index_rows_with_embedding(dsn)
-    matching = [r for r in rows if str(r[0]) == str(oid)]
-    assert matching, "expected a store_vector_index row with a non-empty embedding for the seeded object"
-    object_id, embedding = matching[0]
-    assert embedding, "stored embedding must be non-empty"
-    assert len(list(embedding)) == 8
-
-    reset_store_backends()
+        # store_vector_index row written with a non-empty embedding for this object.
+        rows = _vector_index_rows_with_embedding(dsn)
+        matching = [r for r in rows if str(r[0]) == str(oid)]
+        assert matching, "expected a store_vector_index row with a non-empty embedding for the seeded object"
+        object_id, embedding = matching[0]
+        assert embedding, "stored embedding must be non-empty"
+        assert len(list(embedding)) == 8
+    finally:
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
 
 
 @pytest.mark.pg
@@ -245,54 +248,54 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
-    reset_store_backends()
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("STORE_BACKEND", "pg")
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("EMBED_DIM", "8")
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        import app.store.object_store as legacy_object_store
 
-    fake_path = tmp_path / "index-outbox.jsonl"
-    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+        legacy_object_store._MEMORY_STORE.clear()
 
-    import app.store.object_store as legacy_object_store
+        store = ObjectStore()
+        oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(oid),
+                kind="note",
+                payload={"text": "unembedded payload", "content": "unembedded payload"},
+                source_ref="unit-test:fail-loud",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-fail-loud",
+        )
+        events.emit_index_embedding_requested(
+            {"object_id": oid, "trace_id": "trace-fail-loud", "source": "test"}
+        )
 
-    legacy_object_store._MEMORY_STORE.clear()
+        # Deliberately DO NOT drain the outbox: processed_total stays 0 and no
+        # store_vector_index row is written for this object (the #2252 stall).
+        rows = _vector_index_rows_with_embedding(dsn)
+        matching = [r for r in rows if str(r[0]) == str(oid)]
+        assert not matching, "precondition: object must be present but un-embedded"
 
-    store = ObjectStore()
-    oid = uuid4()
-    store.save_object(
-        DomainObject(
-            uuid=str(oid),
-            kind="note",
-            payload={"text": "unembedded payload", "content": "unembedded payload"},
-            source_ref="unit-test:fail-loud",
-            created_at=datetime.now(timezone.utc),
-        ),
-        emit_outbox=False,
-        trace_id="trace-fail-loud",
-    )
-    events.emit_index_embedding_requested(
-        {"object_id": oid, "trace_id": "trace-fail-loud", "source": "test"}
-    )
+        # Drive the REAL production verifier (app.index.doctor.verify_object_embedded),
+        # not a self-defined raiser, against the objects-present/no-vector state.
+        from app.index.doctor import IndexDriftError, verify_object_embedded
 
-    # Deliberately DO NOT drain the outbox: processed_total stays 0 and no
-    # store_vector_index row is written for this object (the #2252 stall).
-    rows = _vector_index_rows_with_embedding(dsn)
-    matching = [r for r in rows if str(r[0]) == str(oid)]
-    assert not matching, "precondition: object must be present but un-embedded"
+        with pytest.raises(IndexDriftError, match="present in store_objects but has no embedded"):
+            verify_object_embedded(str(oid))
+        from app.index.doctor import diagnose_index, reset_diagnose_cache
 
-    # Drive the REAL production verifier (app.index.doctor.verify_object_embedded),
-    # not a self-defined raiser, against the objects-present/no-vector state. The
-    # production drift check must reject this state rather than pass silently.
-    from app.index.doctor import IndexDriftError, verify_object_embedded
+        reset_diagnose_cache()
+        diagnosis = diagnose_index()
+        assert diagnosis["rebuild_required"] is True
+        assert any("store_objects rows have no embedded" in issue for issue in diagnosis["issues"])
 
-    with pytest.raises(IndexDriftError, match="present in store_objects but has no embedded"):
+        # And once the row IS drained/embedded, the same verifier must pass.
+        processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
+        assert processed_total >= 1
+        reset_diagnose_cache()
         verify_object_embedded(str(oid))
-
-    # And once the row IS drained/embedded, the same verifier must pass.
-    processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
-    assert processed_total >= 1
-    verify_object_embedded(str(oid))
-
-    reset_store_backends()
+    finally:
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)

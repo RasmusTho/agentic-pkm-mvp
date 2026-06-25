@@ -67,58 +67,56 @@ def test_doctor_reports_indexed(tmp_path, monkeypatch) -> None:
 
     from datetime import datetime, timezone
 
-    from app.db.dsn import resolve_dsn
     from app.objects import DomainObject, ObjectStore
     from app.outbox import events
-    from app.stores import reset_store_backends
-    from tests.indexer.test_outbox_roundtrip_pg import _drain_db_outbox_embedding_spine
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drain_db_outbox_embedding_spine,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
 
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
-    reset_store_backends()
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
     reset_diagnose_cache()
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("STORE_BACKEND", "pg")
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_MODEL", "embed-test")
-    monkeypatch.setenv("EMBED_DIM", "8")
+    try:
+        import app.store.object_store as legacy_object_store
 
-    fake_path = tmp_path / "index-outbox.jsonl"
-    monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
+        legacy_object_store._MEMORY_STORE.clear()
 
-    import app.store.object_store as legacy_object_store
+        store = ObjectStore()
+        oid = uuid4()
+        store.save_object(
+            DomainObject(
+                uuid=str(oid),
+                kind="note",
+                payload={"text": "doctor seed payload", "content": "doctor seed payload"},
+                source_ref="unit-test:doctor-indexed",
+                created_at=datetime.now(timezone.utc),
+            ),
+            emit_outbox=False,
+            trace_id="trace-doctor-indexed",
+        )
+        events.emit_index_embedding_requested(
+            {"object_id": oid, "trace_id": "trace-doctor-indexed", "source": "test"}
+        )
 
-    legacy_object_store._MEMORY_STORE.clear()
+        legacy_object_store._MEMORY_STORE.clear()
 
-    store = ObjectStore()
-    oid = uuid4()
-    store.save_object(
-        DomainObject(
-            uuid=str(oid),
-            kind="note",
-            payload={"text": "doctor seed payload", "content": "doctor seed payload"},
-            source_ref="unit-test:doctor-indexed",
-            created_at=datetime.now(timezone.utc),
-        ),
-        emit_outbox=False,
-        trace_id="trace-doctor-indexed",
-    )
-    events.emit_index_embedding_requested(
-        {"object_id": oid, "trace_id": "trace-doctor-indexed", "source": "test"}
-    )
+        # Drain ONLY this object's seeded embedding-request row, scoped by object_id
+        # on the nested envelope path, through the same consumer entrypoint the
+        # production worker dispatches to. A global ``poll_outbox_one`` loop would
+        # ack pre-existing foreign rows on a shared/operator DB — destructive.
+        processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
+        assert processed_total >= 1
 
-    legacy_object_store._MEMORY_STORE.clear()
+        reset_diagnose_cache()
+        result = diagnose_index()
 
-    # Drain ONLY this object's seeded embedding-request row, scoped by object_id
-    # on the nested envelope path, through the same consumer entrypoint the
-    # production worker dispatches to. A global ``poll_outbox_one`` loop would
-    # ack pre-existing foreign rows on a shared/operator DB — destructive.
-    processed_total = _drain_db_outbox_embedding_spine(dsn, str(oid))
-    assert processed_total >= 1
-
-    reset_diagnose_cache()
-    result = diagnose_index()
-
-    assert result["empty_index"] is False
-    assert result["rebuild_required"] is False
-
-    reset_store_backends()
+        assert result["empty_index"] is False
+        assert result["rebuild_required"] is False
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
