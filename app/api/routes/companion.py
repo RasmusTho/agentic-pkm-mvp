@@ -91,7 +91,12 @@ from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
-from app.vault.manager import MachineRole, VaultContext, get_vault_manager
+from app.vault.manager import (
+    MachineRole,
+    VaultContext,
+    existing_init_target_entries,
+    get_vault_manager,
+)
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.settings_service import (
     SettingDefinition,
@@ -205,6 +210,11 @@ class VaultInitializeRequest(BaseModel):
     vault_name: str | None = None
     machine_role: MachineRole = "primary"
     remember: bool = True
+    # Explicit, understood confirmation that the human accepts writing the
+    # settings scaffold into the chosen folder when that folder is already
+    # populated (#2518). Default ``False`` so a non-empty target refuses with
+    # 409 until the human confirms; an empty/new target ignores it.
+    confirm: bool = False
 
 
 class VaultInitializeResponse(BaseModel):
@@ -773,8 +783,37 @@ def read_companion_now() -> list[dict]:
     dependencies=[Depends(require_loopback_or_api_key)],
 )
 def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
+    target = Path(req.path)
+    # Personal-vault-write guard (#2518): initializing writes the settings
+    # scaffold INTO the chosen folder. When that folder is already populated
+    # (an existing personal Obsidian vault resolves to ``uninitialized`` and is
+    # a valid picker target), require an explicit, understood confirmation
+    # before the write. A brand-new/missing or empty target initializes
+    # friction-free (preserves #2312 AC1). This is a single-actor, in-band
+    # proportional guard — the human confirms their own write — not a
+    # governance/agent approval loop (#2475). Manager-direct callers (CLI,
+    # test-channel bootstrap) are deliberate operator actions and bypass this
+    # picker-facing gate.
+    if not req.confirm:
+        existing = existing_init_target_entries(target)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "vault_init_confirmation_required",
+                    "message": (
+                        f"This folder already contains {len(existing)} item(s). "
+                        "Initializing will add a settings/ scaffold to your "
+                        "existing vault. Confirm to initialize into it."
+                    ),
+                    "path": str(target),
+                    "existing_entry_count": len(existing),
+                    "existing_entries_sample": list(existing[:10]),
+                    "requires_confirmation": True,
+                },
+            )
     result = get_vault_manager().initialize_vault(
-        Path(req.path),
+        target,
         vault_name=req.vault_name,
         machine_role=req.machine_role,
         remember=req.remember,

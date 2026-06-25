@@ -76,6 +76,42 @@ def no_vault_context() -> VaultContext:
     return VaultContext(status="none")
 
 
+# OS-noise entries that do not indicate a populated personal vault. A folder
+# holding only these (or only the Design Handoff scaffold) is treated as empty
+# for the initialize-confirmation gate (#2518). ``.DS_Store`` is macOS Finder
+# noise that routinely appears in a folder the human believes is empty; warning
+# on it alone would make a fresh-folder init feel broken.
+INIT_TARGET_IGNORED_ENTRIES = frozenset({".DS_Store"})
+
+
+def existing_init_target_entries(vault_path: Path) -> tuple[str, ...]:
+    """Top-level entry names that mean ``vault_path`` is already populated.
+
+    Returns the sorted names of entries that are neither the Design Handoff
+    scaffold dir (:data:`SETTINGS_DIR_NAME`) nor ignorable OS noise
+    (:data:`INIT_TARGET_IGNORED_ENTRIES`). A non-empty result means initializing
+    would add the settings scaffold into a folder that already holds the human's
+    content, so the picker must obtain an explicit, understood confirmation
+    before the write (#2518: "must not write into a human's personal vault
+    without an explicit, understood choice").
+
+    A missing path, an empty directory, or a directory holding only the scaffold
+    returns ``()`` — those initialize friction-free (preserves #2312 AC1). A path
+    that exists but is not a directory also returns ``()``; ``initialize_vault``
+    owns that error surface.
+    """
+    expanded = vault_path.expanduser()
+    if not expanded.is_dir():
+        return ()
+    names = [
+        child.name
+        for child in expanded.iterdir()
+        if child.name != SETTINGS_DIR_NAME
+        and child.name not in INIT_TARGET_IGNORED_ENTRIES
+    ]
+    return tuple(sorted(names))
+
+
 class VaultManager:
     def __init__(
         self,
@@ -551,6 +587,7 @@ def _bool_setting(value: object, *, default: bool) -> bool:
 
 
 __all__ = [
+    "INIT_TARGET_IGNORED_ENTRIES",
     "MachineRole",
     "VaultChangedEvent",
     "VaultContext",
@@ -559,6 +596,7 @@ __all__ = [
     "VaultPermissions",
     "VaultRequiredError",
     "VaultStatus",
+    "existing_init_target_entries",
     "get_vault_manager",
     "no_vault_context",
 ]

@@ -122,6 +122,8 @@ Rules:
 
 ## Initial Vault Files
 
+Initializing into a **non-empty** folder (an existing personal vault) requires an explicit, understood confirmation first: `POST /api/companion/vault/initialize` refuses a populated target with `409 vault_init_confirmation_required` unless `confirm: true` is set, and the Companion UI surfaces an in-band "Confirm initialize" gesture. A brand-new/missing or empty folder initializes with no confirmation. See `docs/ENVIRONMENTS.md` ([Vault initialization and the personal-vault-write constraint](../ENVIRONMENTS.md#vault-init)) for the full contract (#2518).
+
 Vault initialization creates missing files only:
 
 ```text
@@ -180,7 +182,7 @@ Suggested event payload:
 | --- | --- | --- | --- |
 | No vault selected | `none` | App shell, Companion UI, vault picker, built-in defaults, app-local prefs, docs/help | Watcher, indexer, handoff writer, vault-relative resolver, sync |
 | First-time local vault | `selected` after init | Create settings folder/files, write local settings, start allowed services | Unsafe overwrite of existing files |
-| Existing Obsidian vault without Design Handoff settings | `uninitialized` | Show initialize action, choose another vault | Watcher, indexer, writers |
+| Existing Obsidian vault without Design Handoff settings | `uninitialized` | Show initialize action (confirm first when the folder is non-empty, #2518), choose another vault | Watcher, indexer, writers; scaffolding a populated folder without explicit confirm |
 | Missing moved vault | `missing` | Locate, choose another, remove recent, create new | Vault-scoped work |
 | Invalid settings or Git conflict | `invalid` | Show validation error, open/reload settings | Applying invalid settings |
 | Same logical vault cloned twice | `selected` per path | Separate known-vault records by path/local instance | Collapsing records by `vaultId` |
