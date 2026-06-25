@@ -16,15 +16,32 @@ source "scripts/lib/load_env_defaults.sh"
 # Operators create .env.dev.local (or .env.test.local) with channel-specific
 # VAULT_ROOT and layout vars; these files are gitignored and never committed.
 # load_env_defaults_file handles paths with spaces safely (Python-based parser).
+_pkm_caller_vault_root_set=0
+if [ -n "${VAULT_ROOT+x}" ]; then
+  _pkm_caller_vault_root_set=1
+fi
+_pkm_channel_vault_root_set=0
 _pkm_initial_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
 _pkm_initial_channel_lower="$(printf '%s' "${_pkm_initial_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_initial_channel}")"
 if [ -n "${_pkm_initial_channel_lower:-}" ]; then
   load_env_defaults_file ".env.${_pkm_initial_channel_lower}.local"
+  if [ -n "${VAULT_ROOT+x}" ]; then
+    _pkm_channel_vault_root_set=1
+  fi
 fi
 unset _pkm_initial_channel _pkm_initial_channel_lower
 
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
+
+if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -eq 0 ]; then
+  # A bare start with no caller- or channel-selected vault must stay in the
+  # no-vault idle posture. Generic repo .env can still provide shared defaults
+  # (LLM, DB, ports), but it must not silently bind an operator vault.
+  unset VAULT_ROOT
+  unset VAULT_HOST_ROOT
+fi
+unset _pkm_caller_vault_root_set _pkm_channel_vault_root_set
 
 source "scripts/lib/runtime_endpoint_probe.sh"
 source "scripts/lib/start_full_system_env.sh"

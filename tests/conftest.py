@@ -132,6 +132,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
         "EMBED_MODEL",
         "LLM_FORCE_PROVIDER",
         "LLM_FORCE_MODEL",
+        "LLM_PROVIDER_ENFORCE",
         "OLLAMA_HOST",
         "OLLAMA_URL",
         "OPENAI_API_KEY",

@@ -46,6 +46,9 @@ def _sanitize_external_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PANEL_ACTION_WIRING_PATH", raising=False)
 
     # Deterministic defaults.
+    monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER_ENFORCE", raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("LLM_CHAT_MODEL", "mock-chat")
     monkeypatch.setenv("LLM_EMBED_MODEL", "mock-embed")
