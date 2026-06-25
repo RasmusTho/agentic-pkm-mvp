@@ -10,7 +10,7 @@ import logging
 import os
 import re
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 from uuid import uuid4
 
 import yaml
@@ -91,7 +91,13 @@ from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
-from app.vault.manager import MachineRole, VaultContext, get_vault_manager
+from app.vault.manager import (
+    MachineRole,
+    VaultContext,
+    get_vault_manager,
+    is_vault_root,
+    nearest_enclosing_vault_root,
+)
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.settings_service import (
     SettingDefinition,
@@ -1242,6 +1248,20 @@ class VaultBrowserPaginationState(BaseModel):
     has_previous: bool
 
 
+class VaultNestedRootState(BaseModel):
+    """A nested initialized vault root surfaced as a selectable boundary (#2313).
+
+    Nested vault roots appear in the parent browser as drill-in targets, NOT as
+    merged notes — their (possibly private) contents never surface through the
+    parent's note listing. ``note_path`` is the vault-relative folder path of the
+    child root; ``name`` is the folder name for display.
+    """
+
+    note_path: str
+    name: str
+    kind: Literal["nested_vault_root"] = "nested_vault_root"
+
+
 class VaultBrowserStateResponse(BaseModel):
     notes: list[VaultBrowserNoteState]
     query: str
@@ -1252,6 +1272,9 @@ class VaultBrowserStateResponse(BaseModel):
     identity_available: bool
     active_filters: dict[str, list[str]] = Field(default_factory=dict)
     pagination: VaultBrowserPaginationState
+    # Nested initialized vault roots under the selected vault, surfaced as
+    # selectable boundaries (drill-in) and never merged into ``notes`` (#2313).
+    nested_vault_roots: list[VaultNestedRootState] = Field(default_factory=list)
 
 
 class VaultLinkIndexResponse(BaseModel):
@@ -1459,12 +1482,11 @@ def _list_vault_notes(vault_root: Path, q: str = "") -> list[VaultNoteEntry]:
         return []
     q_lower = q.strip().lower()
     notes: list[VaultNoteEntry] = []
-    for path in vault_root.rglob("*.md"):
+    for path, rel in _iter_vault_note_files(vault_root):
         try:
-            parts = path.relative_to(vault_root).parts
+            parts = PurePosixPath(rel).parts
             if any(p.startswith(_BROWSE_EXCLUDE_DIR_PREFIXES) for p in parts):
                 continue
-            rel = path.relative_to(vault_root).as_posix()
             if q_lower and q_lower not in rel.lower():
                 body_preview = path.read_text(encoding="utf-8", errors="replace")
                 title = _extract_title(body_preview, fallback=path.stem)
@@ -1559,6 +1581,16 @@ def _find_workspace_note(vault_root: Path, safe_note_path: str) -> Path | None:
         )
     if not os.path.isfile(target_real):
         return None
+    # Nested-vault boundary (#2313): even on a direct read-by-path, a note owned
+    # by a deeper nested vault root must NOT be served through the parent-selected
+    # vault — otherwise a caller who knows/guesses a child-vault-relative path
+    # bypasses the enumeration prune and reads (or edits) a private child note.
+    # Resolve to not-found so the parent acts as if the child subtree does not
+    # exist (the confidentiality invariant; this also gates the read-then-write
+    # workspace path, not just listings).
+    selected_root = Path(root_real)
+    if nearest_enclosing_vault_root(Path(target_real), search_root=selected_root) != selected_root:
+        return None
     return Path(target_real)
 
 
@@ -1567,6 +1599,101 @@ def _vault_relative(path: Path, vault_root: Path) -> str | None:
         return path.relative_to(vault_root).as_posix()
     except ValueError:
         return None
+
+
+def _owning_vault_root(note_path: Path, *, selected_root: Path) -> Path | None:
+    """Resolve a note's owning vault = its nearest enclosing vault root (#2313).
+
+    The selected root is the floor of the search; a deeper nested vault root that
+    encloses the note owns it instead. Returns ``None`` when the note is not
+    contained within ``selected_root``. Thin wrapper over
+    ``app.vault.manager.nearest_enclosing_vault_root`` so the read surface owns a
+    single owning-vault identity seam.
+    """
+    return nearest_enclosing_vault_root(note_path, search_root=selected_root)
+
+
+def _iter_vault_note_files(vault_root: Path) -> "Iterator[tuple[Path, str]]":
+    """Yield ``(absolute_path, vault_relative_posix)`` for the SELECTED vault only.
+
+    Nested-vault boundary (#2313): the enumeration of a parent vault STOPS at any
+    nested initialized vault root strictly below ``vault_root``. A folder is a
+    vault root iff it carries the ``settings/vault.md`` marker
+    (``is_vault_root``); the selected ``vault_root`` itself carries the marker but
+    is never pruned (it is the floor). A private child vault's subtree is treated
+    as if it does not exist, so its notes never surface through the parent's read
+    surfaces (the primary confidentiality invariant).
+
+    Efficiency: this prunes during traversal with ``os.walk`` + in-place
+    ``dirs[:]`` pruning, so a pruned child-vault subtree is never descended into
+    (one ``stat`` per directory, no per-note ancestor rescan). This replaces a
+    full ``rglob('*.md')`` scan that ignored vault boundaries and would have
+    enumerated the entire tree before filtering.
+    """
+    root_str = str(vault_root)
+    for dirpath, dirnames, filenames in os.walk(root_str):
+        # Prune in place: do not descend into nested vault roots (deeper markers)
+        # or hidden/dot directories. Sorting keeps traversal deterministic.
+        kept: list[str] = []
+        for name in dirnames:
+            if name.startswith("."):
+                continue
+            child = Path(dirpath) / name
+            # Only DEEPER nested roots are boundaries; the selected root is the
+            # floor and is never itself a child dir encountered here.
+            if is_vault_root(child):
+                continue
+            kept.append(name)
+        dirnames[:] = sorted(kept)
+        for filename in sorted(filenames):
+            if not filename.endswith(".md"):
+                continue
+            candidate = Path(dirpath) / filename
+            # os.walk prunes nested-vault *directories*, but a .md *symlink* in the
+            # parent can point into a pruned child vault (or outside the selected
+            # vault) and read_text() would follow it — leaking the child note
+            # through the parent's enumeration even though the direct /workspace
+            # read now rejects the same real target. Gate symlinks on real-path
+            # ownership so only parent-owned notes are yielded (#2313). Non-symlink
+            # files are parent-owned by construction (child dirs already pruned).
+            if candidate.is_symlink():
+                try:
+                    real = candidate.resolve()
+                except OSError:
+                    continue
+                if nearest_enclosing_vault_root(real, search_root=vault_root) != vault_root.resolve():
+                    continue
+            safe_path = _vault_relative(candidate, vault_root)
+            if safe_path is None:
+                continue
+            yield candidate, safe_path
+
+
+def _iter_nested_vault_roots(vault_root: Path) -> "Iterator[str]":
+    """Yield vault-relative posix paths of nested vault roots directly bounding
+    the selected vault's enumeration (#2313).
+
+    These are the deeper initialized vault roots whose subtrees the parent
+    enumeration prunes. They are surfaced to the picker/browser as selectable
+    boundaries (drill-in targets), NOT merged into the parent's note listing.
+    Only the topmost nested root on each branch is reported — a vault nested
+    inside an already-pruned child is the child's concern, not the parent's.
+    """
+    root_str = str(vault_root)
+    for dirpath, dirnames, _filenames in os.walk(root_str):
+        kept: list[str] = []
+        for name in sorted(dirnames):
+            if name.startswith("."):
+                continue
+            child = Path(dirpath) / name
+            if is_vault_root(child):
+                safe_path = _vault_relative(child, vault_root)
+                if safe_path is not None:
+                    yield safe_path
+                # Do not descend past a nested boundary.
+                continue
+            kept.append(name)
+        dirnames[:] = kept
 
 
 def _active_canvas_session(safe_note_path: str, vault_root: Path) -> object | None:
@@ -2245,7 +2372,7 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
 
     candidates: list[tuple[float, str, Path, Path]] = []
     try:
-        for path in vault_root.rglob("*.md"):
+        for path, _safe in _iter_vault_note_files(vault_root):
             try:
                 if not path.is_file():
                     continue
@@ -2509,11 +2636,8 @@ def _select_vault_notes(
     # materializing the full sorted collection in memory.
     selected_heap: list[tuple[str, VaultBrowserNoteState]] = []
     previous_cursor_heap: list[str] = []
-    for candidate in vault_root.rglob("*.md"):
+    for candidate, safe_path in _iter_vault_note_files(vault_root):
         if not candidate.is_file():
-            continue
-        safe_path = _vault_relative(candidate, vault_root)
-        if safe_path is None:
             continue
         if _is_hidden_browser_path(safe_path):
             continue
@@ -2743,11 +2867,10 @@ def _collect_relation_notes(vault_root: Path) -> list[dict[str, object]]:
     notes: list[dict[str, object]] = []
     if not vault_root.exists():
         return notes
-    for candidate in vault_root.rglob("*.md"):
+    for candidate, safe_path in _iter_vault_note_files(vault_root):
         if not candidate.is_file():
             continue
-        safe_path = _vault_relative(candidate, vault_root)
-        if safe_path is None or _is_hidden_browser_path(safe_path):
+        if _is_hidden_browser_path(safe_path):
             continue
         try:
             body = candidate.read_text(encoding="utf-8")
@@ -3154,6 +3277,18 @@ def read_companion_vault_browser(
     identity_available = (
         bool(identity.vault_name.strip()) and identity.channel in {"dev", "test", "prod"}
     )
+    # Surface nested vault roots as selectable boundaries (drill-in), never as
+    # merged notes (#2313). Skip any under hidden/dot folders for parity with
+    # the note enumeration's hidden-path exclusion.
+    nested_roots = [
+        VaultNestedRootState(
+            note_path=child_path,
+            name=PurePosixPath(child_path).name,
+        )
+        for child_path in _iter_nested_vault_roots(vault_root)
+        if not _is_hidden_browser_path(child_path + "/_")
+    ]
+    nested_roots.sort(key=lambda root: root.note_path)
     return VaultBrowserStateResponse(
         notes=selected,
         query=q,
@@ -3164,6 +3299,7 @@ def read_companion_vault_browser(
         identity_available=identity_available,
         active_filters=active_filters,
         pagination=pagination,
+        nested_vault_roots=nested_roots,
     )
 
 
@@ -3185,11 +3321,10 @@ def _collect_vault_note_paths(vault_root: Path, *, limit: int) -> tuple[list[str
     """
     paths: list[str] = []
     truncated = False
-    for candidate in vault_root.rglob("*.md"):
+    for candidate, safe_path in _iter_vault_note_files(vault_root):
         if not candidate.is_file():
             continue
-        safe_path = _vault_relative(candidate, vault_root)
-        if safe_path is None or _is_hidden_browser_path(safe_path):
+        if _is_hidden_browser_path(safe_path):
             continue
         paths.append(safe_path)
         if len(paths) >= limit:
