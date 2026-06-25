@@ -106,7 +106,6 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         # Properties panel
         "workspace-note-properties",
         "vault-properties-label",
-        "vault-properties-mode",
         "vault-property-value",
         "vault-property-key",
         # Responsive collapse elements (§7.5 / #1342)

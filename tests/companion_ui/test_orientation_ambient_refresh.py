@@ -233,8 +233,9 @@ def test_orientation_vault_entry_includes_browser_control_handlers() -> None:
         },
     )
 
-    assert 'onclick="vaultBrowserToggleSelection(event, this)"' in html
     assert 'onclick="vbToggleFilter(this)"' in html
-    assert "function vaultBrowserToggleSelection(event, control)" in html
     assert "function vbToggleFilter(el)" in html
+    # #2526: the dead ui_only selection checkbox/toggle was removed; only the
+    # filter-toggle control handler remains in the orientation vault entry.
+    assert "vaultBrowserToggleSelection" not in html
     assert "method: 'POST'" not in html
