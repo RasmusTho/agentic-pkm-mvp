@@ -8,7 +8,7 @@ from typing import Dict, Iterable
 
 import yaml
 
-from app.config.paths import resolve_optional_vault_root
+from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 
 DEFAULT_PANEL_ACTION_WIRING_PATH = Path("docs/settings/panel-action-wiring.yaml")
 VAULT_WIRING_RELATIVE = Path("System/Config/panel-action-wiring.yaml")
@@ -35,7 +35,18 @@ def _candidate_paths(path: Path | None = None) -> Iterable[Path]:
     # Route through the canonical optional resolver rather than reading VAULT_ROOT
     # directly, so wiring-config discovery honours the same no-vault semantics as
     # the HTTP path (#2476: non-HTTP vault readers funnel through canonical resolver).
-    vault_root = resolve_optional_vault_root()
+    #
+    # Wiring discovery is OPTIONAL config with a DEFAULT fallback, so a
+    # set-but-missing VAULT_ROOT must not abort it: a stale HTTP VAULT_ROOT would
+    # otherwise raise here and stop watcher/worker-bound background panel
+    # execution (bound via WATCHER_VAULT_PATH and threaded into
+    # execute_panel_intent) before the threaded vault is ever used. Mirror
+    # cognition/runtime: treat a misconfigured root as "no vault-derived
+    # candidate" and fall through to the default.
+    try:
+        vault_root = resolve_optional_vault_root()
+    except VaultRootMisconfiguredError:
+        vault_root = None
     if vault_root is not None:
         yield vault_root.expanduser() / VAULT_WIRING_RELATIVE
     yield DEFAULT_PANEL_ACTION_WIRING_PATH
