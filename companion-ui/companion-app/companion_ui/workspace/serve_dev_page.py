@@ -12806,6 +12806,9 @@ def make_handler(
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/healthz":
+                self._send_json(200, {"ok": True, "service": "companion-ui"})
+                return
             if parsed.path == "/help":
                 body = load_help_guide_html().encode("utf-8")
                 self.send_response(200)

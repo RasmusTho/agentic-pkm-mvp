@@ -55,12 +55,11 @@ For a full promotion acceptance (after a code-ref move from dev → stable), pro
 ### Canonical prod startup
 
 The canonical prod startup uses the prod compose overlay, the `pkm-prod` project namespace,
-explicit `prod` environment selection, and an operator-supplied vault root.
+explicit `prod` environment selection, and the `.env.prod.local` Midgård vault default.
 
-**Via Makefile target** (preferred — requires `VAULT_ROOT` to be set):
+**Via Makefile target** (preferred):
 
 ```bash
-export VAULT_ROOT="/absolute/path/to/your/real/vault"
 make prod-start-full
 ```
 
@@ -70,11 +69,10 @@ make prod-start-full
 COMPOSE_FILE="docker-compose.yaml:docker-compose.prod.yml" \
 COMPOSE_PROJECT_NAME="pkm-prod" \
 PKM_ENVIRONMENT="prod" \
-VAULT_ROOT="/absolute/path/to/your/real/vault" \
-scripts/start_full_system.sh
+bash scripts/prod/start_midgard_stack.sh
 ```
 
-- `VAULT_ROOT` is always operator-supplied — see [prod-vault-binding](#prod-vault-binding) below.
+- `VAULT_ROOT` is loaded from `.env.prod.local` and should resolve to Midgård — see [prod-vault-binding](#prod-vault-binding) below.
 - The startup script waits for health before returning. A successful startup writes
   `startup_succeeded: true` and `runtime_verified: true` to `tmp/startup_status.json`.
 - Confirm the startup receipt before enabling watcher auto-exec.
@@ -283,7 +281,7 @@ It is distinct from a full promotion receipt (which records a code-ref transitio
   "timestamp": "<ISO 8601 UTC>",
   "compose_project": "pkm-prod",
   "compose_files": ["docker-compose.yaml", "docker-compose.prod.yml"],
-  "vault_root": "<operator-supplied absolute path — confirm before storing>",
+  "vault_root": "<.env.prod.local Midgård path — confirm before storing>",
   "database": "app",
   "db_volume": "pkm-prod_pgdata",
   "health_state": "running",

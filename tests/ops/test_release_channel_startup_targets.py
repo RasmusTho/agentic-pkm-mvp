@@ -3,7 +3,7 @@ Static inspection tests for canonical startup targets (Issue #967, #1629).
 
 Verifies that the Makefile startup targets for test and prod channels
 bind the correct compose file, compose project name, PKM_ENVIRONMENT,
-and vault root — and that both require an explicit VAULT_ROOT.
+and channel-appropriate vault root guard.
 
 Also verifies (Issue #1629) that make test-start-full causes the generated
 runtime.env to carry test-scoped artifact paths so containers under
@@ -94,34 +94,51 @@ def test_prod_start_target_binds_prod_environment() -> None:
         "Makefile 'prod-start-full' target does not reference docker-compose.prod.yml. "
         "The prod overlay must be included in the prod startup (Issue #967)."
     )
+    assert "scripts/prod/start_midgard_stack.sh" in body, (
+        "Makefile 'prod-start-full' target must route through the Midgård prod "
+        "vault preflight before the generic no-vault-capable startup script."
+    )
 
 
-def test_full_start_targets_require_vault_root() -> None:
-    """Both test-start-full and prod-start-full must enforce VAULT_ROOT.
+def test_full_start_targets_use_channel_specific_vault_binding() -> None:
+    """Full start targets must use channel-appropriate vault binding.
 
-    Targets must use the require-vault-root prerequisite or equivalent
-    guard so they fail immediately when VAULT_ROOT is unset rather than
-    silently starting with the wrong or empty vault path.
+    Test startup remains explicitly supplied by the caller, while prod startup
+    must not require an inline VAULT_ROOT because the prod channel default is
+    loaded from .env.prod.local.
 
     Verify: Issue #967 AC3 —
-      tests/ops/test_release_channel_startup_targets.py::test_full_start_targets_require_vault_root
+      tests/ops/test_release_channel_startup_targets.py::test_full_start_targets_use_channel_specific_vault_binding
     """
     makefile_text = MAKEFILE.read_text(encoding="utf-8")
 
-    for target_name in ("test-start-full", "prod-start-full"):
-        body = _makefile_target_body(makefile_text, target_name)
-        assert body is not None, (
-            f"Could not find '{target_name}' target in Makefile (Issue #967)."
-        )
-        # Either the target declares require-vault-root as a dependency
-        # or it contains an inline VAULT_ROOT guard.
-        has_prereq = "require-vault-root" in body
-        has_inline_guard = re.search(r'VAULT_ROOT', body) is not None
-        assert has_prereq or has_inline_guard, (
-            f"Makefile '{target_name}' target does not enforce VAULT_ROOT. "
-            "Add 'require-vault-root' as a prerequisite or an inline guard "
-            "to prevent startup without an explicit vault path (Issue #967)."
-        )
+    test_body = _makefile_target_body(makefile_text, "test-start-full")
+    assert test_body is not None, "Could not find 'test-start-full' target in Makefile."
+    assert "require-vault-root" in test_body and re.search(r'VAULT_ROOT', test_body), (
+        "Makefile 'test-start-full' must still require an explicit test VAULT_ROOT."
+    )
+
+    prod_body = _makefile_target_body(makefile_text, "prod-start-full")
+    assert prod_body is not None, "Could not find 'prod-start-full' target in Makefile."
+    assert "require-vault-root" not in prod_body, (
+        "Makefile 'prod-start-full' must use .env.prod.local defaults instead of "
+        "requiring an inline VAULT_ROOT."
+    )
+    assert not re.search(r'\bVAULT_ROOT\s*=', prod_body), (
+        "Makefile 'prod-start-full' must not override the prod channel vault default "
+        "with an inline VAULT_ROOT assignment."
+    )
+
+
+def test_prod_start_full_has_midgard_preflight() -> None:
+    """prod-start-full must fail before generic startup if Midgård is not bound."""
+    script = (REPO_ROOT / "scripts/prod/start_midgard_stack.sh").read_text(
+        encoding="utf-8"
+    )
+    assert '.env.prod.local' in script
+    assert 'VAULT_ROOT' in script
+    assert 'midg(å|a)rd' in script
+    assert 'exec scripts/start_full_system.sh' in script
 
 
 def test_test_start_full_uses_tmp_test_runtime_artifact_paths(tmp_path: Path) -> None:
