@@ -1007,6 +1007,22 @@ def test_recents_anchor_humanises_h1less_filename() -> None:
     )[1].split("</p>", 1)[0]
     assert "Current Work" in human_anchor
 
+    # A single-token H1 title is already human copy, not a filename stem.
+    for label in ("iPhone", "eBay", "macOS"):
+        single_word_h1 = _render(
+            orientation=_orientation_payload(
+                leave_status="absent",
+                recents_anchor={
+                    "note_path": f"Notes/{label}.md",
+                    "display_label": label,
+                },
+            )
+        )
+        single_word_anchor = single_word_h1.split(
+            'data-testid="cold-start-recents-anchor"', 1
+        )[1].split("</p>", 1)[0]
+        assert label in single_word_anchor
+
 
 # ---------------------------------------------------------------------------
 # AC (#2176): recents-anchor sub-affordance on the cold_start threshold
