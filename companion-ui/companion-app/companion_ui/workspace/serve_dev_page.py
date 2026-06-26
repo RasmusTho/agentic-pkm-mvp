@@ -7129,6 +7129,14 @@ def _render_orientation_index_html(
       --orientation-shell-max-width: 1180px;
     }}
     * {{ box-sizing: border-box; }}
+    /* Global reset: the `hidden` attribute must always win. Several elements
+       (note-body-readonly-indicator, the cold_start vault panel, ...) set an
+       explicit `display`, which has equal specificity to and therefore defeats
+       the UA `[hidden] {{ display: none }}` rule — so a `hidden` element leaked
+       into view (e.g. a false "read-only" badge on an editable note). All
+       reveals in this UI remove the attribute (never CSS-show a hidden node),
+       so this is safe and kills the whole class. */
+    [hidden] {{ display: none !important; }}
     body {{
       margin: 0;
       min-height: 100vh;
