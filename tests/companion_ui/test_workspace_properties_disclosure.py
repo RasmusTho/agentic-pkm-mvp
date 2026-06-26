@@ -1,4 +1,12 @@
-"""Tests for breadcrumb + properties disclosure (§7.3 / #1337 AC1–5)."""
+"""Tests for breadcrumb + properties detail.
+
+§7.3 / #1337 introduced the breadcrumb + a single properties disclosure. #2563
+re-houses the properties detail (artifact/hash/uuid) into a Tier-2 anchored
+popover reached from the one quiet utility line — it is no longer an inline
+``<details>`` stacked on the breadcrumb/above the body. These tests assert the
+re-housed contract: the breadcrumb is the quiet path+meta line, and the
+artifact/hash/uuid facts live only inside the properties popover.
+"""
 from __future__ import annotations
 
 import re
@@ -60,8 +68,44 @@ def _render(**overrides) -> str:
     )
 
 
+def _popover_html(html: str) -> str:
+    """The Tier-2 properties popover subtree (artifact/hash/uuid live here)."""
+    m = re.search(
+        r'data-testid="workspace-properties-popover".*?</div>\s*</div>',
+        html,
+        re.DOTALL,
+    )
+    assert m, "workspace-properties-popover not found"
+    return m.group()
+
+
+def _balanced_div_subtree(html: str, testid: str) -> str:
+    """Extract the full ``<div ... data-testid="{testid}" ...>…</div>`` subtree.
+
+    Walks the markup counting ``<div``/``</div>`` so the returned slice is the
+    whole element (including nested children), not the first ``</div>`` after the
+    open tag. Used to prove structural containment of one element inside another.
+    """
+    needle = f'data-testid="{testid}"'
+    attr_pos = html.index(needle)
+    open_pos = html.rindex("<div", 0, attr_pos)
+    depth = 0
+    pos = open_pos
+    div_token = re.compile(r"<div\b|</div>")
+    while True:
+        m = div_token.search(html, pos)
+        assert m, f"unbalanced <div> while extracting {testid}"
+        if m.group() == "</div>":
+            depth -= 1
+            if depth == 0:
+                return html[open_pos : m.end()]
+        else:
+            depth += 1
+        pos = m.end()
+
+
 class TestBreadcrumbReplacesChips:
-    """AC1 — breadcrumb replaces the chip strip."""
+    """AC1 — breadcrumb is the quiet path+meta line (chips moved off it)."""
 
     def test_breadcrumb_present(self) -> None:
         html = _render()
@@ -74,7 +118,7 @@ class TestBreadcrumbReplacesChips:
     def test_old_chip_row_absent(self) -> None:
         html = _render()
         # The standalone note-provenance chip strip no longer exists as a
-        # top-level note-header sibling; chips live inside the disclosure.
+        # top-level note-header sibling; chips live inside the popover.
         assert 'class="note-provenance"' not in html
 
     def test_breadcrumb_path_segments_rendered(self) -> None:
@@ -84,65 +128,56 @@ class TestBreadcrumbReplacesChips:
         assert "Alpha" in html
         assert "Note.md" in html
 
-
-class TestPropertiesDefaultCollapsed:
-    """AC2 — disclosure default state is collapsed."""
-
-    def test_default_collapsed(self) -> None:
+    def test_breadcrumb_no_longer_hosts_inline_disclosure(self) -> None:
+        # #2563 — the breadcrumb must not carry an inline properties <details>;
+        # properties are reached from the utility line, hosted in a popover.
         html = _render()
-        m = re.search(r'data-testid="workspace-properties-disclosure"[^>]*', html)
-        assert m, "workspace-properties-disclosure not found"
-        assert 'aria-expanded="false"' in m.group(), (
-            f"disclosure is not aria-expanded=false: {m.group()!r}"
-        )
+        assert "workspace-properties-disclosure" not in html
+        m = re.search(r'data-testid="workspace-breadcrumb".*?</div>', html, re.DOTALL)
+        assert m, "breadcrumb not found"
+        assert "<details" not in m.group(), "breadcrumb still hosts an inline <details>"
 
-    def test_details_has_no_open_attribute(self) -> None:
+
+class TestPropertiesPopoverHiddenByDefault:
+    """AC2 — the properties popover is closed (hidden) on open."""
+
+    def test_popover_present_and_hidden(self) -> None:
         html = _render()
         m = re.search(
-            r'<details[^>]*data-testid="workspace-properties-disclosure"[^>]*>',
+            r'<div class="note-properties-popover"[^>]*>',
             html,
         )
-        assert m, "properties disclosure <details> not found"
-        assert " open" not in m.group(), "disclosure is open by default"
+        assert m, "note-properties-popover not found"
+        assert "hidden" in m.group(), "properties popover is not hidden by default"
+
+    def test_properties_trigger_on_utility_line(self) -> None:
+        # Properties is reachable from the one utility line, not the body.
+        html = _render()
+        assert 'data-testid="workspace-note-utility-properties"' in html
+        assert 'aria-expanded="false"' in re.search(
+            r'data-testid="workspace-note-utility-properties"[^>]*', html
+        ).group()
 
 
-class TestArtifactAndHashInsideDisclosure:
-    """AC3 — artifact id and content hash live inside the disclosure only."""
+class TestArtifactAndHashInsidePopover:
+    """AC3 — artifact id and content hash live inside the popover only."""
 
-    def test_artifact_inside_disclosure(self) -> None:
+    def test_artifact_inside_popover(self) -> None:
         html = _render(artifact_id="art-99999")
-        disc_m = re.search(
-            r'data-testid="workspace-properties-disclosure".*?</details>',
-            html,
-            re.DOTALL,
-        )
-        assert disc_m, "workspace-properties-disclosure not found"
-        assert "art-99999" in disc_m.group(), "artifact_id not inside disclosure"
+        assert "art-99999" in _popover_html(html), "artifact_id not inside popover"
 
-    def test_hash_inside_disclosure(self) -> None:
+    def test_hash_inside_popover(self) -> None:
         html = _render(content_hash="sha256-cafecafe")
-        disc_m = re.search(
-            r'data-testid="workspace-properties-disclosure".*?</details>',
-            html,
-            re.DOTALL,
-        )
-        assert disc_m, "workspace-properties-disclosure not found"
-        assert "sha256-cafecafe" in disc_m.group(), "content_hash not inside disclosure"
+        assert "sha256-cafecafe" in _popover_html(html), "content_hash not inside popover"
 
-    def test_artifact_only_in_disclosure(self) -> None:
-        """artifact_id must not appear outside the disclosure (no restatement)."""
+    def test_artifact_only_in_popover(self) -> None:
+        """artifact_id must not appear outside the popover (no restatement)."""
         html = _render(artifact_id="art-unique-7777")
-        disc_m = re.search(
-            r'data-testid="workspace-properties-disclosure".*?</details>',
-            html,
-            re.DOTALL,
-        )
-        assert disc_m
-        outside = html.replace(disc_m.group(), "")
+        outside = html.replace(_popover_html(html), "")
         # A human restatement is visible copy, never a data-* attribute; scan the
         # rendered visible text only (parser-based, drops script/style + tags).
         assert "art-unique-7777" not in _visible_text(outside), (
-            "artifact_id appears outside the disclosure (restatement violation)"
+            "artifact_id appears outside the properties popover (restatement)"
         )
 
 
@@ -151,40 +186,244 @@ class TestNoFactRestatement:
 
     def test_no_fact_restatement_for_key_fields(self) -> None:
         html = _render(body=_FRONTMATTER_BODY, artifact_id="art-unique-xzy", content_hash="sha256-unique-abc")
-        # Exclude the closed details subtree (not visible on default render),
-        # then scan the rendered visible text only. The parser-based helper drops
-        # the direct editor's textarea data-content-hash (a machine optimistic-
-        # concurrency token in an attribute, not human-visible restatement) for
-        # free, so no per-element strip is needed.
-        html_outside_details = re.sub(
-            r'<details[^>]*data-testid="workspace-properties-disclosure".*?</details>',
-            "",
-            html,
-            flags=re.DOTALL,
-        )
-        visible = _visible_text(html_outside_details)
-        # These unique values should NOT appear outside the disclosure
-        assert "art-unique-xzy" not in visible, "artifact_id leaked outside disclosure"
-        assert "sha256-unique-abc" not in visible, "content_hash leaked outside disclosure"
+        # Exclude the properties popover subtree (the one region that hosts the
+        # identity facts), then scan the rendered visible text only.
+        outside = html.replace(_popover_html(html), "")
+        visible = _visible_text(outside)
+        assert "art-unique-xzy" not in visible, "artifact_id leaked outside the popover"
+        assert "sha256-unique-abc" not in visible, "content_hash leaked outside the popover"
 
 
 class TestRendererContractPreserved:
     """AC5 — Markdown renderer contract unchanged."""
 
-    def test_properties_renderer_html_inside_disclosure(self) -> None:
+    def test_properties_renderer_html_inside_popover(self) -> None:
         html = _render(body=_FRONTMATTER_BODY)
         assert 'data-testid="workspace-note-properties"' in html
 
     def test_all_frontmatter_keys_still_surfaced(self) -> None:
         html = _render(body=_FRONTMATTER_BODY)
-        disc_m = re.search(
-            r'data-testid="workspace-properties-disclosure".*?</details>',
+        popover = _popover_html(html)
+        assert "kind" in popover
+        assert "review" in popover
+        assert "trust" in popover
+        assert "tags" in popover
+
+
+# ---------------------------------------------------------------------------
+# #2563 — one rule, three tiers: the note-view chrome placement model.
+# ---------------------------------------------------------------------------
+
+
+def _between_title_and_first_body_line(html: str) -> str:
+    """The markup between the note title and the rendered body's first line."""
+    title_end = html.index("</h1>")
+    body_start = html.index('data-testid="workspace-note-rendered"')
+    return html[title_end:body_start]
+
+
+class TestNoteViewChromePlacement:
+    """#2563 AC1·1–5 — the three-tier placement model (static slices)."""
+
+    def test_nothing_visible_renders_between_title_and_first_body_line(self) -> None:
+        # AC1 — on note open, no per-note control renders between the title and
+        # the first body line. The only structural elements between them are the
+        # quiet breadcrumb (path+meta), the title-row utility cluster, and the
+        # edit-mode ribbon / Read-aloud occupant — and every chrome surface that
+        # could outrank the body is hidden until invoked.
+        html = _render()
+        # The edit-mode ribbon is hidden on open.
+        ribbon = re.search(r'<div class="note-edit-bar note-mode-ribbon"[^>]*>', html)
+        assert ribbon and "hidden" in ribbon.group()
+        # The Read-aloud popover is hidden on open.
+        occ = re.search(r'<div class="note-readaloud-popover"[^>]*>', html)
+        assert occ and "hidden" in occ.group()
+        # The properties popover is hidden on open.
+        pop = re.search(r'<div class="note-properties-popover"[^>]*>', html)
+        assert pop and "hidden" in pop.group()
+        # No inline read-only chip stacked above the body, and no Read-aloud /
+        # Edit <details> stacked above the body.
+        between = _between_title_and_first_body_line(html)
+        assert "workspace-read-only-pill" not in between
+        assert "<details" not in between
+
+    def test_one_utility_line_reaches_edit_read_aloud_properties(self) -> None:
+        # AC2 — Edit, Read aloud, and Properties are reachable from one utility
+        # line on the breadcrumb/title row; none is a stacked <details> above the
+        # body.
+        html = _render()
+        cluster = _balanced_div_subtree(html, "workspace-note-utility-line")
+        assert cluster, "note utility line not found"
+        assert 'data-testid="workspace-note-utility-properties"' in cluster
+        assert 'data-testid="workspace-note-utility-read-aloud"' in cluster
+        assert 'data-testid="workspace-note-utility-edit"' in cluster
+        # Read aloud opens the page-local anchored popover (mirrors Properties);
+        # Edit enters the Tier-3 frame mode; Properties opens its anchored popover.
+        assert "noteUtility.toggleReadAloud(this)" in cluster
+        assert "noteEditor.start()" in cluster
+        assert "noteUtility.toggleProperties(this)" in cluster
+        # Both Tier-2 popovers are siblings INSIDE the one utility-line container
+        # (Codex PR #2569 rework) — so the outside-click handler contains inner
+        # clicks for either one.
+        assert 'data-testid="workspace-readaloud-popover"' in cluster
+        assert 'data-testid="workspace-properties-popover"' in cluster
+        # Read aloud is NOT a global overlay-host occupant — no scrim mount.
+        assert "overlayHost.mount('tts')" not in cluster
+        # None of the three is a stacked <details> above the body.
+        assert '<details class="tts-readback-controls"' not in html
+        assert '<details class="note-edit-bar"' not in html
+        assert "workspace-properties-disclosure" not in html
+
+    def test_no_standing_read_only_chip_above_every_note(self) -> None:
+        # AC4 — there is no standing read-only chip above every note. The
+        # read-only indicator/reason are re-housed inside the edit-mode ribbon
+        # (surfaced on the edit attempt) and stay hidden on open.
+        html = _render()
+        assert 'data-testid="workspace-read-only-pill"' not in html
+        # The indicator still exists (server-declared posture renders verbatim),
+        # but it is hidden on open AND lives inside the (hidden) edit-mode ribbon
+        # — so there is no standing chip above the body. It surfaces in the ribbon
+        # only on the edit attempt.
+        ind = re.search(r'<div class="note-body-readonly-indicator"[^>]*>', html)
+        assert ind and "hidden" in ind.group()
+        ribbon = re.search(
+            r'<div class="note-edit-bar note-mode-ribbon".*?</div>\s*</div>',
             html,
             re.DOTALL,
         )
-        assert disc_m
-        disc_html = disc_m.group()
-        assert "kind" in disc_html
-        assert "review" in disc_html
-        assert "trust" in disc_html
-        assert "tags" in disc_html
+        assert ribbon and "note-body-readonly-indicator" in ribbon.group(), (
+            "read-only indicator must be re-housed inside the edit-mode ribbon"
+        )
+        ribbon_open = re.search(r'<div class="note-edit-bar note-mode-ribbon"[^>]*>', html)
+        assert ribbon_open and "hidden" in ribbon_open.group()
+
+    def test_edit_is_a_frame_mode_not_a_panel(self) -> None:
+        # AC4 — entering Edit changes the document frame (mode ribbon + Save /
+        # Cancel / Read draft); the reading state shows no edit toolbar. The
+        # document frame carries the reading/editing state on note-body.
+        html = _render()
+        body = re.search(r'<div class="note-body"[^>]*>', html)
+        assert body and 'data-edit-mode="off"' in body.group()
+        ribbon = re.search(
+            r'<div class="note-edit-bar note-mode-ribbon".*?</div>\s*</div>',
+            html,
+            re.DOTALL,
+        )
+        assert ribbon
+        ribbon_html = ribbon.group()
+        assert 'data-testid="workspace-note-edit-save"' in ribbon_html
+        assert 'data-testid="workspace-note-edit-cancel"' in ribbon_html
+        assert 'data-testid="workspace-note-edit-read-draft"' in ribbon_html
+        # The frame mode is driven by the editor controller, not a <details>.
+        assert "body.setAttribute('data-edit-mode', 'on')" in html
+
+    def test_narrow_collapses_to_overflow_actions_affordance(self) -> None:
+        # AC5 — at <=480px the utility line collapses to a single ⋯ actions
+        # affordance opening an overlay sheet; the body still owns the column.
+        html = _render()
+        assert 'data-testid="workspace-note-utility-overflow"' in html
+        # The CSS hides the inline cluster and shows the ⋯ overflow at <=480px.
+        assert re.search(
+            r"@media \(max-width: 480px\) \{\s*"
+            r"\.note-utility-cluster \{ display: none; \}\s*"
+            r"\.note-utility-overflow \{ display: inline-flex; \}",
+            html,
+        ), "the <=480px utility-line collapse rule is missing"
+        # The overflow opens a sheet exposing the same three verbs.
+        sheet = re.search(
+            r'data-testid="workspace-note-utility-sheet".*?</div>',
+            html,
+            re.DOTALL,
+        )
+        assert sheet
+        sheet_html = sheet.group()
+        assert "noteUtility.fromSheet('properties')" in sheet_html
+        assert "noteUtility.fromSheet('read-aloud')" in sheet_html
+        assert "noteUtility.fromSheet('edit')" in sheet_html
+
+    def test_read_aloud_opens_anchored_popover(self) -> None:
+        # AC3 support (Codex PR #2569 rework) — the Read-aloud detail is a
+        # page-local anchored popover that mirrors the Properties popover (its
+        # sibling Tier-2 control), NOT a global overlay-host occupant / scrim.
+        # The plan-before-audio TTS contract (inspector + explicit Read) is
+        # exercised in live UAT.
+        html = _render()
+        # The Read-aloud control toggles the popover (mirrors toggleProperties).
+        trigger = re.search(
+            r'data-testid="workspace-note-utility-read-aloud"[^>]*>', html
+        )
+        assert trigger and "noteUtility.toggleReadAloud(this)" in trigger.group()
+        assert 'aria-haspopup="dialog"' in trigger.group()
+        # The popover element exists and is hidden by default.
+        pop = re.search(r'<div class="note-readaloud-popover"[^>]*>', html)
+        assert pop, "note-readaloud-popover not found"
+        assert "hidden" in pop.group(), "Read-aloud popover is not hidden by default"
+        assert 'data-testid="workspace-readaloud-popover"' in pop.group()
+        assert 'role="dialog"' in pop.group()
+        # It is NOT a global overlay-host occupant — no host wiring, no scrim.
+        assert 'data-overlay-id="tts"' not in html
+        assert "overlayHost.mount('tts')" not in html
+        assert "overlayHost.register('tts'" not in html
+        assert "tts-readback-occupant" not in html
+        # It dismisses via closePopovers (Esc / open-another / outside click),
+        # exactly like the properties popover: closePopovers must hide the
+        # readaloud popover (and reset its trigger's aria-expanded).
+        close_fn = re.search(
+            r"function closePopovers\(\)\s*\{.*?\n    \}", html, re.DOTALL
+        )
+        assert close_fn, "closePopovers function not found"
+        close_body = close_fn.group()
+        assert 'workspace-readaloud-popover' in close_body, (
+            "closePopovers does not hide the Read-aloud popover"
+        )
+        assert "noteUtility.toggleReadAloud" in html
+        # Codex PR #2569 P2 #1/#3 — the Read-aloud popover is a CHILD of the
+        # note-utility-line container (a sibling of the Properties popover), NOT a
+        # descendant of the scrolling .note-body / rendered-note subtree. Because
+        # it sits inside the utility line, the outside-click handler keys on
+        # `[data-testid="workspace-note-utility-line"]` and `line.contains(target)`
+        # is true for inner clicks — so inner clicks no longer dismiss it
+        # mid-action (structural proof of containment).
+        utility_line = _balanced_div_subtree(html, "workspace-note-utility-line")
+        assert 'data-testid="workspace-readaloud-popover"' in utility_line, (
+            "Read-aloud popover must be a child of the utility-line container"
+        )
+        # The Properties popover is its sibling inside the same container.
+        assert 'data-testid="workspace-properties-popover"' in utility_line
+        # It must NOT live inside the scrolling note-body / rendered-note subtree.
+        note_body = _balanced_div_subtree(html, "workspace-note-body")
+        assert 'data-testid="workspace-readaloud-popover"' not in note_body, (
+            "Read-aloud popover must not live inside the scrolling .note-body"
+        )
+        rendered = _balanced_div_subtree(html, "workspace-note-rendered")
+        assert 'data-testid="workspace-readaloud-popover"' not in rendered, (
+            "Read-aloud popover must not live inside the rendered-note subtree"
+        )
+        # Codex PR #2569 P2 #2 — the popover mirrors the Properties popover
+        # anchoring (anchored to the utility line: top: calc(100% + 4px); right: 0)
+        # and is popover-level (NOT scrim-dependent fixed/z-960, NOT the old
+        # note-body-relative top: 8px which floated above the viewport in a long
+        # scrolled note).
+        css = re.search(
+            r"\.note-readaloud-popover\s*\{([^}]*)\}", html
+        )
+        assert css, "note-readaloud-popover CSS rule is missing"
+        css_body = css.group(1)
+        assert "position: absolute" in css_body
+        assert "position: fixed" not in css_body
+        assert "top: calc(100% + 4px)" in css_body, (
+            "Read-aloud popover must anchor to the utility line, not the scrolled"
+            " note-body content top"
+        )
+        assert "right: 0" in css_body
+        assert "top: 8px" not in css_body, (
+            "the old note-body-relative top: 8px anchor must be gone"
+        )
+        # And the .note-body must no longer carry the popover's positioning context
+        # (the `position: relative` added for the old in-body anchor is reverted).
+        body_css = re.search(r"\.note-body\s*\{([^}]*)\}", html)
+        assert body_css, "note-body CSS rule is missing"
+        assert "position: relative" not in body_css.group(1), (
+            "the .note-body position: relative added for the old popover anchor"
+            " must be reverted"
+        )
