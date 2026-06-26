@@ -318,9 +318,15 @@ Vault Browser MLP v0 provides:
     behind the overlay's ⓘ / Operator drawer, off the front door; the
     machine-Role select and typed path fields are removed from the cold picker
     (they belong to the loaded-vault settings drawer / the Ask-3b "Initialize
-    here" confirm). The overlay only picks and dispatches the existing
-    `vault.select` action — vault resolution/identity stays server-declared; the
-    UI performs no classification.
+    here" confirm). The overlay dispatches the existing `vault.select` action —
+    with one bounded exception: when the picker is shown with
+    `reason="uninitialized"` (a selected-but-uninitialized vault), it also renders
+    a single **"Initialize this vault"** affordance (`data-intent="vault.initialize"`
+    on the configured path, reusing the existing initialize authority incl. the
+    #2518 409-confirm round-trip) so that state is not a dead end; no Role/typed-path
+    chrome is reintroduced. Surfacing the `uninitialized` response from write-boundary
+    client handlers into this picker is tracked separately (write-routing follow-up).
+    Vault resolution/identity stays server-declared; the UI performs no classification.
 - a `read_only: true` invariant on the browser endpoint
 - active vault/channel identity in the response payload (`vault_identity`, `identity_available`)
 - deterministic case-insensitive path/title filtering via a single `q` parameter
