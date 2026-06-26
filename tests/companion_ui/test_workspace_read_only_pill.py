@@ -76,3 +76,21 @@ class TestReadOnlyPill:
         #   4) note-body-readonly-indicator "read-only" (daily-use body affordance, #1361)
         #   5) settings overlay-frame status-pill "read-only render" (CUIDR-02, #2445)
         assert count <= 5, f"'read-only' visible text appears {count} times (expected ≤ 5)"
+
+    def test_hidden_attribute_is_globally_enforced(self) -> None:
+        # Regression (live operator review 2026-06-26): a `hidden` element must
+        # actually be display:none. Elements like note-body-readonly-indicator
+        # set an explicit `display`, which has equal specificity to and so
+        # defeats the UA `[hidden] { display: none }` rule — leaking a false
+        # "read-only" badge onto an editable note (data-read-only="false"). A
+        # global reset enforces the attribute and kills the whole class. NB the
+        # parser-based visible_text helper cannot catch this (it ignores
+        # `hidden`/CSS), which is why the count test above passed while the badge
+        # was visible — assert the structural guarantee instead.
+        html = _render(guard_canvas_enabled=True)
+        assert "[hidden] { display: none !important; }" in html
+        m = re.search(r'<div class="note-body-readonly-indicator"[^>]*>', html)
+        assert m, "note-body-readonly-indicator not found"
+        indicator_tag = m.group()
+        assert "hidden" in indicator_tag
+        assert 'data-read-only="false"' in indicator_tag
