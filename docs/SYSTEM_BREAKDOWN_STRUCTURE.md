@@ -5,8 +5,8 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-21
-Last verified against: docs/PROJECT_KERNEL.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/DESIGN_PRINCIPLES.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CONCEPTS/PORTABILITY_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md
+Last reviewed: 2026-06-26
+Last verified against: docs/PROJECT_KERNEL.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/DESIGN_PRINCIPLES.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CONCEPTS/PORTABILITY_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md, docs/foundation/yggdrasil-architecture-context-packet.md
 
 # Yggdrasil System Breakdown Structure
 
@@ -21,6 +21,33 @@ The central design question is:
 The preferred answer is:
 
 > One control-boundary subsystem, plus stable interface adapters.
+
+## Decomposition principle
+
+Yggdrasil is decomposed by authority, cognitive context, and representation boundaries — not by UI feature, storage technology, or agent implementation detail.
+
+Level 1 macro-domains describe conceptual responsibility regions. Level 2 entries describe control boundaries / bounded contexts. They are not necessarily one-to-one runtime services.
+
+The architecture protects human authority by separating:
+
+- durable human knowledge from machine representations;
+- cognitive context from storage location;
+- governance decisions from execution mechanics;
+- retrieval from truth;
+- memory from authority;
+- agent reasoning from mutation;
+- projections from evidence;
+- observability from policy.
+
+Volatile mechanisms must be replaceable without rewriting the semantic core or authority model.
+
+This document is therefore a control-boundary architecture, not a service decomposition. A Level 2 boundary is a unit of ownership and change isolation; instantiating it as a separate runtime service is a later, evidence-driven decision (see Part 1 and `docs/adr/ADR-0016-contract-first-module-lazy-sbs.md`).
+
+## Related architecture context
+
+- `docs/foundation/yggdrasil-architecture-context-packet.md` — preserves the doctrine → ontology → semantics → system-breakdown → contracts → tests synthesis behind the architecture-foundation backlog. Read it before working on this decomposition.
+- Architecture-foundation epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533). This language and control-boundary-ownership stabilization pass is [#2534](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2534).
+- Traceability matrix (doctrine → docs → ADRs → boundaries → schemas → tests → issues): tracked by [#2535](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2535) and not yet landed. Once it exists it becomes the maintained, fine-grained mapping; this document remains the boundary-ownership authority.
 
 ## Part 1 - Executive Summary
 
@@ -1207,6 +1234,181 @@ Expected lifespan:
 Rationale:
 
 CES prevents implementation vocabulary from becoming architecture vocabulary without creating a new compliance machine.
+
+## Control-boundary separation rules
+
+Part 3 defines each boundary in full. This section states the load-bearing separations in one place so future implementation does not collapse them. Level 2 entries are control boundaries / bounded contexts, not necessarily one-to-one runtime services.
+
+Canonical separations:
+
+- **HKA** says what is durable human knowledge. **SIP** says how it means, derives, and relates. **PDM** says how it is stored.
+- **CAO** plans and proposes. **GOV** authorizes, delegates, approves, and receipts. **EXE** executes only authorized side effects.
+- **RCA** finds and packages candidate context/evidence. **GOV** decides admissibility. **SIP** preserves identity and provenance.
+- **MEM** remembers and advises. **GOV** authorizes promotion. **HKA** contains accepted durable artifacts.
+- **WSP** owns the current situated context. **SFC** owns the replicated topology over time.
+- **OEF** can show and evaluate that something happened. **GOV** decides what it means normatively.
+- **CES** stewards architecture and contracts; it is not runtime.
+
+### HKA / SIP / PDM — knowledge, meaning, storage
+
+- HKA owns durable human and human-accepted artifacts and canonical artifact state.
+- SIP owns semantic identity, ontology, typed relations, attribution, lineage, and provenance continuity.
+- PDM owns persistence mechanisms, storage abstraction, migrations, backup, restore, physical schema, and physical lifecycle.
+
+Representation vs continuity distinction (do not collapse):
+
+- SIP = semantic/provenance model and continuity. SIP is **not** fully disposable in the same sense as indexes or embeddings. Its semantic and provenance continuity is load-bearing; it is rebuilt from HKA identity anchors, GOV receipts, MEM records, and declared sources, not regenerated from nothing.
+- DRI = rebuildable machine representations of content and semantic structure.
+- PDM = physical persistence mechanics.
+
+Storage is not meaning. Indexes and embeddings are rebuildable representations, not truth.
+
+### SIP / DRI — semantic continuity vs rebuildable representation
+
+- SIP owns semantic identity and provenance continuity.
+- DRI owns rebuildable chunks, embeddings, vector/lexical indexes, graph projections, and invalidation.
+- Derived representations must preserve metadata and provenance, but they are not the source of truth.
+
+Required invariant: **no naked derived representations** — every derived record is rebuildable from declared HKA/GOV/MEM/SIP sources and provider configuration, or it is reclassified into one of those owners.
+
+### GOV / CAO / EXE — proposal, authority, execution
+
+- CAO may reason, plan, generate workflows, and produce proposals.
+- GOV owns policy, admissibility, delegation, authority transitions, approvals, and receipts.
+- EXE owns the actual authorized execution mechanics: dry-run, preview, tool actuation, rollback, and status.
+
+Must not happen:
+
+- CAO mutates durable knowledge directly.
+- CAO calls tools directly without GOV/EXE.
+- EXE authorizes itself.
+- GOV becomes a storage / ranking / execution god-object.
+
+Agent orchestration is not mutation. Execution is not authorization.
+
+### RCA / GOV / SIP — candidate evidence, admissibility, provenance
+
+- RCA owns search, ranking, reranking, candidate evidence selection, context bundles, citation packaging, and relevance explanation.
+- RCA does not create truth or authority.
+- GOV decides whether retrieved material is admissible for the current operation.
+- SIP provides the provenance and semantic identity needed for traceable citation.
+
+Retrieval is candidate generation, not truth. Scope and policy eligibility precede ranking.
+
+### MEM / GOV / HKA — advisory memory, promotion, durable knowledge
+
+- MEM owns machine memory candidates, recall, correction signals, and forgetting / suppression / invalidation inside machine memory, plus feedback loops.
+- MEM cannot make itself canonical.
+- Promotion from machine memory to durable human knowledge requires GOV authorization and HKA materialization.
+
+Memory is advisory until promoted; memory is not authority.
+
+### WSP / SFC — situated context vs replicated topology
+
+- WSP owns active context bindings for a session or operation: workspace, scope, sphere, situated identity, principal, and device/node posture.
+- WSP does not decide permission.
+- SFC owns sync, federation, node identity, causal ordering, conflicts, and convergence.
+- SFC must not silently resolve semantic conflicts without governance.
+
+Context is not identity. Scope is not merely a vault, folder, or device. Sync preserves boundaries.
+
+### OEF / GOV — observation vs normative meaning
+
+- OEF owns traces, health, metrics, evals, architecture fitness, drift detection, and audit visibility.
+- OEF is not policy, ranking, memory, or authority.
+- GOV owns normative receipts and accountability.
+
+Observability is not policy.
+
+### CES — stewardship, not runtime
+
+- CES owns subsystem charters, dependency rules, ADRs, versioning, deprecation, and architecture-evolution practice.
+- CES is not a runtime subsystem, not a control plane, and not user governance.
+
+## Ownership and invariant matrix
+
+Each Level 2 boundary owns a bounded responsibility, must never absorb the responsibilities listed against it, and carries one critical invariant. This matrix is the intended source for future architecture-fitness rules (OEF) and boundary charters (CES). It restates the boundaries above; it does not add or remove any.
+
+| ID | Boundary | Owns | Must not own | Critical invariant |
+| --- | --- | --- | --- | --- |
+| HIX | Human Interaction & Intent | Human intent, review, approval, correction, explanation, navigation | Truth, storage, policy, retrieval, execution | Human action is explicit and attributable |
+| WSP | Workspace, Scope & Principal Context | Active situated context bindings | Permission, artifact meaning, sync mechanics | Context is not identity |
+| HKA | Human Knowledge & Artifact Substrate | Durable human/human-accepted artifacts and canonical artifact state | Storage backend, indexes, agent plans | Durable knowledge only changes through governed transition |
+| SIP | Semantic Identity & Provenance | Ontology, semantic identity, lineage, attribution, provenance continuity | Policy, ranking, storage backend | Provenance survives derived use |
+| GOV | Governance, Policy, Authority & Receipts | Admissibility, delegation, approval, authority transitions, receipts | Ranking, storage, execution mechanics | Authority is explicit and receipted |
+| EBF | External Boundary Fabric | Provider/tool/model/parser/editor adapters | Authority, memory lifecycle, artifact identity | External systems are mechanisms, not authority |
+| PDM | Persistence & Data Management | Storage, migrations, backup, restore, physical lifecycle | Meaning, ontology, policy | Storage preserves but does not define meaning |
+| DRI | Derived Representation & Indexing | Chunks, embeddings, indexes, graph projections, invalidation | Source of truth, non-rebuildable meaning | No naked derived representations |
+| RCA | Retrieval & Context Assembly | Search, ranking, context bundles, candidate evidence, citation packaging | Truth, authority, memory | Retrieval is candidate generation |
+| MEM | Machine Memory & Learning | Machine memory candidates, recall, correction, forgetting, feedback | Durable human knowledge, hidden authority | Memory is advisory until promoted |
+| CAO | Cognitive Capability & Agent Orchestration | Agent roles, planning, workflows, proposals, non-side-effect cognition | Direct mutation, tool execution, policy | Agent is not superuser |
+| EXE | Capability Execution & Automation | Authorized execution, dry-runs, previews, rollback, status | Authorization, planning, providers, UI | Execution cannot authorize itself |
+| SFC | Synchronization, Federation & Consensus | Replication, causal ordering, conflicts, convergence | Semantic conflict resolution without governance | Sync preserves boundaries |
+| OEF | Observability, Evaluation & Fitness | Traces, metrics, evals, drift detection, health, audit visibility | Policy, ranking, memory, authority | Observability is not control |
+| CES | Contract & Evolution Stewardship | Charters, dependency rules, ADRs, versioning, deprecation | Runtime behavior, user governance | Architecture evolves explicitly |
+
+## Canonical control flows
+
+These are conceptual control flows across boundaries, not implementation sequences, call graphs, or service topologies. They show which boundary acts in which order and where authority gates sit. Each flow names boundaries by their Level 2 ID.
+
+### 1. Capture / ingestion
+
+HIX or EBF → WSP resolves context → HKA creates/updates artifact identity → SIP records provenance and semantic anchors → PDM persists → DRI derives representations → OEF traces.
+
+Rule: capture may create draft/unknown state, but not canonical authority by itself.
+
+### 2. Retrieval / context assembly
+
+HIX or CAO initiates a need → WSP provides active context → GOV evaluates admissibility constraints → RCA retrieves and ranks allowed candidates → SIP supplies provenance and identity → RCA packages context and citations → CAO reasons or HIX displays → OEF traces and evals.
+
+Rule: scope and policy eligibility precede ranking. Retrieval produces candidate context/evidence, not truth.
+
+### 3. Cross-scope flow
+
+RCA detects a useful candidate outside the active scope → GOV checks the typed `CrossScopeFlow` grant → if denied, omit → if analogy / background / redacted, package with an explicit `evidence_role` → if confirmation is needed, route to HIX review → SIP preserves origin → OEF records the boundary crossing.
+
+Rule: cross-scope use is a governed operation, not a boolean. Similarity is not permission, and parent/master aggregation is not sibling sharing.
+
+### 4. Authority transition / durable mutation
+
+HIX correction or CAO proposal → GOV policy + approval + authority receipt → HKA updates the durable artifact and authority state → PDM persists → SIP records lineage and attribution → DRI invalidates/rebuilds → OEF traces and evals.
+
+Rule: durable human knowledge changes only through a governed authority transition.
+
+### 5. Memory promotion
+
+CAO or MEM produces a memory candidate → MEM stores advisory, scoped memory → HIX/GOV review if promotion is requested → GOV authorizes or rejects promotion → HKA materializes the accepted durable artifact if approved → SIP records provenance → DRI invalidates/rebuilds derived representations → OEF traces.
+
+Rule: memory may advise; it cannot promote itself.
+
+### 6. Execution / side effect
+
+CAO proposes an action → GOV authorizes → EXE performs dry-run / preview / execute → EBF calls the external provider or tool → EXE records status and rollback → OEF traces → HIX shows the result.
+
+Rule: execution cannot authorize itself.
+
+### 7. Sync / conflict
+
+SFC detects a replica change or conflict → PDM exposes persisted state → SIP identifies the semantic and provenance impact → GOV determines whether governance is required → HIX reviews the semantic conflict if needed → HKA accepts the durable transition if approved → DRI invalidates/rebuilds → OEF traces.
+
+Rule: sync preserves boundaries and cannot silently resolve semantic authority conflicts.
+
+## Boundary language guardrails
+
+To keep this decomposition stable, the document states these explicitly:
+
+- Level 2 boundaries are not necessarily runtime services.
+- Storage is not meaning.
+- Indexes and embeddings are rebuildable representations, not truth.
+- Retrieval is not truth.
+- Memory is not authority.
+- Agent orchestration is not mutation.
+- Execution is not authorization.
+- Observability is not policy.
+- CES is not runtime.
+- Parent/master aggregation is not sibling sharing.
+- Scope is not merely a vault, folder, or device; it is a cognitive frame, an audience boundary, a policy boundary, and a provenance context.
+- `source_role`, `authority_state`, and `evidence_role` remain orthogonal dimensions and must not be collapsed into one field (their definitions are owned by the semantic-dimensions work, [#2538](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2538)).
 
 ## Part 4 - Dependency Model
 
