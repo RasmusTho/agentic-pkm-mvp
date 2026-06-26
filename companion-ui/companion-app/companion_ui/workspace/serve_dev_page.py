@@ -7274,6 +7274,15 @@ def _render_orientation_index_html(
     .orientation-vault-entry {{
       grid-column: 1 / -1;
     }}
+    /* #2525 follow-up: the panel renders with the `hidden` attribute on
+       cold_start, but the UA `[hidden] {{ display: none }}` is overridden by
+       `.orientation-section {{ display: grid }}` (equal specificity, author
+       wins), so the collapsed panel leaked onto the door. This
+       higher-specificity rule restores the intended hide; the vault.open verb
+       removes `hidden` to reveal it. */
+    .orientation-vault-entry[hidden] {{
+      display: none;
+    }}
     .orientation-vault-entry .vault-browser {{
       background: transparent;
       border: 0;
@@ -7300,9 +7309,10 @@ def _render_orientation_index_html(
       padding: 10px;
     }}
     .orientation-vault-entry .vault-tree-children {{
+      border-left: 1px solid var(--border);
       list-style: none;
-      margin: 4px 0 0 14px;
-      padding: 0;
+      margin: 4px 0 0 7px;
+      padding: 0 0 0 12px;
     }}
     .orientation-vault-entry .vault-tree-folder-summary {{
       color: var(--fg-2);
@@ -11703,9 +11713,11 @@ def render_index_html(
       gap: 3px;
     }}
     .vault-tree-children {{
+      border-left: 1px solid var(--border);
       display: flex;
       flex-direction: column;
       gap: 3px;
+      margin-left: 7px;
       padding-left: 12px;
     }}
     .vault-tree-folder {{ list-style: none; min-width: 0; }}
