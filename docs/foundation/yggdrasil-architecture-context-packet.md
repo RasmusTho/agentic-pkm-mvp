@@ -172,6 +172,8 @@ The first later implementation slice should be:
 
 > This is **not** part of #2553. It is recorded here only so the intended first runtime target is preserved.
 
+> Naming note (do not duplicate an existing contract): `ContextEnvelope` (#2545) is a **new** contract for the *bounded agent operating context*. It is distinct from the existing RCA `ContextBundle` (`docs/contracts/CONTEXT_BUNDLE.md`), which carries scoped candidate evidence with provenance and relevance explanation. The envelope is expected to **compose** an RCA `ContextBundle` (plus scope, authority posture, and memory bindings) — not rename or replace it. When the need is evidence packaging, extend `ContextBundle`; define `ContextEnvelope` only for the bounded operating-context contract in #2545.
+
 Intentionally later (not in scope for the foundation backlog, and explicitly deferred):
 
 - memory runtime;
@@ -201,7 +203,7 @@ Epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) — stab
 | 10 | [#2542](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2542) | Create GOV, RCA, MEM, CAO, and EXE charters. |
 | 11 | [#2543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2543) | Create WSP, SFC, OEF, and CES charters. |
 | 12 | [#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544) | Define metadata bundle schema. |
-| 13 | [#2545](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2545) | Define `ContextEnvelope` contract. |
+| 13 | [#2545](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2545) | Define `ContextEnvelope` contract (bounded agent operating context; new — distinct from the existing RCA `ContextBundle`, see §8). |
 | 14 | [#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546) | Define `MemoryItem` contract and promotion boundary. |
 | 15 | [#2547](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2547) | Define `AuthorityTransition` contract. |
 | 16 | [#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548) | Define `RetrievalResult` contract and candidate-evidence semantics. |
