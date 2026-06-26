@@ -73,8 +73,8 @@ and carries `source_role: agent_memory`, `authority_state: noncanonical` (defaul
 ## Invariants owned
 
 - Agent memory is noncanonical by default (matrix #4).
-- Machine memory is advisory until promoted (matrix #4, #18).
-- Memory promotion requires GOV + HKA (matrix #4, #18).
+- Machine memory is advisory until promoted (matrix #4, #9).
+- Memory promotion requires GOV + HKA (matrix #4, #9).
 - Forgotten/suppressed memory must not be retrieved into context (semantic dimensions: `suppression_state`).
 
 ## Failure modes

@@ -88,7 +88,7 @@ it does **not** own the `authority_state` transition (GOV) or the `source_role` 
 - Durable human knowledge changes only through governed authority transition (matrix #9, #15).
 - Human-authored material is not automatically canonical (matrix #15).
 - Projection is not evidence (matrix #8) — a projection never enters HKA as knowledge by default.
-- Memory is not durable knowledge until promoted (matrix #4, #18).
+- Memory is not durable knowledge until promoted (matrix #4, #9).
 
 ## Failure modes
 
