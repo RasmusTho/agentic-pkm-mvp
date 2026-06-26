@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/metadata-bundle.schema.json",
+  "title": "MetadataBundle",
+  "description": "The required semantic/provenance envelope every usable Yggdrasil object must carry. Encodes the orthogonal semantic dimensions (docs/architecture/semantic-dimensions.md) and the provenance/scope/identity required by docs/architecture/metadata-bundle.md. source_role, authority_state, and evidence_role are three separate required fields and must never be collapsed. vault_id is storage topology and is not equivalent to scope_id. A vector/chunk without object_id, object_type, scope_id, source_role, authority_state, evidence_role, and provenance fails validation.",
+  "type": "object",
+  "properties": {
+    "object_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Stable identity of the object this bundle describes."
+    },
+    "object_type": { "$ref": "_defs.schema.json#/$defs/object_type" },
+
+    "vault_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Physical/storage root (VaultRoot) the object's bytes live in. Storage topology only; NOT equivalent to scope_id."
+    },
+    "workspace_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Active working surface the object was produced under, where applicable. Context, not identity or authority."
+    },
+    "scope_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Primary scope binding: cognitive frame + audience boundary + policy boundary + provenance context. Membership only; never a cross-scope grant."
+    },
+    "sphere": {
+      "type": "string",
+      "description": "Human-facing life-domain (work, private, RPG). Not a sufficient policy boundary by itself."
+    },
+    "principal_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Identified actor (human or delegated agent role) the object is attributed to, where applicable."
+    },
+    "scope_binding": {
+      "$ref": "_defs.schema.json#/$defs/scope_binding",
+      "description": "Full scope membership, including multi-scope membership beyond the primary scope_id. Membership is not permission."
+    },
+
+    "source_role": { "$ref": "_defs.schema.json#/$defs/source_role" },
+    "authority_state": { "$ref": "_defs.schema.json#/$defs/authority_state" },
+    "evidence_role": { "$ref": "_defs.schema.json#/$defs/evidence_role" },
+    "sensitivity": { "$ref": "_defs.schema.json#/$defs/sensitivity" },
+    "suppression_state": { "$ref": "_defs.schema.json#/$defs/suppression_state" },
+
+    "created_by": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Actor (principal/agent role/system) that created this object."
+    },
+    "created_at": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+    "derived_from": {
+      "$ref": "_defs.schema.json#/$defs/id_list",
+      "description": "Object IDs this object was derived/rebuilt from. Required for derived/rebuildable object types so provenance survives derivation."
+    },
+    "content_hash": {
+      "type": "string",
+      "description": "Content digest for integrity and rebuild verification."
+    },
+    "provenance_event_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "_defs.schema.json#/$defs/id_string" },
+      "description": "ProvenanceEvent references that carry origin AND justification. At least one (the creation/capture event) is always present."
+    },
+
+    "valid_at": {
+      "$ref": "_defs.schema.json#/$defs/iso_datetime",
+      "description": "Start of the object's validity window, where applicable."
+    },
+    "invalid_at": {
+      "$ref": "_defs.schema.json#/$defs/iso_datetime",
+      "description": "End of the object's validity window (invalidation), where applicable."
+    },
+    "indexed_at": {
+      "$ref": "_defs.schema.json#/$defs/iso_datetime",
+      "description": "When a derived/index representation was last (re)built, where applicable."
+    },
+    "sync_state": { "$ref": "_defs.schema.json#/$defs/sync_state" },
+    "memory_state": {
+      "$ref": "_defs.schema.json#/$defs/memory_state",
+      "description": "Memory lifecycle position; only meaningful when object_type is memory_item (see memory-item.schema.json)."
+    },
+    "execution_state": {
+      "$ref": "_defs.schema.json#/$defs/execution_state",
+      "description": "Side-effect status; only meaningful when object_type is execution_effect."
+    },
+    "authority_receipt_ref": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "AuthorityReceipt that recorded the governed transition giving this object its current standing. Required when authority_state is accepted/canonical."
+    },
+    "extensions": { "$ref": "_defs.schema.json#/$defs/extensions" }
+  },
+  "required": [
+    "object_id",
+    "object_type",
+    "scope_id",
+    "source_role",
+    "authority_state",
+    "evidence_role",
+    "sensitivity",
+    "suppression_state",
+    "created_by",
+    "created_at",
+    "provenance_event_ids"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "$comment": "Derived/rebuildable representations must carry provenance lineage (derived_from).",
+      "if": {
+        "properties": {
+          "object_type": {
+            "enum": ["segment", "projection", "retrieval_result", "context_item"]
+          }
+        },
+        "required": ["object_type"]
+      },
+      "then": {
+        "properties": {
+          "derived_from": { "minItems": 1 }
+        },
+        "required": ["derived_from"]
+      }
+    },
+    {
+      "$comment": "Canonical standing requires a governance receipt; no field promotes authority_state without one.",
+      "if": {
+        "properties": {
+          "authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" }
+        },
+        "required": ["authority_state"]
+      },
+      "then": {
+        "required": ["authority_receipt_ref"]
+      }
+    },
+    {
+      "$comment": "A memory item must carry its memory lifecycle state.",
+      "if": {
+        "properties": { "object_type": { "const": "memory_item" } },
+        "required": ["object_type"]
+      },
+      "then": {
+        "required": ["memory_state"]
+      }
+    },
+    {
+      "$comment": "Execution cannot authorize itself: an execution effect carries a status and the receipt that authorized it.",
+      "if": {
+        "properties": { "object_type": { "const": "execution_effect" } },
+        "required": ["object_type"]
+      },
+      "then": {
+        "required": ["execution_state", "authority_receipt_ref"]
+      }
+    },
+    {
+      "$comment": "Projection is not evidence by default: a projection may hold evidence_role only via a provenance-backed promotion receipt.",
+      "if": {
+        "allOf": [
+          {
+            "properties": { "object_type": { "const": "projection" } },
+            "required": ["object_type"]
+          },
+          {
+            "properties": { "evidence_role": { "const": "evidence" } },
+            "required": ["evidence_role"]
+          }
+        ]
+      },
+      "then": {
+        "required": ["authority_receipt_ref"]
+      }
+    }
+  ]
+}

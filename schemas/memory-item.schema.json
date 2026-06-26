@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/memory-item.schema.json",
+  "title": "MemoryItem",
+  "description": "An inspectable, revisable machine-memory record (MEM). Memory is advisory and noncanonical until promoted into HKA through a governed AuthorityTransition. By default source_role is agent_memory, authority_state is noncanonical, and evidence_role excludes real-world `evidence`. A memory may support recall/context but must not be cited as factual evidence. Canonical standing is impossible without an explicit promotion + receipt reference. The semantic fields below ARE this object's metadata-bundle dimensions specialized for memory (object_type: memory_item).",
+  "type": "object",
+  "properties": {
+    "memory_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "scope_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Scope this memory is bound to. Memory must be scoped; cross-scope recall requires a CrossScopeFlow."
+    },
+    "workspace_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "principal_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+
+    "memory_type": { "$ref": "_defs.schema.json#/$defs/memory_type" },
+
+    "source_role": {
+      "$ref": "_defs.schema.json#/$defs/source_role",
+      "description": "Origin of the memory. Default and canonical value for machine memory is agent_memory.",
+      "default": "agent_memory"
+    },
+    "authority_state": {
+      "$ref": "_defs.schema.json#/$defs/authority_state",
+      "description": "Standing of the memory. Default noncanonical. May become accepted/canonical ONLY with an explicit promotion (promotion_state=promoted, a promotion_request_id, and an authority_receipt_ref).",
+      "default": "noncanonical"
+    },
+    "evidence_role": {
+      "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role",
+      "description": "What the memory may do in reasoning. Restricted to non-authoritative roles: memory is never real-world `evidence`. To carry factual evidence standing it must first be promoted into an HKA artifact.",
+      "default": "background"
+    },
+    "sensitivity": { "$ref": "_defs.schema.json#/$defs/sensitivity" },
+
+    "content": {
+      "type": "string",
+      "description": "The memory content."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Short human/agent-readable summary."
+    },
+
+    "derived_from": {
+      "$ref": "_defs.schema.json#/$defs/id_list",
+      "description": "Source/provenance object IDs this memory was derived from."
+    },
+    "created_by": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "created_at": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+    "valid_at": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+    "invalid_at": {
+      "$ref": "_defs.schema.json#/$defs/iso_datetime",
+      "description": "Set when the memory is invalidated. Invalidation is distinct from suppression, tombstone, and purge stub."
+    },
+
+    "memory_state": {
+      "$ref": "_defs.schema.json#/$defs/memory_state",
+      "description": "Coarse lifecycle position. active | suppressed | invalidated | tombstoned | purged_stub | promotion_requested | promoted | rejected. These are distinct states for distinct operations."
+    },
+    "suppression_state": {
+      "$ref": "_defs.schema.json#/$defs/suppression_state",
+      "description": "Visibility dimension. suppressed/tombstoned hide the memory from recall and context but never erase lineage/provenance. Distinct from invalidation and purge stub."
+    },
+    "promotion_state": {
+      "$ref": "_defs.schema.json#/$defs/promotion_state",
+      "description": "Governed-promotion sub-lifecycle. MEM may set promotion_requested; only GOV+HKA can reach promoted. promoted requires a promotion_request_id and an authority_receipt_ref.",
+      "default": "not_requested"
+    },
+    "promotion_request_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Identifier of the promotion request / AuthorityTransition. Required once promotion_state is not not_requested."
+    },
+    "authority_receipt_ref": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "AuthorityReceipt from the governed promotion. Required for any canonical authority_state and for promotion_state=promoted."
+    },
+
+    "provenance_event_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "_defs.schema.json#/$defs/id_string" },
+      "description": "ProvenanceEvent references; memory must carry provenance."
+    },
+    "extensions": { "$ref": "_defs.schema.json#/$defs/extensions" }
+  },
+  "required": [
+    "memory_id",
+    "scope_id",
+    "principal_id",
+    "memory_type",
+    "source_role",
+    "authority_state",
+    "evidence_role",
+    "content",
+    "created_by",
+    "created_at",
+    "memory_state",
+    "suppression_state",
+    "promotion_state",
+    "provenance_event_ids"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "$comment": "Canonical authority is impossible without an explicit governed promotion reference: a receipt, a promotion request, and promotion_state=promoted.",
+      "if": {
+        "properties": {
+          "authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" }
+        },
+        "required": ["authority_state"]
+      },
+      "then": {
+        "properties": {
+          "promotion_state": { "const": "promoted" }
+        },
+        "required": ["promotion_request_id", "authority_receipt_ref", "promotion_state"]
+      }
+    },
+    {
+      "$comment": "Any promotion activity must carry the promotion request id.",
+      "if": {
+        "properties": {
+          "promotion_state": {
+            "enum": ["promotion_requested", "promoted", "rejected"]
+          }
+        },
+        "required": ["promotion_state"]
+      },
+      "then": {
+        "required": ["promotion_request_id"]
+      }
+    },
+    {
+      "$comment": "A completed promotion must carry the governance receipt.",
+      "if": {
+        "properties": { "promotion_state": { "const": "promoted" } },
+        "required": ["promotion_state"]
+      },
+      "then": {
+        "required": ["authority_receipt_ref"]
+      }
+    }
+  ]
+}

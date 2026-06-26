@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/context-envelope.schema.json",
+  "title": "ContextEnvelope",
+  "description": "The bounded operating context handed to an agent (CAO). Agents consume ContextEnvelopes; they receive no raw vault access, no raw index access, and no ambient authority. A ContextEnvelope COMPOSES one or more RCA ContextBundles (docs/contracts/CONTEXT_BUNDLE.md) plus active scope, capabilities, denied scopes, policies, memory/mutation/execution rules, cross-scope flows, and escalation conditions. It does NOT replace ContextBundle. A ContextEnvelope is a projection, not primary evidence.",
+  "type": "object",
+  "properties": {
+    "envelope_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "access_mode": {
+      "const": "bounded_context_only",
+      "description": "Asserts the only access the consuming agent has is this bounded context. There is no field that grants raw vault or raw index access."
+    },
+
+    "active_workspace_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "active_scope_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "active_sphere": {
+      "type": "string",
+      "description": "Active human-facing life-domain, where applicable."
+    },
+    "principal_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "user_intent": {
+      "type": "string",
+      "description": "The intent/task this envelope was assembled to serve."
+    },
+
+    "allowed_capabilities": {
+      "type": "array",
+      "description": "The capability grants the agent may exercise within this envelope. Empty means read/reason only.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "capability_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+          "operations": { "type": "array", "items": { "type": "string" } },
+          "scope_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+          "expiry": { "$ref": "_defs.schema.json#/$defs/iso_datetime" }
+        },
+        "required": ["capability_id"],
+        "additionalProperties": false
+      }
+    },
+    "denied_scopes": {
+      "type": "array",
+      "description": "Scopes explicitly NOT available in this envelope. Required and may be empty. Denied scopes are recorded as denials with reasons, never passed as hidden context. Useful-but-denied material becomes an escalation condition, not silent inclusion.",
+      "items": { "$ref": "_defs.schema.json#/$defs/scope_denial" }
+    },
+    "cross_scope_flows": {
+      "type": "array",
+      "description": "Typed CrossScopeFlow grants in effect for this envelope. Required and may be empty. Any cross-scope material present must be attributable to one of these flows; similarity is not permission.",
+      "items": { "$ref": "_defs.schema.json#/$defs/cross_scope_flow_ref" }
+    },
+
+    "retrieved_items": {
+      "type": "array",
+      "description": "Individual context items available to the agent. Each item must carry an embedded metadata bundle or a metadata-bundle reference; no naked content.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "object_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+          "metadata_bundle": { "$ref": "metadata-bundle.schema.json" },
+          "metadata_bundle_ref": { "$ref": "_defs.schema.json#/$defs/id_string" },
+          "evidence_role_in_context": { "$ref": "_defs.schema.json#/$defs/evidence_role" },
+          "citation_ranges": {
+            "type": "array",
+            "items": { "$ref": "_defs.schema.json#/$defs/citation_range" }
+          },
+          "admitting_cross_scope_flow": { "$ref": "_defs.schema.json#/$defs/id_string" }
+        },
+        "anyOf": [
+          { "required": ["metadata_bundle"] },
+          { "required": ["metadata_bundle_ref"] }
+        ],
+        "additionalProperties": false
+      }
+    },
+    "context_bundles": {
+      "type": "array",
+      "description": "References to the RCA ContextBundles (docs/contracts/CONTEXT_BUNDLE.md) this envelope composes. The envelope references bundles; it does not redefine or replace them. Required and may be empty.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "context_bundle_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+          "retrieval_result_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+          "non_authority": {
+            "const": true,
+            "description": "Marks the composed bundle as candidate evidence/projection, never authority."
+          }
+        },
+        "required": ["context_bundle_id"],
+        "additionalProperties": false
+      }
+    },
+
+    "citation_policy": {
+      "type": "object",
+      "description": "What the agent may cite and how. Retrieval/inclusion permission does NOT imply citation permission.",
+      "properties": {
+        "citation_required": { "type": "boolean" },
+        "citable_evidence_roles": {
+          "type": "array",
+          "items": { "$ref": "_defs.schema.json#/$defs/evidence_role" }
+        },
+        "cross_scope_citation_requires_flow": {
+          "const": true,
+          "description": "Citing material across a scope boundary requires a typed CrossScopeFlow that allows `cite`."
+        }
+      },
+      "required": ["cross_scope_citation_requires_flow"],
+      "additionalProperties": false
+    },
+    "memory_policy": {
+      "type": "object",
+      "description": "What the agent may remember from this envelope. Remembering does not make material canonical.",
+      "properties": {
+        "remember_allowed": { "type": "boolean" },
+        "remembered_authority_state": {
+          "const": "noncanonical",
+          "description": "Anything remembered enters machine memory as noncanonical; promotion is a separate governed transition."
+        },
+        "cross_scope_remember_requires_flow": { "const": true }
+      },
+      "required": ["remember_allowed", "remembered_authority_state"],
+      "additionalProperties": false
+    },
+    "mutation_policy": {
+      "type": "object",
+      "description": "Whether and how durable mutation may be proposed. Agents propose; they never mutate durable knowledge directly.",
+      "properties": {
+        "mutation_allowed": {
+          "type": "boolean",
+          "description": "Whether the agent may PROPOSE a durable mutation. Even when true, it proposes; it does not write."
+        },
+        "requires_authority_transition": {
+          "const": true,
+          "description": "Any durable mutation routes through a governed AuthorityTransition (authority-transition.schema.json). Persistence is not authority."
+        }
+      },
+      "required": ["mutation_allowed", "requires_authority_transition"],
+      "additionalProperties": false
+    },
+    "execution_policy": {
+      "type": "object",
+      "description": "Whether and how side effects may be requested. Execution cannot authorize itself.",
+      "properties": {
+        "execution_allowed": {
+          "type": "boolean",
+          "description": "Whether the agent may REQUEST execution. The request is authorized by GOV, then performed by EXE."
+        },
+        "requires_authorization": {
+          "const": true,
+          "description": "Every side effect requires a prior governed authorization; the agent cannot self-authorize."
+        }
+      },
+      "required": ["execution_allowed", "requires_authorization"],
+      "additionalProperties": false
+    },
+    "escalation_conditions": {
+      "type": "array",
+      "description": "Conditions under which the agent must escalate to a human/governance instead of acting or silently dropping context. Required and may be empty. Useful denied material should surface here rather than be hidden.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "condition": { "type": "string" },
+          "escalate_to": { "type": "string" },
+          "reason": { "type": "string" },
+          "related_scope_id": { "$ref": "_defs.schema.json#/$defs/id_string" }
+        },
+        "required": ["condition"],
+        "additionalProperties": false
+      }
+    },
+
+    "trace_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "provenance_event_ids": {
+      "type": "array",
+      "items": { "$ref": "_defs.schema.json#/$defs/id_string" }
+    },
+    "created_at": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+    "extensions": { "$ref": "_defs.schema.json#/$defs/extensions" }
+  },
+  "required": [
+    "envelope_id",
+    "access_mode",
+    "active_workspace_id",
+    "active_scope_id",
+    "principal_id",
+    "user_intent",
+    "allowed_capabilities",
+    "denied_scopes",
+    "cross_scope_flows",
+    "retrieved_items",
+    "context_bundles",
+    "citation_policy",
+    "memory_policy",
+    "mutation_policy",
+    "execution_policy",
+    "escalation_conditions",
+    "trace_id",
+    "created_at"
+  ],
+  "additionalProperties": false
+}

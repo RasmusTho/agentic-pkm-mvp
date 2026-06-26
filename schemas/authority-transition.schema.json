@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/authority-transition.schema.json",
+  "title": "AuthorityTransition",
+  "description": "The governed contract/state object for a durable mutation of human knowledge. Durable human knowledge changes ONLY through an AuthorityTransition. It is the architecture contract behind WriteGuard-equivalent runtime enforcement (app/write_guard.py) and the GovernedWriteProtocol (PolicyDecision -> DecisionToken -> AuthorityReceipt, docs/contracts/GOVERNED_WRITE_PROTOCOL.md): WriteGuard is the runtime mechanism, AuthorityTransition is the architecture state object. A persistence write is NOT an authority transition. Agent proposals are not mutations. Memory promotion, repair, and sync-conflict resolution that change semantic authority require a transition. Execution may not bypass it. After an accepted transition, DRI must invalidate/rebuild the affected derived representations.",
+  "type": "object",
+  "properties": {
+    "transition_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "actor_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "The actor (principal / delegated agent role) initiating the transition."
+    },
+    "initiating_source": {
+      "type": "string",
+      "description": "What initiated the transition.",
+      "enum": [
+        "human_correction",
+        "human_approval",
+        "agent_proposal",
+        "memory_promotion_request",
+        "repair",
+        "sync_conflict_resolution",
+        "external_import_review"
+      ]
+    },
+
+    "target_object_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "target_scope_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+
+    "prior_authority_state": { "$ref": "_defs.schema.json#/$defs/authority_state" },
+    "requested_authority_state": { "$ref": "_defs.schema.json#/$defs/authority_state" },
+    "approved_authority_state": {
+      "$ref": "_defs.schema.json#/$defs/authority_state",
+      "description": "The authority_state actually granted by governance. Required once approval_state is approved; may differ from (be a downgrade of) requested_authority_state."
+    },
+
+    "operation_type": {
+      "type": "string",
+      "description": "The durable-mutation operation class.",
+      "enum": [
+        "create_artifact",
+        "update_artifact",
+        "accept",
+        "promote",
+        "retract",
+        "deprecate",
+        "correct",
+        "redact",
+        "suppress",
+        "tombstone",
+        "restore",
+        "merge",
+        "rescope",
+        "rollback"
+      ]
+    },
+
+    "approval_required": {
+      "type": "boolean",
+      "description": "Whether human/governance approval is required. Required true for promotion to durable/canonical authority unless an explicit policy exemption is referenced."
+    },
+    "approval_state": {
+      "type": "string",
+      "enum": ["not_required", "pending", "approved", "rejected", "withdrawn"]
+    },
+    "approval_exemption_policy_ref": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Reference to the explicit policy that permits skipping approval for a promotion to canonical authority. Required when approval_required is false for such a promotion."
+    },
+    "approved_by": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "approved_at": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+
+    "authority_receipt_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "AuthorityReceipt recording the governed decision. Required once approved; absent only while approval_state is not_required/pending/rejected/withdrawn."
+    },
+    "decision_token_ref": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "GovernedWriteProtocol DecisionToken validated before the durable write (WriteGuard runtime tie-in)."
+    },
+
+    "promotion_request_id": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "The MemoryItem promotion request being materialized. Required when initiating_source is memory_promotion_request."
+    },
+
+    "provenance_event_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "_defs.schema.json#/$defs/id_string" }
+    },
+    "affected_derived_representation_ids": {
+      "$ref": "_defs.schema.json#/$defs/id_list",
+      "description": "Derived/rebuildable representation IDs (segments, projections, indexes) that DRI must invalidate/rebuild after an accepted transition. Present (may be empty) so the rebuild obligation is explicit."
+    },
+
+    "base_version": {
+      "type": "string",
+      "description": "Version/revision the mutation is based on (optimistic-concurrency / conflict base)."
+    },
+    "result_version": {
+      "type": "string",
+      "description": "Resulting version after an accepted transition."
+    },
+    "conflict_state": {
+      "type": "string",
+      "enum": ["none", "detected", "staged", "resolved"],
+      "description": "Sync/merge conflict posture. Sync conflict resolution that changes semantic authority requires this transition; SFC stages, GOV decides."
+    },
+    "rollback_ref": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Reference enabling reversal of this transition where the operation class supports it."
+    },
+
+    "created_at": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+    "extensions": { "$ref": "_defs.schema.json#/$defs/extensions" }
+  },
+  "required": [
+    "transition_id",
+    "actor_id",
+    "initiating_source",
+    "target_object_id",
+    "target_scope_id",
+    "prior_authority_state",
+    "requested_authority_state",
+    "operation_type",
+    "approval_required",
+    "approval_state",
+    "provenance_event_ids",
+    "affected_derived_representation_ids",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "$comment": "Promotion to durable/canonical authority requires approval, unless an explicit policy exemption is referenced.",
+      "if": {
+        "properties": {
+          "requested_authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" },
+          "approval_required": { "const": false }
+        },
+        "required": ["requested_authority_state", "approval_required"]
+      },
+      "then": {
+        "required": ["approval_exemption_policy_ref"]
+      }
+    },
+    {
+      "$comment": "An approved transition carries the governance receipt, who/when approved, and the granted authority state.",
+      "if": {
+        "properties": { "approval_state": { "const": "approved" } },
+        "required": ["approval_state"]
+      },
+      "then": {
+        "required": ["authority_receipt_id", "approved_by", "approved_at", "approved_authority_state"]
+      }
+    },
+    {
+      "$comment": "Memory promotion transitions carry the originating promotion request id.",
+      "if": {
+        "properties": { "initiating_source": { "const": "memory_promotion_request" } },
+        "required": ["initiating_source"]
+      },
+      "then": {
+        "required": ["promotion_request_id"]
+      }
+    }
+  ]
+}
