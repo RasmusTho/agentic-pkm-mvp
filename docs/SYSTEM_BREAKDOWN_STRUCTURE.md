@@ -1327,7 +1327,7 @@ Observability is not policy.
 
 ## Ownership and invariant matrix
 
-Each Level 2 boundary owns a bounded responsibility, must never absorb the responsibilities listed against it, and carries one critical invariant. This matrix is the intended source for future architecture-fitness rules (OEF) and boundary charters (CES). It restates the boundaries above; it does not add or remove any.
+Each entry owns a bounded responsibility, must never absorb the responsibilities listed against it, and carries one critical invariant. The first fourteen rows are the Level 2 control boundaries; the final row, **CES**, is the cross-cutting contract-stewardship practice — listed here for ownership clarity, **not** a Level 2 control boundary or a runtime subsystem. This matrix is the intended source for future architecture-fitness rules (OEF) and boundary charters (CES). It restates the boundaries and the CES practice defined above; it does not add or remove any.
 
 | ID | Boundary | Owns | Must not own | Critical invariant |
 | --- | --- | --- | --- | --- |
