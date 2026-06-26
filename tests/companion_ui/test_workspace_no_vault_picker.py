@@ -495,6 +495,103 @@ def test_vault_picker_uses_ds() -> None:
     assert 'data-testid="vault-picker-row"' in picker
 
 
+# ---------------------------------------------------------------------------
+# #2564 Codex P2: a selected-but-uninitialized vault must get a working
+# *initialize* affordance inside the "Choose a vault" overlay. When a write
+# boundary refuses with reason="uninitialized"
+# (_uninitialized_selection_required_response), re-clicking the pinned row only
+# re-selects the same uninitialized vault — a dead end. The overlay must offer
+# vault.initialize for the already-selected path. The general no_vault_bound
+# first-contact picker must stay clean (no initialize / typed-path chrome).
+# ---------------------------------------------------------------------------
+
+
+def _uninitialized_payload() -> dict[str, Any]:
+    return {
+        "state": "vault_selection_required",
+        "reason": "uninitialized",
+        "message": (
+            "The selected vault is not initialized yet. Initialize it to enable "
+            "writes, or open a different vault to continue."
+        ),
+        "configured_vault_root": "/Users/me/Vaults/Niflheim",
+        "requested_note_path": "",
+        "context": {"status": "uninitialized", "active_vault_path": "/Users/me/Vaults/Niflheim"},
+        "recent_vaults": [],
+        "actions": [],
+    }
+
+
+def test_uninitialized_reason_renders_initialize_affordance() -> None:
+    """reason="uninitialized" gets a working Initialize affordance (#2564 Codex P2).
+
+    The already-selected uninitialized vault must present an explicit
+    "Initialize this vault" action carrying the existing vault.initialize
+    authority and the configured/selected path — not just a re-select that loops
+    back to the same refusal.
+    """
+    client = _PickerClient(_uninitialized_payload())
+    html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
+    picker_html = _balanced_section(html, '<section class="vault-selection-required"')
+
+    # The overlay declares the uninitialized state.
+    assert 'data-reason="uninitialized"' in picker_html
+
+    # An explicit Initialize affordance is rendered, carrying the existing
+    # vault.initialize authority + the configured/selected path (no new authority).
+    assert 'data-testid="vault-picker-initialize"' in picker_html
+    init_block = picker_html.split('data-testid="vault-picker-initialize"', 1)[1]
+    assert 'data-testid="vault-picker-initialize-submit"' in init_block
+    assert 'data-intent="vault.initialize"' in init_block
+    assert 'data-api-method="POST"' in init_block
+    assert 'data-api-path="/api/companion/vault/initialize"' in init_block
+    assert 'data-vault-path="/Users/me/Vaults/Niflheim"' in init_block
+    assert "Initialize this vault" in init_block
+
+    # Honest copy that the vault isn't initialized yet.
+    assert "isn’t initialized yet" in _visible_text(picker_html)
+
+    # The picker controller handles the vault.initialize POST (not just select).
+    assert "vault-picker-controller" in html
+    assert 'vault-picker-initialize-submit' in html
+    assert "vault/initialize" in html
+    # It reuses the existing in-band confirm guard (#2518) for a populated folder.
+    assert "vault_init_confirmation_required" in html
+    assert "confirm: true" in html or "confirm = true" in html or "body.confirm" in html
+
+    # No foreign form chrome leaks in even here: no typed path field, no Role select.
+    assert 'data-testid="vault-init-role"' not in html
+    assert 'name="machineRole"' not in html
+    assert "Path for a new vault" not in html
+    assert "Path to an existing vault" not in html
+
+
+def test_no_vault_bound_picker_has_no_initialize_chrome() -> None:
+    """The general first-contact picker stays clean (#2564) — guard against
+    re-introducing the initialize / typed-path chrome on no_vault_bound.
+
+    Only reason="uninitialized" earns the initialize affordance. The ordinary
+    no_vault_bound picker (first contact) must not render it, nor any typed-path
+    / Role chrome.
+    """
+    client = _PickerClient(_PICKER_PAYLOAD)
+    assert _PICKER_PAYLOAD["reason"] == "no_vault_bound"
+    html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
+    picker_html = _balanced_section(html, '<section class="vault-selection-required"')
+
+    # No initialize affordance on the clean first-contact picker.
+    assert 'data-testid="vault-picker-initialize"' not in picker_html
+    assert 'data-testid="vault-picker-initialize-submit"' not in picker_html
+    assert 'data-intent="vault.initialize"' not in picker_html
+    assert "Initialize this vault" not in picker_html
+
+    # And still none of the foreign form chrome.
+    assert 'data-testid="vault-init-role"' not in html
+    assert 'name="machineRole"' not in html
+    assert "Path for a new vault" not in html
+    assert "Path to an existing vault" not in html
+
+
 def test_no_white_inputs() -> None:
     """No control on the no-vault page renders with default white chrome (#2564).
 

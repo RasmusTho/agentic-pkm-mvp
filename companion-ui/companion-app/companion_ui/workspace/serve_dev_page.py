@@ -5790,7 +5790,16 @@ def _render_vault_selection_required_section(payload: object) -> str:
     classification happens client-side.
     """
     data = payload if isinstance(payload, dict) else {}
-    reason = _e(str(data.get("reason") or "no_vault_bound"))
+    reason_raw = str(data.get("reason") or "no_vault_bound")
+    reason = _e(reason_raw)
+    # A selected-but-uninitialized vault is readable (it appeared as a valid
+    # picker target / pinned configured row) but a write boundary refused with
+    # ``reason="uninitialized"`` (_uninitialized_selection_required_response).
+    # In that single state the already-selected vault needs a working
+    # *initialize* action — re-selecting it just loops back to the same refusal
+    # (#2564 Codex P2). Only this state earns the initialize affordance; the
+    # general ``no_vault_bound`` first-contact picker stays clean.
+    is_uninitialized = reason_raw == "uninitialized"
     message = _e(
         str(data.get("message") or "No vault is selected. Choose a vault to continue.")
     )
@@ -5899,6 +5908,38 @@ def _render_vault_selection_required_section(payload: object) -> str:
         "</details>"
     )
 
+    # Initialize affordance — ONLY for reason="uninitialized" (#2564 Codex P2).
+    # When the human selected a readable but uninitialized vault folder and then
+    # hit a write/capture action, the runtime returns
+    # ``vault_selection_required`` with ``reason="uninitialized"`` and surfaces
+    # the selected folder on ``configured_vault_root``. Re-clicking the pinned
+    # row only re-selects the same uninitialized vault — a dead end. Give the
+    # already-selected vault a working *initialize* action that reuses the exact
+    # existing ``vault.initialize`` authority (POST /api/companion/vault/initialize
+    # with the selected path; the server's #2518 confirm guard is honored by the
+    # picker controller). This is NOT the foreign form chrome: no typed path
+    # field, no Role select — just an honest confirm button for the path the
+    # human already chose. The general ``no_vault_bound`` picker never renders it.
+    initialize_html = ""
+    if is_uninitialized and configured:
+        initialize_html = (
+            '<div class="vault-picker-initialize" '
+            'data-testid="vault-picker-initialize" data-reason="uninitialized">'
+            '<p class="vault-picker-initialize-copy" '
+            'data-testid="vault-picker-initialize-copy">'
+            "This vault isn’t initialized yet. Initialize it to enable writes "
+            "into this folder."
+            "</p>"
+            '<button type="button" class="vault-picker-initialize-button" '
+            'data-testid="vault-picker-initialize-submit" '
+            'data-intent="vault.initialize" data-api-method="POST" '
+            'data-api-path="/api/companion/vault/initialize" '
+            f'data-vault-path="{_e(configured)}">Initialize this vault</button>'
+            '<p class="vault-picker-initialize-error" '
+            'data-testid="vault-picker-initialize-error" hidden></p>'
+            "</div>"
+        )
+
     # The "Choose a vault" overlay mirrors the note Browse-vault overlay idiom:
     # a titled overlay (`<details open>`), a focused filter, clean clickable
     # rows, and a footer count. The filter only filters the visible list; it is
@@ -5922,6 +5963,7 @@ def _render_vault_selection_required_section(payload: object) -> str:
             autocomplete="off">
         </div>
         <ul class="vault-picker-list" data-testid="vault-picker-list">{rows_html}</ul>
+        {initialize_html}
         {footer_html}
         {operator_html}
       </details>
@@ -5993,6 +6035,64 @@ def _render_vault_picker_script() -> str:
             select.setAttribute('data-affordance-status', 'blocked');
             select.setAttribute('data-submit-error', String(err && err.message || err));
           });
+        return;
+      }
+      // Initialize the already-selected-but-uninitialized vault (#2564 Codex
+      // P2). Reuses the existing vault.initialize authority (POST
+      // /api/companion/vault/initialize) with the selected path — no new
+      // authority, no typed-path field. The folder the human selected is
+      // typically a populated Obsidian vault, so the server's in-band #2518
+      // guard returns 409 vault_init_confirmation_required; mirror the
+      // vault-settings panel by surfacing that message and re-posting with
+      // confirm:true on the human's explicit Confirm (single-actor, in-band).
+      var init = event.target && event.target.closest('[data-testid="vault-picker-initialize-submit"]');
+      if (init) {
+        if (init.getAttribute('data-submitting') === 'true') { return; }
+        var initPath = init.getAttribute('data-vault-path') || '';
+        if (!initPath) { return; }
+        var initEndpoint = init.getAttribute('data-api-path') || '/api/companion/vault/initialize';
+        var errEl = picker.querySelector('[data-testid="vault-picker-initialize-error"]');
+        var confirmed = init.getAttribute('data-init-confirmed') === 'true';
+        init.setAttribute('data-submitting', 'true');
+        init.setAttribute('data-affordance-status', 'pending');
+        var body = { path: initPath };
+        if (confirmed) { body.confirm = true; }
+        fetch(initEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).then(function(response) {
+          return response.text().then(function(text) {
+            var data = null;
+            try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+            return { ok: response.ok, status: response.status, data: data, text: text };
+          });
+        }).then(function(res) {
+          if (res.ok) { window.location.reload(); return; }
+          init.removeAttribute('data-submitting');
+          var detail = res.data && res.data.detail;
+          if (res.status === 409 && detail && detail.error === 'vault_init_confirmation_required') {
+            // The chosen folder already holds the human's content. Surface the
+            // confirm gesture; the next click re-posts with confirm:true.
+            init.setAttribute('data-init-confirmed', 'true');
+            init.setAttribute('data-affordance-status', 'confirm-required');
+            init.textContent = 'Confirm initialize';
+            if (errEl) {
+              errEl.hidden = false;
+              errEl.textContent = (detail && detail.message) || 'This folder already contains files. Initializing will add a settings/ scaffold to your existing vault.';
+            }
+            return;
+          }
+          init.setAttribute('data-affordance-status', 'blocked');
+          var message = (detail && (detail.message || (typeof detail === 'string' ? detail : null))) || res.text || String(res.status);
+          if (errEl) { errEl.hidden = false; errEl.textContent = message; }
+          init.setAttribute('data-submit-error', message);
+        }).catch(function(err) {
+          init.removeAttribute('data-submitting');
+          init.setAttribute('data-affordance-status', 'blocked');
+          if (errEl) { errEl.hidden = false; errEl.textContent = String(err && err.message || err); }
+          init.setAttribute('data-submit-error', String(err && err.message || err));
+        });
         return;
       }
       var reload = event.target && event.target.closest('[data-testid="vault-reload"]');
@@ -12943,6 +13043,37 @@ def render_index_html(
       font-family: var(--font-ui);
       font-size: var(--text-sm);
       padding: 6px 10px;
+    }}
+    .vault-picker-initialize {{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      padding: 12px;
+    }}
+    .vault-picker-initialize-copy {{
+      color: var(--fg-2, #aebfce);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      margin: 0;
+    }}
+    .vault-picker-initialize-button {{
+      align-self: flex-start;
+      background: var(--accent, #5b8cff);
+      border: 1px solid var(--accent, #5b8cff);
+      border-radius: var(--radius-md, 4px);
+      color: var(--bg-base, #060b14);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 6px 12px;
+    }}
+    .vault-picker-initialize-error {{
+      color: var(--fg-2, #aebfce);
+      font-family: var(--font-ui);
+      font-size: var(--text-xs, 11px);
+      margin: 0;
     }}
   </style>
 </head>
