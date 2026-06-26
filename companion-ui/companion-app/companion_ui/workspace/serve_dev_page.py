@@ -370,9 +370,8 @@ def _render_note_frontmatter_region(document: VaultMarkdownDocument):  # type: i
     return hidden_marker, rendered_props
 
 
-def _render_workspace_breadcrumb(
+def _render_identity_chips(
     *,
-    note_path: str,
     artifact_id: str,
     content_hash: str,
     identity_state: str,
@@ -380,38 +379,13 @@ def _render_workspace_breadcrumb(
     artifact_kind: str,
     owns_identity: bool,
     companion_html: str,
-    rendered_props,
 ) -> str:
-    """Breadcrumb line under the note title with a properties ▾ disclosure.
+    """The artifact/hash identity chips for the properties detail.
 
-    §7.3 / #1337: replaces the chip strip (path · artifact · hash) with a
-    single breadcrumb line; artifact id and hash move inside the disclosure.
+    #2563: the chips render only inside the Tier-2 properties popover (no longer
+    inside an inline breadcrumb disclosure); this single builder is the one place
+    artifact id + content hash are turned into chips.
     """
-    # Path segments — keep raw slashes as separators for readability. The
-    # incoming note_path is already HTML-escaped, so fully unescape before
-    # re-escaping each segment once; only reversing &amp; would double-escape
-    # every other metacharacter (e.g. an apostrophe -> literal "&#x27;").
-    path_segments = _html.unescape(note_path).split("/")
-    path_html = " / ".join(_e(p) for p in path_segments if p)
-
-    # Pull up to 2 inline meta items from frontmatter (kind + review_state)
-    _META_KEYS = ("kind", "review", "review_state")
-    meta_items: list[str] = []
-    for field in (rendered_props.fields or ()):
-        if field.key in _META_KEYS and field.values:
-            label = _e(field.key)
-            val = _e(", ".join(field.values[:2]))
-            meta_items.append(
-                f'<span class="breadcrumb-meta-item">{label}&nbsp;{val}</span>'
-            )
-        if len(meta_items) >= 2:
-            break
-
-    meta_html = "".join(
-        f'<span class="breadcrumb-sep">&middot;</span>{item}' for item in meta_items
-    )
-
-    # Artifact/hash chips move inside the disclosure
     artifact_chip = ""
     if artifact_id:
         artifact_chip = (
@@ -437,30 +411,148 @@ def _render_workspace_breadcrumb(
             f"<code>{content_hash}</code>"
             f"</span>"
         )
-    identity_chips_html = ""
     if artifact_chip or hash_chip:
-        identity_chips_html = (
-            f'<div class="breadcrumb-identity-chips">{artifact_chip}{hash_chip}</div>'
-        )
+        return f'<div class="breadcrumb-identity-chips">{artifact_chip}{hash_chip}</div>'
+    return ""
+
+
+def _render_workspace_breadcrumb(
+    *,
+    note_path: str,
+    rendered_props,
+) -> str:
+    """Breadcrumb line under the note title: path + up to two inline meta items.
+
+    §7.3 / #1337 introduced the single breadcrumb line. #2563 strips the inline
+    ``properties`` disclosure off it — artifact id / hash / uuid now live only in
+    the Tier-2 properties popover reached from the utility line. The breadcrumb is
+    now purely the quiet path-and-meta line under the title.
+    """
+    # Path segments — keep raw slashes as separators for readability. The
+    # incoming note_path is already HTML-escaped, so fully unescape before
+    # re-escaping each segment once; only reversing &amp; would double-escape
+    # every other metacharacter (e.g. an apostrophe -> literal "&#x27;").
+    path_segments = _html.unescape(note_path).split("/")
+    path_html = " / ".join(_e(p) for p in path_segments if p)
+
+    # Pull up to 2 inline meta items from frontmatter (kind + review_state)
+    _META_KEYS = ("kind", "review", "review_state")
+    meta_items: list[str] = []
+    for field in (rendered_props.fields or ()):
+        if field.key in _META_KEYS and field.values:
+            label = _e(field.key)
+            val = _e(", ".join(field.values[:2]))
+            meta_items.append(
+                f'<span class="breadcrumb-meta-item">{label}&nbsp;{val}</span>'
+            )
+        if len(meta_items) >= 2:
+            break
+
+    meta_html = "".join(
+        f'<span class="breadcrumb-sep">&middot;</span>{item}' for item in meta_items
+    )
 
     # Fully unescape the already-escaped note_path so the data attribute is
     # escaped exactly once; JS reads data-note-path as the real path (line ~1291),
     # so a double-escaped value would hand JS the wrong path.
     raw_path = _html.unescape(note_path)
+    # #2563 — the properties detail (artifact/hash/uuid) no longer renders as an
+    # inline disclosure on the breadcrumb. It is re-housed as the Tier-2
+    # overlay-hosted popover anchored to the Tier-1 utility line's Properties
+    # control (see _render_note_utility_line). The breadcrumb is now just the
+    # path + inline meta — the quiet line under the title.
     return (
         f'<div class="workspace-breadcrumb" data-testid="workspace-breadcrumb" data-note-path="{_e(raw_path)}">'
         f'<span class="breadcrumb-path">{path_html}</span>'
         f"{meta_html}"
-        f'<details class="workspace-properties-disclosure"'
-        f' data-testid="workspace-properties-disclosure"'
-        f" aria-expanded=\"false\">"
-        f'<summary class="breadcrumb-disclosure-trigger">properties&nbsp;&#9660;</summary>'
+        f"</div>"
+    )
+
+
+def _render_note_utility_line(
+    *,
+    identity_chips_html: str,
+    rendered_props,
+) -> str:
+    """#2563 Tier 1 — one quiet utility line on the breadcrumb/title row.
+
+    A single right-aligned icon cluster (Properties, Read aloud, Edit; extensible
+    to future per-note verbs). Icons sit at ``--fg-3`` with the label revealed on
+    hover/focus, ~16px. The cluster lands on the **document frame** (the note
+    header), not the topbar and not the right rail — so it avoids the
+    carried-over topbar-overflow (#1) and rail-overlap (#2) hazards, and at narrow
+    widths collapses to a single ``⋯`` actions affordance (#3/#4).
+
+    Each control routes to its tier-appropriate host (none is a stacked
+    ``<details>`` above the body):
+      - Properties -> Tier-2 anchored popover (the artifact/hash/uuid detail).
+      - Read aloud -> Tier-2 overlay host occupant (``overlayHost.mount('tts')``),
+        which preserves the plan-before-audio TTS contract.
+      - Edit -> Tier-3 frame mode (``noteEditor.start()`` flips the document
+        frame into edit mode; it is not a panel).
+    """
+    properties_popover = (
+        f'<div class="note-properties-popover" data-testid="workspace-properties-popover"'
+        f' data-region="properties-popover" role="dialog" aria-label="Note properties" hidden>'
         f'<div class="properties-disclosure-body">'
         f"{identity_chips_html}"
         f"{rendered_props.html}"
         f"</div>"
-        f"</details>"
         f"</div>"
+    )
+    return (
+        '<div class="note-utility-line" data-testid="workspace-note-utility-line"'
+        ' data-region="note-utility-line">'
+        '<div class="note-utility-cluster" data-testid="workspace-note-utility-cluster">'
+        # Properties — Tier 2 anchored popover (artifact/hash/uuid).
+        '<button type="button" class="note-utility-icon"'
+        ' data-testid="workspace-note-utility-properties"'
+        ' data-note-verb="properties" aria-haspopup="dialog" aria-expanded="false"'
+        ' title="Properties" aria-label="Note properties"'
+        ' onclick="noteUtility.toggleProperties(this)">'
+        '<span class="note-utility-glyph" aria-hidden="true">&#9432;</span>'
+        '<span class="note-utility-label">Properties</span>'
+        "</button>"
+        # Read aloud — Tier 2 overlay host occupant (plan-before-audio preserved).
+        '<button type="button" class="note-utility-icon"'
+        ' data-testid="workspace-note-utility-read-aloud"'
+        ' data-note-verb="read-aloud" data-tts-requires-speech="true"'
+        ' title="Read aloud" aria-label="Read aloud"'
+        ' onclick="if (window.overlayHost) { overlayHost.mount(\'tts\'); }">'
+        '<span class="note-utility-glyph" aria-hidden="true">&#9835;</span>'
+        '<span class="note-utility-label">Read aloud</span>'
+        "</button>"
+        # Edit — Tier 3 frame mode (not a panel).
+        '<button type="button" class="note-utility-icon"'
+        ' data-testid="workspace-note-utility-edit"'
+        ' data-note-verb="edit" title="Edit" aria-label="Edit note"'
+        ' onclick="noteEditor.start()">'
+        '<span class="note-utility-glyph" aria-hidden="true">&#9998;</span>'
+        '<span class="note-utility-label">Edit</span>'
+        "</button>"
+        "</div>"
+        # Narrow (<=480px) collapse: a single ⋯ actions affordance that opens the
+        # same verbs as an overlay sheet; the body still owns the column (#3/#4).
+        '<button type="button" class="note-utility-overflow"'
+        ' data-testid="workspace-note-utility-overflow"'
+        ' aria-haspopup="menu" aria-expanded="false"'
+        ' title="Note actions" aria-label="Note actions"'
+        ' onclick="noteUtility.toggleSheet(this)">&#8943;</button>'
+        # The overlay sheet the ⋯ affordance opens at narrow widths.
+        '<div class="note-utility-sheet" data-testid="workspace-note-utility-sheet"'
+        ' data-region="note-utility-sheet" role="menu" hidden>'
+        '<button type="button" role="menuitem" class="note-utility-sheet-item"'
+        ' data-testid="workspace-note-utility-sheet-properties"'
+        ' onclick="noteUtility.fromSheet(\'properties\')">Properties</button>'
+        '<button type="button" role="menuitem" class="note-utility-sheet-item"'
+        ' data-testid="workspace-note-utility-sheet-read-aloud"'
+        ' onclick="noteUtility.fromSheet(\'read-aloud\')">Read aloud</button>'
+        '<button type="button" role="menuitem" class="note-utility-sheet-item"'
+        ' data-testid="workspace-note-utility-sheet-edit"'
+        ' onclick="noteUtility.fromSheet(\'edit\')">Edit</button>'
+        "</div>"
+        f"{properties_popover}"
+        "</div>"
     )
 
 
@@ -1167,6 +1259,95 @@ def _display_preferences_script() -> str:
   </script>"""
 
 
+def _note_chrome_script() -> str:
+    """#2563 — the Tier-1 utility-line controller + Tier-2 overlay routing.
+
+    ``noteUtility`` owns the quiet utility line: the Properties anchored popover,
+    the narrow-width ⋯ actions sheet, and the dispatch from sheet items to the
+    same tier-appropriate hosts the inline icons use. The Read-aloud detail is
+    routed through the shared overlay host by registering a ``tts`` occupant
+    (a declared overlay) that shows/hides the overlay-hosted Read-aloud block
+    with the same dismiss grammar (Esc / scrim -> document anchor). No
+    classification moves client-side; this is presentation/interaction wiring
+    only. Emitted after overlay_host_script() so window.overlayHost exists.
+    """
+    return """
+  <script>
+  (function () {
+    function el(sel) { return document.querySelector(sel); }
+    // Tier-2 Read-aloud occupant: register the declared `tts` overlay so the
+    // utility-line "Read aloud" control mounts it on the shared host. Mounting
+    // reveals the overlay-hosted Read-aloud block (plan inspector + controls);
+    // dismiss hides it. The TTS plan-before-audio contract is untouched — audio
+    // still only starts on an explicit "Read" inside the inspector.
+    if (window.overlayHost && window.overlayHost.register) {
+      window.overlayHost.register('tts', {
+        open: function () {
+          var occ = el('[data-overlay-id="tts"]');
+          if (occ) { occ.hidden = false; }
+        },
+        close: function () {
+          var occ = el('[data-overlay-id="tts"]');
+          if (occ) { occ.hidden = true; }
+        }
+      });
+    }
+    function closePopovers() {
+      var pop = el('[data-testid="workspace-properties-popover"]');
+      if (pop) { pop.hidden = true; }
+      var trigger = el('[data-testid="workspace-note-utility-properties"]');
+      if (trigger) { trigger.setAttribute('aria-expanded', 'false'); }
+      var sheet = el('[data-testid="workspace-note-utility-sheet"]');
+      if (sheet) { sheet.hidden = true; }
+      var overflow = el('[data-testid="workspace-note-utility-overflow"]');
+      if (overflow) { overflow.setAttribute('aria-expanded', 'false'); }
+    }
+    window.noteUtility = {
+      toggleProperties: function (trigger) {
+        var pop = el('[data-testid="workspace-properties-popover"]');
+        if (!pop) { return; }
+        var show = pop.hidden;
+        closePopovers();
+        pop.hidden = !show;
+        if (trigger) { trigger.setAttribute('aria-expanded', show ? 'true' : 'false'); }
+      },
+      toggleSheet: function (trigger) {
+        var sheet = el('[data-testid="workspace-note-utility-sheet"]');
+        if (!sheet) { return; }
+        var show = sheet.hidden;
+        closePopovers();
+        sheet.hidden = !show;
+        if (trigger) { trigger.setAttribute('aria-expanded', show ? 'true' : 'false'); }
+      },
+      fromSheet: function (verb) {
+        closePopovers();
+        if (verb === 'properties') {
+          var pop = el('[data-testid="workspace-properties-popover"]');
+          var trigger = el('[data-testid="workspace-note-utility-properties"]');
+          if (pop) { pop.hidden = false; }
+          if (trigger) { trigger.setAttribute('aria-expanded', 'true'); }
+        } else if (verb === 'read-aloud') {
+          if (window.overlayHost) { window.overlayHost.mount('tts'); }
+        } else if (verb === 'edit') {
+          if (window.noteEditor) { window.noteEditor.start(); }
+        }
+      },
+      closeAll: closePopovers
+    };
+    // Esc closes the properties popover / actions sheet (the overlay host owns
+    // Esc for its own occupants; these are utility-line anchored surfaces).
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { closePopovers(); }
+    });
+    // A click outside the utility line dismisses its anchored surfaces.
+    document.addEventListener('click', function (e) {
+      var line = el('[data-testid="workspace-note-utility-line"]');
+      if (line && !line.contains(e.target)) { closePopovers(); }
+    });
+  })();
+  </script>"""
+
+
 def _note_readback_script() -> str:
     """Local-first TTS/read-back controls for the rendered note surface."""
 
@@ -1178,9 +1359,23 @@ def _note_readback_script() -> str:
     function el(sel) { return document.querySelector(sel); }
     function status(text, state) {
       var node = el('[data-testid="tts-readback-status"]');
-      if (!node) return;
-      node.textContent = text || '';
-      node.setAttribute('data-state', state || 'idle');
+      var st = state || 'idle';
+      if (node) {
+        node.textContent = text || '';
+        node.setAttribute('data-state', st);
+      }
+      // #2563 — while read-back is active, dock a minimal transport (play/pause/
+      // stop + position) to the utility line, not a full transport block in the
+      // reading column. The plan inspector stays in the overlay; this is the
+      // in-column residue and is hidden whenever read-back is not active.
+      var transport = el('[data-testid="workspace-tts-utility-transport"]');
+      if (transport) {
+        var active = (st === 'playing' || st === 'paused' || st === 'cached' ||
+          st === 'synthesizing');
+        transport.hidden = !active;
+      }
+      var position = el('[data-testid="tts-transport-position"]');
+      if (position) { position.textContent = text || ''; }
     }
     function rate() {
       var control = el('[data-testid="tts-rate"]');
@@ -1363,31 +1558,35 @@ def _note_editor_script() -> str:
     }
     window.noteEditor = {
       start: function () {
+        // #2563 Tier 3 — Edit is a frame mode, not a panel. Flip the document
+        // frame into edit mode: data-edit-mode="on" on note-body drives the
+        // edit-tint border + reveals the slim mode ribbon (Read draft / Save /
+        // Cancel) pinned to the column top; the rendered body swaps for the
+        // editable source. The reading state shows no edit toolbar at all.
+        // Runtime-declared read-only/edit-disabled posture surfaces verbatim IN
+        // the ribbon on this attempt — server declares, UI renders. The
+        // WriteGuard submit path (save) is unchanged.
         var ta = document.getElementById('note-source-editor');
         if (!ta) { return; }
+        var body = el('.note-body');
         var content = el('.note-body-content');
         var bar = el('[data-testid="workspace-note-edit-bar"]');
-        var actions = el('[data-testid="workspace-note-edit-actions"]');
-        var toggle = el('.note-edit-toggle');
+        if (body) { body.setAttribute('data-edit-mode', 'on'); }
         if (content) { content.hidden = true; }
         ta.hidden = false;
-        if (bar) { bar.open = true; }
-        if (actions) { actions.hidden = false; }
-        if (toggle) { toggle.hidden = true; }
+        if (bar) { bar.hidden = false; }
         setStatus('', '');
         ta.focus();
       },
       cancel: function () {
         var ta = document.getElementById('note-source-editor');
+        var body = el('.note-body');
         var content = el('.note-body-content');
         var bar = el('[data-testid="workspace-note-edit-bar"]');
-        var actions = el('[data-testid="workspace-note-edit-actions"]');
-        var toggle = el('.note-edit-toggle');
         if (ta) { ta.hidden = true; ta.value = ta.defaultValue; }
+        if (body) { body.setAttribute('data-edit-mode', 'off'); }
         if (content) { content.hidden = false; }
-        if (bar) { bar.open = false; }
-        if (actions) { actions.hidden = true; }
-        if (toggle) { toggle.hidden = false; }
+        if (bar) { bar.hidden = true; }
         setStatus('', '');
       },
       applyCorrection: function (id) {
@@ -1937,6 +2136,12 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
     )
     breadcrumb_html = _render_workspace_breadcrumb(
         note_path=note_path_val,
+        rendered_props=rendered_props,
+    )
+    # #2563 Tier 1 — the one quiet utility line (Properties / Read aloud / Edit)
+    # on the title row, plus the Tier-2 properties popover that carries the
+    # artifact/hash/uuid identity chips (re-housed off the breadcrumb).
+    identity_chips_html = _render_identity_chips(
         artifact_id=artifact_id,
         content_hash=content_hash,
         identity_state=identity_state,
@@ -1944,6 +2149,9 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
         artifact_kind=artifact_kind,
         owns_identity=owns_identity,
         companion_html=companion_html,
+    )
+    note_utility_line_html = _render_note_utility_line(
+        identity_chips_html=identity_chips_html,
         rendered_props=rendered_props,
     )
     vault_unreachable_banner_html = (
@@ -2278,7 +2486,10 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
         class="note-header active-note-header"
         data-testid="workspace-note-header"
         data-region="note-header">
-        <h1 class="note-title">{title}</h1>
+        <div class="note-title-row" data-testid="workspace-note-title-row">
+          <h1 class="note-title">{title}</h1>
+          {note_utility_line_html}
+        </div>
         {breadcrumb_html}
         {identity_caution_html}
       </header>
@@ -2291,71 +2502,20 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
           aria-label="open outline" data-layout-visible="800-1099"
           onclick="leftPanel.setMode('outline')">☰ outline</button>
         <div class="note-body" data-testid="workspace-note-body" data-region="note-body"
-          data-read-only="false">
-          <div class="note-body-readonly-indicator"
-            data-testid="workspace-note-body-readonly-indicator"
-            data-read-only="false" hidden>read-only</div>
-          <div class="note-body-readonly-reason"
-            data-testid="workspace-note-body-readonly-reason"
-            aria-live="polite"
-            hidden>
-            Editing is currently disabled by runtime configuration.&#160;<a
-              href="#workspace-runtime-telemetry"
-              data-testid="workspace-note-body-readonly-why">Why?</a>
-          </div>
+          data-read-only="false" data-edit-mode="off">
           {read_only_pill_html}
-          <details class="tts-readback-controls"
-            data-testid="tts-readback-controls"
-            data-authority="read-only-projection"
-            data-source-scope="source-and-proposal">
-            <summary class="tts-readback-summary">Read aloud</summary>
-            <div class="tts-readback-panel">
-              <label class="tts-rate-control">
-                <span>Rate</span>
-                <select data-testid="tts-rate" aria-label="Read-back rate">
-                  <option value="0.85">0.85</option>
-                  <option value="1" selected>1.0</option>
-                  <option value="1.15">1.15</option>
-                  <option value="1.3">1.3</option>
-                </select>
-              </label>
-              <button type="button" data-testid="tts-read-full-note"
-                data-tts-action="read-full-note" data-tts-requires-speech="true"
-                onclick="noteReadback.readFullNote()">Read note</button>
-              <button type="button" data-testid="tts-read-selection"
-                data-tts-action="read-selection" data-tts-requires-speech="true"
-                onclick="noteReadback.readSelection()">Selection</button>
-              <button type="button" data-testid="tts-read-proposal"
-                data-tts-action="read-proposal" data-tts-requires-speech="true"
-                onclick="noteReadback.readProposal()">Proposal</button>
-              <button type="button" data-testid="tts-pause"
-                data-tts-action="pause" data-tts-requires-speech="true"
-                onclick="noteReadback.pause()">Pause</button>
-              <button type="button" data-testid="tts-resume"
-                data-tts-action="resume" data-tts-requires-speech="true"
-                onclick="noteReadback.resume()">Resume</button>
-              <button type="button" data-testid="tts-stop"
-                data-tts-action="stop" data-tts-requires-speech="true"
-                onclick="noteReadback.stop()">Stop</button>
-              <span class="tts-readback-status" data-testid="tts-readback-status"
-                data-state="idle" aria-live="polite">Read-back idle.</span>
-            </div>
-          </details>
-          <div class="tts-plan-inspection"
-            data-testid="tts-plan-inspection"
-            data-authority="read-only-projection"
-            aria-live="polite"
-            hidden></div>
-          <!-- The shipped #1675 display-preference controls moved into the
-               Settings drawer (#1789, SEP-07) — presentation consolidation
-               only; their storage/apply mechanism below is unchanged. -->
-          <details class="note-edit-bar" data-testid="workspace-note-edit-bar">
-            <summary class="note-edit-summary">
-              <button type="button" class="note-edit-toggle"
-              data-testid="workspace-note-edit-toggle"
-              onclick="noteEditor.start()">&#9998;&#160;Edit</button>
-            </summary>
-            <div class="note-edit-actions" data-testid="workspace-note-edit-actions" hidden>
+          <!-- #2563 Tier 3 — Edit is a frame mode, not a panel. The edit ribbon
+               pins to the column top ONLY while editing (data-edit-mode="on" on
+               note-body); on open it is hidden, so nothing renders between the
+               title and the first body line. Server-declared read-only/edit-
+               disabled posture surfaces verbatim IN the ribbon on the edit
+               attempt — there is no standing read-only chip above every note.
+               The Edit/Read-draft/Save/Cancel testids + the noteEditor submit
+               (WriteGuard) path are unchanged; only the housing moved. -->
+          <div class="note-edit-bar note-mode-ribbon" data-testid="workspace-note-edit-bar"
+            data-region="edit-mode-ribbon" hidden>
+            <div class="note-edit-actions" data-testid="workspace-note-edit-actions">
+              <span class="note-mode-label" data-testid="workspace-note-mode-label">Editing</span>
               <button type="button" class="note-edit-readback"
                 data-testid="workspace-note-edit-read-draft"
                 data-tts-action="read-draft" data-tts-requires-speech="true"
@@ -2369,8 +2529,26 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
               <span class="note-edit-status" data-testid="workspace-note-edit-status"
                 aria-live="polite"></span>
             </div>
+            <div class="note-body-readonly-indicator"
+              data-testid="workspace-note-body-readonly-indicator"
+              data-read-only="false" hidden>read-only</div>
+            <div class="note-body-readonly-reason"
+              data-testid="workspace-note-body-readonly-reason"
+              aria-live="polite"
+              hidden>
+              Editing is currently disabled by runtime configuration.&#160;<a
+                href="#workspace-runtime-telemetry"
+                data-testid="workspace-note-body-readonly-why">Why?</a>
+            </div>
+            <!-- The hidden Edit trigger keeps its testid + onclick contract for
+                 the keyboard/utility-line caller (noteEditor.start); the visible
+                 entry point is the Tier-1 utility line, but the canonical control
+                 is preserved here so callers and tests keep one stable hook. -->
+            <button type="button" class="note-edit-toggle"
+              data-testid="workspace-note-edit-toggle"
+              onclick="noteEditor.start()" hidden>&#9998;&#160;Edit</button>
             {text_correction_proposals_html}
-          </details>
+          </div>
           <div class="note-body-content" data-testid="workspace-note-rendered">{body_empty_state_html}{body}</div>
           <textarea class="note-source-editor" id="note-source-editor"
             data-testid="workspace-note-source-editor"
@@ -2380,6 +2558,77 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
             data-note-path="{note_path_val}" data-content-hash="{content_hash}"
             hidden>{_e(editor_body)}</textarea>
           {suggested_insertions_html}
+          <!-- #2563 Tier 2 — Read-aloud detail is overlay-hosted, never an inline
+               <details> stacked above the body. The Tier-1 "Read aloud" control
+               mounts the declared `tts` overlay (overlayHost.mount('tts')); this
+               occupant is hidden until then and dismisses with the shared grammar
+               (Esc / scrim -> document anchor). The TTS contract is preserved
+               verbatim: the plan inspector shows the speech plan (scope: note /
+               selection / proposal + rate) and audio starts ONLY on an explicit
+               "Read" inside it (plan-before-audio). It stays inside note-body so
+               noteReadback's document-level selectors (note-source-editor,
+               .panel-decision-surface) resolve unchanged. -->
+          <div class="tts-readback-occupant" data-testid="workspace-tts-occupant"
+            data-region="tts-occupant" data-overlay-id="tts" hidden>
+            <div class="tts-readback-controls"
+              data-testid="tts-readback-controls"
+              data-authority="read-only-projection"
+              data-source-scope="source-and-proposal">
+              <div class="tts-readback-summary">Read aloud</div>
+              <div class="tts-readback-panel">
+                <label class="tts-rate-control">
+                  <span>Rate</span>
+                  <select data-testid="tts-rate" aria-label="Read-back rate">
+                    <option value="0.85">0.85</option>
+                    <option value="1" selected>1.0</option>
+                    <option value="1.15">1.15</option>
+                    <option value="1.3">1.3</option>
+                  </select>
+                </label>
+                <button type="button" data-testid="tts-read-full-note"
+                  data-tts-action="read-full-note" data-tts-requires-speech="true"
+                  onclick="noteReadback.readFullNote()">Read note</button>
+                <button type="button" data-testid="tts-read-selection"
+                  data-tts-action="read-selection" data-tts-requires-speech="true"
+                  onclick="noteReadback.readSelection()">Selection</button>
+                <button type="button" data-testid="tts-read-proposal"
+                  data-tts-action="read-proposal" data-tts-requires-speech="true"
+                  onclick="noteReadback.readProposal()">Proposal</button>
+                <button type="button" data-testid="tts-pause"
+                  data-tts-action="pause" data-tts-requires-speech="true"
+                  onclick="noteReadback.pause()">Pause</button>
+                <button type="button" data-testid="tts-resume"
+                  data-tts-action="resume" data-tts-requires-speech="true"
+                  onclick="noteReadback.resume()">Resume</button>
+                <button type="button" data-testid="tts-stop"
+                  data-tts-action="stop" data-tts-requires-speech="true"
+                  onclick="noteReadback.stop()">Stop</button>
+                <span class="tts-readback-status" data-testid="tts-readback-status"
+                  data-state="idle" aria-live="polite">Read-back idle.</span>
+              </div>
+            </div>
+            <div class="tts-plan-inspection"
+              data-testid="tts-plan-inspection"
+              data-authority="read-only-projection"
+              aria-live="polite"
+              hidden></div>
+          </div>
+          <!-- #2563 Read-aloud active = a minimal transport (play/pause/stop +
+               position) docks to the utility line, not a full transport block in
+               the reading column. The plan inspector stays in the overlay; this
+               dock is the in-column residue and is hidden until read-back is
+               active (driven by noteReadback status). -->
+          <div class="tts-utility-transport" data-testid="workspace-tts-utility-transport"
+            data-region="tts-transport" hidden>
+            <button type="button" class="tts-transport-btn" data-testid="tts-transport-pause"
+              data-tts-action="pause" onclick="noteReadback.pause()" aria-label="Pause read-back">⏸</button>
+            <button type="button" class="tts-transport-btn" data-testid="tts-transport-resume"
+              data-tts-action="resume" onclick="noteReadback.resume()" aria-label="Resume read-back">▶</button>
+            <button type="button" class="tts-transport-btn" data-testid="tts-transport-stop"
+              data-tts-action="stop" onclick="noteReadback.stop()" aria-label="Stop read-back">⏹</button>
+            <span class="tts-transport-position" data-testid="tts-transport-position"
+              aria-live="polite"></span>
+          </div>
         </div>
       </div>
       {_render_body_edit_panel(update_flow_available, note_path_val, raw_body)}
@@ -9609,6 +9858,15 @@ def render_index_html(
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }}
+    /* #2563 — the title row carries the title and the Tier-1 utility-line
+       cluster on one line; the body's first line sits directly under the title,
+       with nothing stacked between them. */
+    .note-title-row {{
+      align-items: flex-start;
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+    }}
     .note-title {{
       font-family: var(--font-display);
       font-size: var(--text-2xl);
@@ -9616,7 +9874,108 @@ def render_index_html(
       line-height: 1.2;
       color: var(--fg-1);
       margin-bottom: 8px;
+      flex: 1 1 auto;
+      min-width: 0;
     }}
+    /* #2563 Tier 1 — one quiet right-aligned icon cluster on the document frame
+       (the note header), never the topbar or the right rail. Icons sit at
+       --fg-3; the label is revealed on hover/focus only, so the line stays
+       quiet and the document owns the centre. */
+    .note-utility-line {{
+      align-items: center;
+      display: flex;
+      flex: 0 0 auto;
+      gap: 2px;
+      position: relative;
+    }}
+    .note-utility-cluster {{
+      align-items: center;
+      display: inline-flex;
+      gap: 2px;
+    }}
+    .note-utility-icon {{
+      align-items: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      color: var(--fg-3);
+      cursor: pointer;
+      display: inline-flex;
+      font-family: var(--font-ui);
+      font-size: var(--text-xs);
+      gap: 5px;
+      line-height: 1;
+      padding: 4px 6px;
+    }}
+    .note-utility-glyph {{
+      font-size: 16px;
+      line-height: 1;
+    }}
+    .note-utility-label {{
+      display: none;
+      white-space: nowrap;
+    }}
+    .note-utility-icon:hover,
+    .note-utility-icon:focus-visible {{
+      border-color: var(--border);
+      color: var(--fg-1);
+    }}
+    .note-utility-icon:hover .note-utility-label,
+    .note-utility-icon:focus-visible .note-utility-label {{
+      display: inline;
+    }}
+    /* The narrow-width ⋯ actions affordance is hidden on wide viewports; the
+       full cluster shows there. The media query below flips them at <=480px. */
+    .note-utility-overflow {{
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      color: var(--fg-3);
+      cursor: pointer;
+      display: none;
+      font-size: 18px;
+      line-height: 1;
+      padding: 2px 8px;
+    }}
+    .note-utility-overflow:hover,
+    .note-utility-overflow:focus-visible {{
+      border-color: var(--border);
+      color: var(--fg-1);
+    }}
+    .note-utility-sheet {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+      display: flex;
+      flex-direction: column;
+      min-width: 180px;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 30;
+    }}
+    .note-utility-sheet[hidden] {{ display: none; }}
+    .note-utility-sheet-item {{
+      background: transparent;
+      border: none;
+      color: var(--fg-1);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 8px 12px;
+      text-align: left;
+    }}
+    .note-utility-sheet-item:hover {{ background: var(--bg-raised); }}
+    /* #2563 Tier 2 — the properties detail is an anchored popover, not an inline
+       stacked disclosure above the body. */
+    .note-properties-popover {{
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 30;
+    }}
+    .note-properties-popover[hidden] {{ display: none; }}
     .workspace-breadcrumb {{
       display: flex;
       flex-wrap: wrap;
@@ -9631,20 +9990,10 @@ def render_index_html(
     .breadcrumb-path {{ color: var(--fg-3); }}
     .breadcrumb-sep {{ color: var(--border-strong); }}
     .breadcrumb-meta-item {{ color: var(--fg-3); }}
-    .workspace-properties-disclosure {{ display: contents; }}
-    .workspace-properties-disclosure summary {{
-      display: inline;
-      cursor: pointer;
-      color: var(--fg-3);
-      list-style: none;
-      font-family: var(--font-mono);
-      font-size: 12px;
-    }}
-    .workspace-properties-disclosure summary::-webkit-details-marker {{ display: none; }}
-    .workspace-properties-disclosure[open] summary {{ color: var(--fg-2); }}
+    /* #2563 — the properties detail body now renders inside the Tier-2 anchored
+       popover (.note-properties-popover) reached from the utility line, not an
+       inline breadcrumb <details>. The body card styling is retained. */
     .properties-disclosure-body {{
-      position: absolute;
-      z-index: 20;
       background: var(--bg-surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
@@ -9808,30 +10157,30 @@ def render_index_html(
     .note-body-empty p {{
       margin: 0;
     }}
-    .tts-readback-controls {{
-      margin: 0 auto 8px;
+    /* #2563 Tier 2 — Read aloud lives in the overlay-hosted occupant, not an
+       inline <details> stacked above the body. The occupant is hidden until the
+       utility-line control mounts the `tts` overlay; it then renders as a
+       right-rail/anchored card on the overlay host substrate. */
+    .tts-readback-occupant {{
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+      margin: 8px auto;
       max-width: var(--display-reading-width, 68ch);
-      padding: 0 32px;
+      padding: 12px 16px;
+      position: relative;
+      z-index: 25;
     }}
+    .tts-readback-occupant[hidden] {{ display: none; }}
     .tts-readback-summary {{
-      color: var(--fg-3);
-      cursor: pointer;
-      display: inline-flex;
+      color: var(--fg-2);
+      display: block;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
-      list-style: none;
-      padding: 2px 0;
-    }}
-    .tts-readback-summary::-webkit-details-marker {{
-      display: none;
-    }}
-    .tts-readback-summary::before {{
-      color: var(--fg-3);
-      content: "▸";
-      margin-right: 5px;
-    }}
-    .tts-readback-controls[open] .tts-readback-summary::before {{
-      content: "▾";
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+      text-transform: uppercase;
     }}
     .tts-readback-panel {{
       align-items: center;
@@ -9935,20 +10284,39 @@ def render_index_html(
       accent-color: var(--accent);
     }}
     /* ---- Direct human note editor (Read <-> Edit) ---- */
-    .note-edit-bar {{
-      max-width: 68ch;
-      margin: 0 auto 10px;
-      padding: 0 32px;
+    /* #2563 Tier 3 — Edit is a frame mode, not a panel. The edit ribbon is the
+       slim mode bar pinned to the top of the reading column ONLY while editing
+       (note-body[data-edit-mode="on"]); it is hidden on open, so nothing renders
+       between the title and the first body line. The edit-tint frame border on
+       note-body answers "am I reading or editing?" at a glance. */
+    .note-mode-ribbon {{
+      align-items: center;
+      background: color-mix(in srgb, var(--accent) 8%, var(--bg-surface));
+      border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+      border-radius: var(--radius-sm);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 auto 12px;
+      max-width: var(--display-reading-width, 68ch);
+      padding: 8px 12px;
+      position: sticky;
+      top: 0;
+      z-index: 15;
     }}
-    .note-edit-summary {{
-      display: inline-flex;
-      list-style: none;
+    .note-mode-ribbon[hidden] {{ display: none; }}
+    .note-mode-label {{
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
     }}
-    .note-edit-summary::-webkit-details-marker {{
-      display: none;
-    }}
-    .note-edit-bar[open] .note-edit-summary {{
-      margin-bottom: 8px;
+    /* Edit-tint frame border on the document frame while editing. */
+    .note-body[data-edit-mode="on"] {{
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+      border-radius: var(--radius-md);
     }}
     .note-edit-toggle, .note-edit-save, .note-edit-cancel {{
       background: var(--bg-raised);
@@ -9968,10 +10336,37 @@ def render_index_html(
       background: color-mix(in srgb, var(--accent) 18%, var(--bg-raised));
       font-weight: 600;
     }}
-    .note-edit-actions {{ display: flex; align-items: center; gap: 8px; }}
+    .note-edit-actions {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
     .note-edit-status {{ color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-xs); }}
     .note-edit-status.ok {{ color: var(--cyan); }}
     .note-edit-status.error {{ color: var(--destructive); }}
+    /* #2563 — Read-aloud active = a minimal transport docked to the utility line
+       (play/pause/stop + position), not a full transport block in the column. */
+    .tts-utility-transport {{
+      align-items: center;
+      display: inline-flex;
+      gap: 4px;
+      margin: 0 auto 8px;
+      max-width: var(--display-reading-width, 68ch);
+      padding: 4px 32px;
+    }}
+    .tts-utility-transport[hidden] {{ display: none; }}
+    .tts-transport-btn {{
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-1);
+      cursor: pointer;
+      font-size: var(--text-xs);
+      min-height: 24px;
+      padding: 1px 7px;
+    }}
+    .tts-transport-btn:hover {{ border-color: var(--accent); }}
+    .tts-transport-position {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }}
     .note-source-editor {{
       background: var(--bg-base);
       border: 1px solid var(--border-strong);
@@ -11322,6 +11717,13 @@ def render_index_html(
     }}
 
     /* <800px: single column, sheet trigger buttons visible */
+    /* #2563 — at <=480px the utility line collapses to a single ⋯ actions
+       affordance that opens the same verbs as an overlay sheet; the body still
+       owns the column (avoids the bottom-edge narrow pile-up #3/#4). */
+    @media (max-width: 480px) {{
+      .note-utility-cluster {{ display: none; }}
+      .note-utility-overflow {{ display: inline-flex; }}
+    }}
     @media (max-width: 799px) {{
       .workspace-sheet-triggers {{
         display: flex;
@@ -12748,6 +13150,7 @@ def render_index_html(
   {_display_preferences_script()}
   {_note_readback_script()}
   {_note_editor_script()}
+  {_note_chrome_script()}
   {settings_drawer_script()}
   {vault_settings_panel_js}
   {_canvas_coauthor_script(canvas_enabled)}

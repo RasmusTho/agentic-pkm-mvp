@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from companion_ui.workspace.serve_dev_page import render_index_html
 
 
@@ -87,11 +89,13 @@ def _readback_script(html: str) -> str:
 def test_tts_readback_controls_render() -> None:
     html = _html()
 
-    assert '<details class="tts-readback-controls"' in html
+    # #2563 — Read aloud is Tier-2 overlay-hosted, no longer an inline <details>
+    # stacked above the body. The controls live in the `tts` overlay occupant.
+    assert 'class="tts-readback-controls"' in html
     assert 'data-testid="tts-readback-controls"' in html
     assert 'data-authority="read-only-projection"' in html
     assert 'data-source-scope="source-and-proposal"' in html
-    assert '<summary class="tts-readback-summary">Read aloud</summary>' in html
+    assert '<div class="tts-readback-summary">Read aloud</div>' in html
     assert 'data-testid="tts-rate"' in html
     assert 'data-testid="tts-read-full-note"' in html
     assert 'data-testid="tts-read-selection"' in html
@@ -106,12 +110,18 @@ def test_tts_readback_controls_render() -> None:
     assert draft_index < save_index
 
 
-def test_tts_readback_controls_collapsed_by_default() -> None:
+def test_tts_readback_controls_not_inline_details_above_body() -> None:
+    # #2563 — the Read-aloud detail must not be an inline <details> at all (it is
+    # overlay-hosted). The occupant that carries it is hidden until the
+    # utility-line control mounts the `tts` overlay, so nothing renders between
+    # the title and the first body line on open.
     html = _html()
 
-    start = html.index('<details class="tts-readback-controls"')
-    opening_tag = html[start:html.index(">", start)]
-    assert " open" not in opening_tag
+    assert '<details class="tts-readback-controls"' not in html
+    m = re.search(r'<div class="tts-readback-occupant"[^>]*>', html)
+    assert m, "tts-readback-occupant not found"
+    assert "hidden" in m.group(), "Read-aloud occupant is not hidden on open"
+    assert 'data-overlay-id="tts"' in m.group()
 
 
 def test_tts_readback_uses_local_server_tts_not_browser_speech() -> None:

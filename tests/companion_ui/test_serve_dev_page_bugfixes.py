@@ -65,15 +65,10 @@ def test_breadcrumb_escapes_once() -> None:
     # #2160 — the incoming note_path is already HTML-escaped; the breadcrumb must
     # escape exactly once, not double-escape every non-ampersand metacharacter.
     note_path = _e("Today's plan.md")  # what the caller passes: "Today&#x27;s plan.md"
+    # #2563 — the breadcrumb is now just path + inline meta (artifact/hash/uuid
+    # moved to the Tier-2 properties popover), so the signature is path + props.
     html = _render_workspace_breadcrumb(
         note_path=note_path,
-        artifact_id="",
-        content_hash="",
-        identity_state="",
-        identity_source="",
-        artifact_kind="",
-        owns_identity=False,
-        companion_html="",
         rendered_props=SimpleNamespace(fields=(), html=""),
     )
     assert "Today&#x27;s plan.md" in html

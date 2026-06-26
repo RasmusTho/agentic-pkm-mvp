@@ -8,6 +8,8 @@ POSTs to the same-origin ``/api/companion/note/save`` proxy.
 
 from __future__ import annotations
 
+import re
+
 from companion_ui.workspace.serve_dev_page import render_index_html
 
 
@@ -54,21 +56,30 @@ def _render(*, body: str = "---\ntitle: T\nuuid: u\n---\n# Head\n\nBody text.\n"
 
 def test_editor_present_when_canvas_disabled() -> None:
     # The whole point: editing works even with Canvas off (no ceremony).
+    # #2563 — Edit is a Tier-3 frame mode, not an inline <details> panel; the
+    # edit ribbon + Save/Cancel/Read-draft + the editor textarea + the Edit
+    # trigger are all still present (the noteEditor/WriteGuard path is unchanged).
     html = _render(canvas_enabled=False)
-    assert '<details class="note-edit-bar"' in html
+    assert '<div class="note-edit-bar note-mode-ribbon"' in html
     assert 'data-testid="workspace-note-source-editor"' in html
     assert 'data-testid="workspace-note-edit-toggle"' in html
     assert 'data-testid="workspace-note-edit-save"' in html
     assert 'data-testid="workspace-note-edit-cancel"' in html
 
 
-def test_editor_controls_collapsed_by_default() -> None:
+def test_edit_ribbon_hidden_until_edit_mode() -> None:
+    # #2563 — the edit ribbon must not be an inline <details>, and it is hidden
+    # on open (it only appears once the document frame enters edit mode), so
+    # nothing renders between the title and the first body line.
     html = _render(canvas_enabled=False)
 
-    start = html.index('<details class="note-edit-bar"')
-    opening_tag = html[start:html.index(">", start)]
-    assert " open" not in opening_tag
-    assert '<summary class="note-edit-summary">' in html
+    assert '<details class="note-edit-bar"' not in html
+    m = re.search(r'<div class="note-edit-bar note-mode-ribbon"[^>]*>', html)
+    assert m, "edit-mode ribbon not found"
+    assert "hidden" in m.group(), "edit ribbon is not hidden on open"
+    # The document frame starts in reading mode.
+    body_m = re.search(r'<div class="note-body"[^>]*>', html)
+    assert body_m and 'data-edit-mode="off"' in body_m.group()
 
 
 def test_editor_present_when_canvas_enabled() -> None:
