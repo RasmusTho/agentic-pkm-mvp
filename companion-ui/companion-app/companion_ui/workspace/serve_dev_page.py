@@ -486,8 +486,9 @@ def _render_note_utility_line(
     Each control routes to its tier-appropriate host (none is a stacked
     ``<details>`` above the body):
       - Properties -> Tier-2 anchored popover (the artifact/hash/uuid detail).
-      - Read aloud -> Tier-2 overlay host occupant (``overlayHost.mount('tts')``),
-        which preserves the plan-before-audio TTS contract.
+      - Read aloud -> Tier-2 anchored popover (mirrors Properties), which
+        preserves the plan-before-audio TTS contract. (The declared `tts`
+        overlay host stays declared-but-unshipped for a future SEP task.)
       - Edit -> Tier-3 frame mode (``noteEditor.start()`` flips the document
         frame into edit mode; it is not a panel).
     """
@@ -513,12 +514,13 @@ def _render_note_utility_line(
         '<span class="note-utility-glyph" aria-hidden="true">&#9432;</span>'
         '<span class="note-utility-label">Properties</span>'
         "</button>"
-        # Read aloud — Tier 2 overlay host occupant (plan-before-audio preserved).
+        # Read aloud — Tier 2 anchored popover (plan-before-audio preserved).
         '<button type="button" class="note-utility-icon"'
         ' data-testid="workspace-note-utility-read-aloud"'
         ' data-note-verb="read-aloud" data-tts-requires-speech="true"'
+        ' aria-haspopup="dialog" aria-expanded="false"'
         ' title="Read aloud" aria-label="Read aloud"'
-        ' onclick="if (window.overlayHost) { overlayHost.mount(\'tts\'); }">'
+        ' onclick="noteUtility.toggleReadAloud(this)">'
         '<span class="note-utility-glyph" aria-hidden="true">&#9835;</span>'
         '<span class="note-utility-label">Read aloud</span>'
         "</button>"
@@ -1275,28 +1277,22 @@ def _note_chrome_script() -> str:
   <script>
   (function () {
     function el(sel) { return document.querySelector(sel); }
-    // Tier-2 Read-aloud occupant: register the declared `tts` overlay so the
-    // utility-line "Read aloud" control mounts it on the shared host. Mounting
-    // reveals the overlay-hosted Read-aloud block (plan inspector + controls);
-    // dismiss hides it. The TTS plan-before-audio contract is untouched — audio
-    // still only starts on an explicit "Read" inside the inspector.
-    if (window.overlayHost && window.overlayHost.register) {
-      window.overlayHost.register('tts', {
-        open: function () {
-          var occ = el('[data-overlay-id="tts"]');
-          if (occ) { occ.hidden = false; }
-        },
-        close: function () {
-          var occ = el('[data-overlay-id="tts"]');
-          if (occ) { occ.hidden = true; }
-        }
-      });
-    }
+    // Tier-2 Read-aloud is a page-local anchored popover (mirrors Properties),
+    // NOT a global overlay-host occupant — so it does not register/mount on the
+    // shared host or activate the scrim. The Tier-1 "Read aloud" control toggles
+    // it via noteUtility.toggleReadAloud; it dismisses through closePopovers
+    // (Esc / open-another / outside click). The TTS plan-before-audio contract is
+    // untouched — audio still only starts on an explicit "Read" inside the
+    // inspector.
     function closePopovers() {
       var pop = el('[data-testid="workspace-properties-popover"]');
       if (pop) { pop.hidden = true; }
       var trigger = el('[data-testid="workspace-note-utility-properties"]');
       if (trigger) { trigger.setAttribute('aria-expanded', 'false'); }
+      var readAloud = el('[data-testid="workspace-readaloud-popover"]');
+      if (readAloud) { readAloud.hidden = true; }
+      var readAloudTrigger = el('[data-testid="workspace-note-utility-read-aloud"]');
+      if (readAloudTrigger) { readAloudTrigger.setAttribute('aria-expanded', 'false'); }
       var sheet = el('[data-testid="workspace-note-utility-sheet"]');
       if (sheet) { sheet.hidden = true; }
       var overflow = el('[data-testid="workspace-note-utility-overflow"]');
@@ -1305,6 +1301,14 @@ def _note_chrome_script() -> str:
     window.noteUtility = {
       toggleProperties: function (trigger) {
         var pop = el('[data-testid="workspace-properties-popover"]');
+        if (!pop) { return; }
+        var show = pop.hidden;
+        closePopovers();
+        pop.hidden = !show;
+        if (trigger) { trigger.setAttribute('aria-expanded', show ? 'true' : 'false'); }
+      },
+      toggleReadAloud: function (trigger) {
+        var pop = el('[data-testid="workspace-readaloud-popover"]');
         if (!pop) { return; }
         var show = pop.hidden;
         closePopovers();
@@ -1327,7 +1331,10 @@ def _note_chrome_script() -> str:
           if (pop) { pop.hidden = false; }
           if (trigger) { trigger.setAttribute('aria-expanded', 'true'); }
         } else if (verb === 'read-aloud') {
-          if (window.overlayHost) { window.overlayHost.mount('tts'); }
+          var readAloud = el('[data-testid="workspace-readaloud-popover"]');
+          var readAloudTrigger = el('[data-testid="workspace-note-utility-read-aloud"]');
+          if (readAloud) { readAloud.hidden = false; }
+          if (readAloudTrigger) { readAloudTrigger.setAttribute('aria-expanded', 'true'); }
         } else if (verb === 'edit') {
           if (window.noteEditor) { window.noteEditor.start(); }
         }
@@ -2558,18 +2565,22 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
             data-note-path="{note_path_val}" data-content-hash="{content_hash}"
             hidden>{_e(editor_body)}</textarea>
           {suggested_insertions_html}
-          <!-- #2563 Tier 2 — Read-aloud detail is overlay-hosted, never an inline
-               <details> stacked above the body. The Tier-1 "Read aloud" control
-               mounts the declared `tts` overlay (overlayHost.mount('tts')); this
-               occupant is hidden until then and dismisses with the shared grammar
-               (Esc / scrim -> document anchor). The TTS contract is preserved
-               verbatim: the plan inspector shows the speech plan (scope: note /
-               selection / proposal + rate) and audio starts ONLY on an explicit
-               "Read" inside it (plan-before-audio). It stays inside note-body so
-               noteReadback's document-level selectors (note-source-editor,
-               .panel-decision-surface) resolve unchanged. -->
-          <div class="tts-readback-occupant" data-testid="workspace-tts-occupant"
-            data-region="tts-occupant" data-overlay-id="tts" hidden>
+          <!-- #2563 Tier 2 — Read-aloud detail is a page-local anchored popover
+               (mirrors the Properties popover, its sibling Tier-2 control), never
+               an inline <details> stacked above the body and NOT a global
+               overlay-host occupant / scrim. The Tier-1 "Read aloud" control
+               toggles it (noteUtility.toggleReadAloud); it is hidden until then
+               and dismissed via closePopovers (Esc / open-another / outside
+               click). The TTS contract is preserved verbatim: the plan inspector
+               shows the speech plan (scope: note / selection / proposal + rate)
+               and audio starts ONLY on an explicit "Read" inside it
+               (plan-before-audio). It stays inside note-body so noteReadback's
+               document-level selectors (note-source-editor,
+               .panel-decision-surface) resolve unchanged. The declared `tts`
+               overlay host remains declared-but-unshipped (overlay_host.py) for a
+               future SEP task that may ship it as a server-rendered occupant. -->
+          <div class="note-readaloud-popover" data-testid="workspace-readaloud-popover"
+            data-region="readaloud-popover" role="dialog" aria-label="Read aloud" hidden>
             <div class="tts-readback-controls"
               data-testid="tts-readback-controls"
               data-authority="read-only-projection"
@@ -10137,6 +10148,11 @@ def render_index_html(
       min-height: 0;
       overflow-y: auto;
       padding: 24px 24px 96px;
+      /* #2563 (PR #2569 rework) — positioning context for the Read-aloud anchored
+         popover, which lives inside note-body so noteReadback's document-level
+         selectors resolve. Anchors the popover to the reading column, not the
+         viewport / a scrim. */
+      position: relative;
     }}
     .note-body-empty {{
       background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
@@ -10157,39 +10173,28 @@ def render_index_html(
     .note-body-empty p {{
       margin: 0;
     }}
-    /* #2563 Tier 2 — Read aloud lives in the overlay-hosted occupant, not an
-       inline <details> stacked above the body. The occupant is hidden until the
-       utility-line control mounts the `tts` overlay; it then renders as a
-       right-rail/anchored card on the overlay host substrate. */
-    .tts-readback-occupant {{
+    /* #2563 Tier 2 (Codex PR #2569 rework) — Read aloud is a page-local anchored
+       popover (mirrors .note-properties-popover, its sibling Tier-2 control), not
+       an overlay-host occupant and not scrim-dependent. It lives inside note-body
+       (so noteReadback's document-level selectors resolve), anchors to the
+       top-right of the reading column, and stacks at popover level. The Read-aloud
+       panel (plan inspector + controls) is larger than the properties detail, so
+       the card gets a roomier max-width and a max-height with scroll. */
+    .note-readaloud-popover {{
+      position: absolute;
+      right: 24px;
+      top: 8px;
+      z-index: 30;
       background: var(--bg-surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       box-shadow: 0 2px 12px rgba(0,0,0,0.18);
-      margin: 8px auto;
-      max-width: var(--display-reading-width, 68ch);
       padding: 12px 16px;
-      position: relative;
-      z-index: 25;
-    }}
-    .tts-readback-occupant[hidden] {{ display: none; }}
-    /* #2563 Tier 2 fix (Codex PR #2569): when mounted via overlayHost('tts')
-       the shared scrim is active at z-index 900. The occupant stays in the DOM
-       (so noteReadback's document-level selectors resolve) but must render
-       ABOVE the scrim to be clickable — otherwise the first click hits the
-       scrim and dismisses the overlay instead of pressing Read note/Selection.
-       When shown, lift it to a fixed card above the scrim (and the z-950 mount
-       layer); the scrim below still dismisses on outside-click. */
-    .tts-readback-occupant:not([hidden]) {{
-      position: fixed;
-      top: 12vh;
-      left: 50%;
-      transform: translateX(-50%);
-      width: min(92vw, var(--display-reading-width, 68ch));
+      max-width: min(92vw, 560px);
       max-height: 76vh;
       overflow: auto;
-      z-index: 960;
     }}
+    .note-readaloud-popover[hidden] {{ display: none; }}
     .tts-readback-summary {{
       color: var(--fg-2);
       display: block;

@@ -111,17 +111,20 @@ def test_tts_readback_controls_render() -> None:
 
 
 def test_tts_readback_controls_not_inline_details_above_body() -> None:
-    # #2563 — the Read-aloud detail must not be an inline <details> at all (it is
-    # overlay-hosted). The occupant that carries it is hidden until the
-    # utility-line control mounts the `tts` overlay, so nothing renders between
+    # #2563 — the Read-aloud detail must not be an inline <details> at all. It is
+    # a page-local anchored popover (Codex PR #2569 rework, mirroring Properties),
+    # NOT a global overlay-host occupant / scrim. The popover that carries it is
+    # hidden until the utility-line control toggles it, so nothing renders between
     # the title and the first body line on open.
     html = _html()
 
     assert '<details class="tts-readback-controls"' not in html
-    m = re.search(r'<div class="tts-readback-occupant"[^>]*>', html)
-    assert m, "tts-readback-occupant not found"
-    assert "hidden" in m.group(), "Read-aloud occupant is not hidden on open"
-    assert 'data-overlay-id="tts"' in m.group()
+    m = re.search(r'<div class="note-readaloud-popover"[^>]*>', html)
+    assert m, "note-readaloud-popover not found"
+    assert "hidden" in m.group(), "Read-aloud popover is not hidden on open"
+    # Not a global overlay-host occupant.
+    assert 'data-overlay-id="tts"' not in html
+    assert "tts-readback-occupant" not in html
 
 
 def test_tts_readback_uses_local_server_tts_not_browser_speech() -> None:

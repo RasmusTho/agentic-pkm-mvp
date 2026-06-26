@@ -210,8 +210,8 @@ class TestNoteViewChromePlacement:
         # The edit-mode ribbon is hidden on open.
         ribbon = re.search(r'<div class="note-edit-bar note-mode-ribbon"[^>]*>', html)
         assert ribbon and "hidden" in ribbon.group()
-        # The Read-aloud occupant is hidden on open.
-        occ = re.search(r'<div class="tts-readback-occupant"[^>]*>', html)
+        # The Read-aloud popover is hidden on open.
+        occ = re.search(r'<div class="note-readaloud-popover"[^>]*>', html)
         assert occ and "hidden" in occ.group()
         # The properties popover is hidden on open.
         pop = re.search(r'<div class="note-properties-popover"[^>]*>', html)
@@ -237,11 +237,13 @@ class TestNoteViewChromePlacement:
         assert 'data-testid="workspace-note-utility-properties"' in cluster
         assert 'data-testid="workspace-note-utility-read-aloud"' in cluster
         assert 'data-testid="workspace-note-utility-edit"' in cluster
-        # Read aloud mounts the overlay-hosted tts occupant; Edit enters the
-        # Tier-3 frame mode; Properties opens the anchored popover.
-        assert "overlayHost.mount('tts')" in cluster
+        # Read aloud opens the page-local anchored popover (mirrors Properties);
+        # Edit enters the Tier-3 frame mode; Properties opens its anchored popover.
+        assert "noteUtility.toggleReadAloud(this)" in cluster
         assert "noteEditor.start()" in cluster
         assert "noteUtility.toggleProperties(this)" in cluster
+        # Read aloud is NOT a global overlay-host occupant — no scrim mount.
+        assert "overlayHost.mount('tts')" not in cluster
         # None of the three is a stacked <details> above the body.
         assert '<details class="tts-readback-controls"' not in html
         assert '<details class="note-edit-bar"' not in html
@@ -314,23 +316,46 @@ class TestNoteViewChromePlacement:
         assert "noteUtility.fromSheet('read-aloud')" in sheet_html
         assert "noteUtility.fromSheet('edit')" in sheet_html
 
-    def test_read_aloud_routes_through_declared_tts_overlay_occupant(self) -> None:
-        # AC3 support — the Read-aloud detail is overlay-hosted (the declared
-        # `tts` overlay), preserving the dismiss grammar. The plan-before-audio
-        # TTS contract (inspector + explicit Read) is exercised in live UAT.
+    def test_read_aloud_opens_anchored_popover(self) -> None:
+        # AC3 support (Codex PR #2569 rework) — the Read-aloud detail is a
+        # page-local anchored popover that mirrors the Properties popover (its
+        # sibling Tier-2 control), NOT a global overlay-host occupant / scrim.
+        # The plan-before-audio TTS contract (inspector + explicit Read) is
+        # exercised in live UAT.
         html = _render()
-        occ = re.search(r'<div class="tts-readback-occupant"[^>]*>', html)
-        assert occ and 'data-overlay-id="tts"' in occ.group()
-        assert "window.overlayHost.register('tts'" in html
-        # Codex PR #2569 regression: mounting `tts` activates the shared scrim at
-        # z-index 900; the occupant must render ABOVE it (position:fixed, higher
-        # z-index) or the first click lands on the scrim and dismisses the
-        # overlay instead of pressing Read note/Selection/Proposal.
-        shown = re.search(
-            r"\.tts-readback-occupant:not\(\[hidden\]\)\s*\{([^}]*)\}", html
+        # The Read-aloud control toggles the popover (mirrors toggleProperties).
+        trigger = re.search(
+            r'data-testid="workspace-note-utility-read-aloud"[^>]*>', html
         )
-        assert shown, "shown tts-occupant CSS rule (above the scrim) is missing"
-        shown_body = shown.group(1)
-        assert "position: fixed" in shown_body
-        z = re.search(r"z-index:\s*(\d+)", shown_body)
-        assert z and int(z.group(1)) > 900, "tts occupant must stack above the scrim (z-index 900)"
+        assert trigger and "noteUtility.toggleReadAloud(this)" in trigger.group()
+        assert 'aria-haspopup="dialog"' in trigger.group()
+        # The popover element exists and is hidden by default.
+        pop = re.search(r'<div class="note-readaloud-popover"[^>]*>', html)
+        assert pop, "note-readaloud-popover not found"
+        assert "hidden" in pop.group(), "Read-aloud popover is not hidden by default"
+        assert 'data-testid="workspace-readaloud-popover"' in pop.group()
+        assert 'role="dialog"' in pop.group()
+        # It is NOT a global overlay-host occupant — no host wiring, no scrim.
+        assert 'data-overlay-id="tts"' not in html
+        assert "overlayHost.mount('tts')" not in html
+        assert "overlayHost.register('tts'" not in html
+        assert "tts-readback-occupant" not in html
+        # It dismisses via closePopovers (Esc / open-another / outside click),
+        # exactly like the properties popover: closePopovers must hide the
+        # readaloud popover (and reset its trigger's aria-expanded).
+        close_fn = re.search(
+            r"function closePopovers\(\)\s*\{.*?\n    \}", html, re.DOTALL
+        )
+        assert close_fn, "closePopovers function not found"
+        close_body = close_fn.group()
+        assert 'workspace-readaloud-popover' in close_body, (
+            "closePopovers does not hide the Read-aloud popover"
+        )
+        assert "noteUtility.toggleReadAloud" in html
+        # The popover styling is popover-level (NOT scrim-dependent fixed/z-960).
+        css = re.search(
+            r"\.note-readaloud-popover\s*\{([^}]*)\}", html
+        )
+        assert css, "note-readaloud-popover CSS rule is missing"
+        assert "position: absolute" in css.group(1)
+        assert "position: fixed" not in css.group(1)
