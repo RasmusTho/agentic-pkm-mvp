@@ -30,7 +30,7 @@ The repo provides several startup commands. Choose based on the channel and requ
 | --- | --- | --- | --- | --- | --- | --- |
 | `make dev-start-full` | dev | `docker-compose.yaml:docker-compose.dev.yml` | `pkm-dev` | `dev` | From `.env.dev.local` | **Canonical dev startup.** Loads `.env.dev.local` for vault defaults; no inline path needed. |
 | `make dev-up` | dev | `docker-compose.yaml:docker-compose.dev.yml` | `pkm-dev` | `dev` | No | Bring up dev containers only (no health-gate wait). Not a substitute for `dev-start-full`. |
-| `make prod-start-full VAULT_ROOT=<path>` | prod (`stable`) | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | Yes | **Canonical prod startup.** All four bindings explicit. |
+| `make prod-start-full` | prod (`stable`) | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | From `.env.prod.local` | **Canonical prod startup.** Loads the configured Midgård prod vault default; no inline path needed. |
 | `make prod-up` | prod | `docker-compose.yaml:docker-compose.prod.yml` | `pkm-prod` | `prod` | No | Bring up prod containers only (no health-gate wait). Not a substitute for `prod-start-full`. |
 | `make test-start-full VAULT_ROOT=<path>` | test | `docker-compose.yaml:docker-compose.test.yml` | `pkm-test` | `test` | Yes | **Canonical test startup.** All four bindings explicit. Use for staged promotion verification (see `promote-to-test` skill). |
 | `make test-up` | test | `docker-compose.yaml:docker-compose.test.yml` | `pkm-test` | `test` | Uses `TEST_VAULT_ROOT` | Bring up test containers only (no health-gate wait). Not a substitute for `test-start-full`. |
@@ -38,21 +38,20 @@ The repo provides several startup commands. Choose based on the channel and requ
 | `make alpha-up VAULT_ROOT=<path>` | **Legacy.** Equivalent to the old prod startup before explicit env binding existed. Runs `scripts/start_full_system.sh` without explicit compose file, project name, or `PKM_ENVIRONMENT`. | — | — | — | Yes | **Do not use for new prod startups.** Use `make prod-start-full` instead. |
 | `scripts/start_full_system.sh` | Varies | Inherits caller env | Inherits caller env | Inherits caller env | Caller-supplied | Core startup script invoked by `make` targets above. Do not call directly unless you have set all four bindings explicitly. |
 
-**Rule:** for a dev startup, use `make dev-start-full` (vault defaults from `.env.dev.local`). For a prod startup, use `make prod-start-full VAULT_ROOT=<path>`. For a test-channel startup, use `make test-start-full VAULT_ROOT=<path>`. These targets enforce all four explicit bindings and run the health-gate wait. `make alpha-up` and bare `scripts/start_full_system.sh` calls lack one or more of these guarantees.
+**Rule:** for a dev startup, use `make dev-start-full` (vault defaults from `.env.dev.local`). For a prod startup, use `make prod-start-full` (vault defaults from `.env.prod.local`). For a test-channel startup, use `make test-start-full VAULT_ROOT=<path>`. These targets enforce channel identity and run the health-gate wait. `make alpha-up` and bare `scripts/start_full_system.sh` calls lack one or more of these guarantees.
 
 ## Prod startup (canonical)
 
 For the production runtime (`stable` channel against the real vault), use the `prod-start-full` target.
 This uses the prod compose overlay, the `pkm-prod` project namespace, explicit `prod` environment, and an
-operator-supplied `VAULT_ROOT`. Do not guess or substitute a dev/test vault path.
+operator-configured Midgård vault root from `.env.prod.local`. Do not guess or substitute a dev/test vault path.
 
 ```bash
-export VAULT_ROOT="/absolute/path/to/your/real/vault"
 make prod-start-full
 ```
 
 - API is exposed on host port **18000**.
-- `VAULT_ROOT` must be set to the real operator vault path by the operator before startup.
+- `.env.prod.local` must set `VAULT_ROOT` to the real Midgård vault path once per machine.
 - The prod runtime root is the repo checkout directory (e.g., `/path/to/repo`), not a sub-directory. Ensure the correct worktree is used.
 
 For LLM configuration when using a local Ollama endpoint via the OpenAI-compatible API (provider=`openai`):
@@ -86,7 +85,7 @@ EOF
   spaces in values correctly.
 - `.env.dev.local` is gitignored and must not be committed. It contains machine-specific absolute paths.
 - The file format is Docker Compose env-file format (`KEY=VALUE`), not a shell script.
-- Default dev vault: Niflheim. Default prod/stable vault: Midgård (operator-configured). Bifröst/test
+- Default dev vault: Niflheim. Default prod/stable vault: Midgård via `.env.prod.local`. Bifröst/test
   mapping is not a confirmed default; do not encode it without explicit operator confirmation.
 
 ### Dev startup after every reboot
@@ -258,7 +257,7 @@ Architectural reading note:
 - while the higher-level architecture still distinguishes interaction, cognition, execution, memory, and governance above these startup mechanics.
 
 Deprecated:
-- `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers. Use `make prod-start-full VAULT_ROOT=<path>` (prod) or `make start` (dev/test) instead.
+- `scripts/run_alpha_stack.sh` and `scripts/run_alpha_live.sh` are legacy helpers. Use `make prod-start-full` (prod) or `make start` (dev/test) instead.
 - `make alpha-up` is a legacy alias for the old prod startup without explicit env binding. Prefer `make prod-start-full`.
 
 ## Watcher registry (multi-spec)
@@ -311,4 +310,4 @@ export KNOWLEDGE_ALLOW_FALLBACK=0
 - If `/api/health` fails:
   - check heartbeat files in `/app/tmp`
   - `docker logs --tail 200 workspace-api-1|workspace-worker-1|workspace-watcher-1`
-  - rerun `make prod-start-full VAULT_ROOT=<path>` (prod) or `make start` (dev/test) after fixing config/env.
+  - rerun `make prod-start-full` (prod) or `make start` (dev/test) after fixing config/env.

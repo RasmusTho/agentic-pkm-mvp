@@ -127,6 +127,28 @@ cui_api_healthy_now() {
   curl -fsS --max-time 3 "http://127.0.0.1:${CUI_API_PORT}/healthz" >/dev/null 2>&1
 }
 
+cui_api_container_id() {
+  docker ps --filter "label=com.docker.compose.project=${CUI_COMPOSE_PROJECT}" \
+    --filter "name=api" --format '{{.ID}}' 2>/dev/null | head -n1
+}
+
+cui_container_vault_mount_source() {
+  local cid="$1"
+  [ -n "${cid}" ] || return 1
+  docker inspect "${cid}" \
+    --format '{{range .Mounts}}{{if eq .Destination "/app/vault"}}{{.Source}}{{end}}{{end}}' \
+    2>/dev/null
+}
+
+cui_runtime_vault_matches_env() {
+  local cid source
+  cid="$(cui_api_container_id)"
+  [ -n "${cid}" ] || return 1
+  source="$(cui_container_vault_mount_source "${cid}")"
+  [ -n "${source}" ] || return 1
+  [ "${source}" = "${VAULT_ROOT:-}" ]
+}
+
 cui_start_runtime() {
   local root _rc
   root="$(cui_repo_root)"
@@ -135,8 +157,11 @@ cui_start_runtime() {
   # watcher/worker health race). Set CUI_FORCE_RECREATE=1 to force a rebuild,
   # e.g. after changing runtime code or compose config.
   if [ "${CUI_FORCE_RECREATE:-0}" != "1" ] && cui_api_healthy_now; then
-    cui_log "runtime API already healthy on port ${CUI_API_PORT} — skipping full stack recreate (set CUI_FORCE_RECREATE=1 to force)"
-    return 0
+    if cui_runtime_vault_matches_env; then
+      cui_log "runtime API already healthy on port ${CUI_API_PORT} — skipping full stack recreate (set CUI_FORCE_RECREATE=1 to force)"
+      return 0
+    fi
+    cui_warn "runtime API is healthy but bound to a stale/wrong vault mount — recreating ${CUI_COMPOSE_PROJECT}"
   fi
   cui_log "starting runtime API via scripts/start_full_system.sh (project=${CUI_COMPOSE_PROJECT})"
   (
@@ -177,9 +202,8 @@ cui_wait_healthz() {
 # Locates the API container for the compose project and lists /app/vault.
 # Read-only. Prints a human summary; returns non-zero if mount is missing.
 cui_verify_vault_mount() {
-  local cid count
-  cid="$(docker ps --filter "label=com.docker.compose.project=${CUI_COMPOSE_PROJECT}" \
-          --filter "name=api" --format '{{.ID}}' 2>/dev/null | head -n1)"
+  local cid count source
+  cid="$(cui_api_container_id)"
   if [ -z "${cid}" ]; then
     cui_warn "no running api container found for project ${CUI_COMPOSE_PROJECT}; cannot confirm /app/vault mount"
     return 1
@@ -188,8 +212,13 @@ cui_verify_vault_mount() {
     cui_warn "api container ${cid} has no /app/vault directory; vault mount is missing/stale"
     return 1
   fi
+  source="$(cui_container_vault_mount_source "${cid}")"
+  if [ -n "${VAULT_ROOT:-}" ] && [ -n "${source}" ] && [ "${source}" != "${VAULT_ROOT}" ]; then
+    cui_warn "api container ${cid} /app/vault is mounted from '${source}', expected '${VAULT_ROOT}'"
+    return 1
+  fi
   count="$(docker exec "${cid}" sh -c 'ls -1 /app/vault 2>/dev/null | wc -l' 2>/dev/null | tr -d '[:space:]')"
-  cui_log "vault mount OK: container ${cid} sees /app/vault (host VAULT_ROOT=${VAULT_ROOT:-unknown}, top-level entries=${count:-0})"
+  cui_log "vault mount OK: container ${cid} sees /app/vault (source=${source:-unknown}, top-level entries=${count:-0})"
   return 0
 }
 
@@ -280,14 +309,14 @@ cui_start_ui() {
   # wait for the UI to accept connections
   local i=1
   while [ "${i}" -le 15 ]; do
-    if curl -fsS --max-time 3 "http://127.0.0.1:${CUI_UI_PORT}/" >/dev/null 2>&1; then
-      cui_log "Companion UI responding on 127.0.0.1:${CUI_UI_PORT}"
+    if curl -fsS --max-time 3 "http://127.0.0.1:${CUI_UI_PORT}/healthz" >/dev/null 2>&1; then
+      cui_log "Companion UI health responding on 127.0.0.1:${CUI_UI_PORT}"
       return 0
     fi
     sleep 1
     i=$((i + 1))
   done
-  cui_warn "Companion UI did not respond on 127.0.0.1:${CUI_UI_PORT} within timeout; check ${log_path}"
+  cui_warn "Companion UI health did not respond on 127.0.0.1:${CUI_UI_PORT} within timeout; check ${log_path}"
   return 1
 }
 
@@ -429,10 +458,10 @@ cui_run_doctor() {
   fi
 
   # 6. UI process reachable (read-only)
-  if curl -fsS --max-time 3 "http://127.0.0.1:${CUI_UI_PORT}/" >/dev/null 2>&1; then
-    echo "  [ok]   Companion UI responding on :${CUI_UI_PORT}"
+  if curl -fsS --max-time 3 "http://127.0.0.1:${CUI_UI_PORT}/healthz" >/dev/null 2>&1; then
+    echo "  [ok]   Companion UI health responding on :${CUI_UI_PORT}"
   else
-    echo "  [info] Companion UI not responding on :${CUI_UI_PORT} (not started yet?)"
+    echo "  [info] Companion UI health not responding on :${CUI_UI_PORT} (not started yet?)"
   fi
 
   # 7. Target note (optional, read-only)

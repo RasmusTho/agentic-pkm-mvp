@@ -63,8 +63,11 @@ tmp/index.jsonl
 /companion-ui/companion-app/runtime/panel/
 /companion-ui/companion-app/runtime/agent_memory/
 # Promotion-plan receipts are local ops artifacts, not repo truth (#2081).
-# Scoped to ops/promotions/ only — tracked ops/** siblings (benchmarks, observability, quality) stay tracked.
+# Scoped to ops/promotions/ and ops/test-promotions/ only — tracked ops/** siblings stay tracked.
 ops/promotions/
+ops/test-promotions/
+# Codex agent scratch directories (ephemeral workspace artifacts).
+.codex-tmp/
 verification_report.md
 
 # Local hygiene artifacts

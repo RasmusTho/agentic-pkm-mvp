@@ -31,7 +31,7 @@ This is the capability that turns the existing `dev` / `test` / `prod` environme
 
 The immediate operator priority is **establishing a stable prod baseline**, not completing the full promotion-governance workflow. These are sequential concerns, not parallel ones.
 
-Before promotion workflows can be trusted, the prod runtime must be running safely: correct compose overlay (`docker-compose.prod.yml`), explicit project namespace (`pkm-prod`), explicit `PKM_ENVIRONMENT=prod`, and an operator-supplied `VAULT_ROOT` pointing at the real vault. This binding is not optional and cannot be defaulted.
+Before promotion workflows can be trusted, the prod runtime must be running safely: correct compose overlay (`docker-compose.prod.yml`), explicit project namespace (`pkm-prod`), explicit `PKM_ENVIRONMENT=prod`, and the operator-configured `.env.prod.local` default pointing at the Midgård prod vault. This binding is not optional, but it is configured once per machine rather than restated on every startup.
 
 ### Prod runtime binding
 
@@ -39,9 +39,9 @@ A correctly bound prod startup requires all four elements to be explicit and ope
 1. Compose file: `docker-compose.yaml:docker-compose.prod.yml`
 2. Project namespace: `pkm-prod` (prevents resource collision with dev/test)
 3. Environment selector: `PKM_ENVIRONMENT=prod` (controls vault root, DB name, artifact paths)
-4. Vault root: operator-supplied absolute path to the real vault (never a dev or test path)
+4. Vault root: `.env.prod.local` resolves to the real Midgård vault (never a dev or test path)
 
-Use `make prod-start-full VAULT_ROOT=<path>` for the canonical prod startup that enforces all four. See `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md §Startup command semantics`.
+Use `make prod-start-full` for the canonical prod startup that enforces all four. See `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md §Startup command semantics`.
 
 ### Future promotion hardening
 

@@ -180,11 +180,10 @@ prod-up:
 prod-down:
 	@$(COMPOSE_PROD) down --remove-orphans
 
-prod-start-full: require-vault-root
+prod-start-full:
 	COMPOSE_FILE="docker-compose.yaml:docker-compose.prod.yml" \
 	COMPOSE_PROJECT_NAME="pkm-prod" \
 	PKM_ENVIRONMENT="prod" \
-	VAULT_ROOT="$(VAULT_ROOT)" \
 	VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=60 \
 	scripts/start_full_system.sh
 
