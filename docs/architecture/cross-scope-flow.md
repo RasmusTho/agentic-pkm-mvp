@@ -89,7 +89,9 @@ violation (see [doctrine](../foundation/00-yggdrasil-doctrine.md)).
 ## 4. Worked examples
 
 Each example names source, target, operation(s), the evidence role in the target, and
-confirmation/audit semantics.
+confirmation/audit semantics. Every example states `evidence_roles_allowed`,
+`confirmation_required`, and `audit_required` explicitly — including the denied cases — so these rows
+can seed policy and eval fixtures without leaving default-vs-allowed ambiguous.
 
 ### General programming knowledge → work project
 
@@ -102,19 +104,21 @@ confirmation/audit semantics.
 ### Private programming notes → work project
 
 - `source_scope`: a private scope; `target_scope`: a work project.
-- Default: **denied**. May cross only with `redaction_required` and `confirmation_required`, and only
-  for promoted/accepted material.
-- `allowed_operations`: at most `cite`/`import` after redaction + human confirmation;
+- Default: **denied**. May cross only with `redaction_required` and for promoted/accepted material.
+- `allowed_operations`: at most `cite`/`import` after redaction (default empty — denied).
+- `source_roles_allowed`: `private_note`; `authority_states_allowed`: `accepted` only.
+- `evidence_roles_allowed`: `background` at most, never `evidence`. `confirmation_required`: yes;
   `audit_required`: yes.
-- Reading: private → work is denied by default; crossing requires promotion, redaction, and explicit
-  confirmation.
+- Reading: private → work is denied by default; crossing requires promotion, redaction, explicit
+  human confirmation, and an audit record.
 
 ### RPG / worldbuilding → work project
 
 - `source_scope`: RPG/worldbuilding (`source_role: fictional_simulation`); `target_scope`: work.
 - `allowed_operations`: `retrieve`, `surface` as **analogy/inspiration** only, if explicitly
   permitted.
-- `evidence_roles_allowed`: `analogy` / `inspiration`. **Never** `evidence`.
+- `evidence_roles_allowed`: `analogy` / `inspiration`. **Never** `evidence`. `confirmation_required`:
+  yes (per use); `audit_required`: yes.
 - Reading: usable as analogy/inspiration only when a flow explicitly allows it; fiction is never
   real-world evidence.
 
@@ -122,6 +126,8 @@ confirmation/audit semantics.
 
 - `source_scope`: a parent/master scope; `target_scope`: a configured descendant.
 - `allowed_operations`: `retrieve`/`surface` of the **declared aggregation** only.
+- `evidence_roles_allowed`: as declared by the aggregation (typically `background`/`reference`);
+  `confirmation_required`: no (the aggregation is the declared standing); `audit_required`: yes.
 - Reading: configured parent aggregation is allowed **only as declared**. It does **not** imply
   sibling sharing — descendant and sibling scopes remain isolated unless their own explicit flow
   exists.
@@ -130,6 +136,9 @@ confirmation/audit semantics.
 
 - Two sibling work-project scopes.
 - Default: **denied** in both directions. No flow exists implicitly because both are "work".
+- `allowed_operations`: none; `evidence_roles_allowed`: none. `confirmation_required` /
+  `audit_required`: not applicable until an explicit directional flow is created (which would then
+  set its own operation, evidence-role, confirmation, and audit fields).
 - Reading: sibling work projects are isolated; crossing requires an explicit, directional flow per
   direction. `↔` is shorthand for "needs two flows", not one bidirectional grant.
 
