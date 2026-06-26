@@ -79,6 +79,31 @@ def _popover_html(html: str) -> str:
     return m.group()
 
 
+def _balanced_div_subtree(html: str, testid: str) -> str:
+    """Extract the full ``<div ... data-testid="{testid}" ...>…</div>`` subtree.
+
+    Walks the markup counting ``<div``/``</div>`` so the returned slice is the
+    whole element (including nested children), not the first ``</div>`` after the
+    open tag. Used to prove structural containment of one element inside another.
+    """
+    needle = f'data-testid="{testid}"'
+    attr_pos = html.index(needle)
+    open_pos = html.rindex("<div", 0, attr_pos)
+    depth = 0
+    pos = open_pos
+    div_token = re.compile(r"<div\b|</div>")
+    while True:
+        m = div_token.search(html, pos)
+        assert m, f"unbalanced <div> while extracting {testid}"
+        if m.group() == "</div>":
+            depth -= 1
+            if depth == 0:
+                return html[open_pos : m.end()]
+        else:
+            depth += 1
+        pos = m.end()
+
+
 class TestBreadcrumbReplacesChips:
     """AC1 — breadcrumb is the quiet path+meta line (chips moved off it)."""
 
@@ -227,13 +252,8 @@ class TestNoteViewChromePlacement:
         # line on the breadcrumb/title row; none is a stacked <details> above the
         # body.
         html = _render()
-        line = re.search(
-            r'data-testid="workspace-note-utility-line".*?</div>\s*</div>\s*</div>',
-            html,
-            re.DOTALL,
-        )
-        assert line, "note utility line not found"
-        cluster = line.group()
+        cluster = _balanced_div_subtree(html, "workspace-note-utility-line")
+        assert cluster, "note utility line not found"
         assert 'data-testid="workspace-note-utility-properties"' in cluster
         assert 'data-testid="workspace-note-utility-read-aloud"' in cluster
         assert 'data-testid="workspace-note-utility-edit"' in cluster
@@ -242,6 +262,11 @@ class TestNoteViewChromePlacement:
         assert "noteUtility.toggleReadAloud(this)" in cluster
         assert "noteEditor.start()" in cluster
         assert "noteUtility.toggleProperties(this)" in cluster
+        # Both Tier-2 popovers are siblings INSIDE the one utility-line container
+        # (Codex PR #2569 rework) — so the outside-click handler contains inner
+        # clicks for either one.
+        assert 'data-testid="workspace-readaloud-popover"' in cluster
+        assert 'data-testid="workspace-properties-popover"' in cluster
         # Read aloud is NOT a global overlay-host occupant — no scrim mount.
         assert "overlayHost.mount('tts')" not in cluster
         # None of the three is a stacked <details> above the body.
@@ -352,10 +377,53 @@ class TestNoteViewChromePlacement:
             "closePopovers does not hide the Read-aloud popover"
         )
         assert "noteUtility.toggleReadAloud" in html
-        # The popover styling is popover-level (NOT scrim-dependent fixed/z-960).
+        # Codex PR #2569 P2 #1/#3 — the Read-aloud popover is a CHILD of the
+        # note-utility-line container (a sibling of the Properties popover), NOT a
+        # descendant of the scrolling .note-body / rendered-note subtree. Because
+        # it sits inside the utility line, the outside-click handler keys on
+        # `[data-testid="workspace-note-utility-line"]` and `line.contains(target)`
+        # is true for inner clicks — so inner clicks no longer dismiss it
+        # mid-action (structural proof of containment).
+        utility_line = _balanced_div_subtree(html, "workspace-note-utility-line")
+        assert 'data-testid="workspace-readaloud-popover"' in utility_line, (
+            "Read-aloud popover must be a child of the utility-line container"
+        )
+        # The Properties popover is its sibling inside the same container.
+        assert 'data-testid="workspace-properties-popover"' in utility_line
+        # It must NOT live inside the scrolling note-body / rendered-note subtree.
+        note_body = _balanced_div_subtree(html, "workspace-note-body")
+        assert 'data-testid="workspace-readaloud-popover"' not in note_body, (
+            "Read-aloud popover must not live inside the scrolling .note-body"
+        )
+        rendered = _balanced_div_subtree(html, "workspace-note-rendered")
+        assert 'data-testid="workspace-readaloud-popover"' not in rendered, (
+            "Read-aloud popover must not live inside the rendered-note subtree"
+        )
+        # Codex PR #2569 P2 #2 — the popover mirrors the Properties popover
+        # anchoring (anchored to the utility line: top: calc(100% + 4px); right: 0)
+        # and is popover-level (NOT scrim-dependent fixed/z-960, NOT the old
+        # note-body-relative top: 8px which floated above the viewport in a long
+        # scrolled note).
         css = re.search(
             r"\.note-readaloud-popover\s*\{([^}]*)\}", html
         )
         assert css, "note-readaloud-popover CSS rule is missing"
-        assert "position: absolute" in css.group(1)
-        assert "position: fixed" not in css.group(1)
+        css_body = css.group(1)
+        assert "position: absolute" in css_body
+        assert "position: fixed" not in css_body
+        assert "top: calc(100% + 4px)" in css_body, (
+            "Read-aloud popover must anchor to the utility line, not the scrolled"
+            " note-body content top"
+        )
+        assert "right: 0" in css_body
+        assert "top: 8px" not in css_body, (
+            "the old note-body-relative top: 8px anchor must be gone"
+        )
+        # And the .note-body must no longer carry the popover's positioning context
+        # (the `position: relative` added for the old in-body anchor is reverted).
+        body_css = re.search(r"\.note-body\s*\{([^}]*)\}", html)
+        assert body_css, "note-body CSS rule is missing"
+        assert "position: relative" not in body_css.group(1), (
+            "the .note-body position: relative added for the old popover anchor"
+            " must be reverted"
+        )

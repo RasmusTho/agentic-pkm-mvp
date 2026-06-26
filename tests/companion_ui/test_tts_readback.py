@@ -110,6 +110,26 @@ def test_tts_readback_controls_render() -> None:
     assert draft_index < save_index
 
 
+def _balanced_div_subtree(html: str, testid: str) -> str:
+    """Full ``<div … data-testid="{testid}" …>…</div>`` subtree (nesting-aware)."""
+    needle = f'data-testid="{testid}"'
+    attr_pos = html.index(needle)
+    open_pos = html.rindex("<div", 0, attr_pos)
+    depth = 0
+    pos = open_pos
+    div_token = re.compile(r"<div\b|</div>")
+    while True:
+        m = div_token.search(html, pos)
+        assert m, f"unbalanced <div> while extracting {testid}"
+        if m.group() == "</div>":
+            depth -= 1
+            if depth == 0:
+                return html[open_pos : m.end()]
+        else:
+            depth += 1
+        pos = m.end()
+
+
 def test_tts_readback_controls_not_inline_details_above_body() -> None:
     # #2563 — the Read-aloud detail must not be an inline <details> at all. It is
     # a page-local anchored popover (Codex PR #2569 rework, mirroring Properties),
@@ -125,6 +145,54 @@ def test_tts_readback_controls_not_inline_details_above_body() -> None:
     # Not a global overlay-host occupant.
     assert 'data-overlay-id="tts"' not in html
     assert "tts-readback-occupant" not in html
+
+
+def test_read_aloud_popover_lives_in_utility_line_not_note_body() -> None:
+    # Codex PR #2569 P2 #1/#2/#3 — the Read-aloud popover is a child of the
+    # note-utility-line container (sibling of Properties), NOT a descendant of the
+    # scrolling .note-body / rendered-note subtree. This is the structural fix that
+    # (1) lets the outside-click handler contain inner clicks (it keys on the
+    # utility-line container) so they no longer dismiss the popover mid-action, and
+    # (2) anchors the popover to the utility line instead of the scrolled note-body
+    # content top (which floated it above the viewport in a long scrolled note).
+    html = _html()
+
+    utility_line = _balanced_div_subtree(html, "workspace-note-utility-line")
+    assert 'data-testid="workspace-readaloud-popover"' in utility_line, (
+        "Read-aloud popover must be a child of the utility-line container"
+    )
+    assert 'data-testid="workspace-properties-popover"' in utility_line, (
+        "Properties popover (its sibling) must also be in the utility-line container"
+    )
+
+    note_body = _balanced_div_subtree(html, "workspace-note-body")
+    assert 'data-testid="workspace-readaloud-popover"' not in note_body, (
+        "Read-aloud popover must not live inside the scrolling .note-body"
+    )
+    rendered = _balanced_div_subtree(html, "workspace-note-rendered")
+    assert 'data-testid="workspace-readaloud-popover"' not in rendered, (
+        "Read-aloud popover must not live inside the rendered-note subtree"
+    )
+
+    # Anchoring mirrors the Properties popover (utility-line-relative), not the old
+    # note-body-relative top: 8px; and .note-body no longer carries the popover's
+    # positioning context.
+    css = re.search(r"\.note-readaloud-popover\s*\{([^}]*)\}", html)
+    assert css, "note-readaloud-popover CSS rule is missing"
+    css_body = css.group(1)
+    assert "position: absolute" in css_body
+    assert "top: calc(100% + 4px)" in css_body
+    assert "top: 8px" not in css_body
+    body_css = re.search(r"\.note-body\s*\{([^}]*)\}", html)
+    assert body_css and "position: relative" not in body_css.group(1), (
+        "the .note-body position: relative added for the old popover anchor must be"
+        " reverted"
+    )
+
+    # Negative guards kept intact (Codex PR #2569): not an overlay-host occupant.
+    assert 'data-overlay-id="tts"' not in html
+    assert "overlayHost.mount('tts')" not in html
+    assert "overlayHost.register('tts'" not in html
 
 
 def test_tts_readback_uses_local_server_tts_not_browser_speech() -> None:

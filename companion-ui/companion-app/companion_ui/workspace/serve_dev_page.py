@@ -501,6 +501,64 @@ def _render_note_utility_line(
         f"</div>"
         f"</div>"
     )
+    # #2563 Tier 2 (Codex PR #2569 rework) — Read-aloud detail is a page-local
+    # anchored popover that mirrors the Properties popover (its sibling Tier-2
+    # control), so it lives inside this utility-line container, NOT inside the
+    # scrolling .note-body. That fixes two Codex P2 bugs: (1) inner clicks are
+    # contained by the utility line, so the outside-click handler no longer
+    # dismisses the popover mid-action; (2) it anchors to the utility line
+    # (top: calc(100% + 4px); right: 0) instead of the scrolled note-body content
+    # top, so it stays in the viewport in a long scrolled note. noteReadback uses
+    # document-level selectors, so the controls resolve unchanged from here. This
+    # block is static markup (no per-note interpolation). The declared `tts`
+    # overlay host remains declared-but-unshipped for a future SEP task.
+    readaloud_popover = (
+        '<div class="note-readaloud-popover" data-testid="workspace-readaloud-popover"'
+        ' data-region="readaloud-popover" role="dialog" aria-label="Read aloud" hidden>'
+        '<div class="tts-readback-controls"'
+        ' data-testid="tts-readback-controls"'
+        ' data-authority="read-only-projection"'
+        ' data-source-scope="source-and-proposal">'
+        '<div class="tts-readback-summary">Read aloud</div>'
+        '<div class="tts-readback-panel">'
+        '<label class="tts-rate-control">'
+        "<span>Rate</span>"
+        '<select data-testid="tts-rate" aria-label="Read-back rate">'
+        '<option value="0.85">0.85</option>'
+        '<option value="1" selected>1.0</option>'
+        '<option value="1.15">1.15</option>'
+        '<option value="1.3">1.3</option>'
+        "</select>"
+        "</label>"
+        '<button type="button" data-testid="tts-read-full-note"'
+        ' data-tts-action="read-full-note" data-tts-requires-speech="true"'
+        ' onclick="noteReadback.readFullNote()">Read note</button>'
+        '<button type="button" data-testid="tts-read-selection"'
+        ' data-tts-action="read-selection" data-tts-requires-speech="true"'
+        ' onclick="noteReadback.readSelection()">Selection</button>'
+        '<button type="button" data-testid="tts-read-proposal"'
+        ' data-tts-action="read-proposal" data-tts-requires-speech="true"'
+        ' onclick="noteReadback.readProposal()">Proposal</button>'
+        '<button type="button" data-testid="tts-pause"'
+        ' data-tts-action="pause" data-tts-requires-speech="true"'
+        ' onclick="noteReadback.pause()">Pause</button>'
+        '<button type="button" data-testid="tts-resume"'
+        ' data-tts-action="resume" data-tts-requires-speech="true"'
+        ' onclick="noteReadback.resume()">Resume</button>'
+        '<button type="button" data-testid="tts-stop"'
+        ' data-tts-action="stop" data-tts-requires-speech="true"'
+        ' onclick="noteReadback.stop()">Stop</button>'
+        '<span class="tts-readback-status" data-testid="tts-readback-status"'
+        ' data-state="idle" aria-live="polite">Read-back idle.</span>'
+        "</div>"
+        "</div>"
+        '<div class="tts-plan-inspection"'
+        ' data-testid="tts-plan-inspection"'
+        ' data-authority="read-only-projection"'
+        ' aria-live="polite"'
+        " hidden></div>"
+        "</div>"
+    )
     return (
         '<div class="note-utility-line" data-testid="workspace-note-utility-line"'
         ' data-region="note-utility-line">'
@@ -554,6 +612,7 @@ def _render_note_utility_line(
         ' onclick="noteUtility.fromSheet(\'edit\')">Edit</button>'
         "</div>"
         f"{properties_popover}"
+        f"{readaloud_popover}"
         "</div>"
     )
 
@@ -2565,65 +2624,13 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
             data-note-path="{note_path_val}" data-content-hash="{content_hash}"
             hidden>{_e(editor_body)}</textarea>
           {suggested_insertions_html}
-          <!-- #2563 Tier 2 — Read-aloud detail is a page-local anchored popover
-               (mirrors the Properties popover, its sibling Tier-2 control), never
-               an inline <details> stacked above the body and NOT a global
-               overlay-host occupant / scrim. The Tier-1 "Read aloud" control
-               toggles it (noteUtility.toggleReadAloud); it is hidden until then
-               and dismissed via closePopovers (Esc / open-another / outside
-               click). The TTS contract is preserved verbatim: the plan inspector
-               shows the speech plan (scope: note / selection / proposal + rate)
-               and audio starts ONLY on an explicit "Read" inside it
-               (plan-before-audio). It stays inside note-body so noteReadback's
-               document-level selectors (note-source-editor,
-               .panel-decision-surface) resolve unchanged. The declared `tts`
-               overlay host remains declared-but-unshipped (overlay_host.py) for a
-               future SEP task that may ship it as a server-rendered occupant. -->
-          <div class="note-readaloud-popover" data-testid="workspace-readaloud-popover"
-            data-region="readaloud-popover" role="dialog" aria-label="Read aloud" hidden>
-            <div class="tts-readback-controls"
-              data-testid="tts-readback-controls"
-              data-authority="read-only-projection"
-              data-source-scope="source-and-proposal">
-              <div class="tts-readback-summary">Read aloud</div>
-              <div class="tts-readback-panel">
-                <label class="tts-rate-control">
-                  <span>Rate</span>
-                  <select data-testid="tts-rate" aria-label="Read-back rate">
-                    <option value="0.85">0.85</option>
-                    <option value="1" selected>1.0</option>
-                    <option value="1.15">1.15</option>
-                    <option value="1.3">1.3</option>
-                  </select>
-                </label>
-                <button type="button" data-testid="tts-read-full-note"
-                  data-tts-action="read-full-note" data-tts-requires-speech="true"
-                  onclick="noteReadback.readFullNote()">Read note</button>
-                <button type="button" data-testid="tts-read-selection"
-                  data-tts-action="read-selection" data-tts-requires-speech="true"
-                  onclick="noteReadback.readSelection()">Selection</button>
-                <button type="button" data-testid="tts-read-proposal"
-                  data-tts-action="read-proposal" data-tts-requires-speech="true"
-                  onclick="noteReadback.readProposal()">Proposal</button>
-                <button type="button" data-testid="tts-pause"
-                  data-tts-action="pause" data-tts-requires-speech="true"
-                  onclick="noteReadback.pause()">Pause</button>
-                <button type="button" data-testid="tts-resume"
-                  data-tts-action="resume" data-tts-requires-speech="true"
-                  onclick="noteReadback.resume()">Resume</button>
-                <button type="button" data-testid="tts-stop"
-                  data-tts-action="stop" data-tts-requires-speech="true"
-                  onclick="noteReadback.stop()">Stop</button>
-                <span class="tts-readback-status" data-testid="tts-readback-status"
-                  data-state="idle" aria-live="polite">Read-back idle.</span>
-              </div>
-            </div>
-            <div class="tts-plan-inspection"
-              data-testid="tts-plan-inspection"
-              data-authority="read-only-projection"
-              aria-live="polite"
-              hidden></div>
-          </div>
+          <!-- #2563 Tier 2 (Codex PR #2569 rework) — the Read-aloud detail popover
+               (note-readaloud-popover) no longer lives here inside the scrolling
+               .note-body. It is now a sibling of the Properties popover inside the
+               note-utility-line container (see _render_note_utility_line), so it
+               anchors to the utility line and inner clicks are contained by the
+               outside-click handler. noteReadback's document-level selectors still
+               resolve it from anywhere in the DOM. -->
           <!-- #2563 Read-aloud active = a minimal transport (play/pause/stop +
                position) docks to the utility line, not a full transport block in
                the reading column. The plan inspector stays in the overlay; this
@@ -10148,11 +10155,6 @@ def render_index_html(
       min-height: 0;
       overflow-y: auto;
       padding: 24px 24px 96px;
-      /* #2563 (PR #2569 rework) — positioning context for the Read-aloud anchored
-         popover, which lives inside note-body so noteReadback's document-level
-         selectors resolve. Anchors the popover to the reading column, not the
-         viewport / a scrim. */
-      position: relative;
     }}
     .note-body-empty {{
       background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
@@ -10174,16 +10176,19 @@ def render_index_html(
       margin: 0;
     }}
     /* #2563 Tier 2 (Codex PR #2569 rework) — Read aloud is a page-local anchored
-       popover (mirrors .note-properties-popover, its sibling Tier-2 control), not
-       an overlay-host occupant and not scrim-dependent. It lives inside note-body
-       (so noteReadback's document-level selectors resolve), anchors to the
-       top-right of the reading column, and stacks at popover level. The Read-aloud
-       panel (plan inspector + controls) is larger than the properties detail, so
-       the card gets a roomier max-width and a max-height with scroll. */
+       popover that mirrors .note-properties-popover (its sibling Tier-2 control):
+       it lives inside the note-utility-line container and anchors to the utility
+       line (top: calc(100% + 4px); right: 0), NOT to the scrolled .note-body
+       content top. That keeps it in the viewport in a long scrolled note and lets
+       the outside-click handler contain inner clicks. It is not an overlay-host
+       occupant and not scrim-dependent; noteReadback's document-level selectors
+       resolve it from anywhere. The Read-aloud panel (plan inspector + controls)
+       is larger than the properties detail, so the card gets a roomier max-width
+       and a max-height with scroll. */
     .note-readaloud-popover {{
       position: absolute;
-      right: 24px;
-      top: 8px;
+      right: 0;
+      top: calc(100% + 4px);
       z-index: 30;
       background: var(--bg-surface);
       border: 1px solid var(--border);
