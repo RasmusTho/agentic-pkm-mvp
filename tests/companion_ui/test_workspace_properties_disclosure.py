@@ -322,3 +322,15 @@ class TestNoteViewChromePlacement:
         occ = re.search(r'<div class="tts-readback-occupant"[^>]*>', html)
         assert occ and 'data-overlay-id="tts"' in occ.group()
         assert "window.overlayHost.register('tts'" in html
+        # Codex PR #2569 regression: mounting `tts` activates the shared scrim at
+        # z-index 900; the occupant must render ABOVE it (position:fixed, higher
+        # z-index) or the first click lands on the scrim and dismisses the
+        # overlay instead of pressing Read note/Selection/Proposal.
+        shown = re.search(
+            r"\.tts-readback-occupant:not\(\[hidden\]\)\s*\{([^}]*)\}", html
+        )
+        assert shown, "shown tts-occupant CSS rule (above the scrim) is missing"
+        shown_body = shown.group(1)
+        assert "position: fixed" in shown_body
+        z = re.search(r"z-index:\s*(\d+)", shown_body)
+        assert z and int(z.group(1)) > 900, "tts occupant must stack above the scrim (z-index 900)"

@@ -10173,6 +10173,23 @@ def render_index_html(
       z-index: 25;
     }}
     .tts-readback-occupant[hidden] {{ display: none; }}
+    /* #2563 Tier 2 fix (Codex PR #2569): when mounted via overlayHost('tts')
+       the shared scrim is active at z-index 900. The occupant stays in the DOM
+       (so noteReadback's document-level selectors resolve) but must render
+       ABOVE the scrim to be clickable — otherwise the first click hits the
+       scrim and dismisses the overlay instead of pressing Read note/Selection.
+       When shown, lift it to a fixed card above the scrim (and the z-950 mount
+       layer); the scrim below still dismisses on outside-click. */
+    .tts-readback-occupant:not([hidden]) {{
+      position: fixed;
+      top: 12vh;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(92vw, var(--display-reading-width, 68ch));
+      max-height: 76vh;
+      overflow: auto;
+      z-index: 960;
+    }}
     .tts-readback-summary {{
       color: var(--fg-2);
       display: block;
