@@ -63,8 +63,11 @@ These are two different contracts:
 1. **No raw vault access.** The envelope's `access_mode` is `bounded_context_only`; there is no field
    that grants raw vault or index access. Agents reason/propose within envelope boundaries
    ([CAO charter](../boundaries/CAO.md): `agent_no_raw_vault_access`, `agent_receives_bounded_context`).
-2. **No denied scopes as hidden context.** `denied_scopes` records *that* a scope is denied and *why*,
-   never its content.
+2. **No denied scopes as hidden context — not even their identifiers.** `denied_scopes` records a
+   non-identifying reason and denial class, never the denied content and never the denied
+   `scope_id`/`object_id`/provenance (revealing that a specific scope exists is itself cross-boundary
+   disclosure). Identifiers needed for accountability live only in an audit-only record via
+   `audit_ref`.
 3. **Retrieval ≠ citation.** Inclusion in `retrieved_items` does not grant citation; `citation_policy`
    decides, and cross-scope citation requires a flow that allows `cite`.
 4. **Citation ≠ mutation.** `mutation_policy.requires_authority_transition` is always true; durable

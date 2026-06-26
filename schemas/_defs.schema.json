@@ -233,6 +233,16 @@
           "type": "array",
           "items": { "$ref": "#/$defs/evidence_role" }
         },
+        "source_roles_allowed": {
+          "type": "array",
+          "description": "Which source_role families may cross under this flow (e.g. general_knowledge, work_project). From cross-scope-flow.md.",
+          "items": { "$ref": "#/$defs/source_role" }
+        },
+        "authority_states_allowed": {
+          "type": "array",
+          "description": "Which authority_state values may cross under this flow (e.g. accepted, never proposed). From cross-scope-flow.md.",
+          "items": { "$ref": "#/$defs/authority_state" }
+        },
         "confirmation_required": { "type": "boolean" },
         "audit_required": { "type": "boolean" },
         "redaction_required": { "type": "boolean" },
@@ -243,14 +253,34 @@
       "additionalProperties": false
     },
     "scope_denial": {
-      "description": "A reference to denied or out-of-context scope material that records WHY it is denied/escalated WITHOUT leaking its content. Denied material must never be passed as hidden context.",
+      "description": "An audit-safe record that some material was denied or escalated. It records WHY and WHAT CLASS of flow would be needed WITHOUT identifying the denied content, scope, object, or provenance. Denied/escalated cross-scope material must never become hidden context, and even its identifiers must not leak into a usable result/envelope (revealing that a specific scope/object exists is itself cross-boundary disclosure). Any identifiers needed for accountability live only in the audit-only governance/observability record referenced by audit_ref, outside the agent-facing result.",
       "type": "object",
       "properties": {
-        "scope_id": { "$ref": "#/$defs/id_string" },
-        "object_id": { "$ref": "#/$defs/id_string" },
-        "reason": { "type": "string" },
-        "required_cross_scope_flow": { "$ref": "#/$defs/id_string" },
-        "escalation_recommended": { "type": "boolean" }
+        "reason": {
+          "type": "string",
+          "description": "Non-identifying reason for the denial/escalation."
+        },
+        "denial_class": {
+          "type": "string",
+          "description": "Category of denial; non-identifying.",
+          "enum": [
+            "out_of_scope",
+            "cross_scope_no_flow",
+            "suppressed",
+            "sensitivity",
+            "redaction_required",
+            "confirmation_required"
+          ]
+        },
+        "required_flow_class": {
+          "type": "string",
+          "description": "The class/kind of CrossScopeFlow that would be needed (e.g. 'private->work, accepted+redacted'), described WITHOUT identifying the denied source scope or object."
+        },
+        "escalation_recommended": { "type": "boolean" },
+        "audit_ref": {
+          "$ref": "#/$defs/id_string",
+          "description": "Opaque reference to an audit-only governance/observability record (outside this result/envelope) that may hold the denied scope/object identifiers. Never the identifiers themselves."
+        }
       },
       "required": ["reason"],
       "additionalProperties": false

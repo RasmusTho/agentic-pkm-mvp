@@ -134,13 +134,16 @@
       }
     },
     {
-      "$comment": "A memory item must carry its memory lifecycle state.",
+      "$comment": "A memory item must carry its memory lifecycle state, and — even when carried only as a bundle (e.g. inside a retrieval candidate or context envelope) — must not claim real-world evidence standing. This mirrors memory-item.schema.json's non-authoritative evidence restriction so machine memory cannot enter retrieval/context as factual evidence.",
       "if": {
         "properties": { "object_type": { "const": "memory_item" } },
         "required": ["object_type"]
       },
       "then": {
-        "required": ["memory_state"]
+        "required": ["memory_state"],
+        "properties": {
+          "evidence_role": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" }
+        }
       }
     },
     {

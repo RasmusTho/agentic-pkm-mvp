@@ -133,7 +133,7 @@
   "additionalProperties": false,
   "allOf": [
     {
-      "$comment": "Promotion to durable/canonical authority requires approval, unless an explicit policy exemption is referenced.",
+      "$comment": "An approval-EXEMPT promotion to durable/canonical authority skips human approval only — it is still an authority-bearing durable write, so it must reference the exemption policy AND carry the pre-mutation DecisionToken, the post-mutation AuthorityReceipt, and the granted authority state. Exemption never bypasses the GovernedWriteProtocol token+receipt invariant.",
       "if": {
         "properties": {
           "requested_authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" },
@@ -142,7 +142,12 @@
         "required": ["requested_authority_state", "approval_required"]
       },
       "then": {
-        "required": ["approval_exemption_policy_ref"]
+        "required": [
+          "approval_exemption_policy_ref",
+          "decision_token_ref",
+          "authority_receipt_id",
+          "approved_authority_state"
+        ]
       }
     },
     {

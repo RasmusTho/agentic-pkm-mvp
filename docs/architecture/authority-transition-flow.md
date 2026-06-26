@@ -92,7 +92,10 @@ replace that live terminology.
   state is explicit;
 - requires `provenance_event_ids` and an explicit `affected_derived_representation_ids` array;
 - requires approval for promotion to `accepted`/`canonical` authority unless an explicit
-  `approval_exemption_policy_ref` is provided;
+  `approval_exemption_policy_ref` is provided — and that exemption path **still** requires
+  `decision_token_ref` + `authority_receipt_id` + `approved_authority_state`, because an
+  approval-exempt canonical write is still a governed durable mutation and must not bypass the
+  GovernedWriteProtocol token/receipt invariant;
 - requires `promotion_request_id` for memory-promotion transitions;
 - closes the object (`additionalProperties: false`) with an explicit `extensions` point.
 

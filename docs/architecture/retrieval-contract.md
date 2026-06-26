@@ -72,9 +72,11 @@ in the content-free `denied_or_escalated_candidates` list.
    [authority transition](authority-transition-flow.md).
 5. **Projection/context bundle is not a primary source.** Candidates carry their real `source_role`
    and `evidence_role`; a projection candidate is not evidence by default.
-6. **Denied cross-scope material must not be hidden context.** It is recorded in
-   `denied_or_escalated_candidates` with a reason and any required flow, **without** content or a
-   metadata bundle.
+6. **Denied cross-scope material must not be hidden context — not even its identifiers.** It is
+   recorded in `denied_or_escalated_candidates` with a non-identifying reason, denial class, and
+   required-flow class, **without** content, a metadata bundle, or the denied `scope_id`/`object_id`/
+   provenance. Any identifiers needed for accountability live only in an audit-only governance record
+   referenced by `audit_ref`, outside the agent-facing result.
 7. **Escalated material records why escalation is needed** (`escalation_reason`).
 8. **Retrieval preserves citation/provenance ranges** (`citation_ranges`, `provenance_event_ids`).
 
