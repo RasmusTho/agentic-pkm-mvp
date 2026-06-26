@@ -5,7 +5,7 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (charter index); subordinate to the SBS it operationalizes
-Last reviewed: 2026-06-27
+Last reviewed: 2026-06-26
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/architecture/traceability-matrix.md
 
 # Boundary Charters
