@@ -302,6 +302,25 @@ Vault Browser MLP v0 provides:
   Option-2, 2026-06-20). Selecting an existing directory makes it readable even
   before it is fully initialized; writes/permissions still require an
   initialized vault.
+  - **No-vault front door — "Choose a vault" overlay (#2564, part of #2561).**
+    The `vault_selection_required` surface is rendered in the *same graphical
+    idiom as the note Browse-vault overlay*: a titled overlay, a focused filter
+    that only filters the visible list, clean clickable rows, and a footer
+    count. The server-declared configured vault is the **pinned first row**
+    (badged "configured"); the server-declared recents follow as clickable rows
+    (name + a read-only mono path shown for confidence + a quiet last-opened
+    time); a **"Browse for a vault folder…"** entry row sits last (filesystem
+    mode itself is #2565 / Ask 3b). **Selection is always a visual row click —
+    never a typed path.** The filter input narrows the visible list only; it is
+    never a path-to-select field. First-run / no-recents is never an empty
+    labelled region — the pinned configured row plus the Browse row are the
+    whole surface. Operator affordances (Reload, Open settings folder) live
+    behind the overlay's ⓘ / Operator drawer, off the front door; the
+    machine-Role select and typed path fields are removed from the cold picker
+    (they belong to the loaded-vault settings drawer / the Ask-3b "Initialize
+    here" confirm). The overlay only picks and dispatches the existing
+    `vault.select` action — vault resolution/identity stays server-declared; the
+    UI performs no classification.
 - a `read_only: true` invariant on the browser endpoint
 - active vault/channel identity in the response payload (`vault_identity`, `identity_available`)
 - deterministic case-insensitive path/title filtering via a single `q` parameter
