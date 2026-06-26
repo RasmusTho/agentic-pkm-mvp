@@ -7054,7 +7054,7 @@ def _render_orientation_index_html(
         else:
             _cold_recents_html = ""
         cold_start_threshold_html = f"""
-    <div data-region="cold-start-threshold">
+    <div data-region="cold-start-threshold" class="cold-start-threshold">
       <div class="cold-start-vault-chip">
         <span class="cold-start-vault-dot" aria-hidden="true"></span>
         <span class="cold-start-vault-id">{_cold_vault_id}</span>
@@ -7063,18 +7063,30 @@ def _render_orientation_index_html(
         <div class="cold-start-eyebrow">{_e(_cold_eyebrow)}</div>
         <h1 class="cold-start-headline">{_e(_cold_headline)}</h1>
       </div>
+      <!-- #2562 (Ask 2.2): the capture verb was dropped from this row.
+           Capture is a single affordance — the inline line below is the one
+           generative move; the verb row keeps the two navigation verbs
+           (Find a note / See the map). See the inline-capture comment for why
+           drop-the-verb was chosen over focus-the-line. -->
       <p data-region="cold-start-verbs" class="cold-start-verbs">
         <button type="button" class="btn btn--primary cold-start-verb" data-intent="vault.open" onclick="vaultBrowser.focus(); return false;">Find a note</button>
-        <button type="button" class="btn btn--secondary cold-start-verb" data-intent="capture.open" onclick="overlayHost.mount('capture'); return false;">Jot something down</button>
         <button type="button" class="btn btn--secondary cold-start-verb" data-intent="map.open" onclick="overlayHost.mount('map'); return false;">See the map</button>
       </p>{_cold_recents_html}
-      <!-- Inline capture field (design item 4, #2172): on focus / ⌘N mounts
-           the shipped governed capture occupant verbatim.  The warmth rule:
+      <!-- Inline capture field (design item 4, #2172; #2562 Ask 2/3): the door's
+           single capture affordance. On focus / ⌘N it mounts the shipped
+           governed capture occupant verbatim (capture.open). The warmth rule:
            the caret is the one saturated element; the door stays monochrome.
-           Suppressed on no_vault: no honest landing for an offline write. -->
+           A leading circle-dot glyph (#2562) marks it as the capture move; the
+           visible bordered field reads as "type here" while staying visually
+           subordinate to the gold "Find a note" (no fill, neutral border).
+           Suppressed on no_vault: no honest landing for an offline write.
+           #2562: the capture verb was dropped (not made to focus this line) so
+           capture is genuinely one entry point, not two visible controls. -->
       <div data-region="cold-start-capture" class="cold-start-capture-line">
+        <span class="cold-start-capture-glyph" aria-hidden="true"></span>
         <input type="text" class="cold-start-capture-input"
                data-testid="cold-start-capture-input"
+               data-intent="capture.open"
                placeholder="Leave a note for future-you…"
                onfocus="overlayHost.mount('capture'); this.blur();"
                autocomplete="off" aria-label="Leave a note for future-you" />
@@ -7113,6 +7125,14 @@ def _render_orientation_index_html(
       --cyan: #00d4e8;
       --amber: #f09030;
       --destructive: #ff3d3d;
+      /* #2562: vault-green identity colour, matching the shell's vault
+         indicator (--vault in the shell stylesheet). Used for the cold_start
+         vault chip dot so vault identity reads as identity, not telemetry. */
+      --vault: #39e87d;
+      /* #2562: neutral foreground link colour for user-origin links on the
+         door (the recents anchor — the user's own last note). --agent (blue) is
+         reserved for agent-origin content only and must not tint this link. */
+      --fg-link: var(--fg-1);
       --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       /* CUIDR-06 (#2450) D4: the rendered width of the re-entry card's ⓘ info
@@ -7565,26 +7585,102 @@ def _render_orientation_index_html(
          card, which carries the same four answers. */
       .reentry-whisper-col {{ display: none; }}
     }}
-    /* ---- cold_start inline capture (#2172, #2240-c) ---- */
+    /* ---- cold_start vault chip (#2562) — promote the plain-text vault
+       identity to a proper chip that matches the shell's vault indicator
+       (vault-green dot + name), so identity reads as identity, not telemetry. */
+    .cold-start-vault-chip {{
+      align-items: center;
+      color: var(--fg-2);
+      display: inline-flex;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      gap: 6px;
+      line-height: 1;
+    }}
+    .cold-start-vault-dot {{
+      background: var(--vault);
+      border-radius: 999px;
+      display: inline-block;
+      flex: none;
+      height: 6px;
+      width: 6px;
+    }}
+    .cold-start-vault-id {{
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    /* ---- cold_start recents anchor (#2562) — the user's own last note, NOT
+       agent-origin content. Render in a neutral foreground link colour;
+       --agent (blue) is reserved for agent-origin content only. The default
+       browser link blue is also overridden here so no agent-tint leaks in. */
+    .cold-start-recents-anchor {{
+      margin: 14px 0 0;
+    }}
+    .cold-start-recents-anchor a {{
+      color: var(--fg-link);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }}
+    .cold-start-recents-anchor a:hover {{
+      color: var(--fg-1);
+    }}
+    /* ---- cold_start inline capture (#2172, #2240-c; #2562) ---- */
     .cold-start-capture-line {{
+      align-items: center;
+      display: flex;
+      gap: 8px;
       margin: 16px 0 0;
+    }}
+    /* #2562: leading circle-dot capture glyph — marks the line as the capture
+       move. Subordinate to the gold "Find a note": neutral border, hollow ring,
+       no fill (the caret stays the only saturated element). */
+    .cold-start-capture-glyph {{
+      background:
+        radial-gradient(circle at center, var(--fg-2) 0 2px, transparent 2px);
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      flex: none;
+      height: 16px;
+      width: 16px;
     }}
     .cold-start-capture-input {{
       background: transparent;
-      border: none;
-      border-bottom: 1px solid var(--border-strong);
+      /* #2562: a visible bordered field affordance so the line reads as
+         "type here" (was a bare bottom-rule). Subordinate to the gold primary:
+         no fill, neutral border. */
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md, 4px);
       color: var(--fg-1);
+      flex: 1 1 auto;
       font-family: var(--font-ui);
       font-size: 15px;
+      min-width: 0;
       outline: none;
-      padding: 4px 0;
+      padding: 7px 10px;
       width: 100%;
     }}
     .cold-start-capture-input::placeholder {{
       color: var(--fg-3);
     }}
     .cold-start-capture-input:focus {{
-      border-bottom-color: var(--accent);
+      border-color: var(--accent);
+    }}
+    /* #2562: optically centre the threshold block. The shell is a top-aligned
+       grid, which left the cold_start door hugging the top third. On the
+       cold_start entry state, give the threshold a tall flow region and centre
+       its content vertically so the door sits in the optical middle. Targets
+       the class (not the data-region attribute) so this shared-stylesheet rule
+       does not collide with markup-presence guards on other entry states.
+       Presentation only — no entry-state logic moves client-side; the body
+       attribute is server-declared. */
+    body[data-entry-state="cold_start"] .cold-start-threshold {{
+      align-content: center;
+      display: grid;
+      gap: 16px;
+      justify-items: start;
+      min-height: 62vh;
     }}
     /* ---- Design-system buttons (#2448, D2) — the cold_start / no_vault
        entry-screen action row is ranked, on-palette affordances (one primary,

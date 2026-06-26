@@ -697,10 +697,12 @@ def test_residual_ambient_layer_persists_after_resume() -> None:
 def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
     """AC2 verify: verb-line is ranked, on-palette affordances, not a card grid.
 
-    Three intent affordances map 1:1 onto vault.open / capture.open / map.open
-    inside a data-region="cold-start-verbs" element. Per #2448 (D2) the verbs
-    are ranked design-system buttons — one primary, two secondary — not inline
-    browser-blue links, and never an orientation grid/column/card layout.
+    Per #2562 (Ask 2.2) the verb row is the two *navigation* verbs only —
+    vault.open (Find a note, primary) and map.open (See the map, secondary).
+    Capture is no longer a verb-row button: "Jot something down" was dropped so
+    capture is a single affordance (the inline capture line). Per #2448 (D2) the
+    verbs stay ranked design-system buttons — one primary, one secondary — not
+    inline browser-blue links, and never an orientation grid/column/card layout.
     """
     # First-contact variant (leave_point absent)
     first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
@@ -714,24 +716,25 @@ def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
         # Verb-line is present.
         assert 'data-region="cold-start-verbs"' in html, label
 
-        # All three intent affordances are present.
+        # The two navigation intent affordances are present.
         assert 'data-intent="vault.open"' in html, label
-        assert 'data-intent="capture.open"' in html, label
         assert 'data-intent="map.open"' in html, label
 
-        # Verb text labels are present.
+        # Verb text labels are present (capture verb removed — #2562).
         assert "Find a note" in html, label
-        assert "Jot something down" in html, label
         assert "See the map" in html, label
 
         # No "Reorient" verb on cold_start.
         assert "Reorient" not in html, label
 
-        # Verb-line is ranked DS buttons (one primary, two secondary), not
+        # Verb-line is ranked DS buttons (one primary, one secondary), not
         # inline browser-blue links — and never an orientation grid/column/card.
+        # The capture verb is no longer in this row (#2562).
         verb_region = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
         assert verb_region.count("btn--primary") == 1, label
-        assert verb_region.count("btn--secondary") == 2, label
+        assert verb_region.count("btn--secondary") == 1, label
+        assert "Jot something down" not in verb_region, label
+        assert 'data-intent="capture.open"' not in verb_region, label
         assert "<a href" not in verb_region, label
         assert 'class="orientation-grid"' not in verb_region, label
         assert 'class="orientation-column"' not in verb_region, label
@@ -1118,6 +1121,148 @@ def test_recents_anchor_uses_server_payload_without_ui_filesystem_probe() -> Non
     # No filesystem I/O marker: the rendered link text comes from the server
     # display_label, not from any local path computation (confirmed by the
     # two renders above differing only by payload, not by worktree state).
+
+
+# ---------------------------------------------------------------------------
+# AC (#2562): cold_start door — recents provenance recolor + single capture
+# affordance + vault chip / glyph polish (Claude Design Ask 2)
+# ---------------------------------------------------------------------------
+
+
+def test_cold_start_recents_anchor_is_not_agent_tinted() -> None:
+    """#2562 AC1: the recents anchor uses a neutral foreground link colour.
+
+    The recents anchor is the user's *own* last note, not agent-origin content.
+    --agent (blue) is reserved for agent-origin content only and must not tint
+    this link. The CSS rule for the recents anchor must declare a neutral
+    foreground colour (--fg-link / --fg-*) and must not reference --agent.
+    """
+    anchor = {"note_path": "Notes/recent.md", "display_label": "My Recent Note"}
+    html = _render(
+        orientation=_orientation_payload(gap=_GAP_COLD, recents_anchor=anchor)
+    )
+
+    # The anchor renders.
+    assert 'data-testid="cold-start-recents-anchor"' in html
+
+    # There is an explicit CSS rule colouring the recents-anchor link, and it
+    # is a neutral foreground token, not --agent.
+    assert ".cold-start-recents-anchor a {" in html
+    rule = html.split(".cold-start-recents-anchor a {", 1)[1].split("}", 1)[0]
+    assert "color:" in rule, "recents-anchor link must declare an explicit colour"
+    assert "--agent" not in rule, "recents-anchor must not be agent-tinted (provenance defect)"
+    assert "--fg" in rule, "recents-anchor link colour must be a neutral foreground token"
+
+    # Defence-in-depth: the recents-anchor markup itself never carries --agent.
+    anchor_markup = html.split(
+        'data-testid="cold-start-recents-anchor"', 1
+    )[1].split("</a>", 1)[0]
+    assert "--agent" not in anchor_markup
+
+
+def test_cold_start_door_has_single_capture_affordance() -> None:
+    """#2562 AC2: exactly one capture entry point on the door.
+
+    Capture collapses to one affordance: the inline capture line (the single
+    generative move). The "Jot something down" verb is removed from the verb
+    row. The door must expose exactly one capture.open entry point, and the
+    verb row must contain only the two navigation verbs.
+    """
+    for gap_kw, label in [
+        ({"leave_status": "absent"}, "first-contact"),
+        ({"gap": _GAP_COLD}, "cold-trajectory"),
+    ]:
+        html = _render(orientation=_orientation_payload(**gap_kw))
+
+        assert 'data-entry-state="cold_start"' in html, label
+
+        # "Jot something down" is gone entirely from the door.
+        assert "Jot something down" not in html, label
+
+        # Exactly one capture.open entry point exists on the whole door.
+        assert html.count('data-intent="capture.open"') == 1, label
+
+        # That single capture entry point is the inline capture input region,
+        # not a verb-row button.
+        capture_region = html.split('data-region="cold-start-capture"', 1)[1].split("</div>", 1)[0]
+        assert 'data-intent="capture.open"' in capture_region, label
+        assert 'data-testid="cold-start-capture-input"' in capture_region, label
+
+        # The verb row carries no capture affordance — only the two nav verbs.
+        # Match the trailing-quote token so the container class
+        # ("cold-start-verbs") is not double-counted.
+        verb_region = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+        assert 'data-intent="capture.open"' not in verb_region, label
+        assert verb_region.count('cold-start-verb"') == 2, label
+
+
+def test_cold_start_capture_line_has_glyph_and_field_affordance() -> None:
+    """#2562 AC3: inline capture line has a leading glyph + visible field.
+
+    The capture line gets a leading capture glyph (circle-dot) and the input
+    gets a visible bordered field affordance so it reads as "type here" — still
+    subordinate to the gold "Find a note" (no fill).
+    """
+    html = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    # Leading glyph element is present inside the capture line.
+    capture_region = html.split('data-region="cold-start-capture"', 1)[1].split("</div>", 1)[0]
+    assert "cold-start-capture-glyph" in capture_region
+
+    # The glyph has a styled circle-dot rule.
+    assert ".cold-start-capture-glyph {" in html
+
+    # The input declares a visible field border (not a bare bottom-rule, not
+    # borderless), so it reads as a field.
+    assert ".cold-start-capture-input {" in html
+    input_rule = html.split(".cold-start-capture-input {", 1)[1].split("}", 1)[0]
+    assert "border:" in input_rule and "1px solid" in input_rule, (
+        "capture input must declare a visible field border"
+    )
+    # Subordinate to the gold primary: no accent/gold fill on the field.
+    assert "background: transparent" in input_rule
+
+
+def test_cold_start_vault_identity_renders_as_vault_chip() -> None:
+    """#2562 AC3: vault identity is a chip (vault-green dot + name).
+
+    The plain-text vault identity is promoted to a proper vault chip matching
+    the shell's vault indicator: a vault-green dot plus the vault name.
+    """
+    html = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    # Chip markup is present (dot + id) inside the threshold. Split on the
+    # markup tag, not the bare attribute.
+    threshold = html.split(
+        '<div data-region="cold-start-threshold" class="cold-start-threshold">', 1
+    )[1].split("</div>", 1)[0]
+    assert "cold-start-vault-chip" in threshold
+    assert "cold-start-vault-dot" in threshold
+    assert "cold-start-vault-id" in threshold
+    # The server-declared vault id is rendered in the chip.
+    assert "dev-vault" in threshold
+
+    # The dot is vault-green (--vault), matching the shell indicator.
+    assert ".cold-start-vault-dot {" in html
+    dot_rule = html.split(".cold-start-vault-dot {", 1)[1].split("}", 1)[0]
+    assert "var(--vault)" in dot_rule, "vault chip dot must use the vault-green token"
+    # --vault is defined in the orientation stylesheet so the dot resolves.
+    assert "--vault: #39e87d" in html
+
+
+def test_cold_start_threshold_is_optically_centred() -> None:
+    """#2562 AC3: the threshold block is optically centred, not top-loaded.
+
+    A cold_start-scoped rule gives the threshold a tall flow region and centres
+    its content vertically so the door no longer hugs the top third.
+    """
+    html = _render(orientation=_orientation_payload(gap=_GAP_COLD))
+
+    selector = 'body[data-entry-state="cold_start"] .cold-start-threshold {'
+    assert selector in html
+    centre_rule = html.split(selector, 1)[1].split("}", 1)[0]
+    assert "align-content: center" in centre_rule
+    assert "min-height" in centre_rule
 
 
 # ---------------------------------------------------------------------------

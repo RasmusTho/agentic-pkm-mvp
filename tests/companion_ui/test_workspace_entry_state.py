@@ -100,8 +100,11 @@ def _cold_start_action_row(html: str) -> str:
 # ---------------------------------------------------------------------------
 # D2 (#2448): the cold_start / no_vault entry-screen action row is a set of
 # ranked, on-palette affordances — one primary, the rest secondary — not inline
-# browser-blue underlined links. The action set ("Find a note · Jot something
-# down · See the map") is unchanged; only the affordance treatment changes.
+# browser-blue underlined links; only the affordance treatment changed there.
+# #2562 (Ask 2.2): the capture verb ("Jot something down") was dropped from the
+# verb row so capture is a single affordance (the inline capture line). The
+# verb row now carries the two navigation verbs: Find a note (primary) and See
+# the map (secondary).
 # ---------------------------------------------------------------------------
 
 
@@ -114,25 +117,25 @@ def test_entry_actions_ranked() -> None:
 
     row = _cold_start_action_row(html)
 
-    # Exactly one primary affordance and two secondary affordances — ranked,
-    # not three equal inline links.
+    # Exactly one primary affordance and one secondary affordance — ranked,
+    # not equal inline links. The capture verb is no longer in this row (#2562).
     primary = re.findall(r'class="[^"]*\bbtn--primary\b[^"]*"', row)
     secondary = re.findall(r'class="[^"]*\bbtn--secondary\b[^"]*"', row)
     assert len(primary) == 1, f"action row must carry exactly one primary affordance: {row}"
-    assert len(secondary) == 2, f"action row must carry exactly two secondary affordances: {row}"
+    assert len(secondary) == 1, f"action row must carry exactly one secondary affordance: {row}"
 
     # The affordances are on-palette buttons, not inline browser-blue links.
     assert "<a href" not in row and "<a data-intent" not in row, (
         f"entry-screen actions must be ranked buttons, not <a href> links: {row}"
     )
 
-    # The action set is unchanged — only the treatment changed.
+    # The verb row carries the two navigation verbs; the capture verb is gone.
     assert "Find a note" in row
-    assert "Jot something down" in row
     assert "See the map" in row
+    assert "Jot something down" not in row
 
-    # The intents are preserved (the affordance treatment changed, not the
-    # routing): vault.open, capture.open, map.open still drive the row.
+    # The navigation intents are preserved; capture.open is no longer a verb
+    # (it moved to the single inline capture line — #2562).
     assert 'data-intent="vault.open"' in row
-    assert 'data-intent="capture.open"' in row
     assert 'data-intent="map.open"' in row
+    assert 'data-intent="capture.open"' not in row
