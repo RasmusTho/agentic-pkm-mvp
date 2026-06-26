@@ -68,8 +68,9 @@ issues add rows without restructuring it.
 
 ## Boundary charters delivered (#2540–#2543)
 
-The boundary charters for the **delivered** boundaries are no longer pending. Twelve of the fourteen
-Level 2 control boundaries — plus the CES stewardship practice — now have a charter under
+The boundary charters for the **delivered** boundaries are no longer pending. Eleven of the fourteen
+Level 2 control boundaries — plus the CES stewardship practice (a twelfth charter, but not a control
+boundary) — now have a charter under
 [`docs/boundaries/`](../boundaries/README.md) stating what each owns, what it must never own, its
 inputs/outputs, required metadata, policy/provenance obligations, invariants, failure modes, and the
 future tests that will enforce it. **HIX, EBF, and DRI remain pending** (later backlog under #2533) —
