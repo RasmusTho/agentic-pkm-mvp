@@ -933,6 +933,14 @@ def test_cold_start_omits_vault_browser_panel() -> None:
     assert "hidden" in panel
     assert 'data-browse-focused="false"' in panel
     assert 'data-vault-entry-collapsed="true"' in panel
+    # ...and the panel is ACTUALLY hidden, not just attribute-tagged. The UA
+    # `[hidden] { display: none }` is defeated by `.orientation-section {
+    # display: grid }` (equal specificity → author wins), so a higher-specificity
+    # rule must restore the hide. Regression for the leak where the collapsed
+    # panel still rendered on the door (live operator review 2026-06-26).
+    assert ".orientation-vault-entry[hidden]" in cold
+    hide_rule = cold.split(".orientation-vault-entry[hidden]", 1)[1].split("}", 1)[0]
+    assert "display: none" in hide_rule
     # The verb-line vault.open reveals it via the existing reveal script.
     assert "removeAttribute('hidden')" in cold
     verb_region = cold.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
