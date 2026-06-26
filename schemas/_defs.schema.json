@@ -179,6 +179,11 @@
         "escalated"
       ]
     },
+    "surfaceable_admissibility_status": {
+      "description": "Admissibility values a candidate may hold while still appearing in a metadata-bearing candidate_items entry (i.e. surfaceable in the result). `denied` and `escalated` material is NOT surfaceable: it is recorded only in the content-free denied_or_escalated list (scope_denial) so object id/scope/provenance never leak into a usable result.",
+      "type": "string",
+      "enum": ["candidate", "admitted", "redacted", "requires_confirmation"]
+    },
     "scope_binding": {
       "description": "Which scope(s) the object belongs to. WSP-owned (policy facet GOV). Membership only; it never grants cross-scope rights. scope_id is the primary binding; additional_scope_ids covers multi-scope membership.",
       "type": "object",

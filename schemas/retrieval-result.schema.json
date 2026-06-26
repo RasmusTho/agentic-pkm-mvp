@@ -18,7 +18,7 @@
 
     "candidate_items": {
       "type": "array",
-      "description": "The candidate items found, each with its metadata bundle, admissibility status, and (where admitted/cited) provenance/citation ranges. Candidate evidence is distinct from admitted evidence.",
+      "description": "The surfaceable candidate items found, each with its metadata bundle, admissibility status, and (where admitted/cited) provenance/citation ranges. Candidate evidence is distinct from admitted evidence. Denied/escalated cross-scope material is NEVER carried here (it would leak object id/scope/provenance); it is recorded only in the content-free denied_or_escalated_candidates list.",
       "items": {
         "type": "object",
         "properties": {
@@ -27,7 +27,10 @@
             "$ref": "metadata-bundle.schema.json",
             "description": "Embedded metadata bundle carrying object_type, source_role, authority_state, evidence_role, scope_id, derived_from/provenance for this candidate."
           },
-          "admissibility_status": { "$ref": "_defs.schema.json#/$defs/admissibility_status" },
+          "admissibility_status": {
+            "$ref": "_defs.schema.json#/$defs/surfaceable_admissibility_status",
+            "description": "Restricted to surfaceable values (candidate, admitted, redacted, requires_confirmation). Denied/escalated material is not represented as a metadata-bearing candidate; see denied_or_escalated_candidates."
+          },
           "evidence_role_in_context": {
             "$ref": "_defs.schema.json#/$defs/evidence_role",
             "description": "The role this candidate would play in the current context. May be downgraded from its intrinsic evidence_role; never upgraded by retrieval."
@@ -51,14 +54,6 @@
             "$ref": "_defs.schema.json#/$defs/id_string",
             "description": "The CrossScopeFlow that admitted this candidate if it crosses a scope boundary."
           },
-          "denial_reason": {
-            "type": "string",
-            "description": "Required when admissibility_status is denied."
-          },
-          "escalation_reason": {
-            "type": "string",
-            "description": "Required when admissibility_status is escalated; records WHY escalation is needed."
-          },
           "confirmation_reason": {
             "type": "string",
             "description": "Required when admissibility_status is requires_confirmation."
@@ -67,20 +62,6 @@
         "required": ["object_id", "metadata_bundle", "admissibility_status"],
         "additionalProperties": false,
         "allOf": [
-          {
-            "if": {
-              "properties": { "admissibility_status": { "const": "denied" } },
-              "required": ["admissibility_status"]
-            },
-            "then": { "required": ["denial_reason"] }
-          },
-          {
-            "if": {
-              "properties": { "admissibility_status": { "const": "escalated" } },
-              "required": ["admissibility_status"]
-            },
-            "then": { "required": ["escalation_reason"] }
-          },
           {
             "if": {
               "properties": { "admissibility_status": { "const": "requires_confirmation" } },

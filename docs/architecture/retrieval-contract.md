@@ -44,12 +44,20 @@ Each entry in `candidate_items` carries or references:
 - `ranking_signals` and `relevance_explanation` (signals inform order, not permission);
 - `citation_ranges` (provenance/citation ranges);
 - `admitting_cross_scope_flow` when the candidate crosses a scope boundary;
-- a `denial_reason` / `escalation_reason` / `confirmation_reason` matching its admissibility status.
+- a `confirmation_reason` when its admissibility status is `requires_confirmation`.
+
+`candidate_items` carries only **surfaceable** candidates (`candidate`, `admitted`, `redacted`,
+`requires_confirmation`). Denied and escalated cross-scope material is **never** a metadata-bearing
+candidate — it is recorded only in the content-free `denied_or_escalated_candidates` list (see §3.6),
+so object id/scope/provenance never leak into a usable result.
 
 ## 2. Admissibility states
 
 `admissibility_status` ∈ `candidate`, `admitted`, `denied`, `redacted`, `requires_confirmation`,
-`escalated`. This is what distinguishes **candidate** evidence from **admitted** evidence.
+`escalated`. This is what distinguishes **candidate** evidence from **admitted** evidence. Within a
+metadata-bearing `candidate_items` entry the status is restricted to the **surfaceable** subset
+(`candidate`, `admitted`, `redacted`, `requires_confirmation`); `denied` and `escalated` appear only
+in the content-free `denied_or_escalated_candidates` list.
 
 ## 3. Required rules
 

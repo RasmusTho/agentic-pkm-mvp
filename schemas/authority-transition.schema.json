@@ -146,13 +146,13 @@
       }
     },
     {
-      "$comment": "An approved transition carries the governance receipt, who/when approved, and the granted authority state.",
+      "$comment": "An approved transition carries the pre-mutation DecisionToken AND the post-mutation governance receipt, who/when approved, and the granted authority state. The DecisionToken requirement mirrors the GovernedWriteProtocol invariant (pre-mutation validation) so an approved transition cannot bypass governed-write enforcement.",
       "if": {
         "properties": { "approval_state": { "const": "approved" } },
         "required": ["approval_state"]
       },
       "then": {
-        "required": ["authority_receipt_id", "approved_by", "approved_at", "approved_authority_state"]
+        "required": ["decision_token_ref", "authority_receipt_id", "approved_by", "approved_at", "approved_authority_state"]
       }
     },
     {

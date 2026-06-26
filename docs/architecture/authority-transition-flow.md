@@ -85,8 +85,11 @@ replace that live terminology.
 - requires `actor_id` and `initiating_source`;
 - requires `target_object_id` and `target_scope_id`;
 - requires `approval_required` and `approval_state`;
-- requires `authority_receipt_id` (plus `approved_by`, `approved_at`, `approved_authority_state`) once
-  `approval_state` is `approved` — otherwise the pending/rejected receipt state is explicit;
+- requires, once `approval_state` is `approved`, both the pre-mutation `decision_token_ref` and the
+  post-mutation `authority_receipt_id` (plus `approved_by`, `approved_at`, `approved_authority_state`)
+  — mirroring the [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md) invariant so an
+  approved transition cannot bypass governed-write enforcement; otherwise the pending/rejected receipt
+  state is explicit;
 - requires `provenance_event_ids` and an explicit `affected_derived_representation_ids` array;
 - requires approval for promotion to `accepted`/`canonical` authority unless an explicit
   `approval_exemption_policy_ref` is provided;
