@@ -29,8 +29,11 @@ and quietly launder authority.
 - A projection can support navigation and explanation but cannot stand as a source.
 - Retrieval and context artifacts must preserve provenance (matrix row 16); a projection candidate is
   not evidence by default.
-- A projection becomes usable evidence only through provenance-backed promotion or citation
-  ([ADR-0031](./ADR-0031-authority-transition-flow-governs-durable-mutation.md)).
+- A projection becomes usable evidence only through explicit, provenance-backed promotion that
+  carries an authority receipt ([ADR-0031](./ADR-0031-authority-transition-flow-governs-durable-mutation.md);
+  `authority_receipt_ref` per [metadata-bundle](../architecture/metadata-bundle.md) when a projection
+  claims `evidence_role: evidence`). Citation carries provenance forward but does not, by itself,
+  grant evidence standing.
 
 ## Affected boundaries
 
