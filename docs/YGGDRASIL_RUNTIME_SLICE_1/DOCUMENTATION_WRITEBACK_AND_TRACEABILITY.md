@@ -21,8 +21,13 @@ it carries the parent-epic closure handoff.
 
 - Updates `docs/testing/invariant-tests.md` Coverage map: the eight converted invariants move from
   "xfail runtime skeleton" to runtime-enforced (keeping their schema/static posture noted).
-- Updates `docs/architecture/traceability-matrix.md` rows for principles 1–7 where a test moved from
-  `future_runtime` to runtime/static.
+- Updates every `docs/architecture/traceability-matrix.md` row whose Tests/Evals column references a
+  converted invariant and that moved from `future_runtime` to runtime/static. Per the current matrix
+  mapping that is rows **1, 2, 3, 5, 6, 7, and 16** (similarity_not_permission=1, capture_stamps_scope=2,
+  provenance_survives_derivation=3 & 16, retrieval_cannot_upgrade_intrinsic_non_evidence=5,
+  cross_scope_only_via_flow=6, retrieve_scope_prefilter=7). Rows **4** (agent memory noncanonical) and
+  **8** (projection is not evidence) are left-xfail invariants NOT in this slice — do not touch them.
+  Re-derive the row set from the registry at implementation time rather than trusting these numbers blindly.
 - Updates any runtime contract doc to record the implemented slice (notably the architecture context
   packet's "first runtime vertical slice" status, and a one-line pointer to the `yggdrasil_runtime`
   package).
@@ -37,8 +42,9 @@ it carries the parent-epic closure handoff.
   `similarity_not_permission`, `cross_scope_only_via_flow`, `private_not_in_work_results`,
   `rpg_not_confused_with_software`, `retrieval_cannot_upgrade_intrinsic_non_evidence` (runtime part)
   → marked runtime-enforced with their test pointers.
-- Matrix diff: enforcement posture column updated for the corresponding rows — principles **1–7 and
-  row 16**. Row 16 ("Derived/rebuildable representations must preserve metadata and provenance")
+- Matrix diff: enforcement posture column updated for the rows whose tests reference a converted
+  invariant — rows **1, 2, 3, 5, 6, 7, and 16** (NOT row 4 memory / row 8 projection, which stay
+  xfail). Row 16 ("Derived/rebuildable representations must preserve metadata and provenance")
   explicitly maps `provenance_survives_derivation` and still labels it xfail, so it must move with the
   DRI slice or the matrix stays internally contradictory.
 - Registry diff is to **both** surfaces of `docs/testing/invariant-tests.md`: the Coverage map table
@@ -64,10 +70,10 @@ delivered truth.
     `retrieve_scope_prefilter`, `similarity_not_permission`, `cross_scope_only_via_flow`,
     `private_not_in_work_results`, `rpg_not_confused_with_software`,
     `retrieval_cannot_upgrade_intrinsic_non_evidence` runtime part)
-- [ ] `docs/architecture/traceability-matrix.md` enforcement posture updated for the affected rows
-  (principles **1–7 and row 16**).
-  - Verify: doc writeback at `docs/architecture/traceability-matrix.md :: rows 1-7` and the row-16
-    (`provenance_survives_derivation`) entry
+- [ ] `docs/architecture/traceability-matrix.md` enforcement posture updated for every row whose
+  tests reference a converted invariant — rows **1, 2, 3, 5, 6, 7, and 16** (NOT row 4 memory / row 8
+  projection, which remain xfail).
+  - Verify: doc writeback at `docs/architecture/traceability-matrix.md` rows 1, 2, 3, 5, 6, 7, 16
 - [ ] The architecture context packet records the first runtime vertical slice as delivered, with a
   pointer to `yggdrasil_runtime`.
   - Verify: doc writeback at `docs/foundation/yggdrasil-architecture-context-packet.md :: runtime slice status`
