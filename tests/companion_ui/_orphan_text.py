@@ -146,6 +146,15 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         # section; child testids are dynamic (vault-permission-{key},
         # vault-setting-save-{key}, etc.) so the outer container is registered.
         "vault-settings-panel",
+        # Loaded-note vault SWITCH overlay (#2590) — the reused Choose-a-vault
+        # overlay (vault-selection-required / vault-picker) is hosted here as a
+        # hidden reveal opened by the "V" chip; all its titles, copy, rows, and
+        # footer live inside this container, so the outer host is registered.
+        "vault-switch-host",
+        # Relocated scoped-settings editor in the Settings drawer (#2590) — the
+        # vault.settings.write editor moved here; its child testids are dynamic
+        # (vault-setting-save-{key}, etc.), so the outer host is registered.
+        "vault-settings-section",
     }
 )
 

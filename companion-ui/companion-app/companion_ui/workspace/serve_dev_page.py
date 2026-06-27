@@ -139,6 +139,8 @@ from companion_ui.workspace.vault_settings_panel import (
     VAULT_SETTINGS_ENDPOINT,
     VAULT_SETTINGS_FRAGMENT_PICKER_PARAM,
     VAULT_SETTINGS_FRAGMENT_ROUTE,
+    VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM,
+    VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE,
     vault_settings_panel_fragment,
     vault_settings_panel_markup,
     vault_settings_panel_script,
@@ -739,9 +741,13 @@ def _render_workspace_header_strip(
             <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
             <span class="workspace-vault-chip-label" data-testid="workspace-vault-chip-label" title="{vault_name} · vault {vault_state}">{vault_name} · vault {vault_state}</span>
           </a>
-          <!-- Vault settings is vault-config, identity-adjacent — it stays by
-               the vault chip (not in the displaced launcher cluster). #2447. -->
-          <button type="button" class="workspace-surface-icon workspace-vault-settings-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.settings.open" title="Vault settings" aria-label="Open vault settings" aria-controls="workspace-vault-settings-panel" aria-expanded="false">V</button>
+          <!-- #2590: the "V" chip opens the reused Choose-a-vault overlay for
+               vault *switching* (one graphical language with the cold picker and
+               note-browse), not the retired foreign-form drawer. Scoped vault
+               settings moved to the Settings drawer's vault section. It stays by
+               the vault chip (vault-config, identity-adjacent; not in the
+               displaced launcher cluster). #2447. -->
+          <button type="button" class="workspace-surface-icon workspace-vault-settings-icon" data-testid="workspace-surface-icon-vault-settings" data-intent="vault.switch.open" title="Switch vault" aria-label="Switch vault" aria-controls="workspace-vault-switch-host" aria-expanded="false">V</button>
           <span class="workspace-anchor-pill" data-testid="workspace-anchor-pill" data-region="document-anchor" data-anchor-note-path="{_e(anchor_note_path)}" title="Document anchor">{_e(anchor_title)}</span>
           <!-- C1 (#2484): the RECOVERY posture pill (DEFAULT_POSTURE_EMPHASIS,
                local-ui rendering only) is removed from the shell topbar. The
@@ -6378,6 +6384,133 @@ def _render_vault_picker_script() -> str:
   </script>"""
 
 
+def _vault_switch_payload(fields: object) -> dict:
+    """Shape a loaded-note payload for the reused "Choose a vault" overlay (#2590).
+
+    The loaded-note "V" chip opens the SAME ``_render_vault_selection_required_section``
+    overlay the first-contact ``no_vault`` picker uses, so switching a vault
+    from within the app speaks one graphical language with the cold picker and
+    with selecting a note — never a typed path, never a Role select. This is the
+    ONE new render-side piece for #2590: it builds the same payload that overlay
+    already consumes; it does not fetch, classify, or introduce a new surface.
+
+    Source discipline: vault resolution/identity stays server-declared. The
+    loaded-note ``fields`` carry the runtime-declared vault name
+    (``runtime_vault_name``) but not the active vault *path* or the recents list
+    (those are not declared into the page fields, and #2590 must not add an
+    endpoint). So this payload leaves ``configured_vault_root`` and
+    ``recent_vaults`` empty rather than fabricate a path to select by — the
+    overlay's always-present "Browse for a vault folder…" row is the visual
+    switch path (filesystem mode → navigate → Open/Initialize over the existing
+    ``/api/companion/vault/browse`` listing and ``vault.select`` /
+    ``vault.initialize`` authorities, incl. the #2518 409-confirm). ``reason``
+    is the neutral switch reason, never an error/uninitialized state, so the
+    overlay renders the clean switch surface (no init affordance).
+    """
+    data = fields if isinstance(fields, dict) else {}
+    vault_name = str(data.get("runtime_vault_name") or "").strip()
+    if vault_name and vault_name.lower() in {"unresolved", "unknown"}:
+        vault_name = ""
+    if vault_name:
+        message = (
+            f"You are in {vault_name}. Choose another vault to switch to, or "
+            "browse for a vault folder."
+        )
+    else:
+        message = "Choose a vault to switch to, or browse for a vault folder."
+    return {
+        # Neutral switch reason — not no_vault_bound / uninitialized /
+        # vault_root_misconfigured — so the overlay renders the clean switch
+        # surface without the error-state initialize affordance.
+        "reason": "switch",
+        "message": message,
+        # No fabricated configured/recents rows: the active vault path and the
+        # recents list are not server-declared into the loaded-note fields, and
+        # #2590 adds no endpoint. The Browse row carries the switch.
+        "configured_vault_root": "",
+        "recent_vaults": [],
+    }
+
+
+def _render_vault_switch_overlay(fields: object) -> str:
+    """Host the reused "Choose a vault" overlay as the loaded-note switch (#2590).
+
+    REUSE, not rebuild: the inner markup is the EXACT
+    ``_render_vault_selection_required_section`` overlay (titled overlay, filter
+    that only filters the visible list, clickable rows, Browse-for-a-folder
+    filesystem mode, ⓘ Operator drawer) the first-contact picker renders, and
+    its self-bootstrapping controller (``_render_vault_picker_script``) binds it
+    AS-IS (it keys off ``[data-testid="vault-picker"]``). The only addition is a
+    hidden scrim wrapper + a tiny reveal handler keyed off the "V" chip's
+    ``vault.switch.open`` intent, so on a loaded note the overlay starts hidden
+    and is revealed on demand instead of replacing the whole page. No host
+    occupant is added (overlay_host.py is untouched); this is a self-contained
+    reveal in the picker idiom (Esc / scrim click dismiss).
+    """
+    overlay = _render_vault_selection_required_section(_vault_switch_payload(fields))
+    return f"""
+  <style>
+    .vault-switch-host {{
+      position: fixed; inset: 0; z-index: 970;
+      display: none; align-items: flex-start; justify-content: center;
+      padding: 64px 16px 16px;
+      background: rgba(7, 11, 18, 0.62);
+      overflow-y: auto;
+    }}
+    .vault-switch-host[data-open="true"] {{ display: flex; }}
+    .vault-switch-host .vault-selection-required {{
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    }}
+  </style>
+  <div class="vault-switch-host" id="workspace-vault-switch-host"
+    data-testid="vault-switch-host" data-region="vault-switch"
+    data-open="false" role="dialog" aria-modal="true"
+    aria-label="Choose a vault" hidden>
+    {overlay}
+  </div>
+  <script>
+  /* vault-switch-reveal (#2590) — reveal the reused Choose-a-vault overlay */
+  (function() {{
+    var host = document.getElementById('workspace-vault-switch-host');
+    if (!host) {{ return; }}
+    function triggers() {{
+      return Array.prototype.slice.call(
+        document.querySelectorAll('[data-intent="vault.switch.open"]')
+      );
+    }}
+    function open() {{
+      host.removeAttribute('hidden');
+      host.setAttribute('data-open', 'true');
+      triggers().forEach(function(t) {{ t.setAttribute('aria-expanded', 'true'); }});
+      var filter = host.querySelector('[data-testid="vault-picker-filter"]');
+      if (filter) {{ try {{ filter.focus(); }} catch (e) {{}} }}
+    }}
+    function close() {{
+      host.setAttribute('hidden', '');
+      host.setAttribute('data-open', 'false');
+      triggers().forEach(function(t) {{ t.setAttribute('aria-expanded', 'false'); }});
+      var first = triggers()[0];
+      if (first) {{ try {{ first.focus(); }} catch (e) {{}} }}
+    }}
+    document.addEventListener('click', function(event) {{
+      var trigger = event.target && event.target.closest('[data-intent="vault.switch.open"]');
+      if (trigger) {{
+        event.preventDefault();
+        if (host.getAttribute('data-open') === 'true') {{ close(); }} else {{ open(); }}
+        return;
+      }}
+      // Scrim click (outside the overlay card) dismisses, matching the
+      // overlay-host scrim grammar.
+      if (event.target === host) {{ close(); }}
+    }});
+    document.addEventListener('keydown', function(event) {{
+      if (event.key === 'Escape' && host.getAttribute('data-open') === 'true') {{ close(); }}
+    }});
+  }})();
+  /* /vault-switch-reveal */
+  </script>"""
+
+
 def _render_error_section(
     error: str,
     *,
@@ -9592,27 +9725,48 @@ def render_index_html(
     # gates only on the server-declared error, it does not re-classify state.
     runtime_unreachable = _is_runtime_unreachable(error)
     suppress_vault_settings = runtime_unreachable or route_error
-    # The no-vault front door is now the self-contained "Choose a vault" overlay
+    # The no-vault front door is the self-contained "Choose a vault" overlay
     # (#2564): a titled overlay + filter + clickable rows + footer count in the
     # note Browse-vault idiom, with operator affordances behind its own ⓘ
-    # drawer. The vault-settings panel (typed path fields, Role select, init
-    # form — foreign form chrome) is NO LONGER folded into the front door; the
-    # overlay carries its own controller and dispatches the existing
-    # vault.select action. On a loaded note the panel is still mounted as the
-    # hidden vault-settings drawer.
+    # drawer.
+    #
+    # #2590: the LOADED-NOTE vault surface is now brought into the SAME idiom.
+    # The old foreign-form drawer (typed path fields, Role select, init/reload
+    # chrome + scoped-settings editor) is retired from the loaded-note path:
+    #   - vault *switching* reuses the SAME Choose-a-vault overlay, hosted as a
+    #     hidden reveal opened by the "V" chip (`vault.switch.open`); and
+    #   - the scoped-settings editor relocates into the Settings drawer's new
+    #     "vault" section (settings are a settings surface, not switch chrome).
+    # The change is scoped to the loaded-note path (``fields is not None``). The
+    # orientation/setup path (no note, runtime healthy, no vault) keeps the
+    # visible setup panel as the first-contact recovery surface (its own tests
+    # pin that). On the loaded note the panel's WRITE controller
+    # (`vault_settings_panel_script`) stays the single owner of
+    # `vault.settings.write` and binds the relocated Settings-drawer forms via
+    # its document-delegated handler.
     is_picker = vault_selection_required is not None
-    vault_settings_panel_html = (
-        ""
-        if suppress_vault_settings or is_picker
-        else vault_settings_panel_markup(hidden_by_default=fields is not None)
-    )
-    # In picker mode the lightweight picker controller replaces the settings-
-    # panel controller; otherwise (loaded note / orientation) the settings-panel
-    # controller drives the hidden drawer.
+    is_loaded_note = fields is not None
+    if suppress_vault_settings or is_picker:
+        vault_settings_panel_html = ""
+    elif is_loaded_note:
+        vault_settings_panel_html = _render_vault_switch_overlay(fields)
+    else:
+        vault_settings_panel_html = vault_settings_panel_markup(hidden_by_default=False)
+    # Controller emission:
+    #   - picker mode: the picker controller drives the full-page overlay;
+    #   - loaded note: BOTH the picker controller (it binds the reused switch
+    #     overlay) AND the vault-settings-panel write controller (it owns
+    #     `vault.settings.write` for the relocated Settings-drawer vault section);
+    #   - orientation/setup: the vault-settings-panel controller drives the
+    #     visible setup panel (unchanged).
     if suppress_vault_settings:
         vault_settings_panel_js = ""
     elif is_picker:
         vault_settings_panel_js = _render_vault_picker_script()
+    elif is_loaded_note:
+        vault_settings_panel_js = (
+            _render_vault_picker_script() + vault_settings_panel_script()
+        )
     else:
         vault_settings_panel_js = vault_settings_panel_script()
     # Loaded note workspaces keep the settings panel mounted for controller
@@ -9735,6 +9889,16 @@ def render_index_html(
       --radius-md: 4px;
     }}
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    /* Global reset: the `hidden` attribute must always win. Several elements
+       (note-body-readonly-indicator, the relocated vault surfaces, …) set an
+       explicit `display`, which has equal specificity to and therefore defeats
+       the UA `[hidden] {{ display: none }}` rule — so a `hidden` element leaked
+       into view (e.g. a false "read-only" badge on an editable note). All
+       reveals in this UI remove the attribute (never CSS-show a hidden node),
+       so this is safe and kills the whole class. (Previously satisfied only
+       incidentally by the retired vault-settings-panel's scoped rule; #2590
+       makes it an explicit shell-level reset.) */
+    [hidden] {{ display: none !important; }}
     html {{ font-size: 16px; -webkit-font-smoothing: antialiased; }}
     body {{
       background: var(--bg-base);
@@ -14388,6 +14552,15 @@ def make_handler(
                 front_door_picker = "1" in fragment_query.get(
                     VAULT_SETTINGS_FRAGMENT_PICKER_PARAM, []
                 )
+                # #2590: the relocated Settings-drawer "vault" section tags its
+                # fetch with the settings-scope marker so this route returns the
+                # scoped-settings EDITOR ONLY (no switch/foreign-form chrome).
+                settings_only = (
+                    VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE
+                    in fragment_query.get(
+                        VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM, []
+                    )
+                )
                 fragment_context = (
                     data.get("context") if isinstance(data, dict) else None
                 )
@@ -14401,7 +14574,7 @@ def make_handler(
                     and fragment_status in NO_ACTIVE_VAULT_STATUSES
                 )
                 body = vault_settings_panel_fragment(
-                    data, picker_mode=picker_mode
+                    data, picker_mode=picker_mode, settings_only=settings_only
                 ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

@@ -22,16 +22,19 @@ Give the Local UI preferences one coherent home — a right drawer per the desig
   - **Listening** preferences per the #1641/#1643 contract lineage: modality and speed over the shipped TTS read-back, render-only.
   - **Companion behaviour**: the guidance-layer default (extends SEP-06's session-local toggle into a stored Local UI preference) and **quiet hours** — which dampen ambient salience presentation only and can never schedule, suppress, or batch notifications (spec §Resolved Q18; there are no notifications).
   - **Connection posture**: read-only display of the runtime/vault posture; the UI never selects or names a vault.
-- Storage home: the `WORKSPACE_STATE_CONTRACT.md` local-state home as pinned by `DISPLAY_PREFERENCE_LOCAL_STATE_CONTRACT.md` — never vault Markdown/frontmatter, never a save/projection endpoint. (#1675 shipped `localStorage`; this task keeps that mechanism unless the local-state home dictates otherwise — reconcile, don't fork.)
+  - **Vault** (#2590, part of #2561): the relocated scoped Markdown-settings editor — the `enableVaultWatcher` / `allowWritesToVault` / `allowSharedSettingsEdits` / `allowLocalSettingsEdits` flags, the handoff/assets folder fields, and Save. Settings are a settings surface, so they live here instead of being foreign-form chrome on the loaded-note vault drawer (now retired in favour of the Choose-a-vault switch overlay opened from the vault chip — see `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md` §11). **This is the only server-write section** (`data-authority="server-write"`): unlike the render-only / read-only Local UI sections above, its Save posts `vault.settings.write` to `POST /api/companion/vault/settings` with the #2518 init-confirm guard preserved. The editor markup, the `/vault-settings` fragment route, and the `vault_settings_panel_script` write controller are reused unchanged — only the mount point moved. The section never selects or switches a vault (that is the Choose-a-vault overlay); it edits the active vault's scoped settings only.
+- Storage home: the `WORKSPACE_STATE_CONTRACT.md` local-state home as pinned by `DISPLAY_PREFERENCE_LOCAL_STATE_CONTRACT.md` for the Local UI preference sections (Display / Listening / Behaviour / Connection) — never vault Markdown/frontmatter, never a save/projection endpoint. (#1675 shipped `localStorage`; this task keeps that mechanism unless the local-state home dictates otherwise — reconcile, don't fork.) The **Vault** section (#2590) is the deliberate exception: it is a server-write surface that posts the scoped Markdown settings to the runtime — its authority class is distinct and the drawer's render-only `local-only render` badge logic does not apply to it.
 - Guarantees: canonical Markdown hash **byte-unchanged** across any preference change; **`local-only render` badge** whenever a preference diverges from the canonical render; **reset-to-canonical** always available; per-surface overrides may layer on global defaults.
 
 ## Concretely
 
 ```text
-settings.open → right drawer; Display / Listening / Behaviour / Connection sections
+settings.open → right drawer; Display / Listening / Behaviour / Connection / Vault sections
 set font size lg → note re-renders; content_hash unchanged; local-only badge visible
 settings.reset → canonical render restored; badge gone
 quiet hours 22:00–07:00 → ambient cue intensity reduced in window; nothing else changes
+vault section: toggle allowWritesToVault → vault.settings.write → server write + #2518 confirm (NOT a Local UI pref; the local-only badge does not apply)
+switch vault: handled by the Choose-a-vault overlay (vault chip), not this drawer
 ```
 
 ## Why This Matters
@@ -52,6 +55,8 @@ Preferences are the easiest place for authority creep: one preference write that
   Verify: `tests/companion_ui/test_settings_drawer.py::test_quiet_hours_dampen_presentation_only`
 - [ ] The connection section is read-only and never offers vault selection.
   Verify: `tests/companion_ui/test_settings_drawer.py::test_connection_posture_is_read_only`
+- [ ] (#2590) The drawer's **Vault** section hosts the relocated scoped-settings editor as a server-write surface (`data-authority="server-write"`) and still posts `vault.settings.write` to `/api/companion/vault/settings` with the #2518 confirm preserved; it never switches a vault.
+  Verify: `tests/companion_ui/test_settings_drawer.py::test_vault_section_hosts_relocated_scoped_settings_as_server_write` and `::test_vault_section_write_posts_to_settings_endpoint_with_confirm_preserved`
 
 ## How to Verify (Pre-Merge)
 
@@ -63,7 +68,7 @@ Preferences are the easiest place for authority creep: one preference write that
 
 - Re-implementing or relocating the delivered #1675 slice's semantics — only consolidating its presentation.
 - Semantic transformations ("simplify", "summarize", "fix spelling") — separately governed flows per `DISPLAY_PREFERENCE_LOCAL_STATE_CONTRACT.md` RQ-9.
-- Vault selection/binding (runtime-owned).
+- Vault selection/binding (runtime-owned). The Vault section (#2590) edits scoped settings only; switching vaults is the Choose-a-vault overlay, and multi-vault active switching stays #2566 (#2143).
 - TTS provider/endpoint changes (`LOCAL_FIRST_TTS_CONTRACT.md` owns that boundary).
 
 ## Related Docs

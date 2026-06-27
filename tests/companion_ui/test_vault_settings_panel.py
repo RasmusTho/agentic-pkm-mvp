@@ -596,3 +596,93 @@ def test_init_form_surfaces_nonempty_confirm_gesture() -> None:
     # The select form keeps the generic reload-chaining path (init's dedicated
     # path must not remove it): an action still chains through reload().
     assert ".then(reload)" in script
+
+
+# ---------------------------------------------------------------------------
+# #2590: the loaded-note vault drawer is brought into the Choose-a-vault idiom.
+# The "V" chip opens the reused switch overlay (no typed-path/Role chrome); the
+# scoped-settings editor relocates to the Settings drawer's vault section and
+# still posts vault.settings.write with the #2518 confirm preserved. Coverage is
+# RE-HOMED, not dropped.
+# ---------------------------------------------------------------------------
+
+
+def _loaded_note_fields() -> dict[str, Any]:
+    return {
+        "title": "Loaded Note",
+        "note_path": "Notes/loaded.md",
+        "artifact_id": "art-loaded",
+        "artifact_kind": "human_note",
+        "content_hash": "sha256-loaded",
+        "body": "# Loaded\n\nbody",
+        "panel_rail": "rail",
+        "runtime_vault_name": "Niflheim",
+        "runtime_vault_channel": "local-dev",
+        "runtime_vault_provenance": "resolved",
+        "guard_canvas_enabled": True,
+    }
+
+
+def test_loaded_note_vault_surface_uses_switch_overlay_not_foreign_form() -> None:
+    """The "V" chip opens the reused Choose-a-vault switch overlay; the retired
+    foreign-form drawer (typed open/init paths, Role select, the old toggle) is
+    gone from the loaded-note path."""
+    from companion_ui.workspace.serve_dev_page import render_index_html
+
+    html = render_index_html(
+        api_base_url="http://runtime",
+        note_path="Notes/loaded.md",
+        fields=_loaded_note_fields(),
+    )
+
+    # The chip retargets to the switch overlay (one graphical language).
+    assert 'data-intent="vault.switch.open"' in html
+    assert 'data-intent="vault.settings.open"' not in html
+    assert 'aria-controls="workspace-vault-switch-host"' in html
+
+    # The reused Choose-a-vault overlay is hosted (hidden) as the switch surface.
+    assert 'data-testid="vault-switch-host"' in html
+    assert 'data-testid="vault-selection-required"' in html
+    assert 'data-reason="switch"' in html
+    assert 'data-testid="vault-picker"' in html
+
+    # The retired foreign-form drawer + its chrome are gone from the page.
+    assert '<section class="vault-settings-panel"' not in html
+    assert "window.companionVaultSettings" not in html
+    assert 'data-testid="vault-open-path"' not in html
+    assert 'data-testid="vault-init-path"' not in html
+    assert 'data-testid="vault-init-role"' not in html
+
+
+def test_settings_only_fragment_serves_editor_without_foreign_chrome() -> None:
+    """The Settings-drawer vault section tags its fragment fetch with the
+    settings-scope marker; the route returns the scoped-settings editor only —
+    no typed-path/Role/init/reload/recents/identity chrome — and the
+    vault.settings.write Save still posts to the settings endpoint."""
+    from companion_ui.workspace.vault_settings_panel import (
+        VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM,
+        VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE,
+    )
+
+    projection = _selected_projection()
+    client = _FakeClient(get_responses={VAULT_SETTINGS_ENDPOINT: projection})
+    handler_cls = make_handler(client=client, api_base_url="http://runtime")
+    settings_route = (
+        f"{VAULT_SETTINGS_FRAGMENT_ROUTE}"
+        f"?{VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM}={VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE}"
+    )
+    body = _drive_get(handler_cls, settings_route).decode("utf-8")
+
+    # The settings-scope fragment equals the settings_only render — editor only.
+    assert body == vault_settings_panel_fragment(projection, settings_only=True)
+    assert 'data-testid="vault-settings-body"' in body
+    assert 'data-testid="vault-setting-row"' in body
+    assert f'data-api-path="{VAULT_SETTINGS_ENDPOINT}"' in body
+    assert "workflowStatuses" in body
+
+    # No switch / foreign-form chrome leaks onto the settings surface.
+    assert 'data-testid="vault-open-path"' not in body
+    assert 'data-testid="vault-init-path"' not in body
+    assert 'data-testid="vault-init-role"' not in body
+    assert 'data-testid="vault-recent-vaults"' not in body
+    assert 'data-testid="vault-settings-identity"' not in body
