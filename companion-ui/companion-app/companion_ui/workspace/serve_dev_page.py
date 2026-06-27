@@ -6206,9 +6206,12 @@ def _render_vault_picker_script() -> str:
       // #2565 Codex P2: act on the CURRENT folder too. When VAULT_BROWSE_ROOT is
       // narrowed to the exact vault/target dir there is no parent row and maybe
       // no matching child, so the current folder itself must be openable /
-      // initializable from the picker — otherwise that base dead-ends.
+      // initializable from the picker — otherwise that base dead-ends. But NOT
+      // at the filesystem root '/': the unconfigured base defaults to '/', and
+      // offering "Initialize a vault here" for '/' would scaffold a vault into
+      // the container root — there the user must navigate into a child folder.
       var hasCurrent = false;
-      if (data && data.path) {
+      if (data && data.path && data.path !== '/') {
         hasCurrent = true;
         var curLi = document.createElement('li');
         curLi.className = 'vault-picker-row vault-picker-fs-row vault-picker-fs-current' + (data.is_vault ? ' vault-picker-fs-row--vault' : '');

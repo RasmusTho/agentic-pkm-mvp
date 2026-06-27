@@ -775,3 +775,7 @@ def test_filesystem_mode_acts_on_current_folder() -> None:
     assert "Initialize a vault here" in html
     # It reuses the existing select/initialize authority on the current path.
     assert "data.is_vault" in html and "data.path" in html
+    # ...but never offers Initialize for the filesystem root '/' (the unconfigured
+    # base default) — that would scaffold a vault into the container root (#2565
+    # Codex P2). The current-folder row is suppressed at '/'.
+    assert "data.path !== '/'" in html
