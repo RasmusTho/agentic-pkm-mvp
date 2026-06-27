@@ -935,7 +935,9 @@ def _resolve_browse_target(requested: str, base: Path) -> Path:
         raw = base / raw
     try:
         resolved = raw.resolve()
-    except OSError as exc:  # pragma: no cover - defensive
+    except (OSError, RuntimeError) as exc:
+        # RuntimeError: Path.resolve() raises it (not OSError) on a symlink loop;
+        # a bad symlink in the requested path must be a 400, never a 500.
         raise HTTPException(status_code=400, detail="invalid browse path") from exc
     if not _is_within_base(resolved, base):
         # Containment failure: ``..`` traversal, an absolute path outside the
@@ -1015,7 +1017,9 @@ def browse_companion_vault_folder(
                 resolved_child = child.resolve()
                 if not resolved_child.is_dir():
                     continue  # folders only — never list files
-            except OSError:
+            except (OSError, RuntimeError):
+                # RuntimeError: a symlink loop on this child — skip it rather
+                # than 500 the whole listing (base can default to '/').
                 continue
             if not _is_within_base(resolved_child, base):
                 continue  # symlink/junction escaping the browse base

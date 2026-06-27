@@ -6203,6 +6203,32 @@ def _render_vault_picker_script() -> str:
     function renderEntries(data) {
       if (!fsList) { return; }
       fsList.innerHTML = '';
+      // #2565 Codex P2: act on the CURRENT folder too. When VAULT_BROWSE_ROOT is
+      // narrowed to the exact vault/target dir there is no parent row and maybe
+      // no matching child, so the current folder itself must be openable /
+      // initializable from the picker — otherwise that base dead-ends.
+      var hasCurrent = false;
+      if (data && data.path) {
+        hasCurrent = true;
+        var curLi = document.createElement('li');
+        curLi.className = 'vault-picker-row vault-picker-fs-row vault-picker-fs-current' + (data.is_vault ? ' vault-picker-fs-row--vault' : '');
+        curLi.setAttribute('data-testid', 'vault-picker-fs-current');
+        curLi.setAttribute('data-fs-path', data.path || '');
+        curLi.setAttribute('data-is-vault', data.is_vault ? 'true' : 'false');
+        var curAction = data.is_vault
+          ? '<button type="button" class="vault-picker-fs-open" data-testid="vault-picker-fs-open" data-intent="vault.select" data-api-method="POST" data-api-path="/api/companion/vault/select" data-fs-path="' + escapeHtml(data.path) + '">Open this vault</button>'
+          : '<button type="button" class="vault-picker-fs-init" data-testid="vault-picker-fs-initialize" data-intent="vault.initialize" data-api-method="POST" data-api-path="/api/companion/vault/initialize" data-fs-path="' + escapeHtml(data.path) + '">Initialize a vault here</button>';
+        curLi.innerHTML =
+          '<div class="vault-picker-fs-row-main">' +
+            '<span class="vault-picker-row-head">' +
+              '<span class="vault-picker-row-name" data-testid="vault-picker-fs-current-name">This folder' + (data.is_vault ? '' : ' (not a vault yet)') + '</span>' +
+              (data.is_vault ? '<span class="vault-picker-row-badge vault-picker-row-badge--vault" data-testid="vault-picker-fs-current-badge">vault</span>' : '') +
+            '</span>' +
+            '<span class="vault-picker-fs-row-action">' + curAction + '</span>' +
+          '</div>' +
+          '<p class="vault-picker-fs-row-error" data-testid="vault-picker-fs-row-error" hidden></p>';
+        fsList.appendChild(curLi);
+      }
       var entries = (data && data.entries) || [];
       entries.forEach(function(entry) {
         var li = document.createElement('li');
@@ -6231,7 +6257,7 @@ def _render_vault_picker_script() -> str:
         fsList.appendChild(li);
       });
       applyFsFilter();
-      if (fsEmpty) { fsEmpty.hidden = entries.length !== 0; }
+      if (fsEmpty) { fsEmpty.hidden = entries.length !== 0 || hasCurrent; }
       if (fsFooter) {
         var count = entries.length;
         fsFooter.textContent = count + ' folder' + (count === 1 ? '' : 's') + (data && data.truncated ? ' (more not shown)' : '');
@@ -6335,7 +6361,7 @@ def _render_vault_picker_script() -> str:
       // #2518 409-confirm).
       var fsInit = event.target && event.target.closest('[data-testid="vault-picker-fs-initialize"]');
       if (fsInit) {
-        var row = fsInit.closest('[data-testid="vault-picker-fs-row"]');
+        var row = fsInit.closest('li');
         var rowErr = row && row.querySelector('[data-testid="vault-picker-fs-row-error"]');
         initializeVault(fsInit.getAttribute('data-fs-path') || '', fsInit, rowErr, 'Confirm initialize here');
         return;

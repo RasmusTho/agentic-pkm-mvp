@@ -238,3 +238,25 @@ def test_browse_base_defaults_to_filesystem_root(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("VAULT_BROWSE_ROOT", raising=False)
     monkeypatch.setattr(companion_module, "resolve_optional_vault_root", lambda: None)
     assert companion_module._resolve_browse_base() == Path("/").resolve()
+
+
+def test_browse_symlink_loop_does_not_500(client: TestClient, browse_base: Path) -> None:
+    """A symlink loop must not 500 the endpoint: Path.resolve() raises RuntimeError
+    (not OSError) on a loop, so navigating into the loop is a 400 and listing the
+    parent skips it — never a 500 (#2565 Codex P2). Matters because the base can
+    default to '/' and enumerate arbitrary user filesystem entries."""
+    loop = browse_base / "loop"
+    try:
+        loop.symlink_to(loop, target_is_directory=True)  # self-referential loop
+    except (OSError, NotImplementedError):  # pragma: no cover - platform without symlinks
+        pytest.skip("symlinks not supported on this platform")
+
+    # Navigating INTO the loop: rejected (400), never a 500.
+    into = client.get("/api/companion/vault/browse", params={"path": str(loop)})
+    assert into.status_code != 500, into.text
+    assert into.status_code == 400, into.text
+
+    # Listing the PARENT that contains the loop: 200, the loop child skipped.
+    parent = client.get("/api/companion/vault/browse", params={"path": str(browse_base)})
+    assert parent.status_code == 200, parent.text
+    assert "loop" not in [entry["name"] for entry in parent.json()["entries"]]

@@ -757,3 +757,21 @@ def test_no_white_inputs() -> None:
     # No input is left with default white chrome via an inline style.
     for white in ("background: white", "background:#fff", "background: #fff", "background:white"):
         assert white not in html, f"no control may carry inline {white!r} on the dark theme"
+
+
+def test_filesystem_mode_acts_on_current_folder() -> None:
+    """#2565 Codex P2: filesystem mode must act on the CURRENT folder too — Open it
+    when it is a vault, else Initialize a vault here — so a base narrowed to the
+    exact vault/target dir (no parent row, maybe no matching child) is not a dead
+    end. The DOM render is client-side; assert the picker controller carries the
+    current-folder action logic + markup."""
+    client = _PickerClient(_PICKER_PAYLOAD)
+    html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
+    # The controller builds the current-folder row at runtime via setAttribute, so
+    # assert on the JS value/literals rather than a rendered attribute.
+    assert "vault-picker-fs-current" in html
+    # Both branches are present: open the current vault, or initialize here.
+    assert "Open this vault" in html
+    assert "Initialize a vault here" in html
+    # It reuses the existing select/initialize authority on the current path.
+    assert "data.is_vault" in html and "data.path" in html
