@@ -1,5 +1,7 @@
 # Parent Feature Issue — Yggdrasil Runtime Vertical Slice 1
 
+State: OPEN — live validation hub (mirrors GitHub epic #2578).
+
 GitHub issue: **#2578** — `epic: implement Yggdrasil runtime vertical slice 1 — capture to bounded
 context`. State: **OPEN — live validation hub.**
 
