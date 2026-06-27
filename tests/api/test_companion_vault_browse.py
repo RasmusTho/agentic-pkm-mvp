@@ -260,3 +260,23 @@ def test_browse_symlink_loop_does_not_500(client: TestClient, browse_base: Path)
     parent = client.get("/api/companion/vault/browse", params={"path": str(browse_base)})
     assert parent.status_code == 200, parent.text
     assert "loop" not in [entry["name"] for entry in parent.json()["entries"]]
+
+
+def test_browse_base_symlink_loop_degrades_without_raising(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A symlink loop in VAULT_BROWSE_ROOT itself must not raise — _resolve_browse_base
+    runs before the request-path guards and promises not to raise, so a RuntimeError
+    from Path.resolve() degrades to the unresolved path instead of 500ing every
+    browse request (#2565 Codex P3)."""
+    from app.api.routes import companion as companion_module
+
+    loop = tmp_path / "loop"
+    try:
+        loop.symlink_to(loop, target_is_directory=True)
+    except (OSError, NotImplementedError):  # pragma: no cover - platform without symlinks
+        pytest.skip("symlinks not supported on this platform")
+    monkeypatch.setenv("VAULT_BROWSE_ROOT", str(loop))
+
+    base = companion_module._resolve_browse_base()  # must not raise
+    assert base is not None

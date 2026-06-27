@@ -872,7 +872,10 @@ def _resolve_browse_base() -> Path:
         candidate = Path(override).expanduser()
         try:
             return candidate.resolve()
-        except OSError:
+        except (OSError, RuntimeError):
+            # RuntimeError: a symlink loop in VAULT_BROWSE_ROOT itself; degrade
+            # to the unresolved path rather than 500 every browse request (this
+            # helper runs before the request-path guards and promises not to raise).
             return candidate
 
     try:
@@ -882,7 +885,7 @@ def _resolve_browse_base() -> Path:
     if configured is not None:
         try:
             parent = configured.expanduser().resolve().parent
-        except OSError:
+        except (OSError, RuntimeError):
             parent = configured.expanduser().parent
         if parent.is_dir():
             return parent
