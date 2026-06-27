@@ -51,6 +51,16 @@ def test_segment_evidence_role_not_upgraded() -> None:
     assert order.index(seg.metadata_bundle.evidence_role) <= order.index(src.metadata_bundle.evidence_role)
 
 
+def test_segment_cannot_be_constructed_naked() -> None:
+    # The Segment type itself rejects a missing/non-segment bundle at runtime (not just via the
+    # annotation), and is frozen so the bundle cannot be nulled after construction.
+    with pytest.raises((TypeError, ValueError)):
+        dri.Segment(metadata_bundle=None, source_artifact_id="art")  # type: ignore[arg-type]
+    seg = dri.derive_segment(artifact_id="art-1")
+    with pytest.raises(Exception):
+        seg.metadata_bundle = None  # type: ignore[misc]  # frozen -> FrozenInstanceError
+
+
 def test_segment_requires_bundle() -> None:
     # No naked segment: a segment-type MetadataBundle cannot exist without derived_from, so a segment
     # cannot be constructed bundle-less. derive_segment is the production call site that guarantees it.

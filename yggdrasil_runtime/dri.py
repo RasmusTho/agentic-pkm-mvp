@@ -27,13 +27,27 @@ from yggdrasil_runtime import capture
 from yggdrasil_runtime.metadata import MetadataBundle
 
 
-@dataclass
+@dataclass(frozen=True)
 class Segment:
-    """A derived segment: its metadata bundle plus a pointer back to its source artifact."""
+    """A derived segment: its metadata bundle plus a pointer back to its source artifact.
+
+    Frozen + runtime-guarded so the "no naked segment" guarantee does not rely on the type
+    annotation alone: a ``Segment`` cannot be constructed without a segment-typed ``MetadataBundle``,
+    and its bundle cannot be replaced with ``None`` after construction.
+    """
 
     metadata_bundle: MetadataBundle
     source_artifact_id: str
     text: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.metadata_bundle, MetadataBundle):
+            raise TypeError("Segment requires a MetadataBundle (no naked segment)")
+        if self.metadata_bundle.object_type != "segment":
+            raise ValueError(
+                "Segment.metadata_bundle.object_type must be 'segment' "
+                f"(got {self.metadata_bundle.object_type!r})"
+            )
 
 
 def _now_iso() -> str:
