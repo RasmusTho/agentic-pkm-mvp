@@ -68,7 +68,26 @@
               "admitting_cross_scope_flow": { "$ref": "_defs.schema.json#/$defs/id_string" }
             },
             "required": ["metadata_bundle"],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "$comment": "No evidence upgrade in the final bounded context: a memory_item/projection item (intrinsic role already non-authoritative) cannot be handed to the agent as real-world evidence. Mirrors the RetrievalResult restriction. The referenced-bundle variant and the general in-context <= intrinsic monotonicity are pinned by the invariant registry (#2550), as cross-field/cross-document comparison is not expressible in JSON Schema.",
+                "if": {
+                  "properties": {
+                    "metadata_bundle": {
+                      "properties": { "object_type": { "enum": ["memory_item", "projection"] } },
+                      "required": ["object_type"]
+                    }
+                  },
+                  "required": ["metadata_bundle"]
+                },
+                "then": {
+                  "properties": {
+                    "evidence_role_in_context": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" }
+                  }
+                }
+              }
+            ]
           },
           {
             "$comment": "Referenced bundle: object_id identifies the item and metadata_bundle_ref points to its bundle; the embedded bundle is absent. The two never coexist.",
