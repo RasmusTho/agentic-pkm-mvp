@@ -963,6 +963,34 @@ class TestSameOriginProxyRoutes:
         assert resp.json() == payload
         assert client.get_calls == [("/api/companion/vault/notes", {"q": "Inbox"})]
 
+    def test_vault_browse_proxy_uses_server_side_client(self) -> None:
+        # #2565: the visual folder browser's listing fetch must be proxied to the
+        # runtime via the server-side client (same-origin), not 404'd by the UI
+        # server — otherwise the Browse row enters filesystem mode but the first
+        # listing fails, leaving fresh installs unable to bind a vault visually.
+        payload = {
+            "path": "/vaults",
+            "base": "/vaults",
+            "is_vault": False,
+            "parent": None,
+            "breadcrumb": [{"name": "vaults", "path": "/vaults"}],
+            "entries": [{"name": "Niflheim", "path": "/vaults/Niflheim", "is_vault": True}],
+            "truncated": False,
+        }
+        client = _FakeClient(get_result=payload)
+        server, port = _start_server(client, "http://127.0.0.1:18001")
+        try:
+            resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/companion/vault/browse",
+                params={"path": "/vaults"},
+            )
+        finally:
+            server.shutdown()
+
+        assert resp.status_code == 200
+        assert resp.json() == payload
+        assert client.get_calls == [("/api/companion/vault/browse", {"path": "/vaults"})]
+
     def test_vault_notes_proxy_returns_structured_runtime_error(self) -> None:
         client = _FakeClient(get_error=WorkspaceClientNetworkError("Connection refused"))
         server, port = _start_server(client, "http://127.0.0.1:19999")

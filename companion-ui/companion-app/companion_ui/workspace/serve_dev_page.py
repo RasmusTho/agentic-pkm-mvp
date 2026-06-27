@@ -14279,6 +14279,24 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            if parsed.path == "/api/companion/vault/browse":
+                # #2565: forward the visual folder browser's listing fetch to the
+                # runtime endpoint (same-origin model — the browser never talks to
+                # FastAPI directly). Without this the Browse row enters filesystem
+                # mode but the first listing 404s, leaving fresh installs unable to
+                # bind a vault visually.
+                params = parse_qs(parsed.query)
+                browse_path = params.get("path", [""])[0]
+                try:
+                    data = self._client.get(
+                        "/api/companion/vault/browse",
+                        params={"path": browse_path} if browse_path else {},
+                    )
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path == VAULT_SETTINGS_ENDPOINT:
                 try:
                     data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
@@ -14507,6 +14525,7 @@ def make_handler(
                 "/api/companion/orientation",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
+                "/api/companion/vault/browse",
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
                 "/api/companion/tts/status",
