@@ -96,6 +96,10 @@ replace that live terminology.
   (`approval_required: false`) it must also reference `approval_exemption_policy_ref` — closing the gap
   where a lower requested state with a canonical approved state could otherwise skip the governance
   artifacts;
+- covers authority changes **out of** canonical too: a completed no-approval transition whose
+  `prior_authority_state` is `accepted`/`canonical` (e.g. a deprecate/retract/correct of canonical
+  knowledge) must carry `decision_token_ref` + `authority_receipt_id` — an authority-bearing durable
+  write is tokened and receipted whether it moves into or out of canonical standing;
 - requires `provenance_event_ids` and an explicit `affected_derived_representation_ids` array;
 - keeps `approval_required` and `approval_state` consistent: `approval_required: true` forbids
   `approval_state: not_required`, and `approval_required: false` requires `approval_state: not_required`

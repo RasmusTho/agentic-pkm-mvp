@@ -173,6 +173,26 @@
       }
     },
     {
+      "$comment": "A completed no-approval (approval_state:not_required) transition that changes an object OUT OF accepted/canonical standing (e.g. deprecate, retract, correct of canonical knowledge) is still an authority-bearing durable write and must carry the DecisionToken and AuthorityReceipt. The destination-canonical guard does not cover downgrades out of canonical; the approved path is already covered by the approved-state guard.",
+      "if": {
+        "allOf": [
+          {
+            "properties": {
+              "prior_authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" }
+            },
+            "required": ["prior_authority_state"]
+          },
+          {
+            "properties": { "approval_state": { "const": "not_required" } },
+            "required": ["approval_state"]
+          }
+        ]
+      },
+      "then": {
+        "required": ["decision_token_ref", "authority_receipt_id"]
+      }
+    },
+    {
       "$comment": "Granting accepted/canonical authority without approval (approval_required:false) is an approval exemption and must reference the explicit exemption policy — even when only approved_authority_state (not requested_authority_state) is canonical.",
       "if": {
         "allOf": [

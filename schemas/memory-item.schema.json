@@ -89,6 +89,7 @@
     "source_role",
     "authority_state",
     "evidence_role",
+    "sensitivity",
     "content",
     "created_by",
     "created_at",
