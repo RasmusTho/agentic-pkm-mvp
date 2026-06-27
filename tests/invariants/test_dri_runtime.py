@@ -22,7 +22,7 @@ def test_segment_bundle_validates_against_schema() -> None:
     seg = dri.derive_segment(artifact_id="art-1")
     assert_validates(seg.metadata_bundle.to_dict(), "metadata-bundle.schema.json")
     assert seg.metadata_bundle.object_type == "segment"
-    assert seg.metadata_bundle.derived_from == ["art-1"]
+    assert list(seg.metadata_bundle.derived_from) == ["art-1"]
     assert seg.metadata_bundle.provenance_event_ids  # >= 1 (preserved + derivation event)
 
 
@@ -37,7 +37,7 @@ def test_segment_inherits_source_scope_and_role() -> None:
     assert seg.metadata_bundle.source_role == src_bundle.source_role
     assert seg.metadata_bundle.authority_state == src_bundle.authority_state
     assert seg.metadata_bundle.evidence_role == src_bundle.evidence_role
-    assert seg.metadata_bundle.derived_from == [src_bundle.object_id]
+    assert list(seg.metadata_bundle.derived_from) == [src_bundle.object_id]
     # provenance preserved: every source event is still present, plus a derivation event
     assert set(src_bundle.provenance_event_ids).issubset(set(seg.metadata_bundle.provenance_event_ids))
     assert len(seg.metadata_bundle.provenance_event_ids) > len(src_bundle.provenance_event_ids)
@@ -59,6 +59,18 @@ def test_segment_cannot_be_constructed_naked() -> None:
     seg = dri.derive_segment(artifact_id="art-1")
     with pytest.raises(Exception):
         seg.metadata_bundle = None  # type: ignore[misc]  # frozen -> FrozenInstanceError
+
+
+def test_segment_bundle_lineage_is_immutable() -> None:
+    # The shared bundle is frozen and its lineage collections are tuples, so a holder cannot null or
+    # clear lineage after construction (shallow-frozen would still allow derived_from.clear()).
+    seg = dri.derive_segment(artifact_id="art-1")
+    assert isinstance(seg.metadata_bundle.derived_from, tuple)
+    assert isinstance(seg.metadata_bundle.provenance_event_ids, tuple)
+    with pytest.raises(Exception):
+        seg.metadata_bundle.object_type = "artifact"  # type: ignore[misc]  # frozen
+    with pytest.raises(AttributeError):
+        seg.metadata_bundle.derived_from.clear()  # type: ignore[attr-defined]  # tuple has no clear
 
 
 def test_segment_requires_bundle() -> None:
