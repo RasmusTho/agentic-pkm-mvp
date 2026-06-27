@@ -90,7 +90,7 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 
 ## Related ADRs
 
-- ADR-0015 (authority-first target SBS) — via [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- ADR-0015 (authority-first target SBS).
 
 ## Related schemas/contracts
 

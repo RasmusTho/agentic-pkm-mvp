@@ -85,12 +85,12 @@ charter batch.
 
 ## Related ADRs
 
-- ADR set — [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549) (pending; link specific
-  ADR ids once delivered)
+- `<relevant ADR ids>` — link the specific decisions this boundary depends on from the delivered ADR
+  set under [docs/adr/](../adr/INDEX.md) ([#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549))
 
 ## Related schemas/contracts
 
-- <contract this boundary produces/consumes> — [#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544)–[#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548) (pending)
+- `<contract this boundary produces/consumes>` — link the relevant delivered schemas under [schemas/](../../schemas/) ([#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544)–[#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548))
 
 ## Related issues
 

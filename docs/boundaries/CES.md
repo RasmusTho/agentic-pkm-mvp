@@ -106,7 +106,7 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 
 ## Related ADRs
 
-- ADR-0021 (CES as architecture stewardship practice, not runtime peer) — via [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- ADR-0021 (CES as architecture stewardship practice, not runtime peer).
 
 ## Related schemas/contracts
 

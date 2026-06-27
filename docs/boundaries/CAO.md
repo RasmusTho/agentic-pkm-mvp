@@ -91,7 +91,7 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 
 ## Related ADRs
 
-- ADR-0019 (governed writes), ADR-0024 (retrieval candidate evidence) — via [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- ADR-0019 (governed writes), ADR-0024 (retrieval candidate evidence).
 
 ## Related schemas/contracts
 

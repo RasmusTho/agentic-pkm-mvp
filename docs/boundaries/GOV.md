@@ -96,7 +96,7 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 
 ## Related ADRs
 
-- ADR-0017, ADR-0019 (governed writes / receipts), ADR-0021 (CES not GOV) — via [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- ADR-0017, ADR-0019 (governed writes / receipts), ADR-0021 (CES not GOV).
 
 ## Related schemas/contracts
 

@@ -104,7 +104,7 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 
 ## Related ADRs
 
-- ADR-0018 (provenance split) — via [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- ADR-0018 (provenance split).
 
 ## Related schemas/contracts
 

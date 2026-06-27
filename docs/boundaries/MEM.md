@@ -93,7 +93,7 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 
 ## Related ADRs
 
-- ADR-0025 (agent memory noncanonical) — via [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- ADR-0025 (agent memory noncanonical).
 
 ## Related schemas/contracts
 
