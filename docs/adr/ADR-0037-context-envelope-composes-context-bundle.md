@@ -38,7 +38,7 @@ RCA, CAO, GOV, WSP.
 
 ## Affected invariants
 
-- Traceability matrix rows 1/7/8 (retrieval/projection semantics are carried into, not erased by, the
+- Traceability matrix rows 7, 8 (retrieval/projection semantics are carried into, not erased by, the
   envelope).
 - Doctrine §2.5 (projections are not evidence) — the envelope does not upgrade a bundle's standing.
 
