@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS_DIR = REPO_ROOT / "schemas"
 DOCS_DIR = REPO_ROOT / "docs"
@@ -49,12 +51,17 @@ def read_doc(rel_path: str) -> str:
     return (REPO_ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def future_runtime(module_suffix: str, attr: str | None = None) -> Any:
-    """Import a future-runtime entry point.
+def require_future_runtime(module_suffix: str, reason: str, attr: str | None = None) -> Any:
+    """Import a future-runtime entry point, or ``xfail`` *only* on its absence.
 
-    Raises ``ModuleNotFoundError`` until the runtime slice exists; runtime skeletons rely on this so
-    they ``xfail`` honestly and will ``XPASS`` (failing a strict xfail) the day the runtime lands —
-    forcing whoever implements it to turn the skeleton into a real assertion.
+    This is deliberately narrower than wrapping a whole test in ``@pytest.mark.xfail``: it converts
+    **only** the missing-runtime ``ModuleNotFoundError`` into an xfail. Once the runtime module
+    exists, the import succeeds and the test's real assertions run normally — so a *wrong* first
+    implementation fails the test instead of being masked as an expected failure. ``reason`` must
+    name the missing runtime and the invariant the skeleton protects.
     """
-    module = importlib.import_module(f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}")
+    try:
+        module = importlib.import_module(f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}")
+    except ModuleNotFoundError:
+        pytest.xfail(reason)
     return getattr(module, attr) if attr else module

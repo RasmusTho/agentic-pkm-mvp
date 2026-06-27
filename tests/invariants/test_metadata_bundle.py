@@ -4,13 +4,15 @@ Invariant registry: docs/testing/invariant-tests.md
   :: metadata_bundle_required, store_no_naked_vectors, provenance_survives_derivation,
      capture_stamps_scope
 Issues: #2550 (registry), #2552 (skeletons). Contract: docs/architecture/metadata-bundle.md (#2544).
+
+Runtime skeletons xfail *only* on the missing runtime import (require_future_runtime); once the
+runtime exists their assertions run for real, so a wrong implementation fails rather than being
+masked.
 """
 
 from __future__ import annotations
 
-import pytest
-
-from tests.invariants._helpers import future_runtime, load_schema
+from tests.invariants._helpers import load_schema, require_future_runtime
 
 # Core semantics + provenance every usable object must carry — a "naked vector" has none of these.
 _CORE_SEMANTIC_PROVENANCE = {
@@ -51,37 +53,28 @@ def test_store_no_naked_vectors() -> None:
     assert "metadata_bundle" in item.get("required", []), "metadata_bundle must be required per candidate"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Runtime derivation (DRI) not implemented yet; this skeleton protects invariant "
-        "provenance_survives_derivation (#2550). The schema already requires derived_from for "
-        "derived types; the runtime that produces segments/projections must preserve lineage. "
-        "Future vertical slice: Capture -> MetadataBundle -> DRI segment."
-    ),
-    strict=True,
-)
 def test_provenance_survives_derivation() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: provenance_survives_derivation
-    dri = future_runtime("dri")  # raises until the DRI runtime exists
+    # The schema already requires derived_from for derived types; this asserts the DRI runtime
+    # preserves lineage when it produces a segment. Future vertical slice: Capture -> DRI segment.
+    dri = require_future_runtime(
+        "dri",
+        "Runtime derivation (DRI) not implemented yet; protects provenance_survives_derivation (#2550).",
+    )
     segment = dri.derive_segment(artifact_id="art-1")
-    # Intended assertion once runtime lands: a derived segment keeps its source's provenance/scope.
     assert segment.metadata_bundle.derived_from
     assert segment.metadata_bundle.scope_id
     assert segment.metadata_bundle.provenance_event_ids
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Runtime capture not implemented yet; this skeleton protects invariant capture_stamps_scope "
-        "(#2550). The schema already requires scope_id on every bundle; the capture runtime must "
-        "stamp it at capture time. Future vertical slice: Capture -> MetadataBundle."
-    ),
-    strict=True,
-)
 def test_capture_stamps_scope() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: capture_stamps_scope
-    capture = future_runtime("capture")  # raises until the capture runtime exists
+    # The schema already requires scope_id on every bundle; this asserts the capture runtime stamps
+    # it at capture time. Future vertical slice: Capture -> MetadataBundle.
+    capture = require_future_runtime(
+        "capture",
+        "Runtime capture not implemented yet; protects capture_stamps_scope (#2550).",
+    )
     obj = capture.capture(text="a thought", principal_id="p-1")
-    # Intended assertion once runtime lands: nothing enters the system scope-less.
     assert obj.metadata_bundle.scope_id
     assert obj.metadata_bundle.source_role

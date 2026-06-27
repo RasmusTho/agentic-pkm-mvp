@@ -4,15 +4,15 @@ Invariant registry: docs/testing/invariant-tests.md
   :: projection_not_evidence, observability_not_policy
 Issues: #2550 (registry), #2552 (skeletons).
 Contracts: docs/architecture/metadata-bundle.md (#2544), docs/boundaries/OEF.md (#2543).
+
+Runtime skeletons xfail *only* on the missing runtime import (require_future_runtime).
 """
 
 from __future__ import annotations
 
 import json
 
-import pytest
-
-from tests.invariants._helpers import future_runtime, load_schema, read_doc
+from tests.invariants._helpers import load_schema, read_doc, require_future_runtime
 
 
 def test_projection_schema_defaults_non_evidence() -> None:
@@ -27,19 +27,14 @@ def test_projection_schema_defaults_non_evidence() -> None:
     assert schema.get("allOf") or schema.get("if") or "if" in text
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Runtime projection/DRI path not implemented yet; this skeleton protects invariant "
-        "projection_not_evidence (#2550). A projection defaults to non_evidence and gains evidence "
-        "standing only through a provenance-backed promotion. Future vertical slice: DRI projection."
-    ),
-    strict=True,
-)
 def test_projection_not_evidence() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: projection_not_evidence
-    dri = future_runtime("projection")  # raises until projection runtime exists
+    dri = require_future_runtime(
+        "projection",
+        "Runtime projection/DRI path not implemented yet; protects projection_not_evidence (#2550).",
+    )
     projection = dri.build_projection(source_ids=["art-1", "art-2"])
-    # Intended assertion: a freshly built projection is non-evidence until promoted.
+    # A freshly built projection is non-evidence until promoted.
     assert projection.metadata_bundle.evidence_role == "non_evidence"
 
 
@@ -51,18 +46,13 @@ def test_oef_charter_states_observability_not_policy() -> None:
     assert "gov" in charter.lower()
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Runtime observability/OEF path not implemented yet; this skeleton protects invariant "
-        "observability_not_policy (#2550). OEF surfaces drift for a GOV decision and never closes the "
-        "loop itself. Future vertical slice: OEF."
-    ),
-    strict=True,
-)
 def test_observability_not_policy() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: observability_not_policy
-    oef = future_runtime("observability")  # raises until observability runtime exists
+    oef = require_future_runtime(
+        "observability",
+        "Runtime observability/OEF path not implemented yet; protects observability_not_policy (#2550).",
+    )
     report = oef.evaluate_fitness()
-    # Intended assertion: an OEF report is a non-authoritative projection, never a policy mutation.
+    # An OEF report is a non-authoritative projection, never a policy mutation.
     assert report.mutated_policy is False
     assert report.authority_state in {"derived", "projection"}

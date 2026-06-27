@@ -2,13 +2,13 @@
 
 Invariant registry: docs/testing/invariant-tests.md :: cross_scope_only_via_flow (general-knowledge case)
 Issues: #2550 (registry), #2551 (corpus), #2552 (skeletons).
+
+The runtime skeleton xfails *only* on the missing runtime import (require_future_runtime).
 """
 
 from __future__ import annotations
 
-import pytest
-
-from tests.evals._helpers import future_runtime, load_group
+from tests.evals._helpers import load_group, require_future_runtime
 
 
 def test_general_fixtures_marked_eligible() -> None:
@@ -25,19 +25,16 @@ def test_general_fixtures_marked_eligible() -> None:
         assert "general_knowledge" not in doc.meta
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Runtime CrossScopeFlow enforcement not implemented yet; this skeleton protects invariant "
-        "cross_scope_only_via_flow (#2550) for general knowledge over the corpus (#2551). General "
-        "material may cross to work only through an explicit flow, as background/reference, never as "
-        "real-world evidence and never by a general_knowledge bypass. Future vertical slice: GOV "
-        "cross-scope evaluation -> ContextEnvelope."
-    ),
-    strict=True,
-)
 def test_general_knowledge_crosses_clean() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: cross_scope_only_via_flow
-    gov = future_runtime("cross_scope")  # raises until cross-scope runtime exists
+    # General material may cross to work only through an explicit flow, as background/reference, never
+    # as real-world evidence and never by a general_knowledge bypass. Future vertical slice: GOV
+    # cross-scope evaluation -> ContextEnvelope.
+    gov = require_future_runtime(
+        "cross_scope",
+        "Runtime CrossScopeFlow enforcement not implemented yet; protects cross_scope_only_via_flow "
+        "for general knowledge (#2550) over the corpus (#2551).",
+    )
     # With an explicit flow that allows cite-as-background, general knowledge may cross — as background.
     decision = gov.evaluate(
         source_scope="scope:general/programming",

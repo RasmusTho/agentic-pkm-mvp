@@ -2,13 +2,14 @@
 
 Invariant registry: docs/testing/invariant-tests.md :: rpg_not_confused_with_software
 Issues: #2550 (registry), #2551 (corpus), #2552 (skeletons).
+
+The runtime skeleton xfails *only* on the missing runtime import (require_future_runtime); the static
+precondition passes today.
 """
 
 from __future__ import annotations
 
-import pytest
-
-from tests.evals._helpers import future_runtime, load_group
+from tests.evals._helpers import load_group, require_future_runtime
 
 
 def test_rpg_fixtures_are_distinctly_scoped() -> None:
@@ -24,19 +25,16 @@ def test_rpg_fixtures_are_distinctly_scoped() -> None:
         assert doc.meta["evidence_role"] in {"analogy", "inspiration"}
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Runtime retrieval/scope discrimination not implemented yet; this skeleton protects invariant "
-        "rpg_not_confused_with_software (#2550) over the corpus (#2551). A naive embedding search would "
-        "rank Aethelgard's 'state machine' next to Project Alpha's; correct behavior needs the "
-        "architecture (scope/source_role/evidence_role/CrossScopeFlow), not similarity. Future "
-        "vertical slice: retrieval prefilter -> RCA result."
-    ),
-    strict=True,
-)
 def test_rpg_not_confused_with_software() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: rpg_not_confused_with_software
-    rca = future_runtime("retrieval")  # raises until retrieval runtime exists
+    # A naive embedding search would rank Aethelgard's 'state machine' next to Project Alpha's;
+    # correct behavior needs the architecture (scope/source_role/evidence_role/CrossScopeFlow), not
+    # similarity. Future vertical slice: retrieval prefilter -> RCA result.
+    rca = require_future_runtime(
+        "retrieval",
+        "Runtime retrieval/scope discrimination not implemented yet; protects "
+        "rpg_not_confused_with_software (#2550) over the corpus (#2551).",
+    )
     # A software-flavored query in a work scope must not admit RPG fiction as evidence.
     result = rca.retrieve(query="state machine authority rules", active_scope_id="scope:work/project-alpha")
     for candidate in result.candidate_items:

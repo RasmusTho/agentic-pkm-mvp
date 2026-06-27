@@ -5,15 +5,15 @@ Invariant registry: docs/testing/invariant-tests.md
      denied_scope_does_not_leak_identity (retrieval side)
 Issues: #2550 (registry), #2552 (skeletons). Contract: docs/architecture/retrieval-contract.md (#2548).
 See schemas/README.md :: Known JSON Schema limits for the deferred cross-field monotonicity check.
+
+The runtime skeleton xfails *only* on the missing runtime import (require_future_runtime).
 """
 
 from __future__ import annotations
 
 import json
 
-import pytest
-
-from tests.invariants._helpers import future_runtime, load_schema
+from tests.invariants._helpers import load_schema, require_future_runtime
 
 
 def test_retrieval_candidate_identity_single_source() -> None:
@@ -49,17 +49,15 @@ def test_retrieval_denied_candidates_are_content_free() -> None:
     assert "scope_denial" in str(denied)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Runtime retrieval not implemented yet; this skeleton protects the full cross-field rule for "
-        "retrieval_cannot_upgrade_intrinsic_non_evidence (#2550): in-context evidence role must be "
-        "ordinally <= the intrinsic role for every candidate. JSON Schema cannot express the general "
-        "ordinal comparison (schemas/README.md :: Known JSON Schema limits). Future vertical slice: RCA result."
-    ),
-    strict=True,
-)
 def test_retrieval_full_evidence_monotonicity_runtime() -> None:
-    rca = future_runtime("retrieval")  # raises until retrieval runtime exists
+    # Invariant registry: docs/testing/invariant-tests.md :: retrieval_cannot_upgrade_intrinsic_non_evidence
+    # The full cross-field rule (in-context evidence role ordinally <= intrinsic role for every
+    # candidate) is not declarative-schema expressible (schemas/README.md :: Known JSON Schema limits).
+    rca = require_future_runtime(
+        "retrieval",
+        "Runtime retrieval not implemented yet; protects the full ordinal monotonicity of "
+        "retrieval_cannot_upgrade_intrinsic_non_evidence (#2550).",
+    )
     result = rca.retrieve(query="anything", active_scope_id="scope:work/project-alpha")
     order = ["non_evidence", "inspiration", "analogy", "reference", "background", "evidence"]
     for candidate in result.candidate_items:

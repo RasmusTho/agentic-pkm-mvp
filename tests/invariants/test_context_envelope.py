@@ -8,7 +8,7 @@ Issues: #2550 (registry), #2552 (skeletons). Contract: docs/architecture/context
 
 from __future__ import annotations
 
-from tests.invariants._helpers import REPO_ROOT, load_defs, load_schema
+from tests.invariants._helpers import REPO_ROOT, load_defs, load_schema, require_future_runtime
 
 # Fields that would reveal the existence/identity of a denied scope or its content.
 _LEAK_KEYS = {"scope_id", "object_id", "content", "metadata_bundle", "provenance_event_ids", "source_role"}
@@ -50,3 +50,18 @@ def test_context_bundle_is_not_context_envelope() -> None:
     assert "non_authority" in bundle_item.get("required", [])
     # The ContextBundle contract exists independently and is not collapsed into the envelope.
     assert (REPO_ROOT / "docs" / "contracts" / "CONTEXT_BUNDLE.md").exists()
+
+
+def test_propose_when_uncertain() -> None:
+    # Invariant registry: docs/testing/invariant-tests.md :: propose_when_uncertain
+    # When the agent is uncertain it must propose/confirm/escalate rather than silently act; the
+    # ContextEnvelope carries escalation_conditions and a noncanonical proposal posture. Runtime
+    # skeleton: xfails only on the missing CAO runtime import.
+    cao = require_future_runtime(
+        "agent",
+        "Runtime agent/CAO orchestration not implemented yet; protects propose_when_uncertain (#2550).",
+    )
+    outcome = cao.act_on(envelope_id="env-1", user_intent="ambiguous request")
+    # An uncertain outcome is a proposal/escalation, never a silent durable action.
+    assert outcome.kind in {"proposal", "escalation"}
+    assert outcome.authority_state == "proposed" or outcome.escalated is True

@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SCHEMAS_DIR = REPO_ROOT / "schemas"
@@ -117,7 +119,16 @@ def value_family(name: str) -> list[str]:
     return defs["$defs"][name]["enum"]
 
 
-def future_runtime(module_suffix: str, attr: str | None = None) -> Any:
-    """Import a future-runtime entry point; raises ModuleNotFoundError until the slice exists."""
-    module = importlib.import_module(f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}")
+def require_future_runtime(module_suffix: str, reason: str, attr: str | None = None) -> Any:
+    """Import a future-runtime entry point, or ``xfail`` *only* on its absence.
+
+    Narrower than a whole-test ``@pytest.mark.xfail``: only the missing-runtime
+    ``ModuleNotFoundError`` becomes an xfail. Once the runtime exists, the real assertions run, so a
+    wrong implementation fails instead of being masked. ``reason`` names the missing runtime and the
+    invariant the skeleton protects.
+    """
+    try:
+        module = importlib.import_module(f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}")
+    except ModuleNotFoundError:
+        pytest.xfail(reason)
     return getattr(module, attr) if attr else module

@@ -313,6 +313,36 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Related docs / contracts / ADRs:** [OEF charter](../boundaries/OEF.md); ADR-0022, ADR-0035.
 - **Related issues:** #2543, #2550, #2552.
 
+### propose_when_uncertain
+
+- **Purpose:** When the agent is uncertain it proposes/confirms/escalates rather than silently acting.
+  Uncertainty surfaces as a proposal or an escalation condition, never a silent durable effect.
+- **Protected principle:** matrix #17; doctrine §propose/confirm/escalate.
+- **Affected boundaries:** CAO, GOV, HIX.
+- **Required fixture / data:** [`schemas/context-envelope.schema.json`](../../schemas/context-envelope.schema.json) (`escalation_conditions`); a future CAO/agent runtime.
+- **Expected failure mode:** an agent takes a silent durable action on an ambiguous request instead of
+  proposing or escalating.
+- **Current enforcement:** `doc_only` (envelope carries escalation conditions; proposals are noncanonical) + `xfail_runtime_skeleton` (agent behaviour).
+- **Eventual test path:** `tests/invariants/test_context_envelope.py::test_propose_when_uncertain` (xfail).
+- **Related docs / contracts / ADRs:** [context-envelope](../architecture/context-envelope.md), [doctrine](../foundation/00-yggdrasil-doctrine.md); ADR-0026.
+- **Related issues:** #2545, #2550, #2552.
+
+### standards_are_adapters
+
+- **Purpose:** External standards are adapters at the boundary; they do not redefine the ontology or
+  the `source_role`/`authority_state`/`evidence_role` value families.
+- **Protected principle:** matrix #18; doctrine §2.7 (standards are adapters).
+- **Affected boundaries:** EBF, SIP, GOV, CES.
+- **Required fixture / data:** [`schemas/_defs.schema.json`](../../schemas/_defs.schema.json) (the value families standards must not redefine).
+- **Expected failure mode:** an imported external standard silently redefines or collapses a role value
+  family, so the ontology is bent to the standard instead of the standard adapting to the ontology.
+- **Current enforcement:** `doc_only` (CES stewardship review; no runtime to test). No skeleton — this
+  is a review-time invariant, not an executable probe yet.
+- **Eventual test path:** `TBD` — CES stewardship review; promote to a static/CI check only if a
+  mechanical shape emerges.
+- **Related docs / contracts / ADRs:** [doctrine](../foundation/00-yggdrasil-doctrine.md) §2.7, [functional-ontology](../architecture/functional-ontology.md); ADR-0036.
+- **Related issues:** #2549, #2550.
+
 ## Schema-batch deferred invariants
 
 The [schemas/contracts batch](../../schemas/README.md) explicitly deferred a set of cross-field and
@@ -501,6 +531,8 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | authority_transition_state_is_consistent | #9 | GOV | schema + static | `tests/invariants/test_authority_transition.py` |
 | context_bundle_is_not_context_envelope | #7,#8 | RCA/CAO | schema + static | `tests/invariants/test_context_envelope.py` |
 | storage_write_is_not_authority_transition | #9,#12 | PDM/GOV | doc + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
+| propose_when_uncertain | #17 | CAO/GOV/HIX | doc + xfail | `tests/invariants/test_context_envelope.py` (xfail) |
+| standards_are_adapters | #18 | EBF/SIP/CES | doc_only | `TBD` (CES review) |
 
 ## Related documents
 
