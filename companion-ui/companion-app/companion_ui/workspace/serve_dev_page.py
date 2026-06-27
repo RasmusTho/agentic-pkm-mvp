@@ -5693,23 +5693,126 @@ def _is_remote_page_origin(hostname: str) -> bool:
     return host not in ("localhost", "127.0.0.1", "::1", "")
 
 
-def _render_vault_selection_required_section(payload: object) -> str:
-    """Render the no-vault picker surface from the runtime's
-    ``vault_selection_required`` payload (#2309, Option-2 decision 2026-06-20).
+def _vault_picker_last_opened(value: object) -> str:
+    """Quiet, calm last-opened label for a vault row (presentation only).
 
-    The runtime declares the state; the UI renders it. When the server declared
-    a configured-but-unselected vault root, the section offers a one-click
-    "Open" affordance that reuses the vault-settings panel's ``vault.select``
-    submit handler. The full open / initialize / recent-vault forms render in
-    the vault-settings panel that the page chrome already includes below.
+    The runtime declares ``last_opened_at`` as an ISO-8601 timestamp. The row
+    shows it only as a quiet recency hint — never a selection input. Render the
+    date portion when the value parses, else the raw token; an absent value
+    renders nothing.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    # ISO-8601 leads with the date (YYYY-MM-DD…); show only that calm portion.
+    date_part = text[:10]
+    if len(date_part) == 10 and date_part[4] == "-" and date_part[7] == "-":
+        return date_part
+    return text
+
+
+def _render_vault_picker_row(
+    *,
+    name: str,
+    path: str,
+    badge: str = "",
+    last_opened: str = "",
+    pinned: bool = False,
+) -> str:
+    """One clickable "Choose a vault" row in the note-browser idiom.
+
+    Mirrors ``_render_vault_note_row``: a clean clickable row whose label is the
+    vault name, with a read-only mono path shown for confidence (never typed to
+    select by) and a quiet last-opened time. Selection is the click; the path is
+    carried in ``data-vault-path`` for the existing ``vault.select`` action.
+    """
+    badge_html = (
+        f'<span class="vault-picker-row-badge" '
+        f'data-testid="vault-picker-row-badge">{_e(badge)}</span>'
+        if badge
+        else ""
+    )
+    last_opened_html = (
+        f'<span class="vault-picker-row-time" '
+        f'data-testid="vault-picker-row-last-opened">{_e(last_opened)}</span>'
+        if last_opened
+        else ""
+    )
+    path_html = (
+        f'<code class="vault-picker-row-path" '
+        f'data-testid="vault-picker-row-path" title="{_e(path)}">{_e(path)}</code>'
+        if path
+        else ""
+    )
+    pinned_attr = ' data-pinned="true"' if pinned else ""
+    return (
+        f'<li class="vault-picker-row{" vault-picker-row--pinned" if pinned else ""}" '
+        f'data-testid="vault-picker-row" data-pinned="{str(pinned).lower()}">'
+        f'<button type="button" class="vault-picker-row-button" '
+        f'data-testid="vault-picker-row-select" data-intent="vault.select" '
+        f'data-api-method="POST" data-api-path="/api/companion/vault/select" '
+        f'data-vault-path="{_e(path)}"{pinned_attr}>'
+        f'<span class="vault-picker-row-head">'
+        f'<span class="vault-picker-row-name" '
+        f'data-testid="vault-picker-row-name">{_e(name)}</span>'
+        f"{badge_html}{last_opened_html}</span>"
+        f"{path_html}"
+        "</button></li>"
+    )
+
+
+def _render_vault_selection_required_section(payload: object) -> str:
+    """Render the no-vault picker as the "Choose a vault" overlay (#2564).
+
+    The runtime declares the state; the UI renders it. This is the same
+    graphical idiom as the note Browse-vault overlay
+    (:func:`_render_vault_browser`): a titled overlay, a focused filter that
+    only filters the visible list (it never accepts a path to *select* by), a
+    list of clean clickable rows, and a footer count.
+
+    The list, in order:
+
+    - the server-declared **configured vault** as the pinned first row, badged
+      "configured" (the old hero's one-click open is now the top row of the same
+      list — hero and list are one language);
+    - the server-declared **recent vaults** as clickable rows (name + a
+      read-only mono path shown for confidence, never typed + a quiet
+      last-opened time);
+    - a **"Browse for a vault folder…"** entry row that will switch to
+      filesystem mode (delivered in #2565 / Ask 3b) — present here as a calm
+      "coming next" affordance, not a folder browser.
+
+    Operator affordances (Reload, "Open settings folder") are relocated off the
+    front door into the overlay's ⓘ / Operator drawer (CUIDR-04). The typed
+    path fields and the machine-Role select are removed from the front door —
+    initialization folds into Ask 3b's "Initialize here" confirm. Selection is
+    always a click on a row, never a typed path. Content is server-declared; no
+    classification happens client-side.
     """
     data = payload if isinstance(payload, dict) else {}
-    reason = _e(str(data.get("reason") or "no_vault_bound"))
+    reason_raw = str(data.get("reason") or "no_vault_bound")
+    reason = _e(reason_raw)
+    # A selected-but-uninitialized vault is readable (it appeared as a valid
+    # picker target / pinned configured row) but a write boundary refused with
+    # ``reason="uninitialized"`` (_uninitialized_selection_required_response).
+    # In that single state the already-selected vault needs a working
+    # *initialize* action — re-selecting it just loops back to the same refusal
+    # (#2564 Codex P2). Only this state earns the initialize affordance; the
+    # general ``no_vault_bound`` first-contact picker stays clean.
+    is_uninitialized = reason_raw == "uninitialized"
+    # A configured vault whose path is MISSING (VAULT_ROOT set to a non-existent
+    # dir) refuses with ``reason="vault_root_misconfigured"`` and offers a
+    # create_new action. Like the uninitialized case, re-selecting the configured
+    # row only loops back to the same refusal, so this state also earns the
+    # create/initialize affordance (#2565 Codex P2) — never typed-path chrome.
+    is_missing_configured = reason_raw == "vault_root_misconfigured"
     message = _e(
-        str(data.get("message") or "No vault is selected. Open a vault to continue.")
+        str(data.get("message") or "No vault is selected. Choose a vault to continue.")
     )
     requested = str(data.get("requested_note_path") or "")
     configured = str(data.get("configured_vault_root") or "")
+    context = data.get("context") if isinstance(data.get("context"), dict) else {}
+    settings_path = str(context.get("settings_path") or data.get("settings_path") or "")
     requested_html = (
         '<p class="vault-selection-requested" '
         'data-testid="vault-selection-requested-note">'
@@ -5719,45 +5822,560 @@ def _render_vault_selection_required_section(payload: object) -> str:
         if requested
         else ""
     )
+
+    rows: list[str] = []
     if configured:
-        configured_name = _e(Path(configured).name or configured)
-        open_configured_html = (
-            '<form class="vault-selection-open-configured" data-intent="vault.select" '
-            'data-api-method="POST" data-api-path="/api/companion/vault/select">'
-            f'<input type="hidden" name="path" value="{_e(configured)}">'
-            '<button type="submit" class="btn btn--primary" '
-            'data-testid="vault-selection-open-configured" '
-            f'data-vault-path="{_e(configured)}">Open {configured_name}</button>'
-            "</form>"
+        configured_name = str(Path(configured).name or configured)
+        rows.append(
+            _render_vault_picker_row(
+                name=configured_name,
+                path=configured,
+                badge="configured",
+                pinned=True,
+            )
         )
-    else:
-        open_configured_html = ""
-    # The vault picker is the literal front door (E11): styled fully to the
-    # design system so it never reads as default-browser chrome (#2448, D1).
-    # Dark palette, design-system typography, a ranked primary open affordance.
-    # Content is server-declared; this is presentation only.
-    #
-    # IMPORTANT (#2485 D1, Codex round 2): the picker hero + folded vault-
-    # settings panel must render as ONE continuous surface. The head-level
-    # consolidated rule (single `<style>` in `<head>`) owns the picker's
-    # spacing/layout — `margin: 0 auto` + the `~ .vault-settings-panel`
-    # continuity rule. A section-local `<style>` block with the SAME
-    # `.vault-selection-required` specificity, emitted here in the body
-    # *after* the head, would win on source order and reintroduce the old
-    # `margin: 48px auto` that separates the panel from the hero. So this
-    # section emits NO `<style>`: it carries markup only and inherits the
-    # head-level DS rules. Do not re-add a competing section-local style.
+    recents = data.get("recent_vaults") if isinstance(data.get("recent_vaults"), list) else []
+    for item in recents:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path:
+            # A recent with no usable path cannot be selected by a click; skip
+            # it rather than render an inert/unclickable row.
+            continue
+        if configured and path == configured:
+            # The configured vault is already the pinned first row; don't
+            # duplicate it lower in the recents.
+            continue
+        raw_name = str(item.get("vault_name") or "").strip()
+        name = raw_name if raw_name and raw_name.lower() != "unknown" else Path(path).name or path
+        rows.append(
+            _render_vault_picker_row(
+                name=name,
+                path=path,
+                last_opened=_vault_picker_last_opened(item.get("last_opened_at")),
+            )
+        )
+
+    # First-run / no-recents is never an empty labelled region: the configured
+    # row (if any) plus the always-present Browse row are the whole surface. The
+    # Browse row is now a WORKING entry into filesystem mode (#2565) — clicking
+    # it switches this same overlay's list to the folder browser (one graphical
+    # language). The fresh-install P1 (no configured vault + no recents + inert
+    # Browse = no way to bind a vault) is fixed by making this row functional.
+    browse_row = (
+        '<li class="vault-picker-row vault-picker-row--browse" '
+        'data-testid="vault-picker-browse-row">'
+        '<button type="button" class="vault-picker-row-button vault-picker-browse-button" '
+        'data-testid="vault-picker-browse" data-intent="vault.browse.folder" '
+        'data-affordance-status="available">'
+        '<span class="vault-picker-row-head">'
+        '<span class="vault-picker-row-name">Browse for a vault folder…</span>'
+        "</span>"
+        '<span class="vault-picker-row-path vault-picker-browse-hint">'
+        "Pick any folder on this device — open a vault or initialize one."
+        "</span>"
+        "</button></li>"
+    )
+    rows.append(browse_row)
+
+    rows_html = "".join(rows)
+    # Footer count, mirroring the browser's "N shown" state line. Counts only the
+    # selectable vault rows (configured + recents), not the inert Browse row.
+    selectable_count = len(rows) - 1
+    footer_html = (
+        '<div class="vault-picker-footer" data-testid="vault-picker-footer" '
+        f'data-count="{selectable_count}">'
+        f'{selectable_count} vault{"" if selectable_count == 1 else "s"} to choose from'
+        "</div>"
+    )
+
+    # Operator drawer (CUIDR-04): Reload + Open settings folder live behind the
+    # overlay's ⓘ affordance, off the front door. No Role select, no typed path
+    # field anywhere on the front door.
+    settings_folder_html = (
+        '<button type="button" class="vault-picker-operator-action" '
+        'data-testid="vault-settings-folder-open" '
+        'data-intent="vault.settingsFolder.open" data-affordance-status="ui-only" '
+        f'data-settings-folder="{_e(settings_path)}">Open settings folder</button>'
+    )
+    operator_html = (
+        '<details class="vault-picker-operator" data-testid="vault-picker-operator">'
+        '<summary class="vault-picker-operator-summary" '
+        'data-testid="vault-picker-operator-toggle" '
+        'aria-label="Operator actions">ⓘ Operator</summary>'
+        '<div class="vault-picker-operator-body" '
+        'data-testid="vault-picker-operator-body">'
+        '<button type="button" class="vault-picker-operator-action" '
+        'data-testid="vault-reload" data-intent="vault.reload" '
+        'data-api-method="POST" data-api-path="/api/companion/vault/reload">'
+        "Reload</button>"
+        f"{settings_folder_html}"
+        "</div>"
+        "</details>"
+    )
+
+    # Initialize affordance — ONLY for reason="uninitialized" (#2564 Codex P2).
+    # When the human selected a readable but uninitialized vault folder and then
+    # hit a write/capture action, the runtime returns
+    # ``vault_selection_required`` with ``reason="uninitialized"`` and surfaces
+    # the selected folder on ``configured_vault_root``. Re-clicking the pinned
+    # row only re-selects the same uninitialized vault — a dead end. Give the
+    # already-selected vault a working *initialize* action that reuses the exact
+    # existing ``vault.initialize`` authority (POST /api/companion/vault/initialize
+    # with the selected path; the server's #2518 confirm guard is honored by the
+    # picker controller). This is NOT the foreign form chrome: no typed path
+    # field, no Role select — just an honest confirm button for the path the
+    # human already chose. The general ``no_vault_bound`` picker never renders it.
+    initialize_html = ""
+    if (is_uninitialized or is_missing_configured) and configured:
+        initialize_copy = (
+            "This vault folder is missing. Create and initialize it here to "
+            "continue."
+            if is_missing_configured
+            else "This vault isn’t initialized yet. Initialize it to enable "
+            "writes into this folder."
+        )
+        initialize_html = (
+            '<div class="vault-picker-initialize" '
+            f'data-testid="vault-picker-initialize" data-reason="{reason}">'
+            '<p class="vault-picker-initialize-copy" '
+            'data-testid="vault-picker-initialize-copy">'
+            f"{initialize_copy}"
+            "</p>"
+            '<button type="button" class="vault-picker-initialize-button" '
+            'data-testid="vault-picker-initialize-submit" '
+            'data-intent="vault.initialize" data-api-method="POST" '
+            'data-api-path="/api/companion/vault/initialize" '
+            f'data-vault-path="{_e(configured)}">Initialize this vault</button>'
+            '<p class="vault-picker-initialize-error" '
+            'data-testid="vault-picker-initialize-error" hidden></p>'
+            "</div>"
+        )
+
+    # The "Choose a vault" overlay mirrors the note Browse-vault overlay idiom:
+    # a titled overlay (`<details open>`), a focused filter, clean clickable
+    # rows, and a footer count. The filter only filters the visible list; it is
+    # never a path-to-select field. Selection is always a row click. The picker
+    # carries its own small controller (`_render_vault_picker_script`) that
+    # dispatches the existing `vault.select` action — no foreign form chrome and
+    # no separate settings panel folded in (#2564).
     return f"""
     <section class="vault-selection-required" data-region="vault-selection-required"
       data-testid="vault-selection-required" data-reason="{reason}"
       data-entry-state="no_vault">
-      <h1 class="vault-selection-headline">No vault selected</h1>
-      <p class="vault-selection-summary">{message}</p>
-      {requested_html}
-      {open_configured_html}
-      <p class="vault-selection-hint">Open an existing vault, choose a recent
-        vault, or initialize a new one below.</p>
+      <details class="vault-picker" data-testid="vault-picker" open>
+        <summary class="vault-picker-title" data-testid="vault-picker-title">Choose a vault</summary>
+        <div class="vault-picker-recents-mode" data-testid="vault-picker-recents-mode"
+          data-mode="recents">
+          <p class="vault-selection-summary">{message}</p>
+          {requested_html}
+          <div class="vault-picker-filter-row">
+            <input type="search" class="vault-picker-filter"
+              data-testid="vault-picker-filter"
+              placeholder="Filter the list below"
+              aria-label="Filter the list of vaults below"
+              autocomplete="off">
+          </div>
+          <ul class="vault-picker-list" data-testid="vault-picker-list">{rows_html}</ul>
+          {initialize_html}
+          {footer_html}
+        </div>
+        {_render_vault_picker_filesystem_mode()}
+        {operator_html}
+      </details>
     </section>"""
+
+
+def _render_vault_picker_filesystem_mode() -> str:
+    """Filesystem (folder-browser) mode of the "Choose a vault" overlay (#2565).
+
+    Hidden by default; the picker controller reveals it when the human clicks the
+    "Browse for a vault folder…" row. It is the SAME graphical idiom as the
+    recents view — a clickable breadcrumb (click a segment to go up — never type),
+    a filter that only narrows the current folder's visible entries, clean
+    clickable folder rows, and a footer count. Folder rows are rendered
+    client-side from the read-only ``/api/companion/vault/browse`` endpoint
+    (PART A): a vault-detected folder carries a vault-green badge + an "Open"
+    affordance (the existing ``vault.select``); a non-vault folder offers
+    "Initialize a vault here" (the existing ``vault.initialize`` confirm). Vault
+    detection / ``is_vault`` is server-declared; the UI only renders it. There is
+    never a path-to-select field — navigation is folder-row + breadcrumb clicks.
+    """
+    return (
+        '<div class="vault-picker-fs-mode" data-testid="vault-picker-fs-mode" '
+        'data-mode="filesystem" hidden>'
+        '<div class="vault-picker-fs-head">'
+        '<button type="button" class="vault-picker-fs-back" '
+        'data-testid="vault-picker-fs-back" aria-label="Back to recent vaults">'
+        "← Recent vaults</button>"
+        '<nav class="vault-picker-fs-breadcrumb" '
+        'data-testid="vault-picker-fs-breadcrumb" '
+        'aria-label="Current folder path"></nav>'
+        "</div>"
+        '<div class="vault-picker-filter-row">'
+        '<input type="search" class="vault-picker-filter vault-picker-fs-filter" '
+        'data-testid="vault-picker-fs-filter" '
+        'placeholder="Filter this folder" '
+        'aria-label="Filter the folders in this directory" '
+        'autocomplete="off">'
+        "</div>"
+        '<ul class="vault-picker-list vault-picker-fs-list" '
+        'data-testid="vault-picker-fs-list"></ul>'
+        '<p class="vault-picker-fs-empty" data-testid="vault-picker-fs-empty" '
+        'hidden>No sub-folders here.</p>'
+        '<p class="vault-picker-fs-error" data-testid="vault-picker-fs-error" '
+        'hidden></p>'
+        '<div class="vault-picker-footer vault-picker-fs-footer" '
+        'data-testid="vault-picker-fs-footer"></div>'
+        "</div>"
+    )
+
+
+def _render_vault_picker_script() -> str:
+    """Controller for the "Choose a vault" overlay (#2564, #2565).
+
+    Self-contained (no dependency on the vault-settings panel): handles
+    row-click selection (the existing ``vault.select`` action), the visible-list
+    filter (filter only — never a path-to-select field), the operator-drawer
+    Reload action, and (#2565) the filesystem folder-browser mode — entering it
+    from the Browse row, fetching ``/api/companion/vault/browse``, rendering
+    folder rows + a clickable breadcrumb client-side, and dispatching the
+    existing ``vault.select`` / ``vault.initialize`` authority (incl. the #2518
+    409-confirm round-trip) on a chosen folder. Navigation is always a click —
+    folder rows and breadcrumb segments — never a typed path.
+    Selection dispatches the existing vault-selection authority and reloads the
+    page so the runtime re-resolves the entry state.
+    """
+    return """
+  <script>
+  /* vault-picker-controller (#2564, #2565) */
+  (function() {
+    var picker = document.querySelector('[data-testid="vault-picker"]');
+    if (!picker) { return; }
+    function jsonPost(path, body) {
+      return fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      }).then(function(response) {
+        if (!response.ok) { return response.text().then(function(t) { throw new Error(t || response.status); }); }
+        return response.text();
+      });
+    }
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    // Shared select-a-vault dispatch — the existing vault.select authority. Used
+    // by both the recents rows and the filesystem-mode "Open" affordance.
+    function selectVault(path, button) {
+      if (!path) { return; }
+      if (button) {
+        button.setAttribute('data-submitting', 'true');
+        button.setAttribute('data-affordance-status', 'pending');
+      }
+      jsonPost('/api/companion/vault/select', { path: path })
+        .then(function() { window.location.reload(); })
+        .catch(function(err) {
+          if (button) {
+            button.removeAttribute('data-submitting');
+            button.setAttribute('data-affordance-status', 'blocked');
+            button.setAttribute('data-submit-error', String(err && err.message || err));
+          }
+        });
+    }
+    // Shared initialize-a-vault dispatch — the existing vault.initialize
+    // authority incl. the #2518 409-confirm round-trip. ``button`` carries the
+    // confirm state on ``data-init-confirmed``; ``errEl`` (optional) shows the
+    // confirm/error copy. Reused by the uninitialized-state init button (#2564)
+    // and the filesystem-mode "Initialize a vault here" affordance (#2565).
+    function initializeVault(path, button, errEl, confirmLabel) {
+      if (!path) { return; }
+      if (button.getAttribute('data-submitting') === 'true') { return; }
+      var confirmed = button.getAttribute('data-init-confirmed') === 'true';
+      button.setAttribute('data-submitting', 'true');
+      button.setAttribute('data-affordance-status', 'pending');
+      var body = { path: path };
+      if (confirmed) { body.confirm = true; }
+      fetch('/api/companion/vault/initialize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(function(response) {
+        return response.text().then(function(text) {
+          var data = null;
+          try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+          return { ok: response.ok, status: response.status, data: data, text: text };
+        });
+      }).then(function(res) {
+        if (res.ok) { window.location.reload(); return; }
+        button.removeAttribute('data-submitting');
+        var detail = res.data && res.data.detail;
+        if (res.status === 409 && detail && detail.error === 'vault_init_confirmation_required') {
+          // The chosen folder already holds the human's content. Surface the
+          // confirm gesture; the next click re-posts with confirm:true.
+          button.setAttribute('data-init-confirmed', 'true');
+          button.setAttribute('data-affordance-status', 'confirm-required');
+          button.textContent = confirmLabel || 'Confirm initialize';
+          if (errEl) {
+            errEl.hidden = false;
+            errEl.textContent = (detail && detail.message) || 'This folder already contains files. Initializing will add a settings/ scaffold to your existing vault.';
+          }
+          return;
+        }
+        button.setAttribute('data-affordance-status', 'blocked');
+        var message = (detail && (detail.message || (typeof detail === 'string' ? detail : null))) || res.text || String(res.status);
+        if (errEl) { errEl.hidden = false; errEl.textContent = message; }
+        button.setAttribute('data-submit-error', message);
+      }).catch(function(err) {
+        button.removeAttribute('data-submitting');
+        button.setAttribute('data-affordance-status', 'blocked');
+        if (errEl) { errEl.hidden = false; errEl.textContent = String(err && err.message || err); }
+        button.setAttribute('data-submit-error', String(err && err.message || err));
+      });
+    }
+    // Filter only narrows the already-visible list of rows; it never accepts a
+    // path to select by. Selection is always a click on a row.
+    var filter = picker.querySelector('[data-testid="vault-picker-filter"]');
+    if (filter) {
+      filter.addEventListener('input', function() {
+        var term = (filter.value || '').trim().toLowerCase();
+        var rows = picker.querySelectorAll('[data-testid="vault-picker-row"]');
+        var shown = 0;
+        Array.prototype.forEach.call(rows, function(row) {
+          // The Browse row is always kept visible as the escape hatch.
+          if (row.classList.contains('vault-picker-row--browse')) { return; }
+          var name = row.querySelector('[data-testid="vault-picker-row-name"]');
+          var pathEl = row.querySelector('[data-testid="vault-picker-row-path"]');
+          var hay = ((name ? name.textContent : '') + ' ' + (pathEl ? pathEl.textContent : '')).toLowerCase();
+          var match = !term || hay.indexOf(term) !== -1;
+          row.hidden = !match;
+          if (match) { shown += 1; }
+        });
+        var footer = picker.querySelector('[data-testid="vault-picker-footer"]');
+        if (footer) {
+          footer.setAttribute('data-visible', String(shown));
+        }
+      });
+    }
+
+    /* --- Filesystem (folder-browser) mode (#2565) ----------------------- */
+    var recentsMode = picker.querySelector('[data-testid="vault-picker-recents-mode"]');
+    var fsMode = picker.querySelector('[data-testid="vault-picker-fs-mode"]');
+    var fsList = fsMode && fsMode.querySelector('[data-testid="vault-picker-fs-list"]');
+    var fsCrumb = fsMode && fsMode.querySelector('[data-testid="vault-picker-fs-breadcrumb"]');
+    var fsFilter = fsMode && fsMode.querySelector('[data-testid="vault-picker-fs-filter"]');
+    var fsEmpty = fsMode && fsMode.querySelector('[data-testid="vault-picker-fs-empty"]');
+    var fsError = fsMode && fsMode.querySelector('[data-testid="vault-picker-fs-error"]');
+    var fsFooter = fsMode && fsMode.querySelector('[data-testid="vault-picker-fs-footer"]');
+
+    function setMode(mode) {
+      if (!fsMode || !recentsMode) { return; }
+      var fs = mode === 'filesystem';
+      fsMode.hidden = !fs;
+      recentsMode.hidden = fs;
+      picker.setAttribute('data-active-mode', fs ? 'filesystem' : 'recents');
+    }
+
+    function renderBreadcrumb(segments) {
+      if (!fsCrumb) { return; }
+      fsCrumb.innerHTML = '';
+      (segments || []).forEach(function(seg, idx) {
+        if (idx > 0) {
+          var sep = document.createElement('span');
+          sep.className = 'vault-picker-fs-crumb-sep';
+          sep.setAttribute('aria-hidden', 'true');
+          sep.textContent = ' / ';
+          fsCrumb.appendChild(sep);
+        }
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'vault-picker-fs-crumb';
+        btn.setAttribute('data-testid', 'vault-picker-fs-crumb');
+        btn.setAttribute('data-fs-path', seg.path || '');
+        btn.textContent = seg.name || seg.path || '';
+        fsCrumb.appendChild(btn);
+      });
+    }
+
+    function renderEntries(data) {
+      if (!fsList) { return; }
+      fsList.innerHTML = '';
+      // #2565 Codex P2: act on the CURRENT folder too. When VAULT_BROWSE_ROOT is
+      // narrowed to the exact vault/target dir there is no parent row and maybe
+      // no matching child, so the current folder itself must be openable /
+      // initializable from the picker — otherwise that base dead-ends. But NOT
+      // at the filesystem root '/': the unconfigured base defaults to '/', and
+      // offering "Initialize a vault here" for '/' would scaffold a vault into
+      // the container root — there the user must navigate into a child folder.
+      var hasCurrent = false;
+      if (data && data.path && data.path !== '/') {
+        hasCurrent = true;
+        var curLi = document.createElement('li');
+        curLi.className = 'vault-picker-row vault-picker-fs-row vault-picker-fs-current' + (data.is_vault ? ' vault-picker-fs-row--vault' : '');
+        curLi.setAttribute('data-testid', 'vault-picker-fs-current');
+        curLi.setAttribute('data-fs-path', data.path || '');
+        curLi.setAttribute('data-is-vault', data.is_vault ? 'true' : 'false');
+        var curAction = data.is_vault
+          ? '<button type="button" class="vault-picker-fs-open" data-testid="vault-picker-fs-open" data-intent="vault.select" data-api-method="POST" data-api-path="/api/companion/vault/select" data-fs-path="' + escapeHtml(data.path) + '">Open this vault</button>'
+          : '<button type="button" class="vault-picker-fs-init" data-testid="vault-picker-fs-initialize" data-intent="vault.initialize" data-api-method="POST" data-api-path="/api/companion/vault/initialize" data-fs-path="' + escapeHtml(data.path) + '">Initialize a vault here</button>';
+        curLi.innerHTML =
+          '<div class="vault-picker-fs-row-main">' +
+            '<span class="vault-picker-row-head">' +
+              '<span class="vault-picker-row-name" data-testid="vault-picker-fs-current-name">This folder' + (data.is_vault ? '' : ' (not a vault yet)') + '</span>' +
+              (data.is_vault ? '<span class="vault-picker-row-badge vault-picker-row-badge--vault" data-testid="vault-picker-fs-current-badge">vault</span>' : '') +
+            '</span>' +
+            '<span class="vault-picker-fs-row-action">' + curAction + '</span>' +
+          '</div>' +
+          '<p class="vault-picker-fs-row-error" data-testid="vault-picker-fs-row-error" hidden></p>';
+        fsList.appendChild(curLi);
+      }
+      var entries = (data && data.entries) || [];
+      entries.forEach(function(entry) {
+        var li = document.createElement('li');
+        li.className = 'vault-picker-row vault-picker-fs-row' + (entry.is_vault ? ' vault-picker-fs-row--vault' : '');
+        li.setAttribute('data-testid', 'vault-picker-fs-row');
+        li.setAttribute('data-fs-path', entry.path || '');
+        li.setAttribute('data-is-vault', entry.is_vault ? 'true' : 'false');
+        li.setAttribute('data-fs-name', entry.name || '');
+        var badge = entry.is_vault
+          ? '<span class="vault-picker-row-badge vault-picker-row-badge--vault" data-testid="vault-picker-fs-vault-badge">vault</span>'
+          : '';
+        var action = entry.is_vault
+          ? '<button type="button" class="vault-picker-fs-open" data-testid="vault-picker-fs-open" data-intent="vault.select" data-api-method="POST" data-api-path="/api/companion/vault/select" data-fs-path="' + escapeHtml(entry.path) + '">Open</button>'
+          : '<button type="button" class="vault-picker-fs-init" data-testid="vault-picker-fs-initialize" data-intent="vault.initialize" data-api-method="POST" data-api-path="/api/companion/vault/initialize" data-fs-path="' + escapeHtml(entry.path) + '">Initialize a vault here</button>';
+        li.innerHTML =
+          '<div class="vault-picker-fs-row-main">' +
+            '<button type="button" class="vault-picker-fs-enter" data-testid="vault-picker-fs-enter" data-fs-path="' + escapeHtml(entry.path) + '">' +
+              '<span class="vault-picker-row-head">' +
+                '<span class="vault-picker-row-name" data-testid="vault-picker-fs-row-name">' + escapeHtml(entry.name) + '</span>' +
+                badge +
+              '</span>' +
+            '</button>' +
+            '<span class="vault-picker-fs-row-action">' + action + '</span>' +
+          '</div>' +
+          '<p class="vault-picker-fs-row-error" data-testid="vault-picker-fs-row-error" hidden></p>';
+        fsList.appendChild(li);
+      });
+      applyFsFilter();
+      if (fsEmpty) { fsEmpty.hidden = entries.length !== 0 || hasCurrent; }
+      if (fsFooter) {
+        var count = entries.length;
+        fsFooter.textContent = count + ' folder' + (count === 1 ? '' : 's') + (data && data.truncated ? ' (more not shown)' : '');
+        fsFooter.setAttribute('data-count', String(count));
+      }
+    }
+
+    function applyFsFilter() {
+      if (!fsList) { return; }
+      var term = (fsFilter ? (fsFilter.value || '') : '').trim().toLowerCase();
+      var rows = fsList.querySelectorAll('[data-testid="vault-picker-fs-row"]');
+      Array.prototype.forEach.call(rows, function(row) {
+        var name = (row.getAttribute('data-fs-name') || '').toLowerCase();
+        row.hidden = !!term && name.indexOf(term) === -1;
+      });
+    }
+
+    function loadFolder(path) {
+      if (!fsMode) { return; }
+      if (fsError) { fsError.hidden = true; fsError.textContent = ''; }
+      var url = '/api/companion/vault/browse';
+      if (path) { url += '?path=' + encodeURIComponent(path); }
+      fsMode.setAttribute('data-loading', 'true');
+      fetch(url, { headers: { 'Accept': 'application/json' } })
+        .then(function(response) {
+          return response.text().then(function(text) {
+            var data = null;
+            try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+            return { ok: response.ok, status: response.status, data: data, text: text };
+          });
+        })
+        .then(function(res) {
+          fsMode.removeAttribute('data-loading');
+          if (!res.ok || !res.data) {
+            if (fsError) {
+              fsError.hidden = false;
+              var detail = res.data && res.data.detail;
+              fsError.textContent = (detail && (detail.message || detail)) || res.text || ('Could not list folder (' + res.status + ')');
+            }
+            return;
+          }
+          fsMode.setAttribute('data-fs-path', res.data.path || '');
+          renderBreadcrumb(res.data.breadcrumb);
+          renderEntries(res.data);
+        })
+        .catch(function(err) {
+          fsMode.removeAttribute('data-loading');
+          if (fsError) { fsError.hidden = false; fsError.textContent = String(err && err.message || err); }
+        });
+    }
+
+    if (fsFilter) { fsFilter.addEventListener('input', applyFsFilter); }
+
+    picker.addEventListener('click', function(event) {
+      var select = event.target && event.target.closest('[data-testid="vault-picker-row-select"]');
+      if (select) {
+        if (select.getAttribute('data-submitting') === 'true') { return; }
+        selectVault(select.getAttribute('data-vault-path') || '', select);
+        return;
+      }
+      // Initialize the already-selected-but-uninitialized vault (#2564 Codex
+      // P2): reuse the existing vault.initialize authority (no typed-path field).
+      var init = event.target && event.target.closest('[data-testid="vault-picker-initialize-submit"]');
+      if (init) {
+        var errEl = picker.querySelector('[data-testid="vault-picker-initialize-error"]');
+        initializeVault(init.getAttribute('data-vault-path') || '', init, errEl, 'Confirm initialize');
+        return;
+      }
+      var reload = event.target && event.target.closest('[data-testid="vault-reload"]');
+      if (reload) {
+        jsonPost(reload.getAttribute('data-api-path') || '/api/companion/vault/reload', {})
+          .then(function() { window.location.reload(); })
+          .catch(function(err) { reload.setAttribute('data-reload-error', String(err && err.message || err)); });
+        return;
+      }
+      // The Browse-for-a-folder row now switches the overlay to filesystem mode
+      // (#2565) and loads the base folder. One graphical language, no typed path.
+      var browse = event.target && event.target.closest('[data-testid="vault-picker-browse"]');
+      if (browse) {
+        event.preventDefault();
+        browse.setAttribute('data-clicked', 'true');
+        setMode('filesystem');
+        loadFolder('');
+        return;
+      }
+      // Back to the recents view.
+      var back = event.target && event.target.closest('[data-testid="vault-picker-fs-back"]');
+      if (back) { setMode('recents'); return; }
+      // A breadcrumb segment click navigates to that folder (click to go up —
+      // never type).
+      var crumb = event.target && event.target.closest('[data-testid="vault-picker-fs-crumb"]');
+      if (crumb) { loadFolder(crumb.getAttribute('data-fs-path') || ''); return; }
+      // The filesystem-mode "Open" affordance selects a vault-detected folder.
+      var fsOpen = event.target && event.target.closest('[data-testid="vault-picker-fs-open"]');
+      if (fsOpen) {
+        if (fsOpen.getAttribute('data-submitting') === 'true') { return; }
+        selectVault(fsOpen.getAttribute('data-fs-path') || '', fsOpen);
+        return;
+      }
+      // "Initialize a vault here" on a non-vault folder (existing authority +
+      // #2518 409-confirm).
+      var fsInit = event.target && event.target.closest('[data-testid="vault-picker-fs-initialize"]');
+      if (fsInit) {
+        var row = fsInit.closest('li');
+        var rowErr = row && row.querySelector('[data-testid="vault-picker-fs-row-error"]');
+        initializeVault(fsInit.getAttribute('data-fs-path') || '', fsInit, rowErr, 'Confirm initialize here');
+        return;
+      }
+      // Clicking the folder name navigates INTO that folder.
+      var enter = event.target && event.target.closest('[data-testid="vault-picker-fs-enter"]');
+      if (enter) { loadFolder(enter.getAttribute('data-fs-path') || ''); return; }
+    });
+  })();
+  /* /vault-picker-controller */
+  </script>"""
 
 
 def _render_error_section(
@@ -8974,20 +9592,29 @@ def render_index_html(
     # gates only on the server-declared error, it does not re-classify state.
     runtime_unreachable = _is_runtime_unreachable(error)
     suppress_vault_settings = runtime_unreachable or route_error
-    # The no-vault page folds the picker into the styled hero (#2485 D1): render
-    # the panel in picker_mode so it carries no duplicate "No vault selected"
-    # heading and no "unknown / unknown" identity spans. On a loaded note the
-    # panel is the hidden vault-settings drawer, not the front-door picker.
-    vault_settings_picker_mode = vault_selection_required is not None
+    # The no-vault front door is now the self-contained "Choose a vault" overlay
+    # (#2564): a titled overlay + filter + clickable rows + footer count in the
+    # note Browse-vault idiom, with operator affordances behind its own ⓘ
+    # drawer. The vault-settings panel (typed path fields, Role select, init
+    # form — foreign form chrome) is NO LONGER folded into the front door; the
+    # overlay carries its own controller and dispatches the existing
+    # vault.select action. On a loaded note the panel is still mounted as the
+    # hidden vault-settings drawer.
+    is_picker = vault_selection_required is not None
     vault_settings_panel_html = (
         ""
-        if suppress_vault_settings
-        else vault_settings_panel_markup(
-            hidden_by_default=fields is not None,
-            picker_mode=vault_settings_picker_mode,
-        )
+        if suppress_vault_settings or is_picker
+        else vault_settings_panel_markup(hidden_by_default=fields is not None)
     )
-    vault_settings_panel_js = "" if suppress_vault_settings else vault_settings_panel_script()
+    # In picker mode the lightweight picker controller replaces the settings-
+    # panel controller; otherwise (loaded note / orientation) the settings-panel
+    # controller drives the hidden drawer.
+    if suppress_vault_settings:
+        vault_settings_panel_js = ""
+    elif is_picker:
+        vault_settings_panel_js = _render_vault_picker_script()
+    else:
+        vault_settings_panel_js = vault_settings_panel_script()
     # Loaded note workspaces keep the settings panel mounted for controller
     # compatibility, but hidden/inert by default so it cannot cover the
     # document after normal note navigation (#2333). True no-vault/setup pages
@@ -12525,72 +13152,281 @@ def render_index_html(
       text-align: center;
     }}
 
-    /* ---- No-vault picker front door (#2485 D1) ----
-       The styled hero owns the single no-vault heading; the vault-settings
-       panel folds in beneath it as the picker body. Both read in the design
-       system's fonts/colours/spacing — no default-browser chrome.
-       This is the SOLE rule for `.vault-selection-required` spacing/surface:
-       the section renderer emits markup only (no competing section-local
-       `<style>`), so these head-level values are not overridden in the body
-       (Codex round 2: the old `48px auto` section style separated the panel
-       from the hero). */
+    /* ---- "Choose a vault" overlay — the no-vault front door (#2564) ----
+       The picker is rebuilt in the note Browse-vault overlay idiom: one titled
+       overlay, a focused filter (filters the visible list only — never a
+       path-to-select field), clean clickable rows, and a footer count. The
+       configured vault is the pinned first row (badged "configured"); recents
+       follow as clickable rows; a "Browse for a vault folder…" entry row sits
+       last. Operator affordances (Reload, Open settings folder) live behind the
+       overlay's ⓘ drawer, off the front door. One graphical language; no
+       foreign form chrome. Content is server-declared. */
     .vault-selection-required {{
       background: var(--bg-surface);
       border: 1px solid var(--border-strong);
       border-radius: 8px;
       color: var(--fg-1);
-      display: grid;
       font-family: var(--font-ui);
-      gap: 12px;
       margin: 0 auto;
       max-width: 560px;
-      padding: 28px 30px 8px;
+      padding: 22px 24px;
     }}
-    .vault-selection-open-configured {{
-      margin: 2px 0;
+    .vault-picker {{
+      display: grid;
+      gap: 12px;
     }}
-    .vault-selection-headline {{
+    .vault-picker-title {{
       color: var(--fg-1);
+      cursor: default;
       font-family: var(--font-display);
       font-size: var(--text-2xl);
       font-weight: 500;
       letter-spacing: 0.01em;
+      list-style: none;
       margin: 0;
     }}
-    .vault-selection-summary, .vault-selection-hint, .vault-selection-requested {{
+    .vault-picker-title::-webkit-details-marker {{ display: none; }}
+    .vault-selection-summary, .vault-selection-requested {{
       color: var(--fg-2);
       font-family: var(--font-ui);
       font-size: var(--text-base);
       margin: 0;
-    }}
-    .vault-selection-hint {{
-      color: var(--fg-3);
-      font-size: var(--text-sm);
     }}
     .vault-selection-requested code, .vault-selection-required code {{
       color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-sm);
     }}
-    .vault-selection-open-configured button,
-    .vault-selection-required button {{
-      background: var(--accent);
-      border: 1px solid var(--accent);
-      border-radius: var(--radius-md);
-      color: var(--bg-base);
+    .vault-picker-filter-row {{ display: block; }}
+    .vault-picker-filter {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      color: var(--fg-1, #dce8f0);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 7px 10px;
+      width: 100%;
+    }}
+    .vault-picker-list {{
+      display: grid;
+      gap: 6px;
+      list-style: none;
+      margin: 0;
+      max-height: 50vh;
+      overflow: auto;
+      padding: 0;
+    }}
+    .vault-picker-row {{ margin: 0; }}
+    .vault-picker-row[hidden] {{ display: none; }}
+    .vault-picker-row-button {{
+      align-items: flex-start;
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border, #152030);
+      border-radius: var(--radius-md, 6px);
+      color: var(--fg-1, #dce8f0);
+      cursor: pointer;
+      display: grid;
+      font-family: var(--font-ui);
+      gap: 3px;
+      padding: 9px 12px;
+      text-align: left;
+      width: 100%;
+    }}
+    .vault-picker-row-button:hover {{ border-color: var(--border-strong, #1e3050); }}
+    .vault-picker-row--pinned .vault-picker-row-button {{
+      border-color: var(--accent, #5b8cff);
+    }}
+    .vault-picker-row-head {{
+      align-items: baseline;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .vault-picker-row-name {{
+      color: var(--fg-1);
+      font-size: var(--text-base);
+      font-weight: 500;
+    }}
+    .vault-picker-row-badge {{
+      background: var(--accent, #5b8cff);
+      border-radius: 999px;
+      color: var(--bg-base, #060b14);
+      font-size: var(--text-xs, 11px);
+      letter-spacing: 0.02em;
+      padding: 1px 8px;
+    }}
+    .vault-picker-row-badge--soon {{
+      background: transparent;
+      border: 1px solid var(--border-strong, #1e3050);
+      color: var(--fg-3);
+    }}
+    .vault-picker-row-time {{
+      color: var(--fg-3);
+      font-size: var(--text-xs, 11px);
+      margin-left: auto;
+    }}
+    .vault-picker-row-path {{
+      color: var(--fg-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs, 11px);
+      overflow-wrap: anywhere;
+    }}
+    .vault-picker-row--browse .vault-picker-row-button {{
+      border-style: dashed;
+      cursor: default;
+    }}
+    .vault-picker-browse-hint {{ color: var(--fg-3); }}
+    .vault-picker-footer {{
+      color: var(--fg-3);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+    }}
+    .vault-picker-operator {{
+      border-top: 1px solid var(--border, #152030);
+      padding-top: 8px;
+    }}
+    .vault-picker-operator-summary {{
+      color: var(--fg-3);
+      cursor: pointer;
+      font-size: var(--text-sm);
+    }}
+    .vault-picker-operator-body {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-top: 8px;
+    }}
+    .vault-picker-operator-action {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      color: var(--fg-1, #dce8f0);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-sm);
-      padding: 8px 14px;
+      padding: 6px 10px;
     }}
-    /* The picker body (vault-settings panel) renders inline on the no-vault
-       page, directly under the hero, as one continuous DS surface. */
-    .vault-selection-required ~ .vault-settings-panel[data-display-mode="inline"] {{
-      border-top: none;
-      margin: 0 auto;
-      max-width: 560px;
-      padding-top: 4px;
+    .vault-picker-initialize {{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      padding: 12px;
     }}
+    .vault-picker-initialize-copy {{
+      color: var(--fg-2, #aebfce);
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      margin: 0;
+    }}
+    .vault-picker-initialize-button {{
+      align-self: flex-start;
+      background: var(--accent, #5b8cff);
+      border: 1px solid var(--accent, #5b8cff);
+      border-radius: var(--radius-md, 4px);
+      color: var(--bg-base, #060b14);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 6px 12px;
+    }}
+    .vault-picker-initialize-error {{
+      color: var(--fg-2, #aebfce);
+      font-family: var(--font-ui);
+      font-size: var(--text-xs, 11px);
+      margin: 0;
+    }}
+    /* Filesystem (folder-browser) mode (#2565) */
+    .vault-picker-fs-mode {{ display: grid; gap: 12px; }}
+    .vault-picker-fs-mode[hidden] {{ display: none; }}
+    .vault-picker-fs-head {{ display: grid; gap: 8px; }}
+    .vault-picker-fs-back {{
+      background: transparent;
+      border: none;
+      color: var(--fg-3);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      justify-self: start;
+      padding: 0;
+    }}
+    .vault-picker-fs-back:hover {{ color: var(--fg-1); }}
+    .vault-picker-fs-breadcrumb {{
+      align-items: baseline;
+      display: flex;
+      flex-wrap: wrap;
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      gap: 0;
+    }}
+    .vault-picker-fs-crumb {{
+      background: transparent;
+      border: none;
+      color: var(--accent, #5b8cff);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      padding: 0;
+    }}
+    .vault-picker-fs-crumb:hover {{ text-decoration: underline; }}
+    .vault-picker-fs-crumb-sep {{ color: var(--fg-3); }}
+    .vault-picker-fs-row {{ margin: 0; }}
+    .vault-picker-fs-row[hidden] {{ display: none; }}
+    .vault-picker-fs-row-main {{
+      align-items: center;
+      display: flex;
+      gap: 8px;
+    }}
+    .vault-picker-fs-enter {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border, #152030);
+      border-radius: var(--radius-md, 6px);
+      color: var(--fg-1, #dce8f0);
+      cursor: pointer;
+      flex: 1 1 auto;
+      font-family: var(--font-ui);
+      padding: 9px 12px;
+      text-align: left;
+    }}
+    .vault-picker-fs-enter:hover {{ border-color: var(--border-strong, #1e3050); }}
+    .vault-picker-fs-row--vault .vault-picker-fs-enter {{
+      border-color: var(--vault, #39e87d);
+    }}
+    .vault-picker-row-badge--vault {{
+      background: var(--vault, #39e87d);
+      color: var(--vault-muted, #041a10);
+    }}
+    .vault-picker-fs-row-action {{ flex: 0 0 auto; }}
+    .vault-picker-fs-open {{
+      background: var(--vault, #39e87d);
+      border: 1px solid var(--vault, #39e87d);
+      border-radius: var(--radius-md, 4px);
+      color: var(--vault-muted, #041a10);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 6px 12px;
+    }}
+    .vault-picker-fs-init {{
+      background: var(--bg-raised, #111a2e);
+      border: 1px solid var(--border-strong, #1e3050);
+      border-radius: var(--radius-md, 4px);
+      color: var(--fg-1, #dce8f0);
+      cursor: pointer;
+      font-family: var(--font-ui);
+      font-size: var(--text-sm);
+      padding: 6px 10px;
+    }}
+    .vault-picker-fs-row-error, .vault-picker-fs-error {{
+      color: var(--fg-2, #aebfce);
+      font-family: var(--font-ui);
+      font-size: var(--text-xs, 11px);
+      margin: 2px 0 0;
+    }}
+    .vault-picker-fs-empty {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); margin: 0; }}
+    .vault-picker-fs-footer {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
@@ -13484,6 +14320,32 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
+            if parsed.path == "/api/companion/vault/browse":
+                # #2565: forward the visual folder browser's listing fetch to the
+                # runtime endpoint (same-origin model — the browser never talks to
+                # FastAPI directly). Without this the Browse row enters filesystem
+                # mode but the first listing 404s, leaving fresh installs unable to
+                # bind a vault visually.
+                params = parse_qs(parsed.query)
+                browse_path = params.get("path", [""])[0]
+                try:
+                    data = self._client.get(
+                        "/api/companion/vault/browse",
+                        params={"path": browse_path} if browse_path else {},
+                        # Forward the originating client's auth context: the
+                        # runtime route is require_loopback_or_api_key-gated and
+                        # enumerates folder names, so a remote client reaching the
+                        # LAN-bound UI must be authenticated by the runtime as the
+                        # real client, not laundered into loopback by this proxy.
+                        headers=self._forwarded_client_headers(
+                            "/api/companion/vault/browse"
+                        ),
+                    )
+                except WorkspaceClientError as exc:
+                    self._proxy_error(exc)
+                    return
+                self._send_json(200, data)
+                return
             if parsed.path == VAULT_SETTINGS_ENDPOINT:
                 try:
                     data = self._client.get(VAULT_SETTINGS_ENDPOINT, params={})
@@ -13712,6 +14574,7 @@ def make_handler(
                 "/api/companion/orientation",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
+                "/api/companion/vault/browse",
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
                 "/api/companion/tts/status",
@@ -13756,6 +14619,11 @@ def make_handler(
             {
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                # GET /vault/browse is require_loopback_or_api_key-gated and
+                # enumerates folder names; forward the client's auth context so
+                # the runtime authenticates the real client, not the loopback
+                # proxy (#2565).
+                "/api/companion/vault/browse",
             }
         )
 

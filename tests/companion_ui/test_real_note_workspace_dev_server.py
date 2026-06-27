@@ -53,14 +53,20 @@ class _FakeClient:
         self._get_result = get_result
         self._get_error = get_error
         self.get_calls: list[tuple[str, dict]] = []
+        self.get_headers: list[dict[str, str]] = []
 
-    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+    def get(
+        self, url: str, *, params: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         self.get_calls.append((url, params))
+        self.get_headers.append(dict(headers or {}))
         if self._get_error is not None:
             raise self._get_error
         return self._get_result or {}
 
-    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+    def post(
+        self, url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         return {}
 
 
@@ -70,7 +76,9 @@ class _WorkspaceWithOrientationClient:
         self._orientation_payload = orientation_payload
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
 
-    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+    def get(
+        self, url: str, *, params: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         self.get_calls.append((url, params))
         if url == "/api/companion/workspace":
             return self._workspace_payload
@@ -527,7 +535,9 @@ class TestHandleGet:
         from companion_ui.workspace.serve_dev_page import handle_get
 
         class _RootClient(_FakeClient):
-            def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+            def get(
+                self, url: str, *, params: dict[str, Any], headers: dict[str, str] | None = None
+            ) -> dict[str, Any]:
                 self.get_calls.append((url, params))
                 if url == "/api/companion/orientation":
                     return {}
@@ -962,6 +972,56 @@ class TestSameOriginProxyRoutes:
         assert resp.status_code == 200
         assert resp.json() == payload
         assert client.get_calls == [("/api/companion/vault/notes", {"q": "Inbox"})]
+
+    def test_vault_browse_proxy_uses_server_side_client(self) -> None:
+        # #2565: the visual folder browser's listing fetch must be proxied to the
+        # runtime via the server-side client (same-origin), not 404'd by the UI
+        # server — otherwise the Browse row enters filesystem mode but the first
+        # listing fails, leaving fresh installs unable to bind a vault visually.
+        payload = {
+            "path": "/vaults",
+            "base": "/vaults",
+            "is_vault": False,
+            "parent": None,
+            "breadcrumb": [{"name": "vaults", "path": "/vaults"}],
+            "entries": [{"name": "Niflheim", "path": "/vaults/Niflheim", "is_vault": True}],
+            "truncated": False,
+        }
+        client = _FakeClient(get_result=payload)
+        server, port = _start_server(client, "http://127.0.0.1:18001")
+        try:
+            resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/companion/vault/browse",
+                params={"path": "/vaults"},
+            )
+        finally:
+            server.shutdown()
+
+        assert resp.status_code == 200
+        assert resp.json() == payload
+        assert client.get_calls == [("/api/companion/vault/browse", {"path": "/vaults"})]
+
+    def test_vault_browse_proxy_forwards_client_auth_context(self) -> None:
+        # #2565 security: the browse route is require_loopback_or_api_key-gated
+        # and enumerates folder names, so the proxy must forward the originating
+        # client's auth context (X-API-Key / X-Forwarded-For) — otherwise a remote
+        # client reaching the LAN-bound UI is laundered into loopback and can
+        # enumerate folders even when API-key auth should reject it.
+        client = _FakeClient(get_result={"entries": []})
+        server, port = _start_server(client, "http://127.0.0.1:18001")
+        try:
+            httpx.get(
+                f"http://127.0.0.1:{port}/api/companion/vault/browse",
+                params={"path": "/vaults"},
+                headers={"X-API-Key": "uat-secret"},
+            )
+        finally:
+            server.shutdown()
+
+        assert client.get_headers, "browse proxy recorded no forwarded headers"
+        forwarded = client.get_headers[-1]
+        assert forwarded.get("X-API-Key") == "uat-secret"
+        assert "X-Forwarded-For" in forwarded
 
     def test_vault_notes_proxy_returns_structured_runtime_error(self) -> None:
         client = _FakeClient(get_error=WorkspaceClientNetworkError("Connection refused"))
