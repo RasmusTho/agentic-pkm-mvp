@@ -49,7 +49,7 @@ issues add rows without restructuring it.
 | 9 | Authority transitions require governance and receipts. | [functional-ontology](functional-ontology.md), [doctrine](../foundation/00-yggdrasil-doctrine.md) | ADR-0017, ADR-0019, ADR-0031 | `AuthorityReceipt`, `AcceptedArtifact`, `Commitment` | `authority_state` | GOV, HKA | [authority-transition-flow](authority-transition-flow.md) / [schema](../../schemas/authority-transition.schema.json) (#2547) | invariant registry — TBD (#2550) | #2547, #2550 |
 | 10 | Execution cannot authorize itself. | [functional-ontology](functional-ontology.md) | ADR-0019 | `ExecutionEffect`, `CapabilityGrant`, `AuthorityReceipt` | `execution_state`, `authority_state` | [CAO](../boundaries/CAO.md), [GOV](../boundaries/GOV.md), [EXE](../boundaries/EXE.md) | [authority-transition-flow](authority-transition-flow.md) / [schema](../../schemas/authority-transition.schema.json) (#2547); existing [EXECUTION_REQUEST.md](../contracts/EXECUTION_REQUEST.md) | invariant registry — TBD (#2550) | #2537, #2547 |
 | 11 | Parent aggregation is not sibling sharing. | [cross-scope-flow](cross-scope-flow.md) | ADR-0034 | `Scope`, `CrossScopeFlow` | `scope_binding` | [SFC](../boundaries/SFC.md), [GOV](../boundaries/GOV.md), [WSP](../boundaries/WSP.md) | [metadata-bundle](metadata-bundle.md) / [schema](../../schemas/metadata-bundle.schema.json) (#2544) | anti-contamination eval — TBD (#2551) | #2539, #2551 |
-| 12 | Storage preserves but does not define meaning. | [functional-ontology](functional-ontology.md) | ADR-0016 | `VaultRoot`, `Artifact`, `Segment` | `source_role`, `scope_binding` | [HKA](../boundaries/HKA.md), [SIP](../boundaries/SIP.md), [PDM](../boundaries/PDM.md), DRI | [metadata-bundle](metadata-bundle.md) / [schema](../../schemas/metadata-bundle.schema.json) (#2544) | invariant registry — TBD (#2550) | #2537, #2544 |
+| 12 | Storage preserves but does not define meaning. | [functional-ontology](functional-ontology.md) | ADR-0016, ADR-0032 | `VaultRoot`, `Artifact`, `Segment` | `source_role`, `scope_binding` | [HKA](../boundaries/HKA.md), [SIP](../boundaries/SIP.md), [PDM](../boundaries/PDM.md), DRI | [metadata-bundle](metadata-bundle.md) / [schema](../../schemas/metadata-bundle.schema.json) (#2544) | invariant registry — TBD (#2550) | #2537, #2544 |
 | 13 | Observability is not policy. | [functional-ontology](functional-ontology.md), [doctrine](../foundation/00-yggdrasil-doctrine.md) | ADR-0022, ADR-0035 | `Projection`, `AuthorityReceipt`, `ProvenanceEvent` | `evidence_role`, `authority_state` | [OEF](../boundaries/OEF.md), [GOV](../boundaries/GOV.md) | [OEF](../boundaries/OEF.md) / [CES](../boundaries/CES.md) charter (#2543) | invariant registry — TBD (#2550) | #2537, #2543 |
 | 14 | Sync preserves boundaries. | [functional-ontology](functional-ontology.md), [semantic-dimensions](semantic-dimensions.md) | ADR-0034 | `Node`, `Replica`, `Device` | `sync_state`, `scope_binding`, `authority_state` | [WSP](../boundaries/WSP.md), [SFC](../boundaries/SFC.md), [GOV](../boundaries/GOV.md) | existing `REPLICATION_ENVELOPE.md`; [SFC](../boundaries/SFC.md) / [WSP](../boundaries/WSP.md) charter (#2543) | invariant registry — TBD (#2550) | #2537, #2538 |
 | 15 | Human-authored material is not automatically canonical. | [doctrine](../foundation/00-yggdrasil-doctrine.md), [semantic-dimensions](semantic-dimensions.md) | ADR-0017 | `HumanArtifact`, `AcceptedArtifact` | `source_role` ≠ `authority_state` | HKA, GOV | [authority-transition-flow](authority-transition-flow.md) / [schema](../../schemas/authority-transition.schema.json) (#2547) | invariant registry — TBD (#2550) | #2536, #2538, #2547 |
@@ -125,11 +125,12 @@ implement runtime behavior.
 
 The doctrine/ontology/boundary decisions are now frozen as accepted ADRs **ADR-0026 through
 ADR-0039** under [`docs/adr/`](../adr/INDEX.md). ADR-0026–ADR-0035 are the required doctrine set;
-ADR-0036–ADR-0039 record the optional standards and contract-semantics decisions. Each principle row
-above links the ADR(s) that freeze it — including the new doctrine ADRs added to rows that previously
-listed only the earlier mechanism-level ADRs (row 4 → ADR-0030, row 8 → ADR-0033, row 9 → ADR-0031,
-row 13 → ADR-0035). The new ADRs cross-reference the related existing decisions (ADR-0015–ADR-0025)
-rather than re-deciding them.
+ADR-0036–ADR-0039 are follow-up records — optional additions beyond the ten ADRs #2549 requires,
+kept because each freezes a schema- or doctrine-backed decision (their State/Status mark them
+follow-up). Each principle row above links the ADR(s) that freeze it — including the new doctrine
+ADRs added to rows that previously listed only the earlier mechanism-level ADRs (row 4 → ADR-0030,
+row 8 → ADR-0033, row 9 → ADR-0031, row 12 → ADR-0032, row 13 → ADR-0035). The new ADRs
+cross-reference the related existing decisions (ADR-0015–ADR-0025) rather than re-deciding them.
 
 ## Pending artifacts (later backlog)
 

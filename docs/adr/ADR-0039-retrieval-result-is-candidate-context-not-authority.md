@@ -1,4 +1,4 @@
-State: Accepted (doctrine-level architecture decision, 2026-06-26).
+State: Accepted follow-up — optional doctrine ADR beyond the ten required by #2549 (2026-06-26).
 Doc role: Decision record (ADR)
 Authority: Authoritative that retrieval output is candidate context, not truth or authority.
 Owner: RCA / GOV / SIP
@@ -10,7 +10,7 @@ Related issue: #2549
 # ADR-0039: RetrievalResult is candidate context, not authority
 
 **Date:** 2026-06-26
-**Status:** Accepted
+**Status:** Accepted (follow-up; optional addition beyond the #2549 required set ADR-0026–ADR-0035)
 
 ## Context
 
