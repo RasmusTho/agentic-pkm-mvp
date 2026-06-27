@@ -71,14 +71,41 @@ site, is what makes that impossible.
   - Verify: `tests/invariants/test_retrieval_runtime.py::test_prefilter_runs_before_ranking` asserts
     the eligible set is computed at the `retrieve` call site prior to scoring.
 
+## Import-gate side effect (must keep CI green)
+
+`require_future_runtime("retrieval", …)` xfails on the **module**, not per test. The moment this task
+creates `yggdrasil_runtime/retrieval.py`, **every** retrieval-backed skeleton stops xfail-ing and runs
+its real assertions in this same PR — not only the prefilter tests, but also the two nominally-YRS1-05
+tests:
+
+- `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime`
+- `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software`
+
+So the standard `pytest -q tests/invariants tests/evals` gate exercises them in the YRS1-04 PR. To keep
+the gate green without absorbing YRS1-05's full contract, YRS1-04's `retrieve()` must emit candidate
+items that already satisfy the *minimum* those two tests assert:
+
+- each candidate carries `evidence_role_in_context`, defaulted to its intrinsic
+  `metadata_bundle.evidence_role` (equal satisfies the ordinal `<=` monotonicity rule — never upgrade);
+- all candidates are in the active scope (the prefilter already guarantees this), which trivially
+  satisfies the RPG assertion (`scope_id != rpg/worldbuilding` for every admitted candidate).
+
+YRS1-05 then *enriches* (explicit downgrades, the content-free denied/escalated list, full schema
+conformance, the new runtime conformance tests) without widening the eligible set. The same module-gate
+applies to `cross_scope` (general-knowledge eval) — but not to `context`, which is a separate module.
+
 ## How to Verify (Pre-Merge)
 
-- Local: `pytest -q tests/invariants/test_cross_scope_flow.py tests/evals/test_private_not_in_work_results.py tests/evals/test_general_knowledge_crosses_clean.py`.
+- Local: `pytest -q tests/invariants tests/evals` — the prefilter + cross-scope skeletons go green,
+  and the auto-enabled monotonicity + RPG skeletons stay green per the import-gate note above.
 - Confirm `result.scope_policy_prefiltered is True` for every `retrieve` call.
 
 ## Out of Scope
 
-- Full evidence-role monotonicity and RPG analogy handling (delivered by YRS1-05).
+- The **full** RetrievalResult contract — explicit evidence-role downgrades, the content-free
+  denied/escalated list, schema conformance, the new runtime conformance tests (delivered by YRS1-05).
+  Note: the bare monotonicity + RPG skeletons must already pass here (import-gate note), only the
+  richer enrichment is deferred.
 - The full policy engine, GOV receipts, AuthorityTransition runtime.
 - Parent-scope aggregation (`yggdrasil_runtime.scope`) — left xfail.
 - Embedding/reranking sophistication — a trivial similarity helper is sufficient.

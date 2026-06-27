@@ -55,9 +55,13 @@ content-free denied list are what keep retrieval honest and non-leaking.
 
 - [ ] For every candidate, `evidence_role_in_context` is ordinally `<=` the intrinsic
   `metadata_bundle.evidence_role`.
-  - Verify: `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime` (xfail → passing)
+  - Verify: `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime`
+    (kept green — auto-enabled when YRS1-04 created `retrieval.py`; this task adds the explicit
+    downgrade logic and must not regress it)
 - [ ] RPG/worldbuilding material is never admitted as `evidence` in a work scope.
-  - Verify: `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software` (xfail → passing)
+  - Verify: `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software`
+    (kept green — auto-enabled at YRS1-04; this task hardens the analogy/inspiration handling without
+    regressing it)
 - [ ] `denied_or_escalated_candidates` entries are content-free (`scope_denial` shape only).
   - Verify: `tests/invariants/test_retrieval_result.py::test_retrieval_denied_candidates_are_content_free` (kept green) +
     `tests/invariants/test_retrieval_runtime.py::test_runtime_denied_list_is_content_free` over a real `retrieve` call.

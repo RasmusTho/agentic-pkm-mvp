@@ -104,8 +104,14 @@ assertions run):
 | `similarity_not_permission` | `tests/invariants/test_cross_scope_flow.py::test_similarity_is_not_permission` | RETRIEVAL_PREFILTER_BEFORE_RANKING |
 | `cross_scope_only_via_flow` | `tests/invariants/test_cross_scope_flow.py::test_cross_scope_only_via_flow` + `tests/evals/test_general_knowledge_crosses_clean.py::test_general_knowledge_crosses_clean` | RETRIEVAL_PREFILTER_BEFORE_RANKING |
 | `private_not_in_work_results` | `tests/evals/test_private_not_in_work_results.py::test_private_not_in_work_results` | RETRIEVAL_PREFILTER_BEFORE_RANKING |
-| `rpg_not_confused_with_software` | `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software` | RETRIEVAL_RESULT_CANDIDATE_SEMANTICS |
-| `retrieval_cannot_upgrade_intrinsic_non_evidence` (runtime monotonicity) | `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime` | RETRIEVAL_RESULT_CANDIDATE_SEMANTICS |
+| `rpg_not_confused_with_software` | `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software` | RETRIEVAL_RESULT_CANDIDATE_SEMANTICS (auto-enabled at RETRIEVAL_PREFILTER — must already pass there) |
+| `retrieval_cannot_upgrade_intrinsic_non_evidence` (runtime monotonicity) | `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime` | RETRIEVAL_RESULT_CANDIDATE_SEMANTICS (auto-enabled at RETRIEVAL_PREFILTER — must already pass there) |
+
+> **Module import-gate note:** `require_future_runtime("retrieval")` gates on the *module*, so the two
+> rows above stop xfail-ing the moment RETRIEVAL_PREFILTER (#2582) creates `retrieval.py` — they run in
+> *that* PR. #2582 must therefore emit candidates with a non-upgrading `evidence_role_in_context`
+> (default = intrinsic) so both stay green; #2583 then enriches without regressing them. See
+> RETRIEVAL_PREFILTER_BEFORE_RANKING :: "Import-gate side effect".
 
 Already static/schema-green — this slice must keep them green by making the runtime objects conform
 (not regress): `metadata_bundle_required`, `store_no_naked_vectors`,
