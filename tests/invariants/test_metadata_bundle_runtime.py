@@ -9,9 +9,12 @@ Contract: docs/architecture/metadata-bundle.md (#2544). Spec: docs/YGGDRASIL_RUN
 
 from __future__ import annotations
 
+import pytest
+
 from tests.invariants._helpers import assert_validates
 
 from yggdrasil_runtime import capture
+from yggdrasil_runtime.metadata import MetadataBundle
 
 
 def test_capture_bundle_validates_against_schema() -> None:
@@ -46,3 +49,34 @@ def test_capture_registers_artifact_for_derivation() -> None:
     fetched = capture.get_captured(obj.metadata_bundle.object_id)
     assert fetched is not None
     assert fetched.metadata_bundle.scope_id == obj.metadata_bundle.scope_id
+
+
+def _accepted_kwargs(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = dict(
+        object_id="artifact:acc-1",
+        object_type="artifact",
+        scope_id="scope:work/project-alpha",
+        source_role="work_project",
+        authority_state="accepted",
+        evidence_role="evidence",
+        sensitivity="internal",
+        suppression_state="visible",
+        created_by="p-1",
+        created_at="2026-06-27T00:00:00+00:00",
+        provenance_event_ids=["prov:1"],
+        vault_id="vault:local",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_accepted_bundle_requires_receipt() -> None:
+    # Canonical standing (accepted/canonical) comes only from a governed AuthorityTransition; the
+    # shared type fails loud at construction rather than emitting a schema-invalid payload downstream.
+    with pytest.raises(ValueError):
+        MetadataBundle(**_accepted_kwargs())  # type: ignore[arg-type]
+
+
+def test_accepted_bundle_with_receipt_validates() -> None:
+    bundle = MetadataBundle(**_accepted_kwargs(authority_receipt_ref="receipt:abc"))  # type: ignore[arg-type]
+    assert_validates(bundle.to_dict(), "metadata-bundle.schema.json")

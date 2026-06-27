@@ -28,6 +28,11 @@ DERIVED_OBJECT_TYPES = frozenset(
     {"segment", "projection", "retrieval_result", "context_item"}
 )
 
+# Authority states that denote durable accepted standing; reaching one requires a governed
+# AuthorityTransition + AuthorityReceipt (schema: canonical_authority_state). The schema
+# conditionally requires authority_receipt_ref for these, so we enforce it at construction.
+CANONICAL_AUTHORITY_STATES = frozenset({"accepted", "canonical"})
+
 # The required core every bundle must carry (mirrors metadata-bundle.schema.json :: required).
 _REQUIRED_FIELDS = (
     "object_id",
@@ -83,6 +88,11 @@ class MetadataBundle:
             raise ValueError(
                 f"object_type={self.object_type!r} requires a non-empty derived_from (provenance "
                 "must survive derivation)"
+            )
+        if self.authority_state in CANONICAL_AUTHORITY_STATES and not self.authority_receipt_ref:
+            raise ValueError(
+                f"authority_state={self.authority_state!r} requires an authority_receipt_ref "
+                "(canonical standing comes only from a governed AuthorityTransition)"
             )
 
     def to_dict(self) -> dict[str, Any]:
