@@ -73,12 +73,19 @@ in the content-free `denied_or_escalated_candidates` list.
 5. **Projection/context bundle is not a primary source.** Candidates carry their real `source_role`
    and `evidence_role`; a projection candidate is not evidence by default.
 6. **Denied cross-scope material must not be hidden context — not even its identifiers.** It is
-   recorded in `denied_or_escalated_candidates` with a non-identifying reason, denial class, and
-   required-flow class, **without** content, a metadata bundle, or the denied `scope_id`/`object_id`/
-   provenance. Any identifiers needed for accountability live only in an audit-only governance record
-   referenced by `audit_ref`, outside the agent-facing result.
-7. **Escalated material records why escalation is needed** (`escalation_reason`).
+   recorded in `denied_or_escalated_candidates` with the required non-identifying routing fields
+   (`reason`, `denial_class`, `escalation_recommended`) and an optional `required_flow_class`,
+   **without** content, a metadata bundle, or the denied `scope_id`/`object_id`/provenance. Any
+   identifiers needed for accountability live only in an audit-only governance record referenced by
+   `audit_ref`, outside the agent-facing result.
+7. **Escalated material records why escalation is needed** — via the non-identifying `reason` /
+   `denial_class` (and `escalation_recommended`) on its `denied_or_escalated_candidates` entry.
 8. **Retrieval preserves citation/provenance ranges** (`citation_ranges`, `provenance_event_ids`).
+9. **Applicable cross-scope flows carry their guardrails.** Each entry in
+   `applicable_cross_scope_flows` must carry not only `flow_id`/`source_scope`/`target_scope`/
+   `allowed_operations` but also the canonical `source_roles_allowed`, `authority_states_allowed`, and
+   `evidence_roles_allowed` filters from [cross-scope-flow](cross-scope-flow.md) — so a consumer can
+   never apply an operation grant to the wrong source role, authority state, or evidence role.
 
 ## 4. Schema requirements
 

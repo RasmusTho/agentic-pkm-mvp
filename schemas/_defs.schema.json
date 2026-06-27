@@ -249,7 +249,15 @@
         "expiry": { "$ref": "#/$defs/iso_datetime" },
         "provenance_requirements": { "type": "string" }
       },
-      "required": ["flow_id", "source_scope", "target_scope", "allowed_operations"],
+      "required": [
+        "flow_id",
+        "source_scope",
+        "target_scope",
+        "allowed_operations",
+        "source_roles_allowed",
+        "authority_states_allowed",
+        "evidence_roles_allowed"
+      ],
       "additionalProperties": false
     },
     "scope_denial": {
@@ -282,7 +290,7 @@
           "description": "Opaque reference to an audit-only governance/observability record (outside this result/envelope) that may hold the denied scope/object identifiers. Never the identifiers themselves."
         }
       },
-      "required": ["reason"],
+      "required": ["reason", "denial_class", "escalation_recommended"],
       "additionalProperties": false
     },
     "extensions": {
