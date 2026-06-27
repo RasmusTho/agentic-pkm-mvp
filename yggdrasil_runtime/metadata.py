@@ -110,6 +110,13 @@ class MetadataBundle:
                 "a projection may hold evidence_role='evidence' only via a provenance-backed "
                 "promotion receipt (authority_receipt_ref); projection is not evidence by default"
             )
+        # A single str type-checks as Sequence[str]; tuple("art-1") would split it into characters
+        # and silently corrupt lineage/provenance. Reject str explicitly (callers must pass a list).
+        for name in ("provenance_event_ids", "derived_from"):
+            if isinstance(getattr(self, name), str):
+                raise TypeError(
+                    f"{name} must be a sequence of id strings (e.g. ['art-1']), not a single str"
+                )
         # Coerce lineage collections to tuples so they cannot be mutated in place by a holder
         # (frozen=True only blocks reassignment). object.__setattr__ is the frozen-dataclass idiom.
         object.__setattr__(self, "provenance_event_ids", tuple(self.provenance_event_ids))

@@ -82,6 +82,18 @@ def test_accepted_bundle_with_receipt_validates() -> None:
     assert_validates(bundle.to_dict(), "metadata-bundle.schema.json")
 
 
+def test_lineage_str_is_rejected_not_split() -> None:
+    # A single str for a lineage field must fail loud, not be split into characters by tuple().
+    with pytest.raises(TypeError):
+        MetadataBundle(**_accepted_kwargs(authority_receipt_ref="r:1", provenance_event_ids="prov:1"))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        MetadataBundle(
+            **_accepted_kwargs(
+                object_type="segment", authority_state="derived", derived_from="art-1",
+            )  # type: ignore[arg-type]
+        )
+
+
 def test_evidence_projection_requires_receipt() -> None:
     # Projection is not evidence by default; an evidence projection needs a promotion receipt even
     # when authority_state is non-canonical (e.g. derived) — fail loud at construction.
