@@ -105,18 +105,9 @@
       "enum": ["visible", "redacted", "suppressed", "withheld", "tombstoned"]
     },
     "memory_state": {
-      "description": "Coarse machine-memory lifecycle position. MEM-owned; the promotion transition is GOV-owned. Specialized memory value family (extends the initial family in semantic-dimensions.md). `promoted` reflects a governed transition into HKA; it does not by itself confer canonical authority. Suppression, invalidation, tombstone, and purge stub are distinct states.",
+      "description": "Machine-memory EXISTENCE/validity lifecycle position — only the part NOT covered by the orthogonal suppression_state and promotion_state fields. MEM-owned. Kept disjoint so each lifecycle value lives in exactly one field with no inconsistency surface: visibility (suppressed / tombstoned / redacted / withheld) is suppression_state; promotion (promotion_requested / promoted / rejected) is promotion_state. `purged_stub` is a tombstone whose payload was purged while lineage/provenance is retained.",
       "type": "string",
-      "enum": [
-        "active",
-        "suppressed",
-        "invalidated",
-        "tombstoned",
-        "purged_stub",
-        "promotion_requested",
-        "promoted",
-        "rejected"
-      ]
+      "enum": ["active", "invalidated", "purged_stub"]
     },
     "promotion_state": {
       "description": "Fine machine-memory promotion sub-lifecycle. MEM may request promotion; only GOV authorizes and HKA materializes it.",
@@ -185,10 +176,9 @@
       "enum": ["candidate", "admitted", "redacted", "requires_confirmation"]
     },
     "scope_binding": {
-      "description": "Which scope(s) the object belongs to. WSP-owned (policy facet GOV). Membership only; it never grants cross-scope rights. scope_id is the primary binding; additional_scope_ids covers multi-scope membership.",
+      "description": "ADDITIONAL scope membership beyond the object's primary scope. WSP-owned (policy facet GOV). Membership only; it never grants cross-scope rights. The PRIMARY scope is the object's top-level scope_id (the single source of truth) and is intentionally NOT repeated here, so the policy/provenance scope cannot drift between two fields.",
       "type": "object",
       "properties": {
-        "scope_id": { "$ref": "#/$defs/id_string" },
         "additional_scope_ids": { "$ref": "#/$defs/id_list" },
         "sphere": { "type": "string" },
         "bound": {
@@ -196,7 +186,6 @@
           "enum": ["bound", "unbound"]
         }
       },
-      "required": ["scope_id"],
       "additionalProperties": false
     },
     "citation_range": {

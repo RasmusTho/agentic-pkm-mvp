@@ -30,21 +30,38 @@ and the [metadata bundle](metadata-bundle.md).
 
 ## 2. Lifecycle states
 
-Memory lifecycle is tracked across three orthogonal fields so distinct operations stay distinct
-(suppression, invalidation, tombstone, and purge stub are **not** the same operation):
+Memory lifecycle is tracked across three **disjoint** fields, so each lifecycle value lives in exactly
+one place and the states cannot contradict each other (suppression, invalidation, tombstone, and purge
+stub are **not** the same operation):
 
 | Concern | Field | Values |
 | --- | --- | --- |
-| Coarse lifecycle | `memory_state` | `active`, `suppressed`, `invalidated`, `tombstoned`, `purged_stub`, `promotion_requested`, `promoted`, `rejected` |
+| Existence / validity | `memory_state` | `active`, `invalidated`, `purged_stub` |
 | Visibility | `suppression_state` | `visible`, `redacted`, `suppressed`, `withheld`, `tombstoned` |
 | Governed promotion | `promotion_state` | `not_requested`, `promotion_requested`, `promoted`, `rejected` |
 
-`memory_state` is the headline MEM-owned lifecycle (it specializes the initial `memory_state` family
-in [semantic dimensions](semantic-dimensions.md), which is explicitly extensible). `suppression_state`
-is the cross-object visibility dimension shared with the [metadata bundle](metadata-bundle.md);
-`promotion_state` is the fine governed-promotion sub-lifecycle. Suppressed/tombstoned values in
-`memory_state` must agree with `suppression_state`. Forgetting/suppression hides material from recall
-and context; it never erases lineage or provenance.
+The eight lifecycle states this contract must support map to **exactly one** field each — no value is
+duplicated across fields, so a memory can never look (e.g.) promoted in one field while another says
+otherwise:
+
+| Lifecycle state | Field = value |
+| --- | --- |
+| active | `memory_state = active` |
+| suppressed | `suppression_state = suppressed` |
+| invalidated | `memory_state = invalidated` |
+| tombstoned | `suppression_state = tombstoned` |
+| purged_stub | `memory_state = purged_stub` |
+| promotion_requested | `promotion_state = promotion_requested` |
+| promoted | `promotion_state = promoted` |
+| rejected | `promotion_state = rejected` |
+
+`suppression_state` is the cross-object visibility dimension shared with the
+[metadata bundle](metadata-bundle.md); `promotion_state` is the governed-promotion sub-lifecycle.
+Forgetting/suppression hides material from recall and context; it never erases lineage or provenance
+(`purged_stub` retains lineage after the payload is purged). Promotion is governed: `promotion_state`
+reaches `promoted` only through an [authority transition](authority-transition-flow.md) with a receipt
+— `memory_state` carries no promotion value, so a memory can never *look* promoted without the governed
+evidence.
 
 ## 3. Required fields
 

@@ -99,10 +99,10 @@
           "retrieval_result_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
           "non_authority": {
             "const": true,
-            "description": "Marks the composed bundle as candidate evidence/projection, never authority."
+            "description": "Marks the composed bundle as candidate evidence/projection, never authority. Required and always true, so a composed bundle can never be silently treated as authority (no absent-vs-true ambiguity)."
           }
         },
-        "required": ["context_bundle_id"],
+        "required": ["context_bundle_id", "non_authority"],
         "additionalProperties": false
       }
     },
@@ -133,9 +133,12 @@
           "const": "noncanonical",
           "description": "Anything remembered enters machine memory as noncanonical; promotion is a separate governed transition."
         },
-        "cross_scope_remember_requires_flow": { "const": true }
+        "cross_scope_remember_requires_flow": {
+          "const": true,
+          "description": "Cross-scope recall requires a typed CrossScopeFlow that allows `remember`. Required and always true (no absent-vs-true ambiguity)."
+        }
       },
-      "required": ["remember_allowed", "remembered_authority_state"],
+      "required": ["remember_allowed", "remembered_authority_state", "cross_scope_remember_requires_flow"],
       "additionalProperties": false
     },
     "mutation_policy": {

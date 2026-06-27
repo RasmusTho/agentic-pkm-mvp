@@ -95,6 +95,8 @@ These are two different contracts:
   an embedded `metadata_bundle` (identity is the bundle's `object_id`) or a `metadata_bundle_ref`
   paired with an explicit `object_id` — never both, so identity/provenance cannot drift and there is
   no naked content;
+- requires each composed `context_bundles` entry to carry `context_bundle_id` and an explicit
+  `non_authority: true` marker, so a composed bundle can never be silently treated as authority;
 - supports `cross_scope_flows` grants in effect and `escalation_conditions`;
 - pins `access_mode` to `bounded_context_only`;
 - closes the object (`additionalProperties: false`) with an explicit `extensions` point.
