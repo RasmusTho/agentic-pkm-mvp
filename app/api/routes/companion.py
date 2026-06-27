@@ -984,34 +984,43 @@ def browse_companion_vault_folder(
 
     entries: list[VaultBrowseEntry] = []
     truncated = False
+    # Iterate lazily and enforce the cap DURING iteration: never materialize +
+    # sort the whole directory first, so a very large home/mounted folder can't
+    # blow up memory/latency (#2565). The bounded subset is sorted afterwards.
     try:
-        children = sorted(
-            (child for child in target.iterdir()),
-            key=lambda child: child.name.lower(),
-        )
+        for child in target.iterdir():
+            name = child.name
+            if name.startswith(_BROWSE_EXCLUDE_DIR_PREFIXES):
+                # Hidden / dunder folders (.obsidian, .git, __pycache__) are noise
+                # in a vault-picker context; skip them like the note browser does.
+                continue
+            # Re-check containment on the child's REALPATH before following it as a
+            # directory or probing its vault marker. child.is_dir() and
+            # is_vault_root() follow symlinks, so a symlinked child whose real
+            # target escapes the base must be skipped here too — otherwise the
+            # listing would expose an entry that direct navigation rejects with a
+            # 400, breaking the post-realpath containment contract (#2565).
+            try:
+                resolved_child = child.resolve()
+                if not resolved_child.is_dir():
+                    continue  # folders only — never list files
+            except OSError:
+                continue
+            if not _is_within_base(resolved_child, base):
+                continue  # symlink/junction escaping the browse base
+            if len(entries) >= _BROWSE_MAX_ENTRIES:
+                truncated = True
+                break
+            try:
+                child_is_vault = is_vault_root(resolved_child)
+            except OSError:
+                child_is_vault = False
+            entries.append(
+                VaultBrowseEntry(name=name, path=str(child), is_vault=child_is_vault)
+            )
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"cannot list directory: {exc}") from exc
-    for child in children:
-        name = child.name
-        if name.startswith(_BROWSE_EXCLUDE_DIR_PREFIXES):
-            # Hidden / dunder folders (.obsidian, .git, __pycache__) are noise in
-            # a vault-picker context; skip them like the note browser does.
-            continue
-        try:
-            if not child.is_dir():
-                continue  # folders only — never list files
-        except OSError:
-            continue
-        if len(entries) >= _BROWSE_MAX_ENTRIES:
-            truncated = True
-            break
-        try:
-            child_is_vault = is_vault_root(child)
-        except OSError:
-            child_is_vault = False
-        entries.append(
-            VaultBrowseEntry(name=name, path=str(child), is_vault=child_is_vault)
-        )
+    entries.sort(key=lambda entry: entry.name.lower())
 
     parent: str | None = None
     if target != base:

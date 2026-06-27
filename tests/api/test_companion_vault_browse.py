@@ -166,6 +166,31 @@ def test_browse_rejects_symlink_escape(
     assert "private.md" not in resp.text
 
 
+def test_browse_listing_excludes_symlink_escape_child(
+    client: TestClient, browse_base: Path, tmp_path: Path
+) -> None:
+    """A symlinked child whose real target escapes the base is omitted from the
+    PARENT's listing — not just rejected on direct navigation (#2565). is_dir()
+    and is_vault_root() follow symlinks, so each child is realpath-checked for
+    containment before it is listed or probed; an escaping child is skipped."""
+    outside = tmp_path / "secret"
+    outside.mkdir()
+    (outside / "private.md").write_text("secret\n", encoding="utf-8")
+    (browse_base / "RealChild").mkdir()
+    link = browse_base / "escape"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):  # pragma: no cover - platform without symlinks
+        pytest.skip("symlinks not supported on this platform")
+
+    resp = client.get("/api/companion/vault/browse", params={"path": str(browse_base)})
+    assert resp.status_code == 200, resp.text
+    names = [entry["name"] for entry in resp.json()["entries"]]
+    assert "RealChild" in names
+    assert "escape" not in names  # symlink escaping the base is not listed
+    assert "private.md" not in resp.text
+
+
 # --- AC: vault folder detected; plain folder not ----------------------------
 
 
