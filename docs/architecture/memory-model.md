@@ -36,11 +36,17 @@ stub are **not** the same operation):
 
 | Concern | Field | Values |
 | --- | --- | --- |
-| Existence / validity | `memory_state` | `active`, `invalidated`, `purged_stub` |
+| Recall / existence | `memory_state` | `unreviewed`, `reviewed`, `active`, `corrected`, `decayed`, `invalidated`, `forgotten`, `purged_stub` |
 | Visibility | `suppression_state` | `visible`, `redacted`, `suppressed`, `withheld`, `tombstoned` |
 | Governed promotion | `promotion_state` | `not_requested`, `promotion_requested`, `promoted`, `rejected` |
 
-The eight lifecycle states this contract must support map to **exactly one** field each — no value is
+`memory_state` is a **superset of the canonical [semantic-dimensions](semantic-dimensions.md) review
+family** (`unreviewed`, `reviewed`, `corrected`, `decayed`, `forgotten`) plus the existence states
+(`active`, `invalidated`, `purged_stub`). Promotion and visibility are deliberately held in the other
+two fields, so no value is duplicated and the states cannot contradict (`memory_state` has no
+`promoted` value).
+
+The lifecycle states this contract must support map to **exactly one** field each — no value is
 duplicated across fields, so a memory can never look (e.g.) promoted in one field while another says
 otherwise:
 

@@ -5,8 +5,8 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (dimension definitions); subordinate to doctrine and ontology
-Last reviewed: 2026-06-26
-Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/foundation/yggdrasil-architecture-context-packet.md
+Last reviewed: 2026-06-27
+Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/architecture/memory-model.md, schemas/memory-item.schema.json
 
 # Yggdrasil Semantic Dimensions
 
@@ -129,13 +129,21 @@ boundaries are defined in the [System Breakdown Structure](../SYSTEM_BREAKDOWN_S
 
 ### `memory_state`
 
-- **Question:** Where is this in the machine-memory lifecycle?
-- **Value families:** `unreviewed`, `reviewed`, `promoted`, `corrected`, `decayed`, `forgotten`.
-- **Owning boundary:** MEM (lifecycle); GOV for the promotion transition.
+- **Question:** Where is this in the machine-memory recall/existence lifecycle?
+- **Value families:** `unreviewed`, `reviewed`, `active`, `corrected`, `decayed`, `invalidated`,
+  `forgotten`, `purged_stub`. (Extensible.) Two lifecycle concerns are tracked in **orthogonal**
+  fields, not here: governed **promotion** is `promotion_state` (`not_requested` → `promotion_requested`
+  → `promoted` / `rejected`) — `memory_state` carries no `promoted` value — and **visibility** is
+  `suppression_state`. The machine-readable source for these is the metadata bundle
+  ([#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544)) and `MemoryItem`
+  ([#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546)) schemas; see
+  [memory-model](memory-model.md).
+- **Owning boundary:** MEM (lifecycle); GOV for the promotion transition (via `promotion_state`).
 - **Required field:** `memory_state`.
-- **Must NOT be inferred:** canonical authority or evidence standing. `promoted` means a governed
-  transition into HKA occurred — the resulting `authority_state` is set by that transition, not by
-  `memory_state` alone.
+- **Must NOT be inferred:** canonical authority or evidence standing. Promotion is a governed
+  transition tracked by `promotion_state` and materialized into HKA as a **separate** artifact; the
+  resulting `authority_state` is set by that transition, never by `memory_state` alone, and a memory
+  record itself never becomes canonical.
 - **Invariant:** TBD ([#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546),
   [#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)).
 
@@ -195,10 +203,11 @@ on one object.
 - `source_role: agent_memory`
 - `authority_state: noncanonical`
 - `evidence_role: background` / `non_evidence`
-- `memory_state: unreviewed` → `reviewed` → `promoted`
+- `memory_state: unreviewed` → `reviewed` (recall lifecycle); promotion is a separate axis:
+  `promotion_state: not_requested` → `promotion_requested` → `promoted`
 - Reading: advisory recall. It influences reasoning as background only and becomes durable knowledge
-  solely through a governed promotion that sets a new `authority_state` — never by `memory_state`
-  alone.
+  solely through a governed promotion (`promotion_state`) that materializes a **separate** canonical
+  artifact in HKA — never by `memory_state` alone, and the memory record itself stays noncanonical.
 
 ### Work decision
 

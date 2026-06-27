@@ -105,9 +105,18 @@
       "enum": ["visible", "redacted", "suppressed", "withheld", "tombstoned"]
     },
     "memory_state": {
-      "description": "Machine-memory EXISTENCE/validity lifecycle position — only the part NOT covered by the orthogonal suppression_state and promotion_state fields. MEM-owned. Kept disjoint so each lifecycle value lives in exactly one field with no inconsistency surface: visibility (suppressed / tombstoned / redacted / withheld) is suppression_state; promotion (promotion_requested / promoted / rejected) is promotion_state. `purged_stub` is a tombstone whose payload was purged while lineage/provenance is retained.",
+      "description": "MEM-owned recall/existence lifecycle. A superset of the canonical semantic-dimensions.md review family (unreviewed, reviewed, corrected, decayed, forgotten) plus the existence states (active, invalidated, purged_stub). Two lifecycle concerns are deliberately held in ORTHOGONAL fields, not here, so no value is duplicated and the states cannot contradict: governed promotion is promotion_state (memory_state has no `promoted` value); visibility is suppression_state. `purged_stub` is a tombstone whose payload was purged while lineage/provenance is retained.",
       "type": "string",
-      "enum": ["active", "invalidated", "purged_stub"]
+      "enum": [
+        "unreviewed",
+        "reviewed",
+        "active",
+        "corrected",
+        "decayed",
+        "invalidated",
+        "forgotten",
+        "purged_stub"
+      ]
     },
     "promotion_state": {
       "description": "Fine machine-memory promotion sub-lifecycle. MEM may request promotion; only GOV authorizes and HKA materializes it.",
