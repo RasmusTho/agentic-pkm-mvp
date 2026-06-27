@@ -37,7 +37,14 @@ it carries the parent-epic closure handoff.
   `similarity_not_permission`, `cross_scope_only_via_flow`, `private_not_in_work_results`,
   `rpg_not_confused_with_software`, `retrieval_cannot_upgrade_intrinsic_non_evidence` (runtime part)
   → marked runtime-enforced with their test pointers.
-- Matrix diff: enforcement posture column updated for the corresponding rows.
+- Matrix diff: enforcement posture column updated for the corresponding rows — principles **1–7 and
+  row 16**. Row 16 ("Derived/rebuildable representations must preserve metadata and provenance")
+  explicitly maps `provenance_survives_derivation` and still labels it xfail, so it must move with the
+  DRI slice or the matrix stays internally contradictory.
+- Registry diff is to **both** surfaces of `docs/testing/invariant-tests.md`: the Coverage map table
+  **and** each converted invariant's per-entry `Current enforcement` / `Eventual test path` fields
+  (which still read `future_runtime` / `xfail_runtime_skeleton`). Updating only the Coverage map would
+  leave the per-invariant entries claiming future-only enforcement for already-runtime invariants.
 
 ## Why This Matters
 
@@ -48,11 +55,19 @@ delivered truth.
 
 ## Acceptance Criteria
 
-- [ ] `docs/testing/invariant-tests.md` Coverage map reflects the eight converted invariants as
-  runtime-enforced.
-  - Verify: doc writeback at `docs/testing/invariant-tests.md :: Coverage map`
-- [ ] `docs/architecture/traceability-matrix.md` enforcement posture updated for the affected rows.
-  - Verify: doc writeback at `docs/architecture/traceability-matrix.md :: rows 1-7`
+- [ ] `docs/testing/invariant-tests.md` reflects the eight converted invariants as runtime-enforced
+  in **both** the Coverage map table and the per-invariant Registry entries (the `Current enforcement`
+  / `Eventual test path` fields for each converted slug no longer read `future_runtime` /
+  `xfail_runtime_skeleton`).
+  - Verify: doc writeback at `docs/testing/invariant-tests.md :: Coverage map` **and** the named
+    per-invariant registry entries (`capture_stamps_scope`, `provenance_survives_derivation`,
+    `retrieve_scope_prefilter`, `similarity_not_permission`, `cross_scope_only_via_flow`,
+    `private_not_in_work_results`, `rpg_not_confused_with_software`,
+    `retrieval_cannot_upgrade_intrinsic_non_evidence` runtime part)
+- [ ] `docs/architecture/traceability-matrix.md` enforcement posture updated for the affected rows
+  (principles **1–7 and row 16**).
+  - Verify: doc writeback at `docs/architecture/traceability-matrix.md :: rows 1-7` and the row-16
+    (`provenance_survives_derivation`) entry
 - [ ] The architecture context packet records the first runtime vertical slice as delivered, with a
   pointer to `yggdrasil_runtime`.
   - Verify: doc writeback at `docs/foundation/yggdrasil-architecture-context-packet.md :: runtime slice status`

@@ -42,7 +42,7 @@ This keeps the slice narrow, makes every xfail target reachable, and honors ever
 | Module | Entry point | Returns (attributes asserted by tests) |
 | --- | --- | --- |
 | `yggdrasil_runtime.capture` | `capture(text: str, principal_id: str)` | obj with `.metadata_bundle.scope_id`, `.metadata_bundle.source_role` |
-| `yggdrasil_runtime.dri` | `derive_segment(artifact_id: str)` | segment with `.metadata_bundle.derived_from`, `.scope_id`, `.provenance_event_ids` |
+| `yggdrasil_runtime.dri` | `derive_segment(artifact_id: str)` | segment with `.metadata_bundle.derived_from`, `.metadata_bundle.scope_id`, `.metadata_bundle.provenance_event_ids` (all on the embedded bundle — no top-level duplicates) |
 | `yggdrasil_runtime.retrieval` | `retrieve(query: str, active_scope_id: str)` | result with `.candidate_items[]`, each `.metadata_bundle.scope_id`, `.metadata_bundle.evidence_role`, `.admissibility_status`, `.evidence_role_in_context` |
 | `yggdrasil_runtime.cross_scope` | `evaluate(source_scope, target_scope, operation, flow)` | decision with `.allowed: bool`, `.evidence_role_in_target` (when allowed) |
 | `yggdrasil_runtime.context` (new test) | `assemble_envelope(retrieval_result, *, active_workspace_id, active_scope_id, principal_id, user_intent)` | ContextEnvelope conforming to `schemas/context-envelope.schema.json` |
