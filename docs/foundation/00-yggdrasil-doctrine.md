@@ -116,4 +116,4 @@ contract/test path is philosophy, not architecture — file the gap, do not leav
 - [Functional ontology](../architecture/functional-ontology.md) — canonical objects
 - [Semantic dimensions](../architecture/semantic-dimensions.md) — orthogonal meaning-preserving metadata
 - [CrossScopeFlow](../architecture/cross-scope-flow.md) — governed cross-scope use
-- Pending (later backlog): boundary charters ([#2540–#2543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2540)), schemas/contracts ([#2544–#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544)), ADRs ([#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549)), invariant/eval tests ([#2550–#2552](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550))
+- Later backlog now delivered: boundary charters ([#2540–#2543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2540)), schemas/contracts ([#2544–#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544)), ADRs ([#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549)). Still pending: invariant/eval tests ([#2550–#2552](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550))

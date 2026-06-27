@@ -96,7 +96,8 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 
 ## Related ADRs
 
-- ADR-0017, ADR-0019 (governed writes / receipts), ADR-0021 (CES not GOV) — via [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- ADR-0017, ADR-0019 (governed writes / receipts), ADR-0021 (CES not GOV).
+- The doctrine/ontology/boundary decisions affecting this boundary (ADR-0026–ADR-0039, [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549)) are mapped per boundary by the [traceability matrix](../architecture/traceability-matrix.md).
 
 ## Related schemas/contracts
 
