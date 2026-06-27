@@ -55,6 +55,7 @@ issues add rows without restructuring it.
 | 15 | Human-authored material is not automatically canonical. | [doctrine](../foundation/00-yggdrasil-doctrine.md), [semantic-dimensions](semantic-dimensions.md) | ADR-0017, ADR-0026 | `HumanArtifact`, `AcceptedArtifact` | `source_role` ≠ `authority_state` | HKA, GOV | [authority-transition-flow](authority-transition-flow.md) / [schema](../../schemas/authority-transition.schema.json) (#2547) | invariant registry — TBD (#2550) | #2536, #2538, #2547 |
 | 16 | Derived/rebuildable representations must preserve metadata and provenance. | [functional-ontology](functional-ontology.md), [semantic-dimensions](semantic-dimensions.md) | ADR-0018, ADR-0024, ADR-0033, ADR-0038 | `Segment`, `Projection`, `Source` | `source_role`, `scope_binding`, `evidence_role` | DRI, SIP, PDM | [metadata-bundle](metadata-bundle.md) / [schema](../../schemas/metadata-bundle.schema.json) (#2544) | anti-contamination eval — TBD (#2551) | #2537, #2544 |
 | 17 | When uncertain, propose/confirm/escalate rather than silently act. | [doctrine](../foundation/00-yggdrasil-doctrine.md) | ADR-0026 | `Proposal`, `CapabilityGrant` | `authority_state` (`proposed`), confirmation semantics | CAO, GOV, HIX | [context-envelope](context-envelope.md) / [schema](../../schemas/context-envelope.schema.json) (#2545) | invariant registry — TBD (#2550) | #2536, #2545 |
+| 18 | Standards are adapters, not the ontology. | [doctrine](../foundation/00-yggdrasil-doctrine.md) §2.7, [functional-ontology](functional-ontology.md) | ADR-0036 | `Concept`, `Source`, `ProvenanceEvent` | external standards do not redefine `source_role`/`authority_state`/`evidence_role` | EBF, SIP, GOV, CES | [`_defs.schema.json`](../../schemas/_defs.schema.json) (value families standards must not redefine) | invariant registry — TBD (#2550); CES stewardship review | #2536, #2549 |
 
 ## Foundation docs delivered (this PR)
 
@@ -129,9 +130,9 @@ ADR-0036–ADR-0039 are follow-up records — optional additions beyond the ten 
 kept because each freezes a schema- or doctrine-backed decision (their State/Status mark them
 follow-up). The principle rows above and the new ADRs are kept bidirectionally consistent: every row
 lists each new ADR (ADR-0026–ADR-0039) whose *Affected invariants* name that row, and each new ADR
-names its rows in turn. ADR-0036 is the one exception — it records doctrine §2.7, which has no
-principle row. All new ADRs cross-reference the related existing decisions (ADR-0015–ADR-0025) rather
-than re-deciding them.
+names its rows in turn — including ADR-0036, which traces through row 18 (standards are adapters, the
+doctrine §2.7 commitment). All new ADRs cross-reference the related existing decisions
+(ADR-0015–ADR-0025) rather than re-deciding them.
 
 ## Pending artifacts (later backlog)
 

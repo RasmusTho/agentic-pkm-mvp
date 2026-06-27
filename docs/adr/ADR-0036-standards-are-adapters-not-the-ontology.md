@@ -36,6 +36,7 @@ EBF, SIP, GOV, CES.
 
 ## Affected invariants
 
+- Traceability matrix row 18 (standards are adapters, not the ontology).
 - Doctrine §2.7 (standards are adapters, not the ontology).
 
 ## Related docs
