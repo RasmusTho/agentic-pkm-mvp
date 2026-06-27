@@ -367,7 +367,10 @@ Vault Browser MLP v0 provides:
     **realpath** (collapsing `..` and following symlinks) and must be the base or
     a descendant; anything that escapes — `..` traversal, an absolute path
     outside the base, or a **symlink whose realpath target escapes** the base —
-    is rejected with **400**, and nothing outside the base is ever listed. The
+    is rejected with **400**, and nothing outside the base is ever listed. A
+    **symlink loop** (which makes `Path.resolve()` raise `RuntimeError`, not
+    `OSError`) is handled the same way — a 400 when navigated into, skipped when
+    encountered as a child — never a 500. The
     number of entries is capped (`VAULT_BROWSE_MAX_ENTRIES`, default 1000). This
     is single-user / trusted-LAN per project posture, but the endpoint is still
     containment-safe, not an arbitrary-filesystem read. The endpoint is read-only
