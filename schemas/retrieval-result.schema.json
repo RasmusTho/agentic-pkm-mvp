@@ -69,12 +69,12 @@
             "then": { "required": ["confirmation_reason"] }
           },
           {
-            "$comment": "Retrieval never UPGRADES an evidence role. For candidate types the bundle schema already restricts to non-authoritative intrinsic roles (memory_item, projection), the in-context role must likewise be non-authoritative — a non-evidence object can never be admitted into context as real-world evidence. The general 'in-context role <= intrinsic role' monotonicity for all types is pinned by the invariant registry (#2550), as cross-field comparison is not expressible in JSON Schema.",
+            "$comment": "Retrieval never UPGRADES an evidence role. If the candidate's INTRINSIC evidence_role (in its metadata bundle) is non-authoritative — memory, an un-promoted projection, background/reference/analogy material — then the in-context role must also be non-authoritative: a non-evidence object can never be admitted into context as real-world evidence. A receipt-backed (promoted) projection or an accepted artifact whose intrinsic evidence_role is already `evidence` is unaffected, so the projection-promotion contract can still be consumed as evidence. The full ordinal 'in-context <= intrinsic' monotonicity is pinned by the invariant registry (#2550), as cross-field comparison is not fully expressible in JSON Schema.",
             "if": {
               "properties": {
                 "metadata_bundle": {
-                  "properties": { "object_type": { "enum": ["memory_item", "projection"] } },
-                  "required": ["object_type"]
+                  "properties": { "evidence_role": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" } },
+                  "required": ["evidence_role"]
                 }
               },
               "required": ["metadata_bundle"]

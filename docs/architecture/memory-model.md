@@ -72,7 +72,7 @@ evidence.
 ## 3. Required fields
 
 `memory_id`, `scope_id`, `workspace_id` (optional), `principal_id`, `memory_type`, `source_role`,
-`authority_state`, `evidence_role`, `content`, `summary` (optional), `derived_from` (optional),
+`authority_state`, `evidence_role`, `sensitivity`, `content`, `summary` (optional), `derived_from` (optional),
 `created_by`, `created_at`, `valid_at`/`invalid_at` (optional), `memory_state`, `suppression_state`,
 `promotion_state`, `promotion_request_id` (conditional), `authority_receipt_ref` (conditional),
 `provenance_event_ids`.

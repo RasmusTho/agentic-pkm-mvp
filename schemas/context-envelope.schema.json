@@ -71,12 +71,12 @@
             "additionalProperties": false,
             "allOf": [
               {
-                "$comment": "No evidence upgrade in the final bounded context: a memory_item/projection item (intrinsic role already non-authoritative) cannot be handed to the agent as real-world evidence. Mirrors the RetrievalResult restriction. The referenced-bundle variant and the general in-context <= intrinsic monotonicity are pinned by the invariant registry (#2550), as cross-field/cross-document comparison is not expressible in JSON Schema.",
+                "$comment": "No evidence upgrade in the final bounded context: if the embedded bundle's INTRINSIC evidence_role is non-authoritative (memory, un-promoted projection, background/reference/analogy material), the item cannot be handed to the agent as real-world evidence. A receipt-backed (promoted) projection or accepted artifact already at `evidence` is unaffected. Mirrors the RetrievalResult restriction. The referenced-bundle variant and the full ordinal monotonicity are pinned by the invariant registry (#2550), as cross-field/cross-document comparison is not fully expressible in JSON Schema.",
                 "if": {
                   "properties": {
                     "metadata_bundle": {
-                      "properties": { "object_type": { "enum": ["memory_item", "projection"] } },
-                      "required": ["object_type"]
+                      "properties": { "evidence_role": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" } },
+                      "required": ["evidence_role"]
                     }
                   },
                   "required": ["metadata_bundle"]

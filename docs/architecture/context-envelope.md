@@ -94,9 +94,10 @@ These are two different contracts:
 - requires each `retrieved_items` entry to carry **exactly one** metadata source (a `oneOf`): either
   an embedded `metadata_bundle` (identity is the bundle's `object_id`) or a `metadata_bundle_ref`
   paired with an explicit `object_id` — never both, so identity/provenance cannot drift and there is
-  no naked content. As in [retrieval-contract](retrieval-contract.md), an embedded `memory_item`/
-  `projection` item cannot be upgraded to `evidence_role_in_context: evidence`; the referenced-bundle
-  variant and general monotonicity are pinned by the invariant registry (#2550);
+  no naked content. As in [retrieval-contract](retrieval-contract.md), an embedded item whose intrinsic
+  `evidence_role` is non-authoritative cannot be upgraded to `evidence_role_in_context: evidence` (a
+  receipt-backed projection or accepted artifact already at `evidence` is unaffected); the
+  referenced-bundle variant and full monotonicity are pinned by the invariant registry (#2550);
 - requires each composed `context_bundles` entry to carry `context_bundle_id` and an explicit
   `non_authority: true` marker, so a composed bundle can never be silently treated as authority;
 - supports `cross_scope_flows` grants in effect and `escalation_conditions`;
