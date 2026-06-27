@@ -175,8 +175,13 @@ re-cut before proceeding.
 - [ ] `yggdrasil_runtime` package exists with `capture`, `dri`, `retrieval`, `cross_scope`,
   `context`, and `metadata` modules implementing the pinned signatures.
   - Verify: `pytest -q tests/invariants tests/evals`
-- [ ] All eight targeted xfails pass; all deliberately-left xfails remain xfail.
-  - Verify: `pytest -q tests/invariants tests/evals -rxX` shows the expected xpass/xfail split.
+- [ ] All eight targeted invariants — **nine xfail test nodes** (`cross_scope_only_via_flow` covers
+  both `tests/invariants/test_cross_scope_flow.py::test_cross_scope_only_via_flow` and
+  `tests/evals/test_general_knowledge_crosses_clean.py::test_general_knowledge_crosses_clean`) — pass;
+  all nine deliberately-left xfail test nodes remain xfail.
+  - Verify: `pytest -q tests/invariants tests/evals -rxX` shows the expected split (baseline
+    27 passed / 18 xfailed → 9 nodes flip, leaving 9 xfailed). #2585's residue guard asserts the
+    expected nodes explicitly so a partially-converted target cannot pass while one node stays xfail.
 - [ ] No naked vectors/chunks; every runtime object validates against its schema.
   - Verify: `tests/invariants/test_metadata_bundle.py::test_store_no_naked_vectors` (kept green) +
     new runtime conformance tests.

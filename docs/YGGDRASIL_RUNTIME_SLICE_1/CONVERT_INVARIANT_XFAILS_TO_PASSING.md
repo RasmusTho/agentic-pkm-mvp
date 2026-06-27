@@ -51,7 +51,11 @@ task is the honesty gate — it proves the conversions are real and the residue 
   - Verify: `tests/invariants/test_invariant_residue.py::test_expected_xfail_set_is_unchanged`
     asserts the residual xfail slugs match the documented "left for later" list.
 - [ ] All five anti-contamination fixture scenarios are exercised by a passing runtime test.
-  - Verify: `pytest -q tests/evals`
+  - Verify: `pytest -q tests/evals tests/invariants/test_cross_scope_flow.py` — `tests/evals` covers
+    the general/private/RPG scenarios, but the **work Alpha/Beta sibling-contamination** scenario is
+    guarded by `tests/invariants/test_cross_scope_flow.py::test_retrieve_scope_prefilter` and
+    `::test_similarity_is_not_permission` (a Beta doc highly similar to an Alpha query must not be
+    admitted). `pytest -q tests/evals` alone would miss the Beta-leakage case.
 - [ ] No targeted skeleton can silently revert to xfail without failing CI.
   - Verify: `tests/invariants/test_invariant_residue.py::test_targeted_invariants_are_runtime_passing`
 
