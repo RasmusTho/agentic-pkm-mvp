@@ -25,7 +25,7 @@ INVARIANT_REGISTRY = DOCS_DIR / "testing" / "invariant-tests.md"
 # Placeholder namespace for the not-yet-implemented runtime vertical slice
 # (Capture -> MetadataBundle -> DRI segment -> retrieval prefilter -> RCA result -> ContextEnvelope).
 # Importing any of these raises ModuleNotFoundError today, which is what makes the runtime
-# skeletons honestly ``xfail`` (strict) instead of faking a pass.
+# skeletons honestly ``xfail`` instead of faking a pass.
 FUTURE_RUNTIME_PACKAGE = "yggdrasil_runtime"
 
 
@@ -52,16 +52,23 @@ def read_doc(rel_path: str) -> str:
 
 
 def require_future_runtime(module_suffix: str, reason: str, attr: str | None = None) -> Any:
-    """Import a future-runtime entry point, or ``xfail`` *only* on its absence.
+    """Import a future-runtime entry point, or ``xfail`` *only* when that exact module is absent.
 
-    This is deliberately narrower than wrapping a whole test in ``@pytest.mark.xfail``: it converts
-    **only** the missing-runtime ``ModuleNotFoundError`` into an xfail. Once the runtime module
-    exists, the import succeeds and the test's real assertions run normally — so a *wrong* first
-    implementation fails the test instead of being masked as an expected failure. ``reason`` must
-    name the missing runtime and the invariant the skeleton protects.
+    Deliberately narrower than wrapping a whole test in ``@pytest.mark.xfail``: it converts an
+    ``ModuleNotFoundError`` into an xfail **only when the missing module is the requested target
+    itself (or an ancestor package)**. If the target module exists but raises
+    ``ModuleNotFoundError`` from one of *its own* imports (a broken first implementation or a missing
+    dependency), that is re-raised so the test fails for real instead of reporting "not implemented
+    yet". Once the runtime module exists, the import succeeds and the test's real assertions run.
+    ``reason`` must name the missing runtime and the invariant the skeleton protects.
     """
+    target = f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}"
     try:
-        module = importlib.import_module(f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}")
-    except ModuleNotFoundError:
-        pytest.xfail(reason)
+        module = importlib.import_module(target)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        # Only "the target (or an ancestor package) does not exist yet" counts as not-implemented.
+        if missing and (missing == target or target.startswith(f"{missing}.")):
+            pytest.xfail(reason)
+        raise
     return getattr(module, attr) if attr else module

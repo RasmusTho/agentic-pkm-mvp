@@ -120,15 +120,20 @@ def value_family(name: str) -> list[str]:
 
 
 def require_future_runtime(module_suffix: str, reason: str, attr: str | None = None) -> Any:
-    """Import a future-runtime entry point, or ``xfail`` *only* on its absence.
+    """Import a future-runtime entry point, or ``xfail`` *only* when that exact module is absent.
 
-    Narrower than a whole-test ``@pytest.mark.xfail``: only the missing-runtime
-    ``ModuleNotFoundError`` becomes an xfail. Once the runtime exists, the real assertions run, so a
-    wrong implementation fails instead of being masked. ``reason`` names the missing runtime and the
-    invariant the skeleton protects.
+    Narrower than a whole-test ``@pytest.mark.xfail``: an ``ModuleNotFoundError`` becomes an xfail
+    **only when the missing module is the requested target itself (or an ancestor package)**. If the
+    target exists but raises ``ModuleNotFoundError`` from one of its own imports (a broken
+    implementation or missing dependency), it is re-raised so the test fails for real. ``reason``
+    names the missing runtime and the invariant the skeleton protects.
     """
+    target = f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}"
     try:
-        module = importlib.import_module(f"{FUTURE_RUNTIME_PACKAGE}.{module_suffix}")
-    except ModuleNotFoundError:
-        pytest.xfail(reason)
+        module = importlib.import_module(target)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        if missing and (missing == target or target.startswith(f"{missing}.")):
+            pytest.xfail(reason)
+        raise
     return getattr(module, attr) if attr else module
