@@ -187,8 +187,11 @@ re-cut before proceeding.
     new runtime conformance tests.
 - [ ] `docs/testing/invariant-tests.md` and `docs/architecture/traceability-matrix.md` reflect the
   new runtime enforcement status.
-  - Verify: doc writeback at `docs/testing/invariant-tests.md :: Coverage map` and
-    `docs/architecture/traceability-matrix.md` rows 1–7.
+  - Verify: doc writeback at `docs/testing/invariant-tests.md :: Coverage map` **and** the converted
+    invariants' per-entry Registry fields (`Current enforcement` / `Eventual test path`), plus
+    `docs/architecture/traceability-matrix.md` rows **1–7 and row 16**
+    (`provenance_survives_derivation`). See DOCUMENTATION_WRITEBACK_AND_TRACEABILITY (#2586) for the
+    full writeback scope — the epic must not close while any of those surfaces remain stale.
 
 ## Relationship to GitHub issues
 
