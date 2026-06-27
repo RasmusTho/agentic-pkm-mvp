@@ -94,6 +94,15 @@ class MetadataBundle:
                 f"authority_state={self.authority_state!r} requires an authority_receipt_ref "
                 "(canonical standing comes only from a governed AuthorityTransition)"
             )
+        if (
+            self.object_type == "projection"
+            and self.evidence_role == "evidence"
+            and not self.authority_receipt_ref
+        ):
+            raise ValueError(
+                "a projection may hold evidence_role='evidence' only via a provenance-backed "
+                "promotion receipt (authority_receipt_ref); projection is not evidence by default"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict for schema validation; prunes unset optionals.

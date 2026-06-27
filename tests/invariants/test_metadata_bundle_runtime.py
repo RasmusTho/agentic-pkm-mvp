@@ -80,3 +80,17 @@ def test_accepted_bundle_requires_receipt() -> None:
 def test_accepted_bundle_with_receipt_validates() -> None:
     bundle = MetadataBundle(**_accepted_kwargs(authority_receipt_ref="receipt:abc"))  # type: ignore[arg-type]
     assert_validates(bundle.to_dict(), "metadata-bundle.schema.json")
+
+
+def test_evidence_projection_requires_receipt() -> None:
+    # Projection is not evidence by default; an evidence projection needs a promotion receipt even
+    # when authority_state is non-canonical (e.g. derived) — fail loud at construction.
+    with pytest.raises(ValueError):
+        MetadataBundle(
+            **_accepted_kwargs(
+                object_type="projection",
+                authority_state="derived",
+                evidence_role="evidence",
+                derived_from=["artifact:src"],
+            )  # type: ignore[arg-type]
+        )
