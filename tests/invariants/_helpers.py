@@ -72,3 +72,31 @@ def require_future_runtime(module_suffix: str, reason: str, attr: str | None = N
             pytest.xfail(reason)
         raise
     return getattr(module, attr) if attr else module
+
+
+def schema_registry() -> Any:
+    """Build a ``referencing`` registry over every ``schemas/*.schema.json`` keyed by its ``$id``.
+
+    The contract schemas cross-reference each other with relative ``$ref`` strings (e.g.
+    ``_defs.schema.json#/$defs/...``); registering each resource under its absolute ``$id`` lets the
+    validator resolve those refs without network access. Used by the runtime conformance tests that
+    validate live ``yggdrasil_runtime`` objects against their JSON schema.
+    """
+    from referencing import Registry, Resource
+
+    resources = []
+    for path in SCHEMAS_DIR.glob("*.schema.json"):
+        contents = json.loads(path.read_text(encoding="utf-8"))
+        schema_id = contents.get("$id")
+        if schema_id:
+            resources.append((schema_id, Resource.from_contents(contents)))
+    return Registry().with_resources(resources)
+
+
+def assert_validates(instance: Any, schema_name: str) -> None:
+    """Validate ``instance`` against ``schemas/<schema_name>`` (resolving cross-file refs)."""
+    from jsonschema import Draft202012Validator
+
+    schema = load_schema(schema_name)
+    validator = Draft202012Validator(schema, registry=schema_registry())
+    validator.validate(instance)
