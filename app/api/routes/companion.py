@@ -879,7 +879,12 @@ def _resolve_browse_base() -> Path:
             return candidate
 
     try:
-        configured = resolve_optional_vault_root()
+        # Channel-aware (pass the active environment, like the other companion
+        # helpers): a channel-specific binding such as PKM_ENVIRONMENT=test +
+        # VAULT_ROOT_TEST must resolve the configured vault's parent as the base —
+        # otherwise it is ignored and the base falls through to '/', broadening
+        # the first picker screen to the whole tree (#2565 Codex P2).
+        configured = resolve_optional_vault_root(environment=active_environment())
     except VaultRootMisconfiguredError:
         configured = None
     if configured is not None:

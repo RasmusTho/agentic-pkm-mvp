@@ -236,7 +236,9 @@ def test_browse_base_defaults_to_filesystem_root(monkeypatch: pytest.MonkeyPatch
     from app.api.routes import companion as companion_module
 
     monkeypatch.delenv("VAULT_BROWSE_ROOT", raising=False)
-    monkeypatch.setattr(companion_module, "resolve_optional_vault_root", lambda: None)
+    monkeypatch.setattr(
+        companion_module, "resolve_optional_vault_root", lambda environment=None: None
+    )
     assert companion_module._resolve_browse_base() == Path("/").resolve()
 
 
@@ -280,3 +282,23 @@ def test_browse_base_symlink_loop_degrades_without_raising(
 
     base = companion_module._resolve_browse_base()  # must not raise
     assert base is not None
+
+
+def test_browse_base_honors_channel_specific_vault_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A channel setup (PKM_ENVIRONMENT=test + VAULT_ROOT_TEST) must resolve the
+    configured vault's parent as the base — not ignore the channel binding and
+    fall through to '/' (which would broaden the first picker screen to the whole
+    tree). The base resolver passes active_environment() like the other companion
+    helpers (#2565 Codex P2)."""
+    from app.api.routes import companion as companion_module
+
+    vault = tmp_path / "vaults" / "Bifrost"
+    vault.mkdir(parents=True)
+    monkeypatch.delenv("VAULT_BROWSE_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.setenv("PKM_ENVIRONMENT", "test")
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(vault))
+
+    assert companion_module._resolve_browse_base() == vault.parent.resolve()
