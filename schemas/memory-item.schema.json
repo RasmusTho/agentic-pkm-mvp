@@ -101,18 +101,23 @@
   "additionalProperties": false,
   "allOf": [
     {
-      "$comment": "Canonical authority is impossible without an explicit governed promotion reference: a receipt, a promotion request, and promotion_state=promoted.",
+      "$comment": "A memory item is NEVER accepted/canonical. Promotion does not make the memory canonical; it materializes a SEPARATE canonical artifact in HKA while the memory record stays noncanonical (MEM charter: 'promoted reflects a GOV transition; it does not itself confer canonical authority'). Canonical/accepted authority on the memory itself is therefore forbidden.",
       "if": {
         "properties": {
           "authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" }
         },
         "required": ["authority_state"]
       },
+      "then": false
+    },
+    {
+      "$comment": "A purged stub has had its payload removed while lineage/provenance is retained; content must be empty so the purge cannot accidentally keep the original memory text.",
+      "if": {
+        "properties": { "memory_state": { "const": "purged_stub" } },
+        "required": ["memory_state"]
+      },
       "then": {
-        "properties": {
-          "promotion_state": { "const": "promoted" }
-        },
-        "required": ["promotion_request_id", "authority_receipt_ref", "promotion_state"]
+        "properties": { "content": { "const": "" } }
       }
     },
     {

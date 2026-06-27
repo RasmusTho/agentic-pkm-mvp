@@ -40,7 +40,13 @@ Each entry in `candidate_items` carries or references:
   `authority_state`, `evidence_role`, `scope_id`, `derived_from`/provenance). There is no separate
   top-level `object_id` to drift from the bundle;
 - `admissibility_status`;
-- `evidence_role_in_context` (may be downgraded from the intrinsic `evidence_role`, never upgraded);
+- `evidence_role_in_context` (may be downgraded from the intrinsic `evidence_role`, **never
+  upgraded**). For `memory_item`/`projection` candidates — whose intrinsic role the bundle already
+  restricts to non-authoritative — the in-context role is schema-restricted to non-authoritative too,
+  so retrieval can never admit a non-evidence object as real-world `evidence`. The general
+  "in-context ≤ intrinsic" monotonicity for all types is pinned by the invariant registry
+  ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)), since cross-field comparison is
+  not expressible in JSON Schema;
 - `ranking_signals` and `relevance_explanation` (signals inform order, not permission);
 - `citation_ranges` (provenance/citation ranges);
 - `admitting_cross_scope_flow` when the candidate crosses a scope boundary;

@@ -42,9 +42,18 @@ Until one exists:
 - every `$ref` resolves (cross-file by `$id` + internal JSON pointer) — see the structural notes in
   each contract doc;
 - the architecture invariants the schemas encode (role orthogonality, provenance/scope requirements,
-  memory-not-canonical-by-default, retrieval-not-truth, no raw vault access) are pinned later by the
-  invariant registry, eval corpus, and xfail skeletons
+  memory-not-canonical, retrieval-not-truth, no raw vault access, no denied-scope leak) are pinned
+  later by the invariant registry, eval corpus, and xfail skeletons
   ([#2550–#2552](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)).
+
+**Known JSON Schema limits (deferred to #2550).** A few invariants are *cross-field equality or
+monotonicity* constraints that declarative JSON Schema cannot express, so they are enforced
+structurally where possible and otherwise pinned by the invariant registry (#2550): e.g. a retrieval
+candidate's `evidence_role_in_context` must be ≤ its bundle's intrinsic `evidence_role` (the dangerous
+memory_item/projection → `evidence` upgrade *is* blocked structurally; the general ≤ rule is a test),
+and a referenced `metadata_bundle_ref` must resolve to a bundle whose scope/identity matches the
+item. The schemas remove the duplicate-source-of-truth fields wherever they can so these residual
+checks are minimal.
 
 The runtime implementation that consumes these contracts is future work (first slice: Capture →
 metadata bundle → DRI segment → retrieval prefilter → RCA result → ContextEnvelope).

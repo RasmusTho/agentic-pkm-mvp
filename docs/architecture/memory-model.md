@@ -76,13 +76,18 @@ evidence.
 - `source_role` is **fixed** to `agent_memory` (the canonical machine-memory origin) — enforced as a
   schema `const`, not just a default, so a memory can never validate as human/shared source material
   and pass a [`CrossScopeFlow`](cross-scope-flow.md) `source_roles_allowed` filter as if human-authored.
-- `authority_state` = `noncanonical` (default).
+- `authority_state` = `noncanonical`, and it **can never be `accepted`/`canonical`** — the schema
+  forbids canonical authority on a memory. Promotion does not make the memory canonical; it
+  materializes a **separate** canonical artifact in HKA while the memory record itself stays
+  noncanonical (MEM charter: "promoted reflects a GOV transition; it does not itself confer canonical
+  authority").
 - `evidence_role` = `background` (or `non_evidence`).
 
 In the schema, a memory item's `evidence_role` is restricted to the non-authoritative roles
 (`background`, `reference`, `analogy`, `inspiration`, `non_evidence`): a memory **cannot** carry
 real-world `evidence` standing. To become factual evidence it must first be promoted into an HKA
-artifact, after which it is no longer a memory.
+artifact, after which it is no longer a memory. When `memory_state` is `purged_stub`, `content` must
+be empty — the payload is purged while lineage/provenance is retained.
 
 ## 4. Required rules
 
@@ -102,17 +107,22 @@ artifact, after which it is no longer a memory.
 ## 5. Promotion boundary: MEM → GOV → HKA
 
 ```
-MemoryItem (noncanonical)
+MemoryItem (noncanonical — always)
   └─ promotion_state: promotion_requested  (MEM requests; promotion_request_id set)
        └─ AuthorityTransition (initiating_source: memory_promotion_request)   [GOV decides]
-            ├─ approved  → HKA materializes an AcceptedArtifact; AuthorityReceipt issued
-            │             memory: promotion_state=promoted, authority_receipt_ref set
+            ├─ approved  → HKA materializes a SEPARATE canonical AcceptedArtifact; AuthorityReceipt issued
+            │             memory record: promotion_state=promoted, authority_receipt_ref set,
+            │             authority_state STAYS noncanonical (the artifact is the canonical thing)
             └─ rejected  → memory: promotion_state=rejected (stays noncanonical)
 ```
 
-It is **impossible for a memory item to look canonical by default**: the schema requires that any
-`accepted`/`canonical` `authority_state` carry `promotion_state: promoted`, a `promotion_request_id`,
-and an `authority_receipt_ref`. Without those governance references, canonical standing is rejected.
+It is **impossible for a memory item to be canonical**: the schema forbids `accepted`/`canonical`
+`authority_state` on a memory entirely. The canonical result of a promotion is a separate HKA
+artifact, not the memory; the memory record tracks the promotion through `promotion_state: promoted`
+(with a `promotion_request_id` and `authority_receipt_ref`) while remaining noncanonical. This same
+restriction is mirrored on a `memory_item` [metadata bundle](metadata-bundle.md), so a memory carried
+as a bundle in a retrieval candidate or context item cannot be laundered into canonical authority
+either.
 
 ## Related documents
 

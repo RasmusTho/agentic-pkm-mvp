@@ -67,6 +67,23 @@
               "required": ["admissibility_status"]
             },
             "then": { "required": ["confirmation_reason"] }
+          },
+          {
+            "$comment": "Retrieval never UPGRADES an evidence role. For candidate types the bundle schema already restricts to non-authoritative intrinsic roles (memory_item, projection), the in-context role must likewise be non-authoritative — a non-evidence object can never be admitted into context as real-world evidence. The general 'in-context role <= intrinsic role' monotonicity for all types is pinned by the invariant registry (#2550), as cross-field comparison is not expressible in JSON Schema.",
+            "if": {
+              "properties": {
+                "metadata_bundle": {
+                  "properties": { "object_type": { "enum": ["memory_item", "projection"] } },
+                  "required": ["object_type"]
+                }
+              },
+              "required": ["metadata_bundle"]
+            },
+            "then": {
+              "properties": {
+                "evidence_role_in_context": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" }
+              }
+            }
           }
         ]
       }
