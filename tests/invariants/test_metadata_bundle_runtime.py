@@ -82,10 +82,15 @@ def test_accepted_bundle_with_receipt_validates() -> None:
     assert_validates(bundle.to_dict(), "metadata-bundle.schema.json")
 
 
-def test_lineage_str_is_rejected_not_split() -> None:
-    # A single str for a lineage field must fail loud, not be split into characters by tuple().
+def test_lineage_inputs_must_be_list_of_id_strings() -> None:
+    # Lineage fields must be a list/tuple of non-empty id strings; a str (char-split) or a mapping
+    # (keys-only) must fail loud, not silently corrupt provenance/lineage.
     with pytest.raises(TypeError):
         MetadataBundle(**_accepted_kwargs(authority_receipt_ref="r:1", provenance_event_ids="prov:1"))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        MetadataBundle(**_accepted_kwargs(authority_receipt_ref="r:1", provenance_event_ids={"prov:1": 1}))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        MetadataBundle(**_accepted_kwargs(authority_receipt_ref="r:1", provenance_event_ids=["", "x"]))  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         MetadataBundle(
             **_accepted_kwargs(
