@@ -161,8 +161,26 @@
         "properties": {
           "condition": { "type": "string" },
           "escalate_to": { "type": "string" },
-          "reason": { "type": "string" },
-          "related_scope_id": { "$ref": "_defs.schema.json#/$defs/id_string" }
+          "reason": {
+            "type": "string",
+            "description": "Non-identifying reason for the escalation."
+          },
+          "denial_class": {
+            "type": "string",
+            "description": "Category of the denial that motivated the escalation, when applicable; non-identifying.",
+            "enum": [
+              "out_of_scope",
+              "cross_scope_no_flow",
+              "suppressed",
+              "sensitivity",
+              "redaction_required",
+              "confirmation_required"
+            ]
+          },
+          "audit_ref": {
+            "$ref": "_defs.schema.json#/$defs/id_string",
+            "description": "Opaque reference to an audit-only record holding any related scope/object identifiers. Never the identifiers themselves — an escalation must not leak the existence of a denied scope."
+          }
         },
         "required": ["condition"],
         "additionalProperties": false

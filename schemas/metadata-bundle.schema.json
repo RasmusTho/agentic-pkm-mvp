@@ -142,7 +142,8 @@
       "then": {
         "required": ["memory_state"],
         "properties": {
-          "evidence_role": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" }
+          "evidence_role": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" },
+          "source_role": { "const": "agent_memory" }
         }
       }
     },

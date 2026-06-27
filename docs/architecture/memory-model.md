@@ -56,8 +56,10 @@ and context; it never erases lineage or provenance.
 
 ### Required defaults
 
-- `source_role` = `agent_memory` (machine memory). 
-- `authority_state` = `noncanonical`.
+- `source_role` is **fixed** to `agent_memory` (the canonical machine-memory origin) — enforced as a
+  schema `const`, not just a default, so a memory can never validate as human/shared source material
+  and pass a [`CrossScopeFlow`](cross-scope-flow.md) `source_roles_allowed` filter as if human-authored.
+- `authority_state` = `noncanonical` (default).
 - `evidence_role` = `background` (or `non_evidence`).
 
 In the schema, a memory item's `evidence_role` is restricted to the non-authoritative roles

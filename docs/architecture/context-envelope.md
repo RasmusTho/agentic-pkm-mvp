@@ -78,7 +78,9 @@ These are two different contracts:
 6. **Envelopes are projections, not primary evidence.** Composed bundles are marked non-authority; the
    envelope is a derived representation.
 7. **Useful denied material becomes escalation, not hidden inclusion.** It surfaces in
-   `escalation_conditions`, not in `retrieved_items`.
+   `escalation_conditions`, not in `retrieved_items` — and even there it carries no denied
+   `scope_id`/`object_id` (only a non-identifying `reason`/`denial_class`, with identifiers behind
+   `audit_ref`), so the escalation path itself cannot leak the existence of a denied scope.
 
 ## 4. Schema requirements
 

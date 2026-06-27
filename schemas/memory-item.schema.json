@@ -16,9 +16,8 @@
     "memory_type": { "$ref": "_defs.schema.json#/$defs/memory_type" },
 
     "source_role": {
-      "$ref": "_defs.schema.json#/$defs/source_role",
-      "description": "Origin of the memory. Default and canonical value for machine memory is agent_memory.",
-      "default": "agent_memory"
+      "const": "agent_memory",
+      "description": "Origin of the memory. Fixed to agent_memory — the canonical machine-memory source role — enforced as a constant (not a default annotation) so a memory can never validate as human/shared source material and thereby pass a CrossScopeFlow source_roles_allowed filter as if it were human-authored."
     },
     "authority_state": {
       "$ref": "_defs.schema.json#/$defs/authority_state",
