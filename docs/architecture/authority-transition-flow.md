@@ -100,6 +100,11 @@ replace that live terminology.
 - keeps `approval_required` and `approval_state` consistent: `approval_required: true` forbids
   `approval_state: not_required`, and `approval_required: false` requires `approval_state: not_required`
   — a transition cannot claim both that approval is and is not required;
+- forbids grant artifacts on a **non-grant** approval state: when `approval_state` is `pending`,
+  `rejected`, or `withdrawn`, the transition must carry no `approved_authority_state`, `approved_by`,
+  `approved_at`, `decision_token_ref`, or `authority_receipt_id` — authority is materialized only on
+  `approved` or via the `approval_required: false` exemption path, so a transition can never be
+  simultaneously rejected/pending and granting authority;
 - requires approval for promotion to `accepted`/`canonical` authority unless an explicit
   `approval_exemption_policy_ref` is provided — and that exemption path **still** requires
   `decision_token_ref` + `authority_receipt_id` + `approved_authority_state`, because an

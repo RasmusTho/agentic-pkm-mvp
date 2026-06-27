@@ -225,6 +225,26 @@
           "approval_state": { "const": "not_required" }
         }
       }
+    },
+    {
+      "$comment": "A non-grant approval state (pending / rejected / withdrawn) must carry NO grant artifacts: no approved_authority_state, approved_by, approved_at, decision_token_ref, or authority_receipt_id. Authority is materialized only when approval_state is `approved`, or via the approval_required:false exemption path (approval_state: not_required). This prevents a transition that is simultaneously rejected/pending and granting canonical.",
+      "if": {
+        "properties": {
+          "approval_state": { "enum": ["pending", "rejected", "withdrawn"] }
+        },
+        "required": ["approval_state"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["approved_authority_state"] },
+            { "required": ["approved_by"] },
+            { "required": ["approved_at"] },
+            { "required": ["decision_token_ref"] },
+            { "required": ["authority_receipt_id"] }
+          ]
+        }
+      }
     }
   ]
 }
