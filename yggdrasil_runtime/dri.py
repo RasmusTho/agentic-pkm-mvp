@@ -54,20 +54,31 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _synthetic_source_bundle(artifact_id: str) -> MetadataBundle:
-    """Default source bundle for an artifact_id not present in the in-memory capture store."""
+def _unresolved_source_bundle(artifact_id: str) -> MetadataBundle:
+    """Honest source bundle for an artifact_id NOT present in the in-memory capture store.
+
+    The xfail skeleton ``test_provenance_survives_derivation`` calls ``derive_segment("art-1")`` with
+    no prior capture and requires a valid segment back, so failing loud here is not possible without
+    weakening that skeleton (forbidden). Instead of fabricating a *real-looking* internal source
+    (which would mask a missing producer and let the segment masquerade as genuine inherited
+    work-scope provenance), the unregistered path is transparently labelled: an **external /
+    unresolved** scope, ``source_role=external_source``, lowest standing, and a provenance event that
+    explicitly records the unresolved origin. A reviewer can therefore tell at a glance that this
+    segment's source was not resolved. Real captured artifacts (and, later, corpus docs) inherit
+    their true scope/role normally.
+    """
     return MetadataBundle(
         object_id=artifact_id,
         object_type="artifact",
-        scope_id=capture.DEFAULT_CAPTURE_SCOPE,
-        source_role="human_capture",
+        scope_id="scope:external/unresolved",
+        source_role="external_source",
         authority_state="captured",
         evidence_role="reference",
         sensitivity="private",
         suppression_state="visible",
         created_by="system:dri",
         created_at=_now_iso(),
-        provenance_event_ids=[f"prov:source:{uuid4().hex[:8]}"],
+        provenance_event_ids=[f"prov:source-unresolved:{artifact_id}:{uuid4().hex[:8]}"],
         vault_id=capture.DEFAULT_VAULT_ID,
     )
 
@@ -78,7 +89,7 @@ def derive_segment(artifact_id: str, *, text: str = "") -> Segment:
     source = (
         captured.metadata_bundle
         if captured is not None
-        else _synthetic_source_bundle(artifact_id)
+        else _unresolved_source_bundle(artifact_id)
     )
 
     bundle = MetadataBundle(

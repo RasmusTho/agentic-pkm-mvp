@@ -26,6 +26,16 @@ def test_segment_bundle_validates_against_schema() -> None:
     assert seg.metadata_bundle.provenance_event_ids  # >= 1 (preserved + derivation event)
 
 
+def test_unregistered_source_is_transparently_unresolved() -> None:
+    # The skeleton requires derive_segment("art-1") (never captured) to succeed, so we cannot fail
+    # loud; instead the unregistered source must be honestly labelled (not a fabricated real-looking
+    # internal source) so a missing producer is visible, not masked.
+    seg = dri.derive_segment(artifact_id="art-1")
+    assert seg.metadata_bundle.scope_id == "scope:external/unresolved"
+    assert seg.metadata_bundle.source_role == "external_source"
+    assert any("unresolved" in pid for pid in seg.metadata_bundle.provenance_event_ids)
+
+
 def test_segment_inherits_source_scope_and_role() -> None:
     # Derive from a *captured* artifact and assert the segment inherits scope/source/authority/
     # evidence from it (not re-stamped fresh), and that lineage + provenance are preserved.
