@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/_defs.schema.json",
+  "title": "YggdrasilSharedDefinitions",
+  "description": "Shared semantic-dimension value families and common types for the Yggdrasil architecture contracts (#2544-#2548). Single source of truth for the orthogonal dimensions defined in docs/architecture/semantic-dimensions.md so the five contract schemas cannot drift or collapse roles. Enum value families mirror semantic-dimensions.md and are extensible there, not here.",
+  "type": "object",
+  "$defs": {
+    "iso_datetime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 / ISO 8601 timestamp."
+    },
+    "id_string": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Non-empty stable identifier."
+    },
+    "id_list": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/id_string" }
+    },
+    "object_type": {
+      "description": "The kind of usable Yggdrasil object a metadata bundle describes. From docs/architecture/functional-ontology.md.",
+      "type": "string",
+      "enum": [
+        "artifact",
+        "segment",
+        "claim",
+        "memory_item",
+        "proposal",
+        "projection",
+        "retrieval_result",
+        "context_item",
+        "authority_transition",
+        "execution_effect"
+      ]
+    },
+    "source_role": {
+      "description": "Where the object came from and what kind of source it is (origin). SIP-owned. Orthogonal to authority_state and evidence_role. `general_knowledge` is a source role / eligibility signal, never a cross-scope bypass. Value family mirrors docs/architecture/semantic-dimensions.md (extensible there).",
+      "type": "string",
+      "enum": [
+        "human_note",
+        "human_capture",
+        "decision_record",
+        "work_project",
+        "private_note",
+        "general_knowledge",
+        "agent_memory",
+        "agent_proposal",
+        "fictional_simulation",
+        "rpg_rule",
+        "external_source",
+        "projection",
+        "machine_mirror"
+      ]
+    },
+    "authority_state": {
+      "description": "What standing the object currently has. GOV-owned; changed only by a governed AuthorityTransition with an AuthorityReceipt. Orthogonal to source_role and evidence_role.",
+      "type": "string",
+      "enum": [
+        "captured",
+        "draft",
+        "proposed",
+        "working_fiction",
+        "fictional_canon",
+        "accepted",
+        "canonical",
+        "noncanonical",
+        "derived",
+        "projection",
+        "deprecated",
+        "retracted"
+      ]
+    },
+    "canonical_authority_state": {
+      "description": "The subset of authority_state values that denote durable, accepted human-knowledge standing. Reaching one of these requires a governed AuthorityTransition + AuthorityReceipt.",
+      "type": "string",
+      "enum": ["accepted", "canonical"]
+    },
+    "evidence_role": {
+      "description": "What the object may do in reasoning (admissibility). GOV-owned admissibility, consumed by RCA/CAO. Orthogonal to source_role and authority_state; does not grant cross-scope retrieve/cite rights.",
+      "type": "string",
+      "enum": [
+        "evidence",
+        "background",
+        "reference",
+        "analogy",
+        "inspiration",
+        "non_evidence"
+      ]
+    },
+    "non_authoritative_evidence_role": {
+      "description": "Evidence roles that explicitly exclude real-world `evidence` standing. Used by projections and machine memory, which are not factual evidence by default.",
+      "type": "string",
+      "enum": ["background", "reference", "analogy", "inspiration", "non_evidence"]
+    },
+    "sensitivity": {
+      "description": "How confidential the object is; who may see it. GOV-owned policy dimension; governs disclosure, not reasoning standing.",
+      "type": "string",
+      "enum": ["public", "internal", "private", "secret"]
+    },
+    "suppression_state": {
+      "description": "Whether the object is currently withheld, redacted, or tombstoned from surfacing/use. GOV-owned; honored by HIX/RCA/DRI. Suppression hides; it does not erase lineage or authority history.",
+      "type": "string",
+      "enum": ["visible", "redacted", "suppressed", "withheld", "tombstoned"]
+    },
+    "memory_state": {
+      "description": "MEM-owned recall/existence lifecycle. A superset of the canonical semantic-dimensions.md review family (unreviewed, reviewed, corrected, decayed, forgotten) plus the existence states (active, invalidated, purged_stub). Two lifecycle concerns are deliberately held in ORTHOGONAL fields, not here, so no value is duplicated and the states cannot contradict: governed promotion is promotion_state (memory_state has no `promoted` value); visibility is suppression_state. `purged_stub` is a tombstone whose payload was purged while lineage/provenance is retained.",
+      "type": "string",
+      "enum": [
+        "unreviewed",
+        "reviewed",
+        "active",
+        "corrected",
+        "decayed",
+        "invalidated",
+        "forgotten",
+        "purged_stub"
+      ]
+    },
+    "promotion_state": {
+      "description": "Fine machine-memory promotion sub-lifecycle. MEM may request promotion; only GOV authorizes and HKA materializes it.",
+      "type": "string",
+      "enum": ["not_requested", "promotion_requested", "promoted", "rejected"]
+    },
+    "memory_type": {
+      "description": "The kind of machine-memory record.",
+      "type": "string",
+      "enum": [
+        "episodic",
+        "semantic_machine_memory",
+        "procedural",
+        "reflection",
+        "correction_signal",
+        "promotion_candidate"
+      ]
+    },
+    "sync_state": {
+      "description": "Replication/convergence status across nodes. SFC-owned. Never implies authority, scope membership, or evidence role.",
+      "type": "string",
+      "enum": ["local_only", "pending", "synced", "conflicted", "diverged"]
+    },
+    "execution_state": {
+      "description": "Status of an authorized side effect. EXE-owned status; GOV owns the authorization. `authorized` reflects a prior GOV grant/receipt; execution cannot authorize itself.",
+      "type": "string",
+      "enum": [
+        "none",
+        "proposed",
+        "authorized",
+        "executing",
+        "succeeded",
+        "failed",
+        "rolled_back"
+      ]
+    },
+    "cross_scope_operation": {
+      "description": "A distinct cross-scope operation. Each is granted separately; granting one never implies another. From docs/architecture/cross-scope-flow.md.",
+      "type": "string",
+      "enum": [
+        "retrieve",
+        "surface",
+        "cite",
+        "import",
+        "remember",
+        "mutate",
+        "execute",
+        "export"
+      ]
+    },
+    "admissibility_status": {
+      "description": "Whether a retrieval candidate has been admitted for use in the current context. Candidate generation is distinct from admission; admission is a GOV decision, not a similarity outcome.",
+      "type": "string",
+      "enum": [
+        "candidate",
+        "admitted",
+        "denied",
+        "redacted",
+        "requires_confirmation",
+        "escalated"
+      ]
+    },
+    "surfaceable_admissibility_status": {
+      "description": "Admissibility values a candidate may hold while still appearing in a metadata-bearing candidate_items entry (i.e. surfaceable in the result). `denied` and `escalated` material is NOT surfaceable: it is recorded only in the content-free denied_or_escalated list (scope_denial) so object id/scope/provenance never leak into a usable result.",
+      "type": "string",
+      "enum": ["candidate", "admitted", "redacted", "requires_confirmation"]
+    },
+    "scope_binding": {
+      "description": "ADDITIONAL scope membership beyond the object's primary scope. WSP-owned (policy facet GOV). Membership only; it never grants cross-scope rights. The PRIMARY scope is the object's top-level scope_id (the single source of truth) and is intentionally NOT repeated here, so the policy/provenance scope cannot drift between two fields.",
+      "type": "object",
+      "properties": {
+        "additional_scope_ids": { "$ref": "#/$defs/id_list" },
+        "sphere": { "type": "string" },
+        "bound": {
+          "type": "string",
+          "enum": ["bound", "unbound"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "citation_range": {
+      "description": "A citable span anchored in a source object, preserving provenance/citation ranges. Citation references a basis; it does not copy or grant mutation.",
+      "type": "object",
+      "properties": {
+        "object_id": { "$ref": "#/$defs/id_string" },
+        "segment_id": { "$ref": "#/$defs/id_string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "locator": { "type": "string" },
+        "provenance_event_ids": { "$ref": "#/$defs/id_list" }
+      },
+      "required": ["object_id"],
+      "additionalProperties": false
+    },
+    "cross_scope_flow_ref": {
+      "description": "A typed CrossScopeFlow grant in effect, referencing docs/architecture/cross-scope-flow.md. Directional (source -> target), operation-specific, bounded. Presence of a flow is required for any cross-scope use; similarity is not permission.",
+      "type": "object",
+      "properties": {
+        "flow_id": { "$ref": "#/$defs/id_string" },
+        "source_scope": { "$ref": "#/$defs/id_string" },
+        "target_scope": { "$ref": "#/$defs/id_string" },
+        "allowed_operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/cross_scope_operation" }
+        },
+        "denied_operations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/cross_scope_operation" }
+        },
+        "evidence_roles_allowed": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_role" }
+        },
+        "source_roles_allowed": {
+          "type": "array",
+          "description": "Which source_role families may cross under this flow (e.g. general_knowledge, work_project). From cross-scope-flow.md.",
+          "items": { "$ref": "#/$defs/source_role" }
+        },
+        "authority_states_allowed": {
+          "type": "array",
+          "description": "Which authority_state values may cross under this flow (e.g. accepted, never proposed). From cross-scope-flow.md.",
+          "items": { "$ref": "#/$defs/authority_state" }
+        },
+        "confirmation_required": { "type": "boolean" },
+        "audit_required": { "type": "boolean" },
+        "redaction_required": { "type": "boolean" },
+        "expiry": { "$ref": "#/$defs/iso_datetime" },
+        "provenance_requirements": { "type": "string" }
+      },
+      "required": [
+        "flow_id",
+        "source_scope",
+        "target_scope",
+        "allowed_operations",
+        "source_roles_allowed",
+        "authority_states_allowed",
+        "evidence_roles_allowed"
+      ],
+      "additionalProperties": false
+    },
+    "scope_denial": {
+      "description": "An audit-safe record that some material was denied or escalated. It records WHY and WHAT CLASS of flow would be needed WITHOUT identifying the denied content, scope, object, or provenance. Denied/escalated cross-scope material must never become hidden context, and even its identifiers must not leak into a usable result/envelope (revealing that a specific scope/object exists is itself cross-boundary disclosure). Any identifiers needed for accountability live only in the audit-only governance/observability record referenced by audit_ref, outside the agent-facing result.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Non-identifying reason for the denial/escalation."
+        },
+        "denial_class": {
+          "type": "string",
+          "description": "Category of denial; non-identifying.",
+          "enum": [
+            "out_of_scope",
+            "cross_scope_no_flow",
+            "suppressed",
+            "sensitivity",
+            "redaction_required",
+            "confirmation_required"
+          ]
+        },
+        "required_flow_class": {
+          "type": "string",
+          "description": "The class/kind of CrossScopeFlow that would be needed (e.g. 'private->work, accepted+redacted'), described WITHOUT identifying the denied source scope or object."
+        },
+        "escalation_recommended": { "type": "boolean" },
+        "audit_ref": {
+          "$ref": "#/$defs/id_string",
+          "description": "Opaque reference to an audit-only governance/observability record (outside this result/envelope) that may hold the denied scope/object identifiers. Never the identifiers themselves."
+        }
+      },
+      "required": ["reason", "denial_class", "escalation_recommended"],
+      "additionalProperties": false
+    },
+    "extensions": {
+      "description": "Explicit, bounded extension point for runtime evolution. Use instead of arbitrary additional top-level properties so the closed contract stays auditable.",
+      "type": "object"
+    }
+  }
+}

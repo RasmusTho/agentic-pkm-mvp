@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/retrieval-result.schema.json",
+  "title": "RetrievalResult",
+  "description": "Candidate context/evidence found by RCA for a moment-specific query. Retrieval produces candidates, NOT truth, authority, or cross-scope permission. Scope/policy eligibility happens before ranking. A retrieved item is not automatically citable; a citable item is not automatically mutable. Similarity is a ranking signal, never permission. Denied/escalated cross-scope candidates are recorded without leaking their content. Each candidate carries its metadata bundle and provenance/citation ranges.",
+  "type": "object",
+  "properties": {
+    "retrieval_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "query_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "active_scope_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "active_workspace_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "principal_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+
+    "scope_policy_prefiltered": {
+      "const": true,
+      "description": "Asserts scope/policy eligibility was applied BEFORE ranking. Out-of-scope and suppressed material is excluded before any vector/similarity step; ranking never reintroduces it."
+    },
+
+    "candidate_items": {
+      "type": "array",
+      "description": "The surfaceable candidate items found, each with its metadata bundle, admissibility status, and (where admitted/cited) provenance/citation ranges. Candidate evidence is distinct from admitted evidence. Denied/escalated cross-scope material is NEVER carried here (it would leak object id/scope/provenance); it is recorded only in the content-free denied_or_escalated_candidates list.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "metadata_bundle": {
+            "$ref": "metadata-bundle.schema.json",
+            "description": "Embedded metadata bundle — the single source of truth for this candidate's identity (object_id), object_type, source_role, authority_state, evidence_role, scope_id, and derived_from/provenance. There is no separate top-level object_id to drift from this."
+          },
+          "admissibility_status": {
+            "$ref": "_defs.schema.json#/$defs/surfaceable_admissibility_status",
+            "description": "Restricted to surfaceable values (candidate, admitted, redacted, requires_confirmation). Denied/escalated material is not represented as a metadata-bearing candidate; see denied_or_escalated_candidates."
+          },
+          "evidence_role_in_context": {
+            "$ref": "_defs.schema.json#/$defs/evidence_role",
+            "description": "The role this candidate would play in the current context. May be downgraded from its intrinsic evidence_role; never upgraded by retrieval."
+          },
+          "ranking_signals": {
+            "type": "object",
+            "description": "Why this candidate ranked where it did (similarity, recency, etc.). Signals inform ordering; they do not confer permission, admissibility, or authority.",
+            "properties": {
+              "similarity": { "type": "number" },
+              "recency": { "type": "number" },
+              "method": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "relevance_explanation": { "type": "string" },
+          "citation_ranges": {
+            "type": "array",
+            "items": { "$ref": "_defs.schema.json#/$defs/citation_range" }
+          },
+          "admitting_cross_scope_flow": {
+            "$ref": "_defs.schema.json#/$defs/id_string",
+            "description": "The CrossScopeFlow that admitted this candidate if it crosses a scope boundary."
+          },
+          "confirmation_reason": {
+            "type": "string",
+            "description": "Required when admissibility_status is requires_confirmation."
+          }
+        },
+        "required": ["metadata_bundle", "admissibility_status"],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": { "admissibility_status": { "const": "requires_confirmation" } },
+              "required": ["admissibility_status"]
+            },
+            "then": { "required": ["confirmation_reason"] }
+          },
+          {
+            "$comment": "Retrieval never UPGRADES an evidence role. If the candidate's INTRINSIC evidence_role (in its metadata bundle) is non-authoritative — memory, an un-promoted projection, background/reference/analogy material — then the in-context role must also be non-authoritative: a non-evidence object can never be admitted into context as real-world evidence. A receipt-backed (promoted) projection or an accepted artifact whose intrinsic evidence_role is already `evidence` is unaffected, so the projection-promotion contract can still be consumed as evidence. The full ordinal 'in-context <= intrinsic' monotonicity is pinned by the invariant registry (#2550), as cross-field comparison is not fully expressible in JSON Schema.",
+            "if": {
+              "properties": {
+                "metadata_bundle": {
+                  "properties": { "evidence_role": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" } },
+                  "required": ["evidence_role"]
+                }
+              },
+              "required": ["metadata_bundle"]
+            },
+            "then": {
+              "properties": {
+                "evidence_role_in_context": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" }
+              }
+            }
+          }
+        ]
+      }
+    },
+
+    "applicable_cross_scope_flows": {
+      "type": "array",
+      "description": "Typed CrossScopeFlow grants applicable to this retrieval. Required and may be empty; cross-scope candidates are admissible only under one of these.",
+      "items": { "$ref": "_defs.schema.json#/$defs/cross_scope_flow_ref" }
+    },
+    "denied_or_escalated_candidates": {
+      "type": "array",
+      "description": "Cross-scope or out-of-scope material that was found relevant but denied or escalated. Records the reason and any required flow WITHOUT leaking content or a metadata bundle. Denied material must never become hidden context.",
+      "items": { "$ref": "_defs.schema.json#/$defs/scope_denial" }
+    },
+
+    "provenance_event_ids": {
+      "type": "array",
+      "items": { "$ref": "_defs.schema.json#/$defs/id_string" }
+    },
+    "trace_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+    "created_at": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+    "extensions": { "$ref": "_defs.schema.json#/$defs/extensions" }
+  },
+  "required": [
+    "retrieval_id",
+    "query_id",
+    "active_scope_id",
+    "active_workspace_id",
+    "principal_id",
+    "scope_policy_prefiltered",
+    "candidate_items",
+    "applicable_cross_scope_flows",
+    "denied_or_escalated_candidates",
+    "trace_id",
+    "created_at"
+  ],
+  "additionalProperties": false
+}
