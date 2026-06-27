@@ -170,6 +170,45 @@ def test_picker_without_configured_root_omits_pinned_configured_row() -> None:
     assert 'data-testid="vault-picker-browse-row"' in picker_html
 
 
+def test_fresh_install_browse_is_the_working_bind_path_2565() -> None:
+    """P1 regression (#2565): a fresh install can bind a vault — visually.
+
+    #2564 made the picker clean but left Browse inert, so a fresh install
+    (``no_vault_bound`` + ``configured_vault_root: null`` + empty recents) had NO
+    way to bind a vault: no configured row, no recents, inert Browse. This slice
+    makes Browse a working visual folder picker, so the fresh-install dead-end is
+    gone — Browse is the clear, functional bind path and it is never a typed
+    path.
+    """
+    payload = dict(_PICKER_PAYLOAD)
+    payload["configured_vault_root"] = None
+    payload["recent_vaults"] = []
+    client = _PickerClient(payload)
+    html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
+    picker_html = _balanced_section(html, '<section class="vault-selection-required"')
+
+    # No configured row and no recents — the classic fresh-install state.
+    assert 'data-pinned="true"' not in picker_html
+    # The footer reports zero selectable vaults (configured + recents).
+    assert 'data-count="0"' in picker_html
+
+    # The Browse row is the working bind path, not an inert stub.
+    assert 'data-testid="vault-picker-browse-row"' in picker_html
+    assert 'data-coming-in="2565"' not in picker_html
+    browse_btn = picker_html.split('data-testid="vault-picker-browse"', 1)[1][:200]
+    assert 'data-affordance-status="available"' in browse_btn
+
+    # Clicking it enters filesystem mode (the controller loads the browse
+    # endpoint); the bind is fully visual — Open (vault.select) / Initialize
+    # (vault.initialize), never a typed path.
+    assert "function loadFolder" in html
+    assert "setMode('filesystem')" in html
+    assert 'data-intent="vault.select"' in html
+    assert 'data-intent="vault.initialize"' in html
+    # No typed-path-to-select field anywhere on this fresh-install surface.
+    assert 'name="path"' not in picker_html
+
+
 def _balanced_section(text: str, open_marker: str, *, start: int = 0) -> str:
     """Return the balanced ``<section>…</section>`` beginning at ``open_marker``."""
     open_idx = text.index(open_marker, start)
@@ -353,18 +392,91 @@ def test_first_run_no_recents_shows_configured_and_browse_rows() -> None:
     assert "Open recent vault" not in picker_html
 
 
-def test_browse_row_is_present_inert_entry_for_2565() -> None:
-    """AC: a "Browse for a vault folder…" entry row is present (folder mode = #2565)."""
+def test_browse_row_enters_working_filesystem_mode_2565() -> None:
+    """AC (#2565): the Browse row is a WORKING entry into filesystem mode.
+
+    The inert "coming next" stub is gone: clicking "Browse for a vault folder…"
+    switches the same overlay to a folder browser (filesystem mode) backed by the
+    read-only ``/api/companion/vault/browse`` endpoint. One graphical language,
+    no typed path.
+    """
     client = _PickerClient(_PICKER_PAYLOAD)
     html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
     picker_html = _balanced_section(html, '<section class="vault-selection-required"')
 
     assert 'data-testid="vault-picker-browse-row"' in picker_html
     assert "Browse for a vault folder" in picker_html
-    # Present-but-inert: it routes to a "coming next" affordance, not a folder
-    # browser (the folder browser itself is #2565 / Ask 3b).
-    assert 'data-coming-in="2565"' in picker_html
-    assert 'aria-disabled="true"' in picker_html
+    # The inert stub is removed — the row is now an available affordance.
+    assert 'data-coming-in="2565"' not in picker_html
+    assert 'data-testid="vault-picker-browse"' in picker_html
+    browse_btn = picker_html.split('data-testid="vault-picker-browse"', 1)[1][:200]
+    assert 'data-affordance-status="available"' in browse_btn
+    assert "aria-disabled" not in browse_btn
+
+    # The filesystem-mode region exists (hidden until Browse is clicked) with the
+    # same browse idiom: a clickable breadcrumb + a folder list + a filter that
+    # only narrows the current folder (never a path-to-select field).
+    assert 'data-testid="vault-picker-fs-mode"' in picker_html
+    assert 'data-testid="vault-picker-fs-breadcrumb"' in picker_html
+    assert 'data-testid="vault-picker-fs-list"' in picker_html
+    # The folder filter is a search filter (narrows the current folder), not a
+    # path-to-select field.
+    fs_filter_input = picker_html.split('vault-picker-fs-filter', 1)[0][-200:]
+    assert 'type="search"' in fs_filter_input
+
+    # The controller fetches the read-only browse endpoint and renders rows
+    # client-side; vault detection / is_vault is server-declared.
+    assert "/api/companion/vault/browse" in html
+    assert "function loadFolder" in html
+    # No typed-path field is introduced anywhere in the picker.
+    assert 'name="path"' not in picker_html
+    assert 'placeholder="Path to an existing vault"' not in picker_html
+
+
+def test_filesystem_mode_renders_open_and_initialize_via_existing_authority() -> None:
+    """AC (#2565): vault folders get Open (vault.select); plain folders Initialize.
+
+    Both reuse the existing authority — no new endpoint, no new authority. The
+    client renders an "Open" affordance bound to ``vault.select`` for vault rows
+    and "Initialize a vault here" bound to ``vault.initialize`` (incl. the #2518
+    409-confirm) for non-vault rows. Detection is server-declared (``is_vault``).
+    """
+    client = _PickerClient(_PICKER_PAYLOAD)
+    html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
+
+    # The client-side row renderer wires the existing actions.
+    assert 'data-intent="vault.select"' in html
+    assert 'data-intent="vault.initialize"' in html
+    assert 'data-testid="vault-picker-fs-open"' in html
+    assert 'data-testid="vault-picker-fs-initialize"' in html
+    assert "Initialize a vault here" in html
+    # The 409-confirm round-trip is honored in the shared initialize dispatch.
+    assert "vault_init_confirmation_required" in html
+    # is_vault is read from the server payload, not classified client-side.
+    assert "entry.is_vault" in html
+
+
+def test_filesystem_mode_breadcrumb_navigation_is_click_only() -> None:
+    """AC (#2565): breadcrumb segments + folder rows navigate by click, never type.
+
+    The controller renders breadcrumb segments client-side from the server
+    payload and navigates on a segment click (click to go up); folder rows
+    navigate into a folder on click; a Back affordance returns to the recents
+    view. No part of this requires typing a path.
+    """
+    client = _PickerClient(_PICKER_PAYLOAD)
+    html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
+
+    # Breadcrumb is built from server segments and each segment is clickable.
+    assert "function renderBreadcrumb" in html
+    assert 'data-testid="vault-picker-fs-crumb"' in html
+    # A breadcrumb-segment click navigates to that folder.
+    assert "vault-picker-fs-crumb" in html and "loadFolder(crumb.getAttribute('data-fs-path')" in html
+    # A folder-row click navigates into the folder.
+    assert "loadFolder(enter.getAttribute('data-fs-path')" in html
+    # Back returns to the recents view.
+    assert 'data-testid="vault-picker-fs-back"' in html
+    assert "setMode('recents')" in html
 
 
 def test_operator_affordances_relocated_off_front_door() -> None:

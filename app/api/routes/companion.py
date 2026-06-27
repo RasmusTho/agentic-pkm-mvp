@@ -300,6 +300,53 @@ class VaultSettingUpdateResponse(BaseModel):
     settings: VaultSettingsResponse
 
 
+class VaultBrowseBreadcrumbSegment(BaseModel):
+    """One clickable segment of the current browse path (#2565).
+
+    ``name`` is the folder name for display; ``path`` is the absolute path of
+    the directory at that point in the breadcrumb so a click navigates there. The
+    breadcrumb is confined to the allowed base root: the first segment is the
+    base itself, never an ancestor outside it.
+    """
+
+    name: str
+    path: str
+
+
+class VaultBrowseEntry(BaseModel):
+    """An immediate subdirectory of the browsed folder (#2565).
+
+    Only directories are listed (folder browser, not a file picker). ``is_vault``
+    is the server-declared vault-detection verdict — the UI renders it, it does
+    not classify locally. A vault folder offers "Open" (``vault.select``); a
+    plain folder offers "Initialize a vault here" (``vault.initialize``).
+    """
+
+    name: str
+    path: str
+    is_vault: bool
+
+
+class VaultBrowseResponse(BaseModel):
+    """Read-only directory listing for the visual folder browser (#2565).
+
+    The browser confines navigation to a configurable base root (``base``) and
+    rejects any path that escapes it (see ``_resolve_browse_target``). Files are
+    never listed; only immediate subdirectories. ``parent`` is the parent
+    directory's absolute path when it is still within the base, else ``None``
+    (the base is the floor — you cannot navigate above it). ``truncated`` is
+    ``True`` when the directory held more than the configured cap.
+    """
+
+    path: str
+    base: str
+    is_vault: bool
+    parent: str | None = None
+    breadcrumb: list[VaultBrowseBreadcrumbSegment] = Field(default_factory=list)
+    entries: list[VaultBrowseEntry] = Field(default_factory=list)
+    truncated: bool = False
+
+
 _BROWSE_EXCLUDE_DIR_PREFIXES = (".", "__")
 
 
@@ -764,6 +811,219 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
 def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
     context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
     return _vault_context_response(context)
+
+
+# --- Visual folder browser (#2565) ------------------------------------------
+#
+# Path-safety model (single-actor / trusted-LAN per project posture, but the
+# endpoint must still be containment-safe, not an arbitrary-filesystem read):
+#
+#   1. Browsing is confined to a single configurable BASE ROOT
+#      (``VAULT_BROWSE_ROOT``, else the configured vault's PARENT, else the
+#      runtime vault-mount base, else the process home — see
+#      ``_resolve_browse_base``). The base is resolved to its realpath once.
+#   2. EVERY requested path is resolved to its realpath (``Path.resolve``, which
+#      collapses ``..`` and follows symlinks) and must be the base or a
+#      descendant of it. Anything else — ``..`` traversal, an absolute path
+#      outside the base, or a symlink whose target escapes the base — is
+#      rejected with 400, because the realpath comparison is done AFTER symlink
+#      resolution, so a symlink pointing outside the base fails containment.
+#   3. Only directories are ever listed, and only the IMMEDIATE children
+#      (folders only — never files). The number of entries is capped
+#      (``VAULT_BROWSE_MAX_ENTRIES``) so a huge directory cannot exhaust memory.
+#   4. The base itself is the floor: ``parent`` is ``None`` at the base, so the
+#      browser can never walk above the base.
+#
+# This is intentionally a read-only listing surface. It does not select,
+# initialize, or otherwise mutate anything — selection/initialization stay on
+# the existing ``vault.select`` / ``vault.initialize`` authority.
+
+
+def _parse_browse_max_entries() -> int:
+    raw = (os.getenv("VAULT_BROWSE_MAX_ENTRIES") or "").strip()
+    try:
+        value = int(raw) if raw else 1000
+    except ValueError:
+        return 1000
+    return value if value > 0 else 1000
+
+
+_BROWSE_MAX_ENTRIES = _parse_browse_max_entries()
+
+
+def _resolve_browse_base() -> Path:
+    """Resolve the base root the folder browser is confined to (#2565).
+
+    Resolution order, first that yields a usable directory:
+
+    1. ``VAULT_BROWSE_ROOT`` env override (explicit operator choice);
+    2. the configured vault's PARENT directory (so the human browses the folder
+       that holds their vault — e.g. the iCloud Obsidian container), resolved via
+       the optional resolver so a missing/unset root degrades rather than raises;
+    3. the process home directory (``Path.home()``) as the sane default base.
+
+    Always returned as a realpath so the containment check compares like with
+    like. Never raises: a misconfigured/unset vault root falls through to home.
+    """
+    override = (os.getenv("VAULT_BROWSE_ROOT") or "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        try:
+            return candidate.resolve()
+        except OSError:
+            return candidate
+
+    try:
+        configured = resolve_optional_vault_root()
+    except VaultRootMisconfiguredError:
+        configured = None
+    if configured is not None:
+        try:
+            parent = configured.expanduser().resolve().parent
+        except OSError:
+            parent = configured.expanduser().parent
+        if parent.is_dir():
+            return parent
+
+    return Path.home().resolve()
+
+
+def _is_within_base(candidate: Path, base: Path) -> bool:
+    """True iff ``candidate`` is ``base`` or a descendant of it (realpaths)."""
+    if candidate == base:
+        return True
+    try:
+        candidate.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_browse_target(requested: str, base: Path) -> Path:
+    """Resolve a requested browse path to a contained realpath, or reject.
+
+    The requested path may be absolute or relative. It is resolved to its
+    realpath (collapsing ``..`` and following symlinks) and must be the base or a
+    descendant — otherwise a 400 is raised (containment failure). An empty
+    request resolves to the base itself.
+    """
+    text = (requested or "").strip()
+    if not text:
+        return base
+    raw = Path(text).expanduser()
+    if not raw.is_absolute():
+        raw = base / raw
+    try:
+        resolved = raw.resolve()
+    except OSError as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=400, detail="invalid browse path") from exc
+    if not _is_within_base(resolved, base):
+        # Containment failure: ``..`` traversal, an absolute path outside the
+        # base, or a symlink whose realpath target escapes the base. Never list
+        # outside the base.
+        raise HTTPException(
+            status_code=400,
+            detail="requested path is outside the allowed browse root",
+        )
+    return resolved
+
+
+def _browse_breadcrumb(target: Path, base: Path) -> list[VaultBrowseBreadcrumbSegment]:
+    """Breadcrumb from the base (inclusive) down to ``target``, base-confined."""
+    segments: list[VaultBrowseBreadcrumbSegment] = [
+        VaultBrowseBreadcrumbSegment(name=base.name or str(base), path=str(base))
+    ]
+    if target == base:
+        return segments
+    try:
+        rel_parts = target.relative_to(base).parts
+    except ValueError:  # pragma: no cover - target is always contained here
+        return segments
+    current = base
+    for part in rel_parts:
+        current = current / part
+        segments.append(
+            VaultBrowseBreadcrumbSegment(name=part, path=str(current))
+        )
+    return segments
+
+
+@router.get(
+    "/vault/browse",
+    response_model=VaultBrowseResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
+def browse_companion_vault_folder(
+    path: str = Query("", description="Directory to list (absolute or base-relative)"),
+) -> VaultBrowseResponse:
+    """Read-only folder listing for the visual vault folder browser (#2565).
+
+    Returns the resolved directory, a base-confined clickable breadcrumb, its
+    immediate SUBDIRECTORIES (folders only; each with a server-declared
+    ``is_vault`` flag), and the parent dir when still within the base. Browsing
+    is confined to the base root and every path is realpath-checked for
+    containment — see the path-safety model above. Vault detection reuses the
+    runtime's own ``is_vault_root`` marker (``settings/vault.md``), the same
+    marker ``vault.select`` validates, so the UI's "Open vs Initialize" verdict
+    matches what selecting the folder will actually do.
+    """
+    base = _resolve_browse_base()
+    target = _resolve_browse_target(path, base)
+
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="not a directory")
+
+    entries: list[VaultBrowseEntry] = []
+    truncated = False
+    try:
+        children = sorted(
+            (child for child in target.iterdir()),
+            key=lambda child: child.name.lower(),
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"cannot list directory: {exc}") from exc
+    for child in children:
+        name = child.name
+        if name.startswith(_BROWSE_EXCLUDE_DIR_PREFIXES):
+            # Hidden / dunder folders (.obsidian, .git, __pycache__) are noise in
+            # a vault-picker context; skip them like the note browser does.
+            continue
+        try:
+            if not child.is_dir():
+                continue  # folders only — never list files
+        except OSError:
+            continue
+        if len(entries) >= _BROWSE_MAX_ENTRIES:
+            truncated = True
+            break
+        try:
+            child_is_vault = is_vault_root(child)
+        except OSError:
+            child_is_vault = False
+        entries.append(
+            VaultBrowseEntry(name=name, path=str(child), is_vault=child_is_vault)
+        )
+
+    parent: str | None = None
+    if target != base:
+        parent_path = target.parent
+        if _is_within_base(parent_path, base):
+            parent = str(parent_path)
+
+    try:
+        target_is_vault = is_vault_root(target)
+    except OSError:
+        target_is_vault = False
+
+    return VaultBrowseResponse(
+        path=str(target),
+        base=str(base),
+        is_vault=target_is_vault,
+        parent=parent,
+        breadcrumb=_browse_breadcrumb(target, base),
+        entries=entries,
+        truncated=truncated,
+    )
 
 
 @router.get("/now", response_model=list[dict])

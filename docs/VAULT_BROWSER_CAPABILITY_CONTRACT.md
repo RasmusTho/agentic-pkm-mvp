@@ -309,8 +309,9 @@ Vault Browser MLP v0 provides:
     count. The server-declared configured vault is the **pinned first row**
     (badged "configured"); the server-declared recents follow as clickable rows
     (name + a read-only mono path shown for confidence + a quiet last-opened
-    time); a **"Browse for a vault folder…"** entry row sits last (filesystem
-    mode itself is #2565 / Ask 3b). **Selection is always a visual row click —
+    time); a **"Browse for a vault folder…"** entry row sits last and switches
+    the same overlay to **filesystem (folder-browser) mode** (#2565 / Ask 3b,
+    delivered). **Selection is always a visual row click —
     never a typed path.** The filter input narrows the visible list only; it is
     never a path-to-select field. First-run / no-recents is never an empty
     labelled region — the pinned configured row plus the Browse row are the
@@ -327,6 +328,49 @@ Vault Browser MLP v0 provides:
     chrome is reintroduced. Surfacing the `uninitialized` response from write-boundary
     client handlers into this picker is tracked separately (write-routing follow-up).
     Vault resolution/identity stays server-declared; the UI performs no classification.
+  - **Filesystem folder-browser mode (#2565, part of #2561).** Clicking
+    "Browse for a vault folder…" switches the **same overlay** to a visual folder
+    browser in the **same graphical idiom** (one graphical language): a
+    **clickable breadcrumb** of the current path (click a segment to go up —
+    never type), a filter that only narrows the **current folder's** visible
+    entries, clean clickable **folder rows**, and a footer count. A folder the
+    server detects as a vault carries a **vault-green badge** + an **"Open"**
+    affordance (the existing `vault.select`); a non-vault folder offers
+    **"Initialize a vault here"** (the existing `vault.initialize`, reusing the
+    #2518 409-confirm round-trip). **There is never a path-to-select field** —
+    navigation is folder-row + breadcrumb clicks. This makes **first-run work**:
+    a fresh install (`no_vault_bound`, `configured_vault_root: null`, empty
+    recents) binds a vault entirely visually via Browse → navigate →
+    Open/Initialize, closing the P1 dead-end where the cold picker had no
+    configured row, no recents, and an inert Browse. The folder rows are rendered
+    client-side from the **server-declared** browse listing; `is_vault` is the
+    endpoint's verdict, the UI only renders it (no client-side classification).
+  - **Folder-enumeration endpoint — `GET /api/companion/vault/browse` (#2565).**
+    A read-only directory-listing surface owned by the runtime
+    (`app/api/routes/companion.py`). For a directory it returns the current
+    resolved `path`, the confining `base`, a base-confined `breadcrumb` of
+    clickable segments, the immediate **subdirectories** (`entries`: each `name`,
+    absolute `path`, and a server-declared `is_vault` flag — **folders only;
+    files are never listed**), the `parent` directory when still within the base
+    (`null` at the base — the base is the floor), an `is_vault` flag for the
+    target itself, and a `truncated` flag when the entry cap is reached.
+    **Vault detection** reuses the runtime's own `is_vault_root` marker
+    (`settings/vault.md` — the same marker `validate_vault`/`vault.select`
+    require), so the UI's "Open vs Initialize" verdict matches what selecting the
+    folder will actually do; it does not re-derive identity. **Path-safety model
+    (path-injection surface):** browsing is confined to a configurable **base
+    root** — `VAULT_BROWSE_ROOT` env, else the configured vault's **parent**
+    directory, else the process home. Every requested path is resolved to its
+    **realpath** (collapsing `..` and following symlinks) and must be the base or
+    a descendant; anything that escapes — `..` traversal, an absolute path
+    outside the base, or a **symlink whose realpath target escapes** the base —
+    is rejected with **400**, and nothing outside the base is ever listed. The
+    number of entries is capped (`VAULT_BROWSE_MAX_ENTRIES`, default 1000). This
+    is single-user / trusted-LAN per project posture, but the endpoint is still
+    containment-safe, not an arbitrary-filesystem read. The endpoint is read-only
+    (it lists; it never selects, initializes, or mutates — those stay on the
+    existing `vault.select` / `vault.initialize` authority) and is loopback /
+    API-key gated like the other vault-mutation-adjacent routes.
 - a `read_only: true` invariant on the browser endpoint
 - active vault/channel identity in the response payload (`vault_identity`, `identity_available`)
 - deterministic case-insensitive path/title filtering via a single `q` parameter
