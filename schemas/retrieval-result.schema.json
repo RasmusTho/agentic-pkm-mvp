@@ -22,10 +22,9 @@
       "items": {
         "type": "object",
         "properties": {
-          "object_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
           "metadata_bundle": {
             "$ref": "metadata-bundle.schema.json",
-            "description": "Embedded metadata bundle carrying object_type, source_role, authority_state, evidence_role, scope_id, derived_from/provenance for this candidate."
+            "description": "Embedded metadata bundle — the single source of truth for this candidate's identity (object_id), object_type, source_role, authority_state, evidence_role, scope_id, and derived_from/provenance. There is no separate top-level object_id to drift from this."
           },
           "admissibility_status": {
             "$ref": "_defs.schema.json#/$defs/surfaceable_admissibility_status",
@@ -59,7 +58,7 @@
             "description": "Required when admissibility_status is requires_confirmation."
           }
         },
-        "required": ["object_id", "metadata_bundle", "admissibility_status"],
+        "required": ["metadata_bundle", "admissibility_status"],
         "additionalProperties": false,
         "allOf": [
           {

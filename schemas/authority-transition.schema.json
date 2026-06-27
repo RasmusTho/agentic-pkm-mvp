@@ -169,6 +169,30 @@
       "then": {
         "required": ["promotion_request_id"]
       }
+    },
+    {
+      "$comment": "Consistency: if approval is required, the approval_state cannot be not_required.",
+      "if": {
+        "properties": { "approval_required": { "const": true } },
+        "required": ["approval_required"]
+      },
+      "then": {
+        "properties": {
+          "approval_state": { "enum": ["pending", "approved", "rejected", "withdrawn"] }
+        }
+      }
+    },
+    {
+      "$comment": "Consistency: if approval is not required, the approval_state must be not_required (there is no pending/approved/rejected/withdrawn approval to record).",
+      "if": {
+        "properties": { "approval_required": { "const": false } },
+        "required": ["approval_required"]
+      },
+      "then": {
+        "properties": {
+          "approval_state": { "const": "not_required" }
+        }
+      }
     }
   ]
 }

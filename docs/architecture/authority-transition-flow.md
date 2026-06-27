@@ -91,6 +91,9 @@ replace that live terminology.
   approved transition cannot bypass governed-write enforcement; otherwise the pending/rejected receipt
   state is explicit;
 - requires `provenance_event_ids` and an explicit `affected_derived_representation_ids` array;
+- keeps `approval_required` and `approval_state` consistent: `approval_required: true` forbids
+  `approval_state: not_required`, and `approval_required: false` requires `approval_state: not_required`
+  — a transition cannot claim both that approval is and is not required;
 - requires approval for promotion to `accepted`/`canonical` authority unless an explicit
   `approval_exemption_policy_ref` is provided — and that exemption path **still** requires
   `decision_token_ref` + `authority_receipt_id` + `approved_authority_state`, because an

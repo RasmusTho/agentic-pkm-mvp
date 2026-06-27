@@ -35,10 +35,10 @@ bounded agent operating context that composes bundles).
 
 Each entry in `candidate_items` carries or references:
 
-- `metadata_bundle` (embedded [metadata bundle](metadata-bundle.md)) — providing `object_id`,
-  `object_type`, `source_role`, `authority_state`, `evidence_role`, `scope_id`, and
-  `derived_from`/provenance;
-- `object_id`;
+- `metadata_bundle` (embedded [metadata bundle](metadata-bundle.md)) — the **single source of truth**
+  for the candidate's identity (`object_id`) and metadata (`object_type`, `source_role`,
+  `authority_state`, `evidence_role`, `scope_id`, `derived_from`/provenance). There is no separate
+  top-level `object_id` to drift from the bundle;
 - `admissibility_status`;
 - `evidence_role_in_context` (may be downgraded from the intrinsic `evidence_role`, never upgraded);
 - `ranking_signals` and `relevance_explanation` (signals inform order, not permission);
