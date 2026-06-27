@@ -51,25 +51,42 @@
 
     "retrieved_items": {
       "type": "array",
-      "description": "Individual context items available to the agent. Each item must carry an embedded metadata bundle or a metadata-bundle reference; no naked content.",
+      "description": "Individual context items available to the agent. Each item carries EXACTLY ONE metadata source — never both — so there is a single source of identity/provenance and no drift: either an embedded metadata bundle (identity is the bundle's object_id) OR a metadata-bundle reference paired with an explicit object_id. No naked content.",
       "items": {
         "type": "object",
-        "properties": {
-          "object_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
-          "metadata_bundle": { "$ref": "metadata-bundle.schema.json" },
-          "metadata_bundle_ref": { "$ref": "_defs.schema.json#/$defs/id_string" },
-          "evidence_role_in_context": { "$ref": "_defs.schema.json#/$defs/evidence_role" },
-          "citation_ranges": {
-            "type": "array",
-            "items": { "$ref": "_defs.schema.json#/$defs/citation_range" }
+        "oneOf": [
+          {
+            "$comment": "Embedded bundle: the metadata bundle is the single source of identity and metadata; no separate object_id (it would drift from the bundle) and no reference.",
+            "type": "object",
+            "properties": {
+              "metadata_bundle": { "$ref": "metadata-bundle.schema.json" },
+              "evidence_role_in_context": { "$ref": "_defs.schema.json#/$defs/evidence_role" },
+              "citation_ranges": {
+                "type": "array",
+                "items": { "$ref": "_defs.schema.json#/$defs/citation_range" }
+              },
+              "admitting_cross_scope_flow": { "$ref": "_defs.schema.json#/$defs/id_string" }
+            },
+            "required": ["metadata_bundle"],
+            "additionalProperties": false
           },
-          "admitting_cross_scope_flow": { "$ref": "_defs.schema.json#/$defs/id_string" }
-        },
-        "anyOf": [
-          { "required": ["metadata_bundle"] },
-          { "required": ["metadata_bundle_ref"] }
-        ],
-        "additionalProperties": false
+          {
+            "$comment": "Referenced bundle: object_id identifies the item and metadata_bundle_ref points to its bundle; the embedded bundle is absent. The two never coexist.",
+            "type": "object",
+            "properties": {
+              "object_id": { "$ref": "_defs.schema.json#/$defs/id_string" },
+              "metadata_bundle_ref": { "$ref": "_defs.schema.json#/$defs/id_string" },
+              "evidence_role_in_context": { "$ref": "_defs.schema.json#/$defs/evidence_role" },
+              "citation_ranges": {
+                "type": "array",
+                "items": { "$ref": "_defs.schema.json#/$defs/citation_range" }
+              },
+              "admitting_cross_scope_flow": { "$ref": "_defs.schema.json#/$defs/id_string" }
+            },
+            "required": ["object_id", "metadata_bundle_ref"],
+            "additionalProperties": false
+          }
+        ]
       }
     },
     "context_bundles": {

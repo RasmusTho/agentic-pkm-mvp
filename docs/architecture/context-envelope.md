@@ -91,8 +91,10 @@ These are two different contracts:
 - requires policy blocks for citation, memory, mutation, and execution, each pinning its core
   invariant (`requires_authority_transition`, `requires_authorization`,
   `remembered_authority_state: noncanonical`, `cross_scope_citation_requires_flow`);
-- requires each `retrieved_items` entry to carry an embedded `metadata_bundle` **or** a
-  `metadata_bundle_ref` (no naked content);
+- requires each `retrieved_items` entry to carry **exactly one** metadata source (a `oneOf`): either
+  an embedded `metadata_bundle` (identity is the bundle's `object_id`) or a `metadata_bundle_ref`
+  paired with an explicit `object_id` — never both, so identity/provenance cannot drift and there is
+  no naked content;
 - supports `cross_scope_flows` grants in effect and `escalation_conditions`;
 - pins `access_mode` to `bounded_context_only`;
 - closes the object (`additionalProperties: false`) with an explicit `extensions` point.
