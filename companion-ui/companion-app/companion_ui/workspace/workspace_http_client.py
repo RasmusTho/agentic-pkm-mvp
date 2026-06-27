@@ -79,11 +79,29 @@ class WorkspaceHttpClient:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
 
-    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
-        """GET request to the runtime API. Raises WorkspaceClientError on failure."""
+    def get(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """GET request to the runtime API. Raises WorkspaceClientError on failure.
+
+        ``headers`` lets the page-server proxy forward the originating client's
+        auth context (X-Forwarded-For / X-API-Key) for auth-gated GET routes so
+        the runtime authenticates the real client rather than the loopback proxy.
+        """
         full_url = self._base_url + url
+        # Only pass `headers` to httpx when forwarding is actually requested, so
+        # the common no-auth GET path calls httpx.get exactly as before (keeping
+        # existing httpx.get mocks/side-effects that don't accept a headers kwarg
+        # working) and only the auth-forwarded proxy route adds it.
+        get_kwargs: dict[str, Any] = {"params": params, "timeout": self._timeout}
+        if headers:
+            get_kwargs["headers"] = headers
         try:
-            resp = httpx.get(full_url, params=params, timeout=self._timeout)
+            resp = httpx.get(full_url, **get_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(str(exc)) from exc
         if resp.status_code >= 400:

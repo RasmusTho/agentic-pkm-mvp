@@ -226,3 +226,15 @@ def test_browse_404_for_non_directory(client: TestClient, browse_base: Path) -> 
 
     resp = client.get("/api/companion/vault/browse", params={"path": str(note)})
     assert resp.status_code == 404, resp.text
+
+
+def test_browse_base_defaults_to_filesystem_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no VAULT_BROWSE_ROOT and no configured vault (fresh install / standard
+    Compose posture), the base defaults to the filesystem root so the visual
+    picker can navigate to wherever host vaults are mounted instead of
+    dead-ending at the process home (#2565 / Codex P1)."""
+    from app.api.routes import companion as companion_module
+
+    monkeypatch.delenv("VAULT_BROWSE_ROOT", raising=False)
+    monkeypatch.setattr(companion_module, "resolve_optional_vault_root", lambda: None)
+    assert companion_module._resolve_browse_base() == Path("/").resolve()

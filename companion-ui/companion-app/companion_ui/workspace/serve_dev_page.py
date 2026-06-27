@@ -14291,6 +14291,14 @@ def make_handler(
                     data = self._client.get(
                         "/api/companion/vault/browse",
                         params={"path": browse_path} if browse_path else {},
+                        # Forward the originating client's auth context: the
+                        # runtime route is require_loopback_or_api_key-gated and
+                        # enumerates folder names, so a remote client reaching the
+                        # LAN-bound UI must be authenticated by the runtime as the
+                        # real client, not laundered into loopback by this proxy.
+                        headers=self._forwarded_client_headers(
+                            "/api/companion/vault/browse"
+                        ),
                     )
                 except WorkspaceClientError as exc:
                     self._proxy_error(exc)
@@ -14570,6 +14578,11 @@ def make_handler(
             {
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                # GET /vault/browse is require_loopback_or_api_key-gated and
+                # enumerates folder names; forward the client's auth context so
+                # the runtime authenticates the real client, not the loopback
+                # proxy (#2565).
+                "/api/companion/vault/browse",
             }
         )
 

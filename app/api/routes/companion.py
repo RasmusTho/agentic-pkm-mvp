@@ -860,10 +860,12 @@ def _resolve_browse_base() -> Path:
     2. the configured vault's PARENT directory (so the human browses the folder
        that holds their vault — e.g. the iCloud Obsidian container), resolved via
        the optional resolver so a missing/unset root degrades rather than raises;
-    3. the process home directory (``Path.home()``) as the sane default base.
+    3. the filesystem root (``/``) as the default base, so a fresh install can
+       navigate to wherever the host vaults are mounted without the operator
+       preconfiguring a base (the base floor would otherwise dead-end first run).
 
     Always returned as a realpath so the containment check compares like with
-    like. Never raises: a misconfigured/unset vault root falls through to home.
+    like. Never raises: a misconfigured/unset vault root falls through to ``/``.
     """
     override = (os.getenv("VAULT_BROWSE_ROOT") or "").strip()
     if override:
@@ -885,7 +887,16 @@ def _resolve_browse_base() -> Path:
         if parent.is_dir():
             return parent
 
-    return Path.home().resolve()
+    # Fresh install / standard Compose posture (no VAULT_BROWSE_ROOT, no
+    # configured VAULT_ROOT): default to the filesystem root so the visual picker
+    # can navigate to wherever the host vaults are mounted (e.g. /Users,
+    # /Volumes, or a bind-mount path) WITHOUT the operator preconfiguring a base
+    # — otherwise the base floor (parent=None) dead-ends fresh installs. Safe
+    # here: the endpoint lists folder names only (never file content), is
+    # require_loopback_or_api_key-gated with the real client auth forwarded by
+    # the page-server proxy, and is single-user/trusted-LAN. Operators can still
+    # narrow the surface by setting VAULT_BROWSE_ROOT.
+    return Path("/").resolve()
 
 
 def _is_within_base(candidate: Path, base: Path) -> bool:
