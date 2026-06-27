@@ -15,6 +15,13 @@ Only the in-slice submodules exist here (``metadata``, ``capture``, and — as l
 (``authority``, ``storage``, ``execution``, ``memory``, ``agent``, ``scope``, ``sync``,
 ``projection``, ``observability``) are deliberately absent so their invariant skeletons keep
 xfail-ing until their slice is built.
+
+Packaging: this is a *test-time conformance harness*, not shipped product runtime. It is imported
+only by the test suite via ``pythonpath = .`` (see ``pytest.ini``); no ``app/`` code imports it.
+It is therefore intentionally **excluded from the wheel** (``[tool.setuptools.packages.find]
+include = ["app*"]``) — shipping a conformance harness in the production artifact would contradict
+this slice's explicit boundary (corpus-backed harness, not an ``app/`` rewire; see INTEGRATION_MAP).
+When a future slice wires ``yggdrasil_runtime`` into the production pipeline, packaging is added then.
 """
 
 from __future__ import annotations
