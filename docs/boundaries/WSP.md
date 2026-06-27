@@ -91,6 +91,7 @@ Future test names for the invariant registry ([#2550](https://github.com/RasmusT
 ## Related ADRs
 
 - ADR-0015 (authority-first target SBS).
+- The doctrine/ontology/boundary decisions affecting this boundary (ADR-0026–ADR-0039, [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549)) are mapped per boundary by the [traceability matrix](../architecture/traceability-matrix.md).
 
 ## Related schemas/contracts
 
