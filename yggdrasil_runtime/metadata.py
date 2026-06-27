@@ -20,7 +20,8 @@ Design rules enforced here:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 # Object types whose schema 'if/then' requires a non-empty derived_from.
@@ -49,9 +50,15 @@ _REQUIRED_FIELDS = (
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class MetadataBundle:
-    """A schema-conformant metadata bundle. Construct via ``capture``/``dri``, not raw vectors."""
+    """A schema-conformant metadata bundle. Construct via ``capture``/``dri``, not raw vectors.
+
+    Immutable by construction: ``frozen=True`` blocks field reassignment, and the lineage
+    collections (``provenance_event_ids``, ``derived_from``) are coerced to tuples so a downstream
+    holder cannot mutate lineage in place (e.g. ``bundle.derived_from.clear()``) and recreate a
+    naked/no-lineage object after the construction-time guards have run.
+    """
 
     # --- required core ---
     object_id: str
@@ -64,14 +71,14 @@ class MetadataBundle:
     suppression_state: str
     created_by: str
     created_at: str
-    provenance_event_ids: list[str]
+    provenance_event_ids: Sequence[str]
 
     # --- common optionals (omitted from to_dict when unset) ---
     vault_id: str | None = None
     workspace_id: str | None = None
     sphere: str | None = None
     principal_id: str | None = None
-    derived_from: list[str] = field(default_factory=list)
+    derived_from: Sequence[str] = ()
     content_hash: str | None = None
     authority_receipt_ref: str | None = None
 
@@ -80,7 +87,7 @@ class MetadataBundle:
         # bundle never silently propagates downstream.
         for name in _REQUIRED_FIELDS:
             value = getattr(self, name)
-            if value is None or (isinstance(value, (str, list)) and len(value) == 0):
+            if value is None or (isinstance(value, (str, list, tuple)) and len(value) == 0):
                 raise ValueError(f"MetadataBundle missing required field: {name}")
         if self.vault_id is not None and self.vault_id == self.scope_id:
             raise ValueError("vault_id must not equal scope_id (storage topology != policy frame)")
@@ -103,6 +110,23 @@ class MetadataBundle:
                 "a projection may hold evidence_role='evidence' only via a provenance-backed "
                 "promotion receipt (authority_receipt_ref); projection is not evidence by default"
             )
+        # Validate lineage inputs strictly before coercion. tuple() over a str would split it into
+        # characters, and over a mapping would keep only its keys — both silently corrupt
+        # lineage/provenance and still pass the schema's id_string items. Require an explicit
+        # list/tuple of non-empty id strings and fail loud otherwise.
+        for name in ("provenance_event_ids", "derived_from"):
+            value = getattr(self, name)
+            if not isinstance(value, (list, tuple)):
+                raise TypeError(
+                    f"{name} must be a list/tuple of id strings (e.g. ['art-1']), "
+                    f"not {type(value).__name__}"
+                )
+            if any((not isinstance(x, str)) or (x == "") for x in value):
+                raise ValueError(f"{name} must contain only non-empty id strings")
+        # Coerce lineage collections to tuples so they cannot be mutated in place by a holder
+        # (frozen=True only blocks reassignment). object.__setattr__ is the frozen-dataclass idiom.
+        object.__setattr__(self, "provenance_event_ids", tuple(self.provenance_event_ids))
+        object.__setattr__(self, "derived_from", tuple(self.derived_from))
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict for schema validation; prunes unset optionals.
@@ -112,7 +136,9 @@ class MetadataBundle:
         """
         out: dict[str, Any] = {}
         for name in _REQUIRED_FIELDS:
-            out[name] = getattr(self, name)
+            value = getattr(self, name)
+            # Emit lineage tuples as JSON arrays (jsonschema treats only lists as "array").
+            out[name] = list(value) if isinstance(value, tuple) else value
         for name in (
             "vault_id",
             "workspace_id",
@@ -125,7 +151,10 @@ class MetadataBundle:
             value = getattr(self, name)
             if value is None:
                 continue
-            if isinstance(value, list) and not value:
-                continue
-            out[name] = value
+            if isinstance(value, (list, tuple)):
+                if not value:
+                    continue
+                out[name] = list(value)
+            else:
+                out[name] = value
         return out

@@ -82,6 +82,23 @@ def test_accepted_bundle_with_receipt_validates() -> None:
     assert_validates(bundle.to_dict(), "metadata-bundle.schema.json")
 
 
+def test_lineage_inputs_must_be_list_of_id_strings() -> None:
+    # Lineage fields must be a list/tuple of non-empty id strings; a str (char-split) or a mapping
+    # (keys-only) must fail loud, not silently corrupt provenance/lineage.
+    with pytest.raises(TypeError):
+        MetadataBundle(**_accepted_kwargs(authority_receipt_ref="r:1", provenance_event_ids="prov:1"))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        MetadataBundle(**_accepted_kwargs(authority_receipt_ref="r:1", provenance_event_ids={"prov:1": 1}))  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        MetadataBundle(**_accepted_kwargs(authority_receipt_ref="r:1", provenance_event_ids=["", "x"]))  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        MetadataBundle(
+            **_accepted_kwargs(
+                object_type="segment", authority_state="derived", derived_from="art-1",
+            )  # type: ignore[arg-type]
+        )
+
+
 def test_evidence_projection_requires_receipt() -> None:
     # Projection is not evidence by default; an evidence projection needs a promotion receipt even
     # when authority_state is non-canonical (e.g. derived) — fail loud at construction.
