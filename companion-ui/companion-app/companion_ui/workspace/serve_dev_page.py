@@ -5800,6 +5800,12 @@ def _render_vault_selection_required_section(payload: object) -> str:
     # (#2564 Codex P2). Only this state earns the initialize affordance; the
     # general ``no_vault_bound`` first-contact picker stays clean.
     is_uninitialized = reason_raw == "uninitialized"
+    # A configured vault whose path is MISSING (VAULT_ROOT set to a non-existent
+    # dir) refuses with ``reason="vault_root_misconfigured"`` and offers a
+    # create_new action. Like the uninitialized case, re-selecting the configured
+    # row only loops back to the same refusal, so this state also earns the
+    # create/initialize affordance (#2565 Codex P2) — never typed-path chrome.
+    is_missing_configured = reason_raw == "vault_root_misconfigured"
     message = _e(
         str(data.get("message") or "No vault is selected. Choose a vault to continue.")
     )
@@ -5922,14 +5928,20 @@ def _render_vault_selection_required_section(payload: object) -> str:
     # field, no Role select — just an honest confirm button for the path the
     # human already chose. The general ``no_vault_bound`` picker never renders it.
     initialize_html = ""
-    if is_uninitialized and configured:
+    if (is_uninitialized or is_missing_configured) and configured:
+        initialize_copy = (
+            "This vault folder is missing. Create and initialize it here to "
+            "continue."
+            if is_missing_configured
+            else "This vault isn’t initialized yet. Initialize it to enable "
+            "writes into this folder."
+        )
         initialize_html = (
             '<div class="vault-picker-initialize" '
-            'data-testid="vault-picker-initialize" data-reason="uninitialized">'
+            f'data-testid="vault-picker-initialize" data-reason="{reason}">'
             '<p class="vault-picker-initialize-copy" '
             'data-testid="vault-picker-initialize-copy">'
-            "This vault isn’t initialized yet. Initialize it to enable writes "
-            "into this folder."
+            f"{initialize_copy}"
             "</p>"
             '<button type="button" class="vault-picker-initialize-button" '
             'data-testid="vault-picker-initialize-submit" '

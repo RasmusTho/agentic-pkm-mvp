@@ -678,6 +678,40 @@ def test_uninitialized_reason_renders_initialize_affordance() -> None:
     assert "Path to an existing vault" not in html
 
 
+def test_vault_root_misconfigured_reason_renders_initialize_affordance() -> None:
+    """reason="vault_root_misconfigured" (configured vault path missing) also earns
+    a working create/initialize affordance (#2565 Codex P2). Re-selecting the
+    missing configured row would otherwise loop back to the same refusal; the
+    affordance reuses the existing vault.initialize authority on the configured
+    path — still no typed-path / Role chrome."""
+    payload = {
+        "state": "vault_selection_required",
+        "reason": "vault_root_misconfigured",
+        "message": "The configured vault path is missing.",
+        "configured_vault_root": "/Users/me/Vaults/Niflheim",
+        "requested_note_path": "",
+        "context": {"status": "missing", "active_vault_path": "/Users/me/Vaults/Niflheim"},
+        "recent_vaults": [],
+        "actions": [],
+    }
+    client = _PickerClient(payload)
+    html = handle_get(query_string="", client=client, api_base_url="http://127.0.0.1:18001")
+    picker_html = _balanced_section(html, '<section class="vault-selection-required"')
+
+    assert 'data-reason="vault_root_misconfigured"' in picker_html
+    assert 'data-testid="vault-picker-initialize"' in picker_html
+    init_block = picker_html.split('data-testid="vault-picker-initialize"', 1)[1]
+    assert 'data-intent="vault.initialize"' in init_block
+    assert 'data-api-path="/api/companion/vault/initialize"' in init_block
+    assert 'data-vault-path="/Users/me/Vaults/Niflheim"' in init_block
+    assert "Initialize this vault" in init_block
+    # Missing-folder copy (distinct from the uninitialized case).
+    assert "missing" in _visible_text(picker_html)
+    # Still no foreign form chrome.
+    assert 'name="machineRole"' not in html
+    assert "Path to an existing vault" not in html
+
+
 def test_no_vault_bound_picker_has_no_initialize_chrome() -> None:
     """The general first-contact picker stays clean (#2564) — guard against
     re-introducing the initialize / typed-path chrome on no_vault_bound.

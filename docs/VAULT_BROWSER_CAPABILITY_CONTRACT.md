@@ -360,7 +360,10 @@ Vault Browser MLP v0 provides:
     folder will actually do; it does not re-derive identity. **Path-safety model
     (path-injection surface):** browsing is confined to a configurable **base
     root** — `VAULT_BROWSE_ROOT` env, else the configured vault's **parent**
-    directory, else the process home. Every requested path is resolved to its
+    directory, else the **filesystem root (`/`)** so a fresh install (no
+    `VAULT_BROWSE_ROOT`, no configured vault) can navigate to wherever host
+    vaults are mounted instead of dead-ending at a narrow base; operators narrow
+    the surface by setting `VAULT_BROWSE_ROOT`. Every requested path is resolved to its
     **realpath** (collapsing `..` and following symlinks) and must be the base or
     a descendant; anything that escapes — `..` traversal, an absolute path
     outside the base, or a **symlink whose realpath target escapes** the base —
