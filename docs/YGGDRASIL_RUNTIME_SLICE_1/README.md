@@ -114,10 +114,17 @@ Already static/schema-green — this slice must keep them green by making the ru
 of `retrieval_cannot_upgrade_intrinsic_non_evidence`. CONTEXT_ENVELOPE_ASSEMBLY adds a **new** runtime
 assembly test exercising these against a runtime-built envelope.
 
-Deliberately **left xfail** (future slices): `remember_not_canonical`/`promote_requires_governance`,
+Deliberately **left xfail** (future slices — these are the actual runtime-skeleton xfails that stay
+xfail, the set #2585's residue guard asserts unchanged): `promote_requires_governance`,
 `authority_transition_required_for_durable_mutation`, `execution_cannot_authorize_itself`,
 `parent_aggregation_not_sibling_sharing`, `sync_preserves_boundaries`, `projection_not_evidence`,
 `observability_not_policy`, `storage_write_is_not_authority_transition`, `propose_when_uncertain`.
+
+Note: `remember_not_canonical` (`tests/invariants/test_agent_memory.py::test_remember_not_canonical`)
+is **already static/schema-green today** (it does not use `require_future_runtime`), so it is *not* a
+residual runtime xfail — the future memory-promotion runtime xfail is `promote_requires_governance`.
+#2585's `test_expected_xfail_set_is_unchanged` must list only the runtime-skeleton xfails above and
+must not expect `remember_not_canonical` to be xfail.
 
 ## Implementation tasks (execution order)
 
