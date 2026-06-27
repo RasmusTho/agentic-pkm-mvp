@@ -104,8 +104,7 @@ Delivered by [#2540](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2540)�
 These are open issues, not gaps in reasoning:
 
 - **Pending charters:** HIX, EBF, DRI — not in this batch; tracked under epic [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533).
-- **Schemas/contracts** referenced by these charters: metadata bundle [#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544), `ContextEnvelope` [#2545](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2545), `MemoryItem` [#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546), `AuthorityTransition` [#2547](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2547), `RetrievalResult` [#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548).
-- **ADRs:** [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
+- **Now delivered (no longer pending):** the schemas/contracts these charters reference — metadata bundle [#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544), `ContextEnvelope` [#2545](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2545), `MemoryItem` [#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546), `AuthorityTransition` [#2547](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2547), `RetrievalResult` [#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548) — and the ADR set [#2549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2549).
 - **Tests / evals:** invariant registry [#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550), anti-contamination eval corpus [#2551](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2551), xfail skeletons [#2552](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2552).
 
 The `Required tests` named in each charter are **future** test names for #2550–#2552; this batch
