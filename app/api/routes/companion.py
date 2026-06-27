@@ -910,6 +910,15 @@ def _resolve_browse_target(requested: str, base: Path) -> Path:
     text = (requested or "").strip()
     if not text:
         return base
+    # SECURITY (CodeQL py/path-injection — contained, by design): `text` is a
+    # user-supplied directory path, but it is used ONLY to list folder names
+    # (never to read file content), and it is hard-contained to `base`: it is
+    # realpath-resolved below (collapsing `..`, following symlinks) and then
+    # `_is_within_base` rejects anything that is not the base or a descendant —
+    # so `..` traversal, absolute-outside paths, and symlink escapes all raise
+    # 400. The endpoint is loopback/API-key gated, single-user/trusted-LAN.
+    # CodeQL does not recognise the `relative_to` containment as a sanitizer, so
+    # its alert on this line is a false positive (dismissed; see PR #2572).
     raw = Path(text).expanduser()
     if not raw.is_absolute():
         raw = base / raw
