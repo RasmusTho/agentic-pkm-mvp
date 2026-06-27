@@ -90,6 +90,12 @@ replace that live terminology.
   — mirroring the [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md) invariant so an
   approved transition cannot bypass governed-write enforcement; otherwise the pending/rejected receipt
   state is explicit;
+- guards on the **actual** grant, not just the request: any transition whose `approved_authority_state`
+  is `accepted`/`canonical` must carry `decision_token_ref` + `authority_receipt_id` regardless of
+  `requested_authority_state` or the approval path, and if it is approval-exempt
+  (`approval_required: false`) it must also reference `approval_exemption_policy_ref` — closing the gap
+  where a lower requested state with a canonical approved state could otherwise skip the governance
+  artifacts;
 - requires `provenance_event_ids` and an explicit `affected_derived_representation_ids` array;
 - keeps `approval_required` and `approval_state` consistent: `approval_required: true` forbids
   `approval_state: not_required`, and `approval_required: false` requires `approval_state: not_required`

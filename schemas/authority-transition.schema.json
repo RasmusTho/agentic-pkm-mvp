@@ -161,6 +161,38 @@
       }
     },
     {
+      "$comment": "Any transition that ACTUALLY grants accepted/canonical authority (via approved_authority_state) is an authority-bearing durable write and must carry the pre-mutation DecisionToken and post-mutation AuthorityReceipt — regardless of requested_authority_state or the approval path. Closes the gap where requested is lower but approved is canonical.",
+      "if": {
+        "properties": {
+          "approved_authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" }
+        },
+        "required": ["approved_authority_state"]
+      },
+      "then": {
+        "required": ["decision_token_ref", "authority_receipt_id"]
+      }
+    },
+    {
+      "$comment": "Granting accepted/canonical authority without approval (approval_required:false) is an approval exemption and must reference the explicit exemption policy — even when only approved_authority_state (not requested_authority_state) is canonical.",
+      "if": {
+        "allOf": [
+          {
+            "properties": {
+              "approved_authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" }
+            },
+            "required": ["approved_authority_state"]
+          },
+          {
+            "properties": { "approval_required": { "const": false } },
+            "required": ["approval_required"]
+          }
+        ]
+      },
+      "then": {
+        "required": ["approval_exemption_policy_ref"]
+      }
+    },
+    {
       "$comment": "Memory promotion transitions carry the originating promotion request id.",
       "if": {
         "properties": { "initiating_source": { "const": "memory_promotion_request" } },
