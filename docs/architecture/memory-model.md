@@ -82,11 +82,12 @@ evidence.
 - `source_role` is **fixed** to `agent_memory` (the canonical machine-memory origin) — enforced as a
   schema `const`, not just a default, so a memory can never validate as human/shared source material
   and pass a [`CrossScopeFlow`](cross-scope-flow.md) `source_roles_allowed` filter as if human-authored.
-- `authority_state` = `noncanonical`, and it **can never be `accepted`/`canonical`** — the schema
-  forbids canonical authority on a memory. Promotion does not make the memory canonical; it
-  materializes a **separate** canonical artifact in HKA while the memory record itself stays
-  noncanonical (MEM charter: "promoted reflects a GOV transition; it does not itself confer canonical
-  authority").
+- `authority_state` is **fixed to `noncanonical`** (a schema `const`, not merely a default). A memory
+  record never holds `draft`/`proposed`/`accepted`/`canonical`/`deprecated`/etc. standing — so it can
+  never pass an authority-state filter intended for drafts, proposals, or canonical material. Promotion
+  does not make the memory canonical; it materializes a **separate** canonical artifact in HKA while the
+  memory record itself stays noncanonical (MEM charter: "promoted reflects a GOV transition; it does
+  not itself confer canonical authority").
 - `evidence_role` = `background` (or `non_evidence`).
 
 In the schema, a memory item's `evidence_role` is restricted to the non-authoritative roles

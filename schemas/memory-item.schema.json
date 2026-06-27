@@ -20,9 +20,8 @@
       "description": "Origin of the memory. Fixed to agent_memory — the canonical machine-memory source role — enforced as a constant (not a default annotation) so a memory can never validate as human/shared source material and thereby pass a CrossScopeFlow source_roles_allowed filter as if it were human-authored."
     },
     "authority_state": {
-      "$ref": "_defs.schema.json#/$defs/authority_state",
-      "description": "Standing of the memory. Default noncanonical. May become accepted/canonical ONLY with an explicit promotion (promotion_state=promoted, a promotion_request_id, and an authority_receipt_ref).",
-      "default": "noncanonical"
+      "const": "noncanonical",
+      "description": "Standing of the memory record — fixed to noncanonical. A memory is advisory and never holds draft/proposed/accepted/canonical/deprecated/etc. standing; promotion materializes a SEPARATE canonical artifact in HKA while this record stays noncanonical (MEM charter). Pinned as a const so a memory can never pass an authority_state filter intended for drafts, proposals, or canonical material."
     },
     "evidence_role": {
       "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role",
@@ -100,16 +99,6 @@
   ],
   "additionalProperties": false,
   "allOf": [
-    {
-      "$comment": "A memory item is NEVER accepted/canonical. Promotion does not make the memory canonical; it materializes a SEPARATE canonical artifact in HKA while the memory record stays noncanonical (MEM charter: 'promoted reflects a GOV transition; it does not itself confer canonical authority'). Canonical/accepted authority on the memory itself is therefore forbidden.",
-      "if": {
-        "properties": {
-          "authority_state": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" }
-        },
-        "required": ["authority_state"]
-      },
-      "then": false
-    },
     {
       "$comment": "A purged stub has had its payload removed while lineage/provenance is retained; content must be empty so the purge cannot accidentally keep the original memory text.",
       "if": {

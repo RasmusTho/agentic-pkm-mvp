@@ -78,9 +78,9 @@ These are encoded in the schema where possible and are load-bearing everywhere:
   `sensitivity`, and `suppression_state`;
 - applies conditional requirements: `derived_from` for derived types; `authority_receipt_ref` for
   canonical authority; `memory_state` plus a non-authoritative `evidence_role` (never real-world
-  `evidence`), `source_role` fixed to `agent_memory`, and `authority_state` forbidden from being
-  `accepted`/`canonical` for memory items — so a memory item carried only as a bundle cannot claim
-  evidence, pass as human/shared source material, or be laundered into canonical authority;
+  `evidence`), `source_role` fixed to `agent_memory`, and `authority_state` fixed to `noncanonical`
+  for memory items — so a memory item carried only as a bundle cannot claim evidence, pass as
+  human/shared source material, or hold any draft/proposed/canonical standing;
   `execution_state` + `authority_receipt_ref` for execution effects; `authority_receipt_ref` for a
   projection claiming evidence role;
 - closes the object (`additionalProperties: false`) but provides an explicit `extensions` object for

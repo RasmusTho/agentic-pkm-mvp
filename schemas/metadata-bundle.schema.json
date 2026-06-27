@@ -144,7 +144,7 @@
         "properties": {
           "evidence_role": { "$ref": "_defs.schema.json#/$defs/non_authoritative_evidence_role" },
           "source_role": { "const": "agent_memory" },
-          "authority_state": { "not": { "$ref": "_defs.schema.json#/$defs/canonical_authority_state" } }
+          "authority_state": { "const": "noncanonical" }
         }
       }
     },
