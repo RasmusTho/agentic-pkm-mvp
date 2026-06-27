@@ -127,10 +127,14 @@ The doctrine/ontology/boundary decisions are now frozen as accepted ADRs **ADR-0
 ADR-0039** under [`docs/adr/`](../adr/INDEX.md). ADR-0026–ADR-0035 are the required doctrine set;
 ADR-0036–ADR-0039 are follow-up records — optional additions beyond the ten ADRs #2549 requires,
 kept because each freezes a schema- or doctrine-backed decision (their State/Status mark them
-follow-up). Each principle row above links the ADR(s) that freeze it — including the new doctrine
-ADRs added to rows that previously listed only the earlier mechanism-level ADRs (row 4 → ADR-0030,
-row 8 → ADR-0033, row 9 → ADR-0031, row 12 → ADR-0032, row 13 → ADR-0035). The new ADRs
-cross-reference the related existing decisions (ADR-0015–ADR-0025) rather than re-deciding them.
+follow-up). Each principle row above links the **required** doctrine ADR(s) that freeze it —
+including the doctrine ADRs added to rows that previously listed only the earlier mechanism-level
+ADRs (row 4 → ADR-0030, row 8 → ADR-0033, row 9 → ADR-0031, row 12 → ADR-0032, row 13 → ADR-0035).
+The follow-up ADRs (ADR-0036–ADR-0039) are not threaded into the principle rows — they would only
+duplicate the required ADR already there; instead each names the rows it sharpens in its own
+*Affected invariants* (where applicable) and is reachable through this note and the
+[ADR index](../adr/INDEX.md). All new ADRs cross-reference the related existing decisions
+(ADR-0015–ADR-0025) rather than re-deciding them.
 
 ## Pending artifacts (later backlog)
 
