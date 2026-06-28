@@ -51,10 +51,11 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 It never issues a GraphQL call. For an autonomous `&& gh pr merge`, run with `--codex` and require exit
 `0`: exit `4` means stop and resolve the Codex verdict yourself per *Reading the Codex verdict* (do not
 hard-wait, and do not auto-merge on an unresolved verdict). The `--codex` verdict is resolved
-**head-specifically** — a 👍 passes only when it postdates the verified head commit, and findings /
-changes-requested are matched to the exact SHA — so a stale verdict carried over from an earlier push
-cannot green-light a new commit. The script gates the *wait* and reports a head-pinned verdict;
-`verification-and-closure` remains the merge authority and owns any ambiguous call.
+**head-specifically** — a pass requires a Codex review whose `commit_id` equals the verified head
+(immune to a commit's embedded committer date), and findings / changes-requested are matched to the
+exact SHA — so a stale verdict carried over from an earlier push cannot green-light a new commit. The
+script gates the *wait* and reports a head-pinned verdict; `verification-and-closure` remains the merge
+authority and owns any ambiguous call.
 
 ## Manual REST commands (when the script is unavailable)
 

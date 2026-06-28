@@ -134,49 +134,43 @@ echo "all required checks passed on $SHA"
 
 if [ "$CHECK_CODEX" -eq 1 ]; then
   bot="chatgpt-codex-connector[bot]"
-  # The verdict must be tied to the CURRENT verified head. A 👍 is a PR-level reaction that persists
-  # across pushes, so an old positive reaction must NOT pass a newly pushed commit Codex never
-  # reviewed. ISO8601 timestamps compare lexicographically == chronologically.
-  # All evidence reads are PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than
-  # silently treating missing data as "no findings / no block", and --paginate ensures blocking
-  # feedback on page 2+ is not missed (REST list endpoints default to 30 items/page).
-  head_ts=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.committer.date' 2>/dev/null) || head_ts=""
-  react_lines=$(gh api --paginate "repos/$REPO/issues/$PR/reactions" --jq ".[] | select(.user.login==\"$bot\") | \"\(.content)\t\(.created_at)\"" 2>/dev/null) \
-    || { echo "codex: reactions read failed — failing closed" >&2; exit 2; }
-  find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\") | .id" 2>/dev/null) \
-    || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
+  # Resolve the verdict against the EXACT verified commit. The authoritative head-specific marker is
+  # a Codex REVIEW whose commit_id == SHA — immune to a commit's embedded committer date, which can
+  # predate a stale PR-level 👍 (e.g. a cherry-picked or locally-created head). All evidence reads
+  # are PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than degrading to "no block",
+  # and --paginate ensures feedback on page 2+ is not missed (REST list endpoints default to 30/page).
+  reviewed_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
+    || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
   cr_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
-  # Codex also leaves findings as PR conversation comments (/issues/<pr>/comments), which are not
-  # commit-tied; every Codex finding carries the "Useful? React" footer, so treat such a comment
-  # created after the verified head as a blocking finding for this head.
+  find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\") | .id" 2>/dev/null) \
+    || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
+  # Conversation comments (/issues/<pr>/comments) aren't commit-tied; every Codex finding carries the
+  # "Useful? React" footer. The head commit date is used ONLY to block (exit 4) — the safe direction
+  # — so the committer-date caveat above can never cause a false pass here.
+  head_ts=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.committer.date' 2>/dev/null) || head_ts=""
   conv_ts=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and (.body | contains(\"Useful? React\"))) | .created_at" 2>/dev/null) \
     || { echo "codex: conversation comments read failed — failing closed" >&2; exit 2; }
-  pos_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="+1"||$1=="heart"||$1=="hooray"||$1=="rocket"||$1=="laugh"{print $2}' | sort | tail -1)
-  neg_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="-1"||$1=="confused"{print $2}' | sort | tail -1)
   conv_ts=$(printf '%s\n' "$conv_ts" | sort | tail -1)
-  findings=$(printf '%s' "$find_ids" | grep -c . || true)
+  reviewed=$(printf '%s' "$reviewed_ids" | grep -c . || true)
   cr=$(printf '%s' "$cr_ids" | grep -c . || true)
-  echo "codex: head_ts=${head_ts:-?} positive_reaction=${pos_ts:-none} findings_on_head=${findings:-0} conversation_finding=${conv_ts:-none} changes_requested=${cr:-0}"
+  findings=$(printf '%s' "$find_ids" | grep -c . || true)
+  echo "codex: reviewed_head=${reviewed:-0} changes_requested=${cr:-0} findings_on_head=${findings:-0} conversation_finding=${conv_ts:-none}"
 
-  if [ -z "$head_ts" ]; then
-    echo "codex: could not resolve head commit time — failing closed" >&2; exit 2
+  # Blocking: Codex requested changes on this exact commit.
+  if [ "${cr:-0}" -gt 0 ]; then
+    echo "CODEX BLOCKING: changes-requested on $SHA" >&2; exit 3
   fi
-  # Blocking: changes-requested for this head, or a negative reaction newer than the head.
-  if [ "${cr:-0}" -gt 0 ] || { [ -n "$neg_ts" ] && [[ "$neg_ts" > "$head_ts" ]]; }; then
-    echo "CODEX BLOCKING for $SHA (changes-requested or fresh negative reaction)" >&2; exit 3
-  fi
-  # Findings for this head must be addressed before merge — inline (commit-tied) or a Codex
-  # conversation comment newer than the verified head.
-  if [ "${findings:-0}" -gt 0 ] || { [ -n "$conv_ts" ] && [[ "$conv_ts" > "$head_ts" ]]; }; then
+  # Findings to address — inline (commit-tied) or a Codex conversation comment after the head.
+  if [ "${findings:-0}" -gt 0 ] || { [ -n "$conv_ts" ] && [ -n "$head_ts" ] && [[ "$conv_ts" > "$head_ts" ]]; }; then
     echo "codex: finding(s) for $SHA (inline=$findings, conversation=${conv_ts:-none}) — address per verification-and-closure" >&2; exit 4
   fi
-  # Pass ONLY on a positive reaction newer than the verified head commit (i.e. the verdict is for
-  # this head, not a stale 👍 carried over from an earlier push).
-  if [ -n "$pos_ts" ] && [[ "$pos_ts" > "$head_ts" ]]; then
-    echo "codex: pass (positive reaction $pos_ts is newer than head $head_ts)"; exit 0
+  # Pass ONLY when Codex has reviewed THIS exact commit (review.commit_id == SHA) with no findings/
+  # changes — the head-anchored verdict marker, not a possibly-stale reaction.
+  if [ "${reviewed:-0}" -gt 0 ]; then
+    echo "codex: pass (Codex reviewed this exact head $SHA with no findings)"; exit 0
   fi
-  echo "codex: no fresh verdict for $SHA — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
+  echo "codex: no Codex review for this exact head yet — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
   echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
   exit 4
 fi
