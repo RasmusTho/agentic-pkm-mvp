@@ -153,6 +153,11 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
   cr_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
+  # A COMMENTED review on this SHA whose body itself carries findings (the "Useful? React" footer that
+  # the generic Codex wrapper lacks) must block too — findings can live in the review body, not only
+  # inline. verification-and-closure treats a COMMENTED review with findings as blocking.
+  review_find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\" and (.body | contains(\"Useful? React\"))) | .id" 2>/dev/null) \
+    || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
   find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
   # Anchor reaction/conversation freshness to the EARLIEST check-run start time for this head — the
@@ -172,15 +177,17 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   reviewed=$(printf '%s' "$reviewed_ids" | grep -c . || true)
   cr=$(printf '%s' "$cr_ids" | grep -c . || true)
   findings=$(printf '%s' "$find_ids" | grep -c . || true)
-  echo "codex: reviewed_head=${reviewed:-0} changes_requested=${cr:-0} findings_on_head=${findings:-0} conversation_finding=${conv_ts:-none} positive_reaction=${pos_ts:-none} negative_reaction=${neg_ts:-none}"
+  review_findings=$(printf '%s' "$review_find_ids" | grep -c . || true)
+  echo "codex: reviewed_head=${reviewed:-0} changes_requested=${cr:-0} findings_on_head=${findings:-0} review_body_findings=${review_findings:-0} conversation_finding=${conv_ts:-none} positive_reaction=${pos_ts:-none} negative_reaction=${neg_ts:-none}"
 
   # Blocking: changes-requested on this commit, or a negative reaction newer than the head.
   if [ "${cr:-0}" -gt 0 ] || { [ -n "$neg_ts" ] && [ -n "$head_ts" ] && [[ "$neg_ts" > "$head_ts" ]]; }; then
     echo "CODEX BLOCKING for $SHA (changes-requested or fresh negative reaction)" >&2; exit 3
   fi
-  # Findings to address — inline (commit-tied) or a Codex conversation comment after the head.
-  if [ "${findings:-0}" -gt 0 ] || { [ -n "$conv_ts" ] && [ -n "$head_ts" ] && [[ "$conv_ts" > "$head_ts" ]]; }; then
-    echo "codex: finding(s) for $SHA (inline=$findings, conversation=${conv_ts:-none}) — address per verification-and-closure" >&2; exit 4
+  # Findings to address — inline (commit-tied), in the review body, or a Codex conversation comment
+  # after the head.
+  if [ "${findings:-0}" -gt 0 ] || [ "${review_findings:-0}" -gt 0 ] || { [ -n "$conv_ts" ] && [ -n "$head_ts" ] && [[ "$conv_ts" > "$head_ts" ]]; }; then
+    echo "codex: finding(s) for $SHA (inline=$findings, review_body=$review_findings, conversation=${conv_ts:-none}) — address per verification-and-closure" >&2; exit 4
   fi
   # Pass when Codex reviewed THIS exact commit (review.commit_id == SHA; strongest marker) or left a
   # positive reaction newer than the head — and nothing above blocked.
