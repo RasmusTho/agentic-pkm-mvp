@@ -608,11 +608,25 @@ def panel_palette_script() -> str:
         body: JSON.stringify(panelPayload(btn))
       })
         .then(function(r) {
-          var ok = !!(r && r.ok);
-          btn.setAttribute('data-action-state', ok ? 'done' : 'error');
-          // On failure re-enable so the user can retry; on success leave it
-          // disabled so the same proposal is not actioned twice.
-          if (!ok) { btn.removeAttribute('aria-disabled'); }
+          // Read the body: /api/panel/confirm returns HTTP 200 with
+          // status:"blocked" when WriteGuard keeps the proposal staged for
+          // retry. r.ok alone would mark that "done" and disable the button
+          // forever, so the user could never retry after the guard clears.
+          return r.json().then(
+            function(data) { return {ok: r.ok, data: data || {}}; },
+            function() { return {ok: r.ok, data: {}}; }
+          );
+        })
+        .then(function(res) {
+          var blocked = String((res.data && res.data.status) || '') === 'blocked';
+          var done = res.ok && !blocked;
+          btn.setAttribute(
+            'data-action-state', blocked ? 'blocked' : (res.ok ? 'done' : 'error')
+          );
+          // Re-enable on a blocked or failed outcome so the user can retry
+          // (e.g. after the guard clears); only a true success stays disabled
+          // so the same proposal is not actioned twice.
+          if (!done) { btn.removeAttribute('aria-disabled'); }
         })
         .catch(function() {
           btn.setAttribute('data-action-state', 'error');
