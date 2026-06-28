@@ -162,7 +162,7 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   # A COMMENTED review on this SHA whose body itself carries findings (the "Useful? React" footer that
   # the generic Codex wrapper lacks) must block too — findings can live in the review body, not only
   # inline. verification-and-closure treats a COMMENTED review with findings as blocking.
-  review_find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\" and (.body | contains(\"Useful? React\"))) | .id" 2>/dev/null) \
+  review_find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\" and ((.body // \"\") | contains(\"Useful? React\"))) | .id" 2>/dev/null) \
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
   find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
@@ -173,7 +173,7 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   # fail safe to reviewed_head. Conversation comments (/issues/<pr>/comments) aren't commit-tied;
   # every Codex finding carries the "Useful? React" footer.
   head_ts=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '[.check_runs[].started_at | select(.!=null)] | min // ""' 2>/dev/null) || head_ts=""
-  conv_ts=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and (.body | contains(\"Useful? React\"))) | .created_at" 2>/dev/null) \
+  conv_ts=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and ((.body // \"\") | contains(\"Useful? React\"))) | .created_at" 2>/dev/null) \
     || { echo "codex: conversation comments read failed — failing closed" >&2; exit 2; }
   conv_ts=$(printf '%s\n' "$conv_ts" | sort | tail -1)
   react_lines=$(gh api --paginate "repos/$REPO/issues/$PR/reactions" --jq ".[] | select(.user.login==\"$bot\") | \"\(.content)\t\(.created_at)\"" 2>/dev/null) \
