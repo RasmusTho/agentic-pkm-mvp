@@ -9204,6 +9204,17 @@ def render_operator_overlay_html(
             f"</tr>"
             for s in stores
         ) or '<tr><td colspan="4" class="op-muted">No stores reported.</td></tr>'
+        # #2617: worker queue backlog — pending and processed_total
+        worker_queue = status_payload.get("worker_queue") or {}
+        wq_mode = worker_queue.get("mode", "none")
+        wq_pending = worker_queue.get("pending")
+        wq_processed = worker_queue.get("processed_total")
+        wq_pending_display = (
+            "N/A" if (wq_pending is None or wq_mode == "none") else _e(wq_pending)
+        )
+        wq_processed_display = (
+            "N/A" if (wq_processed is None or wq_mode == "none") else _e(wq_processed)
+        )
         status_html = (
             f'<div class="op-stat-row"><span>SoT version</span><span>{sot_v}</span></div>'
             f'<div class="op-stat-row"><span>Timestamp</span><span>{ts}</span></div>'
@@ -9215,6 +9226,10 @@ def render_operator_overlay_html(
             f'<span>{_e(ask_s.get("total_queries_24h", 0))}</span></div>'
             f'<div class="op-stat-row"><span>ASK avg latency</span>'
             f'<span>{_e(ask_s.get("avg_latency_ms_24h", "N/A"))}</span></div>'
+            f'<div class="op-stat-row" data-testid="operator-status-worker-pending">'
+            f'<span>Worker queue pending</span><span>{wq_pending_display}</span></div>'
+            f'<div class="op-stat-row" data-testid="operator-status-worker-processed">'
+            f'<span>Worker processed total</span><span>{wq_processed_display}</span></div>'
             f'<table class="op-table"><thead>'
             f'<tr><th>Store</th><th>Objects</th><th>Last ingest</th><th>Last error</th></tr>'
             f'</thead><tbody>{store_rows}</tbody></table>'
@@ -9234,8 +9249,85 @@ def render_operator_overlay_html(
             f"{_e(detail.get('detail', '') if isinstance(detail, dict) else '')}</td></tr>"
             for name, detail in checks.items()
         ) or '<tr><td colspan="2" class="op-muted">No checks reported.</td></tr>'
+
+        # #2616: runtime liveness — worker and watcher
+        _LIVENESS_LABEL: dict[str, str] = {
+            "ok": "ok",
+            "stale": "stale",
+            "missing": "not running",
+            "future": "clock drift",
+            "disabled": "disabled",
+            "skipped": "skipped",
+            "malformed": "malformed",
+            "invalid": "invalid",
+        }
+        runtime = health_payload.get("runtime") or {}
+        worker_rt = runtime.get("worker") or {}
+        watcher_rt = runtime.get("watcher") or {}
+
+        def _liveness_label(rt: dict) -> str:
+            status = str(rt.get("status") or "").lower()
+            return _LIVENESS_LABEL.get(status, status or "unknown")
+
+        def _liveness_pill(rt: dict) -> str:
+            ok_val = rt.get("ok")
+            status = str(rt.get("status") or "").lower()
+            if status == "ok":
+                return '<span class="op-pill op-pill-ok">ok</span>'
+            if status in ("disabled", "skipped"):
+                return f'<span class="op-pill">{_e(_liveness_label(rt))}</span>'
+            if ok_val is False:
+                return f'<span class="op-pill op-pill-warn">{_e(_liveness_label(rt))}</span>'
+            return f'<span class="op-pill">{_e(_liveness_label(rt))}</span>'
+
+        worker_liveness_html = (
+            f'<div class="op-stat-row" data-testid="operator-health-worker-liveness">'
+            f'<span>Worker</span><span>{_liveness_pill(worker_rt)}</span></div>'
+        ) if runtime else ""
+        watcher_liveness_html = (
+            f'<div class="op-stat-row" data-testid="operator-health-watcher-liveness">'
+            f'<span>Watcher</span><span>{_liveness_pill(watcher_rt)}</span></div>'
+        ) if runtime else ""
+
+        # #2616: authority spine — write_guard
+        authority_spine = health_payload.get("authority_spine") or {}
+        write_guard = str(authority_spine.get("write_guard") or "").lower()
+        _WRITE_GUARD_LABEL: dict[str, str] = {
+            "active": "active",
+            "blocked": "writes blocked",
+            "unavailable": "unavailable",
+        }
+        write_guard_display = _WRITE_GUARD_LABEL.get(write_guard, write_guard or "unknown")
+        write_guard_ok = write_guard == "active"
+        write_guard_html = (
+            f'<div class="op-stat-row" data-testid="operator-health-write-guard">'
+            f'<span>Authority (WriteGuard)</span>'
+            f'<span class="op-pill {"op-pill-ok" if write_guard_ok else "op-pill-warn"}">'
+            f'{_e(write_guard_display)}</span></div>'
+        ) if authority_spine else ""
+
+        # #2616: suggested actions — plain list; empty list renders nothing
+        suggested_actions = health_payload.get("suggested_actions") or []
+        if suggested_actions:
+            action_items = "".join(
+                f'<li data-testid="operator-health-suggested-action">{_e(a.get("message", ""))}</li>'
+                for a in suggested_actions
+                if isinstance(a, dict) and a.get("message")
+            )
+            suggested_actions_html = (
+                f'<div class="op-stat-row"><span>Suggested actions</span></div>'
+                f'<ul class="op-suggested-actions" data-testid="operator-health-suggested-actions">'
+                f'{action_items}</ul>'
+            ) if action_items else ""
+        else:
+            suggested_actions_html = ""
+
         health_html = (
             f'<div class="op-stat-row"><span>Overall</span><span>{_pill(ok)}</span></div>'
+            f'{worker_liveness_html}'
+            f'{watcher_liveness_html}'
+            f'{write_guard_html}'
+            f'{suggested_actions_html}'
             f'<table class="op-table"><thead>'
             f'<tr><th>Check</th><th>Result</th></tr>'
             f'</thead><tbody>{check_rows}</tbody></table>'
@@ -9305,6 +9397,9 @@ def render_operator_overlay_html(
     border-bottom:1px solid var(--border,#152030)}}
   .op-table th{{color:var(--fg-3,#3d5570);font-weight:600}}
   .op-muted{{color:var(--fg-3,#3d5570);font-size:13px}}
+  .op-suggested-actions{{margin:4px 0 6px 8px;padding:0 0 0 16px;
+    font-size:13px;color:var(--fg-1,#dce8f0)}}
+  .op-suggested-actions li{{margin:2px 0}}
   .op-pre{{font:400 12px/1.5 'JetBrains Mono',monospace;color:var(--fg-2,#7a9ab8);
     background:var(--bg-base,#070b12);border-radius:4px;padding:8px;
     margin:6px 0 0;overflow-x:auto;white-space:pre-wrap}}
