@@ -9359,9 +9359,14 @@ def load_help_guide_html() -> str:
         )
 
 
-def _render_help_toggle() -> str:
+def _render_help_toggle(include_settings: bool = False) -> str:
     """The composed bottom bar (#2447, CUIDR-04) — one container, no stray
     fixed siblings at the bottom edge.
+
+    ``include_settings`` (NAV-1) emits the direct Settings launcher. It is only
+    set on the working shell, where the settings drawer occupant is registered;
+    the entry/orientation bundles do not mount that occupant, so the button is
+    omitted there rather than left as a dead ``settings.open`` affordance.
 
     Before CUIDR-04 the bottom edge was a collision of independently positioned
     fixed elements (the Help pill, the Operator pill, the body-edit hint, the
@@ -9390,14 +9395,19 @@ def _render_help_toggle() -> str:
         '<span aria-hidden="true">&#10070;</span> Map</button>'
         # NAV-1 (ui-audit) — a direct Settings launcher so preferences are not
         # reachable only by opening the System Map. Reuses the existing
-        # settings.open intent + host occupant; the map node stays too.
-        '<button type="button" class="settings-toggle" '
-        'data-testid="workspace-surface-icon-settings" '
-        'data-intent="settings.open" aria-haspopup="dialog" '
-        'title="Settings — your preferences" aria-label="Open settings" '
-        'onclick="overlayHost.mount(\'settings\')">'
-        '<span aria-hidden="true">&#9881;</span> Settings</button>'
-        '<button type="button" class="help-toggle" '
+        # settings.open intent + host occupant; the map node stays too. Only
+        # emitted where the settings drawer is registered (the working shell).
+        + (
+            '<button type="button" class="settings-toggle" '
+            'data-testid="workspace-surface-icon-settings" '
+            'data-intent="settings.open" aria-haspopup="dialog" '
+            'title="Settings — your preferences" aria-label="Open settings" '
+            'onclick="overlayHost.mount(\'settings\')">'
+            '<span aria-hidden="true">&#9881;</span> Settings</button>'
+            if include_settings
+            else ""
+        )
+        + '<button type="button" class="help-toggle" '
         'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
         'aria-controls="workspace-help-drawer" aria-expanded="false" '
         'title="Companion UI help" onclick="companionHelp.open()">'
@@ -13520,7 +13530,7 @@ def render_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
-  {_render_help_toggle()}
+  {_render_help_toggle(include_settings=True)}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>

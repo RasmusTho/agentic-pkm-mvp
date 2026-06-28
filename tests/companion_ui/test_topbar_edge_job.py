@@ -550,3 +550,15 @@ def test_bottom_bar_has_direct_settings_launcher() -> None:
     assert 'data-intent="settings.open"' in bar
     assert "overlayHost.mount('settings')" in bar
     assert 'aria-label="Open settings"' in bar
+
+
+def test_settings_launcher_absent_on_entry_pages() -> None:
+    # NAV-1 (Codex review): the entry/orientation bundles do not register the
+    # settings drawer occupant, so the Settings launcher must NOT appear there —
+    # otherwise it is a dead `settings.open` affordance. Map + Help still render.
+    for state, raw in _ENTRY_RENDERS.items():
+        assert 'data-testid="workspace-surface-icon-settings"' not in raw, (
+            f"settings launcher must not appear on entry state {state} "
+            "(no settings drawer occupant registered there)"
+        )
+        assert 'data-testid="workspace-surface-icon-map"' in raw, state
