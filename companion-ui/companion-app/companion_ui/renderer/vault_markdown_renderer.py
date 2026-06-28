@@ -396,8 +396,67 @@ def _render_table(
 
 
 def _split_table_row(line: str) -> list[str]:
-    stripped = line.strip().strip("|")
-    return [cell.strip() for cell in stripped.split("|")]
+    """Split a Markdown table row into trimmed cell strings.
+
+    A pipe is a cell delimiter only in ordinary text. It is treated as literal
+    content — never a delimiter — when it is backslash escaped (``\\|``), inside
+    an inline code span (`` `a|b` ``), or inside an Obsidian wikilink
+    (``[[Note|Alias]]``), mirroring GFM/Obsidian. Code spans honor backtick run
+    length, so ``` `` `code` `` ``` is one span rather than three. Without this,
+    aliased wikilinks (very common in real vaults) inflate the cell count, the
+    body row fails ``_is_table_row``, and the table collapses to an empty
+    ``<tbody>`` with the rows dumped into a fallback paragraph.
+    """
+    text = line.strip()
+    cells: list[str] = []
+    buffer: list[str] = []
+    fence = 0  # open code-span backtick run length; 0 when outside a code span
+    wikilink_depth = 0  # open ``[[`` ... ``]]`` nesting depth
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "\\" and fence == 0 and index + 1 < length:
+            # Backslash escape keeps the next char (e.g. an escaped pipe) literal.
+            buffer.append(text[index : index + 2])
+            index += 2
+            continue
+        if char == "`" and wikilink_depth == 0:
+            run_end = index
+            while run_end < length and text[run_end] == "`":
+                run_end += 1
+            run = run_end - index
+            if fence == 0:
+                fence = run
+            elif run == fence:
+                fence = 0
+            buffer.append(text[index:run_end])
+            index = run_end
+            continue
+        if fence == 0 and text.startswith("[[", index):
+            wikilink_depth += 1
+            buffer.append("[[")
+            index += 2
+            continue
+        if fence == 0 and wikilink_depth > 0 and text.startswith("]]", index):
+            wikilink_depth -= 1
+            buffer.append("]]")
+            index += 2
+            continue
+        if char == "|" and fence == 0 and wikilink_depth == 0:
+            cells.append("".join(buffer))
+            buffer = []
+            index += 1
+            continue
+        buffer.append(char)
+        index += 1
+    cells.append("".join(buffer))
+    # Drop the empty cells produced by the optional outer pipes of ``| a | b |``.
+    if cells and not cells[0].strip():
+        cells.pop(0)
+    if cells and not cells[-1].strip():
+        cells.pop()
+    return [cell.strip() for cell in cells]
 
 
 def _is_table_row(

@@ -124,6 +124,83 @@ def test_gfm_table_does_not_capture_pipe_paragraph_after_blank_line() -> None:
     assert "<p>This paragraph has A | B text.</p>" in rendered.html
 
 
+def _table_link_resolver() -> VaultLinkResolver:
+    # Notes referenced by the table-cell wikilink tests below resolve so the
+    # alias renders as the visible link text rather than a missing diagnostic.
+    return VaultLinkResolver(
+        {
+            "Authentication System": "Notes/Authentication System.md",
+            "Database Layer": "Notes/Database Layer.md",
+            "Sync Engine": "Notes/Sync Engine.md",
+        }
+    )
+
+
+def test_gfm_table_cell_with_inline_code_pipe_keeps_columns() -> None:
+    # A pipe inside an inline code span is literal content, not a column
+    # delimiter, so the body row keeps its column count and the table renders.
+    rendered = render_vault_markdown(
+        "\n".join(
+            [
+                "| Name | Code |",
+                "| --- | --- |",
+                "| Pipe | `a|b` |",
+            ]
+        )
+    )
+
+    assert "<tbody></tbody>" not in rendered.html
+    assert "<td>Pipe</td>" in rendered.html
+    assert "<td><code>a|b</code></td>" in rendered.html
+    assert "<p>| Pipe" not in rendered.html
+
+
+def test_gfm_table_cell_with_aliased_wikilink_keeps_columns() -> None:
+    # An Obsidian aliased wikilink ``[[Note|Alias]]`` carries a pipe that is an
+    # alias separator, not a column delimiter (the common real-vault case).
+    rendered = render_vault_markdown(
+        "\n".join(
+            [
+                "| Topic | Reference |",
+                "| --- | --- |",
+                "| Auth | [[Authentication System|auth]] |",
+            ]
+        ),
+        link_resolver=_table_link_resolver(),
+    )
+
+    assert "<tbody></tbody>" not in rendered.html
+    assert "<td>Auth</td>" in rendered.html
+    assert 'data-link-state="resolved"' in rendered.html
+    assert ">auth</a>" in rendered.html
+    assert "<p>| Auth" not in rendered.html
+
+
+def test_gfm_table_every_body_cell_aliased_wikilink_keeps_all_rows() -> None:
+    # Every body cell holds an aliased wikilink; the pipes must not inflate the
+    # column count, so all rows survive and each alias resolves to link text.
+    rendered = render_vault_markdown(
+        "\n".join(
+            [
+                "| Topic | Reference |",
+                "| --- | --- |",
+                "| Auth | [[Authentication System|auth]] |",
+                "| Data | [[Database Layer|db]] |",
+                "| Sync | [[Sync Engine|sync]] |",
+            ]
+        ),
+        link_resolver=_table_link_resolver(),
+    )
+
+    assert "<tbody></tbody>" not in rendered.html
+    # Header row plus three body rows, none dumped into a fallback paragraph.
+    assert rendered.html.count("<tr>") == 4
+    assert "<p>| Auth" not in rendered.html
+    for alias in (">auth</a>", ">db</a>", ">sync</a>"):
+        assert alias in rendered.html
+    assert rendered.html.count('data-link-state="resolved"') == 3
+
+
 def test_frontmatter_excluded_from_body() -> None:
     rendered = render_vault_markdown(_fixture("frontmatter-properties.md"))
 
