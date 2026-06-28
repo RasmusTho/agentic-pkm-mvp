@@ -330,6 +330,17 @@ def overlay_host_script() -> str:
     var DECLARED = (host.getAttribute('data-declared-overlays') || '').split(' ');
     var occupants = {};
     var stack = [];
+    // NAV-3a (#2639): overlays participate in browser history. Each mounted
+    // overlay pushes exactly ONE history entry carrying an overlay-host
+    // marker; browser Back fires `popstate` and dismisses the TOPMOST overlay
+    // (one entry popped per dismiss) instead of navigating the page away. This
+    // is the modal-Back expectation; it is NOT a route reset — the URL path,
+    // query, scroll ownership, and anchor identity are untouched. The `popping`
+    // re-entrancy guard keeps a programmatic dismiss (Esc / scrim / occupant
+    // self-close, which calls history.back()) from double-dismissing when the
+    // resulting popstate fires.
+    var HISTORY_MARKER = 'overlayHostMarker';
+    var popping = false;
     function assertDeclared(id) {
       if (DECLARED.indexOf(id) === -1) {
         throw new Error('undeclared overlay: ' + id);
@@ -340,6 +351,18 @@ def overlay_host_script() -> str:
       host.setAttribute('data-overlay-stack', stack.join(' '));
       if (scrim) { scrim.setAttribute('data-active', stack.length ? 'true' : 'false'); }
     }
+    function popTopmost() {
+      // Shared topmost-pop used by both the programmatic dismiss path and the
+      // browser-Back (popstate) path. Updates host bookkeeping and runs the
+      // occupant close hook; never navigates and never touches the document
+      // column, so staged suggestions and open-loop counts survive.
+      if (!stack.length) { return null; }
+      var id = stack.pop();
+      sync();
+      var occ = occupants[id];
+      if (occ && occ.close) { occ.close(); }
+      return id;
+    }
     window.overlayHost = {
       register: function(id, adapter) {
         assertDeclared(id);
@@ -348,36 +371,106 @@ def overlay_host_script() -> str:
       mount: function(id, detail) {
         assertDeclared(id);
         var occ = occupants[id];
-        // Declared but unshipped: inert no-op — never invent a surface.
+        // Declared but unshipped: inert no-op — never invent a surface, and
+        // never push a phantom history entry for a surface that won't mount.
         if (!occ) { return; }
         var at = stack.indexOf(id);
+        // Re-mounting an already-stacked id is a move-to-top, NOT a net-new
+        // overlay: it must NOT push a second history entry (that double-push
+        // desyncs the stack depth from the history position). Only a net-new
+        // mount pushes.
+        var isNetNew = at === -1;
         if (at !== -1) { stack.splice(at, 1); }
         stack.push(id);
         sync();
+        // Push one history entry per NET-NEW overlay so browser Back can pop it
+        // and browser Forward can restore it. Same-document pushState: it
+        // changes neither the URL nor the document, only adds an entry carrying
+        // the overlay id and the stack depth it represents (depth = the new
+        // stack length, i.e. 1 for the first overlay). The popstate handler
+        // reconciles the live stack to that depth.
+        if (isNetNew) {
+          try {
+            var st = {}; st[HISTORY_MARKER] = id; st.depth = stack.length;
+            if (window.history && window.history.pushState) {
+              window.history.pushState(st, '');
+            }
+          } catch (err) { /* history unavailable — overlay still mounts */ }
+        }
         if (occ.open) { occ.open(detail || {}); }
       },
       dismiss: function() {
         // overlay.dismiss — return to the document anchor. Pops only the
-        // topmost overlay and updates host bookkeeping. It never navigates
-        // and never touches the document column, so the URL, scroll
-        // ownership, anchor identity, staged suggestions, and open-loop
-        // counts are preserved by construction.
+        // topmost overlay and updates host bookkeeping. It never navigates the
+        // page and never touches the document column, so the URL path/query,
+        // scroll ownership, anchor identity, staged suggestions, and open-loop
+        // counts are preserved by construction. To keep the history stack in
+        // lock-step with the overlay stack, the matching history entry is
+        // unwound with history.back(); the `popping` guard stops the resulting
+        // popstate from popping a second overlay.
         if (!stack.length) { return; }
-        var id = stack.pop();
-        sync();
-        var occ = occupants[id];
-        if (occ && occ.close) { occ.close(); }
+        popTopmost();
+        try {
+          if (!popping && window.history && window.history.back) {
+            popping = true;
+            window.history.back();
+          }
+        } catch (err) { popping = false; }
       },
       notifyClosed: function(id) {
         // An occupant closed itself through its own affordance; keep the
-        // host stack truthful without re-running the occupant close hook.
+        // host stack truthful without re-running the occupant close hook, and
+        // unwind the matching history entry so Back stays in step.
         var at = stack.indexOf(id);
-        if (at !== -1) { stack.splice(at, 1); sync(); }
+        if (at !== -1) {
+          stack.splice(at, 1); sync();
+          try {
+            if (!popping && window.history && window.history.back) {
+              popping = true;
+              window.history.back();
+            }
+          } catch (err) { popping = false; }
+        }
       },
       topmost: function() {
         return stack.length ? stack[stack.length - 1] : null;
       }
     };
+    // Browser Back/Forward reconcile the overlay stack to the depth carried in
+    // the history entry being landed on (NAV-3a, #2639). When the entry this
+    // handler reacts to was unwound by a programmatic dismiss (Esc / scrim /
+    // occupant self-close, which calls history.back()), the `popping` guard
+    // absorbs the event so we never double-dismiss.
+    //
+    // Reconcile-to-depth (not a blind pop) so Forward after a Back RESTORES the
+    // modal instead of closing another one, and stacked overlays never
+    // close/restore the WRONG one:
+    //   - Back (landed depth < live stack): pop overlays until the live stack
+    //     matches the target depth (close-above-target — the common case);
+    //   - Forward (landed depth > live stack, by one): re-open the entry's
+    //     marked overlay if its occupant is registered and not already mounted,
+    //     WITHOUT pushing a new history entry. Single-step forward-restore is
+    //     the recovery path; arbitrary multi-overlay forward chains are not
+    //     rebuilt.
+    // The base document entry carries no overlay state, so its target depth is
+    // 0 and Back from the first overlay closes it back to the anchor.
+    window.addEventListener('popstate', function(event) {
+      if (popping) { popping = false; return; }
+      var st = event && event.state;
+      var targetDepth = (st && typeof st.depth === 'number') ? st.depth : 0;
+      // Back / down: close overlays above the target depth.
+      while (stack.length > targetDepth) { popTopmost(); }
+      // Forward / up by one: restore the marked overlay (recovery path).
+      if (stack.length < targetDepth && st) {
+        var marker = st[HISTORY_MARKER];
+        var occ = marker ? occupants[marker] : null;
+        if (occ && stack.indexOf(marker) === -1) {
+          stack.push(marker);
+          sync();
+          if (occ.open) { occ.open({}); }
+        }
+      }
+    });
     // Keyboard map (SYSTEM_ENTRY_POINT_SPEC.md §Keyboard map):
     //   meta+k -> cmd.open, meta+n -> capture.open, escape -> overlay.dismiss.
     // cmd.open mounts the shipped Panel command palette (#1786, SEP-04);

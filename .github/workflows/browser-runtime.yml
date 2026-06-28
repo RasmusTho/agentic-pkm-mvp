@@ -43,6 +43,15 @@ jobs:
         run: |
           pytest -q tests/companion_ui/test_runtime_unavailable_browser.py
 
+      # NAV-3a (#2639): overlay↔browser-history is real browser behaviour
+      # (history.pushState on a net-new mount, popstate → reconcile-to-depth so
+      # Back closes the topmost overlay and Forward restores it). Deterministic
+      # and offline (rendered shell + bundled Chromium, no live vault), so it is
+      # a real regression gate too — NOT continue-on-error.
+      - name: Run overlay browser-history smoke (NAV-3a)
+        run: |
+          pytest -q tests/companion_ui/test_overlay_history_browser.py
+
       # Mermaid runtime rendering depends on heavier vendored ESM and is kept
       # advisory (step-level continue-on-error) so its flakiness cannot block a PR.
       - name: Run mermaid browser-runtime test (advisory)
