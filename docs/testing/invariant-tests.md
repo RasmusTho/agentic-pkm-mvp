@@ -80,7 +80,7 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Expected failure mode:** a captured artifact without `scope_id`/`source_role` reaches storage, so
   later scope/policy decisions have nothing to act on.
 - **Current enforcement:** `schema_enforced` (a bundle without `scope_id` fails validation) + `runtime_test` (capture path, `yggdrasil_runtime.capture`).
-- **Eventual test path:** `tests/invariants/test_metadata_bundle.py::test_capture_stamps_scope` (xfail).
+- **Runtime test path:** `tests/invariants/test_metadata_bundle.py::test_capture_stamps_scope` (runtime — passes).
 - **Related docs / contracts / ADRs:** [metadata-bundle](../architecture/metadata-bundle.md); ADR-0027, ADR-0038.
 - **Related issues:** #2544, #2550, #2552; runtime: first vertical slice (Capture).
 
@@ -124,7 +124,7 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Expected failure mode:** a segment/projection drops its lineage, so a derived view becomes the only
   copy of meaning (a misclassified DRI record).
 - **Current enforcement:** `schema_enforced` (derived types require `derived_from`) + `runtime_test` (derivation runtime, `yggdrasil_runtime.dri`).
-- **Eventual test path:** `tests/invariants/test_metadata_bundle.py::test_provenance_survives_derivation` (xfail).
+- **Runtime test path:** `tests/invariants/test_metadata_bundle.py::test_provenance_survives_derivation` (runtime — passes).
 - **Related docs / contracts / ADRs:** [metadata-bundle](../architecture/metadata-bundle.md), [semantic-dimensions](../architecture/semantic-dimensions.md); ADR-0018, ADR-0024, ADR-0033.
 - **Related issues:** #2544, #2550, #2552.
 
@@ -138,7 +138,7 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Expected failure mode:** the ranker sees candidates from a denied scope and merely sorts them lower
   rather than excluding them, so out-of-scope material can surface on a high similarity score.
 - **Current enforcement:** `schema_enforced` (the flag is pinned `true` in data) + `runtime_test` (prefilter behaviour, `yggdrasil_runtime.retrieval`).
-- **Eventual test path:** `tests/invariants/test_cross_scope_flow.py::test_retrieve_scope_prefilter` (xfail).
+- **Runtime test path:** `tests/invariants/test_cross_scope_flow.py::test_retrieve_scope_prefilter` (runtime — passes).
 - **Related docs / contracts / ADRs:** [retrieval-contract](../architecture/retrieval-contract.md) §3; ADR-0024, ADR-0039.
 - **Related issues:** #2548, #2550, #2551, #2552.
 
@@ -152,7 +152,7 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Expected failure mode:** Project Beta material is admitted into a Project Alpha answer purely because
   the embeddings were close, with no `CrossScopeFlow`.
 - **Current enforcement:** `doc_only`/`schema_enforced` in part (ranking signals inform order only) + `runtime_test` (admission behaviour, `yggdrasil_runtime.retrieval`).
-- **Eventual test path:** `tests/invariants/test_cross_scope_flow.py::test_similarity_is_not_permission` (xfail).
+- **Runtime test path:** `tests/invariants/test_cross_scope_flow.py::test_similarity_is_not_permission` (runtime — passes).
 - **Related docs / contracts / ADRs:** [cross-scope-flow](../architecture/cross-scope-flow.md), [retrieval-contract](../architecture/retrieval-contract.md); ADR-0028, ADR-0039.
 - **Related issues:** #2539, #2548, #2550, #2551, #2552.
 
@@ -167,7 +167,7 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Expected failure mode:** a cross-scope use proceeds without a flow grant, or a single grant is
   treated as covering every operation (retrieve ⇒ cite ⇒ import ⇒ mutate).
 - **Current enforcement:** `schema_enforced` in part (flow guardrails carried on results/envelopes) + `runtime_test` (`yggdrasil_runtime.retrieval`/`cross_scope`).
-- **Eventual test path:** `tests/invariants/test_cross_scope_flow.py::test_cross_scope_only_via_flow` (xfail); `tests/evals/test_general_knowledge_crosses_clean.py::test_general_knowledge_crosses_clean` (xfail).
+- **Runtime test path:** `tests/invariants/test_cross_scope_flow.py::test_cross_scope_only_via_flow` (runtime — passes); `tests/evals/test_general_knowledge_crosses_clean.py::test_general_knowledge_crosses_clean` (runtime — passes).
 - **Related docs / contracts / ADRs:** [cross-scope-flow](../architecture/cross-scope-flow.md); ADR-0028.
 - **Related issues:** #2539, #2550, #2551, #2552.
 
@@ -181,7 +181,7 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Expected failure mode:** an RPG "state machine"/"authority" note is retrieved and cited as real-world
   software guidance because the vocabulary overlaps.
 - **Current enforcement:** `static_test` (fixtures are distinctly scoped/roled — passes today) + `runtime_test` (retrieval discrimination, `yggdrasil_runtime.retrieval`).
-- **Eventual test path:** `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software` (xfail).
+- **Runtime test path:** `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software` (runtime — passes).
 - **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) §4, [cross-scope-flow](../architecture/cross-scope-flow.md); ADR-0029.
 - **Related issues:** #2551, #2550, #2552.
 
@@ -195,7 +195,7 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Expected failure mode:** a useful private technique surfaces inside a work answer with no flow,
   redaction, or confirmation.
 - **Current enforcement:** `static_test` (fixtures denied-by-default scoped — passes today) + `runtime_test` (`yggdrasil_runtime.retrieval`).
-- **Eventual test path:** `tests/evals/test_private_not_in_work_results.py::test_private_not_in_work_results` (xfail).
+- **Runtime test path:** `tests/evals/test_private_not_in_work_results.py::test_private_not_in_work_results` (runtime — passes).
 - **Related docs / contracts / ADRs:** [cross-scope-flow](../architecture/cross-scope-flow.md) §4; ADR-0028.
 - **Related issues:** #2551, #2550, #2552.
 
