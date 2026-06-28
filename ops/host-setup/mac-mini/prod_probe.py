@@ -45,9 +45,17 @@ log = logging.getLogger("prod_probe")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-PROBE_BASE_URL = os.environ.get("PROBE_BASE_URL", "http://localhost:8000")
+# The prod stack exposes the API on host port 18000 (docker-compose maps
+# 18000:8000; 8000 is the in-CONTAINER port). This script runs on the macOS HOST
+# (launchd / `make live-prod-probe`), so it must target the host port.
+PROBE_BASE_URL = os.environ.get("PROBE_BASE_URL", "http://127.0.0.1:18000")
+# This script runs on the HOST, not inside the worker container. The worker
+# writes its heartbeat to <repo>/tmp/worker_heartbeat.json (the container path
+# /app/tmp/... is the same file via the repo bind-mount). Resolve the host path
+# from this file's location so `make live-prod-probe` works without env.
 WORKER_HEARTBEAT_PATH = os.environ.get(
-    "WORKER_HEARTBEAT_PATH", "/app/tmp/worker_heartbeat.json"
+    "WORKER_HEARTBEAT_PATH",
+    str(Path(__file__).resolve().parents[3] / "tmp" / "worker_heartbeat.json"),
 )
 WORKER_HEARTBEAT_STALE_SECONDS = float(
     os.environ.get("WORKER_HEARTBEAT_STALE_SECONDS", "60")
@@ -271,9 +279,13 @@ def _probe_worker_heartbeat(
         hb = json.loads(path.read_text())
     except Exception as exc:
         return False, f"worker heartbeat malformed: {exc}"
-    ts = hb.get("timestamp")
+    # The real worker heartbeat (app/runtime/worker_heartbeat.py) writes the epoch
+    # timestamp under "ts"; accept "timestamp" only as a legacy fallback.
+    ts = hb.get("ts")
     if ts is None:
-        return False, "worker heartbeat has no timestamp"
+        ts = hb.get("timestamp")
+    if ts is None:
+        return False, "worker heartbeat has no timestamp (expected `ts`)"
     age = time.time() - float(ts)
     if age > stale_seconds:
         return False, f"worker heartbeat stale by {age:.0f}s (threshold {stale_seconds}s)"

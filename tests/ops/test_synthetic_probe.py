@@ -72,14 +72,15 @@ def _make_spy_channel() -> MagicMock:
 
 def _write_fresh_heartbeat(tmp_path: Path) -> Path:
     hb_path = tmp_path / "worker_heartbeat.json"
-    hb_path.write_text(json.dumps({"timestamp": time.time()}))
+    # Real shape: app/runtime/worker_heartbeat.py writes the epoch under "ts".
+    hb_path.write_text(json.dumps({"ts": time.time()}))
     return hb_path
 
 
 def _write_stale_heartbeat(tmp_path: Path) -> Path:
     hb_path = tmp_path / "worker_heartbeat.json"
-    # 120 s old — stale at any reasonable threshold
-    hb_path.write_text(json.dumps({"timestamp": time.time() - 120}))
+    # 120 s old — stale at any reasonable threshold. Real field is "ts".
+    hb_path.write_text(json.dumps({"ts": time.time() - 120}))
     return hb_path
 
 
@@ -306,3 +307,55 @@ class TestProbeHelpers:
         assert prod_probe._alert_already_sent() is False
         prod_probe._record_alert_sent()
         assert prod_probe._alert_already_sent() is True
+
+
+# ---------------------------------------------------------------------------
+# Real-environment wiring (the Codex P1s: ts field / host port / host path / install)
+# ---------------------------------------------------------------------------
+class TestProbeRealEnvironmentWiring:
+    """Guards that the probe is configured for the REAL host prod environment,
+    not the in-container defaults (these are the four Codex P1s)."""
+
+    _PROBE_PY = PROBE_MODULE_DIR / "prod_probe.py"
+    _PLIST = PROBE_MODULE_DIR / "com.yggdrasil.prod-probe.plist"
+    _INSTALL = PROBE_MODULE_DIR / "install.sh"
+
+    def test_heartbeat_reads_ts_field(self, tmp_path: Path) -> None:
+        """The probe must read the real heartbeat `ts` field (epoch). A fresh
+        `ts` heartbeat is NOT stale; an old `ts` IS stale."""
+        fresh = tmp_path / "fresh.json"
+        fresh.write_text(json.dumps({"ts": time.time()}))
+        ok, _ = prod_probe._probe_worker_heartbeat(str(fresh), 60.0)
+        assert ok, "a fresh `ts` heartbeat must be read as healthy"
+
+        stale = tmp_path / "stale.json"
+        stale.write_text(json.dumps({"ts": time.time() - 600}))
+        ok, reason = prod_probe._probe_worker_heartbeat(str(stale), 60.0)
+        assert not ok and "stale" in reason, "an old `ts` heartbeat must be stale"
+
+    def test_default_base_url_targets_host_prod_port_18000(self) -> None:
+        """Default probe URL must be the HOST prod port 18000, not in-container 8000."""
+        src = self._PROBE_PY.read_text()
+        assert '"http://127.0.0.1:18000"' in src, "prod_probe.py default must target :18000"
+        assert "localhost:8000" not in src, "must not default to the in-container :8000"
+        plist = self._PLIST.read_text()
+        assert "127.0.0.1:18000" in plist and "localhost:8000" not in plist
+
+    def test_plist_uses_host_heartbeat_path_not_container(self) -> None:
+        """The launchd plist (runs on the macOS host) must not point at the
+        container /app/tmp path; it uses a substituted absolute host path."""
+        plist = self._PLIST.read_text()
+        assert "/app/tmp/worker_heartbeat.json" not in plist
+        assert "__HEARTBEAT__" in plist
+
+    def test_install_substitutes_and_loads_prod_probe_plist(self) -> None:
+        """install.sh must substitute the plist placeholders and load it, else the
+        documented install path leaves no working probe."""
+        install = self._INSTALL.read_text()
+        for ph in ("__PYTHON__", "__PROBE__", "__HEARTBEAT__"):
+            assert ph in install, f"install.sh must substitute {ph}"
+        assert "com.yggdrasil.prod-probe.plist" in install
+        assert "launchctl load" in install and "PROBE_PLIST" in install
+        # The plist still carries the placeholders to be substituted at install.
+        plist = self._PLIST.read_text()
+        assert "__PYTHON__" in plist and "__PROBE__" in plist

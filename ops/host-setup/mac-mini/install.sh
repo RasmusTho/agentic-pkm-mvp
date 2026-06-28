@@ -37,6 +37,19 @@ launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
 sleep 2
 
+# 4b. prod-down probe launchd service ---------------------------------------
+# Substitute the venv python, the probe script, and the HOST worker-heartbeat
+# path (ops/host-setup/mac-mini is three levels under the repo root), then load.
+PROBE_PLIST="$HOME/Library/LaunchAgents/com.yggdrasil.prod-probe.plist"
+REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
+sed -e "s#__PYTHON__#$HERE/.venv/bin/python#g" \
+    -e "s#__PROBE__#$HERE/prod_probe.py#g" \
+    -e "s#__HEARTBEAT__#$REPO_ROOT/tmp/worker_heartbeat.json#g" \
+    "$HERE/com.yggdrasil.prod-probe.plist" >"$PROBE_PLIST"
+launchctl unload "$PROBE_PLIST" 2>/dev/null || true
+launchctl load "$PROBE_PLIST"
+sleep 1
+
 # 5. Verify + next steps ----------------------------------------------------
 echo
 echo "== Gateway health =="

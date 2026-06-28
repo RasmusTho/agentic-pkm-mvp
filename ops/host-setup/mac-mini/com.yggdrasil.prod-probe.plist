@@ -34,12 +34,14 @@
        configure the notification channel and endpoint. -->
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- Base URL for the prod API (no trailing slash) -->
+    <!-- Base URL for the prod API on the host (compose maps 18000:8000) -->
     <key>PROBE_BASE_URL</key>
-    <string>http://localhost:8000</string>
-    <!-- Path to the worker heartbeat JSON file -->
+    <string>http://127.0.0.1:18000</string>
+    <!-- Host path to the worker heartbeat JSON (install.sh substitutes the
+         absolute <repo>/tmp/worker_heartbeat.json; this runs on the host, not
+         inside the worker container, so it must NOT be the /app/... path) -->
     <key>WORKER_HEARTBEAT_PATH</key>
-    <string>/app/tmp/worker_heartbeat.json</string>
+    <string>__HEARTBEAT__</string>
     <!-- Seconds before a worker heartbeat is considered stale -->
     <key>WORKER_HEARTBEAT_STALE_SECONDS</key>
     <string>60</string>
