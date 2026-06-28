@@ -395,9 +395,90 @@ def _render_table(
     return f"<table><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table>", index
 
 
+def _find_code_span_close(text: str, start: int, run: int) -> int | None:
+    """Return the index just past the backtick run that closes a code span.
+
+    GFM closes a code span only with a backtick run of *exactly* the opening
+    length. Returns ``None`` when no such run exists, so an unmatched backtick
+    can be treated as ordinary text (its trailing pipes stay cell delimiters).
+    """
+    index = start
+    length = len(text)
+    while index < length:
+        if text[index] != "`":
+            index += 1
+            continue
+        run_end = index
+        while run_end < length and text[run_end] == "`":
+            run_end += 1
+        if run_end - index == run:
+            return run_end
+        index = run_end
+    return None
+
+
 def _split_table_row(line: str) -> list[str]:
-    stripped = line.strip().strip("|")
-    return [cell.strip() for cell in stripped.split("|")]
+    """Split a Markdown table row into trimmed cell strings.
+
+    A pipe is a cell delimiter only in ordinary text. It is treated as literal
+    content — never a delimiter — when it is backslash escaped (``\\|``), inside
+    a *closed* inline code span (`` `a|b` ``), or inside a *closed* Obsidian
+    wikilink (``[[Note|Alias]]``), mirroring GFM/Obsidian. Code spans honor
+    backtick run length, so ``` `` `code` `` ``` is one span. An unmatched
+    backtick run or an unclosed ``[[`` stays plain text so its trailing pipes
+    still delimit — matching the inline tokenizer, which only recognizes closed
+    backtick pairs and closed ``[[...]]`` tokens. Without this, aliased
+    wikilinks (very common in real vaults) inflate the cell count, the body row
+    fails ``_is_table_row``, and the table collapses to an empty ``<tbody>``
+    with the rows dumped into a fallback paragraph.
+    """
+    text = line.strip()
+    cells: list[str] = []
+    buffer: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "\\" and index + 1 < length:
+            # Backslash escape keeps the next char (e.g. an escaped pipe or
+            # backtick) literal rather than a delimiter or span opener.
+            buffer.append(text[index : index + 2])
+            index += 2
+            continue
+        if char == "`":
+            run_end = index
+            while run_end < length and text[run_end] == "`":
+                run_end += 1
+            close = _find_code_span_close(text, run_end, run_end - index)
+            # A closed span is consumed whole (pipes inside are literal); an
+            # unmatched backtick run stays plain text so later pipes delimit.
+            end = close if close is not None else run_end
+            buffer.append(text[index:end])
+            index = end
+            continue
+        if text.startswith("[[", index):
+            close = text.find("]]", index + 2)
+            # A closed wikilink is consumed whole (the ``|`` is an alias
+            # separator); an unclosed ``[[`` stays plain text so later pipes
+            # delimit, matching the inline tokenizer's closed-token rule.
+            end = close + 2 if close != -1 else index + 2
+            buffer.append(text[index:end])
+            index = end
+            continue
+        if char == "|":
+            cells.append("".join(buffer))
+            buffer = []
+            index += 1
+            continue
+        buffer.append(char)
+        index += 1
+    cells.append("".join(buffer))
+    # Drop the empty cells produced by the optional outer pipes of ``| a | b |``.
+    if cells and not cells[0].strip():
+        cells.pop(0)
+    if cells and not cells[-1].strip():
+        cells.pop()
+    return [cell.strip() for cell in cells]
 
 
 def _is_table_row(
