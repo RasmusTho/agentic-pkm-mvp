@@ -141,10 +141,21 @@ def test_panel_renders_fetched_projection() -> None:
     # Controls inside the swapped body (Reload button, recent-vault buttons)
     # use delegated handling so they survive the fragment swap — a directly
     # attached listener would be lost after the first reload (#2016 Codex).
+    # #2590 Codex P2a: the delegate is bound to the controller's OWN root, NOT
+    # document — applyFragment() never replaces root, so a root-scoped delegate
+    # still survives the body swap, while a document-wide one would also catch
+    # the sibling Choose-a-vault picker overlay's reload/select/initialize and
+    # double-fire the shared vault intents.
     assert "root.querySelector('[data-testid=\"vault-reload\"]')" not in script
     assert (
         "event.target.closest('[data-testid=\"vault-reload\"]')" in script
-    ), "the Reload button must be handled via document-delegated click"
+    ), "the Reload button must still be handled via event delegation"
+    assert "root.addEventListener('click'" in script, (
+        "click delegation must be scoped to root, not document (#2590 P2a)"
+    )
+    assert "document.addEventListener('click'" not in script, (
+        "no document-wide click delegate may catch the picker overlay (#2590 P2a)"
+    )
 
     # The initial server-rendered panel also carries the fragment route and the
     # applied projection so the first paint already reflects the vault context.
@@ -686,3 +697,165 @@ def test_settings_only_fragment_serves_editor_without_foreign_chrome() -> None:
     assert 'data-testid="vault-init-role"' not in body
     assert 'data-testid="vault-recent-vaults"' not in body
     assert 'data-testid="vault-settings-identity"' not in body
+
+
+# ---------------------------------------------------------------------------
+# #2590 Codex P2a: on a loaded note BOTH the Choose-a-vault picker controller
+# and the relocated-settings write controller are emitted. The picker overlay
+# carries its OWN vault.select / vault.initialize / vault.reload buttons; the
+# settings write controller must NOT also catch them (a document-wide delegate
+# would double-fire the shared vault intents, e.g. two POST /vault/reload). The
+# settings controller's delegated handlers are therefore scoped to its own root
+# (the relocated drawer section, a SIBLING of the picker overlay), so the picker
+# controller is the SOLE owner of select/initialize/reload in the switch overlay.
+# ---------------------------------------------------------------------------
+
+
+def test_settings_controller_delegates_on_own_root_not_document() -> None:
+    """The write controller binds its submit/click delegates to ``root`` (its
+    own section), never to ``document`` — so it cannot catch the sibling picker
+    overlay's reload/select/initialize buttons (#2590 P2a)."""
+    script = vault_settings_panel_script()
+
+    # Delegation is bound to the controller's resolved root, not document.
+    assert "root.addEventListener('submit'" in script
+    assert "root.addEventListener('click'" in script
+    assert "document.addEventListener('submit'" not in script, (
+        "submit delegation must be root-scoped, not document-wide (#2590 P2a)"
+    )
+    assert "document.addEventListener('click'" not in script, (
+        "click delegation must be root-scoped, not document-wide (#2590 P2a)"
+    )
+
+    # The reload button is still handled via delegation (survives the body swap)
+    # — just on root, since applyFragment() never replaces root itself.
+    assert "event.target.closest('[data-testid=\"vault-reload\"]')" in script
+
+
+def test_loaded_note_picker_overlay_owns_reload_solely() -> None:
+    """On a loaded-note page the switch overlay's reload (and select/initialize)
+    is wired to exactly ONE controller (#2590 P2a).
+
+    BOTH controllers are emitted on a loaded note. The picker controller scopes
+    its click handler to the overlay element (``picker.addEventListener``); the
+    settings write controller scopes its handlers to its own ``root``. Because
+    the overlay and the relocated settings section are SIBLING subtrees, no
+    settings-controller delegate can fire for an overlay button — so the overlay
+    reload posts ``/vault/reload`` once, not twice.
+    """
+    from companion_ui.workspace.serve_dev_page import render_index_html
+
+    html = render_index_html(
+        api_base_url="http://runtime",
+        note_path="Notes/loaded.md",
+        fields=_loaded_note_fields(),
+    )
+
+    # Both controllers are present on the loaded note.
+    assert "vault-picker-controller" in html
+    assert "vault-settings-panel-controller" in html
+
+    # The picker controller owns the overlay reload via an overlay-scoped click
+    # handler (picker.addEventListener), NOT document.
+    assert "picker.addEventListener('click'" in html
+
+    # Isolate the settings write controller's script block — the page also emits
+    # an unrelated vault-switch-reveal handler that legitimately listens on
+    # document for the V-chip's vault.switch.open trigger (it only opens/closes
+    # the overlay; it never fires a vault intent). The relevant guarantee is that
+    # the SETTINGS WRITE controller's reload/select/initialize delegates are NOT
+    # document-wide (that is what would double-fire).
+    settings_controller = html[
+        html.index("/* vault-settings-panel-controller */") : html.index(
+            "/* /vault-settings-panel-controller */"
+        )
+    ]
+    assert "document.addEventListener('click'" not in settings_controller, (
+        "a document-wide click delegate would double-fire the picker overlay's "
+        "reload/select (#2590 P2a)"
+    )
+    assert "document.addEventListener('submit'" not in settings_controller, (
+        "a document-wide submit delegate would double-fire the picker overlay's "
+        "select/initialize (#2590 P2a)"
+    )
+
+    # The settings controller's delegates are scoped to its own root instead.
+    assert "root.addEventListener('click'" in settings_controller
+    assert "root.addEventListener('submit'" in settings_controller
+
+
+# ---------------------------------------------------------------------------
+# #2590 Codex P2b: the relocated scoped-settings editor (now in the Settings
+# drawer's vault section) must carry the editor styles wherever it renders, or
+# it falls back to default-browser white chrome on the dark theme. The
+# ``.vault-setting-row`` grid + dark input/select/textarea/button palette must
+# resolve under the new drawer host (``.vault-settings-section-host``), and no
+# control may render an inline white background.
+# ---------------------------------------------------------------------------
+
+
+def test_relocated_settings_section_carries_dark_editor_styles() -> None:
+    """The relocated Settings -> Vault section emits the scoped-settings editor
+    styles targeting the drawer host, with no default white chrome (#2590 P2b)."""
+    from companion_ui.workspace.vault_settings_panel import (
+        vault_settings_section_markup,
+    )
+
+    section = vault_settings_section_markup(_selected_projection())
+
+    # The section carries its own editor style block (loaded-note pages no
+    # longer render vault_settings_panel_markup's block).
+    assert "<style>" in section
+
+    # The .vault-setting-row grid + dark palette resolve under the NEW drawer
+    # host, not only the retired .vault-settings-panel host.
+    assert ".vault-setting-row {" in section
+    assert ".vault-settings-section-host input" in section
+    assert ".vault-settings-section-host select" in section
+    assert ".vault-settings-section-host textarea" in section
+    assert ".vault-settings-section-host button" in section
+
+    # The palette is the single design-system dark palette (same tokens the
+    # no-vault picker's settings use) — not a fork.
+    assert "var(--bg-raised" in section
+    assert "var(--fg-1" in section
+
+    # No control renders an inline white background on the dark theme (mirrors
+    # the settings-drawer no-white-chrome assertion).
+    for white in (
+        "background: white",
+        "background:#fff",
+        "background: #fff",
+        "background:white",
+    ):
+        assert white not in section, (
+            f"the relocated editor must not carry inline {white!r} on the dark theme"
+        )
+
+
+def test_loaded_note_page_dresses_relocated_editor_no_white_chrome() -> None:
+    """End-to-end on a loaded-note page: the relocated editor's dark palette is
+    present under the drawer host and no input leaks white chrome (#2590 P2b)."""
+    from companion_ui.workspace.serve_dev_page import render_index_html
+
+    html = render_index_html(
+        api_base_url="http://runtime",
+        note_path="Notes/loaded.md",
+        fields=_loaded_note_fields(),
+    )
+
+    # The relocated editor host renders inside the drawer with the dark palette.
+    assert 'data-testid="vault-settings-section"' in html
+    assert ".vault-settings-section-host input" in html
+    assert ".vault-settings-section-host button" in html
+
+    # No input/button anywhere on the page carries an inline white background.
+    for white in (
+        "background: white",
+        "background:#fff",
+        "background: #fff",
+        "background:white",
+    ):
+        assert white not in html, (
+            f"no control may carry inline {white!r} on the dark theme (#2590 P2b)"
+        )

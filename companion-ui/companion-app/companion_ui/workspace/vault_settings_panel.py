@@ -370,6 +370,63 @@ def vault_settings_panel_fragment(
     )
 
 
+# The two hosts the scoped-settings editor can render under: the no-vault
+# recovery panel (``vault_settings_panel_markup``) and the relocated Settings-
+# drawer "vault" section (``vault_settings_section_markup``, #2590). The editor
+# control styles (grid + dark input/button palette) must apply under BOTH, or
+# the relocated editor falls back to default-browser white chrome on the dark
+# theme (#2590 Codex P2b). Both selectors are listed so the one shared style
+# block dresses either host — no forked palette, no duplicated rules.
+_VAULT_SETTINGS_EDITOR_HOSTS: tuple[str, ...] = (
+    ".vault-settings-panel",
+    ".vault-settings-section-host",
+)
+
+
+def _vault_settings_editor_styles() -> str:
+    """Shared control styles for the scoped-settings editor (#2590 P2b).
+
+    Emitted wherever the editor renders — the no-vault recovery panel AND the
+    relocated Settings-drawer vault section — so the ``.vault-setting-row`` grid
+    and the dark input/select/textarea/button palette resolve under either host.
+    Without this under the drawer host the relocated editor rendered with
+    default-browser white chrome, violating the dark-theme no-white-chrome rule.
+    The selectors are host-scoped to both ``.vault-settings-panel`` and
+    ``.vault-settings-section-host`` rather than global, so they never bleed onto
+    unrelated controls; the palette itself is the single design-system one (same
+    ``var(--bg-raised)`` / ``var(--fg-1)`` tokens), not a fork.
+    """
+    code = ", ".join(f"{host} code" for host in _VAULT_SETTINGS_EDITOR_HOSTS)
+    inputs = ", ".join(
+        f"{host} input, {host} select, {host} textarea"
+        for host in _VAULT_SETTINGS_EDITOR_HOSTS
+    )
+    buttons = ", ".join(f"{host} button" for host in _VAULT_SETTINGS_EDITOR_HOSTS)
+    buttons_disabled = ", ".join(
+        f"{host} button[disabled]" for host in _VAULT_SETTINGS_EDITOR_HOSTS
+    )
+    return f"""
+    {code} {{ overflow-wrap: anywhere; }}
+    .vault-settings-actions, .vault-settings-identity, .vault-settings-editor {{
+      display: grid; gap: 8px;
+    }}
+    .vault-settings-form, .vault-setting-row {{
+      align-items: end; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto;
+    }}
+    .vault-setting-row {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }}
+    {inputs} {{
+      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
+      border-radius: 4px; color: var(--fg-1, #dce8f0); padding: 5px 8px; width: 100%;
+    }}
+    {buttons} {{
+      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
+      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer; padding: 6px 10px;
+    }}
+    {buttons_disabled} {{ cursor: not-allowed; opacity: 0.55; }}
+    .vault-permissions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+    .vault-permission {{ border: 1px solid var(--border, #152030); border-radius: 4px; padding: 3px 6px; }}"""
+
+
 def vault_settings_panel_markup(
     projection: dict[str, Any] | None = None,
     *,
@@ -427,26 +484,7 @@ def vault_settings_panel_markup(
     .vault-settings-panel-close {{
       justify-self: end;
       min-width: 32px;
-    }}
-    .vault-settings-panel code {{ overflow-wrap: anywhere; }}
-    .vault-settings-actions, .vault-settings-identity, .vault-settings-editor {{
-      display: grid; gap: 8px;
-    }}
-    .vault-settings-form, .vault-setting-row {{
-      align-items: end; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto;
-    }}
-    .vault-setting-row {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }}
-    .vault-settings-panel input, .vault-settings-panel select, .vault-settings-panel textarea {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); padding: 5px 8px; width: 100%;
-    }}
-    .vault-settings-panel button {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer; padding: 6px 10px;
-    }}
-    .vault-settings-panel button[disabled] {{ cursor: not-allowed; opacity: 0.55; }}
-    .vault-permissions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
-    .vault-permission {{ border: 1px solid var(--border, #152030); border-radius: 4px; padding: 3px 6px; }}
+    }}{_vault_settings_editor_styles()}
     @media (max-width: 700px) {{
       .vault-settings-panel[data-display-mode="drawer"] {{
         bottom: 8px;
@@ -497,7 +535,15 @@ def vault_settings_section_markup(projection: dict[str, Any] | None = None) -> s
         f"{VAULT_SETTINGS_FRAGMENT_ROUTE}"
         f"?{VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM}={VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE}"
     )
+    # Carry the shared editor styles so the relocated editor wears the dark
+    # input/button palette under the drawer host (#2590 Codex P2b). The
+    # ``vault_settings_panel_markup`` recovery panel emits the SAME block; the
+    # selectors are host-scoped to both ``.vault-settings-panel`` and
+    # ``.vault-settings-section-host`` so neither surface falls back to
+    # default-browser white chrome and the palette stays a single source.
     return f"""
+        <style>{_vault_settings_editor_styles()}
+        </style>
         <section class="settings-section vault-settings-section"
           data-testid="settings-section-vault"
           data-settings-section="vault" data-authority="server-write"
@@ -656,7 +702,19 @@ def vault_settings_panel_script() -> str:
         form.setAttribute('data-submit-error', message);
       }}).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
     }}
-    document.addEventListener('submit', function(event) {{
+    // #2590 (Codex P2a): delegate on the controller's OWN root, not document.
+    // On a loaded note BOTH this write controller and the Choose-a-vault picker
+    // controller are emitted; the picker overlay carries its own
+    // vault.select / vault.initialize / vault.reload buttons. A document-wide
+    // delegate here would ALSO catch the picker overlay's submit/click (which
+    // lives in a SIBLING subtree, not inside root), double-firing the shared
+    // vault intents (e.g. two POST /vault/reload). Scoping to `root` means this
+    // handler only ever fires for events that bubble through the relocated
+    // settings host (the drawer's vault section) or the no-vault recovery panel
+    // — the picker overlay is the SOLE owner of select/initialize/reload in the
+    // switch overlay. The handler still survives applyFragment() because root
+    // itself is never replaced (only its inner body is).
+    root.addEventListener('submit', function(event) {{
       var form = event.target;
       if (!form || !form.matches('[data-intent="vault.select"],[data-intent="vault.initialize"],[data-intent="vault.settings.write"]')) {{ return; }}
       event.preventDefault();
@@ -694,11 +752,13 @@ def vault_settings_panel_script() -> str:
         body: JSON.stringify(basePayload)
       }}).then(reload).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
     }});
-    // Delegated on document so the handlers survive fragment swaps:
-    // applyFragment() replaces the panel body (which contains both the recent-
-    // vault buttons and the Reload button), so a directly-attached listener
-    // would be lost after the first reload (#2016 Codex review).
-    document.addEventListener('click', function(event) {{
+    // Delegated on root (not document) so the handlers survive fragment swaps
+    // WITHOUT catching the sibling picker overlay's buttons (#2590 Codex P2a):
+    // applyFragment() replaces only the panel body (which holds the recent-vault
+    // buttons and the Reload button), never root itself, so a root-scoped
+    // delegate survives the swap (#2016 Codex review) yet stays confined to this
+    // controller's own subtree — the picker overlay owns its own reload/select.
+    root.addEventListener('click', function(event) {{
       var recent = event.target && event.target.closest('[data-testid="vault-recent-vault"]');
       if (recent) {{
         jsonFetch('{VAULT_SELECT_ENDPOINT}', {{

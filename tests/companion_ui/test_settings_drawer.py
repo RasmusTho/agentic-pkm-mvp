@@ -738,3 +738,41 @@ def test_vault_section_write_posts_to_settings_endpoint_with_confirm_preserved()
     assert "JSON.stringify({ key: key, value: value })" in script
     # The #2518 init-confirm guard is preserved in the same controller.
     assert "vault_init_confirmation_required" in script
+
+
+def test_vault_section_editor_on_dark_palette_no_white_chrome() -> None:
+    """The relocated Settings -> Vault editor wears the dark input/button palette
+    under the drawer host — no default-browser white chrome (#2590 Codex P2b).
+
+    The .vault-setting-row grid + the dark palette were previously scoped only
+    under .vault-settings-panel (emitted by vault_settings_panel_markup), which
+    the loaded-note page no longer renders. The relocated section must carry the
+    shared editor styles itself, scoped to .vault-settings-section-host, so the
+    editor never falls back to white chrome on the dark theme (mirrors the
+    settings time-input no-white-chrome AC, #2448 D4).
+    """
+    html = _render()
+    drawer = _drawer_markup(html)
+
+    # The editor styles resolve under the new drawer host.
+    assert ".vault-setting-row {" in drawer
+    assert ".vault-settings-section-host input" in drawer
+    assert ".vault-settings-section-host select" in drawer
+    assert ".vault-settings-section-host textarea" in drawer
+    assert ".vault-settings-section-host button" in drawer
+
+    # The dark design-system palette (same tokens as the rest of the drawer).
+    section_styles = drawer[drawer.index(".vault-setting-row {") :]
+    assert "var(--bg-raised" in section_styles
+    assert "var(--fg-1" in section_styles
+
+    # No control on the page carries an inline white background on the dark theme.
+    for white in (
+        "background: white",
+        "background:#fff",
+        "background: #fff",
+        "background:white",
+    ):
+        assert white not in html, (
+            f"the relocated vault editor must not carry inline {white!r} (#2590 P2b)"
+        )
