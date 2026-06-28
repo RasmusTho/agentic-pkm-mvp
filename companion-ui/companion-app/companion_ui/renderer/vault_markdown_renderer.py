@@ -1112,6 +1112,12 @@ def _is_table_start(lines: list[str], index: int) -> bool:
     separator_index = _next_nonblank_index(lines, index + 1)
     if separator_index is None:
         return False
+    # Stay consistent with _render_table, which consumes rows via _is_table_row
+    # (that requires a pipe). A borderless one-column delimiter ('---') would
+    # pass _table_alignments but then be rejected as a row, yielding a
+    # header-only table + a stray <hr>; treat such a line as a thematic break.
+    if "|" not in lines[separator_index]:
+        return False
     alignments = _table_alignments(lines[separator_index])
     if alignments is None:
         return False

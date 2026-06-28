@@ -531,3 +531,18 @@ def test_wide_table_is_wrapped_for_horizontal_scroll() -> None:
 
     assert '<div class="vault-table-scroll">' in rendered.html
     assert rendered.html.index("vault-table-scroll") < rendered.html.index("<table>")
+
+
+def test_borderless_single_column_delimiter_is_not_a_broken_table() -> None:
+    # Regression (Codex post-merge P2): a one-column header followed by a
+    # border-less '---' delimiter must NOT yield a header-only <table> + stray
+    # <hr> (_is_table_start used to disagree with _render_table). It is treated
+    # as ordinary text + a thematic break instead.
+    rendered = render_vault_markdown("| Name |\n---\n| Alice |")
+
+    assert "<tbody></tbody>" not in rendered.html
+    assert "<table>" not in rendered.html
+    # The proper single-column form (border pipe in the delimiter) still works.
+    proper = render_vault_markdown("| Name |\n| --- |\n| Alice |")
+    assert "<table>" in proper.html
+    assert "<td>Alice</td>" in proper.html

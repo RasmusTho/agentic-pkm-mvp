@@ -111,6 +111,18 @@ def test_palette_action_disables_in_flight_and_reports_result() -> None:
     assert ".catch(function" in script
 
 
+def test_palette_action_keeps_blocked_confirmations_retryable() -> None:
+    # ST-2 follow-up (Codex post-merge P2): /api/panel/confirm returns HTTP 200
+    # with status:"blocked" (WriteGuard staged-for-retry). The handler must parse
+    # the body and re-enable the button on a blocked outcome — not mark it done
+    # and disable it forever.
+    script = _palette_script(_render())
+    assert "r.json()" in script
+    assert "=== 'blocked'" in script
+    # A non-success (blocked or error) outcome removes the in-flight lock.
+    assert "if (!done) { btn.removeAttribute('aria-disabled'); }" in script
+
+
 def test_palette_filter_has_no_match_state() -> None:
     # ST-3 (ui-audit): filtering to zero matches shows a 'no matches' row
     # instead of a silently blank list.
