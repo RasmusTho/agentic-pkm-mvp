@@ -403,6 +403,55 @@ def test_search_pill_gated_to_registered_palette_no_dead_affordance() -> None:
             )
 
 
+def test_bottom_bar_collapses_to_icon_only_on_narrow_viewport() -> None:
+    # NAV-2/NAV-4 overflow regression (Codex P2, PR #2636). On the loaded-note
+    # shell the right-anchored, no-wrap bottom bar holds up to six labeled
+    # pills (Map, History, Memory, Settings, Search, Help); without a narrow
+    # treatment the leftmost clip off-screen on ≤480px, making the new 1-click
+    # access unreachable on mobile (regresses AC1). Pixels can't be measured in
+    # a unit test, so assert the CSS contract that keeps all six reachable:
+    # each pill's text is a hideable `.launcher-label`, a ≤480px media rule
+    # hides it (icon-only), and the accessible name (aria-label) is preserved.
+    html = _render()
+    bottom_bar = _bottom_bar(html)
+
+    # Each launcher wraps its text in a `.launcher-label` span and keeps its
+    # aria-label, so collapsing to icon-only never strips the accessible name.
+    launchers = {
+        "workspace-surface-icon-map": "Open system map",
+        "workspace-surface-icon-receipts": "Open history",
+        "workspace-surface-icon-memory": "Open memory review",
+        "workspace-surface-icon-settings": "Open settings",
+        "workspace-surface-icon-cmd": "Open search command palette",
+        "workspace-help-toggle": None,  # Help uses title, not aria-label
+    }
+    for testid, aria_label in launchers.items():
+        button = re.search(
+            rf'<button[^>]*data-testid="{testid}"[^>]*>.*?</button>',
+            bottom_bar,
+            re.S,
+        )
+        assert button, f"{testid} launcher must render in the bottom bar"
+        assert '<span class="launcher-label">' in button.group(0), (
+            f"{testid}: the text label must be a hideable .launcher-label span"
+        )
+        if aria_label is not None:
+            assert f'aria-label="{aria_label}"' in button.group(0), (
+                f"{testid}: the accessible name must survive icon-only collapse"
+            )
+
+    # The narrow-viewport rule collapses the row to icon-only by hiding the
+    # label — this is the contract that keeps all six reachable on mobile.
+    narrow_rule = re.search(
+        r"@media\s*\(max-width:\s*480px\)\s*\{[^}]*\.launcher-label\s*\{\s*display:\s*none",
+        html,
+    )
+    assert narrow_rule, (
+        "a ≤480px media rule must hide .launcher-label so the six bottom-bar "
+        "pills collapse to icon-only and none clip off-screen (Codex P2 #2636)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # White-input AC (#2448, D4): no input renders with default white chrome
 # against the dark theme. The settings time inputs are brought onto the dark

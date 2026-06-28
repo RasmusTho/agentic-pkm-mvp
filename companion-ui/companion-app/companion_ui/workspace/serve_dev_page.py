@@ -9798,7 +9798,8 @@ def _render_help_toggle(
         'data-intent="map.open" aria-haspopup="dialog" '
         'title="System map — all surfaces" aria-label="Open system map" '
         'onclick="overlayHost.mount(\'map\')">'
-        '<span aria-hidden="true">&#10070;</span> Map</button>'
+        '<span aria-hidden="true">&#10070;</span>'
+        '<span class="launcher-label">Map</span></button>'
         # NAV-1/NAV-2 (ui-audit) — direct launchers so the frequently-used
         # secondary surfaces are not reachable only by opening the System Map (a
         # 2-click toll). The map stays the complete index; these add a 1-click
@@ -9816,7 +9817,8 @@ def _render_help_toggle(
             'title="History — receipts of what happened" '
             'aria-label="Open history" '
             'onclick="overlayHost.mount(\'receipts\')">'
-            '<span aria-hidden="true">&#9719;</span> History</button>'
+            '<span aria-hidden="true">&#9719;</span>'
+            '<span class="launcher-label">History</span></button>'
             # NAV-2 — direct Memory review launcher (reuses memory.open).
             '<button type="button" class="memory-toggle" '
             'data-testid="workspace-surface-icon-memory" '
@@ -9824,14 +9826,16 @@ def _render_help_toggle(
             'title="Memory — review open loops" '
             'aria-label="Open memory review" '
             'onclick="overlayHost.mount(\'memory\')">'
-            '<span aria-hidden="true">&#9737;</span> Memory</button>'
+            '<span aria-hidden="true">&#9737;</span>'
+            '<span class="launcher-label">Memory</span></button>'
             # NAV-1 — direct Settings launcher (reuses settings.open).
             '<button type="button" class="settings-toggle" '
             'data-testid="workspace-surface-icon-settings" '
             'data-intent="settings.open" aria-haspopup="dialog" '
             'title="Settings — your preferences" aria-label="Open settings" '
             'onclick="overlayHost.mount(\'settings\')">'
-            '<span aria-hidden="true">&#9881;</span> Settings</button>'
+            '<span aria-hidden="true">&#9881;</span>'
+            '<span class="launcher-label">Settings</span></button>'
             if include_settings
             else ""
         )
@@ -9849,7 +9853,8 @@ def _render_help_toggle(
             'title="Search — command palette (⌘K)" '
             'aria-label="Open search command palette" '
             'onclick="overlayHost.mount(\'cmd\')">'
-            '<span aria-hidden="true">&#9906;</span> Search</button>'
+            '<span aria-hidden="true">&#9906;</span>'
+            '<span class="launcher-label">Search</span></button>'
             if include_search
             else ""
         )
@@ -9857,7 +9862,8 @@ def _render_help_toggle(
         'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
         'aria-controls="workspace-help-drawer" aria-expanded="false" '
         'title="Companion UI help" onclick="companionHelp.open()">'
-        '<span aria-hidden="true">?</span> Help</button>'
+        '<span aria-hidden="true">?</span>'
+        '<span class="launcher-label">Help</span></button>'
         '</div>'
     )
 
@@ -9904,6 +9910,22 @@ def _render_help_drawer() -> str:
     .help-toggle:focus-visible,.map-toggle:focus-visible,.settings-toggle:focus-visible,
     .receipts-toggle:focus-visible,.memory-toggle:focus-visible,.cmd-toggle:focus-visible{
       outline:2px solid var(--border-focus);outline-offset:2px}
+    /* NAV-2/NAV-4 (ui-audit, Codex P2 #2636): the composed bottom bar now holds
+       up to six labeled pills (Map, History, Memory, Settings, Search, Help) on
+       the loaded-note shell. It is right-anchored inline-flex with no wrap, so
+       six *labeled* pills overflow the ≤480px viewport and clip the leftmost
+       launchers off the left edge — making the new 1-click direct access
+       unreachable on mobile (regresses AC1 on exactly the surface it bites).
+       Collapse to icon-only at the narrow breakpoint: hide the text label,
+       keep the glyph + aria-label + title, so all six fit one row and stay
+       reachable. The label is a real element (`.launcher-label`) precisely so
+       this rule can hide it without touching the accessible name. Desktop is
+       unchanged (labels visible, single row). */
+    @media (max-width: 480px){
+      .workspace-bottom-bar .launcher-label{display:none}
+      .help-toggle,.map-toggle,.settings-toggle,
+      .receipts-toggle,.memory-toggle,.cmd-toggle{padding:8px;gap:0}
+    }
     .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
       opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
     .help-drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,94vw);
