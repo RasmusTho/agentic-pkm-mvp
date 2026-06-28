@@ -474,27 +474,54 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         assert 'data-routable="false"' in tag, sid
         assert "onclick" not in tag, sid
 
-    # The routing controller composes existing surfaces: host mounts and the
-    # shipped vault affordance — and never navigates (overlay grammar: no
-    # route reset, no data loss).
+    # The routing controller composes existing surfaces and never navigates
+    # (overlay grammar: no route reset, no data loss). NAV-3b (#2640): map ->
+    # overlay routes use the ATOMIC overlayHost.replace(<target>) swap, NOT the
+    # old dismiss()->mount() shape whose pending history.back() raced the next
+    # push and desynced browser history from data-overlay-stack.
     script = _map_script(html)
-    assert "overlayHost.mount('cmd')" in script
-    assert "overlayHost.mount('memory')" in script
-    assert "overlayHost.mount('capture')" in script
-    assert "overlayHost.mount('receipts')" in script
-    assert "overlayHost.mount('settings')" in script
+    assert "overlayHost.replace('cmd')" in script
+    assert "overlayHost.replace('memory')" in script
+    assert "overlayHost.replace('capture')" in script
+    assert "overlayHost.replace('receipts')" in script
+    assert "overlayHost.replace('settings')" in script
+    # Negative-confirm: the routable-overlay branches must NOT use the racy
+    # dismiss()->mount() pattern (the central NAV-3b fix). dismiss() survives
+    # only on the non-overlay focus targets (anchor / vault / panel / operator).
+    for racy in (
+        "overlayHost.mount('cmd')",
+        "overlayHost.mount('memory')",
+        "overlayHost.mount('capture')",
+        "overlayHost.mount('receipts')",
+        "overlayHost.mount('settings')",
+    ):
+        assert racy not in script, (
+            f"map route must use overlayHost.replace, not the racy {racy}"
+        )
     assert "vaultBrowser.focus()" in script
+    # dismiss() is still present for the non-overlay focus targets.
     assert "overlayHost.dismiss()" in script
+    # Forbidden-CALL checks run against a comment-stripped view: the controller's
+    # explanatory comments legitimately *name* history.back / history.replaceState
+    # to document the race being removed and where the swap actually lives.
+    script_code = "\n".join(re.sub(r"//.*$", "", ln) for ln in script.splitlines())
     for forbidden in (
         "location.href",
         "location.assign",
         "location.reload",
+        # The map controller never touches history directly — the atomic swap
+        # lives in the host (overlayHost.replace), which the controller only
+        # *calls*; the controller itself pushes/replaces no history entry.
         "history.pushState",
+        "history.replaceState",
+        "history.back",
         "window.open",
         "form.submit",
         "fetch(",
     ):
-        assert forbidden not in script, f"map controller must not call {forbidden}"
+        assert forbidden not in script_code, (
+            f"map controller must not call {forbidden}"
+        )
 
     # In cold_start the shell surfaces are not live: only the vault route is
     # offered (the declared cold_start -> shell_active transition), and the
@@ -948,10 +975,13 @@ def test_relocated_map_counts_are_read_only_projection_without_zero_state() -> N
     assert 'data-intent="receipts.open"' in gov_btn.group(0), (
         "governance button must carry data-intent=receipts.open"
     )
-    # JS controller routes governance via overlayHost.mount('receipts').
+    # JS controller routes governance to the receipts surface via the atomic
+    # overlayHost.replace('receipts') swap (NAV-3b, #2640) — governance is a
+    # map->overlay route, so it swaps the map's history entry for receipts'
+    # rather than dismiss()->mount() (which raced history).
     script_text = system_map_overlay_script()
-    assert "governance" in script_text and "mount('receipts')" in script_text, (
-        "system map controller must route governance via overlayHost.mount('receipts')"
+    assert "governance" in script_text and "replace('receipts')" in script_text, (
+        "system map controller must route governance via overlayHost.replace('receipts')"
     )
     # data-authority on the map overlay is "projection" (map-level); governance
     # node itself is read-only-projection by contract (#2246 cross-task invariant).

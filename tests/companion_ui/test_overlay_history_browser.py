@@ -1,4 +1,4 @@
-"""Playwright browser smoke for overlay↔browser-history (NAV-3a, #2639).
+"""Playwright browser smoke for overlay↔browser-history (NAV-3a #2639, NAV-3b #2640).
 
 The NAV-3 core contract is real browser behaviour a pure-Python render test
 cannot exercise: ``overlayHost.mount`` pushes a same-document history entry,
@@ -16,12 +16,18 @@ of truth for which overlay is mounted) plus URL invariance:
   single: open overlay → browser Back closes it (URL unchanged);
   stacked: open 2 → Back closes the topmost → Forward restores it
            (``data-overlay-stack`` consistent, never the wrong overlay,
-           no navigation).
+           no navigation);
+  System Map route (NAV-3b): open the map → click a node that routes to another
+           overlay → the destination is open and the map is closed → one
+           browser Back closes the destination (no extra/dead press, no
+           navigate-away), ``data-overlay-stack`` consistent throughout.
 
-Scope (NAV-3a, #2639): the CORE overlay↔history mechanism only. The
-``?overlay=`` deep-link is #2641 (NAV-3c) and the System Map ``dismiss→mount``
-route sync is #2640 (NAV-3b); neither is exercised here. This shell is rendered
-without any ``boot_overlay`` threading, so it stays purely the core mechanism.
+Scope: NAV-3a (#2639) is the CORE overlay↔history mechanism (single + stacked);
+NAV-3b (#2640) adds the System Map route swap (``overlayHost.replace`` —
+``dismiss→mount`` would race history and desync the stack). The ``?overlay=``
+deep-link is #2641 (NAV-3c) and is not exercised here. This shell is rendered
+without any ``boot_overlay`` threading, so the only history entries are the ones
+the host itself creates.
 
 Guard: Playwright + a Chromium/Chrome must be available; otherwise the module
 is skipped (not failed). Enable via COMPANION_UI_BROWSER_TESTS=1. Deterministic
@@ -261,6 +267,70 @@ def test_browser_back_then_forward_restores_topmost_on_stack() -> None:
                 _wait_open(page, "cmd")
                 _wait_stack(page, "memory cmd")
                 assert page.url == start_url, "Forward must not navigate the page away"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+
+def test_system_map_route_swaps_overlay_back_closes_in_one_press() -> None:
+    """NAV-3b (#2640): System Map route stays in browser-history sync.
+
+    Open the System Map, click a node that routes to another overlay (memory),
+    and the destination overlay is open with the map closed — an ATOMIC swap of
+    the single history entry (overlayHost.replace), NOT dismiss()->mount(). Then
+    exactly ONE browser Back closes the destination overlay (no extra/dead
+    press, no navigate-away), and ``data-overlay-stack`` is consistent
+    throughout. Against the unrewired dismiss()->mount() route, the pending
+    history.back() would be swallowed and Back would need a second press / land
+    on the wrong overlay — this test pins the fix.
+    """
+    server, port = _make_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}/"
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                page = browser.new_page()
+                page.goto(base, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                start_url = page.url
+                assert page.evaluate(_OPEN_JS) == "none"
+
+                # Open the System Map (its single history entry; depth 1).
+                page.evaluate("window.overlayHost.mount('map')")
+                _wait_open(page, "map")
+                _wait_stack(page, "map")
+
+                # Click the map's memory routing node — the real production path
+                # systemMap.route('memory') -> overlayHost.replace('memory').
+                # The destination overlay opens and the map closes in one atomic
+                # swap: stack is exactly 'memory' (the map is gone, not stacked
+                # under it), so depth stays 1 — one history entry SWAPPED.
+                node = page.query_selector(
+                    "[data-testid='system-map-node'][data-surface-id='memory']"
+                )
+                assert node is not None, "map must render a clickable memory route node"
+                node.click()
+                _wait_open(page, "memory")
+                _wait_stack(page, "memory")
+                assert page.url == start_url, "routing must not navigate the page away"
+
+                # ONE browser Back closes the destination overlay and returns to
+                # the document anchor — no dead/extra press, no navigate-away.
+                # (With the old dismiss()->mount() race, history would still
+                # point at the map entry and this single Back would land on the
+                # wrong overlay or fail to close.)
+                page.go_back()
+                _wait_open(page, "none")
+                _wait_stack(page, "")
+                assert page.url == start_url, (
+                    "one Back must close the destination without navigating away"
+                )
             finally:
                 browser.close()
     finally:

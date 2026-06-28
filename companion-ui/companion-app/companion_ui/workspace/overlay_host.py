@@ -399,6 +399,41 @@ def overlay_host_script() -> str:
         }
         if (occ.open) { occ.open(detail || {}); }
       },
+      replace: function(id, detail) {
+        // NAV-3b (#2640): atomic overlay->overlay swap for the System Map route.
+        // A route is one history entry SWAPPED, not a back-then-push: it closes
+        // the current topmost occupant and opens the destination at the SAME
+        // history depth via history.replaceState. This deliberately avoids the
+        // dismiss()->mount() shape, whose async history.back() (popping=true) is
+        // still pending when the next mount() pushes — the delayed popstate is
+        // then swallowed by the guard, leaving browser history pointing at the
+        // OLD overlay while data-overlay-stack points at the destination, so the
+        // next Back/Forward acts on the wrong overlay.
+        assertDeclared(id);
+        var occ = occupants[id];
+        // Declared but unshipped: inert no-op — never invent a surface, and
+        // never swap to a surface that won't mount (same rule as mount).
+        if (!occ) { return; }
+        // Defensive: with nothing mounted there is no entry to swap, only the
+        // base page-load entry — fall back to a normal pushState mount so we
+        // never clobber the document anchor's history entry.
+        if (!stack.length) { this.mount(id, detail); return; }
+        // Close + pop the current topmost occupant WITHOUT history.back() (no
+        // pending traversal to race the swap), then push the destination.
+        popTopmost();
+        stack.push(id);
+        sync();
+        // Replace the current history entry (the one that represented the old
+        // overlay) with the destination marker at the SAME depth: one entry
+        // swapped, history position unchanged, no popstate fired.
+        try {
+          var st = {}; st[HISTORY_MARKER] = id; st.depth = stack.length;
+          if (window.history && window.history.replaceState) {
+            window.history.replaceState(st, '');
+          }
+        } catch (err) { /* history unavailable — overlay still swaps */ }
+        if (occ.open) { occ.open(detail || {}); }
+      },
       dismiss: function() {
         // overlay.dismiss — return to the document anchor. Pops only the
         // topmost overlay and updates host bookkeeping. It never navigates the
