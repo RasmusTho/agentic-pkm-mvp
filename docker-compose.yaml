@@ -24,7 +24,11 @@ services:
     restart: unless-stopped
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+        BUILT_AT: ${BUILT_AT:-unknown}
     image: workspace-app
     working_dir: /app
     env_file:
@@ -84,7 +88,11 @@ services:
       retries: 3
 
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+        BUILT_AT: ${BUILT_AT:-unknown}
     image: workspace-app
     working_dir: /app
     env_file:
@@ -123,7 +131,11 @@ services:
       retries: 3
 
   watcher:
-    build: .
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+        BUILT_AT: ${BUILT_AT:-unknown}
     image: workspace-app
     working_dir: /app
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"

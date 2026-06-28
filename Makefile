@@ -21,6 +21,14 @@ COMPOSE_DEV := $(COMPOSE_BASE) -f docker-compose.dev.yml -p pkm-dev
 COMPOSE_TEST := $(COMPOSE_BASE) -f docker-compose.test.yml -p pkm-test
 COMPOSE_PROD := $(COMPOSE_BASE) -f docker-compose.prod.yml -p pkm-prod
 TEST_COMPOSE_ENV := COMPOSE_FILE=docker-compose.yaml:docker-compose.test.yml COMPOSE_PROJECT_NAME=pkm-test
+# Runtime version marker (issue #2602). Computed once and exported so every
+# `docker compose build` invocation (dev-up, prod-up, test-up, alpha-up) bakes
+# the real git SHA + build time into the image via compose build-args. Override
+# via the environment if needed; defaults preserve current behavior when unset.
+VCS_REF ?= $(shell git rev-parse HEAD 2>/dev/null)
+BUILT_AT ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+export VCS_REF
+export BUILT_AT
 
 fmt:
 	rufflehog --version >/dev/null 2>&1 || true

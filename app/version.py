@@ -46,11 +46,19 @@ def get_runtime_version() -> dict:
     (local dev), ``VCS_REF`` falls back to a live ``git rev-parse HEAD`` call
     and ``BUILT_AT`` falls back to an empty string.
 
+    The Dockerfile declares ``ARG VCS_REF=unknown`` so an image built without
+    ``--build-arg`` (e.g. a plain compose ``build: .`` with no build args) bakes
+    the literal sentinel ``"unknown"`` into the image env. That sentinel is
+    treated here as *not set* so the git fallback still runs; otherwise the
+    deployed ``/version`` would report ``"unknown"`` instead of the real SHA.
+
     The static SoT constants (``SOT_BASELINE`` etc.) are doc/governance
     identifiers and are intentionally *not* returned here.
     """
-    git_sha = os.environ.get("VCS_REF") or _git_rev_parse_head()
-    built_at = os.environ.get("BUILT_AT", "")
+    env_sha = (os.environ.get("VCS_REF") or "").strip()
+    git_sha = env_sha if env_sha and env_sha != "unknown" else _git_rev_parse_head()
+    env_built_at = (os.environ.get("BUILT_AT") or "").strip()
+    built_at = env_built_at if env_built_at and env_built_at != "unknown" else ""
     return {"git_sha": git_sha, "built_at": built_at}
 
 

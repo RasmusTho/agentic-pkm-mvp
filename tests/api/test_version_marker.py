@@ -8,11 +8,27 @@ They verify:
 """
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
-from app.version import SOT_VERSION
+from app.version import SOT_VERSION, get_runtime_version
+
+
+def _git_sha_available() -> bool:
+    """True when a git checkout with a resolvable HEAD is reachable from cwd."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 _FAKE_SHA = "abc1234deadbeef5678cafe0000111122223333"
@@ -100,3 +116,21 @@ def test_version_not_static_doc_version(
         f"git_sha must not equal SOT_VERSION={SOT_VERSION!r}; "
         f"the /version surface returns runtime identity, not the doc-version string"
     )
+
+
+@pytest.mark.skipif(not _git_sha_available(), reason="no git checkout with HEAD available")
+def test_unknown_env_sentinel_falls_back_to_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Dockerfile ARG default 'unknown' (baked when compose builds without
+    build-args) must NOT be treated as authoritative — get_runtime_version()
+    falls back to `git rev-parse HEAD` so the deployed /version reports the real
+    SHA, not the literal sentinel. Regression guard for the P1 on PR #2623."""
+    monkeypatch.setenv("VCS_REF", "unknown")
+    monkeypatch.setenv("BUILT_AT", "unknown")
+
+    result = get_runtime_version()
+    assert result["git_sha"] != "unknown", (
+        "VCS_REF=='unknown' must fall back to git rev-parse, not be reported verbatim"
+    )
+    assert result["git_sha"], "git_sha must be a non-empty SHA from the git fallback"
+    # The 'unknown' BUILT_AT sentinel collapses to an empty string, not the literal.
+    assert result["built_at"] == "", "BUILT_AT=='unknown' must collapse to empty string"
