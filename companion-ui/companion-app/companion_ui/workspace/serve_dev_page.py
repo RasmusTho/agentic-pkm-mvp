@@ -9750,16 +9750,29 @@ def load_help_guide_html() -> str:
         )
 
 
-def _render_help_toggle(include_settings: bool = False) -> str:
+def _render_help_toggle(
+    include_settings: bool = False, include_search: bool = False
+) -> str:
     """The composed bottom bar (#2447, CUIDR-04) — one container, no stray
     fixed siblings at the bottom edge.
 
-    ``include_settings`` (NAV-1, NAV-2, NAV-4) emits the direct working-shell
-    launchers: Settings (NAV-1), plus History/Receipts and Memory (NAV-2) and
-    the Search / ⌘K palette pill (NAV-4). It is only set on the working shell,
-    where those overlay occupants (``settings``/``receipts``/``memory``/``cmd``)
-    are registered; the entry/orientation bundles do not mount them, so the
-    buttons are omitted there rather than left as dead open affordances.
+    ``include_settings`` (NAV-1, NAV-2) emits the direct working-shell
+    launchers whose occupants register on every shell this template renders:
+    Settings (NAV-1, ``settings_drawer_markup`` emits regardless of fields),
+    plus History/Receipts and Memory (NAV-2, whose ``receipts``/``memory``
+    occupants take no ``fields`` and always register). The entry/orientation
+    bundles do not mount those occupants, so the buttons are omitted there
+    rather than left as dead open affordances.
+
+    ``include_search`` (NAV-4) emits the Search / ⌘K palette pill and is gated
+    *more tightly* than the others: the ``cmd`` palette occupant only registers
+    on a loaded-note shell (``panel_palette_markup`` returns "" and the
+    controller skips registration when ``fields is None`` — the host keeps ⌘K a
+    graceful no-op). The vault-selection and error shells this template also
+    renders run with ``fields is None``, so a visible Search pill there would
+    mount nothing = a dead affordance. The caller passes
+    ``include_search=fields is not None`` so the pill appears only where the
+    palette is actually registered.
 
     Before CUIDR-04 the bottom edge was a collision of independently positioned
     fixed elements (the Help pill, the Operator pill, the body-edit hint, the
@@ -9786,13 +9799,15 @@ def _render_help_toggle(include_settings: bool = False) -> str:
         'title="System map — all surfaces" aria-label="Open system map" '
         'onclick="overlayHost.mount(\'map\')">'
         '<span aria-hidden="true">&#10070;</span> Map</button>'
-        # NAV-1/NAV-2/NAV-4 (ui-audit) — direct launchers so the frequently-used
+        # NAV-1/NAV-2 (ui-audit) — direct launchers so the frequently-used
         # secondary surfaces are not reachable only by opening the System Map (a
         # 2-click toll). The map stays the complete index; these add a 1-click
         # door. Each reuses the surface's existing open intent + host occupant,
-        # and its map node is retained (additive, not a removal). Only emitted
-        # where those occupants are registered (the working shell), so they are
-        # never dead chrome on the entry/orientation bundles.
+        # and its map node is retained (additive, not a removal). receipts /
+        # memory / settings occupants register on every shell this template
+        # emits, so the launchers are never dead chrome here. (Search/⌘K is
+        # gated separately on include_search — see below — because its `cmd`
+        # occupant only registers on a loaded-note shell.)
         + (
             # NAV-2 — direct History/Receipts launcher (reuses receipts.open).
             '<button type="button" class="receipts-toggle" '
@@ -9810,16 +9825,6 @@ def _render_help_toggle(include_settings: bool = False) -> str:
             'aria-label="Open memory review" '
             'onclick="overlayHost.mount(\'memory\')">'
             '<span aria-hidden="true">&#9737;</span> Memory</button>'
-            # NAV-4 — visible Search / ⌘K affordance (reuses cmd.open). The ⌘K
-            # hint lives in the title so the keyboard-first fast path stays
-            # discoverable from the visible pill.
-            '<button type="button" class="cmd-toggle" '
-            'data-testid="workspace-surface-icon-cmd" '
-            'data-intent="cmd.open" aria-haspopup="dialog" '
-            'title="Search — command palette (⌘K)" '
-            'aria-label="Open search command palette" '
-            'onclick="overlayHost.mount(\'cmd\')">'
-            '<span aria-hidden="true">&#9906;</span> Search</button>'
             # NAV-1 — direct Settings launcher (reuses settings.open).
             '<button type="button" class="settings-toggle" '
             'data-testid="workspace-surface-icon-settings" '
@@ -9828,6 +9833,24 @@ def _render_help_toggle(include_settings: bool = False) -> str:
             'onclick="overlayHost.mount(\'settings\')">'
             '<span aria-hidden="true">&#9881;</span> Settings</button>'
             if include_settings
+            else ""
+        )
+        # NAV-4 — visible Search / ⌘K affordance (reuses cmd.open). Gated on
+        # include_search (caller passes fields is not None) because the `cmd`
+        # palette occupant only registers on a loaded-note shell; without that
+        # gate the pill would be a silent no-op on the vault-selection / error
+        # shells (fields is None), which the no-dead-affordance contract forbids
+        # (Codex P2, PR #2636). The ⌘K hint lives in the title so the
+        # keyboard-first fast path stays discoverable from the visible pill.
+        + (
+            '<button type="button" class="cmd-toggle" '
+            'data-testid="workspace-surface-icon-cmd" '
+            'data-intent="cmd.open" aria-haspopup="dialog" '
+            'title="Search — command palette (⌘K)" '
+            'aria-label="Open search command palette" '
+            'onclick="overlayHost.mount(\'cmd\')">'
+            '<span aria-hidden="true">&#9906;</span> Search</button>'
+            if include_search
             else ""
         )
         + '<button type="button" class="help-toggle" '
@@ -13994,7 +14017,7 @@ def render_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
-  {_render_help_toggle(include_settings=True)}
+  {_render_help_toggle(include_settings=True, include_search=fields is not None)}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
