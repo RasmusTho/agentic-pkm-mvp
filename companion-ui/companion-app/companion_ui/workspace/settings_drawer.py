@@ -55,14 +55,20 @@ from companion_ui.workspace.overlay_frame import (
     overlay_frame_header,
     overlay_frame_root_attrs,
 )
+from companion_ui.workspace.vault_settings_panel import (
+    vault_settings_section_markup,
+)
 
-# The drawer's four sections, in render order (SETTINGS_DRAWER.md §What This
-# Task Does).
+# The drawer's sections, in render order (SETTINGS_DRAWER.md §What This Task
+# Does). #2590 adds the "vault" section: the relocated scoped Markdown-settings
+# editor — the only server-write section in the drawer; the others stay
+# render-only / read-only Local UI.
 SETTINGS_SECTIONS: tuple[str, ...] = (
     "display",
     "listening",
     "behaviour",
     "connection",
+    "vault",
 )
 
 # The spec's settings intents (§Intent vocabulary): none routes through the
@@ -382,6 +388,23 @@ def _connection_section(fields: dict) -> str:
         </section>"""
 
 
+def _vault_section() -> str:
+    """The relocated scoped-settings editor as a drawer section (#2590).
+
+    Settings are a settings surface, so the scoped Markdown-settings editor
+    (watcher/writes/shared-local-edit flags + handoff/assets folders + Save)
+    moves here from the retired loaded-note vault drawer. This is a
+    **server-write** section (it posts ``vault.settings.write`` to the runtime
+    with the existing #2518 confirm guard) — distinct from the drawer's
+    render-only / read-only Local UI sections, so the drawer's render-only badge
+    logic does not mislabel it. The markup, fragment route, and write controller
+    are reused unchanged (:func:`vault_settings_panel.vault_settings_section_markup`);
+    only the mount point moved. Vault *switching* is not here — that is the
+    Choose-a-vault overlay opened from the vault chip.
+    """
+    return vault_settings_section_markup()
+
+
 def settings_drawer_markup(fields: dict) -> str:
     """The Settings right-drawer shell plus the local-only render badge.
 
@@ -542,12 +565,14 @@ def settings_drawer_markup(fields: dict) -> str:
     {_frame_header}
     {guidance_callout_markup('settings')}
     <p class="settings-authority-note" data-testid="settings-authority-note">
-      Preferences re-render identical content. They never touch the vault
-      and are always resettable.</p>
+      Display, Listening, Behaviour and Connection preferences re-render
+      identical content — they never touch the vault and are always resettable.
+      The Vault section below is the exception: it writes scoped vault settings
+      to the runtime (governed, confirm-gated), not a local preference.</p>
     <section class="settings-section" data-testid="settings-section-display"
       data-settings-section="display" data-authority="render-only">
       <h3 class="settings-section-title">Display</h3>{_display_section_form()}
-    </section>{_listening_section()}{_behaviour_section()}{_connection_section(fields)}
+    </section>{_listening_section()}{_behaviour_section()}{_connection_section(fields)}{_vault_section()}
     <footer class="settings-foot">
       <button type="button" class="settings-reset"
         data-testid="settings-reset" data-intent="settings.reset"

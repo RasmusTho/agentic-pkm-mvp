@@ -505,8 +505,8 @@ def test_operator_affordances_relocated_off_front_door() -> None:
     assert 'data-testid="vault-settings-folder-open"' not in before_operator
 
 
-def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
-    fields: dict[str, Any] = {
+def _loaded_note_fields() -> dict[str, Any]:
+    return {
         "title": "Companion UI UAT",
         "note_path": "Companion UI UAT.md",
         "artifact_id": "note-uat",
@@ -540,31 +540,57 @@ def test_valid_note_does_not_render_visible_vault_settings_panel() -> None:
         "suggestion_state": "idle",
         "suggestion_composer_enabled": True,
     }
+
+
+def test_loaded_note_v_chip_opens_choose_a_vault_switch_overlay() -> None:
+    """#2590: on a loaded note the "V" chip opens the reused Choose-a-vault
+    overlay for vault *switching*, not the retired foreign-form drawer.
+
+    The loaded-note vault surface is now in the same graphical idiom as the
+    first-contact picker and note-browse: a hidden switch overlay revealed by
+    the chip, with no typed path field and no machine-Role select on it. The
+    retired ``vault-settings-panel`` drawer + its ``vault.settings.open`` toggle
+    are gone from the loaded-note path.
+    """
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         note_path="Companion UI UAT.md",
-        fields=fields,
+        fields=_loaded_note_fields(),
     )
 
     assert 'data-entry-state="shell_active"' in html
     assert "Companion UI UAT" in html
-    assert 'data-testid="vault-selection-required"' not in html
-    assert 'data-testid="vault-settings-panel"' in html
-    assert 'data-testid="workspace-surface-icon-vault-settings"' in html
-    assert 'data-intent="vault.settings.open"' in html
-    assert 'aria-controls="workspace-vault-settings-panel"' in html
-    assert "window.companionVaultSettings" in html
 
-    panel_start = html.index('<section class="vault-settings-panel"')
-    panel_tag_end = html.index(">", panel_start)
-    panel_tag = html[panel_start:panel_tag_end]
-    assert " hidden" in panel_tag
-    assert 'aria-hidden="true"' in panel_tag
-    assert " inert" in panel_tag
-    assert 'data-display-mode="drawer"' in panel_tag
-    assert 'data-open="false"' in panel_tag
-    assert ".vault-settings-panel[hidden] { display: none !important; }" in html
-    assert 'data-testid="vault-settings-panel-close"' in html
+    # The "V" chip retargets to the switch overlay (vault.switch.open), not the
+    # retired settings-drawer toggle.
+    assert 'data-testid="workspace-surface-icon-vault-settings"' in html
+    assert 'data-intent="vault.switch.open"' in html
+    assert 'data-intent="vault.settings.open"' not in html
+    assert 'aria-controls="workspace-vault-switch-host"' in html
+
+    # The retired foreign-form drawer mount + its toggle are gone.
+    assert '<section class="vault-settings-panel"' not in html
+    assert "window.companionVaultSettings" not in html
+    assert 'data-testid="vault-settings-panel-close"' not in html
+
+    # The switch overlay reuses the Choose-a-vault overlay, hosted hidden until
+    # the chip reveals it (data-reason="switch", not a no_vault first-contact
+    # picker).
+    host_start = html.index('data-testid="vault-switch-host"')
+    host_open = html.rindex("<div", 0, host_start)
+    host_tag = html[host_open : html.index(">", host_start)]
+    assert "hidden" in host_tag
+    assert 'data-open="false"' in host_tag
+    assert 'data-testid="vault-selection-required"' in html
+    assert 'data-reason="switch"' in html
+    assert 'data-testid="vault-picker"' in html
+    # The reused picker controller is emitted so the overlay is live.
+    assert "vault-picker-controller" in html
+
+    # No typed-path / Role chrome on the switch surface (one graphical language).
+    assert 'data-testid="vault-open-path"' not in html
+    assert 'data-testid="vault-init-path"' not in html
+    assert 'data-testid="vault-init-role"' not in html
 
 
 # ---------------------------------------------------------------------------

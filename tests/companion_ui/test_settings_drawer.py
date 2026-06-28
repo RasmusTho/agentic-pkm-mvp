@@ -164,8 +164,15 @@ def test_drawer_sections_render_and_display_prefs_work() -> None:
     assert "settings" in SHIPPED_OVERLAY_OCCUPANTS
     assert "overlayHost.register('settings'" in _controller_script(html)
 
-    # All four declared sections render, in the declared order.
-    assert SETTINGS_SECTIONS == ("display", "listening", "behaviour", "connection")
+    # All declared sections render, in the declared order. #2590 adds the
+    # "vault" section (the relocated scoped-settings editor) after connection.
+    assert SETTINGS_SECTIONS == (
+        "display",
+        "listening",
+        "behaviour",
+        "connection",
+        "vault",
+    )
     positions = []
     for section in SETTINGS_SECTIONS:
         marker = f'data-settings-section="{section}"'
@@ -635,3 +642,154 @@ def test_connection_posture_is_read_only() -> None:
     # Pure projection degrades to declared-unknown, never to a picker.
     empty_rows = connection_posture_rows({})
     assert all(value == "unknown" for _t, _l, value in empty_rows)
+
+
+# ---------------------------------------------------------------------------
+# #2590: the relocated scoped-settings editor renders as the drawer's "vault"
+# section — a server-write surface, distinct from the render-only / read-only
+# Local UI sections, that still posts vault.settings.write with the #2518
+# confirm guard preserved.
+# ---------------------------------------------------------------------------
+
+
+def test_vault_section_hosts_relocated_scoped_settings_as_server_write() -> None:
+    from companion_ui.workspace.vault_settings_panel import (
+        VAULT_SETTINGS_ENDPOINT,
+        VAULT_SETTINGS_FRAGMENT_ROUTE,
+        VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM,
+        VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE,
+    )
+
+    html = _render()
+    drawer = _drawer_markup(html)
+
+    # The vault section renders inside the Settings drawer, after connection.
+    assert 'data-settings-section="vault"' in drawer
+    assert 'data-testid="settings-section-vault"' in drawer
+    assert drawer.index('data-settings-section="connection"') < drawer.index(
+        'data-settings-section="vault"'
+    )
+
+    # It is a SERVER-WRITE surface — distinct from the render-only / read-only /
+    # local-ui authority of the other sections, so the drawer's render-only badge
+    # logic does not mislabel it.
+    vault_open = drawer.index('data-settings-section="vault"')
+    vault_tag = drawer[drawer.rindex("<section", 0, vault_open) : drawer.index(">", vault_open)]
+    assert 'data-authority="server-write"' in vault_tag
+
+    # The relocated editor host is the controller's resolved root + carries the
+    # settings-scoped fragment-reload path and the settings-write endpoint.
+    assert 'data-testid="vault-settings-section"' in drawer
+    assert f'data-api-path="{VAULT_SETTINGS_ENDPOINT}"' in drawer
+    expected_fragment = (
+        f"{VAULT_SETTINGS_FRAGMENT_ROUTE}"
+        f"?{VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM}={VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE}"
+    )
+    assert f'data-fragment-path="{expected_fragment}"' in drawer
+
+    # The scoped-settings editor body (the vault.settings.write surface) is
+    # mounted here — re-homed, not dropped.
+    assert 'data-testid="vault-settings-body"' in drawer
+    assert 'data-intent="vault.settings.write"' in html
+
+    # The switch / foreign-form chrome (typed paths, Role select) does NOT leak
+    # onto the settings surface — vault switching is the Choose-a-vault overlay.
+    assert 'data-testid="vault-open-path"' not in drawer
+    assert 'data-testid="vault-init-path"' not in drawer
+    assert 'data-testid="vault-init-role"' not in drawer
+
+    # The write controller (single owner of vault.settings.write) is emitted on
+    # the loaded-note page, with the #2518 init/confirm guard preserved.
+    assert "vault-settings-panel-controller" in html
+    assert "vault_init_confirmation_required" in html
+
+    # Authority labeling stays truthful (#2590 Codex P2): the drawer's authority
+    # note no longer blanket-claims "never touch the vault" — it scopes that to
+    # the preference sections and names the Vault section as the server-write
+    # exception, so a real runtime write is not mislabeled as a local preference.
+    note_start = drawer.index('data-testid="settings-authority-note"')
+    note = " ".join(drawer[note_start : drawer.index("</p>", note_start)].split())
+    assert "Vault section" in note
+    assert "writes scoped vault settings to the runtime" in note
+
+
+def test_vault_section_write_posts_to_settings_endpoint_with_confirm_preserved() -> None:
+    """The relocated editor still posts vault.settings.write to
+    /api/companion/vault/settings, and the #2518 init-confirm round-trip is
+    intact in the same controller (re-homed write path, not a new one)."""
+    from companion_ui.workspace.vault_settings_panel import (
+        VAULT_SETTINGS_ENDPOINT,
+        vault_settings_panel_script,
+        vault_settings_section_markup,
+    )
+
+    section = vault_settings_section_markup(
+        {
+            "context": {"status": "selected"},
+            "definitions": [
+                {
+                    "key": "allowWritesToVault",
+                    "type": "boolean",
+                    "scope": "vault",
+                    "editable": True,
+                }
+            ],
+            "settings": [{"key": "allowWritesToVault", "value": True}],
+            "validation_errors": [],
+        }
+    )
+    # The relocated editor renders the scoped Save form posting vault.settings.write.
+    assert 'data-intent="vault.settings.write"' in section
+    assert f'data-api-path="{VAULT_SETTINGS_ENDPOINT}"' in section
+    assert 'data-testid="vault-setting-save-allowWritesToVault"' in section
+
+    script = vault_settings_panel_script()
+    # The single write controller binds the relocated section as its root.
+    assert '[data-testid="vault-settings-section"]' in script
+    # vault.settings.write posts to the settings endpoint.
+    assert (
+        "form.matches('[data-intent=\"vault.select\"],"
+        "[data-intent=\"vault.initialize\"],"
+        "[data-intent=\"vault.settings.write\"]')" in script
+    )
+    assert "JSON.stringify({ key: key, value: value })" in script
+    # The #2518 init-confirm guard is preserved in the same controller.
+    assert "vault_init_confirmation_required" in script
+
+
+def test_vault_section_editor_on_dark_palette_no_white_chrome() -> None:
+    """The relocated Settings -> Vault editor wears the dark input/button palette
+    under the drawer host — no default-browser white chrome (#2590 Codex P2b).
+
+    The .vault-setting-row grid + the dark palette were previously scoped only
+    under .vault-settings-panel (emitted by vault_settings_panel_markup), which
+    the loaded-note page no longer renders. The relocated section must carry the
+    shared editor styles itself, scoped to .vault-settings-section-host, so the
+    editor never falls back to white chrome on the dark theme (mirrors the
+    settings time-input no-white-chrome AC, #2448 D4).
+    """
+    html = _render()
+    drawer = _drawer_markup(html)
+
+    # The editor styles resolve under the new drawer host.
+    assert ".vault-setting-row {" in drawer
+    assert ".vault-settings-section-host input" in drawer
+    assert ".vault-settings-section-host select" in drawer
+    assert ".vault-settings-section-host textarea" in drawer
+    assert ".vault-settings-section-host button" in drawer
+
+    # The dark design-system palette (same tokens as the rest of the drawer).
+    section_styles = drawer[drawer.index(".vault-setting-row {") :]
+    assert "var(--bg-raised" in section_styles
+    assert "var(--fg-1" in section_styles
+
+    # No control on the page carries an inline white background on the dark theme.
+    for white in (
+        "background: white",
+        "background:#fff",
+        "background: #fff",
+        "background:white",
+    ):
+        assert white not in html, (
+            f"the relocated vault editor must not carry inline {white!r} (#2590 P2b)"
+        )

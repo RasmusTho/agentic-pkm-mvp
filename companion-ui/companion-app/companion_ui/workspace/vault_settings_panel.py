@@ -34,6 +34,17 @@ VAULT_SETTINGS_FRAGMENT_ROUTE = "/vault-settings"
 # (#2312).
 VAULT_SETTINGS_FRAGMENT_PICKER_PARAM = "picker"
 
+# Query marker the relocated Settings-drawer vault section (#2590) appends to its
+# fragment fetch so the page server renders the SCOPED-SETTINGS EDITOR ONLY (the
+# enableVaultWatcher / allowWritesToVault / allowSharedSettingsEdits /
+# allowLocalSettingsEdits flags + handoff/assets folder fields + Save) without
+# the retired foreign-form chrome (typed open/init path fields, the Role select,
+# Initialize / Reload). The switch overlay (Choose-a-vault) owns vault selection;
+# the drawer owns scoped settings. Presentation-only marker; it never
+# re-classifies status or changes the vault.settings.write authority (#2312).
+VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM = "scope"
+VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE = "settings"
+
 # Canonical set of runtime vault statuses that mean "no active vault is bound".
 # Each of these resolves to the no-vault front-door picker surface (#2485 D1):
 # the single DS picker with no legacy settings form, no duplicate "No vault
@@ -250,7 +261,12 @@ def _settings_editor(projection: dict[str, Any], status: str) -> str:
     return f'<section class="vault-settings-editor" data-testid="vault-settings-editor">{"".join(rows)}</section>'
 
 
-def _panel_body(projection: dict[str, Any], *, picker_mode: bool = False) -> str:
+def _panel_body(
+    projection: dict[str, Any],
+    *,
+    picker_mode: bool = False,
+    settings_only: bool = False,
+) -> str:
     """Inner panel content rendered from the fetched projection.
 
     Shared by :func:`vault_settings_panel_markup` (initial server render) and
@@ -266,6 +282,14 @@ def _panel_body(projection: dict[str, Any], *, picker_mode: bool = False) -> str
     are suppressed too. The open / init / recents / settings-folder affordances
     all still render — this is presentation-only and does not change picker
     behaviour (that is #2312's domain).
+
+    When ``settings_only`` is set (#2590) the panel renders ONLY the scoped
+    Markdown-settings editor (plus its status header + validation errors) for
+    the Settings-drawer "vault" section. The retired foreign-form chrome (typed
+    open/init path fields, the Role select, Initialize / Reload, recents, the
+    identity spans) is suppressed — vault *switching* now lives on the
+    Choose-a-vault overlay, not on the settings surface. The ``vault.settings.write``
+    authority and the editor markup are unchanged; only the mount point moves.
     """
     context = projection.get("context") if isinstance(projection.get("context"), dict) else {"status": "none"}
     status = str(context.get("status") or "none")
@@ -295,6 +319,17 @@ def _panel_body(projection: dict[str, Any], *, picker_mode: bool = False) -> str
     # form chrome remains"). Suppress it entirely here; selected-vault
     # rendering is unchanged.
     editor = "" if picker_mode else _settings_editor(projection, status)
+    if settings_only:
+        # Settings-drawer vault section (#2590): the scoped editor only — no
+        # switch/foreign-form chrome, no identity spans, and no vault-status
+        # header ("Vault selected" / "No vault selected") on the settings
+        # surface. The status header is switch-state info (it now lives in the
+        # switch overlay + the read-only Connection section), not a settings
+        # control, so it must not leak onto a settings-only / error page. The
+        # editor stays the same `vault.settings.write` markup.
+        return f"""
+    {_validation_errors(errors)}
+    {editor}"""
     return f"""{head}
     {_action_forms(context, recent_vaults)}
     {_identity_rows(context, picker_mode=picker_mode)}
@@ -311,6 +346,7 @@ def vault_settings_panel_fragment(
     projection: dict[str, Any] | None = None,
     *,
     picker_mode: bool = False,
+    settings_only: bool = False,
 ) -> str:
     """Server-rendered inner panel fragment from the fetched projection.
 
@@ -321,13 +357,74 @@ def vault_settings_panel_fragment(
     ``picker_mode`` folds the panel into the no-vault picker front door: it
     drops the duplicate status heading and the "unknown" identity spans while
     preserving every picker affordance (#2485 D1).
+
+    ``settings_only`` (#2590) renders just the scoped Markdown-settings editor
+    for the Settings-drawer "vault" section — no switch/foreign-form chrome.
     """
     projection = projection if isinstance(projection, dict) else {}
     return (
         '<div class="vault-settings-body" data-testid="vault-settings-body" '
         f'data-vault-status="{_e(_panel_status(projection))}">'
-        f"{_panel_body(projection, picker_mode=picker_mode)}</div>"
+        f"{_panel_body(projection, picker_mode=picker_mode, settings_only=settings_only)}"
+        "</div>"
     )
+
+
+# The two hosts the scoped-settings editor can render under: the no-vault
+# recovery panel (``vault_settings_panel_markup``) and the relocated Settings-
+# drawer "vault" section (``vault_settings_section_markup``, #2590). The editor
+# control styles (grid + dark input/button palette) must apply under BOTH, or
+# the relocated editor falls back to default-browser white chrome on the dark
+# theme (#2590 Codex P2b). Both selectors are listed so the one shared style
+# block dresses either host — no forked palette, no duplicated rules.
+_VAULT_SETTINGS_EDITOR_HOSTS: tuple[str, ...] = (
+    ".vault-settings-panel",
+    ".vault-settings-section-host",
+)
+
+
+def _vault_settings_editor_styles() -> str:
+    """Shared control styles for the scoped-settings editor (#2590 P2b).
+
+    Emitted wherever the editor renders — the no-vault recovery panel AND the
+    relocated Settings-drawer vault section — so the ``.vault-setting-row`` grid
+    and the dark input/select/textarea/button palette resolve under either host.
+    Without this under the drawer host the relocated editor rendered with
+    default-browser white chrome, violating the dark-theme no-white-chrome rule.
+    The selectors are host-scoped to both ``.vault-settings-panel`` and
+    ``.vault-settings-section-host`` rather than global, so they never bleed onto
+    unrelated controls; the palette itself is the single design-system one (same
+    ``var(--bg-raised)`` / ``var(--fg-1)`` tokens), not a fork.
+    """
+    code = ", ".join(f"{host} code" for host in _VAULT_SETTINGS_EDITOR_HOSTS)
+    inputs = ", ".join(
+        f"{host} input, {host} select, {host} textarea"
+        for host in _VAULT_SETTINGS_EDITOR_HOSTS
+    )
+    buttons = ", ".join(f"{host} button" for host in _VAULT_SETTINGS_EDITOR_HOSTS)
+    buttons_disabled = ", ".join(
+        f"{host} button[disabled]" for host in _VAULT_SETTINGS_EDITOR_HOSTS
+    )
+    return f"""
+    {code} {{ overflow-wrap: anywhere; }}
+    .vault-settings-actions, .vault-settings-identity, .vault-settings-editor {{
+      display: grid; gap: 8px;
+    }}
+    .vault-settings-form, .vault-setting-row {{
+      align-items: end; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto;
+    }}
+    .vault-setting-row {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }}
+    {inputs} {{
+      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
+      border-radius: 4px; color: var(--fg-1, #dce8f0); padding: 5px 8px; width: 100%;
+    }}
+    {buttons} {{
+      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
+      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer; padding: 6px 10px;
+    }}
+    {buttons_disabled} {{ cursor: not-allowed; opacity: 0.55; }}
+    .vault-permissions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+    .vault-permission {{ border: 1px solid var(--border, #152030); border-radius: 4px; padding: 3px 6px; }}"""
 
 
 def vault_settings_panel_markup(
@@ -387,26 +484,7 @@ def vault_settings_panel_markup(
     .vault-settings-panel-close {{
       justify-self: end;
       min-width: 32px;
-    }}
-    .vault-settings-panel code {{ overflow-wrap: anywhere; }}
-    .vault-settings-actions, .vault-settings-identity, .vault-settings-editor {{
-      display: grid; gap: 8px;
-    }}
-    .vault-settings-form, .vault-setting-row {{
-      align-items: end; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto;
-    }}
-    .vault-setting-row {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }}
-    .vault-settings-panel input, .vault-settings-panel select, .vault-settings-panel textarea {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); padding: 5px 8px; width: 100%;
-    }}
-    .vault-settings-panel button {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer; padding: 6px 10px;
-    }}
-    .vault-settings-panel button[disabled] {{ cursor: not-allowed; opacity: 0.55; }}
-    .vault-permissions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
-    .vault-permission {{ border: 1px solid var(--border, #152030); border-radius: 4px; padding: 3px 6px; }}
+    }}{_vault_settings_editor_styles()}
     @media (max-width: 700px) {{
       .vault-settings-panel[data-display-mode="drawer"] {{
         bottom: 8px;
@@ -428,48 +506,80 @@ def vault_settings_panel_markup(
   </section>"""
 
 
+def vault_settings_section_markup(projection: dict[str, Any] | None = None) -> str:
+    """Scoped Markdown-settings editor as a Settings-drawer section (#2590).
+
+    The relocated mount point for the scoped vault settings (enableVaultWatcher /
+    allowWritesToVault / allowSharedSettingsEdits / allowLocalSettingsEdits flags
+    + handoff/assets folder fields + Save). Settings are a settings surface, so
+    they live in the Settings drawer's "vault" section instead of being foreign
+    chrome folded onto the (now retired) loaded-note vault drawer.
+
+    REUSE, not rebuild: the body is the same :func:`vault_settings_panel_fragment`
+    (``settings_only`` variant) the ``/vault-settings`` route serves, and the
+    same :func:`vault_settings_panel_script` controller owns its
+    ``vault.settings.write`` submit + #2518 init-confirm + fragment-reload. This
+    function only supplies the host shell the controller resolves as ``root``
+    (``data-testid="vault-settings-section"``) and the fragment-path it reloads
+    from (tagged with the settings-scope marker so the route returns the editor
+    only). The section is rendered server-side empty/default and filled by the
+    controller's on-load ``reload()`` fetch — the same pattern the old drawer
+    used.
+
+    The section is a **server-write surface** (``data-authority="server-write"``),
+    distinct from the Settings drawer's render-only / local-UI sections, so the
+    drawer's render-only badge logic does not mislabel it.
+    """
+    projection = projection if isinstance(projection, dict) else {}
+    fragment_path = (
+        f"{VAULT_SETTINGS_FRAGMENT_ROUTE}"
+        f"?{VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM}={VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE}"
+    )
+    # Carry the shared editor styles so the relocated editor wears the dark
+    # input/button palette under the drawer host (#2590 Codex P2b). The
+    # ``vault_settings_panel_markup`` recovery panel emits the SAME block; the
+    # selectors are host-scoped to both ``.vault-settings-panel`` and
+    # ``.vault-settings-section-host`` so neither surface falls back to
+    # default-browser white chrome and the palette stays a single source.
+    return f"""
+        <style>{_vault_settings_editor_styles()}
+        </style>
+        <section class="settings-section vault-settings-section"
+          data-testid="settings-section-vault"
+          data-settings-section="vault" data-authority="server-write"
+          data-vault-selection="never">
+          <h3 class="settings-section-title">Vault settings</h3>
+          <p class="settings-section-note" data-testid="settings-vault-note">
+            Scoped Markdown settings for the active vault. These post to the
+            runtime (a server write with the existing confirm guard) — not a
+            Local UI preference. To switch vaults, use the vault chip.</p>
+          <div class="vault-settings-section-host"
+            data-testid="vault-settings-section"
+            data-api-path="{VAULT_SETTINGS_ENDPOINT}"
+            data-fragment-path="{fragment_path}" data-api-method="GET"
+            data-authority="server-write">
+            {vault_settings_panel_fragment(projection, settings_only=True)}
+          </div>
+        </section>"""
+
+
 def vault_settings_panel_script() -> str:
     return f"""
   <script>
   /* vault-settings-panel-controller */
   (function() {{
-    var root = document.querySelector('[data-testid="vault-settings-panel"]');
+    // #2590: this controller is the single owner of `vault.settings.write`. Its
+    // host element moved — on a loaded note the scoped-settings editor now lives
+    // in the Settings drawer's "vault" section (`[data-testid="vault-settings-section"]`)
+    // instead of the retired V-chip drawer (`[data-testid="vault-settings-panel"]`,
+    // still used by the no-vault picker recovery surface). Resolve whichever is
+    // present so the fragment-reload target and the write/confirm handlers bind
+    // unchanged. The V-chip drawer toggle (companionVaultSettings) is retired:
+    // the "V" chip now opens the Choose-a-vault switch overlay, and the Settings
+    // drawer's open/close is owned by the overlay host.
+    var root = document.querySelector('[data-testid="vault-settings-panel"]')
+      || document.querySelector('[data-testid="vault-settings-section"]');
     if (!root) {{ return; }}
-    function vaultSettingsTriggers() {{
-      return Array.prototype.slice.call(document.querySelectorAll('[data-intent="vault.settings.open"]'));
-    }}
-    function syncDrawerState(open) {{
-      root.setAttribute('data-open', open ? 'true' : 'false');
-      vaultSettingsTriggers().forEach(function(trigger) {{
-        trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-      }});
-    }}
-    function openDrawer() {{
-      root.removeAttribute('hidden');
-      root.removeAttribute('aria-hidden');
-      root.removeAttribute('inert');
-      syncDrawerState(true);
-      try {{ root.focus(); }} catch (err) {{}}
-    }}
-    function closeDrawer() {{
-      if (root.getAttribute('data-default-hidden') === 'true') {{
-        root.setAttribute('hidden', '');
-        root.setAttribute('aria-hidden', 'true');
-        root.setAttribute('inert', '');
-      }}
-      syncDrawerState(false);
-      var triggers = vaultSettingsTriggers();
-      if (triggers[0]) {{ try {{ triggers[0].focus(); }} catch (err) {{}} }}
-    }}
-    window.companionVaultSettings = {{
-      open: openDrawer,
-      close: closeDrawer,
-      toggle: function() {{
-        if (root.hasAttribute('hidden')) {{ openDrawer(); }}
-        else {{ closeDrawer(); }}
-      }}
-    }};
-    syncDrawerState(!root.hasAttribute('hidden'));
     function jsonFetch(path, options) {{
       return fetch(path, Object.assign({{ headers: {{ 'Content-Type': 'application/json' }} }}, options || {{}}))
         .then(function(response) {{
@@ -592,7 +702,19 @@ def vault_settings_panel_script() -> str:
         form.setAttribute('data-submit-error', message);
       }}).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
     }}
-    document.addEventListener('submit', function(event) {{
+    // #2590 (Codex P2a): delegate on the controller's OWN root, not document.
+    // On a loaded note BOTH this write controller and the Choose-a-vault picker
+    // controller are emitted; the picker overlay carries its own
+    // vault.select / vault.initialize / vault.reload buttons. A document-wide
+    // delegate here would ALSO catch the picker overlay's submit/click (which
+    // lives in a SIBLING subtree, not inside root), double-firing the shared
+    // vault intents (e.g. two POST /vault/reload). Scoping to `root` means this
+    // handler only ever fires for events that bubble through the relocated
+    // settings host (the drawer's vault section) or the no-vault recovery panel
+    // — the picker overlay is the SOLE owner of select/initialize/reload in the
+    // switch overlay. The handler still survives applyFragment() because root
+    // itself is never replaced (only its inner body is).
+    root.addEventListener('submit', function(event) {{
       var form = event.target;
       if (!form || !form.matches('[data-intent="vault.select"],[data-intent="vault.initialize"],[data-intent="vault.settings.write"]')) {{ return; }}
       event.preventDefault();
@@ -630,17 +752,13 @@ def vault_settings_panel_script() -> str:
         body: JSON.stringify(basePayload)
       }}).then(reload).catch(function(err) {{ form.setAttribute('data-submit-error', String(err.message || err)); }});
     }});
-    // Delegated on document so the handlers survive fragment swaps:
-    // applyFragment() replaces the panel body (which contains both the recent-
-    // vault buttons and the Reload button), so a directly-attached listener
-    // would be lost after the first reload (#2016 Codex review).
-    document.addEventListener('click', function(event) {{
-      var vaultSettingsTrigger = event.target && event.target.closest('[data-intent="vault.settings.open"]');
-      if (vaultSettingsTrigger && window.companionVaultSettings) {{
-        event.preventDefault();
-        window.companionVaultSettings.toggle();
-        return;
-      }}
+    // Delegated on root (not document) so the handlers survive fragment swaps
+    // WITHOUT catching the sibling picker overlay's buttons (#2590 Codex P2a):
+    // applyFragment() replaces only the panel body (which holds the recent-vault
+    // buttons and the Reload button), never root itself, so a root-scoped
+    // delegate survives the swap (#2016 Codex review) yet stays confined to this
+    // controller's own subtree — the picker overlay owns its own reload/select.
+    root.addEventListener('click', function(event) {{
       var recent = event.target && event.target.closest('[data-testid="vault-recent-vault"]');
       if (recent) {{
         jsonFetch('{VAULT_SELECT_ENDPOINT}', {{
@@ -671,7 +789,10 @@ __all__ = [
     "VAULT_SETTINGS_ENDPOINT",
     "VAULT_SETTINGS_FRAGMENT_ROUTE",
     "VAULT_SETTINGS_FRAGMENT_PICKER_PARAM",
+    "VAULT_SETTINGS_FRAGMENT_SETTINGS_PARAM",
+    "VAULT_SETTINGS_FRAGMENT_SETTINGS_VALUE",
     "vault_settings_panel_fragment",
     "vault_settings_panel_markup",
     "vault_settings_panel_script",
+    "vault_settings_section_markup",
 ]
