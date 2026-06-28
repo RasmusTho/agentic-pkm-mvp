@@ -425,17 +425,23 @@ def settings_drawer_markup(fields: dict) -> str:
     _frame_header = overlay_frame_header(
         overlay_id="settings",
         title="Settings",
-        # status-pill: the read-only designation the spec requires for
-        # settings (OVERLAY_MODAL_FRAME_SPEC.md §Header furniture slots).
-        status_pill="read-only render",
-        status_pill_testid="settings-frame-status-pill",
+        # No frame-wide status-pill: Settings is a real (writable) settings
+        # surface, not a read-only render. Storing settings in Markdown does not
+        # make the menu read-only — the Vault section writes scoped settings to
+        # the runtime (vault.settings.write). Authority is therefore declared
+        # PER SECTION (render-only preferences vs the server-write Vault section),
+        # not by a single misleading frame designation (#2590 — owner reframe;
+        # OVERLAY_MODAL_FRAME_SPEC.md updated to match).
+        status_pill=None,
         guidance_surface="settings",
     )
     return f"""
-  <!-- Settings drawer (#1789, SEP-07) — Local UI preferences in one home.
-       Preferences re-render identical content (canonical hash byte-
-       unchanged), never touch the vault or a save/projection endpoint, and
-       are always resettable (spec §Resolved Q18/Q19). -->
+  <!-- Settings drawer (#1789, SEP-07) — a real settings surface. The Display/
+       Listening/Behaviour preference sections re-render identical content
+       (canonical hash byte-unchanged), persist browser-local, and are always
+       resettable (spec §Resolved Q18/Q19); Connection is a read-only display of
+       server state; the Vault section is a server-write surface (vault.settings.write
+       to Markdown). Authority is declared per section, not frame-wide (#2590). -->
   <style>
     .settings-drawer {{
       background: var(--bg-surface, #0c1220);
@@ -551,7 +557,7 @@ def settings_drawer_markup(fields: dict) -> str:
   <aside class="settings-drawer" id="settings-drawer"
     data-testid="settings-drawer" data-region="settings-drawer"
     data-overlay-id="settings" data-drawer-side="right" data-open="false"
-    data-authority="local-ui" data-storage-scope="browser-local"
+    data-authority="mixed" data-storage-scope="per-section"
     data-diverged="false" data-quiet-hours="inactive"
     data-sections="{sections}"
     data-canonical-font-size="{_e(DISPLAY_PREF_CANONICAL["fontSize"])}"

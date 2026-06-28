@@ -159,7 +159,12 @@ def test_drawer_sections_render_and_display_prefs_work() -> None:
     assert 'data-overlay-id="settings"' in drawer
     assert 'data-drawer-side="right"' in drawer
     assert 'data-open="false"' in drawer
-    assert 'data-authority="local-ui"' in drawer
+    # #2590: the drawer is a real (writable) settings surface with mixed
+    # authority declared per section, not a single frame-wide read-only
+    # render. The root carries data-authority="mixed"; the frame renders
+    # NO frame-wide status pill (it would mislabel the writable sections).
+    assert 'data-authority="mixed"' in drawer
+    assert 'data-testid="overlay-frame-status-pill"' not in drawer
     assert 'data-intent="overlay.dismiss"' in drawer
     assert "settings" in SHIPPED_OVERLAY_OCCUPANTS
     assert "overlayHost.register('settings'" in _controller_script(html)

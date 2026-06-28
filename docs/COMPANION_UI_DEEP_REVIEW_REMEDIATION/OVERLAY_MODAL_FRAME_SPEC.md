@@ -47,7 +47,7 @@ frame position it adopts, and any notable header-furniture delta.
 | ⌘K Panel palette (`cmd`) | Large centered panel | `center` | Panel ≠ Chat callout; no close button in header | title (`Panel`) · — · — · × |
 | Capture modal (`capture`) | Medium centered modal | `center` | ⓘ + × in header | title (`Capture`) · — · ⓘ · × |
 | Receipts history (`receipts`) | Small top-anchored card | `center` | Varies | title (`Receipts`) · — · — · × |
-| Settings (`settings`) | Right drawer | `right-drawer` | Section labels; no unified header | title (`Settings`) · read-only-pill · — · × |
+| Settings (`settings`) | Right drawer | `right-drawer` | Section labels; no unified header | title (`Settings`) · — · ⓘ · × |
 | Memory review (`memory`) | Right drawer | `right-drawer` | Provenance guard; no unified header | title (`Memory`) · status-pill · ⓘ · × |
 | System Map (`map`) | Large centered modal | `center` | Title present; no close button in fixed position | title (`System Map`) · — · — · × |
 
@@ -64,9 +64,13 @@ frame position it adopts, and any notable header-furniture delta.
 **Header furniture slots:**
 
 1. **title** — always present; the overlay's plain-language name (not a route or enum).
-2. **status-pill** — present only when the overlay has an authority or read-only designation to
-   display (e.g. settings' "Preferences re-render identical content. They never touch the vault").
-   Absent otherwise; the slot does not render an empty placeholder.
+2. **status-pill** — present only when the overlay has a single frame-wide authority designation to
+   display (e.g. Memory review's provenance guard). Absent otherwise; the slot does not render an
+   empty placeholder. Settings carries NO frame-wide pill: it is a real (writable) settings surface
+   whose sections declare authority individually — render-only browser-local preferences, a
+   read-only Connection display, and a server-write Vault section (`vault.settings.write` to
+   Markdown). A single "read-only" frame designation would mislabel the writable sections, so
+   authority is declared per section instead (#2590).
 3. **ⓘ** — present only when the overlay ships contextual guidance. The capture modal already has
    this; it is absent for palette and system map.
 4. **close (×)** — always present; activates `overlayHost.dismiss()`.
