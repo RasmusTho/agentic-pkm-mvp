@@ -23,15 +23,25 @@ from uuid import uuid4
 @dataclass(frozen=True)
 class ComposedBundleRef:
     context_bundle_id: str
-    retrieval_result_id: str
+    retrieval_result_id: str = ""
     non_authority: bool = True
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "context_bundle_id": self.context_bundle_id,
-            "retrieval_result_id": self.retrieval_result_id,
             "non_authority": True,
         }
+        # retrieval_result_id is optional in the schema; omit when absent rather than emit an empty
+        # (minLength-violating) id.
+        if self.retrieval_result_id:
+            out["retrieval_result_id"] = self.retrieval_result_id
+        return out
+
+
+# Storage/raw-access fields that must never appear inside a bounded ContextEnvelope. The bundle
+# schema permits vault_id (storage topology), but the envelope contract forbids any raw-access field
+# anywhere — so envelope-projected bundles drop them (the source bundle keeps them elsewhere).
+_ENVELOPE_FORBIDDEN_BUNDLE_KEYS = frozenset({"vault_id", "vault_root", "raw_index"})
 
 
 @dataclass(frozen=True)
@@ -40,8 +50,15 @@ class RetrievedItem:
     evidence_role_in_context: str
 
     def to_dict(self) -> dict[str, Any]:
+        # Project the bundle into bounded context: strip storage/raw-access fields. Dropping the
+        # optional vault_id keeps the bundle schema-valid.
+        bundle = {
+            k: v
+            for k, v in self.metadata_bundle.to_dict().items()
+            if k not in _ENVELOPE_FORBIDDEN_BUNDLE_KEYS
+        }
         return {
-            "metadata_bundle": self.metadata_bundle.to_dict(),
+            "metadata_bundle": bundle,
             "evidence_role_in_context": self.evidence_role_in_context,
         }
 
@@ -112,6 +129,13 @@ def assemble_envelope(
     principal_id: str,
     user_intent: str,
 ) -> ContextEnvelope:
+    # Fail loud on a scope mismatch: re-stamping a result built for one scope as another scope would
+    # smuggle the original scope's bundles into this envelope, bypassing the prefilter's premise.
+    if retrieval_result.active_scope_id != active_scope_id:
+        raise ValueError(
+            "active_scope_id mismatch: RetrievalResult was built for "
+            f"{retrieval_result.active_scope_id!r}, cannot package it as {active_scope_id!r}"
+        )
     denials = tuple(retrieval_result.denied_or_escalated_candidates)
     items = tuple(
         RetrievedItem(
@@ -121,10 +145,12 @@ def assemble_envelope(
         for c in retrieval_result.candidate_items
     )
     # Reference (never inline) the RCA ContextBundle this envelope composes; non_authority always true.
+    rr_id = retrieval_result.retrieval_id or ""
+    bundle_key = rr_id or uuid4().hex[:12]
     bundles = (
         ComposedBundleRef(
-            context_bundle_id=f"context-bundle:{retrieval_result.retrieval_id}",
-            retrieval_result_id=retrieval_result.retrieval_id,
+            context_bundle_id=f"context-bundle:{bundle_key}",
+            retrieval_result_id=rr_id,
         ),
     )
     return ContextEnvelope(

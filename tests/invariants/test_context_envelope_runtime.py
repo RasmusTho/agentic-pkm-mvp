@@ -10,9 +10,11 @@ Spec: docs/YGGDRASIL_RUNTIME_SLICE_1/CONTEXT_ENVELOPE_ASSEMBLY.md
 
 from __future__ import annotations
 
+import pytest
+
 from tests.invariants._helpers import assert_validates
 
-from yggdrasil_runtime import context, retrieval
+from yggdrasil_runtime import capture, context, retrieval
 
 _ALPHA = "scope:work/project-alpha"
 # Any raw-access shaped field must never appear anywhere in the envelope payload.
@@ -60,6 +62,39 @@ def test_envelope_references_bundle_as_non_authority() -> None:
         assert b["non_authority"] is True
         assert "context_bundle_id" in b
         assert "metadata_bundle" not in b  # a reference, never an inlined bundle
+
+
+def test_envelope_strips_vault_id_from_capture_bundles() -> None:
+    # Capture-path bundles carry vault_id (storage topology); the bounded envelope must not expose
+    # any raw-access/storage field, even nested inside a retrieved item's bundle.
+    art = capture.capture(text="a thought", principal_id="p-1")
+    assert art.metadata_bundle.vault_id, "precondition: capture bundle carries vault_id"
+    cand = retrieval.Candidate(
+        metadata_bundle=art.metadata_bundle,
+        admissibility_status="admitted",
+        evidence_role_in_context=art.metadata_bundle.evidence_role,
+    )
+    result = retrieval.RetrievalResult(
+        candidate_items=(cand,), scope_policy_prefiltered=True,
+        active_scope_id=art.metadata_bundle.scope_id, query="x",
+    )
+    env = context.assemble_envelope(
+        result, active_workspace_id="ws-1", active_scope_id=art.metadata_bundle.scope_id,
+        principal_id="p-1", user_intent="orient",
+    )
+    payload = env.to_dict()
+    assert_validates(payload, "context-envelope.schema.json")
+    assert "vault_id" not in payload["retrieved_items"][0]["metadata_bundle"]
+
+
+def test_envelope_rejects_scope_mismatch() -> None:
+    # A RetrievalResult built for one scope cannot be packaged as a different scope.
+    result = retrieval.retrieve(query="state machine", active_scope_id="scope:work/project-beta")
+    with pytest.raises(ValueError):
+        context.assemble_envelope(
+            result, active_workspace_id="ws-1", active_scope_id=_ALPHA,
+            principal_id="p-1", user_intent="orient",
+        )
 
 
 def test_runtime_denied_scopes_are_content_free() -> None:
