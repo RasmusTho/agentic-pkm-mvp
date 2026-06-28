@@ -24,6 +24,42 @@ def dsn() -> str:
     return resolve_dsn()
 
 
+def looks_like_prod_dsn(conninfo: t.Optional[str] = None) -> bool:
+    """Heuristic: does this DSN point at the production database?
+
+    Used as a safety guard by `make db-restore` so a bare restore can never
+    clobber prod. Prod is identified by either:
+      - the database name being exactly ``app`` (dev=``app_dev``, test=``app_test``), or
+      - the host port being the prod-published port ``15432``
+        (dev=``15433``, test=``15434``).
+
+    This is intentionally conservative: it errs toward flagging ambiguous DSNs
+    as prod so the restore refuses rather than silently overwriting prod data.
+    """
+    url = resolve_dsn(conninfo)
+    if not url:
+        return False
+    try:
+        from urllib.parse import urlsplit  # noqa: PLC0415
+
+        parts = urlsplit(url)
+    except Exception:
+        return False
+
+    db_name = (parts.path or "").lstrip("/").split("?", 1)[0]
+    if db_name == "app":
+        return True
+
+    try:
+        if parts.port == 15432:
+            return True
+    except ValueError:
+        # Malformed port: treat as ambiguous → flag as prod (conservative).
+        return True
+
+    return False
+
+
 def connect(conninfo: t.Optional[str] = None, **kwargs):
     import psycopg  # noqa: PLC0415
 

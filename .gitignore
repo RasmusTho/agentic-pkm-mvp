@@ -81,3 +81,6 @@ tests/retrieval/__init__.py
 vault/Test fil1.md
 vault/Workbench/Test fil 2.md
 vault/System/companions/
+
+# Dev DB snapshot dumps (dev-ergonomics / forensic; not for DR)
+.db-snapshots/
