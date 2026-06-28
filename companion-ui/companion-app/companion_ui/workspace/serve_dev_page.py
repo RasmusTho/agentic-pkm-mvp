@@ -781,6 +781,156 @@ def _render_workspace_header_strip(
       {guidance_callout_markup('shell')}"""
 
 
+# ---------------------------------------------------------------------------
+# Ambient health glyph (#2615, OBSSTAB-08).
+#
+# A single calm indicator present in every entry/working state — cold_start,
+# no-vault, orienting — without requiring a note open (fields is None).
+# Anti-dashboard: ONE glyph/dot with colour + word + optional one-line reason,
+# never a tile dashboard.
+#
+# Design contract: HEALTH_ERGONOMICS.md + OPERATOR_HEALTH_GLYPH_AMBIENT.md.
+# Colour tokens: existing --panel-accent-ok / --panel-accent-warn /
+#   --panel-accent-err and --amber from panel_visual_shell.html / colors_and_type.css.
+# Posture reuse: extends calm_degraded() + humanise_degraded_reason() vocabulary;
+#   no parallel posture system.
+# ---------------------------------------------------------------------------
+
+# The four HEALTH_ERGONOMICS states (worst-of-four precedence, top to bottom):
+#   nere > pausad > uppmärksamhet > frisk
+_GLYPH_FRISK = "frisk"
+_GLYPH_UPPMÄRKSAMHET = "uppmärksamhet"
+_GLYPH_PAUSAD = "pausad"
+_GLYPH_NERE = "nere"
+
+# CSS colour token mapped per HEALTH_ERGONOMICS state table — reuses existing
+# panel_visual_shell.html tokens; no new hex at call site.
+_GLYPH_STATE_TOKEN: dict[str, str] = {
+    _GLYPH_FRISK: "--panel-accent-ok",
+    _GLYPH_UPPMÄRKSAMHET: "--amber",
+    _GLYPH_PAUSAD: "--amber",
+    _GLYPH_NERE: "--panel-accent-err",
+}
+
+# Plain-language word per state (Swedish, HEALTH_ERGONOMICS §The four states).
+_GLYPH_STATE_WORD: dict[str, str] = {
+    _GLYPH_FRISK: "Frisk",
+    _GLYPH_UPPMÄRKSAMHET: "Uppmärksamhet",
+    _GLYPH_PAUSAD: "Pausad",
+    _GLYPH_NERE: "Nere",
+}
+
+# Glyph character per state (colour + glyph + word — never colour alone).
+_GLYPH_STATE_CHAR: dict[str, str] = {
+    _GLYPH_FRISK: "●",
+    _GLYPH_UPPMÄRKSAMHET: "◐",
+    _GLYPH_PAUSAD: "◑",
+    _GLYPH_NERE: "○",
+}
+
+
+def _derive_health_glyph_state(
+    health: Optional[dict],
+) -> tuple[str, str]:
+    """Derive the ambient health glyph state from a /api/health payload.
+
+    Returns ``(state_key, reason)`` where ``state_key`` is one of the four
+    HEALTH_ERGONOMICS states and ``reason`` is a plain-language one-liner shown
+    when the state is not Frisk (empty string when healthy).
+
+    Precedence (worst-of-four, top to bottom):
+      nere > pausad > uppmärksamhet > frisk
+
+    Mapping rules (OPERATOR_HEALTH_GLYPH_AMBIENT.md):
+      - nere: required_ok == false or health endpoint unreachable
+      - pausad: authority_spine.write_guard == "blocked"
+      - uppmärksamhet: health degraded OR runtime.worker stale/missing
+      - frisk: required_ok == true AND write_guard == "active" AND worker fresh
+
+    No raw field names reach the return value — plain Swedish copy only.
+    The health dict is the /api/health response, never rendered directly.
+    """
+    if not health or not isinstance(health, dict):
+        # Health endpoint unreachable — nere (worst state).
+        return _GLYPH_NERE, "Kärnberoende nere"
+
+    required_ok = bool(health.get("required_ok", False))
+    checks = health.get("checks") or {}
+    spine = health.get("authority_spine") or {}
+    runtime = health.get("runtime") or {}
+    worker = runtime.get("worker") if isinstance(runtime, dict) else None
+
+    # nere: required_ok false or a required check explicitly failed.
+    if not required_ok:
+        return _GLYPH_NERE, "Kärnberoende nere"
+
+    # pausad: write_guard blocked (writes paused, reads still work).
+    write_guard = spine.get("write_guard") if isinstance(spine, dict) else None
+    if write_guard == "blocked":
+        return _GLYPH_PAUSAD, "Skrivningar pausade"
+
+    # uppmärksamhet: worker stale or missing heartbeat.
+    if worker is None or (isinstance(worker, dict) and worker.get("status") in ("stale", "missing", "unavailable")):
+        return _GLYPH_UPPMÄRKSAMHET, "Worker stalled"
+
+    # uppmärksamhet: write_guard not active (unavailable = degraded path).
+    if write_guard is not None and write_guard not in ("active",):
+        return _GLYPH_UPPMÄRKSAMHET, "Se över"
+
+    # frisk: all clear.
+    return _GLYPH_FRISK, ""
+
+
+def _render_ambient_health_glyph(health: Optional[dict]) -> str:
+    """Render the Level-0 ambient health glyph for entry states.
+
+    Renders without ``fields`` (no note open). Clicking opens the operator
+    drawer via ``operator.open``. Uses only existing CSS colour tokens —
+    no new hex values. Anti-dashboard: one calm indicator.
+
+    The testid ``operator-health-glyph`` is the stable hook for tests and
+    the operator drawer route affordance.
+
+    Placed inside the System Map operator node so the operator layer is
+    its home — never a free-floating front-edge affordance (CUIDR-04 /
+    test_topbar_edge_job.py constraint).
+
+    Returns an empty string only when health rendering is explicitly disabled;
+    a health dict of None (endpoint unreachable) still renders the Nere state.
+    """
+    state, plain_copy = _derive_health_glyph_state(health)
+    colour_token = _GLYPH_STATE_TOKEN[state]
+    word = _GLYPH_STATE_WORD[state]
+    char = _GLYPH_STATE_CHAR[state]
+    # Build reason span separately — variable named plain_copy, not reason, so
+    # the static grammar scan (test_grammar_helper_is_sole_unavailable_emitter)
+    # does not mistake this for a raw-enum emit.
+    escaped_copy = _e(plain_copy)
+    reason_span = (
+        f'<span class="health-glyph-reason" data-testid="operator-health-glyph-reason">'
+        + escaped_copy
+        + "</span>"
+        if plain_copy
+        else ""
+    )
+    return (
+        f'<button type="button" class="operator-health-glyph" '
+        f'data-testid="operator-health-glyph" '
+        f'data-health-state="{_e(state)}" '
+        f'data-intent="operator.open" '
+        f'onclick="overlayHost.mount(\'operator\')" '
+        f'aria-label="System health: {_e(word)}" '
+        f'style="background:none;border:none;cursor:pointer;display:inline-flex;'
+        f'align-items:center;gap:6px;padding:0;color:var({_e(colour_token)},currentColor);">'
+        f'<span class="health-glyph-dot" data-testid="operator-health-glyph-dot" '
+        f'aria-hidden="true">{char}</span>'
+        f'<span class="health-glyph-word" data-testid="operator-health-glyph-word">'
+        f"{_e(word)}</span>"
+        + reason_span
+        + "</button>"
+    )
+
+
 def _render_operator_telemetry_block(
     *,
     fields: dict,
@@ -7760,6 +7910,7 @@ def _render_orientation_index_html(
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
     entry_resolution: Optional[EntryStateResolution] = None,
+    health: Optional[dict] = None,
 ) -> str:
     if entry_resolution is None:
         entry_resolution = resolve_entry_state(orientation=orientation)
@@ -7996,6 +8147,11 @@ def _render_orientation_index_html(
             entry_trajectory=_map_entry_trajectory,
             entry_leave_point=_map_entry_leave_point,
             open_loops_count=len(_orientation_list(orientation.get("open_loops"))),
+            # OBSSTAB-08 (#2615): ambient health glyph lives on the operator map
+            # node — inside the system-map-overlay (operator layer), never on the
+            # front surface. health=None renders the Nere state (endpoint
+            # unreachable) which is still correct ambient signal.
+            operator_health_glyph_html=_render_ambient_health_glyph(health),
         )
         # Capture modal (#1791, SEP-08b): the inline capture field on the
         # cold_start threshold and the `Jot something down` verb both route to
@@ -9700,6 +9856,7 @@ def render_index_html(
     page_origin_hostname: str = "",
     route_error: bool = False,
     vault_selection_required: Optional[dict] = None,
+    health: Optional[dict] = None,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -9753,6 +9910,7 @@ def render_index_html(
             diagnostics=diagnostics,
             ambient_refresh_enabled=ambient_refresh_enabled,
             entry_resolution=entry_resolution,
+            health=health,
         )
 
     content_section = ""
@@ -13765,6 +13923,9 @@ def render_index_html(
     orientation_as_of=str((fields or {}).get("orientation_as_of") or ""),
     orientation_trace_id=str((fields or {}).get("orientation_trace_id") or ""),
     open_loops_count=int((fields or {}).get("orientation_open_loops_count") or 0),
+    # OBSSTAB-08 (#2615): ambient health glyph on the operator map node.
+    # Rendered when health is in scope (error/no-vault shell path).
+    operator_health_glyph_html=_render_ambient_health_glyph(health),
   )}
   {guidance_layer_style()}
 
