@@ -480,31 +480,35 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
     # old dismiss()->mount() shape whose pending history.back() raced the next
     # push and desynced browser history from data-overlay-stack.
     script = _map_script(html)
+    # Forbidden-CALL / racy-shape checks run against a comment-stripped view: the
+    # controller's explanatory comments legitimately *name* history.back /
+    # history.replaceState / overlayHost.mount('vault') to document the race
+    # being removed and where the swap lives; only executable code should match.
+    script_code = "\n".join(re.sub(r"//.*$", "", ln) for ln in script.splitlines())
     assert "overlayHost.replace('cmd')" in script
     assert "overlayHost.replace('memory')" in script
     assert "overlayHost.replace('capture')" in script
     assert "overlayHost.replace('receipts')" in script
     assert "overlayHost.replace('settings')" in script
-    # Negative-confirm: the routable-overlay branches must NOT use the racy
-    # dismiss()->mount() pattern (the central NAV-3b fix). dismiss() survives
-    # only on the non-overlay focus targets (anchor / vault / panel / operator).
+    # Negative-confirm: NO map->overlay branch may use the racy dismiss()->mount()
+    # pattern (the central NAV-3b fix). dismiss() survives on the pure focus
+    # targets (anchor / panel / operator) and the WIDE vault branch (inline
+    # pane). Vault on a NARROW viewport is itself an overlay and routes through
+    # replace('vault') (see test_vault_route_swaps_on_narrow_focuses_on_wide).
     for racy in (
         "overlayHost.mount('cmd')",
         "overlayHost.mount('memory')",
         "overlayHost.mount('capture')",
         "overlayHost.mount('receipts')",
         "overlayHost.mount('settings')",
+        "overlayHost.mount('vault')",
     ):
-        assert racy not in script, (
+        assert racy not in script_code, (
             f"map route must use overlayHost.replace, not the racy {racy}"
         )
-    assert "vaultBrowser.focus()" in script
-    # dismiss() is still present for the non-overlay focus targets.
+    assert "vaultBrowser.focus()" in script  # wide vault branch focuses inline
+    # dismiss() is still present for the pure focus targets + the wide vault path.
     assert "overlayHost.dismiss()" in script
-    # Forbidden-CALL checks run against a comment-stripped view: the controller's
-    # explanatory comments legitimately *name* history.back / history.replaceState
-    # to document the race being removed and where the swap actually lives.
-    script_code = "\n".join(re.sub(r"//.*$", "", ln) for ln in script.splitlines())
     for forbidden in (
         "location.href",
         "location.assign",
@@ -552,6 +556,73 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         assert error_nodes[sid].startswith("<article"), sid
         assert 'data-routable="false"' in error_nodes[sid], sid
         assert "onclick" not in error_nodes[sid], sid
+
+
+# ---------------------------------------------------------------------------
+# NAV-3b (#2640): the System Map vault route is narrow/wide-aware. Vault is a
+# focus target on a WIDE viewport (the persistent inline left pane — focus()
+# mounts nothing, no race) but an OVERLAY on a NARROW one (focus() falls through
+# to open() -> overlayHost.mount('vault')). The overlay case must go through the
+# atomic overlayHost.replace('vault') swap, or dismiss()+focus() re-introduces
+# the dismiss()->mount() history race replace() exists to kill.
+# ---------------------------------------------------------------------------
+
+
+def test_vault_route_swaps_on_narrow_focuses_on_wide() -> None:
+    html = _render_workspace()
+    script = _map_script(html)
+
+    # Isolate the vault branch of route() (up to the next sibling, the 'panel'
+    # branch), then strip JS line-comments: the branch's explanatory comments
+    # legitimately *name* overlayHost.mount('vault') / vaultBrowser.focus() to
+    # document the race, which would pollute substring + ordering checks.
+    m = re.search(r"if \(id === 'vault'\) \{(.*?)if \(id === 'panel'\)", script, re.S)
+    assert m, "route() must have a vault branch"
+    vault_branch = "\n".join(
+        re.sub(r"//.*$", "", ln) for ln in m.group(1).splitlines()
+    )
+
+    # Narrow (overlay) path: gated on vaultBrowser.prefersOverlay(), routes via
+    # the atomic swap — never overlayHost.mount('vault') (the racy shape).
+    assert "window.vaultBrowser.prefersOverlay()" in vault_branch, (
+        "vault route must consult vaultBrowser.prefersOverlay() to detect the "
+        "narrow (overlay) case"
+    )
+    assert "overlayHost.replace('vault')" in vault_branch, (
+        "the narrow (overlay) vault case must route through the atomic swap"
+    )
+    assert "overlayHost.mount('vault')" not in vault_branch, (
+        "the vault route must never use the racy dismiss()->mount() shape"
+    )
+
+    # Wide (inline-focus) path preserved: dismiss the map + focus the pane.
+    assert "overlayHost.dismiss()" in vault_branch, (
+        "the wide vault path must still dismiss the map back to the anchor"
+    )
+    assert "vaultBrowser.focus()" in vault_branch, (
+        "the wide vault path must still focus the inline pane"
+    )
+
+    # Ordering: the prefersOverlay()->replace swap must SHORT-CIRCUIT before the
+    # wide dismiss()+focus() fallback (otherwise the narrow case would still
+    # dismiss-then-mount). replace('vault') precedes dismiss() in the branch.
+    replace_pos = vault_branch.find("overlayHost.replace('vault')")
+    dismiss_pos = vault_branch.find("overlayHost.dismiss()")
+    focus_pos = vault_branch.find("vaultBrowser.focus()")
+    assert -1 < replace_pos < dismiss_pos < focus_pos, (
+        "the narrow replace('vault') swap must short-circuit before the wide "
+        "dismiss()+focus() fallback"
+    )
+
+    # The predicate ships on the full vaultBrowser in the workspace shell: it is
+    # the inverse of the inline-pane check focus() uses (single source of truth,
+    # so focus-inline vs open-overlay can never diverge from the route's view).
+    assert "prefersOverlay: function()" in html, (
+        "the workspace vaultBrowser must expose the prefersOverlay() predicate"
+    )
+    assert "return !hasInlinePane();" in html, (
+        "prefersOverlay() must be the inverse of the shared inline-pane check"
+    )
 
 
 # ---------------------------------------------------------------------------

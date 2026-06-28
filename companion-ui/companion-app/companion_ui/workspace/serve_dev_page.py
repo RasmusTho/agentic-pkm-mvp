@@ -14188,16 +14188,24 @@ def render_index_html(
         }});
     }}
 
+    // §5.2/§5.3 — the canonical browser is the persistent left context pane on
+    // desktop; it is unavailable on narrow viewports, where browsing falls back
+    // to the modal overlay. This single predicate decides inline-pane vs
+    // overlay so focus() and prefersOverlay() never diverge.
+    function hasInlinePane() {{
+      var leftPane = document.getElementById('vault-browser-left-pane');
+      return !!(leftPane &&
+        window.matchMedia('(min-width: 860px)').matches &&
+        window.getComputedStyle(leftPane).display !== 'none');
+    }}
+
     window.vaultBrowser = {{
       focus: function() {{
         // §5.2/§5.3 — on desktop the canonical browser is the left context
         // pane; focus it in place. Only fall back to the modal overlay on
         // narrow viewports where the persistent left pane is not available.
-        var leftPane = document.getElementById('vault-browser-left-pane');
-        var hasInlinePane = leftPane &&
-          window.matchMedia('(min-width: 860px)').matches &&
-          window.getComputedStyle(leftPane).display !== 'none';
-        if (hasInlinePane) {{
+        if (hasInlinePane()) {{
+          var leftPane = document.getElementById('vault-browser-left-pane');
           // §4.1/§5.2 — activate browse mode in the single left context panel.
           if (window.leftPanel) window.leftPanel.setMode('browse');
           leftPane.setAttribute('data-browse-focused', 'true');
@@ -14207,6 +14215,15 @@ def render_index_html(
           return;
         }}
         vaultBrowser.open();
+      }},
+      prefersOverlay: function() {{
+        // NAV-3b (#2640): true exactly when focus() would fall through to
+        // open() — i.e. there is no inline left pane and browsing opens as the
+        // 'vault' overlay. The System Map route uses this to send the narrow
+        // (overlay) vault case through the atomic overlayHost.replace swap
+        // instead of dismiss()+focus() (which would mount the vault overlay
+        // right after a pending history.back(), re-introducing the race).
+        return !hasInlinePane();
       }},
       open: function() {{
         overlay.classList.add('open');

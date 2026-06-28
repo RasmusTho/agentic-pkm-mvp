@@ -435,3 +435,74 @@ def test_system_map_route_to_already_open_destination_does_not_duplicate() -> No
                 browser.close()
     finally:
         server.shutdown()
+
+
+def test_system_map_vault_route_swaps_on_narrow_back_closes_in_one_press() -> None:
+    """NAV-3b (#2640): the System Map Vault route stays in history sync on a
+    NARROW viewport, where vault opens as the ``vault`` overlay.
+
+    On a narrow viewport (< 860px) the inline left pane is unavailable, so
+    vaultBrowser.focus() would fall through to open() -> mount('vault'). The
+    route detects this via vaultBrowser.prefersOverlay() and goes through
+    overlayHost.replace('vault') instead. Open the System Map, click the Vault
+    node, and the vault overlay opens with the map closed (stack ``vault``);
+    exactly ONE browser Back closes it (no extra/dead press, no navigate-away),
+    ``data-overlay-stack`` consistent. Against the unfixed route (dismiss() then
+    focus()->open()->mount('vault')), the pending history.back() would be
+    swallowed and one Back would not close the vault overlay.
+    """
+    server, port = _make_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}/"
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                # NARROW viewport: the persistent inline left pane is suppressed,
+                # so vault is an overlay (prefersOverlay() is true).
+                page = browser.new_page(viewport={"width": 600, "height": 900})
+                page.goto(base, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                start_url = page.url
+                assert page.evaluate(_OPEN_JS) == "none"
+
+                # Precondition: at this width vault prefers the overlay (so the
+                # route must take the replace path, not dismiss()+focus()).
+                assert (
+                    page.evaluate(
+                        "window.vaultBrowser && window.vaultBrowser.prefersOverlay"
+                        " ? window.vaultBrowser.prefersOverlay() : false"
+                    )
+                    is True
+                ), "narrow viewport must report vaultBrowser.prefersOverlay() == true"
+
+                # Open the System Map, then click its Vault routing node.
+                page.evaluate("window.overlayHost.mount('map')")
+                _wait_open(page, "map")
+                _wait_stack(page, "map")
+                node = page.query_selector(
+                    "[data-testid='system-map-node'][data-surface-id='vault']"
+                )
+                assert node is not None, "map must render a clickable vault route node"
+                node.click()
+
+                # The vault overlay opens and the map closes — one atomic swap,
+                # stack is exactly 'vault' (depth stays 1).
+                _wait_open(page, "vault")
+                _wait_stack(page, "vault")
+                assert page.url == start_url, "routing must not navigate the page away"
+
+                # ONE browser Back closes the vault overlay (no extra/dead press).
+                page.go_back()
+                _wait_open(page, "none")
+                _wait_stack(page, "")
+                assert page.url == start_url, (
+                    "one Back must close the vault route without navigating away"
+                )
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()

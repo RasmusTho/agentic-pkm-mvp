@@ -734,6 +734,22 @@ def system_map_overlay_script() -> str:
           return;
         }
         if (id === 'vault') {
+          // Vault is a focus target on WIDE viewports (the persistent inline
+          // left pane) but an OVERLAY on narrow ones (vaultBrowser.focus()
+          // falls through to open() -> overlayHost.mount('vault')). NAV-3b
+          // (#2640): when vault opens as the overlay, route it through the
+          // atomic swap — dismiss()+focus() would mount the vault overlay right
+          // after a pending history.back() (popping=true), re-introducing the
+          // race replace() exists to kill (Back would need a second press).
+          if (window.vaultBrowser && window.vaultBrowser.prefersOverlay
+              && window.vaultBrowser.prefersOverlay()) {
+            window.overlayHost.replace('vault');
+            return;
+          }
+          // Wide viewport: dismiss the map and focus the inline pane (mounts
+          // nothing -> no race). The orientation/no_vault surfaces also land
+          // here (their vaultBrowser shim has no prefersOverlay), where vault is
+          // a focus target, not a host overlay.
           window.overlayHost.dismiss();
           if (window.vaultBrowser) { window.vaultBrowser.focus(); return; }
           focusRegion('[data-testid=workspace-orientation-vault-entry]');
