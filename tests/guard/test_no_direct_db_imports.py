@@ -30,6 +30,10 @@ ALLOW_FILES = (
     'app/memory_kv/store.py',
     'app/agent/repository.py',
     'app/api/routes/search.py',
+    # Health contract reads the live DB reachability probe (ping_postgres) so
+    # readiness reflects real dependency health (#2598). It consumes only the
+    # bounded SELECT-1 ping, not the data layer.
+    'app/health_contract.py',
 )
 
 def _allowed(p: Path) -> bool:

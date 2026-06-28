@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
+from app.db.dsn import ping_postgres
 from app.events.outbox import default_outbox_path, event_name, latest_trace_story, normalize_timestamp
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
@@ -33,11 +34,8 @@ def _count_outbox_lines_db() -> int | None:
         return None
 
 
-def _count_outbox_lines(path: Path) -> int:
-    """Count outbox records: DB when available, else streaming file line count."""
-    db_count = _count_outbox_lines_db()
-    if db_count is not None:
-        return db_count
+def _count_outbox_lines_from_file(path: Path) -> int:
+    """Streaming file line count of the outbox; never touches the DB. 0 on error."""
     if not path.exists():
         return 0
     try:
@@ -54,6 +52,14 @@ def _count_outbox_lines(path: Path) -> int:
         return count
     except Exception:
         return 0
+
+
+def _count_outbox_lines(path: Path) -> int:
+    """Count outbox records: DB when available, else streaming file line count."""
+    db_count = _count_outbox_lines_db()
+    if db_count is not None:
+        return db_count
+    return _count_outbox_lines_from_file(path)
 
 
 def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
@@ -187,12 +193,17 @@ class HealthContract:
         state_machine: HealthStateMachine | None = None,
         now_fn: Callable[[], datetime] | None = None,
         vault_root_fn: Callable[[], Path | None] | None = None,
+        db_ping_fn: Callable[..., tuple[bool, str]] | None = None,
     ):
         self.state_machine = state_machine or HealthStateMachine()
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
         # Optional resolver: returns None when no vault is selected (#2384) and
         # still raises VaultRootMisconfiguredError for a set-but-missing root.
         self.vault_root_fn = vault_root_fn or resolve_optional_vault_root
+        # Live DB reachability probe (#2598). Injectable so tests can exercise the
+        # readiness short-circuit without a real Postgres. Bounded by the caller's
+        # connect_timeout so the health probe never hangs.
+        self.db_ping_fn = db_ping_fn or ping_postgres
 
     def evaluate(self) -> dict[str, Any]:
         now = self.now_fn()
@@ -204,6 +215,24 @@ class HealthContract:
             vault_root = None
         settings_result = load_health_settings(vault_root=vault_root)
         outbox_path = default_outbox_path()
+
+        # Dependency layer (#2598): probe the live DB FIRST, before any DB-backed
+        # diagnostic (object store count, index doctor) runs. When Postgres is
+        # down under STORE_BACKEND=pg we must short-circuit and RETURN a complete
+        # `unhealthy` snapshot here — those diagnostics would otherwise open a
+        # second psycopg connection that raises or hangs, turning /readyz's clean
+        # 503 into a 500 or a slow timeout. `unhealthy` (not `degraded`) is
+        # required: `degraded` is in READY_STATES so /readyz would stay 200 on
+        # DB-down — the false-green this slice exists to kill.
+        db_down_reason = self._db_dependency_down_reason()
+        if db_down_reason is not None:
+            return self._db_down_snapshot(
+                now=now,
+                settings_result=settings_result,
+                outbox_path=outbox_path,
+                reason=db_down_reason,
+            )
+
         outbox_count = _count_outbox_lines(outbox_path)
         records = _read_tail_records(outbox_path)
         object_count = self._count_objects()
@@ -220,7 +249,19 @@ class HealthContract:
             age,
             settings_result.settings.thresholds,
         )
-        index_result = diagnose_index()
+        # Belt-and-braces: a DB-backed index diagnostic must never escape and turn
+        # a readiness 503 into a 500. The ping above already guards the known
+        # DB-down case; this catches a flaky/partial DB that fails mid-diagnostic.
+        try:
+            index_result = diagnose_index()
+        except Exception as exc:
+            index_result = {
+                "backend": None,
+                "expected_identity": None,
+                "stored_identity": None,
+                "issues": [f"index diagnostic failed ({type(exc).__name__})"],
+                "warnings": [],
+            }
         index_status = self._summary_status(
             index_result.get("issues"),
             index_result.get("warnings"),
@@ -289,6 +330,119 @@ class HealthContract:
         if settings_result.settings.incident_capture.transition_history:
             result["recent_transition_history"] = list(self.state_machine.transition_history)
         return result
+
+    def _db_down_snapshot(
+        self,
+        *,
+        now: datetime,
+        settings_result: Any,
+        outbox_path: Path,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Build a complete `unhealthy` snapshot for a known DB-down stack.
+
+        Uses only DB-free inputs (env, settings, the outbox file tail) so no
+        second psycopg connection is attempted on the known-down path. The shape
+        mirrors the normal snapshot key-for-key so `/readyz`, `/status`, and CLI
+        consumers never KeyError. The outbox state machine is intentionally NOT
+        mutated — this is a contract-level dependency override, so outbox recovery
+        hysteresis is unaffected once Postgres returns.
+        """
+        state = "unhealthy"
+        since_ts = now.isoformat()
+        # File-only outbox count: never route through the DB count helper while
+        # the DB is known down. _read_tail_records is file-based and fail-soft.
+        outbox_count = _count_outbox_lines_from_file(outbox_path)
+        records = _read_tail_records(outbox_path)
+        age = self._compute_age(self._latest_timestamp(records), now)
+        # Do NOT count objects here: the pg object store's connect() has no bounded
+        # timeout, so on a known-down DB it could block for seconds. Report 0.
+        object_count = 0
+        events_status = self._events_status(records)
+        catch_up_progress = self._catch_up_progress(
+            outbox_count,
+            age,
+            settings_result.settings.thresholds,
+        )
+        index_status = "fail"
+        writes_allowed = False  # unhealthy is in WRITE_BLOCKED_STATES
+        write_guard_reason = reason
+        suggested_actions = ["python -m app.cli health status --json"]
+        bootstrap_state, bootstrap_reason = self._bootstrap_state(object_count, outbox_count)
+
+        if settings_result.settings.incident_capture.enabled and state != self.state_machine.state:
+            self._append_incident_log(
+                path=settings_result.settings.incident_log_path,
+                entry=self._incident_entry(
+                    now=now,
+                    state=state,
+                    reason=reason,
+                    since_ts=since_ts,
+                    settings_result=settings_result,
+                    outbox_count=outbox_count,
+                    outbox_recent_age_s=age,
+                    index_status=index_status,
+                    events_status=events_status,
+                    writes_allowed=writes_allowed,
+                    write_guard_reason=write_guard_reason,
+                    catch_up_progress=catch_up_progress,
+                    suggested_actions=suggested_actions,
+                ),
+            )
+
+        result: dict[str, Any] = {
+            "environment": active_environment(),
+            "state": state,
+            "reason": reason,
+            "since_ts": since_ts,
+            "vault": {
+                "status": settings_result.vault_status,
+                "configured_vault_root": settings_result.configured_vault_root,
+            },
+            "outbox_count": outbox_count,
+            "outbox_recent_age_s": age,
+            "store_object_count": object_count,
+            "bootstrap_state": bootstrap_state,
+            "bootstrap_reason": bootstrap_reason,
+            "embedding_identity": {
+                "backend": None,
+                "expected_identity": None,
+                "stored_identity": None,
+            },
+            "index_doctor_status": index_status,
+            "events_doctor_status": events_status,
+            "errors_last_10m": self._count_errors(records, now),
+            "settings_status": settings_result.status,
+            "settings_source": settings_result.source.to_payload(),
+            "settings_errors": settings_result.errors,
+            "thresholds": settings_result.settings.thresholds.to_payload(),
+            "writes_allowed": writes_allowed,
+            "write_guard_reason": write_guard_reason,
+            "catch_up_progress": catch_up_progress,
+            "suggested_actions": suggested_actions,
+        }
+        if settings_result.settings.incident_capture.transition_history:
+            result["recent_transition_history"] = list(self.state_machine.transition_history)
+        return result
+
+    def _db_dependency_down_reason(self) -> str | None:
+        """Return a human-legible reason when the DB dependency is down, else None.
+
+        Only gates readiness when ``STORE_BACKEND=pg`` — the memory backend has no
+        Postgres dependency. The ping is bounded (``connect_timeout=1.0`` s) so the
+        health probe never hangs, and any unexpected probe error fails closed (the
+        DB is treated as unreachable) rather than silently reporting ready.
+        """
+        backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+        if backend != "pg":
+            return None
+        try:
+            ok, detail = self.db_ping_fn(timeout=1.0)
+        except Exception as exc:  # fail closed: a probe error is not a healthy DB
+            return f"postgres unreachable (ping error: {type(exc).__name__})"
+        if ok:
+            return None
+        return f"postgres unreachable: {detail}"
 
     def _latest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
         latest: datetime | None = None
