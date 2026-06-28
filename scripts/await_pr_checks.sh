@@ -134,11 +134,12 @@ echo "all required checks passed on $SHA"
 
 if [ "$CHECK_CODEX" -eq 1 ]; then
   bot="chatgpt-codex-connector[bot]"
-  # Resolve the verdict against the EXACT verified commit. The authoritative head-specific marker is
-  # a Codex REVIEW whose commit_id == SHA — immune to a commit's embedded committer date, which can
-  # predate a stale PR-level 👍 (e.g. a cherry-picked or locally-created head). All evidence reads
-  # are PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than degrading to "no block",
-  # and --paginate ensures feedback on page 2+ is not missed (REST list endpoints default to 30/page).
+  # Resolve the verdict against the EXACT verified commit. The strongest head marker is a Codex REVIEW
+  # whose commit_id == SHA; Codex also commonly signals a clean pass with only a 👍 reaction, honored
+  # as a best-effort fallback (reactions are PR-level, anchored to the head commit date — for
+  # cherry-picked/unusual heads the final call is verification-and-closure's). All evidence reads are
+  # PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than degrading to "no block", and
+  # --paginate ensures page-2+ feedback is not missed (REST list endpoints default to 30 items/page).
   reviewed_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
   cr_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
@@ -152,23 +153,30 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   conv_ts=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and (.body | contains(\"Useful? React\"))) | .created_at" 2>/dev/null) \
     || { echo "codex: conversation comments read failed — failing closed" >&2; exit 2; }
   conv_ts=$(printf '%s\n' "$conv_ts" | sort | tail -1)
+  react_lines=$(gh api --paginate "repos/$REPO/issues/$PR/reactions" --jq ".[] | select(.user.login==\"$bot\") | \"\(.content)\t\(.created_at)\"" 2>/dev/null) \
+    || { echo "codex: reactions read failed — failing closed" >&2; exit 2; }
+  pos_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="+1"||$1=="heart"||$1=="hooray"||$1=="rocket"||$1=="laugh"{print $2}' | sort | tail -1)
+  neg_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="-1"||$1=="confused"{print $2}' | sort | tail -1)
   reviewed=$(printf '%s' "$reviewed_ids" | grep -c . || true)
   cr=$(printf '%s' "$cr_ids" | grep -c . || true)
   findings=$(printf '%s' "$find_ids" | grep -c . || true)
-  echo "codex: reviewed_head=${reviewed:-0} changes_requested=${cr:-0} findings_on_head=${findings:-0} conversation_finding=${conv_ts:-none}"
+  echo "codex: reviewed_head=${reviewed:-0} changes_requested=${cr:-0} findings_on_head=${findings:-0} conversation_finding=${conv_ts:-none} positive_reaction=${pos_ts:-none} negative_reaction=${neg_ts:-none}"
 
-  # Blocking: Codex requested changes on this exact commit.
-  if [ "${cr:-0}" -gt 0 ]; then
-    echo "CODEX BLOCKING: changes-requested on $SHA" >&2; exit 3
+  # Blocking: changes-requested on this commit, or a negative reaction newer than the head.
+  if [ "${cr:-0}" -gt 0 ] || { [ -n "$neg_ts" ] && [ -n "$head_ts" ] && [[ "$neg_ts" > "$head_ts" ]]; }; then
+    echo "CODEX BLOCKING for $SHA (changes-requested or fresh negative reaction)" >&2; exit 3
   fi
   # Findings to address — inline (commit-tied) or a Codex conversation comment after the head.
   if [ "${findings:-0}" -gt 0 ] || { [ -n "$conv_ts" ] && [ -n "$head_ts" ] && [[ "$conv_ts" > "$head_ts" ]]; }; then
     echo "codex: finding(s) for $SHA (inline=$findings, conversation=${conv_ts:-none}) — address per verification-and-closure" >&2; exit 4
   fi
-  # Pass ONLY when Codex has reviewed THIS exact commit (review.commit_id == SHA) with no findings/
-  # changes — the head-anchored verdict marker, not a possibly-stale reaction.
+  # Pass when Codex reviewed THIS exact commit (review.commit_id == SHA; strongest marker) or left a
+  # positive reaction newer than the head — and nothing above blocked.
   if [ "${reviewed:-0}" -gt 0 ]; then
     echo "codex: pass (Codex reviewed this exact head $SHA with no findings)"; exit 0
+  fi
+  if [ -n "$pos_ts" ] && [ -n "$head_ts" ] && [[ "$pos_ts" > "$head_ts" ]]; then
+    echo "codex: pass (positive reaction $pos_ts newer than head $head_ts; best-effort — skill owns ambiguous calls)"; exit 0
   fi
   echo "codex: no Codex review for this exact head yet — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
   echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
