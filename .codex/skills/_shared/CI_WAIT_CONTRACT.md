@@ -55,11 +55,12 @@ It never issues a GraphQL call. For an autonomous `&& gh pr merge`, run with `--
 `0`: exit `4` means stop and resolve the Codex verdict yourself per *Reading the Codex verdict* (do not
 hard-wait, and do not auto-merge on an unresolved verdict). The `--codex` verdict is resolved
 **head-specifically** — a pass requires a Codex review whose `commit_id` equals the verified head (the
-strongest marker), or, best-effort, a positive reaction newer than the head commit; findings /
-changes-requested are matched to the exact SHA. Reactions are PR-level (no commit id), so the reaction
-fallback is best-effort — `verification-and-closure` remains the merge authority and owns ambiguous or
-cherry-picked-head calls. The script gates the *wait* and reports a head-pinned verdict; it does not
-replace the skill's judgment.
+strongest marker), or a positive reaction newer than the head's **check-run start time** — a reliable
+GitHub-side head-push timestamp, immune to a backdated cherry-picked/locally-created commit. Findings /
+changes-requested are matched to the exact SHA. If the head-push time can't be resolved the reaction
+fallback is skipped (reviewed-review only), so a stale reaction can never pass on its own.
+`verification-and-closure` remains the merge authority for genuinely ambiguous calls; the script gates
+the *wait* and reports a head-pinned verdict — it does not replace the skill's judgment.
 
 ## Manual REST commands (when the script is unavailable)
 

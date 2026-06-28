@@ -146,20 +146,22 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   bot="chatgpt-codex-connector[bot]"
   # Resolve the verdict against the EXACT verified commit. The strongest head marker is a Codex REVIEW
   # whose commit_id == SHA; Codex also commonly signals a clean pass with only a 👍 reaction, honored
-  # as a best-effort fallback (reactions are PR-level, anchored to the head commit date — for
-  # cherry-picked/unusual heads the final call is verification-and-closure's). All evidence reads are
-  # PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than degrading to "no block", and
-  # --paginate ensures page-2+ feedback is not missed (REST list endpoints default to 30 items/page).
+  # as a fallback whose freshness is anchored to the head's check-run start time (see below). All
+  # evidence reads are PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than degrading to
+  # "no block", and --paginate ensures page-2+ feedback is not missed (REST lists default to 30/page).
   reviewed_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
   cr_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
   find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
-  # Conversation comments (/issues/<pr>/comments) aren't commit-tied; every Codex finding carries the
-  # "Useful? React" footer. The head commit date is used ONLY to block (exit 4) — the safe direction
-  # — so the committer-date caveat above can never cause a false pass here.
-  head_ts=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.committer.date' 2>/dev/null) || head_ts=""
+  # Anchor reaction/conversation freshness to the EARLIEST check-run start time for this head — the
+  # reliable GitHub-side moment the head was pushed, unlike a commit's embedded committer date which a
+  # cherry-picked or locally-created head can backdate (a stale 👍 could then look "fresh"). If it
+  # can't be resolved, every comparison below is skipped, so a reaction can never pass on its own —
+  # fail safe to reviewed_head. Conversation comments (/issues/<pr>/comments) aren't commit-tied;
+  # every Codex finding carries the "Useful? React" footer.
+  head_ts=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '[.check_runs[].started_at | select(.!=null)] | min // ""' 2>/dev/null) || head_ts=""
   conv_ts=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and (.body | contains(\"Useful? React\"))) | .created_at" 2>/dev/null) \
     || { echo "codex: conversation comments read failed — failing closed" >&2; exit 2; }
   conv_ts=$(printf '%s\n' "$conv_ts" | sort | tail -1)
@@ -186,7 +188,7 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
     echo "codex: pass (Codex reviewed this exact head $SHA with no findings)"; exit 0
   fi
   if [ -n "$pos_ts" ] && [ -n "$head_ts" ] && [[ "$pos_ts" > "$head_ts" ]]; then
-    echo "codex: pass (positive reaction $pos_ts newer than head $head_ts; best-effort — skill owns ambiguous calls)"; exit 0
+    echo "codex: pass (positive reaction $pos_ts newer than head check-run start $head_ts)"; exit 0
   fi
   echo "codex: no Codex review for this exact head yet — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
   echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
