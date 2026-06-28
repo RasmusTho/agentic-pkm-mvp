@@ -3,11 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 import json
+import logging
 import os
+import uuid
 
 from app.db.db import conn_rw
 from app.settings import settings
 from app.stores import resolved_store_backend_hint
+
+logger = logging.getLogger(__name__)
 
 
 def _audit_pg_backend_selected() -> bool:
@@ -37,10 +41,8 @@ def audit_event(
     if not _audit_pg_backend_selected():
         return
 
-    payload = {
+    details = {
         "event": event,
-        "agent": agent,
-        "object_id": object_id,
         "extra": extra or {},
     }
 
@@ -52,16 +54,23 @@ def audit_event(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO audit (trace_id, event, payload, created_at)
-                    VALUES (%s, %s, %s::jsonb, %s)
+                    INSERT INTO audit (id, object_id, agent, action, ts, trace_id, details)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
                     """,
                     (
-                        trace_id,
+                        str(uuid.uuid4()),
+                        object_id,
+                        agent,
                         event,
-                        json.dumps(payload),
                         datetime.now(timezone.utc),
+                        trace_id,
+                        json.dumps(details),
                     ),
                 )
-    except Exception:
-        # offline pytest path (no DB running)
+    except Exception as exc:
+        logger.error(
+            "audit_event INSERT failed — best-effort audit write dropped",
+            exc_info=exc,
+            extra={"event": event, "agent": agent, "trace_id": trace_id},
+        )
         return
