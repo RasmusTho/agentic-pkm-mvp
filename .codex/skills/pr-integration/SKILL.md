@@ -63,6 +63,7 @@ If any condition fails, stop and use the relevant escalation path.
 - Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.
 - If CI fails, review blocks, branch drifts, or the PR is large or mixed-scope, stop and read `PR_ESCALATION_PATHS.md`.
 - Integration effort and the model/reasoning to spend (cheap hot path vs. escalated investigation) follow `AGENTS.md :: Total Cost of Development` — do not duplicate it here. [tcd-routing]
+- When waiting for CI to go green, follow `_shared/CI_WAIT_CONTRACT.md` (REST check-runs only, calibrated backoff, `scripts/await_pr_checks.sh`). Never tight-poll `gh pr checks`/`gh pr view --json` — they are GraphQL and starve the shared API budget. [ci-wait-contract]
 - If CI reports an unavailable pytest flag such as `-n`/`--dist`, check for `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and require an explicit `-p <plugin_name>` load before adding or changing dependencies. [plugin-load-guard]
 - After a review-fix push where GitHub's merge ref may differ from branch HEAD, fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, and run at least one targeted test against the merge-ref worktree before declaring `ready-for-verification`. [merge-ref-validation]
 

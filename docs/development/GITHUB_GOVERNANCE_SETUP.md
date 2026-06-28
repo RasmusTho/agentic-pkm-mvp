@@ -167,6 +167,7 @@ Approved governance surfaces:
 - `scripts/git_hygiene_janitor.py`
 - `scripts/reconcile_project_status.py`
 - `scripts/validate_source_anchors.py`
+- `scripts/await_pr_checks.sh`
 - `tests/ops/test_git_hygiene.py`
 - `tests/ops/test_project_status_reconcile.py`
 
