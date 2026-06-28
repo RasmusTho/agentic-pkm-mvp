@@ -60,10 +60,42 @@ def _contract_with_ping(
     )
 
 
+def _exploding_index_doctor(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Stub diagnose_index to RAISE and count calls (mimics the real pg-down path).
+
+    On a real DB-down stack, diagnose_index() opens a second psycopg connection
+    that raises/hangs. Stubbing it to raise — rather than to a no-op success —
+    exercises the production path: it proves evaluate() short-circuits BEFORE the
+    index diagnostic runs and that no exception escapes to turn 503 into 500.
+    Returns a one-element call counter.
+    """
+    calls = [0]
+
+    def boom() -> dict[str, object]:
+        calls[0] += 1
+        raise RuntimeError("DATABASE_URL is required for postgres store access")
+
+    monkeypatch.setattr("app.health_contract.diagnose_index", boom)
+    return calls
+
+
 def test_readyz_flips_red_when_db_down(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When Postgres is unreachable under STORE_BACKEND=pg, /readyz returns 503."""
+    """When Postgres is unreachable under STORE_BACKEND=pg, /readyz returns 503.
+
+    Uses the production path: the index doctor (which itself hits the DB) is
+    stubbed to raise, so a fall-through would 500 instead of 503.
+    """
     monkeypatch.setenv("STORE_BACKEND", "pg")
-    contract = _contract_with_ping(monkeypatch, (False, "postgres unreachable (OperationalError)"))
+    index_calls = _exploding_index_doctor(monkeypatch)
+
+    def fake_ping(*, timeout: float = 1.0, conninfo: object | None = None) -> tuple[bool, str]:
+        return False, "postgres unreachable (OperationalError)"
+
+    contract = HealthContract(
+        state_machine=HealthStateMachine(),
+        vault_root_fn=lambda: None,
+        db_ping_fn=fake_ping,
+    )
 
     client = TestClient(app)
     monkeypatch.setattr(
@@ -82,6 +114,67 @@ def test_readyz_flips_red_when_db_down(monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = contract.evaluate()
     assert snapshot["state"] == "unhealthy"
     assert snapshot["writes_allowed"] is False
+    # Short-circuit proof: the DB-backed index diagnostic was never reached.
+    assert index_calls[0] == 0, "evaluate() ran diagnose_index() after the DB ping failed"
+
+
+def test_evaluate_short_circuits_before_db_diagnostics_on_db_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a failed ping, evaluate() returns a full unhealthy snapshot and runs NO
+    DB-backed diagnostic — no exception escapes (503 stays 503, never 500).
+
+    This is the regression test for the P1: previously evaluate() set state to
+    unhealthy but fell through into diagnose_index(), which opens a second psycopg
+    connection that raises/hangs on a real DB-down stack.
+    """
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    index_calls = _exploding_index_doctor(monkeypatch)
+
+    def fake_ping(*, timeout: float = 1.0, conninfo: object | None = None) -> tuple[bool, str]:
+        return False, "postgres unreachable (OperationalError)"
+
+    contract = HealthContract(
+        state_machine=HealthStateMachine(),
+        vault_root_fn=lambda: None,
+        db_ping_fn=fake_ping,
+    )
+
+    # Must NOT raise even though diagnose_index would.
+    snapshot = contract.evaluate()
+
+    assert index_calls[0] == 0, "diagnose_index() ran despite a failed DB ping"
+    assert snapshot["state"] == "unhealthy"
+    assert snapshot["writes_allowed"] is False
+    assert snapshot["write_guard_reason"] and "postgres" in snapshot["write_guard_reason"].lower()
+    assert "postgres" in snapshot["reason"].lower()
+    # Full-shape parity: the keys /readyz, /status, and CLI consumers read are all
+    # present so nothing downstream KeyErrors on the short-circuit snapshot.
+    for key in (
+        "environment",
+        "state",
+        "reason",
+        "since_ts",
+        "vault",
+        "outbox_count",
+        "outbox_recent_age_s",
+        "store_object_count",
+        "bootstrap_state",
+        "bootstrap_reason",
+        "embedding_identity",
+        "index_doctor_status",
+        "events_doctor_status",
+        "errors_last_10m",
+        "settings_status",
+        "settings_source",
+        "settings_errors",
+        "thresholds",
+        "writes_allowed",
+        "write_guard_reason",
+        "catch_up_progress",
+        "suggested_actions",
+    ):
+        assert key in snapshot, f"short-circuit snapshot missing key: {key}"
 
 
 def test_container_healthcheck_targets_readyz() -> None:
