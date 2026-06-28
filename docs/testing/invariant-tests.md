@@ -60,6 +60,7 @@ Each invariant carries:
 | `static_test` | A non-runtime test asserts it against a current artifact (schema, fixture, doc) and **passes today**. |
 | `xfail_runtime_skeleton` | A test exists but is `xfail` (strict) because the runtime path it asserts is not implemented. |
 | `future_runtime` | No runtime and no skeleton yet; the probe is named here for when the slice lands. |
+| `runtime_test` | A test exercises the runtime path (the `yggdrasil_runtime` slice) and **passes today** — the former `xfail_runtime_skeleton` now runs its real assertions. |
 
 An invariant may be partly `schema_enforced` *and* carry an `xfail_runtime_skeleton` — the schema
 blocks the structurally-expressible part, the skeleton holds the cross-field or runtime part. The
@@ -78,8 +79,8 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Required fixture / data:** a future capture runtime; the [metadata-bundle schema](../architecture/metadata-bundle.md).
 - **Expected failure mode:** a captured artifact without `scope_id`/`source_role` reaches storage, so
   later scope/policy decisions have nothing to act on.
-- **Current enforcement:** `schema_enforced` (a bundle without `scope_id` fails validation) + `future_runtime` (capture path).
-- **Eventual test path:** `tests/invariants/test_metadata_bundle.py::test_capture_stamps_scope` (xfail).
+- **Current enforcement:** `schema_enforced` (a bundle without `scope_id` fails validation) + `runtime_test` (capture path, `yggdrasil_runtime.capture`).
+- **Runtime test path:** `tests/invariants/test_metadata_bundle.py::test_capture_stamps_scope` (runtime — passes).
 - **Related docs / contracts / ADRs:** [metadata-bundle](../architecture/metadata-bundle.md); ADR-0027, ADR-0038.
 - **Related issues:** #2544, #2550, #2552; runtime: first vertical slice (Capture).
 
@@ -122,8 +123,8 @@ declarative-schema-impossible and therefore live here as the source of truth.
   derivation runtime.
 - **Expected failure mode:** a segment/projection drops its lineage, so a derived view becomes the only
   copy of meaning (a misclassified DRI record).
-- **Current enforcement:** `schema_enforced` (derived types require `derived_from`) + `xfail_runtime_skeleton` (derivation runtime).
-- **Eventual test path:** `tests/invariants/test_metadata_bundle.py::test_provenance_survives_derivation` (xfail).
+- **Current enforcement:** `schema_enforced` (derived types require `derived_from`) + `runtime_test` (derivation runtime, `yggdrasil_runtime.dri`).
+- **Runtime test path:** `tests/invariants/test_metadata_bundle.py::test_provenance_survives_derivation` (runtime — passes).
 - **Related docs / contracts / ADRs:** [metadata-bundle](../architecture/metadata-bundle.md), [semantic-dimensions](../architecture/semantic-dimensions.md); ADR-0018, ADR-0024, ADR-0033.
 - **Related issues:** #2544, #2550, #2552.
 
@@ -136,8 +137,8 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Required fixture / data:** [`schemas/retrieval-result.schema.json`](../../schemas/retrieval-result.schema.json) (`scope_policy_prefiltered`); a future retrieval runtime + the [eval corpus](../../tests/evals/fixtures/README.md).
 - **Expected failure mode:** the ranker sees candidates from a denied scope and merely sorts them lower
   rather than excluding them, so out-of-scope material can surface on a high similarity score.
-- **Current enforcement:** `schema_enforced` (the flag is pinned `true` in data) + `xfail_runtime_skeleton` (prefilter behaviour).
-- **Eventual test path:** `tests/invariants/test_cross_scope_flow.py::test_retrieve_scope_prefilter` (xfail).
+- **Current enforcement:** `schema_enforced` (the flag is pinned `true` in data) + `runtime_test` (prefilter behaviour, `yggdrasil_runtime.retrieval`).
+- **Runtime test path:** `tests/invariants/test_cross_scope_flow.py::test_retrieve_scope_prefilter` (runtime — passes).
 - **Related docs / contracts / ADRs:** [retrieval-contract](../architecture/retrieval-contract.md) §3; ADR-0024, ADR-0039.
 - **Related issues:** #2548, #2550, #2551, #2552.
 
@@ -150,8 +151,8 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Required fixture / data:** the [anti-contamination corpus](../../tests/evals/fixtures/README.md) (deliberately overlapping vocabulary) + a future retrieval runtime.
 - **Expected failure mode:** Project Beta material is admitted into a Project Alpha answer purely because
   the embeddings were close, with no `CrossScopeFlow`.
-- **Current enforcement:** `doc_only`/`schema_enforced` in part (ranking signals inform order only) + `xfail_runtime_skeleton` (admission behaviour).
-- **Eventual test path:** `tests/invariants/test_cross_scope_flow.py::test_similarity_is_not_permission` (xfail).
+- **Current enforcement:** `doc_only`/`schema_enforced` in part (ranking signals inform order only) + `runtime_test` (admission behaviour, `yggdrasil_runtime.retrieval`).
+- **Runtime test path:** `tests/invariants/test_cross_scope_flow.py::test_similarity_is_not_permission` (runtime — passes).
 - **Related docs / contracts / ADRs:** [cross-scope-flow](../architecture/cross-scope-flow.md), [retrieval-contract](../architecture/retrieval-contract.md); ADR-0028, ADR-0039.
 - **Related issues:** #2539, #2548, #2550, #2551, #2552.
 
@@ -165,8 +166,8 @@ declarative-schema-impossible and therefore live here as the source of truth.
   cross-scope enforcement runtime.
 - **Expected failure mode:** a cross-scope use proceeds without a flow grant, or a single grant is
   treated as covering every operation (retrieve ⇒ cite ⇒ import ⇒ mutate).
-- **Current enforcement:** `schema_enforced` in part (flow guardrails carried on results/envelopes) + `xfail_runtime_skeleton`.
-- **Eventual test path:** `tests/invariants/test_cross_scope_flow.py::test_cross_scope_only_via_flow` (xfail); `tests/evals/test_general_knowledge_crosses_clean.py::test_general_knowledge_crosses_clean` (xfail).
+- **Current enforcement:** `schema_enforced` in part (flow guardrails carried on results/envelopes) + `runtime_test` (`yggdrasil_runtime.retrieval`/`cross_scope`).
+- **Runtime test path:** `tests/invariants/test_cross_scope_flow.py::test_cross_scope_only_via_flow` (runtime — passes); `tests/evals/test_general_knowledge_crosses_clean.py::test_general_knowledge_crosses_clean` (runtime — passes).
 - **Related docs / contracts / ADRs:** [cross-scope-flow](../architecture/cross-scope-flow.md); ADR-0028.
 - **Related issues:** #2539, #2550, #2551, #2552.
 
@@ -179,8 +180,8 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Required fixture / data:** [`tests/evals/fixtures/rpg_worldbuilding/`](../../tests/evals/fixtures/README.md) vs `work_project_*`/`general_programming/` + a future retrieval runtime.
 - **Expected failure mode:** an RPG "state machine"/"authority" note is retrieved and cited as real-world
   software guidance because the vocabulary overlaps.
-- **Current enforcement:** `static_test` (fixtures are distinctly scoped/roled — passes today) + `xfail_runtime_skeleton` (retrieval discrimination).
-- **Eventual test path:** `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software` (xfail).
+- **Current enforcement:** `static_test` (fixtures are distinctly scoped/roled — passes today) + `runtime_test` (retrieval discrimination, `yggdrasil_runtime.retrieval`).
+- **Runtime test path:** `tests/evals/test_rpg_not_confused_with_software.py::test_rpg_not_confused_with_software` (runtime — passes).
 - **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) §4, [cross-scope-flow](../architecture/cross-scope-flow.md); ADR-0029.
 - **Related issues:** #2551, #2550, #2552.
 
@@ -193,8 +194,8 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Required fixture / data:** [`tests/evals/fixtures/private_programming/`](../../tests/evals/fixtures/README.md) vs `work_project_*` + a future retrieval runtime.
 - **Expected failure mode:** a useful private technique surfaces inside a work answer with no flow,
   redaction, or confirmation.
-- **Current enforcement:** `static_test` (fixtures denied-by-default scoped — passes today) + `xfail_runtime_skeleton`.
-- **Eventual test path:** `tests/evals/test_private_not_in_work_results.py::test_private_not_in_work_results` (xfail).
+- **Current enforcement:** `static_test` (fixtures denied-by-default scoped — passes today) + `runtime_test` (`yggdrasil_runtime.retrieval`).
+- **Runtime test path:** `tests/evals/test_private_not_in_work_results.py::test_private_not_in_work_results` (runtime — passes).
 - **Related docs / contracts / ADRs:** [cross-scope-flow](../architecture/cross-scope-flow.md) §4; ADR-0028.
 - **Related issues:** #2551, #2550, #2552.
 
@@ -404,9 +405,8 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Expected failure mode:** a candidate whose bundle says `analogy`/`background` is surfaced with
   `evidence_role_in_context: evidence`.
 - **Current enforcement:** `schema_enforced` (the dangerous non-evidence→`evidence` upgrade is blocked
-  structurally) + `future_runtime`/`xfail_runtime_skeleton` (the general ordinal ≤ comparison is a
-  cross-field rule).
-- **Eventual test path:** `tests/invariants/test_retrieval_result.py::test_retrieval_cannot_upgrade_intrinsic_non_evidence` (schema part passes); full monotonicity: `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime` (xfail).
+  structurally) + `runtime_test` (the full ordinal ≤ comparison now runs over `yggdrasil_runtime.retrieval`).
+- **Runtime test path:** `tests/invariants/test_retrieval_result.py::test_retrieval_cannot_upgrade_intrinsic_non_evidence` (schema part passes); full monotonicity: `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime` (runtime — passes).
 - **Related docs / contracts / ADRs:** [retrieval-contract](../architecture/retrieval-contract.md) §1, [schemas/README §Known JSON Schema limits](../../schemas/README.md); ADR-0039.
 - **Related issues:** #2548, #2550, #2552.
 
@@ -504,15 +504,15 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 
 | Invariant | Matrix principle(s) | Primary boundary | Enforcement | Test path |
 | --- | --- | --- | --- | --- |
-| capture_stamps_scope | #2 | WSP/SIP | schema + future runtime | `tests/invariants/test_metadata_bundle.py` (xfail) |
+| capture_stamps_scope | #2 | WSP/SIP | schema + runtime | `tests/invariants/test_metadata_bundle.py` |
 | metadata_bundle_required | #2,#3,#12 | SIP | schema + static | `tests/invariants/test_metadata_bundle.py` |
 | store_no_naked_vectors | #12,#16 | PDM/DRI | schema + static | `tests/invariants/test_metadata_bundle.py` |
-| provenance_survives_derivation | #3,#16 | DRI/SIP | schema + xfail | `tests/invariants/test_metadata_bundle.py` (xfail) |
-| retrieve_scope_prefilter | #1,#7 | RCA | schema + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
-| similarity_not_permission | #1 | RCA/GOV | doc + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
-| cross_scope_only_via_flow | #1,#6 | GOV/RCA | schema + xfail | `tests/invariants/test_cross_scope_flow.py`, `tests/evals/test_general_knowledge_crosses_clean.py` (xfail) |
-| rpg_not_confused_with_software | #1,#5 | RCA/SIP | static + xfail | `tests/evals/test_rpg_not_confused_with_software.py` (xfail) |
-| private_not_in_work_results | #1,#2 | WSP/GOV | static + xfail | `tests/evals/test_private_not_in_work_results.py` (xfail) |
+| provenance_survives_derivation | #3,#16 | DRI/SIP | schema + runtime | `tests/invariants/test_metadata_bundle.py` |
+| retrieve_scope_prefilter | #1,#7 | RCA | schema + runtime | `tests/invariants/test_cross_scope_flow.py` |
+| similarity_not_permission | #1 | RCA/GOV | doc + runtime | `tests/invariants/test_cross_scope_flow.py` |
+| cross_scope_only_via_flow | #1,#6 | GOV/RCA | schema + runtime | `tests/invariants/test_cross_scope_flow.py`, `tests/evals/test_general_knowledge_crosses_clean.py` |
+| rpg_not_confused_with_software | #1,#5 | RCA/SIP | static + runtime | `tests/evals/test_rpg_not_confused_with_software.py` |
+| private_not_in_work_results | #1,#2 | WSP/GOV | static + runtime | `tests/evals/test_private_not_in_work_results.py` |
 | remember_not_canonical | #4 | MEM/GOV | schema + static | `tests/invariants/test_agent_memory.py` |
 | promote_requires_governance | #4,#9,#15 | MEM/GOV/HKA | schema + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
 | projection_not_evidence | #8 | DRI/OEF/GOV | schema + xfail | `tests/invariants/test_projection_not_evidence.py` (xfail) |
@@ -524,7 +524,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | context_envelope_has_no_raw_vault_or_index_access | #17 | CAO/RCA | schema + static | `tests/invariants/test_context_envelope.py` |
 | denied_scope_does_not_leak_identity | #1,#2 | RCA/GOV | schema + static | `tests/invariants/test_context_envelope.py` |
 | retrieval_candidate_identity_single_source | #3,#7 | RCA/SIP | schema + static | `tests/invariants/test_retrieval_result.py` |
-| retrieval_cannot_upgrade_intrinsic_non_evidence | #1,#5,#8 | RCA/GOV | schema + future runtime | `tests/invariants/test_retrieval_result.py` (+ xfail) |
+| retrieval_cannot_upgrade_intrinsic_non_evidence | #1,#5,#8 | RCA/GOV | schema + runtime | `tests/invariants/test_retrieval_result.py` |
 | memory_item_authority_is_noncanonical | #4,#5 | MEM/GOV | schema + static | `tests/invariants/test_agent_memory.py` |
 | memory_item_cannot_be_real_world_evidence | #4 | MEM/GOV | schema + static | `tests/invariants/test_agent_memory.py` |
 | authority_transition_requires_decision_token_and_receipt | #9 | GOV/HKA | schema + static | `tests/invariants/test_authority_transition.py` |

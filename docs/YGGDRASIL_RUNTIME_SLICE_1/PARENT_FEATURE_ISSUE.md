@@ -1,9 +1,10 @@
 # Parent Feature Issue — Yggdrasil Runtime Vertical Slice 1
 
-State: OPEN — live validation hub (mirrors GitHub epic #2578).
+State: CLOSED — all children #2579–#2586 delivered (mirrors GitHub epic #2578, closed 2026-06-28).
 
 GitHub issue: **#2578** — `epic: implement Yggdrasil runtime vertical slice 1 — capture to bounded
-context`. State: **OPEN — live validation hub.**
+context`. State: **CLOSED — slice delivered (capture → ContextEnvelope as the `yggdrasil_runtime`
+package; eight targeted invariants runtime-enforced, nine future-slice invariants remain xfail).**
 
 This file mirrors the live GitHub epic. The GitHub issue (#2578) is the authoritative backlog and
 validation surface; this file is a local pointer reconciled on each lifecycle change.

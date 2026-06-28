@@ -181,6 +181,7 @@ jobs:
               "scripts/issue_pickup_claim.sh",
               "scripts/reconcile_project_status.py",
               "scripts/validate_source_anchors.py",
+              "scripts/await_pr_checks.sh",
               "tests/ops/test_git_hygiene.py",
               "tests/architecture/test_agent_skill_entrypoints.py",
               "tests/architecture/test_pr_hot_path_governance.py",

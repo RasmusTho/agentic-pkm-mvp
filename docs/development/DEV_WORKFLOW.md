@@ -149,6 +149,7 @@ Use this lane only when:
   - `.github/pull_request_template.md`
   - `.github/workflows/issue-pr-governance.yml`
   - `scripts/docs_guard.py`
+  - `scripts/await_pr_checks.sh`
   - `tests/architecture/test_agent_skill_entrypoints.py`
 - the PR is limited to repo governance, agent workflow, or lightweight enforcement
 - the PR does not change product/runtime implementation or shipped feature behavior

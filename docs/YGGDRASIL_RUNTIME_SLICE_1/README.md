@@ -1,8 +1,11 @@
 # Yggdrasil Runtime Vertical Slice 1 — Capture to Bounded Context
 
-State: Specification directory — child issues filed, delivery not yet started. Parent feature issue:
-**#2578** (live validation hub). Child issues: #2579 (ready) → #2580 → #2581 → #2582 → #2583 → #2584
-→ #2585 → #2586 (blocked, sequential chain).
+State: **DELIVERED (2026-06-28).** All child issues #2579–#2586 merged to `main`; parent epic
+**#2578** closed. The chain is implemented as the `yggdrasil_runtime` package (capture → MetadataBundle
+→ DRI segment → retrieval prefilter → RetrievalResult → ContextEnvelope), corpus-backed over
+`tests/evals/fixtures/`. Acceptance surface: `pytest -q tests/invariants tests/evals` — the eight
+targeted invariants pass; the nine deliberately-left future-slice invariants remain xfail (locked by
+`tests/invariants/test_invariant_residue.py`).
 
 SBS classification: **Product / Runtime System.** This slice builds the first runtime spine of the
 Product System. The OEF-facing fitness surface (invariant registry, eval corpus) is touched only to

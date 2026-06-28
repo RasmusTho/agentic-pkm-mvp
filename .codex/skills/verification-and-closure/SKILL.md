@@ -98,6 +98,8 @@ Verification owns the merge decision.
 
 For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks to go green and resolve Codex review, then merge — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch does not relax them); only the human watching is removed.
 
+Wait **how** matters: follow `_shared/CI_WAIT_CONTRACT.md` — REST check-runs only, sleep the bulk of CI up front, back off ≥60–120s, and prefer `scripts/await_pr_checks.sh <PR> --codex`. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
+
 Prerequisites for merge:
 
 - current SHA truth is intact
