@@ -358,6 +358,132 @@ def test_overlay_host_pushes_history_marker_and_handles_popstate() -> None:
 
 
 # ---------------------------------------------------------------------------
+# NAV-3b (#2640): the System Map route is an ATOMIC overlay->overlay swap.
+# overlayHost.replace(id) closes the current topmost occupant and opens the
+# destination at the SAME history depth via history.replaceState — never the
+# dismiss()->mount() shape, whose pending history.back() (popping=true) raced
+# the next push and left browser history desynced from the overlay stack so the
+# next Back/Forward acted on the wrong overlay. systemMap.route() is rewired to
+# use replace for every map->overlay branch.
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_host_replace_swaps_history_entry_at_constant_depth() -> None:
+    """The rendered host exposes overlayHost.replace(id, detail): it closes the
+    current topmost occupant (its close hook runs, via the shared topmost-pop),
+    pushes the destination, and REPLACES the current history entry with the
+    destination marker at the SAME depth using history.replaceState — with NO
+    history.back() in the swap (no pending traversal to race a later push). A
+    declared-but-unshipped id is inert, and an empty stack falls back to a
+    pushState mount so the base page-load entry is never clobbered.
+    """
+    script = _host_script(_render())
+
+    # The replace path exists on the host API.
+    assert "replace: function(id, detail)" in script, (
+        "host must expose overlayHost.replace(id, detail) for the atomic route swap"
+    )
+
+    # Isolate the replace method body so depth/replaceState assertions are about
+    # the swap path itself, not the unrelated mount/dismiss bodies.
+    m = re.search(
+        r"replace: function\(id, detail\) \{(.*?)\n      \},", script, re.S
+    )
+    assert m, "replace method body must be present"
+    body = m.group(1)
+    # Strip JS line-comments so call-shape assertions are about executable code,
+    # not the explanatory comments (which legitimately *name* history.back /
+    # dismiss->mount to document the race being removed).
+    code = "\n".join(re.sub(r"//.*$", "", ln) for ln in body.splitlines())
+
+    # It declares the destination, and is inert for an unshipped occupant
+    # (same no-op rule as mount — never invent a surface).
+    assert "assertDeclared(id)" in code, "replace must assert the id is declared"
+    assert "if (!occ) { return; }" in code, (
+        "replace must be an inert no-op for a declared-but-unshipped occupant"
+    )
+
+    # It closes the current topmost occupant via the shared topmost-pop (which
+    # runs the occupant close hook and updates host bookkeeping) WITHOUT calling
+    # history.back() — the swap leaves no pending history traversal to race a
+    # subsequent push (the central NAV-3b fix).
+    assert "popTopmost()" in code, (
+        "replace must close the current topmost occupant via the shared pop"
+    )
+    assert "history.back" not in code, (
+        "replace must NOT call history.back() — that pending traversal is the "
+        "race NAV-3b removes"
+    )
+
+    # It de-dups the destination before pushing (same rule as mount): when the
+    # target already sits in the stack BELOW the just-closed overlay (Memory ->
+    # Map over it -> route to Memory), replace must remove the existing instance
+    # before push so data-overlay-stack never carries the id twice while the DOM
+    # has one occupant — a duplicate would desync host bookkeeping from the DOM
+    # on the next Back (one pop hides the only drawer, host still reports it
+    # open). The splice must precede the push.
+    assert "stack.indexOf(id)" in code and "stack.splice(" in code, (
+        "replace must de-dup the destination (splice an existing instance) "
+        "before pushing, like mount"
+    )
+    splice_pos = code.find("stack.splice(")
+    push_pos = code.find("stack.push(id)")
+    assert splice_pos != -1 and push_pos != -1 and splice_pos < push_pos, (
+        "replace must remove any existing instance of id BEFORE stack.push(id)"
+    )
+
+    # It swaps the SAME history entry (replaceState) at constant depth — the
+    # destination marker carries the host marker and depth = stack.length, and
+    # the entry is REPLACED, not pushed.
+    assert "history.replaceState" in code, (
+        "replace must use history.replaceState to swap the single history entry"
+    )
+    assert "history.pushState" not in code, (
+        "replace must not push a new entry on the non-empty (swap) path"
+    )
+    assert "st[HISTORY_MARKER] = id" in code and "st.depth = stack.length" in code, (
+        "the swapped entry must carry the destination marker and the stack depth"
+    )
+
+    # Empty-stack defensive fallback: with nothing mounted there is no entry to
+    # swap, so replace falls back to a normal pushState mount (never clobbers the
+    # base page-load entry via replaceState).
+    assert "if (!stack.length) { this.mount(id, detail); return; }" in code, (
+        "replace must fall back to mount (pushState) when the stack is empty"
+    )
+
+    # The destination is opened with its detail.
+    assert "occ.open(detail || {})" in code, "replace must open the destination occupant"
+
+
+def test_system_map_route_uses_replace_not_dismiss_then_mount() -> None:
+    """systemMap.route() routes map->overlay via the atomic overlayHost.replace
+    swap, not the racy dismiss()->mount() pair. This is the cross-surface
+    contract for NAV-3b: against the unrewired route() (dismiss + mount) this
+    assertion fails. dismiss() survives only on the non-overlay focus targets
+    (anchor / vault / panel / operator).
+    """
+    html = _render()
+    m = re.search(
+        r"/\* system-map-controller \*/(.*?)/\* /system-map-controller \*/",
+        html,
+        re.S,
+    )
+    assert m, "system-map-controller script must render"
+    map_script = m.group(1)
+
+    # Every map->overlay branch uses the atomic replace swap.
+    for target in ("cmd", "memory", "capture", "receipts", "settings"):
+        assert f"overlayHost.replace('{target}')" in map_script, (
+            f"map route to {target} must use the atomic overlayHost.replace swap"
+        )
+        # ...and NOT the racy dismiss()->mount() shape.
+        assert f"overlayHost.mount('{target}')" not in map_script, (
+            f"map route to {target} must not use the racy dismiss()->mount() pattern"
+        )
+
+
+# ---------------------------------------------------------------------------
 # AC3: Esc dismisses the topmost overlay; ⌘K and ⌘N route to declared intents
 # ---------------------------------------------------------------------------
 

@@ -709,35 +709,69 @@ def system_map_overlay_script() -> str:
       if (el.focus) { el.focus(); }
     }
     window.systemMap = {
-      // Routing composes existing surfaces: dismiss the map back to the
-      // document anchor first (overlay grammar — no route reset, no data
-      // loss), then open/focus the target via its own shipped affordance.
+      // Routing composes existing surfaces — no route reset, no data loss.
+      //
+      // map -> overlay (NAV-3b, #2640): use overlayHost.replace(<target>), an
+      // ATOMIC swap of the map's single history entry for the destination's at
+      // the same depth. This replaces the old dismiss()->mount() shape, whose
+      // async history.back() was still pending when mount() pushed — the delayed
+      // popstate got swallowed and browser history desynced from
+      // data-overlay-stack, so the next Back/Forward acted on the wrong overlay.
+      // The map is the topmost overlay when its node is clicked, so the stack is
+      // non-empty and replace performs a true swap (never the empty-stack push
+      // fallback).
+      //
+      // map -> non-overlay focus target (anchor / vault / panel / operator):
+      // there is no destination host overlay to swap to, so these still dismiss
+      // the map back to the anchor and then focus/open the target via its own
+      // shipped affordance.
       route: function(id) {
-        window.overlayHost.dismiss();
         // Focus selectors use unquoted CSS attribute values so the script
         // never embeds another surface's quoted test markers.
         if (id === 'anchor') {
+          window.overlayHost.dismiss();
           focusRegion('[data-region=document-column], [data-region=note-body]');
           return;
         }
         if (id === 'vault') {
+          // Vault is a focus target on WIDE viewports (the persistent inline
+          // left pane) but an OVERLAY on narrow ones (vaultBrowser.focus()
+          // falls through to open() -> overlayHost.mount('vault')). NAV-3b
+          // (#2640): when vault opens as the overlay, route it through the
+          // atomic swap — dismiss()+focus() would mount the vault overlay right
+          // after a pending history.back() (popping=true), re-introducing the
+          // race replace() exists to kill (Back would need a second press).
+          if (window.vaultBrowser && window.vaultBrowser.prefersOverlay
+              && window.vaultBrowser.prefersOverlay()) {
+            window.overlayHost.replace('vault');
+            return;
+          }
+          // Wide viewport: dismiss the map and focus the inline pane (mounts
+          // nothing -> no race). The orientation/no_vault surfaces also land
+          // here (their vaultBrowser shim has no prefersOverlay), where vault is
+          // a focus target, not a host overlay.
+          window.overlayHost.dismiss();
           if (window.vaultBrowser) { window.vaultBrowser.focus(); return; }
           focusRegion('[data-testid=workspace-orientation-vault-entry]');
           return;
         }
         if (id === 'panel') {
+          window.overlayHost.dismiss();
           focusRegion('[data-testid=workspace-agent-rail]');
           return;
         }
-        if (id === 'palette') { window.overlayHost.mount('cmd'); return; }
-        if (id === 'memory') { window.overlayHost.mount('memory'); return; }
-        if (id === 'capture') { window.overlayHost.mount('capture'); return; }
-        if (id === 'receipts') { window.overlayHost.mount('receipts'); return; }
-        if (id === 'governance') { window.overlayHost.mount('receipts'); return; }
-        if (id === 'settings') { window.overlayHost.mount('settings'); return; }
+        if (id === 'palette') { window.overlayHost.replace('cmd'); return; }
+        if (id === 'memory') { window.overlayHost.replace('memory'); return; }
+        if (id === 'capture') { window.overlayHost.replace('capture'); return; }
+        if (id === 'receipts') { window.overlayHost.replace('receipts'); return; }
+        if (id === 'governance') { window.overlayHost.replace('receipts'); return; }
+        if (id === 'settings') { window.overlayHost.replace('settings'); return; }
         // Operator layer (#2447): the operator drawer is the home for the
-        // runtime/diagnostic telemetry that left the front edge.
+        // runtime/diagnostic telemetry that left the front edge. It is a
+        // client-rendered diagnostics surface, not a host overlay occupant, so
+        // routing to it dismisses the map and opens the drawer directly.
         if (id === 'operator') {
+          window.overlayHost.dismiss();
           if (window.companionOperator) { window.companionOperator.open(); }
           return;
         }

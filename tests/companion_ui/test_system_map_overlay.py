@@ -474,27 +474,58 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         assert 'data-routable="false"' in tag, sid
         assert "onclick" not in tag, sid
 
-    # The routing controller composes existing surfaces: host mounts and the
-    # shipped vault affordance — and never navigates (overlay grammar: no
-    # route reset, no data loss).
+    # The routing controller composes existing surfaces and never navigates
+    # (overlay grammar: no route reset, no data loss). NAV-3b (#2640): map ->
+    # overlay routes use the ATOMIC overlayHost.replace(<target>) swap, NOT the
+    # old dismiss()->mount() shape whose pending history.back() raced the next
+    # push and desynced browser history from data-overlay-stack.
     script = _map_script(html)
-    assert "overlayHost.mount('cmd')" in script
-    assert "overlayHost.mount('memory')" in script
-    assert "overlayHost.mount('capture')" in script
-    assert "overlayHost.mount('receipts')" in script
-    assert "overlayHost.mount('settings')" in script
-    assert "vaultBrowser.focus()" in script
+    # Forbidden-CALL / racy-shape checks run against a comment-stripped view: the
+    # controller's explanatory comments legitimately *name* history.back /
+    # history.replaceState / overlayHost.mount('vault') to document the race
+    # being removed and where the swap lives; only executable code should match.
+    script_code = "\n".join(re.sub(r"//.*$", "", ln) for ln in script.splitlines())
+    assert "overlayHost.replace('cmd')" in script
+    assert "overlayHost.replace('memory')" in script
+    assert "overlayHost.replace('capture')" in script
+    assert "overlayHost.replace('receipts')" in script
+    assert "overlayHost.replace('settings')" in script
+    # Negative-confirm: NO map->overlay branch may use the racy dismiss()->mount()
+    # pattern (the central NAV-3b fix). dismiss() survives on the pure focus
+    # targets (anchor / panel / operator) and the WIDE vault branch (inline
+    # pane). Vault on a NARROW viewport is itself an overlay and routes through
+    # replace('vault') (see test_vault_route_swaps_on_narrow_focuses_on_wide).
+    for racy in (
+        "overlayHost.mount('cmd')",
+        "overlayHost.mount('memory')",
+        "overlayHost.mount('capture')",
+        "overlayHost.mount('receipts')",
+        "overlayHost.mount('settings')",
+        "overlayHost.mount('vault')",
+    ):
+        assert racy not in script_code, (
+            f"map route must use overlayHost.replace, not the racy {racy}"
+        )
+    assert "vaultBrowser.focus()" in script  # wide vault branch focuses inline
+    # dismiss() is still present for the pure focus targets + the wide vault path.
     assert "overlayHost.dismiss()" in script
     for forbidden in (
         "location.href",
         "location.assign",
         "location.reload",
+        # The map controller never touches history directly — the atomic swap
+        # lives in the host (overlayHost.replace), which the controller only
+        # *calls*; the controller itself pushes/replaces no history entry.
         "history.pushState",
+        "history.replaceState",
+        "history.back",
         "window.open",
         "form.submit",
         "fetch(",
     ):
-        assert forbidden not in script, f"map controller must not call {forbidden}"
+        assert forbidden not in script_code, (
+            f"map controller must not call {forbidden}"
+        )
 
     # In cold_start the shell surfaces are not live: only the vault route is
     # offered (the declared cold_start -> shell_active transition), and the
@@ -525,6 +556,73 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         assert error_nodes[sid].startswith("<article"), sid
         assert 'data-routable="false"' in error_nodes[sid], sid
         assert "onclick" not in error_nodes[sid], sid
+
+
+# ---------------------------------------------------------------------------
+# NAV-3b (#2640): the System Map vault route is narrow/wide-aware. Vault is a
+# focus target on a WIDE viewport (the persistent inline left pane — focus()
+# mounts nothing, no race) but an OVERLAY on a NARROW one (focus() falls through
+# to open() -> overlayHost.mount('vault')). The overlay case must go through the
+# atomic overlayHost.replace('vault') swap, or dismiss()+focus() re-introduces
+# the dismiss()->mount() history race replace() exists to kill.
+# ---------------------------------------------------------------------------
+
+
+def test_vault_route_swaps_on_narrow_focuses_on_wide() -> None:
+    html = _render_workspace()
+    script = _map_script(html)
+
+    # Isolate the vault branch of route() (up to the next sibling, the 'panel'
+    # branch), then strip JS line-comments: the branch's explanatory comments
+    # legitimately *name* overlayHost.mount('vault') / vaultBrowser.focus() to
+    # document the race, which would pollute substring + ordering checks.
+    m = re.search(r"if \(id === 'vault'\) \{(.*?)if \(id === 'panel'\)", script, re.S)
+    assert m, "route() must have a vault branch"
+    vault_branch = "\n".join(
+        re.sub(r"//.*$", "", ln) for ln in m.group(1).splitlines()
+    )
+
+    # Narrow (overlay) path: gated on vaultBrowser.prefersOverlay(), routes via
+    # the atomic swap — never overlayHost.mount('vault') (the racy shape).
+    assert "window.vaultBrowser.prefersOverlay()" in vault_branch, (
+        "vault route must consult vaultBrowser.prefersOverlay() to detect the "
+        "narrow (overlay) case"
+    )
+    assert "overlayHost.replace('vault')" in vault_branch, (
+        "the narrow (overlay) vault case must route through the atomic swap"
+    )
+    assert "overlayHost.mount('vault')" not in vault_branch, (
+        "the vault route must never use the racy dismiss()->mount() shape"
+    )
+
+    # Wide (inline-focus) path preserved: dismiss the map + focus the pane.
+    assert "overlayHost.dismiss()" in vault_branch, (
+        "the wide vault path must still dismiss the map back to the anchor"
+    )
+    assert "vaultBrowser.focus()" in vault_branch, (
+        "the wide vault path must still focus the inline pane"
+    )
+
+    # Ordering: the prefersOverlay()->replace swap must SHORT-CIRCUIT before the
+    # wide dismiss()+focus() fallback (otherwise the narrow case would still
+    # dismiss-then-mount). replace('vault') precedes dismiss() in the branch.
+    replace_pos = vault_branch.find("overlayHost.replace('vault')")
+    dismiss_pos = vault_branch.find("overlayHost.dismiss()")
+    focus_pos = vault_branch.find("vaultBrowser.focus()")
+    assert -1 < replace_pos < dismiss_pos < focus_pos, (
+        "the narrow replace('vault') swap must short-circuit before the wide "
+        "dismiss()+focus() fallback"
+    )
+
+    # The predicate ships on the full vaultBrowser in the workspace shell: it is
+    # the inverse of the inline-pane check focus() uses (single source of truth,
+    # so focus-inline vs open-overlay can never diverge from the route's view).
+    assert "prefersOverlay: function()" in html, (
+        "the workspace vaultBrowser must expose the prefersOverlay() predicate"
+    )
+    assert "return !hasInlinePane();" in html, (
+        "prefersOverlay() must be the inverse of the shared inline-pane check"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -948,10 +1046,13 @@ def test_relocated_map_counts_are_read_only_projection_without_zero_state() -> N
     assert 'data-intent="receipts.open"' in gov_btn.group(0), (
         "governance button must carry data-intent=receipts.open"
     )
-    # JS controller routes governance via overlayHost.mount('receipts').
+    # JS controller routes governance to the receipts surface via the atomic
+    # overlayHost.replace('receipts') swap (NAV-3b, #2640) — governance is a
+    # map->overlay route, so it swaps the map's history entry for receipts'
+    # rather than dismiss()->mount() (which raced history).
     script_text = system_map_overlay_script()
-    assert "governance" in script_text and "mount('receipts')" in script_text, (
-        "system map controller must route governance via overlayHost.mount('receipts')"
+    assert "governance" in script_text and "replace('receipts')" in script_text, (
+        "system map controller must route governance via overlayHost.replace('receipts')"
     )
     # data-authority on the map overlay is "projection" (map-level); governance
     # node itself is read-only-projection by contract (#2246 cross-task invariant).

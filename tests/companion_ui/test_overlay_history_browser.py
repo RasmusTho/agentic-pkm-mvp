@@ -1,4 +1,4 @@
-"""Playwright browser smoke for overlay↔browser-history (NAV-3a, #2639).
+"""Playwright browser smoke for overlay↔browser-history (NAV-3a #2639, NAV-3b #2640).
 
 The NAV-3 core contract is real browser behaviour a pure-Python render test
 cannot exercise: ``overlayHost.mount`` pushes a same-document history entry,
@@ -16,12 +16,18 @@ of truth for which overlay is mounted) plus URL invariance:
   single: open overlay → browser Back closes it (URL unchanged);
   stacked: open 2 → Back closes the topmost → Forward restores it
            (``data-overlay-stack`` consistent, never the wrong overlay,
-           no navigation).
+           no navigation);
+  System Map route (NAV-3b): open the map → click a node that routes to another
+           overlay → the destination is open and the map is closed → one
+           browser Back closes the destination (no extra/dead press, no
+           navigate-away), ``data-overlay-stack`` consistent throughout.
 
-Scope (NAV-3a, #2639): the CORE overlay↔history mechanism only. The
-``?overlay=`` deep-link is #2641 (NAV-3c) and the System Map ``dismiss→mount``
-route sync is #2640 (NAV-3b); neither is exercised here. This shell is rendered
-without any ``boot_overlay`` threading, so it stays purely the core mechanism.
+Scope: NAV-3a (#2639) is the CORE overlay↔history mechanism (single + stacked);
+NAV-3b (#2640) adds the System Map route swap (``overlayHost.replace`` —
+``dismiss→mount`` would race history and desync the stack). The ``?overlay=``
+deep-link is #2641 (NAV-3c) and is not exercised here. This shell is rendered
+without any ``boot_overlay`` threading, so the only history entries are the ones
+the host itself creates.
 
 Guard: Playwright + a Chromium/Chrome must be available; otherwise the module
 is skipped (not failed). Enable via COMPANION_UI_BROWSER_TESTS=1. Deterministic
@@ -261,6 +267,241 @@ def test_browser_back_then_forward_restores_topmost_on_stack() -> None:
                 _wait_open(page, "cmd")
                 _wait_stack(page, "memory cmd")
                 assert page.url == start_url, "Forward must not navigate the page away"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+
+def test_system_map_route_swaps_overlay_back_closes_in_one_press() -> None:
+    """NAV-3b (#2640): System Map route stays in browser-history sync.
+
+    Open the System Map, click a node that routes to another overlay (memory),
+    and the destination overlay is open with the map closed — an ATOMIC swap of
+    the single history entry (overlayHost.replace), NOT dismiss()->mount(). Then
+    exactly ONE browser Back closes the destination overlay (no extra/dead
+    press, no navigate-away), and ``data-overlay-stack`` is consistent
+    throughout. Against the unrewired dismiss()->mount() route, the pending
+    history.back() would be swallowed and Back would need a second press / land
+    on the wrong overlay — this test pins the fix.
+    """
+    server, port = _make_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}/"
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                page = browser.new_page()
+                page.goto(base, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                start_url = page.url
+                assert page.evaluate(_OPEN_JS) == "none"
+
+                # Open the System Map (its single history entry; depth 1).
+                page.evaluate("window.overlayHost.mount('map')")
+                _wait_open(page, "map")
+                _wait_stack(page, "map")
+
+                # Click the map's memory routing node — the real production path
+                # systemMap.route('memory') -> overlayHost.replace('memory').
+                # The destination overlay opens and the map closes in one atomic
+                # swap: stack is exactly 'memory' (the map is gone, not stacked
+                # under it), so depth stays 1 — one history entry SWAPPED.
+                node = page.query_selector(
+                    "[data-testid='system-map-node'][data-surface-id='memory']"
+                )
+                assert node is not None, "map must render a clickable memory route node"
+                node.click()
+                _wait_open(page, "memory")
+                _wait_stack(page, "memory")
+                assert page.url == start_url, "routing must not navigate the page away"
+
+                # ONE browser Back closes the destination overlay and returns to
+                # the document anchor — no dead/extra press, no navigate-away.
+                # (With the old dismiss()->mount() race, history would still
+                # point at the map entry and this single Back would land on the
+                # wrong overlay or fail to close.)
+                page.go_back()
+                _wait_open(page, "none")
+                _wait_stack(page, "")
+                assert page.url == start_url, (
+                    "one Back must close the destination without navigating away"
+                )
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+
+def test_system_map_route_to_already_open_destination_does_not_duplicate() -> None:
+    """NAV-3b (#2640) dedup: routing to a destination ALREADY in the stack must
+    NOT create a duplicate stack entry, so host bookkeeping never desyncs from
+    the DOM.
+
+    Memory open -> Map opened over it (stack ``memory map``) -> click the map's
+    Memory node -> overlayHost.replace('memory') closes the map and moves Memory
+    to the single top: ``data-overlay-stack`` is exactly ``memory`` (one
+    instance, NOT ``memory memory``). Without the dedup splice the stack would
+    read ``memory memory`` while the DOM has one drawer — the bug Codex flagged:
+    a later Back pops one phantom entry and hides the only drawer while the host
+    still reports the overlay open. The single-Back-closes invariant is covered
+    by ``test_system_map_route_swaps_overlay_back_closes_in_one_press`` (route
+    over an empty stack); here the route reopens a destination that was already
+    pushed below the map, so an extra lower history entry from that original
+    push legitimately survives (history.replaceState swaps only the current
+    entry, it cannot delete the one beneath). What this test pins is that Back
+    unwinds the host->DOM relationship consistently — the host never reports an
+    overlay open after the DOM drawer is gone — which the dedup guarantees and
+    the duplicate would break.
+    """
+    server, port = _make_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}/"
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                page = browser.new_page()
+                page.goto(base, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                start_url = page.url
+                assert page.evaluate(_OPEN_JS) == "none"
+
+                # Memory open, then the Map stacked OVER it (two history entries).
+                page.evaluate("window.overlayHost.mount('memory')")
+                _wait_open(page, "memory")
+                page.evaluate("window.overlayHost.mount('map')")
+                _wait_stack(page, "memory map")
+
+                # Route to Memory from the map. replace('memory') closes the map
+                # and de-dups: Memory moves to the single top, NOT appended again.
+                # data-overlay-stack is exactly 'memory' (one instance) — the core
+                # dedup assertion (no 'memory memory').
+                node = page.query_selector(
+                    "[data-testid='system-map-node'][data-surface-id='memory']"
+                )
+                assert node is not None, "map must render a clickable memory route node"
+                node.click()
+                _wait_open(page, "memory")
+                _wait_stack(page, "memory")  # exactly one 'memory', never 'memory memory'
+                assert page.evaluate(_STACK_JS) == "memory", (
+                    "routing to an already-open destination must not duplicate the "
+                    "stack entry (no 'memory memory')"
+                )
+                assert page.url == start_url, "routing must not navigate the page away"
+
+                # Back unwinds host<->DOM consistently: each Back either keeps the
+                # drawer open (host says 'memory') or closes it (host says 'none')
+                # — the host never claims an overlay is open after the DOM drawer
+                # is closed. The drawer's open state is its data-open attribute
+                # (the memory occupant's open/close hooks toggle it); is_visible()
+                # is unreliable here because the closed drawer is only slid off
+                # via CSS transform. Walk Back until the host reports 'none'; the
+                # stack must be empty at that point and never have carried a dup.
+                drawer_open_js = (
+                    "(function(){var d=document.querySelector("
+                    "\"[data-overlay-id='memory']\");"
+                    "return d ? d.getAttribute('data-open') : null;})()"
+                )
+                for _ in range(4):
+                    open_now = page.evaluate(_OPEN_JS)
+                    drawer_open = page.evaluate(drawer_open_js) == "true"
+                    # Host/DOM agreement: host 'memory' <=> drawer data-open=true.
+                    assert (open_now == "memory") == drawer_open, (
+                        "host bookkeeping must match the DOM: open=='memory' iff the "
+                        f"memory drawer data-open=true (open={open_now!r}, "
+                        f"drawer_open={drawer_open})"
+                    )
+                    if open_now == "none":
+                        break
+                    page.go_back()
+                    page.wait_for_timeout(150)
+                _wait_open(page, "none")
+                _wait_stack(page, "")
+                # Final state agreement: drawer is closed when the host says none.
+                assert page.evaluate(drawer_open_js) == "false", (
+                    "the memory drawer must be closed (data-open=false) once the "
+                    "host reports no overlay open"
+                )
+                assert page.url == start_url, "Back must not navigate the page away"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+
+def test_system_map_vault_route_swaps_on_narrow_back_closes_in_one_press() -> None:
+    """NAV-3b (#2640): the System Map Vault route stays in history sync on a
+    NARROW viewport, where vault opens as the ``vault`` overlay.
+
+    On a narrow viewport (< 860px) the inline left pane is unavailable, so
+    vaultBrowser.focus() would fall through to open() -> mount('vault'). The
+    route detects this via vaultBrowser.prefersOverlay() and goes through
+    overlayHost.replace('vault') instead. Open the System Map, click the Vault
+    node, and the vault overlay opens with the map closed (stack ``vault``);
+    exactly ONE browser Back closes it (no extra/dead press, no navigate-away),
+    ``data-overlay-stack`` consistent. Against the unfixed route (dismiss() then
+    focus()->open()->mount('vault')), the pending history.back() would be
+    swallowed and one Back would not close the vault overlay.
+    """
+    server, port = _make_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}/"
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                # NARROW viewport: the persistent inline left pane is suppressed,
+                # so vault is an overlay (prefersOverlay() is true).
+                page = browser.new_page(viewport={"width": 600, "height": 900})
+                page.goto(base, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                start_url = page.url
+                assert page.evaluate(_OPEN_JS) == "none"
+
+                # Precondition: at this width vault prefers the overlay (so the
+                # route must take the replace path, not dismiss()+focus()).
+                assert (
+                    page.evaluate(
+                        "window.vaultBrowser && window.vaultBrowser.prefersOverlay"
+                        " ? window.vaultBrowser.prefersOverlay() : false"
+                    )
+                    is True
+                ), "narrow viewport must report vaultBrowser.prefersOverlay() == true"
+
+                # Open the System Map, then click its Vault routing node.
+                page.evaluate("window.overlayHost.mount('map')")
+                _wait_open(page, "map")
+                _wait_stack(page, "map")
+                node = page.query_selector(
+                    "[data-testid='system-map-node'][data-surface-id='vault']"
+                )
+                assert node is not None, "map must render a clickable vault route node"
+                node.click()
+
+                # The vault overlay opens and the map closes — one atomic swap,
+                # stack is exactly 'vault' (depth stays 1).
+                _wait_open(page, "vault")
+                _wait_stack(page, "vault")
+                assert page.url == start_url, "routing must not navigate the page away"
+
+                # ONE browser Back closes the vault overlay (no extra/dead press).
+                page.go_back()
+                _wait_open(page, "none")
+                _wait_stack(page, "")
+                assert page.url == start_url, (
+                    "one Back must close the vault route without navigating away"
+                )
             finally:
                 browser.close()
     finally:
