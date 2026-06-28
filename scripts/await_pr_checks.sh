@@ -137,12 +137,20 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   # The verdict must be tied to the CURRENT verified head. A 👍 is a PR-level reaction that persists
   # across pushes, so an old positive reaction must NOT pass a newly pushed commit Codex never
   # reviewed. ISO8601 timestamps compare lexicographically == chronologically.
-  head_ts=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.committer.date' 2>/dev/null)
-  reactions=$(gh api "repos/$REPO/issues/$PR/reactions" 2>/dev/null)
-  pos_ts=$(printf '%s' "$reactions" | jq -r --arg b "$bot" '[.[] | select(.user.login==$b and (.content=="+1" or .content=="heart" or .content=="hooray" or .content=="rocket" or .content=="laugh")) | .created_at] | max // ""' 2>/dev/null)
-  neg_ts=$(printf '%s' "$reactions" | jq -r --arg b "$bot" '[.[] | select(.user.login==$b and (.content=="-1" or .content=="confused")) | .created_at] | max // ""' 2>/dev/null)
-  findings=$(gh api "repos/$REPO/pulls/$PR/comments" --jq "[.[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\")] | length" 2>/dev/null)
-  cr=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\")] | length" 2>/dev/null)
+  # All evidence reads are PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than
+  # silently treating missing data as "no findings / no block", and --paginate ensures blocking
+  # feedback on page 2+ is not missed (REST list endpoints default to 30 items/page).
+  head_ts=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.committer.date' 2>/dev/null) || head_ts=""
+  react_lines=$(gh api --paginate "repos/$REPO/issues/$PR/reactions" --jq ".[] | select(.user.login==\"$bot\") | \"\(.content)\t\(.created_at)\"" 2>/dev/null) \
+    || { echo "codex: reactions read failed — failing closed" >&2; exit 2; }
+  find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\") | .id" 2>/dev/null) \
+    || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
+  cr_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
+    || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
+  pos_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="+1"||$1=="heart"||$1=="hooray"||$1=="rocket"||$1=="laugh"{print $2}' | sort | tail -1)
+  neg_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="-1"||$1=="confused"{print $2}' | sort | tail -1)
+  findings=$(printf '%s' "$find_ids" | grep -c . || true)
+  cr=$(printf '%s' "$cr_ids" | grep -c . || true)
   echo "codex: head_ts=${head_ts:-?} positive_reaction=${pos_ts:-none} findings_on_head=${findings:-0} changes_requested=${cr:-0}"
 
   if [ -z "$head_ts" ]; then
