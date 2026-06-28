@@ -126,7 +126,7 @@ Architectural reading note:
 
 <!-- SECTION:OBS:BEGIN -->
 ## JSON log and span schema
-`app/obs/log.py:11-58` emits one line per span with:
+`app/observability/log.py:11-58` emits one line per span with:
 | Field | Type | Description |
 | --- | --- | --- |
 | `trace_id` | str | Propagated from the CLI or generated when missing. |
