@@ -166,11 +166,11 @@ This order exists to prevent jumping into runtime implementation before the conc
 
 ## 8. First later runtime vertical slice
 
-The first later implementation slice should be:
+The first later implementation slice was:
 
 `Capture → Metadata bundle → DRI segment → Retrieval prefilter → RCA result → ContextEnvelope`
 
-> This is **not** part of #2553. It is recorded here only so the intended first runtime target is preserved.
+> **Status (2026-06-28): DELIVERED.** Runtime Slice 1 (epic [#2578](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2578), children #2579–#2586) implemented this chain as the new top-level **`yggdrasil_runtime`** package — a corpus-backed conformance harness over `tests/evals/fixtures/` (NOT an `app/` rewire). Entry points: `yggdrasil_runtime.capture.capture`, `.dri.derive_segment`, `.retrieval.retrieve`, `.cross_scope.evaluate`, `.context.assemble_envelope`, over a shared immutable `yggdrasil_runtime.metadata.MetadataBundle`. The eight targeted invariants are now `runtime_test`-enforced (see the invariant registry Coverage map and traceability-matrix rows 1–3, 5–7, 16); the deliberately-left future-slice invariants remain xfail, locked by `tests/invariants/test_invariant_residue.py`. The "Intentionally later" items below are still deferred.
 
 > Naming note (do not duplicate an existing contract): `ContextEnvelope` (#2545) is a **new** contract for the *bounded agent operating context*. It is distinct from the existing RCA `ContextBundle` (`docs/contracts/CONTEXT_BUNDLE.md`), which carries scoped candidate evidence with provenance and relevance explanation. The envelope is expected to **compose** an RCA `ContextBundle` (plus scope, authority posture, and memory bindings) — not rename or replace it. When the need is evidence packaging, extend `ContextBundle`; define `ContextEnvelope` only for the bounded operating-context contract in #2545.
 
