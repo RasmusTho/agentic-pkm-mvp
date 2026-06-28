@@ -134,25 +134,36 @@ echo "all required checks passed on $SHA"
 
 if [ "$CHECK_CODEX" -eq 1 ]; then
   bot="chatgpt-codex-connector[bot]"
-  reaction=$(gh api "repos/$REPO/issues/$PR/reactions" \
-    --jq "[.[] | select(.user.login==\"$bot\") | .content] | join(\",\")" 2>/dev/null)
-  review=$(gh api "repos/$REPO/pulls/$PR/reviews" \
-    --jq "[.[] | select(.user.login==\"$bot\") | .state] | last // \"\"" 2>/dev/null)
-  echo "codex: reactions=[${reaction:-none}] last_review=${review:-none}"
-  case ",$reaction," in
-    *",-1,"*|*",confused,"*) echo "CODEX BLOCKING: negative reaction" >&2; exit 3 ;;
-  esac
-  if [ "$review" = "CHANGES_REQUESTED" ]; then
-    echo "CODEX BLOCKING: CHANGES_REQUESTED" >&2; exit 3
+  # The verdict must be tied to the CURRENT verified head. A 👍 is a PR-level reaction that persists
+  # across pushes, so an old positive reaction must NOT pass a newly pushed commit Codex never
+  # reviewed. ISO8601 timestamps compare lexicographically == chronologically.
+  head_ts=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.committer.date' 2>/dev/null)
+  reactions=$(gh api "repos/$REPO/issues/$PR/reactions" 2>/dev/null)
+  pos_ts=$(printf '%s' "$reactions" | jq -r --arg b "$bot" '[.[] | select(.user.login==$b and (.content=="+1" or .content=="heart" or .content=="hooray" or .content=="rocket" or .content=="laugh")) | .created_at] | max // ""' 2>/dev/null)
+  neg_ts=$(printf '%s' "$reactions" | jq -r --arg b "$bot" '[.[] | select(.user.login==$b and (.content=="-1" or .content=="confused")) | .created_at] | max // ""' 2>/dev/null)
+  findings=$(gh api "repos/$REPO/pulls/$PR/comments" --jq "[.[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\")] | length" 2>/dev/null)
+  cr=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\")] | length" 2>/dev/null)
+  echo "codex: head_ts=${head_ts:-?} positive_reaction=${pos_ts:-none} findings_on_head=${findings:-0} changes_requested=${cr:-0}"
+
+  if [ -z "$head_ts" ]; then
+    echo "codex: could not resolve head commit time — failing closed" >&2; exit 2
   fi
-  case ",$reaction," in
-    *",+1,"*|*",heart,"*|*",hooray,"*|*",rocket,"*|*",laugh,"*)
-      echo "codex: pass (positive reaction)"; exit 0 ;;
-    *)
-      echo "codex: verdict UNRESOLVED — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
-      echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
-      exit 4 ;;
-  esac
+  # Blocking: changes-requested for this head, or a negative reaction newer than the head.
+  if [ "${cr:-0}" -gt 0 ] || { [ -n "$neg_ts" ] && [[ "$neg_ts" > "$head_ts" ]]; }; then
+    echo "CODEX BLOCKING for $SHA (changes-requested or fresh negative reaction)" >&2; exit 3
+  fi
+  # Findings on this exact head must be addressed before merge.
+  if [ "${findings:-0}" -gt 0 ]; then
+    echo "codex: $findings finding(s) on $SHA — address per verification-and-closure" >&2; exit 4
+  fi
+  # Pass ONLY on a positive reaction newer than the verified head commit (i.e. the verdict is for
+  # this head, not a stale 👍 carried over from an earlier push).
+  if [ -n "$pos_ts" ] && [[ "$pos_ts" > "$head_ts" ]]; then
+    echo "codex: pass (positive reaction $pos_ts is newer than head $head_ts)"; exit 0
+  fi
+  echo "codex: no fresh verdict for $SHA — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
+  echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
+  exit 4
 fi
 
 exit 0
