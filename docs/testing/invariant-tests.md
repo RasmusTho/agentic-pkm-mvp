@@ -406,7 +406,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   `evidence_role_in_context: evidence`.
 - **Current enforcement:** `schema_enforced` (the dangerous non-evidence→`evidence` upgrade is blocked
   structurally) + `runtime_test` (the full ordinal ≤ comparison now runs over `yggdrasil_runtime.retrieval`).
-- **Eventual test path:** `tests/invariants/test_retrieval_result.py::test_retrieval_cannot_upgrade_intrinsic_non_evidence` (schema part passes); full monotonicity: `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime` (runtime — passes).
+- **Runtime test path:** `tests/invariants/test_retrieval_result.py::test_retrieval_cannot_upgrade_intrinsic_non_evidence` (schema part passes); full monotonicity: `tests/invariants/test_retrieval_result.py::test_retrieval_full_evidence_monotonicity_runtime` (runtime — passes).
 - **Related docs / contracts / ADRs:** [retrieval-contract](../architecture/retrieval-contract.md) §1, [schemas/README §Known JSON Schema limits](../../schemas/README.md); ADR-0039.
 - **Related issues:** #2548, #2550, #2552.
 
