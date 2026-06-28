@@ -39,6 +39,9 @@ done
 [ -n "$PR" ] || { echo "error: PR number required (see --help)" >&2; exit 64; }
 [ "$INTERVAL" -ge 60 ] 2>/dev/null || INTERVAL=60   # never drop below 60s on the shared bucket
 
+command -v gh >/dev/null 2>&1 || { echo "error: gh is required" >&2; exit 64; }
+command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 64; }
+
 REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
 [ -n "$REPO" ] || { echo "error: could not resolve repo from git remote 'origin'" >&2; exit 64; }
 
@@ -55,28 +58,35 @@ echo "head=$SHA"
 echo "waiting ${INITIAL_WAIT}s before first check (CI runs ~4-5 min; not polling through it)..."
 sleep "$INITIAL_WAIT"
 
+# Fetch check-runs once per iteration into a single guarded response, then derive BOTH the
+# pending set and the failed conclusions from it. Fail CLOSED: a fetch error, an unparseable
+# body, or zero attached checks never falls through to success — it retries until the deadline,
+# then times out (exit 2). The conclusion classification only runs on a response we trust.
 deadline=$(( $(date +%s) + TIMEOUT - INITIAL_WAIT ))
+failed=""
 while :; do
-  pending=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-    --jq '[.check_runs[] | select(.status!="completed") | .name] | join(", ")' 2>/dev/null)
+  resp=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null)
   rc=$?
-  if [ $rc -ne 0 ]; then
-    echo "transient REST error (rc=$rc); backing off ${INTERVAL}s..."
-  elif [ -z "$pending" ]; then
-    break   # all check-runs completed
+  count=$(printf '%s' "$resp" | jq -r '.check_runs | length' 2>/dev/null)
+  if [ "$rc" -ne 0 ] || ! [ "${count:-x}" -ge 0 ] 2>/dev/null; then
+    echo "transient REST/parse error (rc=$rc); backing off ${INTERVAL}s..."
+  elif [ "$count" -eq 0 ]; then
+    echo "no check-runs attached to $SHA yet; waiting..."
   else
+    pending=$(printf '%s' "$resp" | jq -r '[.check_runs[] | select(.status!="completed") | .name] | join(", ")')
+    if [ -z "$pending" ]; then
+      failed=$(printf '%s' "$resp" | jq -r '[.check_runs[] | select(.conclusion!=null and .conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral") | "\(.name): \(.conclusion)"] | join("; ")')
+      break   # all check-runs completed; `failed` derived from the SAME trusted response
+    fi
     echo "still running: $pending"
   fi
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "TIMEOUT after ${TIMEOUT}s; checks still pending: ${pending:-unknown}" >&2
+    echo "TIMEOUT after ${TIMEOUT}s; checks not confirmed complete (last pending: ${pending:-unknown})" >&2
     exit 2
   fi
   sleep "$INTERVAL"
 done
 
-# All complete — classify conclusions (skipped/neutral are not failures).
-failed=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-  --jq '[.check_runs[] | select(.conclusion!=null and .conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral") | "\(.name): \(.conclusion)"] | join("; ")' 2>/dev/null)
 if [ -n "$failed" ]; then
   echo "CHECKS FAILED: $failed" >&2
   exit 1
