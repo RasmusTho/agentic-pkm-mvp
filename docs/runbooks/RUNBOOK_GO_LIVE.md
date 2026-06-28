@@ -51,7 +51,7 @@ All FastAPI routes listen on `http://127.0.0.1:18000` (docker compose maps host 
 
 There is no `/health` route in the Reality-MVP API; use `/healthz` for simple liveness and `/api/health` for the full contract. Swagger UI lives at `http://127.0.0.1:18000/docs` and the OpenAPI document is the source of truth (`/openapi.json`). If you are unsure which paths exist, run `curl -sS http://127.0.0.1:18000/openapi.json | python -c 'import sys,json; j=json.load(sys.stdin); print("\n".join(sorted(j["paths"].keys())))'`.
 
-Note: `/api/health` may report `ok=false` when optional tools (for example, `ffmpeg`) are missing. Treat this as a degraded feature signal, not a full system outage, if `/healthz`, `/readyz`, search, and ask are healthy.
+Note: `/api/health` `ok`/`required_ok` count only **required** checks (`_checks_ok()` skips `required=False` checks such as `ffmpeg`), so an absent optional tool does **not** flip them. A `false` therefore signals a required check or runtime probe failure — investigate it; do not dismiss it as an optional-tool gap. See `docs/HEALTH.md :: False-green register`.
 
 ## CLI sanity (store stats)
 
