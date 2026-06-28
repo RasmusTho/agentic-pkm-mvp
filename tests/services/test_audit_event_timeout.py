@@ -20,6 +20,7 @@ host).
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 
 import pytest
 
@@ -65,6 +66,11 @@ class _RecordingConnection:
 
     def cursor(self) -> _RecordingCursor:
         return self.cursor_instance
+
+    @contextmanager
+    def transaction(self):
+        # Simulate a SAVEPOINT scope that commits cleanly (FK satisfied path).
+        yield self
 
 
 def test_audit_event_skips_db_in_memory_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,8 +171,9 @@ def test_audit_event_writes_when_cached_backend_hint_is_pg_without_store_backend
     assert len(connection.cursor_instance.statements) == 1
     statement, params = connection.cursor_instance.statements[0]
     assert "INSERT INTO audit" in statement
-    assert params[0] == "t-2406"
-    assert params[1] == "test.event"
+    # params order: (id, object_id, agent, action, ts, trace_id, details)
+    assert params[5] == "t-2406"   # trace_id
+    assert params[3] == "test.event"  # action (mapped from event)
 
 
 def test_audit_event_writes_when_settings_backend_is_pg_without_store_backend_env(
@@ -199,5 +206,6 @@ def test_audit_event_writes_when_settings_backend_is_pg_without_store_backend_en
     assert len(connection.cursor_instance.statements) == 1
     statement, params = connection.cursor_instance.statements[0]
     assert "INSERT INTO audit" in statement
-    assert params[0] == "t-settings-pg"
-    assert params[1] == "test.settings"
+    # params order: (id, object_id, agent, action, ts, trace_id, details)
+    assert params[5] == "t-settings-pg"   # trace_id
+    assert params[3] == "test.settings"   # action (mapped from event)
