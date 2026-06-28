@@ -7920,6 +7920,7 @@ def _render_orientation_index_html(
     ambient_refresh_enabled: bool = False,
     entry_resolution: Optional[EntryStateResolution] = None,
     health: Optional[dict] = None,
+    boot_overlay: str = "",
 ) -> str:
     if entry_resolution is None:
         entry_resolution = resolve_entry_state(orientation=orientation)
@@ -8180,6 +8181,12 @@ def _render_orientation_index_html(
         # gate and the UI-local toggle controller ship with the substrate.
         + guidance_layer_style()
         + guidance_layer_script()
+        # NAV-3 (#2611): ?overlay=<id> deep-link on the entry/orientation page
+        # too. Emitted after the occupant scripts register, so a declared+
+        # shipped id (e.g. ?overlay=map) auto-mounts; an id whose occupant is
+        # not registered on this shell (e.g. ?overlay=memory when the drawer is
+        # not present) is an inert host no-op, so it degrades calmly.
+        + overlay_deep_link_boot_script(resolve_deep_link_overlay(boot_overlay))
     )
     # cold_start threshold body (AC2, #2171).
     # Variant is determined server-side from the orientation payload: first
@@ -10102,6 +10109,7 @@ def render_index_html(
             ambient_refresh_enabled=ambient_refresh_enabled,
             entry_resolution=entry_resolution,
             health=health,
+            boot_overlay=boot_overlay,
         )
 
     content_section = ""

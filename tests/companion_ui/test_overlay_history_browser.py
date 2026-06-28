@@ -98,10 +98,15 @@ _FIELDS: dict[str, Any] = {
 }
 
 # Host bookkeeping read helpers (the host element is the single source of truth
-# for which overlay is open; it is display:none until something mounts).
+# for which overlay is open / what the full stack is; the host element is
+# display:none until something mounts).
 _OPEN_JS = (
     "document.querySelector('[data-region=\\'overlay-host\\']')"
     ".getAttribute('data-overlay-open')"
+)
+_STACK_JS = (
+    "document.querySelector('[data-region=\\'overlay-host\\']')"
+    ".getAttribute('data-overlay-stack')"
 )
 
 
@@ -148,6 +153,10 @@ def _launch(pw: Any) -> Any:
 
 def _wait_open(page: Any, value: str) -> None:
     page.wait_for_function(f"{_OPEN_JS} === '{value}'", timeout=5000)
+
+
+def _wait_stack(page: Any, value: str) -> None:
+    page.wait_for_function(f"{_STACK_JS} === '{value}'", timeout=5000)
 
 
 def test_browser_back_closes_topmost_overlay_then_esc_and_scrim() -> None:
@@ -200,14 +209,78 @@ def test_browser_back_closes_topmost_overlay_then_esc_and_scrim() -> None:
                 assert page.url == start_url, "scrim must not navigate the page away"
 
                 # Stacked: two overlays, Back closes only the topmost (one entry
-                # per mount). memory then cmd; Back leaves memory mounted.
+                # per mount). memory then cmd; Back leaves memory mounted and the
+                # stack consistent.
                 page.evaluate("window.overlayHost.mount('memory')")
                 _wait_open(page, "memory")
                 page.evaluate("window.overlayHost.mount('cmd')")
-                _wait_open(page, "cmd")
+                _wait_stack(page, "memory cmd")
                 page.go_back()
                 _wait_open(page, "memory")  # only the topmost (cmd) was popped
+                _wait_stack(page, "memory")
                 assert page.url == start_url
+                # Clean up: Back again returns fully to the anchor.
+                page.go_back()
+                _wait_open(page, "none")
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+
+def test_browser_forward_restores_overlay_and_stack_stays_correct() -> None:
+    """Codex P2 (popstate must reconcile to history position):
+
+    - single overlay: Back closes it, Forward RESTORES it (not a blind pop);
+    - 2-overlay stack: Back then Forward leaves the CORRECT overlay open and
+      ``data-overlay-stack`` consistent — never closes/restores the wrong one.
+    No page navigation throughout.
+    """
+    server, port = _make_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}/"
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                page = browser.new_page()
+                page.goto(base, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                start_url = page.url
+                assert page.evaluate(_OPEN_JS) == "none"
+
+                # Single overlay: open → Back closes → Forward restores it.
+                page.evaluate("window.overlayHost.mount('memory')")
+                _wait_open(page, "memory")
+                page.go_back()
+                _wait_open(page, "none")
+                assert page.url == start_url
+                page.go_forward()
+                _wait_open(page, "memory")  # RESTORED, not a different overlay
+                _wait_stack(page, "memory")
+                assert page.url == start_url, "Forward must not navigate the page away"
+
+                # Back to a clean anchor for the stacked case.
+                page.go_back()
+                _wait_open(page, "none")
+
+                # 2-overlay stack: memory then cmd. Back drops cmd (memory left).
+                page.evaluate("window.overlayHost.mount('memory')")
+                _wait_open(page, "memory")
+                page.evaluate("window.overlayHost.mount('cmd')")
+                _wait_stack(page, "memory cmd")
+                page.go_back()
+                _wait_open(page, "memory")  # only the topmost (cmd) closed
+                _wait_stack(page, "memory")
+                # Forward restores cmd ON TOP of memory — the correct overlay,
+                # stack consistent (never restores the wrong one).
+                page.go_forward()
+                _wait_open(page, "cmd")
+                _wait_stack(page, "memory cmd")
+                assert page.url == start_url, "Forward must not navigate the page away"
             finally:
                 browser.close()
     finally:

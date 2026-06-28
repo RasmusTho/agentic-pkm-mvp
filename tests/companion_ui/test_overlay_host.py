@@ -305,23 +305,45 @@ def test_overlay_dismiss_returns_to_anchor_without_route_reset() -> None:
 def test_overlay_host_pushes_history_marker_and_handles_popstate() -> None:
     """AC1 Verify target: the rendered overlay-host script pushes a history
     state marker on ``mount`` and registers a ``popstate`` handler that
-    dismisses the topmost overlay (browser Back closes the modal).
+    reconciles the overlay stack to the depth carried in the history entry
+    (browser Back closes the modal; Forward restores it).
     """
     script = _host_script(_render())
 
-    # mount pushes exactly one marked history entry per overlay.
+    # mount pushes a marked history entry carrying the overlay id AND the stack
+    # depth it represents (so popstate can reconcile to it, not blind-pop).
     assert "history.pushState" in script, (
         "mount must push a history state marker so browser Back can pop it"
     )
     assert "overlayHostMarker" in script, "the pushed state must carry the host marker"
+    assert "st.depth = stack.length" in script, (
+        "the pushed state must carry the stack depth for reconciliation"
+    )
+    # A re-mount (move-to-top of an already-stacked id) must NOT push a second
+    # entry (double-push desyncs depth from history position).
+    assert "isNetNew" in script, (
+        "only a net-new mount may push a history entry (no double-push on re-mount)"
+    )
 
-    # A popstate handler is registered and it dismisses the topmost overlay
-    # (pops back to the document anchor) on a genuine browser Back.
+    # A popstate handler is registered and it RECONCILES to the landed entry's
+    # depth (event.state.depth) rather than unconditionally popping. Back closes
+    # above target; Forward (depth up by one) restores the marked overlay.
     assert "addEventListener('popstate'" in script, (
         "a popstate handler must be registered so browser Back closes the overlay"
     )
-    # The popstate path and the programmatic dismiss path share the topmost-pop,
-    # and a programmatic dismiss unwinds its own entry with history.back() —
+    assert "event.state" in script or "st = event" in script, (
+        "the popstate handler must read event.state to reconcile by depth"
+    )
+    assert "targetDepth" in script, (
+        "the popstate handler must reconcile to the entry's target depth"
+    )
+    assert "stack.length > targetDepth" in script, (
+        "Back must pop overlays down to the target depth (close-above-target)"
+    )
+    assert "stack.length < targetDepth" in script, (
+        "Forward must restore the marked overlay when depth increased (recovery)"
+    )
+    # The programmatic dismiss path unwinds its own entry with history.back(),
     # guarded against re-entrant double-dismiss.
     assert "history.back" in script, (
         "a programmatic dismiss must unwind its matching history entry"
@@ -377,6 +399,40 @@ def test_serve_dev_page_honours_overlay_query_param() -> None:
 
     # No param: no boot auto-mount (default).
     plain = _render()
+    assert "/* overlay-deep-link-boot" not in plain
+
+
+def test_orientation_shell_honours_overlay_query_param() -> None:
+    """AC2 (orientation shell): ?overlay=<id> deep-links on the entry/
+    orientation page too. `map` (always registered there) auto-mounts; an
+    occupant not registered on that shell, or an unknown id, is a calm no-op.
+    """
+    # The orientation shell renders when only an orientation payload is present
+    # (no note_path / fields), and it ships the overlay host + map occupant.
+    oriented = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_start_orientation(),
+        boot_overlay="map",
+    )
+    assert 'data-entry-state="cold_start"' in oriented
+    # map is a declared+shipped occupant registered on the orientation shell.
+    assert "map" in SHIPPED_OVERLAY_OCCUPANTS
+    assert "/* overlay-deep-link-boot (NAV-3, #2611) */" in oriented
+    assert "overlayHost.mount('map')" in oriented
+
+    # Unknown id: no boot auto-mount on the orientation shell either.
+    unknown = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_start_orientation(),
+        boot_overlay="task-popup",
+    )
+    assert "/* overlay-deep-link-boot" not in unknown
+
+    # No param: no boot auto-mount (default).
+    plain = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_start_orientation(),
+    )
     assert "/* overlay-deep-link-boot" not in plain
 
 

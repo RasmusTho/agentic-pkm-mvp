@@ -424,18 +424,28 @@ def overlay_host_script() -> str:
         // never push a phantom history entry for a surface that won't mount.
         if (!occ) { return; }
         var at = stack.indexOf(id);
+        // Re-mounting an already-stacked id is a move-to-top, NOT a net-new
+        // overlay: it must NOT push a second history entry (that double-push
+        // desyncs the stack depth from the history position). Only a net-new
+        // mount pushes.
+        var isNetNew = at === -1;
         if (at !== -1) { stack.splice(at, 1); }
         stack.push(id);
         sync();
-        // Push one history entry per mounted overlay so browser Back can pop
-        // it. Same-document pushState: it changes neither the URL nor the
-        // document, only adds a marked entry the popstate handler recognises.
-        try {
-          var st = {}; st[HISTORY_MARKER] = id;
-          if (window.history && window.history.pushState) {
-            window.history.pushState(st, '');
-          }
-        } catch (err) { /* history unavailable — overlay still mounts */ }
+        // Push one history entry per NET-NEW overlay so browser Back can pop it
+        // and browser Forward can restore it. Same-document pushState: it
+        // changes neither the URL nor the document, only adds an entry carrying
+        // the overlay id and the stack depth it represents (depth = the new
+        // stack length, i.e. 1 for the first overlay). The popstate handler
+        // reconciles the live stack to that depth.
+        if (isNetNew) {
+          try {
+            var st = {}; st[HISTORY_MARKER] = id; st.depth = stack.length;
+            if (window.history && window.history.pushState) {
+              window.history.pushState(st, '');
+            }
+          } catch (err) { /* history unavailable — overlay still mounts */ }
+        }
         if (occ.open) { occ.open(detail || {}); }
       },
       dismiss: function() {
@@ -475,14 +485,40 @@ def overlay_host_script() -> str:
         return stack.length ? stack[stack.length - 1] : null;
       }
     };
-    // Browser Back closes the TOPMOST overlay (NAV-3, #2611). When the entry
-    // this handler reacts to was unwound by a programmatic dismiss (Esc /
-    // scrim / occupant self-close), the `popping` guard absorbs the event so
-    // we never double-dismiss. Otherwise this is a genuine user Back: pop the
-    // topmost overlay back to the document anchor without navigating away.
-    window.addEventListener('popstate', function() {
+    // Browser Back/Forward reconcile the overlay stack to the depth carried in
+    // the history entry being landed on (NAV-3, #2611). When the entry this
+    // handler reacts to was unwound by a programmatic dismiss (Esc / scrim /
+    // occupant self-close, which calls history.back()), the `popping` guard
+    // absorbs the event so we never double-dismiss.
+    //
+    // Reconcile-to-depth (not a blind pop) so Forward after a Back RESTORES the
+    // modal instead of closing another one, and stacked overlays never
+    // close/restore the WRONG one:
+    //   - Back (landed depth < live stack): pop overlays until the live stack
+    //     matches the target depth (close-above-target — the common case);
+    //   - Forward (landed depth > live stack, by one): re-open the entry's
+    //     marked overlay if its occupant is registered and not already mounted,
+    //     WITHOUT pushing a new history entry. Single-step forward-restore is
+    //     the recovery path; arbitrary multi-overlay forward chains are not
+    //     rebuilt.
+    // The base document entry carries no overlay state, so its target depth is
+    // 0 and Back from the first overlay closes it back to the anchor.
+    window.addEventListener('popstate', function(event) {
       if (popping) { popping = false; return; }
-      if (stack.length) { popTopmost(); }
+      var st = event && event.state;
+      var targetDepth = (st && typeof st.depth === 'number') ? st.depth : 0;
+      // Back / down: close overlays above the target depth.
+      while (stack.length > targetDepth) { popTopmost(); }
+      // Forward / up by one: restore the marked overlay (recovery path).
+      if (stack.length < targetDepth && st) {
+        var marker = st[HISTORY_MARKER];
+        var occ = marker ? occupants[marker] : null;
+        if (occ && stack.indexOf(marker) === -1) {
+          stack.push(marker);
+          sync();
+          if (occ.open) { occ.open({}); }
+        }
+      }
     });
     // Keyboard map (SYSTEM_ENTRY_POINT_SPEC.md §Keyboard map):
     //   meta+k -> cmd.open, meta+n -> capture.open, escape -> overlay.dismiss.
