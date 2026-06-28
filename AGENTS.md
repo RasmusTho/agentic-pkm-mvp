@@ -21,6 +21,8 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
 
 - General repo dev work in this repository:
   `.codex/skills/agentic-pkm/SKILL.md`
+- Resume interrupted dev/build work after a session breaks (quota, network, hung command, tool failure, context loss):
+  `.codex/skills/resume-work/SKILL.md`
 - GitHub implementation work from a bounded Issue:
   `.codex/skills/issue-to-code/SKILL.md`
 - Issue, PR, label, or Project lifecycle correction:
