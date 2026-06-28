@@ -99,3 +99,23 @@ def test_palette_action_posts_to_panel_confirm() -> None:
     assert "idempotency_key: 'palette:'" in script
     assert "postPanelAction(btn)" in script
     assert "railButton.click()" not in script
+
+
+def test_palette_action_disables_in_flight_and_reports_result() -> None:
+    # ST-2 (ui-audit): the POST is no longer fire-and-forget — it guards against
+    # double-submit (aria-disabled) and reflects success/error on the button.
+    script = _palette_script(_render())
+    assert "aria-disabled" in script
+    assert "data-action-state" in script
+    assert ".then(function(r)" in script
+    assert ".catch(function" in script
+
+
+def test_palette_filter_has_no_match_state() -> None:
+    # ST-3 (ui-audit): filtering to zero matches shows a 'no matches' row
+    # instead of a silently blank list.
+    html = _render()
+    assert 'data-testid="palette-filter-empty"' in html
+    script = _palette_script(html)
+    assert "palette-filter-empty" in script
+    assert "hits === 0" in script

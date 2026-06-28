@@ -101,10 +101,8 @@ _ROUTABLE_SURFACE_IDS: tuple[str, ...] = (
 
 # The entry-point center node (issue #1787: "the entry-point center node plus
 # one node per composition-table surface").
-MAP_CENTER_NAME = "Entry point · the document anchor"
-MAP_CENTER_SUB = (
-    "cold start → orientation (latency ladder) → unified shell → any surface → back"
-)
+MAP_CENTER_NAME = "Home · your current note"
+MAP_CENTER_SUB = "Start here, move to any area, and come back."
 
 
 @dataclass(frozen=True)
@@ -163,186 +161,185 @@ class MapNode:
 MAP_SURFACES: tuple[MapNode, ...] = (
     MapNode(
         surface_id="orientation",
-        name="Orientation re-entry",
+        name="Welcome back",
         modes=("reorient",),
-        reached="the entry substrate (orienting) — reached by returning, never by opening",
-        returns="becomes the shell on resume",
+        reached="where you land when you return — it appears, you don't open it",
+        returns="becomes your workspace when you resume",
         status="shipped",
-        status_note="shipped — re-entry surface with its mist treatments",
+        status_note="Ready — the gentle screen that greets you when you come back",
     ),
     MapNode(
         surface_id="anchor",
-        name="Document anchor (active note)",
+        name="Your current note",
         modes=("find", "reorient", "resurface", "act"),
-        reached="the shell's primary column",
-        returns="— (it is the anchor)",
+        reached="the main column of your workspace",
+        returns="— (this is home)",
         status="shipped",
-        status_note="shipped — the canonical note body every overlay returns to",
+        status_note="Ready — the note you are reading; every panel returns you to it",
         routable=True,
     ),
     MapNode(
         surface_id="vault",
-        name="Vault Browser",
+        name="Browse your notes",
         modes=("find",),
-        reached="left pane; modal in narrow mode",
-        returns="re-anchors the shell",
+        reached="the left pane; opens as a panel on a narrow screen",
+        returns="brings you back to your note",
         status="shipped",
-        status_note="shipped — browse/find (Projection); queue_review is the one governed handoff",
+        status_note="Ready — browse and open your notes; sending one for review is a tracked action",
         routable=True,
     ),
     MapNode(
         surface_id="panel",
-        name="Panel rail",
+        name="Suggestions rail",
         modes=("act",),
-        reached="right rail (the shipped agent rail)",
-        returns="stays on anchor",
+        reached="the right-hand rail",
+        returns="keeps you on your note",
         status="shipped",
-        status_note="shipped — proposal → confirmation → receipt (governed)",
+        status_note="Ready — review the companion suggestions; confirm or decline, with a record kept",
         routable=True,
     ),
     MapNode(
         surface_id="palette",
-        name="⌘K Panel command palette",
+        name="Command bar (⌘K)",
         modes=("act",),
-        reached="command overlay (⌘K · cmd.open)",
-        returns="dismisses to anchor",
+        reached="the command bar (⌘K)",
+        returns="closes back to your note",
         status="shipped",
-        status_note="shipped — a Panel presentation, not new authority",
+        status_note="Ready — a faster way to act on the same suggestions as the rail",
         routable=True,
     ),
     MapNode(
         surface_id="chat_rail",
-        name="Chat rail slot",
+        name="Chat",
         modes=("find", "act"),
-        reached="margin rail slot (bottom sheet when narrow)",
-        returns="dismisses to anchor",
+        reached="a slot in the side rail (a bottom sheet on a narrow screen)",
+        returns="closes back to your note",
         status="partial",
-        status_note="slot defined by the spec; occupant owned by the canvas-chat lane",
+        status_note="In progress — the space is reserved; the chat itself is still being built",
     ),
     MapNode(
         surface_id="suggestions",
-        name="Canvas suggestion blocks",
+        name="Inline suggestions",
         modes=("act",),
-        reached="staged block inside the document",
-        returns="stays on anchor",
+        reached="shown inline, inside your note",
+        returns="keeps you on your note",
         status="shipped",
-        status_note="shipped — proposal → body-edit lane (no receipt)",
+        status_note="Ready — suggested edits you can accept right in the text",
     ),
     MapNode(
         surface_id="memory",
-        name="Memory candidate review drawer",
+        name="Memory review",
         modes=("reorient", "act"),
-        reached="right drawer overlay (memory.open)",
-        returns="dismisses to anchor",
+        reached="a drawer on the right",
+        returns="closes back to your note",
         status="shipped",
-        status_note="shipped — governed review outcomes over the candidate drawer",
+        status_note="Ready — review what the companion proposes to remember",
         routable=True,
     ),
     MapNode(
         surface_id="peek",
         name="Source peek",
         modes=("find",),
-        reached="anchored popover (source.peek)",
-        returns="dismisses to anchor",
+        reached="a small popover anchored to the text",
+        returns="closes back to your note",
         status="shipped",
-        status_note="shipped — provenance lines are live; no map route exists on no-vault/error renders",
+        status_note="Ready — shows where a detail came from",
     ),
     MapNode(
         surface_id="posture",
-        name="Posture emphasis switch",
+        name="Emphasis switch",
         modes=(),
-        reached="centered overlay (posture.open)",
-        returns="anchor preserved with carry-forward set",
+        reached="a centered panel",
+        returns="keeps your note, with your choice carried forward",
         status="new",
-        status_note="new — not yet shipped",
+        status_note="Not built yet",
     ),
     MapNode(
         surface_id="map",
-        name="System map overlay",
+        name="System map",
         modes=("reorient",),
-        reached="topbar + cold-start affordance (map.open)",
-        returns="dismisses to anchor; nodes route to surfaces",
+        reached="the Map button, and from the welcome screen",
+        returns="closes back to your note; pick any area to go there",
         status="shipped",
-        status_note="shipped — you are here",
+        status_note="Ready — you are here",
     ),
     MapNode(
         surface_id="settings",
-        name="Settings drawer",
+        name="Settings",
         modes=(),
-        reached="right drawer overlay (settings.open)",
-        returns="dismisses to anchor",
+        reached="a drawer on the right",
+        returns="closes back to your note",
         status="shipped",
-        status_note="shipped — Local UI preferences; canonical hash untouched",
+        status_note="Ready — your preferences for this app; your notes are untouched",
         routable=True,
     ),
     MapNode(
         surface_id="tts",
-        name="TTS read-back",
+        name="Listen (read-back)",
         modes=(),
-        reached="per-surface Listen control → plan popover",
-        returns="stays on anchor",
+        reached="the Listen control on each area — with a short plan before audio",
+        returns="keeps you on your note",
         status="shipped",
-        status_note="shipped — local listening; the plan is inspected before audio",
+        status_note="Ready — listen out loud; you see the plan before it speaks",
     ),
     MapNode(
         surface_id="capture",
-        name="Capture",
+        name="Quick capture",
         modes=("act",),
-        reached="top modal (⌘N · capture.open)",
-        returns="dismisses to anchor",
+        reached="a panel at the top (⌘N)",
+        returns="closes back to your note",
         status="shipped",
-        status_note="shipped — governed append to the vault inbox",
+        status_note="Ready — quickly save a thought to your inbox",
         routable=True,
     ),
     MapNode(
         surface_id="receipts",
-        name="Receipts / history",
+        name="History",
         modes=("act", "reorient"),
-        reached="top modal (receipts.open)",
-        returns="dismisses to anchor",
+        reached="a panel at the top",
+        returns="closes back to your note",
         status="shipped",
-        status_note="shipped — runtime receipts rendered verbatim, never invented",
+        status_note="Ready — a history of what the companion has done",
         routable=True,
     ),
     MapNode(
         surface_id="governance",
-        name="Governance counts",
+        name="Action counts",
         modes=("act", "reorient"),
-        reached="receipts surface (receipts.open) — counts header row on the receipts modal",
-        returns="dismisses to anchor via receipts surface",
+        reached="on the History panel — the counts row at its top",
+        returns="closes back to your note through the History panel",
         status="shipped",
-        status_note="shipped — projection index; routes via receipts.open",
+        status_note="Ready — a running count of tracked actions, shown on the History panel",
         routable=True,
     ),
     MapNode(
         surface_id="resurface_rail",
-        name="Resurface candidates",
+        name="Notes brought back",
         modes=("resurface",),
-        reached="shell resurface rail mode (_render_resurface_mode); navigated in shell, not via overlayHost.mount",
-        returns="stays in shell",
+        reached="appears in your main workspace when the companion resurfaces notes",
+        returns="stays in your workspace",
         status="shipped",
-        status_note="shipped — read-only index node; rail is navigated in shell, never via overlay route",
+        status_note="Ready — notes the companion brings back for another look",
     ),
     MapNode(
         surface_id="guidance",
-        name="Guidance layer",
+        name="On-screen tips",
         modes=(),
-        reached="ⓘ toggle on topbar, overlay heads, re-entry card",
-        returns="cross-cutting; persists nothing",
+        reached="the ⓘ toggle — on the Map button, panel headers, and the welcome card",
+        returns="a helper that stays out of the way; remembers nothing",
         status="shipped",
-        status_note="shipped — cross-cutting local UI toggle",
+        status_note="Ready — turn short on-screen tips on or off",
     ),
     MapNode(
         surface_id="operator",
-        name="Operator diagnostics",
+        name="System status",
         modes=(),
-        reached="System map (operator.open) — the operator layer",
-        returns="dims but does not dismiss; returns to anchor",
+        reached="the System map",
+        returns="dims but stays open; returns to your note",
         status="shipped",
         status_note=(
-            "shipped — operator/diagnostic telemetry "
-            "(runtime status, freshness, as-of) moved off the front edge to "
-            "this operator layer; not a daily-use surface"
+            "Ready — runtime status and timing for this app; "
+            "not needed day to day"
         ),
         routable=True,
     ),
@@ -377,10 +374,14 @@ def _node_html(
     Omitted when zero or absent (no zero-state — open loops belong to a
     trajectory; legitimately none on first contact).
     """
+    # data-mode keeps the machine product-mode tokens (a stable hook); the
+    # visible chip shows a human label — raw enum tokens like "find reorient
+    # resurface act" / "local-ui" mean nothing to a non-developer.
     mode = _e(node.mode_attr)
+    mode_label = _e(" · ".join(m.capitalize() for m in node.modes))
     reach = (
         f'<p class="map-node-reach" data-testid="system-map-node-reach">'
-        f"reached: {_e(node.reached)} · returns: {_e(node.returns)}</p>"
+        f"How to reach it: {_e(node.reached)} · How it returns: {_e(node.returns)}</p>"
     )
     status = (
         f'<p class="map-node-status" data-testid="system-map-node-status" '
@@ -388,7 +389,7 @@ def _node_html(
     )
     head = (
         f'<span class="map-node-name">{_e(node.name)}</span>'
-        f'<span class="map-node-mode">{mode}</span>'
+        f'<span class="map-node-mode">{mode_label}</span>'
     )
     # Relocated open-loops index count on the memory map node (#2247,
     # TELEMETRY_RELOCATION-03): omit when zero or absent (no zero-state).
@@ -500,7 +501,7 @@ def system_map_overlay_markup(
         data-region="map-entry-point-meta">
         <span data-testid="map-entry-point-meta-freshness"><code>{_html.escape(_f)}</code></span>
         {(f'<span data-testid="map-entry-point-meta-as-of">{_html.escape(_a)}</span>') if _a else ''}
-        {(f'<span data-testid="map-entry-point-meta-trace-id"><code>{_html.escape(_t)}</code></span>') if _t else ''}
+        {(f'<span class="map-meta-diagnostic" data-testid="map-entry-point-meta-trace-id"><code>{_html.escape(_t)}</code></span>') if _t else ''}
       </div>"""
         if (_f or _a or _t)
         else ""
@@ -575,6 +576,10 @@ def system_map_overlay_markup(
       justify-content: center; flex-wrap: wrap;
     }}
     .map-center-meta code {{ font-family: inherit; }}
+    /* The runtime correlation id (trace id) is an operator/diagnostic detail
+       with no meaning to a human reader — keep it in the DOM for operators but
+       hide it from the default human view (mirrors the #1418 diagnostics gate). */
+    body[data-diagnostics="false"] .map-meta-diagnostic {{ display: none; }}
     .system-map-grid {{
       display: grid; gap: 10px; grid-template-columns: repeat(2, 1fr);
     }}
@@ -623,10 +628,9 @@ def system_map_overlay_markup(
     aria-label="System map">
     {_frame_header}
     {guidance_callout_markup('map')}
-    <p class="system-map-note" data-testid="system-map-note">An index of the
-      companion's surfaces — it renders and routes, nothing more. Everything
-      opens over the document anchor and returns to it; nothing here
-      re-classifies anything.</p>
+    <p class="system-map-note" data-testid="system-map-note">A map of everything
+      in your companion and how to get there. Each area opens over your current
+      note and brings you back to it.</p>
     <div class="map-center" data-testid="system-map-center"
       data-region="system-map-center">
       <div class="map-center-name">{_e(MAP_CENTER_NAME)}</div>
@@ -638,9 +642,9 @@ def system_map_overlay_markup(
       {nodes}
     </div>
     <p class="system-map-parked" data-testid="system-map-parked-note"
-      data-parked-surfaces="{parked}">Parked (spec §Parked, Q15–Q16): the
-      context lane and the place band have no grounded source yet and are not
-      reachable from anywhere — including here.</p>
+      data-parked-surfaces="{parked}">Not available yet: a context lane and a
+      place band are planned but not built, so they can't be opened from
+      anywhere — including here.</p>
   </div>
   <!-- system-map-overlay end -->"""
 

@@ -3390,6 +3390,16 @@ def _render_vault_actions(note: dict) -> str:
             else ""
         )
         onclick_attr = f' onclick="{_e(onclick)}"' if onclick else ""
+        # An onclick-driven <div> is mouse-only. Make it keyboard-operable the
+        # same way the receipt-row does: role=button + tabindex + Enter/Space
+        # re-firing the click. (Only when it actually has a click handler.)
+        keyboard_attrs = (
+            ' role="button" tabindex="0"'
+            ' onkeydown="if(event.key===\'Enter\'||event.key===\' \')'
+            "{event.preventDefault();this.click();}\""
+            if onclick
+            else ""
+        )
         return (
             f'<div class="vault-action" '
             f'data-testid="{testid}" '
@@ -3405,6 +3415,7 @@ def _render_vault_actions(note: dict) -> str:
             f"{api_path_attr}"
             f"{note_path_attr}"
             f"{artifact_uuid_attr}"
+            f"{keyboard_attrs}"
             f'{onclick_attr}>'
             f'<span class="vault-action-label">{_e(label)}</span>'
             f"</div>"
@@ -3511,7 +3522,11 @@ def _render_filter_chips(
                 f'data-key="{_e(field)}" '
                 f'data-value="{_e(val)}" '
                 f'data-active="{"true" if is_active else "false"}" '
+                f'role="button" tabindex="0" '
+                f'aria-pressed="{"true" if is_active else "false"}" '
                 f'onclick="vbToggleFilter(this)" '
+                f'onkeydown="if(event.key===\'Enter\'||event.key===\' \')'
+                f'{{event.preventDefault();this.click();}}" '
                 f'style="cursor:pointer">'
                 f'{_e(label)}: {_e(val)}'
                 f'{deselect_span}'
@@ -9181,6 +9196,7 @@ def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
     var toggle = document.querySelector('[data-testid="workspace-operator-toggle"]');
     if (!host || !body) { return; }
     var loaded = false;
+    var loading = false;
     function setExpanded(state) {
       if (toggle) { toggle.setAttribute('aria-expanded', state ? 'true' : 'false'); }
     }
@@ -9200,8 +9216,11 @@ def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
       }
     }
     function loadContent() {
-      if (loaded) { return; }
-      loaded = true;
+      // ST-1 (ui-audit): only mark loaded on SUCCESS, and guard concurrent
+      // in-flight loads. A transient gateway failure ([Errno 61]/"Failed to
+      // fetch") must not pin the error state — reopening should retry.
+      if (loaded || loading) { return; }
+      loading = true;
       fetch('/operator', {method: 'GET'})
         .then(function(r) { return r.text(); })
         .then(function(html) {
@@ -9212,11 +9231,22 @@ def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
             ns.textContent = s.textContent;
             s.parentNode.replaceChild(ns, s);
           });
+          loaded = true;
+          loading = false;
         })
         .catch(function(err) {
+          // Keep loaded=false so the next open retries. Show a calm, human
+          // message; keep the raw error in a data-* attr for operators only.
+          loading = false;
+          // Calm, human copy. The calm_degraded grammar helper owns the
+          // canonical degraded connective; this runtime JS banner deliberately
+          // phrases around it (see test_calm_degraded_grammar). Raw error kept
+          // in data-error for operators, never shown as copy.
           body.innerHTML = '<div class="op-banner-degraded"'
-            + ' data-testid="operator-degraded-banner" data-state="degraded">'
-            + 'Operator panel unavailable: ' + String(err) + '</div>';
+            + ' data-testid="operator-degraded-banner" data-state="degraded"'
+            + ' data-error="' + String(err).replace(/"/g, '&quot;') + '">'
+            + 'Operator panel could not load — connection failed. Nothing was lost.'
+            + ' Reopen to retry.</div>';
         });
     }
     // CUIDR-04 (#2447): the relocated runtime-telemetry block is rendered
@@ -9358,6 +9388,15 @@ def _render_help_toggle() -> str:
         'title="System map — all surfaces" aria-label="Open system map" '
         'onclick="overlayHost.mount(\'map\')">'
         '<span aria-hidden="true">&#10070;</span> Map</button>'
+        # NAV-1 (ui-audit) — a direct Settings launcher so preferences are not
+        # reachable only by opening the System Map. Reuses the existing
+        # settings.open intent + host occupant; the map node stays too.
+        '<button type="button" class="settings-toggle" '
+        'data-testid="workspace-surface-icon-settings" '
+        'data-intent="settings.open" aria-haspopup="dialog" '
+        'title="Settings — your preferences" aria-label="Open settings" '
+        'onclick="overlayHost.mount(\'settings\')">'
+        '<span aria-hidden="true">&#9881;</span> Settings</button>'
         '<button type="button" class="help-toggle" '
         'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
         'aria-controls="workspace-help-drawer" aria-expanded="false" '
@@ -9398,12 +9437,14 @@ def _render_help_drawer() -> str:
     @media (max-width: 899px){
       body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar{bottom:calc(60px + 18px)}
     }
-    .help-toggle,.map-toggle{position:static;
+    .help-toggle,.map-toggle,.settings-toggle{position:static;
       display:inline-flex;align-items:center;gap:6px;
       padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
       background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:999px;
       cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
-    .help-toggle:hover,.map-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
+    .help-toggle:hover,.map-toggle:hover,.settings-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
+    .help-toggle:focus-visible,.map-toggle:focus-visible,.settings-toggle:focus-visible{
+      outline:2px solid var(--border-focus);outline-offset:2px}
     .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
       opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
     .help-drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,94vw);
@@ -9431,6 +9472,7 @@ def _render_help_drawer() -> str:
          onclick="companionHelp.close()"></div>
     <aside class="help-drawer" id="workspace-help-drawer"
            data-testid="workspace-help-drawer" role="dialog" aria-modal="true"
+           inert
            aria-label="Companion UI help">
       <div class="help-drawer-head">
         <span class="help-drawer-title">Companion UI · Help</span>
@@ -9448,6 +9490,7 @@ def _render_help_drawer() -> str:
   (function() {
     var host  = document.getElementById('workspace-help-host');
     var frame = document.getElementById('workspace-help-frame');
+    var drawer = document.getElementById('workspace-help-drawer');
     var toggle = document.querySelector('[data-testid="workspace-help-toggle"]');
     if (!host || !frame) { return; }
     function setExpanded(state) {
@@ -9477,10 +9520,14 @@ def _render_help_drawer() -> str:
         if (!frame.getAttribute('src')) { frame.setAttribute('src', frame.dataset.src); }
         installHelpFrameEscapeHandling();
         host.setAttribute('data-open', 'true');
+        // A closed drawer is only translated offscreen; toggle `inert` so its
+        // close button and iframe leave the tab order while hidden.
+        if (drawer) { drawer.removeAttribute('inert'); }
         setExpanded(true);
       },
       close: function() {
         host.setAttribute('data-open', 'false');
+        if (drawer) { drawer.setAttribute('inert', ''); }
         setExpanded(false);
         if (toggle) { try { toggle.focus(); } catch (e) {} }
       },
@@ -10521,6 +10568,19 @@ def render_index_html(
       margin-bottom: 8px;
       flex: 1 1 auto;
       min-width: 0;
+      /* A long unbroken title (a slug, URL, or path used as a title) must wrap
+         instead of overflowing the header. Matches .note-body-content. */
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }}
+    /* Proposal cards in the 280px rail carry user/agent text (descriptions,
+       trigger summaries) that can contain long unbroken tokens (e.g. a file
+       path); break them so they never overflow the fixed-width rail. */
+    .act-proposal-title,
+    .act-proposal,
+    .act-bundle {{
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
     /* #2563 Tier 1 — one quiet right-aligned icon cluster on the document frame
        (the note header), never the topbar or the right rail. Icons sit at
@@ -11170,9 +11230,22 @@ def render_index_html(
     }}
     /* §6.5 — tables: header is a label band; rows separated by a single dashed rule;
        no row striping. */
+    /* A wide table scrolls horizontally inside this wrapper rather than
+       crushing its cells into the reading column or widening the viewport. */
+    .vault-markdown-rendered .vault-table-scroll {{
+      overflow-x: auto;
+      max-width: 100%;
+      margin: 0 0 16px;
+    }}
     .vault-markdown-rendered table {{
       border-collapse: collapse;
       width: 100%;
+    }}
+    /* When wrapped for horizontal scroll, let the table grow past the column
+       width (so it scrolls) instead of being capped at 100%. */
+    .vault-markdown-rendered .vault-table-scroll > table {{
+      width: auto;
+      min-width: 100%;
     }}
     .vault-markdown-rendered th,
     .vault-markdown-rendered td {{
@@ -11662,6 +11735,12 @@ def render_index_html(
     }}
     .rail-placeholder-body {{
       flex: 1;
+      /* The rail is a fixed-height flex column with overflow:hidden, so this
+         body must own the scroll when proposals/receipts/cards exceed the
+         viewport — without min-height:0 a flex child refuses to shrink and the
+         lower cards (and their confirm/correct/reject controls) are clipped. */
+      min-height: 0;
+      overflow-y: auto;
       padding: 16px;
       font-size: var(--text-sm);
       color: var(--fg-3);
@@ -12449,6 +12528,10 @@ def render_index_html(
         position: fixed;
         right: 0;
         z-index: 20;
+        /* The half/full snaps are height-capped; let the sheet body scroll so
+           content taller than the snap is reachable instead of clipped. */
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
       }}
       .portrait-sheet[data-current-snap="peek"] {{
         height: 60px;
@@ -12856,6 +12939,13 @@ def render_index_html(
     .filter-chip[data-active="true"] {{
       border-color: var(--border-focus);
       color: var(--fg-1);
+    }}
+    /* Keyboard focus must be visible now that chips and note actions are
+       keyboard-operable (role=button + tabindex). */
+    .filter-chip:focus-visible,
+    .vault-action:focus-visible {{
+      outline: 2px solid var(--border-focus);
+      outline-offset: 1px;
     }}
     /* §6 — density: folder group headers + compact, truncating rows. */
     /* #1425/#1427 — Obsidian-style collapsible folder tree. The folder summaries

@@ -529,7 +529,7 @@ def panel_palette_markup(fields: Optional[dict[str, Any]]) -> str:
            data-testid="palette-filter-input" data-input-role="filter"
            placeholder="Filter declared proposals…" autocomplete="off"
            aria-label="Filter declared proposals">
-    <ul class="palette-proposal-list" data-testid="palette-proposal-list">{_rows_html(rows)}</ul>
+    <ul class="palette-proposal-list" data-testid="palette-proposal-list">{_rows_html(rows)}<li class="palette-empty palette-filter-empty" data-testid="palette-filter-empty" data-filter-empty="hidden" hidden>No proposals match your filter.</li></ul>
     {_blocked_html(response)}{_receipt_html(response)}
   </div>
   <!-- /panel-palette -->"""
@@ -555,11 +555,25 @@ def panel_palette_script() -> str:
     function applyFilter() {
       var needle = input ? String(input.value || '').trim().toLowerCase() : '';
       var rows = root.querySelectorAll('[data-testid="palette-proposal-row"]');
+      var hits = 0;
       rows.forEach(function(row) {
         var hay = String(row.getAttribute('data-filter-text') || '').toLowerCase();
         var hit = !needle || hay.includes(needle);
         row.setAttribute('data-filter-hit', hit ? 'true' : 'false');
+        if (hit) { hits++; }
       });
+      // ST-3 (ui-audit): when a non-empty filter excludes every row, show a
+      // 'no matches' state instead of a silently blank list.
+      var fe = root.querySelector('[data-testid="palette-filter-empty"]');
+      if (fe) {
+        if (needle && rows.length > 0 && hits === 0) {
+          fe.removeAttribute('hidden');
+          fe.setAttribute('data-filter-empty', 'shown');
+        } else {
+          fe.setAttribute('hidden', '');
+          fe.setAttribute('data-filter-empty', 'hidden');
+        }
+      }
     }
     function setOpen(open) {
       root.setAttribute('data-open', open ? 'true' : 'false');
@@ -583,11 +597,27 @@ def panel_palette_script() -> str:
     }
     function postPanelAction(btn) {
       var path = btn.getAttribute('data-api-path') || '/api/panel/confirm';
+      // ST-2 (ui-audit): disable in-flight (no double-submit) and reflect
+      // success/error on the button instead of firing blind with no feedback.
+      if (btn.getAttribute('aria-disabled') === 'true') { return; }
+      btn.setAttribute('aria-disabled', 'true');
+      btn.setAttribute('data-action-state', 'pending');
       return fetch(path, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(panelPayload(btn))
-      });
+      })
+        .then(function(r) {
+          var ok = !!(r && r.ok);
+          btn.setAttribute('data-action-state', ok ? 'done' : 'error');
+          // On failure re-enable so the user can retry; on success leave it
+          // disabled so the same proposal is not actioned twice.
+          if (!ok) { btn.removeAttribute('aria-disabled'); }
+        })
+        .catch(function() {
+          btn.setAttribute('data-action-state', 'error');
+          btn.removeAttribute('aria-disabled');
+        });
     }
     root.addEventListener('click', function(e) {
       var btn = e.target && e.target.closest

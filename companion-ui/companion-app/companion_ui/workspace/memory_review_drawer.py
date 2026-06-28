@@ -564,6 +564,7 @@ def memory_review_drawer_markup() -> str:
     data-reviewed-by="{_e(MEMORY_REVIEW_REVIEWER)}"
     {_frame_root}
     role="dialog" aria-modal="false" aria-hidden="true"
+    inert
     aria-label="Memory candidate review">
     {_frame_header}
     {guidance_callout_markup('memory')}
@@ -599,6 +600,10 @@ def memory_review_drawer_script() -> str:
     function setOpen(open) {{
       drawer.setAttribute('data-open', open ? 'true' : 'false');
       drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+      // A closed drawer is only translated offscreen; toggle `inert` so its
+      // controls leave the tab order and the a11y tree while hidden.
+      if (open) {{ drawer.removeAttribute('inert'); }}
+      else {{ drawer.setAttribute('inert', ''); }}
     }}
     function load() {{
       queueEl.setAttribute('data-loaded', 'false');

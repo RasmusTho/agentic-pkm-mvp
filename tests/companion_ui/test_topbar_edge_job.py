@@ -532,3 +532,21 @@ def test_shell_topbar_has_no_recovery_telemetry() -> None:
         assert "recovery" not in front, (
             f"recovery telemetry leaked into visible text on entry state {state}"
         )
+
+
+def test_bottom_bar_has_direct_settings_launcher() -> None:
+    # NAV-1 (ui-audit): Settings must be reachable directly, not only by opening
+    # the System Map. The bottom bar carries a labelled Settings launcher that
+    # reuses the existing settings.open intent + host occupant.
+    html = _shell()
+    bottom_bar = re.search(
+        r'<[^>]*data-region="bottom-bar"[^>]*>(.*?)</(?:div|footer|nav)>',
+        html,
+        re.S,
+    )
+    assert bottom_bar, "bottom-bar must render"
+    bar = bottom_bar.group(1)
+    assert 'data-testid="workspace-surface-icon-settings"' in bar
+    assert 'data-intent="settings.open"' in bar
+    assert "overlayHost.mount('settings')" in bar
+    assert 'aria-label="Open settings"' in bar

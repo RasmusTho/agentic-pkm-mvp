@@ -226,13 +226,21 @@ def test_drawer_sections_render_and_display_prefs_work() -> None:
     assert 'data-intent="settings.set"' in drawer
     assert 'data-intent="settings.reset"' in drawer
 
-    # CUIDR-04 (#2447): the settings launcher is displaced off the topbar
-    # (IDENTITY + Capture only). It is reachable via the System Map overlay's
-    # settings node with the declared settings.open intent.
+    # CUIDR-04 (#2447) keeps the *topbar* to IDENTITY + Capture only — settings
+    # is not a SHIPPED_TOPBAR_SURFACES surface. NAV-1 (ui-audit) adds a direct
+    # Settings launcher to the composed *bottom bar* so preferences are reachable
+    # without first opening the System Map; the map settings node remains too.
     assert "settings" not in SHIPPED_TOPBAR_SURFACES
-    assert 'data-testid="workspace-surface-icon-settings"' not in html, (
-        "the settings launcher must not sit on the topbar"
+    bottom_bar = re.search(
+        r'<[^>]*data-region="bottom-bar"[^>]*>(.*?)</(?:div|footer|nav)>',
+        html,
+        re.S,
     )
+    assert bottom_bar is not None, "composed bottom bar must render"
+    assert 'data-testid="workspace-surface-icon-settings"' in bottom_bar.group(1), (
+        "NAV-1: the Settings launcher must sit in the composed bottom bar"
+    )
+    assert "settings.open" in bottom_bar.group(1)
     map_node = re.search(
         r'<button[^>]*data-surface-id="settings"[^>]*>', html
     )

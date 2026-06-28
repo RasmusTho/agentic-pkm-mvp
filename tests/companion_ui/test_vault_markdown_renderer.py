@@ -473,3 +473,61 @@ def test_no_write_calls() -> None:
     ).read_text(encoding="utf-8")
     for forbidden_call in ("httpx.", "WorkspaceHttpClient", ".post(", ".put(", ".patch(", ".delete("):
         assert forbidden_call not in renderer_source
+
+
+def test_gfm_table_accepts_one_and_two_dash_separators() -> None:
+    # GFM requires only a single dash per delimiter cell; many editors emit
+    # one- or two-dash separators. They must render as tables, not collapse.
+    for separator in ("| - | - |", "| -- | -- |"):
+        rendered = render_vault_markdown(
+            "\n".join(["| A | B |", separator, "| 1 | 2 |"])
+        )
+        assert "<table>" in rendered.html, separator
+        assert "<td>1</td>" in rendered.html
+        assert "<p>| A | B |" not in rendered.html
+
+
+def test_gfm_single_column_table_renders() -> None:
+    rendered = render_vault_markdown(
+        "\n".join(["| Name |", "| --- |", "| Alice |", "| Bob |"])
+    )
+
+    assert "<table>" in rendered.html
+    assert "<th>Name</th>" in rendered.html
+    assert "<td>Alice</td>" in rendered.html
+    assert "<td>Bob</td>" in rendered.html
+
+
+def test_gfm_table_applies_column_alignment() -> None:
+    rendered = render_vault_markdown(
+        "\n".join(["| L | C | R |", "| :-- | :-: | --: |", "| 1 | 2 | 3 |"])
+    )
+
+    # Left is the default (no redundant style); center/right are explicit.
+    assert "<th>L</th>" in rendered.html
+    assert '<th style="text-align:center">C</th>' in rendered.html
+    assert '<th style="text-align:right">R</th>' in rendered.html
+    assert '<td style="text-align:right">3</td>' in rendered.html
+
+
+def test_gfm_table_escaped_pipe_does_not_break_row() -> None:
+    # A backslash-escaped pipe inside a cell must NOT split the row or collapse
+    # the table to a paragraph (the row stays intact). The span-aware splitter
+    # (#2596) keeps the escaped pipe as literal cell content.
+    rendered = render_vault_markdown(
+        "\n".join(["| A | B |", "| --- | --- |", r"| a \| b | c |"])
+    )
+
+    assert "<table>" in rendered.html
+    assert rendered.html.count("<tr>") == 2
+    assert "<p>|" not in rendered.html
+    assert "<td>c</td>" in rendered.html
+
+
+def test_wide_table_is_wrapped_for_horizontal_scroll() -> None:
+    rendered = render_vault_markdown(
+        "\n".join(["| A | B |", "| --- | --- |", "| 1 | 2 |"])
+    )
+
+    assert '<div class="vault-table-scroll">' in rendered.html
+    assert rendered.html.index("vault-table-scroll") < rendered.html.index("<table>")

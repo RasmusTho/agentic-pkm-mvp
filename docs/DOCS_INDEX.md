@@ -167,6 +167,7 @@ The 2026 docs cleanup work is not retained as live documentation. The active rea
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
 | README.md | Top-level overview | Aligned (v6.0 seams shipped; v6.1+ framing) | 2026-05-17 | v5.5 baseline quickstart + invariants; v6.0 seams baseline shipped; broader v6 consumption is v6.1+; points readers to DOCS_INDEX/STATUS/ARCHITECTURE and the wider active docs set. |
+| docs/ui-audit.md | Companion UI UX audit + correction record (point-in-time) | Point-in-time audit (non-canonical) | 2026-06-27 | Evidence-based UX audit of the Companion UI (markdown rendering, panel scroll, System Map dev-leak, accessibility, navigation, states) with findings tables, click-budget, and the fixes applied in one pass. Subordinate to `docs/COMPANION_UI_PRODUCT_SPEC.md`; deferred items tracked as GitHub issues. |
 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
