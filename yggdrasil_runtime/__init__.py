@@ -26,4 +26,4 @@ When a future slice wires ``yggdrasil_runtime`` into the production pipeline, pa
 
 from __future__ import annotations
 
-__all__ = ["metadata", "capture", "dri", "corpus", "cross_scope", "retrieval"]
+__all__ = ["metadata", "capture", "dri", "corpus", "cross_scope", "retrieval", "context"]
