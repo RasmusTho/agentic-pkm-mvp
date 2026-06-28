@@ -415,6 +415,23 @@ def test_overlay_host_replace_swaps_history_entry_at_constant_depth() -> None:
         "race NAV-3b removes"
     )
 
+    # It de-dups the destination before pushing (same rule as mount): when the
+    # target already sits in the stack BELOW the just-closed overlay (Memory ->
+    # Map over it -> route to Memory), replace must remove the existing instance
+    # before push so data-overlay-stack never carries the id twice while the DOM
+    # has one occupant — a duplicate would desync host bookkeeping from the DOM
+    # on the next Back (one pop hides the only drawer, host still reports it
+    # open). The splice must precede the push.
+    assert "stack.indexOf(id)" in code and "stack.splice(" in code, (
+        "replace must de-dup the destination (splice an existing instance) "
+        "before pushing, like mount"
+    )
+    splice_pos = code.find("stack.splice(")
+    push_pos = code.find("stack.push(id)")
+    assert splice_pos != -1 and push_pos != -1 and splice_pos < push_pos, (
+        "replace must remove any existing instance of id BEFORE stack.push(id)"
+    )
+
     # It swaps the SAME history entry (replaceState) at constant depth — the
     # destination marker carries the host marker and depth = stack.length, and
     # the entry is REPLACED, not pushed.

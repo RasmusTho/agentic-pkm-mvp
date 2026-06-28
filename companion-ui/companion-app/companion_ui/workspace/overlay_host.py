@@ -421,6 +421,15 @@ def overlay_host_script() -> str:
         // Close + pop the current topmost occupant WITHOUT history.back() (no
         // pending traversal to race the swap), then push the destination.
         popTopmost();
+        // De-dup the destination before pushing (same rule as mount): if the
+        // target already sits in the stack BELOW the just-closed overlay (e.g.
+        // Memory open -> Map over it -> route to Memory), pushing again would
+        // make data-overlay-stack carry two 'id' entries while the DOM has one
+        // occupant. The next Back would pop one duplicate, hide the only drawer
+        // via its close hook, yet still report the overlay as open -> DOM/host
+        // desync. Splicing first moves it to the single top and keeps depth true.
+        var at = stack.indexOf(id);
+        if (at !== -1) { stack.splice(at, 1); }
         stack.push(id);
         sync();
         // Replace the current history entry (the one that represented the old
