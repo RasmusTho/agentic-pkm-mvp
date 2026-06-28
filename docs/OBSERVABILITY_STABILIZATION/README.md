@@ -82,6 +82,10 @@ These invariants hold *across* tasks; a breakdown whose tasks are each locally c
   | OBSSTAB-05 RUNTIME_VERSION_MARKER | [#2602](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2602) | ready |
   | OBSSTAB-06 FALSE_GREEN_REGISTER_AND_DOC_TRUTH | [#2603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2603) | ready |
   | OBSSTAB-07 DEV_DB_SNAPSHOT_RESTORE | [#2604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2604) | ready |
+  | OBSSTAB-08 OPERATOR_HEALTH_GLYPH_AMBIENT | [#2615](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2615) | ready (P0, operator-facing primary) |
+  | OBSSTAB-09 OPERATOR_DRAWER_RENDERS_LOADBEARING_HEALTH | [#2616](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2616) | ready |
+  | OBSSTAB-10 OPERATOR_DRAWER_SHOWS_BACKLOG | [#2617](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2617) | ready |
+  | OBSSTAB-11 UI_HEALTHZ_NOT_FALSE_GREEN | [#2618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2618) | ready |
 
 - **Cross-links:** `OBSSTAB-05` (#2602) complements #2527 (prod-runs-dirty-main, governance) — it makes the running commit observable, it does not replace the deploy-source-of-truth reconciliation. #2589 (healthy-services-but-fails) is a related false-green symptom.
 
