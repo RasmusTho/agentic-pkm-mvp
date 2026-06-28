@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down verify-test-channel verify-prod-channel dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 # Test vault root. Honors an explicit TEST_VAULT_ROOT make/env override first,
@@ -209,16 +209,24 @@ test-up:
 test-down:
 	@$(COMPOSE_TEST) down --remove-orphans
 
-verify-test-channel:
+## check-test-channel: run pytest channel-isolation suites for the test channel
+check-test-channel:
 	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest -q \
 		tests/ops/test_release_channel_isolation.py \
 		tests/ops/test_release_channel_startup_targets.py \
 		tests/release_channels/test_channel_isolation_preflight.py
 
-verify-prod-channel:
+## check-prod-channel: run pytest channel-isolation suites for the prod channel
+check-prod-channel:
 	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest -q \
 		tests/ops/test_release_channel_isolation.py \
 		tests/ops/test_release_channel_startup_targets.py
+
+## live-prod-probe: invoke the prod-down backstop probe once for a manual spot-check
+## This hits the real PROBE_BASE_URL (default localhost:8000); it is NOT a pytest suite.
+## For the channel-isolation pytest suites, use check-prod-channel / check-test-channel.
+live-prod-probe:
+	@$(PYTHON) ops/host-setup/mac-mini/prod_probe.py
 
 alpha-e2e-smoke:
 	@$(PYTHON) - <<'PY'

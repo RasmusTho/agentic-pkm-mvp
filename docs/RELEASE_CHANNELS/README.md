@@ -134,7 +134,7 @@ expressions, because Compose must still resolve and load the service's `env_file
 **Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
 
 - by `scripts/test/test_ui_doctor.sh` (and therefore `make test-ui-doctor`) before any Docker or network check;
-- by `make verify-test-channel` via `tests/release_channels/test_channel_isolation_preflight.py`;
+- by `make check-test-channel` via `tests/release_channels/test_channel_isolation_preflight.py`;
 - and should be called at the start of `promote-to-test` / `execute-promotion` before any stack mutation.
 
 The guard is **read-only**: it reports and fail-closes; it never edits operator files. When it fails, the operator must correct the compose overlay to match the intended channel before proceeding.

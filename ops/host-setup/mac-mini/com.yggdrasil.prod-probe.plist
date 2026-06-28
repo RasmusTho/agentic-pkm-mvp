@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Installed to ~/Library/LaunchAgents/ by install.sh (see install.sh for sed substitution).
+     Replaces __PYTHON__ with the absolute path to the venv python interpreter and
+     __PROBE__ with the absolute path to prod_probe.py.
+     Runs the prod-down backstop probe on a configurable interval (default 60 s).
+     The probe curls /readyz and /api/health required_ok, checks worker-heartbeat
+     staleness, and dispatches exactly one push notification on failure.
+     Debounce / one-shot: a second prod-down in the same interval does not
+     re-fire; restart does not re-fire while the state marker is present. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yggdrasil.prod-probe</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__PROBE__</string>
+  </array>
+
+  <!-- Interval in seconds. Override by editing this value or setting
+       PROBE_INTERVAL_SECONDS in the probe env file. -->
+  <key>StartInterval</key>
+  <integer>60</integer>
+
+  <!-- Do NOT use RunAtLoad + KeepAlive — the probe is a one-shot script, not
+       a daemon. StartInterval drives it. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Environment variables passed to the probe script. Edit these to
+       configure the notification channel and endpoint. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Base URL for the prod API on the host (compose maps 18000:8000) -->
+    <key>PROBE_BASE_URL</key>
+    <string>http://127.0.0.1:18000</string>
+    <!-- Host path to the worker heartbeat JSON (install.sh substitutes the
+         absolute <repo>/tmp/worker_heartbeat.json; this runs on the host, not
+         inside the worker container, so it must NOT be the /app/... path) -->
+    <key>WORKER_HEARTBEAT_PATH</key>
+    <string>__HEARTBEAT__</string>
+    <!-- Seconds before a worker heartbeat is considered stale -->
+    <key>WORKER_HEARTBEAT_STALE_SECONDS</key>
+    <string>60</string>
+    <!-- Debounce state file (rebuildable; delete to reset) -->
+    <key>PROD_PROBE_STATE_FILE</key>
+    <string>/tmp/yggdrasil-prod-probe.state</string>
+    <!-- Probe interval in seconds — should match StartInterval above -->
+    <key>PROBE_INTERVAL_SECONDS</key>
+    <string>60</string>
+    <!-- Notification channel: ntfy | telegram | mail | none -->
+    <key>PROD_PROBE_CHANNEL</key>
+    <string>ntfy</string>
+    <!-- ntfy topic (used when PROD_PROBE_CHANNEL=ntfy) -->
+    <key>NTFY_TOPIC</key>
+    <string>yggdrasil-prod-alerts</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/yggdrasil-prod-probe.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/yggdrasil-prod-probe.err</string>
+</dict>
+</plist>

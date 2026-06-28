@@ -244,6 +244,31 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 - Runtime signals and interpretation live in `docs/OBSERVABILITY.md`.
 - Local Prometheus+Grafana recipe lives in `docs/INFRASTRUCTURE.md` (Docker Compose).
 
+## Prod probe and push alert (scheduled backstop)
+
+`ops/host-setup/mac-mini/prod_probe.py` is the hard-down backstop probe installed as
+a launchd job (`com.yggdrasil.prod-probe`) on the mac mini. It runs on a configurable
+interval (default 60 s), curls `/readyz` and `/api/health` `required_ok` (NOT the
+top-level `ok`), checks worker-heartbeat staleness, and dispatches exactly one push
+notification per failure interval to the configured channel (ntfy / Telegram / mail —
+channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
+
+**Two distinct Makefile targets — do not confuse them:**
+
+| Target | What it does |
+| --- | --- |
+| `make live-prod-probe` | Invokes the real probe script against `PROBE_BASE_URL` (default `localhost:8000`) — a live spot-check of the actual prod stack. Exits 0 if healthy, 1 if prod is down. |
+| `make check-prod-channel` | Runs the pytest channel-isolation suites (`tests/ops/test_release_channel_isolation.py`, `tests/ops/test_release_channel_startup_targets.py`) to confirm that prod and test channels are correctly isolated. No live network calls to the running stack. |
+| `make check-test-channel` | Same channel-isolation suites plus the test-channel preflight (`tests/release_channels/test_channel_isolation_preflight.py`). |
+
+**Debounce / one-shot guarantee:** A second prod-down in the same probe interval does
+NOT send a duplicate push. A launchd restart does NOT re-fire while the state marker
+(`PROD_PROBE_STATE_FILE`, default `/tmp/yggdrasil-prod-probe.state`) is present.
+Delete that file to reset the debounce.
+
+**Install:** See `ops/host-setup/mac-mini/install.sh` for how to register the launchd
+job. The plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist`.
+
 ## Runtime health: watcher → DB outbox → worker
 - Watcher heartbeat: `WATCHER_HEARTBEAT_PATH` (default `/app/tmp/watcher_heartbeat.json` in containers, `tmp/watcher_heartbeat.json` on host).
 - Worker heartbeat: `WORKER_HEARTBEAT_PATH` (default `/app/tmp/worker_heartbeat.json`).
