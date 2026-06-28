@@ -47,9 +47,15 @@ and `watcher` (`:158-159`) from plain service names to
 ## Concretely
 
 ```bash
-# Simulate a stale worker heartbeat (backdate mtime beyond threshold)
-touch -d "$(date -v-120S '+%Y-%m-%d %H:%M:%S')" "$(docker exec pkm-dev-worker-1 \
-    sh -c 'echo $WORKER_HEARTBEAT_PATH')"
+# Simulate a stale worker heartbeat by writing an OLD `ts` into the heartbeat JSON.
+# The reused probe (_worker_runtime_status) compares the JSON `ts` field against
+# WORKER_HEARTBEAT_STALE_SECONDS — it does NOT read file mtime, so a `touch` would
+# NOT register as stale (the heartbeat is rewritten with a fresh `ts` each cycle).
+docker exec pkm-dev-worker-1 python - <<'PY'
+import datetime, json, os
+old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=120)
+json.dump({"ts": old.isoformat()}, open(os.environ["WORKER_HEARTBEAT_PATH"], "w"))
+PY
 
 # After the next healthcheck interval (~20 s):
 docker inspect --format '{{.State.Health.Status}}' pkm-dev-worker-1
@@ -71,8 +77,9 @@ transient connection errors rather than waiting (risk **R10**).
 
 ## Acceptance Criteria
 
-- [ ] Worker container reports `unhealthy` when its heartbeat file mtime is older
-  than `WORKER_HEARTBEAT_STALE_SECONDS`.
+- [ ] Worker container reports `unhealthy` when its heartbeat JSON `ts` is older
+  than `WORKER_HEARTBEAT_STALE_SECONDS` (freshness is keyed on the JSON `ts` field,
+  not file mtime — the test must backdate `ts`, not `touch` the file).
   - Verify: `tests/health/test_container_health_signals.py::test_worker_unhealthy_on_stale_heartbeat`
 - [ ] Watcher container reports `unhealthy` on a stale heartbeat.
   - Verify: `tests/health/test_container_health_signals.py::test_watcher_unhealthy_on_stale_heartbeat`

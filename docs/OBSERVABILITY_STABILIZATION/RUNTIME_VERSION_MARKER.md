@@ -25,10 +25,16 @@ divergence loud; it does not replace the deploy source-of-truth fix.
 
 ## What This Task Does
 
-1. Add `ARG VCS_REF` and `ARG BUILT_AT` to `Dockerfile` and bake them as
-   `LABEL` metadata; pass them at build time via `--build-arg`.
+1. Add `ARG VCS_REF` and `ARG BUILT_AT` to `Dockerfile`, bake them as `LABEL`
+   metadata, **and persist them into the image environment with
+   `ENV VCS_REF=$VCS_REF` / `ENV BUILT_AT=$BUILT_AT`**; pass them at build time
+   via `--build-arg`. A bare `ARG`/`LABEL` is *not* readable via `os.getenv` at
+   runtime — without the `ENV` lines `/version` would silently fall back to
+   "unknown" in the built image and the monkeypatched unit tests would not catch
+   it (they inject env directly). (Alternatively, read the `LABEL` via
+   `docker inspect`, but the `ENV` persist is the simplest runtime-readable path.)
 2. Add `app/version.py :: get_runtime_version()` that reads `VCS_REF` /
-   `BUILT_AT` from env vars set at build time (or a fallback shelling to
+   `BUILT_AT` from the env vars persisted in step 1 (or a fallback shelling to
    `git rev-parse HEAD` for local dev runs without Docker).
 3. Register a `/version` route returning `{"git_sha": "…", "built_at": "…"}`.
 4. Extend `run_health` in `app/cli/health.py` to include a top-level
