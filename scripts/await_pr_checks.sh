@@ -18,6 +18,7 @@
 #   2  timed out before checks were confirmed complete
 #   3  Codex verdict is blocking         (only with --codex)
 #   4  Codex verdict unresolved — resolve per verification-and-closure before merge (only with --codex)
+#   5  PR head moved during the wait — verified checks are stale; re-run (when SHA is auto-resolved)
 set -uo pipefail
 
 INITIAL_WAIT=180     # sleep before first check (~ CI p50; the `not pg` gate is the long pole)
@@ -26,6 +27,7 @@ TIMEOUT=1800         # give up after this many seconds of total polling
 CHECK_CODEX=0
 PR=""
 SHA=""
+SHA_FROM_PR=0        # 1 when SHA is auto-resolved from the PR (enables the head-drift recheck)
 
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0; }
 
@@ -58,6 +60,7 @@ echo "repo=$REPO pr=$PR budget: $budget (this script uses REST core only)"
 if [ -z "$SHA" ]; then
   SHA=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || true
   [ -n "$SHA" ] || { echo "error: could not resolve head SHA for PR #$PR (REST)" >&2; exit 64; }
+  SHA_FROM_PR=1
 fi
 echo "head=$SHA"
 
@@ -113,6 +116,19 @@ done
 if [ -n "$failed" ]; then
   echo "CHECKS FAILED: $failed" >&2
   exit 1
+fi
+
+# Current-SHA truth: if we resolved SHA from the PR, the head must not have moved during the wait.
+# Otherwise the green we just verified is for a stale commit, and an autonomous `&& gh pr merge`
+# would merge the new, unverified head. (Skipped when --sha pins an explicit commit.)
+if [ "$SHA_FROM_PR" -eq 1 ]; then
+  cur=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null)
+  if [ -z "$cur" ]; then
+    echo "ERROR: could not re-confirm PR head after the wait — failing closed" >&2; exit 2
+  elif [ "$cur" != "$SHA" ]; then
+    echo "PR HEAD MOVED during the wait: verified $SHA but head is now $cur — verified checks are stale; re-run" >&2
+    exit 5
+  fi
 fi
 echo "all required checks passed on $SHA"
 

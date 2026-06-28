@@ -46,6 +46,7 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 - `2` — timed out before checks were confirmed complete
 - `3` — Codex verdict is blocking (only with `--codex`)
 - `4` — Codex verdict unresolved (only with `--codex`) — resolve before merge
+- `5` — the PR head moved during the wait (when SHA is auto-resolved) — verified checks are stale; re-run
 
 It never issues a GraphQL call. For an autonomous `&& gh pr merge`, run with `--codex` and require exit
 `0`: exit `4` means stop and resolve the Codex verdict yourself per *Reading the Codex verdict* (do not
