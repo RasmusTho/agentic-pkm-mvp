@@ -398,22 +398,31 @@ Three targets are available:
 | Target | Purpose |
 |---|---|
 | `make db-snapshot` | Dumps the dev/test DB to a timestamped `.dump` file under `.db-snapshots/dev_<UTCstamp>.dump`. |
-| `make db-restore` | Restores from the most-recent snapshot (or pass `SNAPSHOT=<path>` for a named file). |
-| `make db-dump-prod` | Writes a timestamped forensic dump from the prod DB on demand (no scheduling). Source `.env.prod.local` first. |
+| `make db-restore` | Restores from the most-recent **dev_/test_** snapshot (or pass `SNAPSHOT=<path>` for a named file). |
+| `make db-dump-prod` | Writes a timestamped forensic dump from the prod DB on demand (no scheduling). Source `.env.prod.local` first. Dump-only — it never restores. |
 
 All three targets derive the DSN from `DATABASE_URL` / `DB_DSN` via `app/db/dsn.py::resolve_dsn()` — no hardcoded connection strings.
 
+Host-published Postgres ports (see `docker-compose.*.yml`): **dev = `app_dev` on `15433`**, test = `app_test` on `15434`, prod = `app` on `15432`.
+
 Dump files are written to `.db-snapshots/` which is gitignored. No retention/purge policy exists; remove old files manually.
+
+**Restore safety (data-loss guard):**
+- A bare `make db-restore` only ever considers `dev_*.dump` / `test_*.dump` snapshots — it will **never** auto-select a `prod_*.dump`. (A named `SNAPSHOT=<path>` restore of any file is still allowed for deliberate forensic work.)
+- `db-restore` **refuses** to run when the resolved target DSN looks like prod (database name exactly `app`, or host port `15432`) unless you pass `ALLOW_PROD_RESTORE=1`. This stops a stray `.env.prod.local` in your shell from rewriting prod.
 
 **Usage examples:**
 
 ```bash
-# Dev snapshot + restore cycle
-export DATABASE_URL=postgresql://app:app@127.0.0.1:15432/app_dev
+# Dev snapshot + restore cycle (dev = app_dev on host port 15433)
+export DATABASE_URL=postgresql://app:app@127.0.0.1:15433/app_dev
 make db-snapshot                            # → .db-snapshots/dev_20260628T...Z.dump
 # ...reproduce a bug, mutate state...
-make db-restore                             # restores from the latest snapshot
+make db-restore                             # restores from the latest dev_/test_ snapshot
 make db-restore SNAPSHOT=.db-snapshots/dev_20260628T153000Z.dump   # named restore
+
+# Test DB is app_test on host port 15434:
+#   export DATABASE_URL=postgresql://app:app@127.0.0.1:15434/app_test
 
 # Prod forensic dump (operator-only, no automation)
 source .env.prod.local

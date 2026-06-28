@@ -331,9 +331,14 @@ dispatcher-sync:
 #
 # DSN resolution: reads DATABASE_URL (or DB_DSN) from the environment via
 # app/db/dsn.py::resolve_dsn(), matching the pattern used by all app code.
-# For dev, export DATABASE_URL=postgresql://app:app@127.0.0.1:15432/app_dev
+# Host-published ports: dev=app_dev:15433, test=app_test:15434, prod=app:15432.
+# For dev, export DATABASE_URL=postgresql://app:app@127.0.0.1:15433/app_dev
 # For prod forensics, export DATABASE_URL from .env.prod.local before calling
 # db-dump-prod (never hardcode the prod DSN here).
+#
+# SAFETY: db-restore defaults to the newest dev_*/test_* snapshot only
+# (never a prod_*.dump) and refuses to run against a prod DSN unless
+# ALLOW_PROD_RESTORE=1 is set. db-dump-prod is dump-only; it never restores.
 
 SNAPSHOT_DIR ?= .db-snapshots
 
@@ -350,11 +355,13 @@ db-snapshot:
 db-restore:
 	@SNAP="$(SNAPSHOT)"; \
 	if [ -z "$$SNAP" ]; then \
-		SNAP=$$(ls -1t "$(SNAPSHOT_DIR)"/*.dump 2>/dev/null | head -1); \
+		SNAP=$$(ls -1t "$(SNAPSHOT_DIR)"/dev_*.dump "$(SNAPSHOT_DIR)"/test_*.dump 2>/dev/null | head -1); \
 	fi; \
-	if [ -z "$$SNAP" ]; then echo "ERROR: no snapshot found in $(SNAPSHOT_DIR)/. Use SNAPSHOT=path/to/file.dump"; exit 1; fi; \
+	if [ -z "$$SNAP" ]; then echo "ERROR: no dev_/test_ snapshot found in $(SNAPSHOT_DIR)/. Use SNAPSHOT=path/to/file.dump for a named restore."; exit 1; fi; \
 	DSN=$$($(PYTHON) -c "from app.db.dsn import resolve_dsn; print(resolve_dsn())"); \
 	if [ -z "$$DSN" ]; then echo "ERROR: DATABASE_URL / DB_DSN is not set"; exit 1; fi; \
+	if [ "$(ALLOW_PROD_RESTORE)" != "1" ] && $(PYTHON) -c "import sys; from app.db.dsn import looks_like_prod_dsn; sys.exit(0 if looks_like_prod_dsn() else 1)"; then \
+		echo "REFUSING: target DSN looks like prod (db 'app' or port 15432). Set ALLOW_PROD_RESTORE=1 to override."; exit 1; fi; \
 	echo "Restoring from $$SNAP → $$DSN"; \
 	pg_restore --clean --if-exists --no-password --dbname="$$DSN" "$$SNAP" && \
 	echo "Restore complete."

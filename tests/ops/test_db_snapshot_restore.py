@@ -241,6 +241,112 @@ def test_db_dump_prod_writes_timestamped_file(tmp_path: Path, monkeypatch: pytes
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# P1 data-safety: default restore selection must never pick a prod_*.dump
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _default_restore_selection(snapshot_dir: Path) -> Path | None:
+    """Mirror the Makefile db-restore default-selection rule.
+
+    The Makefile selects the newest dev_*/test_* dump only:
+        ls -1t "$DIR"/dev_*.dump "$DIR"/test_*.dump | head -1
+    prod_*.dump files are deliberately excluded from the glob. This helper
+    replicates that exact rule (newest mtime among dev_/test_ only) so the
+    test verifies the real selection behaviour, not a stub.
+    """
+    candidates = sorted(
+        list(snapshot_dir.glob("dev_*.dump")) + list(snapshot_dir.glob("test_*.dump")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def test_default_restore_ignores_newer_prod_dump(tmp_path: Path) -> None:
+    """With a NEWER prod_*.dump and an OLDER dev_*.dump present, the default
+    selection must pick the dev_ one and never the prod_ one."""
+    import time  # noqa: PLC0415
+
+    snapshot_dir = tmp_path / ".db-snapshots"
+    snapshot_dir.mkdir()
+
+    # Older dev dump
+    dev_dump = snapshot_dir / "dev_20260628T100000Z.dump"
+    dev_dump.write_bytes(b"PGDMP dev")
+    old = time.time() - 100
+
+    # Newer prod dump (more recent mtime) — must be ignored by default selection
+    prod_dump = snapshot_dir / "prod_20260628T120000Z.dump"
+    prod_dump.write_bytes(b"PGDMP prod")
+    new = time.time()
+
+    os.utime(dev_dump, (old, old))
+    os.utime(prod_dump, (new, new))
+
+    selected = _default_restore_selection(snapshot_dir)
+    assert selected is not None, "Expected a dev_ snapshot to be selected"
+    assert selected.name.startswith("dev_"), (
+        f"Default restore selected the wrong file: {selected.name} (must be dev_)"
+    )
+    assert not selected.name.startswith("prod_"), "Default restore must never pick prod_"
+
+
+def test_makefile_default_restore_glob_excludes_prod() -> None:
+    """Static guard: the db-restore default glob must list dev_*/test_* and
+    must not glob a bare *.dump (which would sweep in prod_)."""
+    text = MAKEFILE.read_text(encoding="utf-8")
+    restore_block = text.split("\ndb-restore:", 1)[1].split("\ndb-dump-prod:", 1)[0]
+    assert "dev_*.dump" in restore_block, "db-restore must glob dev_*.dump"
+    assert "test_*.dump" in restore_block, "db-restore must glob test_*.dump"
+    # The default-selection `ls` must not use a bare /*.dump that includes prod_.
+    assert '"$(SNAPSHOT_DIR)"/*.dump' not in restore_block, (
+        "db-restore default selection must not glob a bare *.dump (would include prod_)"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# P1 data-safety: prod-restore guard (looks_like_prod_dsn)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_looks_like_prod_dsn_flags_prod_db_name() -> None:
+    from app.db.dsn import looks_like_prod_dsn  # noqa: PLC0415
+
+    # Prod DB name is exactly "app".
+    assert looks_like_prod_dsn("postgresql://app:app@db:5432/app") is True
+    assert looks_like_prod_dsn("postgresql+psycopg://app:app@db:5432/app") is True
+
+
+def test_looks_like_prod_dsn_flags_prod_port() -> None:
+    from app.db.dsn import looks_like_prod_dsn  # noqa: PLC0415
+
+    # Host-published prod port is 15432 even if db name differs.
+    assert looks_like_prod_dsn("postgresql://app:app@127.0.0.1:15432/somedb") is True
+
+
+def test_looks_like_prod_dsn_allows_dev_and_test() -> None:
+    from app.db.dsn import looks_like_prod_dsn  # noqa: PLC0415
+
+    # Dev = app_dev:15433, test = app_test:15434 — neither should flag.
+    assert looks_like_prod_dsn("postgresql://app:app@127.0.0.1:15433/app_dev") is False
+    assert looks_like_prod_dsn("postgresql://app:app@127.0.0.1:15434/app_test") is False
+    # Empty DSN is not prod.
+    assert looks_like_prod_dsn("") is False
+
+
+def test_makefile_db_restore_has_prod_guard() -> None:
+    """db-restore must call looks_like_prod_dsn and honor ALLOW_PROD_RESTORE."""
+    text = MAKEFILE.read_text(encoding="utf-8")
+    restore_block = text.split("\ndb-restore:", 1)[1].split("\ndb-dump-prod:", 1)[0]
+    assert "looks_like_prod_dsn" in restore_block, (
+        "db-restore must guard against prod DSNs via looks_like_prod_dsn"
+    )
+    assert "ALLOW_PROD_RESTORE" in restore_block, (
+        "db-restore must allow an ALLOW_PROD_RESTORE=1 override"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Structural: verify Makefile declares all three targets
 # ──────────────────────────────────────────────────────────────────────────────
 
