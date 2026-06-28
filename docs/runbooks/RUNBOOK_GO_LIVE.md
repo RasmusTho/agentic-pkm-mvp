@@ -43,7 +43,7 @@ Use this checklist to validate a deployment before enabling full ingest + panel 
 All FastAPI routes listen on `http://127.0.0.1:18000` (docker compose maps host `18000` → container `8000`). Operators should expect:
 
 - `GET /healthz` – liveness probe returning plain `ok`. Example: `curl -sS http://127.0.0.1:18000/healthz`.
-- `GET /readyz` – readiness probe gated by migrations and startup checks. Example: `curl -sS http://127.0.0.1:18000/readyz`.
+- `GET /readyz` – readiness probe driven by the health contract: returns `503` when the runtime is not in a ready state **or** Postgres is unreachable (a live DB ping runs inside `HealthContract.evaluate()`, OBSSTAB-01). Migrations do **not** gate readiness. Example: `curl -sS http://127.0.0.1:18000/readyz`.
 - `GET /api/health` – structured health contract with watcher/worker/db/LLM statuses. Example: `curl -sS http://127.0.0.1:18000/api/health`.
 - `GET /api/status` – status/SOT payload that drives dashboards. Example: `curl -sS http://127.0.0.1:18000/api/status`.
 - `GET /search?q=...&k=...` – realtime hybrid search. Example: `curl -sS "http://127.0.0.1:18000/search?q=warm%20content&k=3"`.

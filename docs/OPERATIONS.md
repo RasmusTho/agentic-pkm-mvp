@@ -239,7 +239,8 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 - Store the API key in environment or secret manager; rotate by updating deployments and monitoring logs for legacy usage.
 
 ## Observability
-- Logs: JSON-formatted via `app/observability.setup_logging()`. Hook into your logging stack (CloudWatch, ELK, etc.).
+- Logs: a JSON formatter is available via `app/observability.setup_logging()`, but it is **not called at startup**, so logs are **not JSON-formatted by default**. Until a startup hook calls `setup_logging()`, logs are plain text; do not assume structured JSON when wiring a logging stack (CloudWatch, ELK, etc.).
+- Version: `GET /version` returns the running git SHA and build time (`OBSSTAB-05`); `/api/health` also carries a `version` field. Use it to confirm which commit is actually deployed during an incident.
 - Metrics: enable `METRICS_ENABLED=1` to expose Prometheus metrics under `/metrics` using `prometheus-fastapi-instrumentator` (secure access appropriately).
 - Runtime signals and interpretation live in `docs/OBSERVABILITY.md`.
 - Local Prometheus+Grafana recipe lives in `docs/INFRASTRUCTURE.md` (Docker Compose).

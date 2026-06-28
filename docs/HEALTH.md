@@ -89,3 +89,26 @@ All values are bounded status strings; no raw state, path, secret, token, or tra
 
 The `write_guard` field reflects the current cached `HealthContract` state without evaluating the WriteGuard or running the full health contract diagnostics. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
 <!-- SECTION:HEALTH:END -->
+
+## False-green register
+
+One authoritative place stating what each always-on health surface's **green** signal
+actually means — and where green can lie. Operators must read this before trusting any
+single green during go-live or an incident. Kept consistent with the code as of the
+Observability Stabilization epic (#2597); the "fixed by" notes point at the slice that
+closed each gap.
+
+| Surface | Green means | Where green can mislead |
+|---|---|---|
+| `GET /healthz` (api) | the API process is alive and serving HTTP | **Unconditional by design** — returns `200 {"ok": true}` with *every* dependency down. It is a liveness probe, not a dependency signal; use `/readyz`. |
+| `GET /readyz` (api) | the readiness contract is in a ready state **and** Postgres is reachable | Reflects real DB health since **OBSSTAB-01 (#2598)**: a live `ping_postgres()` runs inside `HealthContract.evaluate()`, so a DB outage forces `unhealthy` → `503`. Before #2598 it keyed only on outbox-event age, so a quiet-window outage still returned `200`. Note `degraded` is still a *ready* state (writes paused, reads served) — green here does not guarantee writes are accepted. |
+| `GET /api/health` (api) | the full health contract evaluated | The top-level `ok` can be `false` purely because an **optional** tool (e.g. `ffmpeg`) is absent, with no real outage. **Read `required_ok`, not the top-level `ok`** (`app/cli/health.py`); the scheduled probe (OBSSTAB-04) and runbooks key on `required_ok`. |
+| `GET /agent/health` | the agent HTTP route is mounted and responding | **Known residual false-green:** returns `200 {"heartbeat": …}` regardless of whether the agent loop is actually alive (`app/api/routers/agent.py`). Do not treat it as agent liveness. Making it reflect real agent state is out of scope for Fas 0. |
+| Container healthcheck (`docker ps` / compose status) | the worker/watcher heartbeat is **fresh**, and db-dependents started only after Postgres accepted a connection | Detects staleness since **OBSSTAB-02 (#2599)**: worker/watcher probes compare the heartbeat JSON `ts` against the stale threshold (was a `test -s` file-presence check, so a hung process whose heartbeat file still existed read "healthy" — the `processed_total=0` ingest-stall shape). `api`/`worker`/`watcher` now gate on `db: condition: service_healthy`, and `ollama` has an in-image CLI healthcheck. |
+| Companion-UI `/healthz` | the UI process reached the **upstream** runtime API | Probes the upstream since **OBSSTAB-11 (#2618)**: it calls `/api/health` and returns `503 {"ok": false, "upstream": "unreachable"}` when the runtime is down (was an unconditional `200`, so the UI read green while every request 502'd). The same fix applies in production via the shared `make_handler` factory. |
+
+**Cross-check:** after OBSSTAB-01/-02/-11 merged, no always-on signal reports healthy while
+Postgres is down (`/readyz`, the container probe). The two intentional exceptions are
+`/healthz` (liveness, never dependency-aware) and `/agent/health` (residual, documented above).
+Active-LLM reachability is **not** a Fas 0 readiness gate (deferred to #2621) — an LLM outage is
+surfaced through the operator's "Minne" group, not via `/readyz`.
