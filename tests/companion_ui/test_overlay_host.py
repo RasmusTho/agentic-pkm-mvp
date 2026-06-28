@@ -376,12 +376,17 @@ def test_keyboard_map_routes_declared_intents() -> None:
         assert f'data-intent="{intent}"' in map_overlay.group(0)
 
     # No dead affordances: the capture surface opens through the host's ⌘N
-    # wiring and the topbar's single Capture launcher; cmd.open is advertised
-    # only by the System Map's palette routing node — live host routes to
-    # shipped surfaces, never dead chrome.
+    # wiring and the topbar's single Capture launcher. cmd.open is advertised
+    # by the System Map's palette routing node and, since NAV-4 (ui-audit), by
+    # the composed bottom bar's direct Search / ⌘K launcher — both route to the
+    # shipped `cmd` occupant, never dead chrome. No other element may carry it.
     for tag in re.findall(r'<[a-z]+[^>]*data-intent="cmd.open"[^>]*>', html):
-        assert 'data-testid="system-map-node"' in tag, (
-            f"only a live system-map routing node may advertise cmd.open: {tag}"
+        assert (
+            'data-testid="system-map-node"' in tag
+            or 'data-testid="workspace-surface-icon-cmd"' in tag
+        ), (
+            "only a live system-map routing node or the NAV-4 bottom-bar Search "
+            f"launcher may advertise cmd.open: {tag}"
         )
     for tag in re.findall(r'<[a-z]+[^>]*data-intent="capture.open"[^>]*>', html):
         assert (

@@ -274,6 +274,196 @@ def test_drawer_sections_render_and_display_prefs_work() -> None:
 
 
 # ---------------------------------------------------------------------------
+# NAV-2 / NAV-4 (ui-audit): direct bottom-bar launchers for History/Receipts,
+# Memory, and Search (⌘K). NAV-1 added the Settings launcher to the composed
+# bottom bar so preferences were reachable without first opening the System
+# Map; NAV-2 extends that to the remaining frequently-used secondary surfaces
+# (History/Receipts, Memory) and NAV-4 adds the Search / ⌘K palette pill. The
+# map is the complete index, not the only door — every launcher reuses the
+# existing intent + host occupant, and the System Map node stays too.
+# ---------------------------------------------------------------------------
+
+
+def _bottom_bar(html: str) -> str:
+    match = re.search(
+        r'<[^>]*data-region="bottom-bar"[^>]*>(.*?)</(?:div|footer|nav)>',
+        html,
+        re.S,
+    )
+    assert match is not None, "composed bottom bar must render"
+    return match.group(1)
+
+
+def test_bottom_bar_direct_launchers_nav2_nav4() -> None:
+    html = _render()
+    bottom_bar = _bottom_bar(html)
+
+    # AC1: History/Receipts, Memory, and Search are each reachable in 1 click
+    # from the working shell — direct launchers in the composed bottom bar,
+    # not only via the map. Each emits the surface's existing open intent.
+    for testid, intent in (
+        ("workspace-surface-icon-receipts", "receipts.open"),
+        ("workspace-surface-icon-memory", "memory.open"),
+        ("workspace-surface-icon-cmd", "cmd.open"),
+    ):
+        assert f'data-testid="{testid}"' in bottom_bar, (
+            f"NAV-2/NAV-4: the {testid} launcher must sit in the composed bottom bar"
+        )
+        assert f'data-intent="{intent}"' in bottom_bar, (
+            f"NAV-2/NAV-4: the bottom-bar launcher must emit {intent}"
+        )
+
+    # NAV-4: the Search pill carries the ⌘K hint in its title so the
+    # keyboard-first fast path is discoverable from the visible affordance.
+    cmd_launcher = re.search(
+        r'<button[^>]*data-testid="workspace-surface-icon-cmd"[^>]*>',
+        bottom_bar,
+    )
+    assert cmd_launcher, "NAV-4: the Search / ⌘K launcher must render"
+    assert "⌘K" in cmd_launcher.group(0), (
+        "NAV-4: the Search launcher title must carry the ⌘K hint"
+    )
+
+    # AC2: launchers reuse existing intents/host occupants — no invented
+    # surfaces. receipts.open / memory.open / cmd.open are the shipped
+    # overlay-open intents; the launchers mount the same registered occupants.
+    for intent, occupant in (
+        ("receipts.open", "receipts"),
+        ("memory.open", "memory"),
+        ("cmd.open", "cmd"),
+    ):
+        assert occupant in SHIPPED_OVERLAY_OCCUPANTS, (
+            f"{occupant} must be a shipped overlay occupant the launcher reuses"
+        )
+        assert f"overlayHost.mount('{occupant}')" in bottom_bar, (
+            f"the bottom-bar launcher must mount the existing {occupant} occupant"
+        )
+
+    # AC2: the System Map nodes are retained — additive direct access, not a
+    # removal. Each surface still has its routing node in the map overlay.
+    for surface_id, intent in (
+        ("receipts", "receipts.open"),
+        ("memory", "memory.open"),
+        ("palette", "cmd.open"),
+    ):
+        map_node = re.search(
+            rf'<button[^>]*data-surface-id="{surface_id}"[^>]*>', html
+        )
+        assert map_node, (
+            f"{surface_id} must remain reachable via the System Map overlay node"
+        )
+        assert f'data-intent="{intent}"' in map_node.group(0)
+
+
+def test_runtime_projection_launchers_gated_to_loaded_note_shell() -> None:
+    # NAV-2/NAV-4 false-affordance regression (Codex P2, PR #2636). History,
+    # Memory, and Search surface RUNTIME PROJECTIONS that depend on a live
+    # note/runtime. On the fields-None shells (vault-selection picker, runtime
+    # error) the page's own route contract (map_available_routes) marks those
+    # surfaces unavailable — only `operator` is routable there — and Search has
+    # no registered `cmd` occupant (panel_palette emits nothing). So all three
+    # runtime-projection launchers must be ABSENT on those shells. Settings
+    # (config, legitimate on degraded shells) and Map / Help (no runtime
+    # dependency) must remain PRESENT.
+    fields_none_shells = {
+        "vault-selection-required": render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            note_path="",
+            vault_selection_required={
+                "title": "Choose a vault",
+                "message": "Pick a vault to continue.",
+                "context": {"status": "none"},
+                "recent_vaults": [],
+                "actions": [],
+            },
+        ),
+        "error": render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            note_path="",
+            error="Runtime unreachable",
+        ),
+    }
+    for shell_name, shell_html in fields_none_shells.items():
+        # The runtime-projection launchers AND their open intents are fully
+        # absent — no bottom-bar pill and no live map routing node (those
+        # surfaces are not routable when fields is None).
+        for testid, intent in (
+            ("workspace-surface-icon-receipts", "receipts.open"),
+            ("workspace-surface-icon-memory", "memory.open"),
+            ("workspace-surface-icon-cmd", "cmd.open"),
+        ):
+            assert f'data-testid="{testid}"' not in shell_html, (
+                f"NAV-2/NAV-4: the {testid} runtime-projection launcher must "
+                f"not render on the {shell_name} shell (surface unavailable there)"
+            )
+            assert f'data-intent="{intent}"' not in shell_html, (
+                f"no element may advertise {intent} on the {shell_name} shell "
+                "(the surface is not routable when fields is None)"
+            )
+        # Settings (config) and Map / Help (no runtime dependency) stay present,
+        # so this gates the runtime-projection launchers alone, not NAV-1 or the
+        # always-present wayfinding affordances.
+        for testid in (
+            "workspace-surface-icon-settings",
+            "workspace-surface-icon-map",
+            "workspace-help-toggle",
+        ):
+            assert f'data-testid="{testid}"' in shell_html, (
+                f"the {testid} launcher must still render on the {shell_name} "
+                "shell (Settings is config; Map/Help have no runtime dependency)"
+            )
+
+
+def test_bottom_bar_collapses_to_icon_only_on_narrow_viewport() -> None:
+    # NAV-2/NAV-4 overflow regression (Codex P2, PR #2636). On the loaded-note
+    # shell the right-anchored, no-wrap bottom bar holds up to six labeled
+    # pills (Map, History, Memory, Settings, Search, Help); without a narrow
+    # treatment the leftmost clip off-screen on ≤480px, making the new 1-click
+    # access unreachable on mobile (regresses AC1). Pixels can't be measured in
+    # a unit test, so assert the CSS contract that keeps all six reachable:
+    # each pill's text is a hideable `.launcher-label`, a ≤480px media rule
+    # hides it (icon-only), and the accessible name (aria-label) is preserved.
+    html = _render()
+    bottom_bar = _bottom_bar(html)
+
+    # Each launcher wraps its text in a `.launcher-label` span and keeps its
+    # aria-label, so collapsing to icon-only never strips the accessible name.
+    launchers = {
+        "workspace-surface-icon-map": "Open system map",
+        "workspace-surface-icon-receipts": "Open history",
+        "workspace-surface-icon-memory": "Open memory review",
+        "workspace-surface-icon-settings": "Open settings",
+        "workspace-surface-icon-cmd": "Open search command palette",
+        "workspace-help-toggle": None,  # Help uses title, not aria-label
+    }
+    for testid, aria_label in launchers.items():
+        button = re.search(
+            rf'<button[^>]*data-testid="{testid}"[^>]*>.*?</button>',
+            bottom_bar,
+            re.S,
+        )
+        assert button, f"{testid} launcher must render in the bottom bar"
+        assert '<span class="launcher-label">' in button.group(0), (
+            f"{testid}: the text label must be a hideable .launcher-label span"
+        )
+        if aria_label is not None:
+            assert f'aria-label="{aria_label}"' in button.group(0), (
+                f"{testid}: the accessible name must survive icon-only collapse"
+            )
+
+    # The narrow-viewport rule collapses the row to icon-only by hiding the
+    # label — this is the contract that keeps all six reachable on mobile.
+    narrow_rule = re.search(
+        r"@media\s*\(max-width:\s*480px\)\s*\{[^}]*\.launcher-label\s*\{\s*display:\s*none",
+        html,
+    )
+    assert narrow_rule, (
+        "a ≤480px media rule must hide .launcher-label so the six bottom-bar "
+        "pills collapse to icon-only and none clip off-screen (Codex P2 #2636)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # White-input AC (#2448, D4): no input renders with default white chrome
 # against the dark theme. The settings time inputs are brought onto the dark
 # palette via a design-system class / variables; no inline white background.

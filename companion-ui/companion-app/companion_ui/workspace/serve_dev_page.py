@@ -9750,14 +9750,32 @@ def load_help_guide_html() -> str:
         )
 
 
-def _render_help_toggle(include_settings: bool = False) -> str:
+def _render_help_toggle(
+    include_settings: bool = False, include_runtime_launchers: bool = False
+) -> str:
     """The composed bottom bar (#2447, CUIDR-04) — one container, no stray
     fixed siblings at the bottom edge.
 
-    ``include_settings`` (NAV-1) emits the direct Settings launcher. It is only
-    set on the working shell, where the settings drawer occupant is registered;
-    the entry/orientation bundles do not mount that occupant, so the button is
-    omitted there rather than left as a dead ``settings.open`` affordance.
+    Bottom-bar launcher model (NAV-1/NAV-2/NAV-4, ui-audit; Codex P2 #2636):
+
+    - **Map / Help** are always present — wayfinding/meta affordances with no
+      runtime dependency. Map opens the never-clipping System Map (the complete
+      surface index); Help opens the in-shell guide.
+    - **Settings** (NAV-1) is gated on ``include_settings`` — the working shell.
+      Configuration is legitimately available on degraded shells too (you may
+      need to configure your way out of a no-vault / error state), and
+      ``settings_drawer_markup`` emits its occupant regardless of ``fields``.
+    - **History / Memory / Search** (NAV-2 + NAV-4) are *runtime-projection*
+      launchers, gated together on ``include_runtime_launchers`` — the caller
+      passes ``fields is not None``. They are suppressed on the ``fields is
+      None`` shells (vault-selection picker, runtime error) because their
+      content depends on a live note/runtime and the page's own route contract
+      (``map_available_routes``) marks those surfaces unavailable there: a
+      visible launcher to an unavailable surface is a false affordance. Search
+      additionally has no registered ``cmd`` occupant when ``fields is None``
+      (``panel_palette_markup`` returns "" → ⌘K is a graceful no-op), so gating
+      it here also removes that dead affordance. This mirrors the existing
+      suppression of the vault-setup form on the error shell (see below).
 
     Before CUIDR-04 the bottom edge was a collision of independently positioned
     fixed elements (the Help pill, the Operator pill, the body-edit hint, the
@@ -9783,18 +9801,66 @@ def _render_help_toggle(include_settings: bool = False) -> str:
         'data-intent="map.open" aria-haspopup="dialog" '
         'title="System map — all surfaces" aria-label="Open system map" '
         'onclick="overlayHost.mount(\'map\')">'
-        '<span aria-hidden="true">&#10070;</span> Map</button>'
-        # NAV-1 (ui-audit) — a direct Settings launcher so preferences are not
-        # reachable only by opening the System Map. Reuses the existing
-        # settings.open intent + host occupant; the map node stays too. Only
-        # emitted where the settings drawer is registered (the working shell).
+        '<span aria-hidden="true">&#10070;</span>'
+        '<span class="launcher-label">Map</span></button>'
+        # NAV-2 + NAV-4 (ui-audit) — direct *runtime-projection* launchers so the
+        # frequently-used secondary surfaces are not reachable only by opening
+        # the System Map (a 2-click toll). The map stays the complete index;
+        # these add a 1-click door. Each reuses the surface's existing open
+        # intent + host occupant, and its map node is retained (additive, not a
+        # removal). Gated together on include_runtime_launchers (caller passes
+        # fields is not None): on the fields-None shells (vault-selection / error)
+        # the page's own route contract (map_available_routes) marks these
+        # surfaces unavailable and their content depends on a live note/runtime,
+        # so a visible launcher there is a false affordance (Search additionally
+        # has no registered `cmd` occupant — a dead no-op). Settings stays under
+        # include_settings below — config is legitimate on degraded shells.
+        + (
+            # NAV-2 — direct History/Receipts launcher (reuses receipts.open).
+            '<button type="button" class="receipts-toggle" '
+            'data-testid="workspace-surface-icon-receipts" '
+            'data-intent="receipts.open" aria-haspopup="dialog" '
+            'title="History — receipts of what happened" '
+            'aria-label="Open history" '
+            'onclick="overlayHost.mount(\'receipts\')">'
+            '<span aria-hidden="true">&#9719;</span>'
+            '<span class="launcher-label">History</span></button>'
+            # NAV-2 — direct Memory review launcher (reuses memory.open).
+            '<button type="button" class="memory-toggle" '
+            'data-testid="workspace-surface-icon-memory" '
+            'data-intent="memory.open" aria-haspopup="dialog" '
+            'title="Memory — review open loops" '
+            'aria-label="Open memory review" '
+            'onclick="overlayHost.mount(\'memory\')">'
+            '<span aria-hidden="true">&#9737;</span>'
+            '<span class="launcher-label">Memory</span></button>'
+            # NAV-4 — visible Search / ⌘K affordance (reuses cmd.open). The ⌘K
+            # hint lives in the title so the keyboard-first fast path stays
+            # discoverable from the visible pill.
+            '<button type="button" class="cmd-toggle" '
+            'data-testid="workspace-surface-icon-cmd" '
+            'data-intent="cmd.open" aria-haspopup="dialog" '
+            'title="Search — command palette (⌘K)" '
+            'aria-label="Open search command palette" '
+            'onclick="overlayHost.mount(\'cmd\')">'
+            '<span aria-hidden="true">&#9906;</span>'
+            '<span class="launcher-label">Search</span></button>'
+            if include_runtime_launchers
+            else ""
+        )
+        # NAV-1 (ui-audit) — direct Settings launcher (reuses settings.open).
+        # Gated on include_settings (the working shell) but NOT on a loaded note:
+        # settings_drawer_markup emits its occupant regardless of fields, and
+        # configuration is a legitimate affordance on degraded shells (you may
+        # need to configure your way out of a no-vault / error state).
         + (
             '<button type="button" class="settings-toggle" '
             'data-testid="workspace-surface-icon-settings" '
             'data-intent="settings.open" aria-haspopup="dialog" '
             'title="Settings — your preferences" aria-label="Open settings" '
             'onclick="overlayHost.mount(\'settings\')">'
-            '<span aria-hidden="true">&#9881;</span> Settings</button>'
+            '<span aria-hidden="true">&#9881;</span>'
+            '<span class="launcher-label">Settings</span></button>'
             if include_settings
             else ""
         )
@@ -9802,7 +9868,8 @@ def _render_help_toggle(include_settings: bool = False) -> str:
         'data-testid="workspace-help-toggle" aria-haspopup="dialog" '
         'aria-controls="workspace-help-drawer" aria-expanded="false" '
         'title="Companion UI help" onclick="companionHelp.open()">'
-        '<span aria-hidden="true">?</span> Help</button>'
+        '<span aria-hidden="true">?</span>'
+        '<span class="launcher-label">Help</span></button>'
         '</div>'
     )
 
@@ -9838,14 +9905,33 @@ def _render_help_drawer() -> str:
     @media (max-width: 899px){
       body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar{bottom:calc(60px + 18px)}
     }
-    .help-toggle,.map-toggle,.settings-toggle{position:static;
+    .help-toggle,.map-toggle,.settings-toggle,
+    .receipts-toggle,.memory-toggle,.cmd-toggle{position:static;
       display:inline-flex;align-items:center;gap:6px;
       padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
       background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:999px;
       cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
-    .help-toggle:hover,.map-toggle:hover,.settings-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
-    .help-toggle:focus-visible,.map-toggle:focus-visible,.settings-toggle:focus-visible{
+    .help-toggle:hover,.map-toggle:hover,.settings-toggle:hover,
+    .receipts-toggle:hover,.memory-toggle:hover,.cmd-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
+    .help-toggle:focus-visible,.map-toggle:focus-visible,.settings-toggle:focus-visible,
+    .receipts-toggle:focus-visible,.memory-toggle:focus-visible,.cmd-toggle:focus-visible{
       outline:2px solid var(--border-focus);outline-offset:2px}
+    /* NAV-2/NAV-4 (ui-audit, Codex P2 #2636): the composed bottom bar now holds
+       up to six labeled pills (Map, History, Memory, Settings, Search, Help) on
+       the loaded-note shell. It is right-anchored inline-flex with no wrap, so
+       six *labeled* pills overflow the ≤480px viewport and clip the leftmost
+       launchers off the left edge — making the new 1-click direct access
+       unreachable on mobile (regresses AC1 on exactly the surface it bites).
+       Collapse to icon-only at the narrow breakpoint: hide the text label,
+       keep the glyph + aria-label + title, so all six fit one row and stay
+       reachable. The label is a real element (`.launcher-label`) precisely so
+       this rule can hide it without touching the accessible name. Desktop is
+       unchanged (labels visible, single row). */
+    @media (max-width: 480px){
+      .workspace-bottom-bar .launcher-label{display:none}
+      .help-toggle,.map-toggle,.settings-toggle,
+      .receipts-toggle,.memory-toggle,.cmd-toggle{padding:8px;gap:0}
+    }
     .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
       opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}
     .help-drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,94vw);
@@ -13959,7 +14045,7 @@ def render_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
-  {_render_help_toggle(include_settings=True)}
+  {_render_help_toggle(include_settings=True, include_runtime_launchers=fields is not None)}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
