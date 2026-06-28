@@ -912,21 +912,29 @@ def _render_ambient_health_glyph(health: Optional[dict]) -> str:
         if plain_copy
         else ""
     )
+    # Rendered as a span with role="button" (NOT a <button>): the operator map
+    # node is itself a <button> when its route is live, and nesting a <button>
+    # inside it is invalid HTML — browsers reparent/auto-close it, breaking both
+    # the node DOM and this glyph's own click target. A focusable span keeps the
+    # drill-in working while staying valid as a child of the node button.
+    # onclick stops propagation so the glyph's own operator.open fires once and
+    # does not also trigger the parent node's systemMap.route handler.
     return (
-        f'<button type="button" class="operator-health-glyph" '
+        f'<span class="operator-health-glyph" role="button" tabindex="0" '
         f'data-testid="operator-health-glyph" '
         f'data-health-state="{_e(state)}" '
         f'data-intent="operator.open" '
-        f'onclick="overlayHost.mount(\'operator\')" '
+        f"onclick=\"event.stopPropagation(); overlayHost.mount('operator')\" "
+        f"onkeydown=\"if(event.key==='Enter'||event.key===' '){{event.preventDefault(); event.stopPropagation(); overlayHost.mount('operator');}}\" "
         f'aria-label="System health: {_e(word)}" '
-        f'style="background:none;border:none;cursor:pointer;display:inline-flex;'
-        f'align-items:center;gap:6px;padding:0;color:var({_e(colour_token)},currentColor);">'
+        f'style="cursor:pointer;display:inline-flex;'
+        f'align-items:center;gap:6px;color:var({_e(colour_token)},currentColor);">'
         f'<span class="health-glyph-dot" data-testid="operator-health-glyph-dot" '
         f'aria-hidden="true">{char}</span>'
         f'<span class="health-glyph-word" data-testid="operator-health-glyph-word">'
         f"{_e(word)}</span>"
         + reason_span
-        + "</button>"
+        + "</span>"
     )
 
 
@@ -14505,6 +14513,7 @@ def handle_get(
     orientation_error = ""
     error = ""
     vault_selection_required: Optional[dict] = None
+    health: Optional[dict] = None
 
     if note_path:
         page = RealNoteWorkspaceDevPage(client)
@@ -14534,6 +14543,16 @@ def handle_get(
             orientation = client.get("/api/companion/orientation", params={})
         except WorkspaceClientError as exc:
             orientation_error = str(exc)
+        # OBSSTAB-08 (#2615): fetch live runtime health on the entry-state path
+        # (cold_start / orienting / no-vault) so the ambient operator-health
+        # glyph reflects the REAL runtime, not a defaulted "Nere". Mirrors the
+        # orientation fetch above (same client, same WorkspaceClientError
+        # handling). On a genuine fetch failure/timeout health stays None, which
+        # the glyph renders as "Nere" (runtime unreachable) — the honest mode.
+        try:
+            health = client.get("/api/health", params={})
+        except WorkspaceClientError:
+            health = None
         try:
             browser_params: dict = {
                 "q": params.get("q", [""])[0].strip(),
@@ -14579,6 +14598,7 @@ def handle_get(
         ambient_refresh_enabled=orientation_ambient_refresh_enabled(),
         page_origin_hostname=page_origin_host,
         vault_selection_required=vault_selection_required,
+        health=health,
     )
 
 

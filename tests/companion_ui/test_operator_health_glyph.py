@@ -16,8 +16,10 @@ from typing import Any
 from companion_ui.workspace.serve_dev_page import (
     _derive_health_glyph_state,
     _render_ambient_health_glyph,
+    handle_get,
     render_index_html,
 )
+from companion_ui.workspace.workspace_http_client import WorkspaceClientError
 
 # ---------------------------------------------------------------------------
 # Helpers — orientation / health fixture builders
@@ -248,15 +250,144 @@ def test_glyph_drills_into_operator_drawer() -> None:
     """Expanding / clicking the glyph routes to the operator drawer."""
     html = _render_cold_start(health=_health_ok())
 
-    # The glyph must carry data-intent="operator.open" so the overlay host
-    # knows it routes to the operator drawer.
-    glyph_section = _extract_glyph_html(html)
-    assert 'data-intent="operator.open"' in glyph_section, (
+    # The glyph's opening tag must carry data-intent="operator.open" and an
+    # onclick that mounts the operator overlay.
+    glyph_tag = _glyph_open_tag(html)
+    assert 'data-intent="operator.open"' in glyph_tag, (
         "glyph must carry data-intent=operator.open to route to the operator drawer"
     )
-    # The onclick must call overlayHost.mount('operator')
-    assert "overlayHost.mount('operator')" in glyph_section, (
+    assert "overlayHost.mount('operator')" in glyph_tag, (
         "glyph onclick must mount the operator overlay"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1 (#2615 Codex): the REAL handle_get serving path must fetch /api/health
+# and pass it through — direct injection alone would not catch a missing fetch.
+# ---------------------------------------------------------------------------
+
+
+class _EntryStateClient:
+    """Stub WorkspaceHttpClient for the entry-state handle_get path.
+
+    Returns a cold_start orientation + an injectable /api/health payload
+    (or raises WorkspaceClientError when ``health_raises`` is set, to model a
+    genuine fetch failure/timeout).
+    """
+
+    def __init__(
+        self,
+        *,
+        health_payload: dict[str, Any] | None,
+        health_raises: bool = False,
+    ) -> None:
+        self._health_payload = health_payload
+        self._health_raises = health_raises
+        self.get_calls: list[str] = []
+
+    def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        self.get_calls.append(url)
+        if url == "/api/health":
+            if self._health_raises:
+                raise WorkspaceClientError("health endpoint unreachable")
+            return self._health_payload or {}
+        if url == "/api/companion/orientation":
+            return _orientation_payload(leave_status="absent")
+        if url == "/api/companion/vault-browser":
+            return {
+                "identity": {"vault_id": "test-vault", "channel": "test"},
+                "notes": {"items": []},
+                "pagination": {},
+            }
+        return {}
+
+    def post(self, url: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+
+def test_handle_get_fetches_health_and_renders_green_when_healthy() -> None:
+    """The served entry page (real handle_get path) shows Frisk when runtime is healthy.
+
+    Regression guard for the Codex P1 finding: handle_get previously did not
+    fetch /api/health, so a healthy runtime rendered "Nere" on the real page.
+    """
+    client = _EntryStateClient(health_payload=_health_ok())
+    html = handle_get(
+        query_string="",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+    # handle_get must actually fetch /api/health on the entry-state path.
+    assert "/api/health" in client.get_calls, (
+        "handle_get must fetch /api/health on the entry-state path"
+    )
+    # A healthy runtime must yield the green Frisk glyph — NOT Nere.
+    glyph_tag = _glyph_open_tag(html)
+    assert 'data-health-state="frisk"' in glyph_tag, (
+        "served entry page must show Frisk (green) for a healthy runtime, not Nere"
+    )
+    assert 'data-health-state="nere"' not in glyph_tag
+
+
+def test_handle_get_health_fetch_failure_renders_nere() -> None:
+    """When the health fetch genuinely fails, the served page shows Nere (honest)."""
+    client = _EntryStateClient(health_payload=None, health_raises=True)
+    html = handle_get(
+        query_string="",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+    assert "/api/health" in client.get_calls
+    glyph_tag = _glyph_open_tag(html)
+    assert 'data-health-state="nere"' in glyph_tag, (
+        "a failed/timed-out health fetch must render Nere (runtime unreachable)"
+    )
+
+
+def test_handle_get_renders_write_blocked_on_served_page() -> None:
+    """write_guard blocked on the served entry page → Pausad glyph (via handle_get)."""
+    client = _EntryStateClient(health_payload=_health_write_blocked())
+    html = handle_get(
+        query_string="",
+        client=client,  # type: ignore[arg-type]
+        api_base_url="http://127.0.0.1:18001",
+    )
+    glyph_tag = _glyph_open_tag(html)
+    assert 'data-health-state="pausad"' in glyph_tag
+
+
+# ---------------------------------------------------------------------------
+# P2 (#2615 Codex): the glyph must not be a <button> nested in another <button>.
+# ---------------------------------------------------------------------------
+
+
+def test_glyph_is_not_nested_button() -> None:
+    """The glyph element is not a <button> nested inside the operator node button.
+
+    Nested <button> is invalid HTML; browsers reparent/auto-close it, breaking
+    the node DOM and the glyph's own click target (AC4 drill-in).
+    """
+    # Rendered alone, the glyph itself must not be a <button>.
+    glyph_html = _render_ambient_health_glyph(_health_ok())
+    assert "<button" not in glyph_html, (
+        "the glyph must not be a <button> (it nests inside the operator node button)"
+    )
+    assert 'role="button"' in glyph_html, (
+        "the glyph should be a focusable element with role=button"
+    )
+
+    # In a full render, the operator node carries the glyph but contains no
+    # nested <button> (i.e. no `<button ...> ... <button` pattern).
+    html = _render_cold_start(health=_health_ok())
+    node_html = _operator_node_html(html)
+    assert 'data-testid="operator-health-glyph"' in node_html, (
+        "the operator node should host the health glyph"
+    )
+    # The node opens with a <button> tag; assert there is no SECOND <button>
+    # opening tag anywhere inside it.
+    inner = node_html[node_html.index(">") + 1 :]
+    assert "<button" not in inner, (
+        "operator node must not contain a nested <button> (invalid HTML)"
     )
 
 
@@ -325,12 +456,29 @@ def test_no_raw_field_names_in_glyph() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _extract_glyph_html(html: str) -> str:
-    """Extract the rendered health glyph element from a full page HTML."""
+def _glyph_open_tag(html: str) -> str:
+    """The glyph's opening element tag (carries the intent/onclick attributes).
+
+    The glyph is a ``<span role="button">`` (not a ``<button>``) so it stays
+    valid HTML when nested inside the operator map node's own ``<button>``.
+    """
     m = re.search(
-        r'(<button[^>]*data-testid="operator-health-glyph"[^>]*>.*?</button>)',
+        r'<span[^>]*data-testid="operator-health-glyph"[^>]*>',
+        html,
+    )
+    assert m, "operator-health-glyph span must be present in HTML"
+    return m.group(0)
+
+
+def _operator_node_html(html: str) -> str:
+    """The full operator map node element (button or article) from a page.
+
+    Used to assert the glyph is not nested inside another ``<button>``.
+    """
+    m = re.search(
+        r'<(?P<tag>button|article)[^>]*data-surface-id="operator"[^>]*>.*?</(?P=tag)>',
         html,
         re.S,
     )
-    assert m, "operator-health-glyph button must be present in HTML"
-    return m.group(1)
+    assert m, "operator map node must render"
+    return m.group(0)
