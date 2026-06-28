@@ -21,6 +21,7 @@ from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
 from app.cli.settings_explain import mask_dsn
 from app.observability.log import span, with_trace_id
+from app.version import get_runtime_version
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores.db_health import ping_postgres, resolve_dsn
@@ -650,5 +651,6 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     ok = bool(checks_ok and runtime_ok)
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
-    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": check_v6_seams(), "authority_spine": _check_authority_spine()}
+    runtime_version = get_runtime_version()
+    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": check_v6_seams(), "authority_spine": _check_authority_spine(), "version": runtime_version.get("git_sha", "unknown")}
 __all__ = ["run_health"]
