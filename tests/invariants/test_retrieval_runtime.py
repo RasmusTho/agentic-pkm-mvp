@@ -57,6 +57,26 @@ def test_cross_scope_allows_via_flow_as_conservative_role() -> None:
     assert decision.evidence_role_in_target == "background"
 
 
+def test_cross_scope_flow_direction_is_enforced() -> None:
+    # A flow that declares its own scopes must match this crossing; a reversed flow is denied even
+    # if it allows the operation (grants are directional).
+    reversed_flow = {
+        "source_scope": _ALPHA, "target_scope": "scope:general/programming",
+        "allowed_operations": ["cite"], "evidence_roles_allowed": ["background"],
+    }
+    decision = cross_scope.evaluate("scope:general/programming", _ALPHA, "cite", flow=reversed_flow)
+    assert decision.allowed is False
+
+
+def test_cross_scope_denies_flow_without_target_role() -> None:
+    # A flow with no recognized target evidence role cannot admit (no role to downgrade/bound to).
+    decision = cross_scope.evaluate(
+        "scope:general/programming", _ALPHA, "cite",
+        flow={"allowed_operations": ["cite"], "evidence_roles_allowed": []},
+    )
+    assert decision.allowed is False
+
+
 def test_cross_scope_denies_ungranted_operation() -> None:
     # A flow that allows cite must not implicitly grant import/mutate.
     decision = cross_scope.evaluate(
