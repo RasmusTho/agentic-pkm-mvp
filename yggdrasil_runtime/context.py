@@ -14,7 +14,8 @@ returns a ContextEnvelope conforming to ``schemas/context-envelope.schema.json``
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -44,14 +45,26 @@ class ComposedBundleRef:
 _ENVELOPE_FORBIDDEN_BUNDLE_KEYS = frozenset({"vault_id", "vault_root", "raw_index"})
 
 
+def sanitize_bundle_for_envelope(bundle: Any) -> Any:
+    """Return a bounded-context copy of ``bundle`` with storage/raw-access topology removed.
+
+    The boundary must hold for the envelope VALUE handed to callers, not only its serialization — a
+    consumer using the object API must not be able to read ``item.metadata_bundle.vault_id``. The
+    optional ``vault_id`` is the only such field on MetadataBundle today; dropping it keeps the bundle
+    schema-valid. The source bundle (with full topology) is unchanged.
+    """
+    if getattr(bundle, "vault_id", None) is None:
+        return bundle
+    return replace(bundle, vault_id=None)
+
+
 @dataclass(frozen=True)
 class RetrievedItem:
     metadata_bundle: Any
     evidence_role_in_context: str
 
     def to_dict(self) -> dict[str, Any]:
-        # Project the bundle into bounded context: strip storage/raw-access fields. Dropping the
-        # optional vault_id keeps the bundle schema-valid.
+        # The bundle is already sanitized at construction; the dict-level filter is defense in depth.
         bundle = {
             k: v
             for k, v in self.metadata_bundle.to_dict().items()
@@ -85,26 +98,30 @@ class ContextEnvelope:
     created_at: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "envelope_id": self.envelope_id,
-            "access_mode": self.access_mode,
-            "active_workspace_id": self.active_workspace_id,
-            "active_scope_id": self.active_scope_id,
-            "principal_id": self.principal_id,
-            "user_intent": self.user_intent,
-            "allowed_capabilities": list(self.allowed_capabilities),
-            "denied_scopes": [d.to_dict() for d in self.denied_scopes],
-            "cross_scope_flows": list(self.cross_scope_flows),
-            "retrieved_items": [i.to_dict() for i in self.retrieved_items],
-            "context_bundles": [b.to_dict() for b in self.context_bundles],
-            "citation_policy": self.citation_policy,
-            "memory_policy": self.memory_policy,
-            "mutation_policy": self.mutation_policy,
-            "execution_policy": self.execution_policy,
-            "escalation_conditions": list(self.escalation_conditions),
-            "trace_id": self.trace_id,
-            "created_at": self.created_at,
-        }
+        # deepcopy so a caller mutating the returned payload can never reach back into this frozen
+        # envelope's policy guards / nested dicts (frozen blocks reassignment, not nested mutation).
+        return copy.deepcopy(
+            {
+                "envelope_id": self.envelope_id,
+                "access_mode": self.access_mode,
+                "active_workspace_id": self.active_workspace_id,
+                "active_scope_id": self.active_scope_id,
+                "principal_id": self.principal_id,
+                "user_intent": self.user_intent,
+                "allowed_capabilities": list(self.allowed_capabilities),
+                "denied_scopes": [d.to_dict() for d in self.denied_scopes],
+                "cross_scope_flows": list(self.cross_scope_flows),
+                "retrieved_items": [i.to_dict() for i in self.retrieved_items],
+                "context_bundles": [b.to_dict() for b in self.context_bundles],
+                "citation_policy": self.citation_policy,
+                "memory_policy": self.memory_policy,
+                "mutation_policy": self.mutation_policy,
+                "execution_policy": self.execution_policy,
+                "escalation_conditions": list(self.escalation_conditions),
+                "trace_id": self.trace_id,
+                "created_at": self.created_at,
+            }
+        )
 
 
 def _escalations_from_denials(denials) -> tuple[dict[str, Any], ...]:
@@ -139,7 +156,7 @@ def assemble_envelope(
     denials = tuple(retrieval_result.denied_or_escalated_candidates)
     items = tuple(
         RetrievedItem(
-            metadata_bundle=c.metadata_bundle,
+            metadata_bundle=sanitize_bundle_for_envelope(c.metadata_bundle),
             evidence_role_in_context=c.evidence_role_in_context,
         )
         for c in retrieval_result.candidate_items

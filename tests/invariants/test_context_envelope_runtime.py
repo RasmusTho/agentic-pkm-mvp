@@ -87,6 +87,37 @@ def test_envelope_strips_vault_id_from_capture_bundles() -> None:
     assert "vault_id" not in payload["retrieved_items"][0]["metadata_bundle"]
 
 
+def test_envelope_object_api_has_no_storage_topology() -> None:
+    # The boundary holds for the VALUE handed to callers, not only to_dict(): the object API must not
+    # expose vault_id either.
+    art = capture.capture(text="a thought", principal_id="p-1")
+    cand = retrieval.Candidate(
+        metadata_bundle=art.metadata_bundle, admissibility_status="admitted",
+        evidence_role_in_context=art.metadata_bundle.evidence_role,
+    )
+    result = retrieval.RetrievalResult(
+        candidate_items=(cand,), scope_policy_prefiltered=True,
+        active_scope_id=art.metadata_bundle.scope_id, query="x",
+    )
+    env = context.assemble_envelope(
+        result, active_workspace_id="ws-1", active_scope_id=art.metadata_bundle.scope_id,
+        principal_id="p-1", user_intent="orient",
+    )
+    assert env.retrieved_items[0].metadata_bundle.vault_id is None
+    # The source bundle is untouched (sanitization returns a copy).
+    assert art.metadata_bundle.vault_id
+
+
+def test_to_dict_policy_mutation_does_not_corrupt_envelope() -> None:
+    # Mutating the serialized payload must not reach back into the frozen envelope's policy guards.
+    env = _envelope()
+    payload = env.to_dict()
+    payload["execution_policy"]["execution_allowed"] = True
+    payload["citation_policy"]["citable_evidence_roles"].append("hacked")
+    assert env.execution_policy["execution_allowed"] is False
+    assert "hacked" not in env.citation_policy["citable_evidence_roles"]
+
+
 def test_envelope_rejects_scope_mismatch() -> None:
     # A RetrievalResult built for one scope cannot be packaged as a different scope.
     result = retrieval.retrieve(query="state machine", active_scope_id="scope:work/project-beta")
