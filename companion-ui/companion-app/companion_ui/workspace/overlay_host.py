@@ -207,6 +207,55 @@ def dismiss(state: OverlayHostState) -> OverlayHostState:
     return replace(state, stack=state.stack[:-1])
 
 
+def resolve_deep_link_overlay(
+    overlay_id: str | None,
+    *,
+    occupants: tuple[str, ...] = SHIPPED_OVERLAY_OCCUPANTS,
+) -> str | None:
+    """Resolve a ``?overlay=<id>`` deep-link request to an auto-mountable id.
+
+    NAV-3 (#2611): a surface may be opened directly by URL. Only a **declared
+    and shipped** overlay is honoured — an undeclared id, an empty value, or a
+    declared-but-unshipped id (no registered occupant) resolves to ``None`` so
+    the page never auto-mounts a dead surface (the #2610 lesson: don't invent a
+    mount for an occupant that only registers on a particular shell). The
+    returned id, when present, is safe to hand to ``overlayHost.mount`` on load.
+    """
+    if not overlay_id:
+        return None
+    candidate = overlay_id.strip()
+    if candidate not in DECLARED_OVERLAYS:
+        return None
+    if candidate not in occupants:
+        return None
+    return candidate
+
+
+def overlay_deep_link_boot_script(overlay_id: str | None) -> str:
+    """Boot script that auto-mounts a deep-linked overlay on load (NAV-3).
+
+    Returns an empty string unless ``overlay_id`` is an already-resolved,
+    declared+shipped id (see :func:`resolve_deep_link_overlay`); callers MUST
+    resolve first, so this only ever embeds a known-safe literal. The script is
+    emitted after the occupant registration scripts so ``overlayHost`` and the
+    target occupant exist; ``mount`` stays a no-op if the occupant did not
+    register on this particular shell (declared-but-inert), so the deep link
+    degrades calmly instead of erroring.
+    """
+    if not overlay_id or overlay_id not in DECLARED_OVERLAYS:
+        return ""
+    # overlay_id is a fixed member of DECLARED_OVERLAYS — a safe JS literal.
+    return f"""
+  <script>
+  /* overlay-deep-link-boot (NAV-3, #2611) */
+  (function() {{
+    if (!window.overlayHost) {{ return; }}
+    try {{ window.overlayHost.mount('{overlay_id}'); }} catch (err) {{ /* inert */ }}
+  }})();
+  /* /overlay-deep-link-boot */
+  </script>"""
+
+
 def keyboard_intent(key: str) -> str | None:
     """Resolve a normalized key chord to its declared intent, or ``None``."""
     return KEYBOARD_MAP.get(key)
@@ -330,6 +379,17 @@ def overlay_host_script() -> str:
     var DECLARED = (host.getAttribute('data-declared-overlays') || '').split(' ');
     var occupants = {};
     var stack = [];
+    // NAV-3 (#2611): overlays participate in browser history. Each mounted
+    // overlay pushes exactly ONE history entry carrying an overlay-host
+    // marker; browser Back fires `popstate` and dismisses the TOPMOST overlay
+    // (one entry popped per dismiss) instead of navigating the page away. This
+    // is the modal-Back expectation; it is NOT a route reset — the URL path,
+    // query, scroll ownership, and anchor identity are untouched. The `popping`
+    // re-entrancy guard keeps a programmatic dismiss (Esc / scrim / occupant
+    // self-close, which calls history.back()) from double-dismissing when the
+    // resulting popstate fires.
+    var HISTORY_MARKER = 'overlayHostMarker';
+    var popping = false;
     function assertDeclared(id) {
       if (DECLARED.indexOf(id) === -1) {
         throw new Error('undeclared overlay: ' + id);
@@ -340,6 +400,18 @@ def overlay_host_script() -> str:
       host.setAttribute('data-overlay-stack', stack.join(' '));
       if (scrim) { scrim.setAttribute('data-active', stack.length ? 'true' : 'false'); }
     }
+    function popTopmost() {
+      // Shared topmost-pop used by both the programmatic dismiss path and the
+      // browser-Back (popstate) path. Updates host bookkeeping and runs the
+      // occupant close hook; never navigates and never touches the document
+      // column, so staged suggestions and open-loop counts survive.
+      if (!stack.length) { return null; }
+      var id = stack.pop();
+      sync();
+      var occ = occupants[id];
+      if (occ && occ.close) { occ.close(); }
+      return id;
+    }
     window.overlayHost = {
       register: function(id, adapter) {
         assertDeclared(id);
@@ -348,36 +420,70 @@ def overlay_host_script() -> str:
       mount: function(id, detail) {
         assertDeclared(id);
         var occ = occupants[id];
-        // Declared but unshipped: inert no-op — never invent a surface.
+        // Declared but unshipped: inert no-op — never invent a surface, and
+        // never push a phantom history entry for a surface that won't mount.
         if (!occ) { return; }
         var at = stack.indexOf(id);
         if (at !== -1) { stack.splice(at, 1); }
         stack.push(id);
         sync();
+        // Push one history entry per mounted overlay so browser Back can pop
+        // it. Same-document pushState: it changes neither the URL nor the
+        // document, only adds a marked entry the popstate handler recognises.
+        try {
+          var st = {}; st[HISTORY_MARKER] = id;
+          if (window.history && window.history.pushState) {
+            window.history.pushState(st, '');
+          }
+        } catch (err) { /* history unavailable — overlay still mounts */ }
         if (occ.open) { occ.open(detail || {}); }
       },
       dismiss: function() {
         // overlay.dismiss — return to the document anchor. Pops only the
-        // topmost overlay and updates host bookkeeping. It never navigates
-        // and never touches the document column, so the URL, scroll
-        // ownership, anchor identity, staged suggestions, and open-loop
-        // counts are preserved by construction.
+        // topmost overlay and updates host bookkeeping. It never navigates the
+        // page and never touches the document column, so the URL path/query,
+        // scroll ownership, anchor identity, staged suggestions, and open-loop
+        // counts are preserved by construction. To keep the history stack in
+        // lock-step with the overlay stack, the matching history entry is
+        // unwound with history.back(); the `popping` guard stops the resulting
+        // popstate from popping a second overlay.
         if (!stack.length) { return; }
-        var id = stack.pop();
-        sync();
-        var occ = occupants[id];
-        if (occ && occ.close) { occ.close(); }
+        popTopmost();
+        try {
+          if (!popping && window.history && window.history.back) {
+            popping = true;
+            window.history.back();
+          }
+        } catch (err) { popping = false; }
       },
       notifyClosed: function(id) {
         // An occupant closed itself through its own affordance; keep the
-        // host stack truthful without re-running the occupant close hook.
+        // host stack truthful without re-running the occupant close hook, and
+        // unwind the matching history entry so Back stays in step.
         var at = stack.indexOf(id);
-        if (at !== -1) { stack.splice(at, 1); sync(); }
+        if (at !== -1) {
+          stack.splice(at, 1); sync();
+          try {
+            if (!popping && window.history && window.history.back) {
+              popping = true;
+              window.history.back();
+            }
+          } catch (err) { popping = false; }
+        }
       },
       topmost: function() {
         return stack.length ? stack[stack.length - 1] : null;
       }
     };
+    // Browser Back closes the TOPMOST overlay (NAV-3, #2611). When the entry
+    // this handler reacts to was unwound by a programmatic dismiss (Esc /
+    // scrim / occupant self-close), the `popping` guard absorbs the event so
+    // we never double-dismiss. Otherwise this is a genuine user Back: pop the
+    // topmost overlay back to the document anchor without navigating away.
+    window.addEventListener('popstate', function() {
+      if (popping) { popping = false; return; }
+      if (stack.length) { popTopmost(); }
+    });
     // Keyboard map (SYSTEM_ENTRY_POINT_SPEC.md §Keyboard map):
     //   meta+k -> cmd.open, meta+n -> capture.open, escape -> overlay.dismiss.
     // cmd.open mounts the shipped Panel command palette (#1786, SEP-04);

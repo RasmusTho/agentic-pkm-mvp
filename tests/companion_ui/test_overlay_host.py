@@ -44,6 +44,8 @@ from companion_ui.workspace.overlay_host import (
     dismiss,
     keyboard_intent,
     mount,
+    overlay_deep_link_boot_script,
+    resolve_deep_link_overlay,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
 
@@ -97,12 +99,13 @@ def _fields(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def _render(**overrides: Any) -> str:
+def _render(*, boot_overlay: str = "", **overrides: Any) -> str:
     fields = _fields(**overrides)
     return render_index_html(
         api_base_url="http://127.0.0.1:18001",
         note_path=str(fields["note_path"]),
         fields=fields,
+        boot_overlay=boot_overlay,
     )
 
 
@@ -280,11 +283,101 @@ def test_overlay_dismiss_returns_to_anchor_without_route_reset() -> None:
     assert "overlayHost.dismiss()" in html  # scrim dismisses to the anchor
 
     # The dismiss path performs no route reset: the host controller never
-    # navigates, never submits a form, never rewrites history.
+    # navigates the page away or submits a form. NAV-3 (#2611) adds browser-
+    # history participation (history.pushState on mount, history.back to unwind
+    # on dismiss, a popstate handler) — that is the modal-Back mechanism, NOT a
+    # route reset: it never changes the URL path/query and never replaces the
+    # document. So pushState/popstate/history.back are explicitly allowed while
+    # genuine navigation calls stay forbidden.
     script = _host_script(html)
     for forbidden in ("location.href", "location.assign", "location.reload",
-                      "form.submit", "history.pushState", "window.open"):
+                      "form.submit", "window.open"):
         assert forbidden not in script, f"host dismiss must not call {forbidden}"
+
+
+# ---------------------------------------------------------------------------
+# NAV-3 (#2611): overlays participate in browser history — mount pushes a
+# history state marker; a popstate handler dismisses the topmost overlay so
+# browser Back closes a modal instead of navigating the page away.
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_host_pushes_history_marker_and_handles_popstate() -> None:
+    """AC1 Verify target: the rendered overlay-host script pushes a history
+    state marker on ``mount`` and registers a ``popstate`` handler that
+    dismisses the topmost overlay (browser Back closes the modal).
+    """
+    script = _host_script(_render())
+
+    # mount pushes exactly one marked history entry per overlay.
+    assert "history.pushState" in script, (
+        "mount must push a history state marker so browser Back can pop it"
+    )
+    assert "overlayHostMarker" in script, "the pushed state must carry the host marker"
+
+    # A popstate handler is registered and it dismisses the topmost overlay
+    # (pops back to the document anchor) on a genuine browser Back.
+    assert "addEventListener('popstate'" in script, (
+        "a popstate handler must be registered so browser Back closes the overlay"
+    )
+    # The popstate path and the programmatic dismiss path share the topmost-pop,
+    # and a programmatic dismiss unwinds its own entry with history.back() —
+    # guarded against re-entrant double-dismiss.
+    assert "history.back" in script, (
+        "a programmatic dismiss must unwind its matching history entry"
+    )
+    assert "popping" in script, "a re-entrancy guard must coordinate back/popstate"
+
+    # Esc and the scrim still dismiss to the anchor (grammar preserved).
+    assert "Escape" in script and "overlay.dismiss" in script
+    assert "overlayHost.dismiss()" in _render()  # scrim onclick
+
+
+def test_resolve_deep_link_overlay_only_declared_and_shipped() -> None:
+    """Pure resolver: ?overlay=<id> honours only declared + shipped ids."""
+    # A declared, shipped occupant resolves to itself.
+    for shipped in ("memory", "receipts", "settings", "map", "cmd"):
+        assert shipped in SHIPPED_OVERLAY_OCCUPANTS
+        assert resolve_deep_link_overlay(shipped) == shipped
+
+    # Declared-but-unshipped ids do not auto-mount (no dead surface).
+    for unshipped in ("peek", "posture"):
+        assert unshipped in DECLARED_OVERLAYS
+        assert unshipped not in SHIPPED_OVERLAY_OCCUPANTS
+        assert resolve_deep_link_overlay(unshipped) is None
+
+    # Undeclared / empty / None never resolve.
+    for bogus in (None, "", "task-popup", "VAULT", "notifications"):
+        assert resolve_deep_link_overlay(bogus) is None
+
+    # The boot script is emitted only for a resolved id and embeds that id.
+    assert overlay_deep_link_boot_script(None) == ""
+    assert overlay_deep_link_boot_script("") == ""
+    assert overlay_deep_link_boot_script("task-popup") == ""  # not declared
+    boot = overlay_deep_link_boot_script("memory")
+    assert "overlayHost.mount('memory')" in boot
+
+
+def test_serve_dev_page_honours_overlay_query_param() -> None:
+    """AC2 Verify target: ?overlay=<declared-id> auto-mounts that overlay on
+    load; an unshipped/unknown id is a calm no-op (no boot mount emitted).
+    """
+    # Declared + shipped id: the boot script auto-mounts it on load.
+    mounted = _render(boot_overlay="memory")
+    assert "/* overlay-deep-link-boot (NAV-3, #2611) */" in mounted
+    assert "overlayHost.mount('memory')" in mounted
+
+    # Unshipped declared id: no boot auto-mount (never a dead surface).
+    inert = _render(boot_overlay="peek")
+    assert "/* overlay-deep-link-boot" not in inert
+
+    # Unknown id: no boot auto-mount.
+    unknown = _render(boot_overlay="task-popup")
+    assert "/* overlay-deep-link-boot" not in unknown
+
+    # No param: no boot auto-mount (default).
+    plain = _render()
+    assert "/* overlay-deep-link-boot" not in plain
 
 
 # ---------------------------------------------------------------------------

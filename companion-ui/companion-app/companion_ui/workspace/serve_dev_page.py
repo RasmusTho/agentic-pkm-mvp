@@ -104,8 +104,10 @@ from companion_ui.workspace.memory_review_drawer import (
 from companion_ui.workspace.overlay_host import (
     DEFAULT_POSTURE_EMPHASIS,
     coarse_vault_posture,
+    overlay_deep_link_boot_script,
     overlay_host_markup,
     overlay_host_script,
+    resolve_deep_link_overlay,
 )
 from companion_ui.workspace.panel_palette import (
     panel_palette_markup,
@@ -10045,6 +10047,7 @@ def render_index_html(
     route_error: bool = False,
     vault_selection_required: Optional[dict] = None,
     health: Optional[dict] = None,
+    boot_overlay: str = "",
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -10236,6 +10239,13 @@ def render_index_html(
     # here so the f-string below carries no inline comment (Python 3.11 forbids
     # comments inside f-string replacement fields).
     operator_health_glyph_shell_html = _render_ambient_health_glyph(health)
+    # NAV-3 (#2611): ?overlay=<id> deep-link. Resolve to a declared+shipped id
+    # (or "" for unknown/unshipped) and emit a boot script that auto-mounts it
+    # after the occupant scripts register. Computed here so the note-shell
+    # f-string below carries no inline comment.
+    overlay_deep_link_boot_html = overlay_deep_link_boot_script(
+        resolve_deep_link_overlay(boot_overlay)
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -14247,6 +14257,7 @@ def render_index_html(
   {receipts_history_script()}
   {system_map_overlay_script()}
   {guidance_layer_script()}
+  {overlay_deep_link_boot_html}
 
   <script>
   (function() {{
@@ -14687,6 +14698,10 @@ def handle_get(
         browser_limit = 250
     # #1418 — diagnostics/operator chrome is opt-in via an explicit route.
     diagnostics = params.get("diagnostics", ["0"])[0].strip().lower() in {"1", "true", "yes", "on"}
+    # NAV-3 (#2611) — ?overlay=<id> deep-link request. Passed through verbatim;
+    # render_index_html resolves it to a declared+shipped id (else a no-op) so
+    # an unknown or unshipped id never auto-mounts a dead surface.
+    boot_overlay = params.get("overlay", [""])[0].strip()
     fields: Optional[dict] = None
     orientation: Optional[dict] = None
     orientation_vault_browser: Optional[dict] = None
@@ -14782,6 +14797,7 @@ def handle_get(
         page_origin_hostname=page_origin_host,
         vault_selection_required=vault_selection_required,
         health=health,
+        boot_overlay=boot_overlay,
     )
 
 
