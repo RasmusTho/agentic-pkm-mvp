@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 # Test vault root. Honors an explicit TEST_VAULT_ROOT make/env override first,
@@ -323,3 +323,48 @@ dispatcher-init:
 
 dispatcher-sync:
 	$(PYTHON) -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --json
+
+# ── Dev/test DB snapshot & forensic dump ─────────────────────────────────────
+# These targets are dev-ergonomics and on-demand forensic tooling.
+# They are NOT scheduled disaster recovery — the vault is the durable SoR.
+# See docs/OPERATIONS.md § "DB snapshot/restore".
+#
+# DSN resolution: reads DATABASE_URL (or DB_DSN) from the environment via
+# app/db/dsn.py::resolve_dsn(), matching the pattern used by all app code.
+# For dev, export DATABASE_URL=postgresql://app:app@127.0.0.1:15432/app_dev
+# For prod forensics, export DATABASE_URL from .env.prod.local before calling
+# db-dump-prod (never hardcode the prod DSN here).
+
+SNAPSHOT_DIR ?= .db-snapshots
+
+db-snapshot:
+	@mkdir -p "$(SNAPSHOT_DIR)"
+	@STAMP=$$(date -u +%Y%m%dT%H%M%SZ); \
+	DSN=$$($(PYTHON) -c "from app.db.dsn import resolve_dsn; print(resolve_dsn())"); \
+	if [ -z "$$DSN" ]; then echo "ERROR: DATABASE_URL / DB_DSN is not set"; exit 1; fi; \
+	DUMP_FILE="$(SNAPSHOT_DIR)/dev_$$STAMP.dump"; \
+	echo "Snapshotting dev DB → $$DUMP_FILE"; \
+	pg_dump --format=custom --no-password --file="$$DUMP_FILE" "$$DSN" && \
+	echo "Snapshot written: $$DUMP_FILE"
+
+db-restore:
+	@SNAP="$(SNAPSHOT)"; \
+	if [ -z "$$SNAP" ]; then \
+		SNAP=$$(ls -1t "$(SNAPSHOT_DIR)"/*.dump 2>/dev/null | head -1); \
+	fi; \
+	if [ -z "$$SNAP" ]; then echo "ERROR: no snapshot found in $(SNAPSHOT_DIR)/. Use SNAPSHOT=path/to/file.dump"; exit 1; fi; \
+	DSN=$$($(PYTHON) -c "from app.db.dsn import resolve_dsn; print(resolve_dsn())"); \
+	if [ -z "$$DSN" ]; then echo "ERROR: DATABASE_URL / DB_DSN is not set"; exit 1; fi; \
+	echo "Restoring from $$SNAP → $$DSN"; \
+	pg_restore --clean --if-exists --no-password --dbname="$$DSN" "$$SNAP" && \
+	echo "Restore complete."
+
+db-dump-prod:
+	@mkdir -p "$(SNAPSHOT_DIR)"
+	@STAMP=$$(date -u +%Y%m%dT%H%M%SZ); \
+	DSN=$$($(PYTHON) -c "from app.db.dsn import resolve_dsn; print(resolve_dsn())"); \
+	if [ -z "$$DSN" ]; then echo "ERROR: DATABASE_URL / DB_DSN is not set. Source .env.prod.local first."; exit 1; fi; \
+	DUMP_FILE="$(SNAPSHOT_DIR)/prod_$$STAMP.dump"; \
+	echo "Forensic dump of prod DB → $$DUMP_FILE"; \
+	pg_dump --format=custom --no-password --file="$$DUMP_FILE" "$$DSN" && \
+	echo "Prod forensic dump written: $$DUMP_FILE"
