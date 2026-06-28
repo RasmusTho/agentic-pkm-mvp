@@ -22,6 +22,12 @@ services:
     volumes:
       - ollama:/root/.ollama
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2).status == 200 else 1)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
 
   api:
     build:
@@ -79,7 +85,8 @@ services:
     ports:
       - "18000:8000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python - <<'PY'\nimport os, urllib.request, sys\ntry:\n    urllib.request.urlopen(os.environ['API_HEALTHCHECK_URL'], timeout=2)\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
@@ -122,10 +129,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "test -s \"$${WORKER_HEARTBEAT_PATH}\""]
+      test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _worker_runtime_status; r=_worker_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
       interval: 20s
       timeout: 5s
       retries: 3
@@ -168,10 +176,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "test -s \"$${WATCHER_HEARTBEAT_PATH}\""]
+      test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _watcher_runtime_status; r=_watcher_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
       interval: 5s
       timeout: 2s
       retries: 10
