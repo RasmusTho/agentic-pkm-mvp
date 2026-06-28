@@ -23,7 +23,12 @@ services:
       - ollama:/root/.ollama
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2).status == 200 else 1)\""]
+      # Use the in-image `ollama` CLI (the image's entrypoint binary): it queries
+      # the server's API and exits non-zero when ollama is down. The official
+      # ollama/ollama image ships no python3/curl/wget, so an HTTP-tool probe
+      # would report `not found` even while serving; and a hardcoded loopback
+      # 11434 URL is forbidden by tests/guards/test_no_hardcoded_runtime_defaults.
+      test: ["CMD-SHELL", "ollama list || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3

@@ -170,11 +170,15 @@ def test_ollama_has_healthcheck() -> None:
     )
     assert "test" in hc, "ollama healthcheck block is missing 'test' key"
 
-    # The test command must reference the api/tags endpoint
+    # The healthcheck must be a meaningful ollama liveness probe: the in-image
+    # `ollama` CLI (which queries the server's API and exits non-zero when down)
+    # or a reference to the API port/endpoint. A hardcoded http://localhost:11434
+    # URL is forbidden (tests/guards/test_no_hardcoded_runtime_defaults) and the
+    # ollama image ships no python3/curl, so the CLI form is the correct probe.
     test_cmd = hc["test"]
     test_str = " ".join(test_cmd) if isinstance(test_cmd, list) else str(test_cmd)
-    assert "11434" in test_str or "api/tags" in test_str, (
-        f"ollama healthcheck does not reference port 11434 or /api/tags: {test_str!r}"
+    assert "ollama" in test_str or "11434" in test_str or "api/tags" in test_str, (
+        f"ollama healthcheck is not a meaningful liveness probe: {test_str!r}"
     )
 
 
