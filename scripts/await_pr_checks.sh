@@ -4,14 +4,20 @@
 #
 # This repo runs many concurrent agents against ONE 5,000/hr GitHub API budget; GraphQL exhausts
 # first. `gh pr checks` / `gh pr view --json mergeStateStatus` are GraphQL, and a tight poll loop
-# starves every other agent. This script polls REST check-runs only, sleeps the bulk of CI up front,
-# and backs off >=60s on the tail. Contract: .codex/skills/_shared/CI_WAIT_CONTRACT.md
+# starves every other agent. This script polls the REST check-runs and classic commit-status
+# endpoints only, sleeps the bulk of CI up front, and backs off >=60s on the tail.
+# Contract: .codex/skills/_shared/CI_WAIT_CONTRACT.md
 #
 # Usage:
 #   scripts/await_pr_checks.sh <PR> [--codex] [--initial-wait S] [--interval S] [--timeout S] [--sha SHA]
 #   scripts/await_pr_checks.sh --help
 #
-# Exit codes: 0 all checks passed · 1 a check failed · 2 timeout · 3 Codex blocking (with --codex)
+# Exit codes:
+#   0  CI check-runs + classic commit status all passed (with --codex, Codex also gave a positive reaction)
+#   1  a required check failed
+#   2  timed out before checks were confirmed complete
+#   3  Codex verdict is blocking         (only with --codex)
+#   4  Codex verdict unresolved — resolve per verification-and-closure before merge (only with --codex)
 set -uo pipefail
 
 INITIAL_WAIT=180     # sleep before first check (~ CI p50; the `not pg` gate is the long pole)
@@ -21,7 +27,7 @@ CHECK_CODEX=0
 PR=""
 SHA=""
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -74,11 +80,28 @@ while :; do
     echo "no check-runs attached to $SHA yet; waiting..."
   else
     pending=$(printf '%s' "$resp" | jq -r '[.check_runs[] | select(.status!="completed") | .name] | join(", ")')
-    if [ -z "$pending" ]; then
-      failed=$(printf '%s' "$resp" | jq -r '[.check_runs[] | select(.conclusion!=null and .conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral") | "\(.name): \(.conclusion)"] | join("; ")')
-      break   # all check-runs completed; `failed` derived from the SAME trusted response
+    if [ -n "$pending" ]; then
+      echo "still running: $pending"
+    else
+      # Check-runs complete — also confirm the classic combined commit status. Branch protection on
+      # stable-targeted PRs requires the classic status context (strict=true); check-runs alone would
+      # green-light too early (see GITHUB_GOVERNANCE_SETUP.md and the contract's manual REST path).
+      sresp=$(gh api "repos/$REPO/commits/$SHA/status" 2>/dev/null); src=$?
+      sstate=$(printf '%s' "$sresp" | jq -r '.state // empty' 2>/dev/null)
+      stotal=$(printf '%s' "$sresp" | jq -r '.total_count // 0' 2>/dev/null)
+      if [ "$src" -ne 0 ] || [ -z "$sstate" ]; then
+        echo "transient status fetch error (rc=$src); backing off ${INTERVAL}s..."
+      elif [ "${stotal:-0}" -gt 0 ] && [ "$sstate" = "pending" ]; then
+        echo "classic commit statuses still pending; waiting..."
+      else
+        # Both surfaces resolved — derive failures from the SAME trusted responses (fail closed).
+        failed=$(printf '%s' "$resp" | jq -r '[.check_runs[] | select(.conclusion!=null and .conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral") | "\(.name): \(.conclusion)"] | join("; ")')
+        if [ "${stotal:-0}" -gt 0 ] && [ "$sstate" != "success" ]; then
+          failed="${failed:+$failed; }classic commit status=$sstate"
+        fi
+        break
+      fi
     fi
-    echo "still running: $pending"
   fi
   if [ "$(date +%s)" -ge "$deadline" ]; then
     echo "TIMEOUT after ${TIMEOUT}s; checks not confirmed complete (last pending: ${pending:-unknown})" >&2
@@ -107,8 +130,12 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
     echo "CODEX BLOCKING: CHANGES_REQUESTED" >&2; exit 3
   fi
   case ",$reaction," in
-    *",+1,"*|*",heart,"*|*",hooray,"*|*",rocket,"*|*",laugh,"*) echo "codex: pass (positive reaction)" ;;
-    *) echo "codex: no verdict yet — resolve per verification-and-closure :: Reading the Codex verdict (do not hard-wait)" ;;
+    *",+1,"*|*",heart,"*|*",hooray,"*|*",rocket,"*|*",laugh,"*)
+      echo "codex: pass (positive reaction)"; exit 0 ;;
+    *)
+      echo "codex: verdict UNRESOLVED — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
+      echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
+      exit 4 ;;
   esac
 fi
 

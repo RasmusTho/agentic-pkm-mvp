@@ -37,9 +37,19 @@ scripts/await_pr_checks.sh --help          # flags: --initial-wait, --interval, 
 ```
 
 It auto-detects the repo from the git remote, resolves the PR head SHA via REST, sleeps `--initial-wait`
-(default 180s) before the first check, then polls check-runs every `--interval` (default 90s, floor 60s)
-until all complete or `--timeout` (default 1800s). Exit `0` = all checks passed, `1` = a check failed,
-`2` = timeout, `3` = Codex blocking (with `--codex`). It never issues a GraphQL call.
+(default 180s) before the first check, then polls the REST **check-runs and classic commit-status**
+endpoints every `--interval` (default 90s, floor 60s) until all complete or `--timeout` (default 1800s),
+failing **closed** on any fetch error (an unverifiable state never reports success). Exit codes:
+
+- `0` — CI passed (with `--codex`, Codex also gave a positive reaction)
+- `1` — a required check failed
+- `2` — timed out before checks were confirmed complete
+- `3` — Codex verdict is blocking (only with `--codex`)
+- `4` — Codex verdict unresolved (only with `--codex`) — resolve before merge
+
+It never issues a GraphQL call. For an autonomous `&& gh pr merge`, run with `--codex` and require exit
+`0`: exit `4` means stop and resolve the Codex verdict yourself per *Reading the Codex verdict* (do not
+hard-wait, and do not auto-merge on an unresolved verdict).
 
 ## Manual REST commands (when the script is unavailable)
 
