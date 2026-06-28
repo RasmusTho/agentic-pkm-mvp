@@ -119,6 +119,9 @@ def test_ambient_refresh_disabled_by_default(monkeypatch) -> None:
 
     assert client.get_calls == [
         ("/api/companion/orientation", {}),
+        # OBSSTAB-08 (#2615): entry-state path also fetches live health for the
+        # ambient operator-health glyph.
+        ("/api/health", {}),
         ("/api/companion/vault-browser", {"q": "", "limit": 250}),
     ]
     assert 'data-testid="workspace-reentry-orientation"' in html
@@ -139,6 +142,9 @@ def test_ambient_refresh_uses_foreground_pull_after_staleness(monkeypatch) -> No
 
     assert client.get_calls == [
         ("/api/companion/orientation", {}),
+        # OBSSTAB-08 (#2615): entry-state path also fetches live health for the
+        # ambient operator-health glyph.
+        ("/api/health", {}),
         ("/api/companion/vault-browser", {"q": "", "limit": 250}),
     ]
     assert 'data-ambient-refresh="enabled"' in html

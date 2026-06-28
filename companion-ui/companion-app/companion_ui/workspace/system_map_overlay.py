@@ -360,6 +360,7 @@ def _node_html(
     *,
     available: bool,
     open_loops_count: int = 0,
+    operator_health_glyph_html: str = "",
 ) -> str:
     """Render one surface node.
 
@@ -373,6 +374,14 @@ def _node_html(
     "map-memory-node-open-loops-count", data-authority="read-only-projection").
     Omitted when zero or absent (no zero-state — open loops belong to a
     trajectory; legitimately none on first contact).
+
+    ``operator_health_glyph_html`` — when non-empty and the node is the
+    operator surface, renders the ambient health glyph (OBSSTAB-08, #2615) as
+    a label annotation on this node. The glyph lives inside the System Map
+    overlay (the operator layer) so it satisfies the CUIDR-04 constraint that
+    ``operator.open`` must not appear as a free-floating front-edge affordance.
+    Omitted when empty (no zero-state; the node renders without it on pages
+    that do not have health data).
     """
     # data-mode keeps the machine product-mode tokens (a stable hook); the
     # visible chip shows a human label — raw enum tokens like "find reorient
@@ -402,6 +411,13 @@ def _node_html(
         if node.surface_id == "memory" and open_loops_count > 0
         else ""
     )
+    # Ambient health glyph on the operator node (OBSSTAB-08, #2615): a calm
+    # level-0 indicator inside the operator layer — never front-surface.
+    health_html = (
+        operator_health_glyph_html
+        if node.surface_id == "operator" and operator_health_glyph_html
+        else ""
+    )
     if node.routable and available:
         intent = ROUTE_INTENTS.get(node.surface_id)
         intent_attr = f' data-intent="{intent}"' if intent else ""
@@ -411,7 +427,7 @@ def _node_html(
             f'data-status="{node.status}" data-routable="true"{intent_attr} '
             f"onclick=\"systemMap.route('{node.surface_id}')\">"
             f'<span class="map-node-head">{head}</span>{reach}{status}'
-            f'{open_loops_html}</button>'
+            f'{open_loops_html}{health_html}</button>'
         )
     unavailable = (
         '<p class="map-node-unavailable" data-testid="system-map-node-unavailable">'
@@ -426,7 +442,7 @@ def _node_html(
         f'data-status="{node.status}" data-routable="false"{current} '
         f'aria-disabled="true">'
         f'<span class="map-node-head">{head}</span>{reach}{status}'
-        f'{unavailable}{open_loops_html}</article>'
+        f'{unavailable}{open_loops_html}{health_html}</article>'
     )
 
 
@@ -439,6 +455,7 @@ def system_map_overlay_markup(
     entry_trajectory: str = "",
     entry_leave_point: str = "",
     open_loops_count: int = 0,
+    operator_health_glyph_html: str = "",
 ) -> str:
     """The system map overlay markup — closed by default, never unbidden.
 
@@ -467,6 +484,11 @@ def system_map_overlay_markup(
     ``open_loops_count`` — when non-zero, renders a read-only index count
     annotation on the memory map node (#2247, TELEMETRY_RELOCATION-03).
     Omitted when zero or absent (no zero-state).
+
+    ``operator_health_glyph_html`` — when non-empty, renders the ambient
+    health glyph (OBSSTAB-08, #2615) as a label annotation on the operator
+    map node. Lives inside the system-map-overlay markers (the operator layer)
+    so it satisfies the CUIDR-04 constraint. Omitted when empty.
     """
     declared = routable_surface_ids()
     for surface_id in available_routes:
@@ -476,7 +498,12 @@ def system_map_overlay_markup(
             )
     available = frozenset(available_routes)
     nodes = "".join(
-        _node_html(node, available=node.surface_id in available, open_loops_count=open_loops_count)
+        _node_html(
+            node,
+            available=node.surface_id in available,
+            open_loops_count=open_loops_count,
+            operator_health_glyph_html=operator_health_glyph_html,
+        )
         for node in MAP_SURFACES
     )
     parked = " ".join(PARKED_SURFACES)

@@ -262,6 +262,9 @@ def test_reentry_orientation_fresh_state() -> None:
 
     assert client.get_calls == [
         ("/api/companion/orientation", {}),
+        # OBSSTAB-08 (#2615): entry-state path also fetches live health for the
+        # ambient operator-health glyph.
+        ("/api/health", {}),
         ("/api/companion/vault-browser", {"q": "", "limit": 250}),
     ]
     assert 'data-testid="workspace-reentry-orientation"' in html
