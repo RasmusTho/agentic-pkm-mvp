@@ -27,7 +27,7 @@ State: Point-in-time UX audit + correction record for the Companion UI (2026-06-
 5. Make overlays participate in browser history (pushState on mount, popstate → dismiss). — **Filed as NAV-3** (#2611; behavioural change warranting a live smoke).
 
 ### Fixed in this pass
-- **Markdown tables (MD-1…MD-5, MD-7):** separator now accepts GFM 1+ dash & single-column tables; per-column alignment (`:--`,`--:`,`:--:`) is applied; escaped pipes `\|` are split correctly and unescaped; the splitter is span-aware so a pipe inside inline code or an aliased wikilink stays in its cell; wide tables are wrapped in a horizontal-scroll container. + 8 new tests.
+- **Markdown tables (MD-1…MD-5):** separator now accepts GFM 1+ dash & single-column tables; per-column alignment (`:--`,`--:`,`:--:`) is applied; escaped/awkward pipes no longer drop the row; wide tables are wrapped in a horizontal-scroll container. + new tests. **MD-7** (span-aware splitting for pipes inside inline code / aliased wikilinks) landed independently on main via **#2596**; this PR builds on that splitter and keeps its regression tests.
 - **Right-rail scroll (SC-1):** `.rail-placeholder-body` now owns the scroll (`min-height:0; overflow-y:auto`). Playwright-verified.
 - **Portrait-sheet scroll (SC-2):** defensive `overflow-y:auto` on the narrow-mode bottom sheet.
 - **System Map dev-leak (MAP-1…MAP-6):** all 19 node copies rewritten to plain language; `_render_resurface_mode` / `overlayHost.mount` / `*.open` tokens removed from visible copy; trace id gated behind diagnostics; the dev token `local-ui` is no longer shown on the mode chip and the four product-mode labels are title-cased (they are intentional product vocabulary, so they were not reworded further — MAP-6 is Partial); intro + parked notes + center copy humanised. The existing C4 "no internal refs" contract test was **extended** to also forbid source symbols/intent tokens.
@@ -83,7 +83,7 @@ Status: **Fixed** (this pass) · **Documented** (recommended; not changed).
 | MD-4 | Markdown / tables | P2 | Escaped pipe `\|` split as a delimiter → table drops the row / shows `\|` | `_split_table_row` `:398-400` raw `split("\|")` | Cells with a literal pipe break the table | Split on unescaped pipes `(?<!\\)\|`, unescape `\|`→`\|` | **Fixed** |
 | MD-5 | Markdown / tables + CSS | P1 | Wide tables had no horizontal scroll; crushed into the 68ch column / widened layout | `_render_table` emitted bare `<table>`; only `<pre>` had `overflow-x` | Wide tables unreadable / break layout | Wrap in `.vault-table-scroll{overflow-x:auto}`; table `min-width:100%` | **Fixed** |
 | MD-6 | Markdown / hr | P3 | A document starting with bare `---` emits a spurious "unterminated frontmatter" diagnostic before the `<hr>` | `vault_markdown_parser.py:78-95` | Confusing diagnostic on a valid thematic break | Only treat leading `---` as frontmatter when a closing `---` exists | **Documented** |
-| MD-7 | Markdown / tables | P2 | A literal pipe inside inline code (`` `a\|b` ``) or an aliased wikilink (`[[Note\|Alias]]`) in a table cell was split as a delimiter → the row mis-counts and the table collapses to a mangled paragraph (aliased wikilinks in tables are common in real vaults). Pre-existing; surfaced by adversarial verification | `_split_table_row` split on every unescaped `\|` with no span awareness | Tables with code/wikilinks break | Made `_split_table_row` span-aware: never split inside `` `…` `` code spans or `[[…]]` wikilinks/embeds | **Fixed** |
+| MD-7 | Markdown / tables | P2 | A literal pipe inside inline code (`` `a\|b` ``) or an aliased wikilink (`[[Note\|Alias]]`) in a table cell was split as a delimiter → the row mis-counts and the table collapses to a mangled paragraph (aliased wikilinks in tables are common in real vaults) | `_split_table_row` split on every unescaped `\|` with no span awareness | Tables with code/wikilinks break | Span-aware `_split_table_row` (skips `` `…` `` code spans + `[[…]]` wikilinks) | **Fixed on main via #2596** (independent); this PR builds on it |
 | SC-1 | Right panel / agent-rail | P1 | Rail body cannot scroll; lower proposal cards + their controls clipped | `.agent-rail` `overflow:hidden` `:10449`; `.rail-placeholder-body` `flex:1` no overflow `:10488` | Cannot reach/act on lower proposals | Add `min-height:0; overflow-y:auto` to `.rail-placeholder-body` | **Fixed** |
 | SC-2 | Narrow / portrait-sheet | P2 | Height-capped bottom sheet had no `overflow-y` → tall content clipped | `.portrait-sheet` snaps `:11290-11298`, base rule no overflow | Narrow-screen sheet content unreachable | Add `overflow-y:auto` to `.portrait-sheet` | **Fixed** |
 | SC-3 | Settings badge layering | P3 | `position:fixed` local-only badge floats over scrolled drawer content | `settings_drawer.py:507-514` (z-index 955 vs drawer 960) | Minor overlap of a small chip | Render badge inside drawer flow | **Documented** |
@@ -156,7 +156,7 @@ Standard: primary actions 1–2 clicks · secondary 2–3 · rare/admin deeper b
 | Table — single column | ✅ **(fixed)** | was `<p>`; now `<table>` | **MD-2 Fixed** |
 | Table — alignment `:--`/`--:`/`:--:` | ✅ **(fixed)** | now emits `style="text-align:…"` | **MD-3 Fixed** |
 | Table — escaped pipe `\|` | ✅ **(fixed)** | now one cell, unescaped to `\|` | **MD-4 Fixed** |
-| Table — pipe in inline code / aliased wikilink in a cell | ✅ **(fixed)** | span-aware split keeps `` `a\|b` `` & `[[Note\|Alias]]` in one cell | **MD-7 Fixed** |
+| Table — pipe in inline code / aliased wikilink in a cell | ✅ **(fixed)** | span-aware split keeps `` `a\|b` `` & `[[Note\|Alias]]` in one cell | **MD-7 — via #2596** (this PR builds on it) |
 | Wide table (horizontal overflow) | ✅ **(fixed)** | wrapped in `.vault-table-scroll` | **MD-5 Fixed** |
 | Long table (many rows) | ✅ | scrolls via note-body | — |
 | Table inside a scrollable panel | ✅ **(fixed)** | covered by MD-5 wrapper | **MD-5 Fixed** |
@@ -221,14 +221,14 @@ The map is a **default human-view surface** (1 click), so all visible copy is us
 
 ## Appendix — files changed in this pass
 This branch (`chore/companion-ui-ux-audit`) is based on **`origin/main`** — the original audit was performed on the stale `fix/2527` branch (39 commits behind main), so every change was rebased onto current shipping code and re-verified.
-- `companion-ui/companion-app/companion_ui/renderer/vault_markdown_renderer.py` — table parser/renderer (MD-1…MD-5, MD-7).
+- `companion-ui/companion-app/companion_ui/renderer/vault_markdown_renderer.py` — table parser/renderer (MD-1…MD-5; built on #2596's MD-7 span-aware splitter).
 - `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py` — table-scroll CSS, right-rail scroll, portrait-sheet scroll, note/proposal word-break, vault-action & filter-chip keyboard + focus, Help-drawer `inert`, **NAV-1 Settings launcher**, **ST-1 operator-drawer retry**.
 - `companion-ui/companion-app/companion_ui/workspace/system_map_overlay.py` — human copy, trace-id gate, mode-chip humanisation.
 - `companion-ui/companion-app/companion_ui/workspace/panel_palette.py` — **ST-2** in-flight/result handling, **ST-3** filter empty-state.
 - `companion-ui/companion-app/companion_ui/workspace/memory_review_drawer.py` — `inert` on close.
-- Tests: `test_vault_markdown_renderer.py` (8 table tests), `test_system_map_overlay.py` (extended C4 contract + copy), `test_reentry_orientation_treatment.py` (scoped cold-start assertion), `test_settings_drawer.py` (NAV-1 contract update), `test_topbar_edge_job.py` (NAV-1 test), `test_panel_palette.py` (ST-2/ST-3 tests), `test_operator_overlay_render.py` (ST-1 test).
+- Tests: `test_vault_markdown_renderer.py` (5 complementary table tests on top of #2596's span tests), `test_system_map_overlay.py` (extended C4 contract + copy), `test_reentry_orientation_treatment.py` (scoped cold-start assertion), `test_settings_drawer.py` (NAV-1 contract update), `test_topbar_edge_job.py` (NAV-1 test), `test_panel_palette.py` (ST-2/ST-3 tests), `test_operator_overlay_render.py` (ST-1 test).
 
 **Verification (run from the worktree, base = origin/main):**
-- `tests/companion_ui` — **1782 passed, 5 skipped, 0 failed** (1778 baseline + 4 new follow-up tests).
+- `tests/companion_ui` — **1785 passed, 5 skipped, 0 failed** (on the branch rebased onto current `main`, including #2596).
 - `ruff check` clean on all changed files; markdown table fixes reproduced before/after (incl. inline-code & aliased-wikilink cells); map copy machine-checked free of source symbols/intent tokens; no new `mypy` errors (pre-existing baseline only).
 - ST-1/ST-2/ST-3 are JS behavioural fixes verified by render/string tests + reasoning; a live-runtime smoke is still recommended before relying on them in production.
