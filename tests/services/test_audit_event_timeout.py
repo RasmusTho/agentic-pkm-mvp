@@ -20,6 +20,7 @@ host).
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 
 import pytest
 
@@ -65,6 +66,11 @@ class _RecordingConnection:
 
     def cursor(self) -> _RecordingCursor:
         return self.cursor_instance
+
+    @contextmanager
+    def transaction(self):
+        # Simulate a SAVEPOINT scope that commits cleanly (FK satisfied path).
+        yield self
 
 
 def test_audit_event_skips_db_in_memory_mode(monkeypatch: pytest.MonkeyPatch) -> None:

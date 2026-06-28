@@ -2,12 +2,19 @@
 
 AC1 — end-to-end privileged action writes ≥1 audit row on a real pg:
     test_audit_row_written_on_action  (pytest.mark.pg)
+    test_audit_row_written_for_object_scoped_action  (pytest.mark.pg) — the real
+        promotion-gate path: object_id present in store_objects but NOT in the
+        FK-referenced `objects` table; row must still be written with a NULL
+        object_id and the original id preserved in details.object_ref.
 
 AC2 — forced INSERT failure logs ERROR and does NOT abort the calling action:
     test_audit_insert_failure_logs_error_non_fatal  (not pg — monkeypatched)
 
 AC3 — writer column list matches migration schema:
     test_audit_columns_match_migration  (not pg — structural check)
+
+FK-fallback unit coverage (not pg — monkeypatched):
+    test_audit_object_fk_violation_falls_back_to_null_object_id
 """
 
 from __future__ import annotations
@@ -15,11 +22,13 @@ from __future__ import annotations
 import inspect
 import logging
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from psycopg import IntegrityError
 
 import app.services.audit as audit_module
 from app.services.audit import audit_event
@@ -82,6 +91,79 @@ def test_audit_row_written_on_action() -> None:
     assert row["trace_id"] == test_trace_id
 
 
+@pytest.mark.pg
+def test_audit_row_written_for_object_scoped_action() -> None:
+    """The real promotion-gate path: an object-scoped audit row is still written.
+
+    The `audit.object_id` FK references the legacy `objects` table, but the
+    active object store (`PgObjectStore`) writes to `store_objects`. A real
+    object-scoped audit call (e.g. `promotion-gate` with `object_id=str(oid)`)
+    therefore carries an id that exists in `store_objects` but not in `objects`,
+    which would raise an FK violation. The writer must fall back to a NULL
+    object_id and preserve the original id in `details.object_ref` so a row IS
+    written.
+
+    Requires a live pg with pgvector (the migration creates a `vector`-typed
+    column).
+    """
+    import os  # noqa: PLC0415
+    import uuid  # noqa: PLC0415
+
+    from app.db.db import conn_rw  # noqa: PLC0415
+
+    # A UUID that is (overwhelmingly) NOT present in the `objects` table.
+    orphan_object_id = str(uuid.uuid4())
+    test_trace_id = f"test-ac1-objscoped-{uuid.uuid4()}"
+
+    os.environ["STORE_BACKEND"] = "pg"
+
+    try:
+        audit_event(
+            event="test.ac1.object_scoped",
+            object_id=orphan_object_id,
+            agent="promotion-gate",
+            trace_id=test_trace_id,
+            extra={"reason": "AC1 object-scoped FK-fallback test"},
+        )
+    except Exception as exc:
+        pytest.fail(f"audit_event raised unexpectedly for object-scoped call: {exc}")
+
+    try:
+        with conn_rw(connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, object_id, agent, action, trace_id, details "
+                    "FROM audit WHERE trace_id = %s",
+                    (test_trace_id,),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:
+        pytest.fail(f"Could not query audit table: {exc}")
+
+    assert len(rows) >= 1, (
+        f"Expected at least 1 audit row for object-scoped trace_id={test_trace_id!r}; "
+        "got 0. The FK-fallback retry may be missing — the FK violation dropped the row."
+    )
+    row = rows[0]
+    assert row["agent"] == "promotion-gate"
+    assert row["action"] == "test.ac1.object_scoped"
+    # FK could not be satisfied → object_id written as NULL.
+    assert row["object_id"] is None, (
+        "Expected object_id NULL after FK fallback (the id is not in `objects`), "
+        f"got {row['object_id']!r}"
+    )
+    # Original id preserved in details so the audit trail is not lossy.
+    details = row["details"]
+    if isinstance(details, str):
+        import json as _json  # noqa: PLC0415
+
+        details = _json.loads(details)
+    assert details.get("object_ref") == orphan_object_id, (
+        "Expected the original object_id preserved in details.object_ref, "
+        f"got {details.get('object_ref')!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC2 — forced INSERT failure logs ERROR, does NOT abort caller (not pg)
 # ---------------------------------------------------------------------------
@@ -136,6 +218,112 @@ def test_audit_insert_failure_logs_error_non_fatal(
     combined_message = " ".join(r.getMessage() for r in error_records)
     assert "audit" in combined_message.lower() or "INSERT" in combined_message or "dropped" in combined_message.lower(), (
         f"ERROR log message does not mention audit/INSERT/dropped: {combined_message!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# FK-fallback unit coverage (#2625 P1) — not pg, monkeypatched
+# ---------------------------------------------------------------------------
+
+
+class _FkFallbackCursor:
+    """Records executes; raises FK IntegrityError when object_id is non-NULL."""
+
+    def __init__(self, recorder: list[tuple[str, tuple[object, ...]]]) -> None:
+        self._recorder = recorder
+
+    def __enter__(self) -> _FkFallbackCursor:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, statement: str, params: tuple[object, ...]) -> None:
+        # params order: (id, object_id, agent, action, ts, trace_id, details)
+        object_id = params[1]
+        self._recorder.append((statement, params))
+        if object_id is not None:
+            # Simulate the audit.object_id FK violation against `objects`.
+            raise IntegrityError("insert or update on table \"audit\" violates foreign key constraint")
+
+
+class _FkFallbackConnection:
+    """Fake connection: first (SAVEPOINT) insert with object_id fails the FK,
+    NULL-object_id retry succeeds. Records every execute for assertion."""
+
+    def __init__(self) -> None:
+        self.statements: list[tuple[str, tuple[object, ...]]] = []
+
+    def __enter__(self) -> _FkFallbackConnection:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def cursor(self) -> _FkFallbackCursor:
+        return _FkFallbackCursor(self.statements)
+
+    @contextmanager
+    def transaction(self):
+        # SAVEPOINT scope: a raised IntegrityError propagates out (rolled back to
+        # the savepoint by real psycopg) so the writer can run the NULL retry.
+        yield self
+
+
+@pytest.mark.not_pg
+def test_audit_object_fk_violation_falls_back_to_null_object_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An object-scoped audit whose object_id is absent from `objects` (it lives
+    in store_objects) must still write a row: object_id NULL, original id in
+    details.object_ref. This exercises the real promotion-gate path without
+    requiring a live pg.
+    """
+    monkeypatch.setattr(audit_module, "_audit_pg_backend_selected", lambda: True)
+
+    connection = _FkFallbackConnection()
+
+    def _conn_rw(*, connect_timeout: int) -> _FkFallbackConnection:
+        assert connect_timeout == 1
+        return connection
+
+    monkeypatch.setattr(audit_module, "conn_rw", _conn_rw)
+
+    orphan_object_id = "11111111-2222-3333-4444-555555555555"
+
+    # Must not raise — writer stays non-fatal even through the fallback.
+    result = audit_event(
+        event="promotion.orphan_override",
+        object_id=orphan_object_id,
+        agent="promotion-gate",
+        trace_id="t-fk-fallback",
+    )
+    assert result is None
+
+    # Two inserts: first attempt (object_id present, FK fails), retry (NULL).
+    assert len(connection.statements) == 2, (
+        f"Expected exactly 2 INSERT attempts (FK attempt + NULL retry); "
+        f"got {len(connection.statements)}"
+    )
+
+    first_stmt, first_params = connection.statements[0]
+    second_stmt, second_params = connection.statements[1]
+    assert "INSERT INTO audit" in first_stmt
+    assert "INSERT INTO audit" in second_stmt
+
+    # First attempt carried the real object_id.
+    assert first_params[1] == orphan_object_id
+    # Retry wrote NULL object_id.
+    assert second_params[1] is None, (
+        f"Retry must write NULL object_id, got {second_params[1]!r}"
+    )
+
+    # The original id is preserved in the retry's details payload.
+    import json as _json  # noqa: PLC0415
+
+    retry_details = _json.loads(second_params[6])
+    assert retry_details.get("object_ref") == orphan_object_id, (
+        f"Retry details must preserve original id in object_ref; got {retry_details!r}"
     )
 
 
@@ -202,16 +390,20 @@ def test_audit_columns_match_migration() -> None:
         "Update this test if the migration schema changes."
     )
 
-    # Now check the writer INSERT statement contains exactly these columns.
-    writer_src = inspect.getsource(audit_event)
+    # Now check the writer INSERT statement contains exactly these columns. The
+    # writer keeps a single canonical INSERT in `_AUDIT_INSERT_SQL`; fall back to
+    # scanning the module source if the constant is ever inlined again.
+    insert_source = getattr(audit_module, "_AUDIT_INSERT_SQL", None) or inspect.getsource(
+        audit_module
+    )
 
     insert_match = re.search(
         r"INSERT INTO audit\s*\(([^)]+)\)",
-        writer_src,
+        insert_source,
         re.DOTALL | re.IGNORECASE,
     )
     assert insert_match, (
-        "Could not find INSERT INTO audit(...) in audit_event source. "
+        "Could not find INSERT INTO audit(...) in the writer source. "
         "Is the INSERT missing or using a dynamic column list?"
     )
     insert_cols_raw = insert_match.group(1)
