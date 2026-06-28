@@ -13,8 +13,6 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import pytest
-
 from companion_ui.workspace.serve_dev_page import (
     _derive_health_glyph_state,
     _render_ambient_health_glyph,

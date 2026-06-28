@@ -855,12 +855,11 @@ def _derive_health_glyph_state(
         return _GLYPH_NERE, "Kärnberoende nere"
 
     required_ok = bool(health.get("required_ok", False))
-    checks = health.get("checks") or {}
     spine = health.get("authority_spine") or {}
     runtime = health.get("runtime") or {}
     worker = runtime.get("worker") if isinstance(runtime, dict) else None
 
-    # nere: required_ok false or a required check explicitly failed.
+    # nere: required_ok false (a required dependency / runtime check failed).
     if not required_ok:
         return _GLYPH_NERE, "Kärnberoende nere"
 
@@ -907,7 +906,7 @@ def _render_ambient_health_glyph(health: Optional[dict]) -> str:
     # does not mistake this for a raw-enum emit.
     escaped_copy = _e(plain_copy)
     reason_span = (
-        f'<span class="health-glyph-reason" data-testid="operator-health-glyph-reason">'
+        '<span class="health-glyph-reason" data-testid="operator-health-glyph-reason">'
         + escaped_copy
         + "</span>"
         if plain_copy
@@ -10043,6 +10042,11 @@ def render_index_html(
         # here so diagnostics aren't lost exactly when the runtime is degraded.
         else ("operator",)
     )
+    # OBSSTAB-08 (#2615): ambient health glyph on the operator map node.
+    # Rendered when health is in scope (error / no-vault shell path); computed
+    # here so the f-string below carries no inline comment (Python 3.11 forbids
+    # comments inside f-string replacement fields).
+    operator_health_glyph_shell_html = _render_ambient_health_glyph(health)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -13923,9 +13927,7 @@ def render_index_html(
     orientation_as_of=str((fields or {}).get("orientation_as_of") or ""),
     orientation_trace_id=str((fields or {}).get("orientation_trace_id") or ""),
     open_loops_count=int((fields or {}).get("orientation_open_loops_count") or 0),
-    # OBSSTAB-08 (#2615): ambient health glyph on the operator map node.
-    # Rendered when health is in scope (error/no-vault shell path).
-    operator_health_glyph_html=_render_ambient_health_glyph(health),
+    operator_health_glyph_html=operator_health_glyph_shell_html,
   )}
   {guidance_layer_style()}
 
