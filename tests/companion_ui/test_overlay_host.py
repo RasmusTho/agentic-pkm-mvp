@@ -280,11 +280,81 @@ def test_overlay_dismiss_returns_to_anchor_without_route_reset() -> None:
     assert "overlayHost.dismiss()" in html  # scrim dismisses to the anchor
 
     # The dismiss path performs no route reset: the host controller never
-    # navigates, never submits a form, never rewrites history.
+    # navigates the page away or submits a form. NAV-3a (#2639) adds browser-
+    # history participation (history.pushState on mount, history.back to unwind
+    # on dismiss, a popstate handler) — that is the modal-Back mechanism, NOT a
+    # route reset: it never changes the URL path/query and never replaces the
+    # document. So pushState/popstate/history.back are explicitly allowed while
+    # genuine navigation calls stay forbidden.
     script = _host_script(html)
     for forbidden in ("location.href", "location.assign", "location.reload",
-                      "form.submit", "history.pushState", "window.open"):
+                      "form.submit", "window.open"):
         assert forbidden not in script, f"host dismiss must not call {forbidden}"
+
+
+# ---------------------------------------------------------------------------
+# NAV-3a (#2639): overlays participate in browser history — the CORE mechanism.
+# mount pushes a depth-stamped history marker; a popstate handler reconciles the
+# overlay stack to the landed entry's depth, so browser Back closes the topmost
+# overlay (single AND stacked) and Forward restores the marked one. The optional
+# ?overlay= deep-link is #2641 (NAV-3c) and the System Map route sync is #2640
+# (NAV-3b) — neither is asserted here.
+# ---------------------------------------------------------------------------
+
+
+def test_overlay_host_pushes_history_marker_and_handles_popstate() -> None:
+    """AC1 Verify target: the rendered overlay-host script pushes a depth-stamped
+    history state marker on a net-new ``mount`` and registers a ``popstate``
+    handler that reconciles the overlay stack to the depth carried in the history
+    entry (browser Back closes the modal; Forward restores it). The programmatic
+    dismiss path unwinds its own entry via ``history.back()`` behind a re-entrancy
+    guard, and the Esc/scrim/anchor-return grammar is preserved.
+    """
+    script = _host_script(_render())
+
+    # mount pushes a marked history entry carrying the overlay id AND the stack
+    # depth it represents (so popstate can reconcile to it, not blind-pop).
+    assert "history.pushState" in script, (
+        "mount must push a history state marker so browser Back can pop it"
+    )
+    assert "overlayHostMarker" in script, "the pushed state must carry the host marker"
+    assert "st.depth = stack.length" in script, (
+        "the pushed state must carry the stack depth for reconciliation"
+    )
+    # A re-mount (move-to-top of an already-stacked id) must NOT push a second
+    # entry (double-push desyncs depth from history position).
+    assert "isNetNew" in script, (
+        "only a net-new mount may push a history entry (no double-push on re-mount)"
+    )
+
+    # A popstate handler is registered and it RECONCILES to the landed entry's
+    # depth (event.state.depth) rather than unconditionally popping. Back closes
+    # above target; Forward (depth up by one) restores the marked overlay.
+    assert "addEventListener('popstate'" in script, (
+        "a popstate handler must be registered so browser Back closes the overlay"
+    )
+    assert "event.state" in script or "st = event" in script, (
+        "the popstate handler must read event.state to reconcile by depth"
+    )
+    assert "targetDepth" in script, (
+        "the popstate handler must reconcile to the entry's target depth"
+    )
+    assert "stack.length > targetDepth" in script, (
+        "Back must pop overlays down to the target depth (close-above-target)"
+    )
+    assert "stack.length < targetDepth" in script, (
+        "Forward must restore the marked overlay when depth increased (recovery)"
+    )
+    # The programmatic dismiss path unwinds its own entry with history.back(),
+    # guarded against re-entrant double-dismiss.
+    assert "history.back" in script, (
+        "a programmatic dismiss must unwind its matching history entry"
+    )
+    assert "popping" in script, "a re-entrancy guard must coordinate back/popstate"
+
+    # Esc and the scrim still dismiss to the anchor (grammar preserved).
+    assert "Escape" in script and "overlay.dismiss" in script
+    assert "overlayHost.dismiss()" in _render()  # scrim onclick
 
 
 # ---------------------------------------------------------------------------
