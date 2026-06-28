@@ -11,9 +11,15 @@ Spec: docs/YGGDRASIL_RUNTIME_SLICE_1/RETRIEVAL_PREFILTER_BEFORE_RANKING.md
 
 from __future__ import annotations
 
+from tests.invariants._helpers import assert_validates
+
 from yggdrasil_runtime import cross_scope, retrieval
 
 _ALPHA = "scope:work/project-alpha"
+
+# Closed scope_denial shape — denial records must carry no identifying fields beyond these.
+_SCOPE_DENIAL_KEYS = {"reason", "denial_class", "escalation_recommended", "required_flow_class", "audit_ref"}
+_IDENTITY_LEAK_KEYS = {"object_id", "scope_id", "metadata_bundle", "content", "text", "provenance_event_ids"}
 
 
 def test_prefilter_runs_before_ranking() -> None:
@@ -41,6 +47,37 @@ def test_evidence_role_in_context_not_upgraded() -> None:
     result = retrieval.retrieve(query="anything", active_scope_id=_ALPHA)
     for c in result.candidate_items:
         assert order.index(c.evidence_role_in_context) <= order.index(c.metadata_bundle.evidence_role)
+
+
+def test_retrieval_result_validates_against_schema() -> None:
+    # The emitted RetrievalResult conforms to the contract schema (scope_policy_prefiltered const true,
+    # candidate bundles, content-free denied list, required ids/timestamps).
+    result = retrieval.retrieve(query="state machine event bus", active_scope_id=_ALPHA)
+    assert_validates(result.to_dict(), "retrieval-result.schema.json")
+
+
+def test_runtime_denied_list_is_content_free() -> None:
+    # A query matching shared vocab surfaces relevant material in other scopes; the denial list must
+    # record that material was withheld (not silently dropped) WITHOUT leaking object/scope identity,
+    # content, or provenance.
+    result = retrieval.retrieve(query="system agent rule state event workflow", active_scope_id=_ALPHA)
+    payload = result.to_dict()
+    denied = payload["denied_or_escalated_candidates"]
+    assert denied, "relevant cross-scope material must be recorded as a content-free denial"
+    for entry in denied:
+        assert set(entry).issubset(_SCOPE_DENIAL_KEYS), f"unexpected key in denial: {set(entry)}"
+        assert _IDENTITY_LEAK_KEYS.isdisjoint(entry), "denial must not leak identity/content"
+        assert entry["reason"] and entry["denial_class"]
+    # Confirm no out-of-scope scope_id leaked into the surfaced candidates either.
+    assert all(c["metadata_bundle"]["scope_id"] == _ALPHA for c in payload["candidate_items"])
+
+
+def test_candidate_identity_is_single_source() -> None:
+    # Candidate identity comes only from the embedded bundle; no sibling object_id at item level.
+    result = retrieval.retrieve(query="state machine", active_scope_id=_ALPHA)
+    for item in result.to_dict()["candidate_items"]:
+        assert "object_id" not in item
+        assert item["metadata_bundle"]["object_id"]
 
 
 def test_cross_scope_denied_without_flow() -> None:
