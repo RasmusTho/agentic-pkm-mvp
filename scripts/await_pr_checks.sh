@@ -9,7 +9,7 @@
 # Contract: .codex/skills/_shared/CI_WAIT_CONTRACT.md
 #
 # Usage:
-#   scripts/await_pr_checks.sh <PR> [--codex] [--initial-wait S] [--interval S] [--timeout S] [--sha SHA]
+#   scripts/await_pr_checks.sh <PR> [--codex] [--repo owner/name] [--initial-wait S] [--interval S] [--timeout S] [--sha SHA]
 #   scripts/await_pr_checks.sh --help
 #
 # --sha pins a commit for inspection and is NOT a merge gate (PR head-drift is not verified). Omit
@@ -31,6 +31,7 @@ CHECK_CODEX=0
 PR=""
 SHA=""
 SHA_FROM_PR=0        # 1 when SHA is auto-resolved from the PR (enables the head-drift recheck)
+REPO_FLAG=""
 
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0; }
 
@@ -42,6 +43,7 @@ while [ $# -gt 0 ]; do
     --interval) INTERVAL="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
     --sha) SHA="$2"; shift 2 ;;
+    --repo) REPO_FLAG="$2"; shift 2 ;;
     -*) echo "unknown flag: $1" >&2; exit 64 ;;
     *) PR="$1"; shift ;;
   esac
@@ -53,8 +55,12 @@ done
 command -v gh >/dev/null 2>&1 || { echo "error: gh is required" >&2; exit 64; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 64; }
 
-REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
-[ -n "$REPO" ] || { echo "error: could not resolve repo from git remote 'origin'" >&2; exit 64; }
+# Resolve the repo: --repo flag, then $GH_REPO, then the git 'origin' remote. (Avoid `gh repo view`,
+# which is GraphQL — the bucket this script exists to spare.) A remote-less worktree can still take the
+# blessed REST path via --repo/GH_REPO instead of falling back to a GraphQL-draining manual poll.
+REPO="${REPO_FLAG:-${GH_REPO:-}}"
+[ -n "$REPO" ] || REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+[ -n "$REPO" ] || { echo "error: could not resolve repo — pass --repo owner/name or set GH_REPO (no 'origin' remote found)" >&2; exit 64; }
 
 # Free, rate-limit-exempt preflight — informational only.
 budget=$(gh api rate_limit --jq '"core=\(.resources.core.remaining) graphql=\(.resources.graphql.remaining)"' 2>/dev/null || echo "unknown")
