@@ -14,10 +14,10 @@ returns a ContextEnvelope conforming to ``schemas/context-envelope.schema.json``
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 from uuid import uuid4
 
 
@@ -43,6 +43,11 @@ class ComposedBundleRef:
 # schema permits vault_id (storage topology), but the envelope contract forbids any raw-access field
 # anywhere — so envelope-projected bundles drop them (the source bundle keeps them elsewhere).
 _ENVELOPE_FORBIDDEN_BUNDLE_KEYS = frozenset({"vault_id", "vault_root", "raw_index"})
+
+
+def _plain(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Fresh plain dict from an immutable mapping; inner tuples -> lists for JSON/schema validity."""
+    return {k: (list(v) if isinstance(v, tuple) else v) for k, v in mapping.items()}
 
 
 def sanitize_bundle_for_envelope(bundle: Any) -> Any:
@@ -89,39 +94,38 @@ class ContextEnvelope:
     cross_scope_flows: tuple[Any, ...]
     retrieved_items: tuple[RetrievedItem, ...]
     context_bundles: tuple[ComposedBundleRef, ...]
-    citation_policy: dict[str, Any]
-    memory_policy: dict[str, Any]
-    mutation_policy: dict[str, Any]
-    execution_policy: dict[str, Any]
-    escalation_conditions: tuple[dict[str, Any], ...]
+    citation_policy: Mapping[str, Any]
+    memory_policy: Mapping[str, Any]
+    mutation_policy: Mapping[str, Any]
+    execution_policy: Mapping[str, Any]
+    escalation_conditions: tuple[Mapping[str, Any], ...]
     trace_id: str
     created_at: str
 
     def to_dict(self) -> dict[str, Any]:
-        # deepcopy so a caller mutating the returned payload can never reach back into this frozen
-        # envelope's policy guards / nested dicts (frozen blocks reassignment, not nested mutation).
-        return copy.deepcopy(
-            {
-                "envelope_id": self.envelope_id,
-                "access_mode": self.access_mode,
-                "active_workspace_id": self.active_workspace_id,
-                "active_scope_id": self.active_scope_id,
-                "principal_id": self.principal_id,
-                "user_intent": self.user_intent,
-                "allowed_capabilities": list(self.allowed_capabilities),
-                "denied_scopes": [d.to_dict() for d in self.denied_scopes],
-                "cross_scope_flows": list(self.cross_scope_flows),
-                "retrieved_items": [i.to_dict() for i in self.retrieved_items],
-                "context_bundles": [b.to_dict() for b in self.context_bundles],
-                "citation_policy": self.citation_policy,
-                "memory_policy": self.memory_policy,
-                "mutation_policy": self.mutation_policy,
-                "execution_policy": self.execution_policy,
-                "escalation_conditions": list(self.escalation_conditions),
-                "trace_id": self.trace_id,
-                "created_at": self.created_at,
-            }
-        )
+        # Rebuild fresh, plain, JSON-able structures from the immutable sources. jsonschema treats
+        # only `list`/`dict` as array/object (not tuple/mappingproxy), and rebuilding means a caller
+        # mutating the returned payload can never reach back into the frozen envelope's guards.
+        return {
+            "envelope_id": self.envelope_id,
+            "access_mode": self.access_mode,
+            "active_workspace_id": self.active_workspace_id,
+            "active_scope_id": self.active_scope_id,
+            "principal_id": self.principal_id,
+            "user_intent": self.user_intent,
+            "allowed_capabilities": [dict(c) for c in self.allowed_capabilities],
+            "denied_scopes": [d.to_dict() for d in self.denied_scopes],
+            "cross_scope_flows": [dict(f) for f in self.cross_scope_flows],
+            "retrieved_items": [i.to_dict() for i in self.retrieved_items],
+            "context_bundles": [b.to_dict() for b in self.context_bundles],
+            "citation_policy": _plain(self.citation_policy),
+            "memory_policy": _plain(self.memory_policy),
+            "mutation_policy": _plain(self.mutation_policy),
+            "execution_policy": _plain(self.execution_policy),
+            "escalation_conditions": [_plain(c) for c in self.escalation_conditions],
+            "trace_id": self.trace_id,
+            "created_at": self.created_at,
+        }
 
 
 def _escalations_from_denials(denials) -> tuple[dict[str, Any], ...]:
@@ -182,19 +186,21 @@ def assemble_envelope(
         cross_scope_flows=(),
         retrieved_items=items,
         context_bundles=bundles,
-        citation_policy={
+        # Policy guards are immutable on the object API too (MappingProxyType + tuple), so a consumer
+        # holding the envelope value cannot flip a guard in place.
+        citation_policy=MappingProxyType({
             "citation_required": True,
-            "citable_evidence_roles": ["evidence", "background", "reference"],
+            "citable_evidence_roles": ("evidence", "background", "reference"),
             "cross_scope_citation_requires_flow": True,
-        },
-        memory_policy={
+        }),
+        memory_policy=MappingProxyType({
             "remember_allowed": True,
             "remembered_authority_state": "noncanonical",
             "cross_scope_remember_requires_flow": True,
-        },
-        mutation_policy={"mutation_allowed": False, "requires_authority_transition": True},
-        execution_policy={"execution_allowed": False, "requires_authorization": True},
-        escalation_conditions=_escalations_from_denials(denials),
+        }),
+        mutation_policy=MappingProxyType({"mutation_allowed": False, "requires_authority_transition": True}),
+        execution_policy=MappingProxyType({"execution_allowed": False, "requires_authorization": True}),
+        escalation_conditions=tuple(MappingProxyType(c) for c in _escalations_from_denials(denials)),
         trace_id=f"trace:{uuid4().hex[:12]}",
         created_at=datetime.now(timezone.utc).isoformat(),
     )

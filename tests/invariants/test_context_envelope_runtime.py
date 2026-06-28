@@ -118,6 +118,17 @@ def test_to_dict_policy_mutation_does_not_corrupt_envelope() -> None:
     assert "hacked" not in env.citation_policy["citable_evidence_roles"]
 
 
+def test_object_api_policy_guards_are_immutable() -> None:
+    # The object value itself: policy blocks are immutable mappings, so a consumer holding the
+    # envelope cannot flip a guard in place.
+    env = _envelope()
+    with pytest.raises(TypeError):
+        env.execution_policy["execution_allowed"] = True  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        env.citation_policy["citable_evidence_roles"].append("hacked")  # type: ignore[attr-defined]
+    assert env.execution_policy["execution_allowed"] is False
+
+
 def test_envelope_rejects_scope_mismatch() -> None:
     # A RetrievalResult built for one scope cannot be packaged as a different scope.
     result = retrieval.retrieve(query="state machine", active_scope_id="scope:work/project-beta")
