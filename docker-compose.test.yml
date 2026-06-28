@@ -13,7 +13,7 @@ services:
     ports: !override
       - "18002:8000"
     environment:
-      API_HEALTHCHECK_URL: http://host.docker.internal:18002/healthz
+      API_HEALTHCHECK_URL: http://host.docker.internal:18002/readyz
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test

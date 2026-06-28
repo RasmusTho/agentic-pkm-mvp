@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
+from app.db.dsn import ping_postgres
 from app.events.outbox import default_outbox_path, event_name, latest_trace_story, normalize_timestamp
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
@@ -187,12 +188,17 @@ class HealthContract:
         state_machine: HealthStateMachine | None = None,
         now_fn: Callable[[], datetime] | None = None,
         vault_root_fn: Callable[[], Path | None] | None = None,
+        db_ping_fn: Callable[..., tuple[bool, str]] | None = None,
     ):
         self.state_machine = state_machine or HealthStateMachine()
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
         # Optional resolver: returns None when no vault is selected (#2384) and
         # still raises VaultRootMisconfiguredError for a set-but-missing root.
         self.vault_root_fn = vault_root_fn or resolve_optional_vault_root
+        # Live DB reachability probe (#2598). Injectable so tests can exercise the
+        # readiness short-circuit without a real Postgres. Bounded by the caller's
+        # connect_timeout so the health probe never hangs.
+        self.db_ping_fn = db_ping_fn or ping_postgres
 
     def evaluate(self) -> dict[str, Any]:
         now = self.now_fn()
@@ -215,6 +221,17 @@ class HealthContract:
             settings_result.settings.thresholds,
             now=now,
         )
+        # Dependency layer (#2598): a live Postgres outage must short-circuit
+        # readiness to a non-ready, write-blocked state regardless of outbox age.
+        # `unhealthy` (not `degraded`) is required: `degraded` is in READY_STATES
+        # so /readyz would stay 200 on DB-down — the false-green this kills.
+        # We override the contract-level state without mutating the outbox state
+        # machine, so outbox recovery hysteresis is unaffected once the DB returns.
+        db_state, db_reason = self._evaluate_db_dependency()
+        if db_state is not None:
+            state = db_state
+            reason = db_reason
+            since_ts = now.isoformat()
         catch_up_progress = self._catch_up_progress(
             outbox_count,
             age,
@@ -289,6 +306,25 @@ class HealthContract:
         if settings_result.settings.incident_capture.transition_history:
             result["recent_transition_history"] = list(self.state_machine.transition_history)
         return result
+
+    def _evaluate_db_dependency(self) -> tuple[str | None, str | None]:
+        """Return a forced (state, reason) when the DB dependency is down, else (None, None).
+
+        Only gates readiness when ``STORE_BACKEND=pg`` — the memory backend has no
+        Postgres dependency. The ping is bounded (``connect_timeout=1.0`` s) so the
+        health probe never hangs, and any unexpected probe error fails closed to
+        ``unhealthy`` rather than silently reporting ready.
+        """
+        backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+        if backend != "pg":
+            return None, None
+        try:
+            ok, detail = self.db_ping_fn(timeout=1.0)
+        except Exception as exc:  # fail closed: a probe error is not a healthy DB
+            return "unhealthy", f"postgres ping error ({type(exc).__name__})"
+        if ok:
+            return None, None
+        return "unhealthy", f"postgres dependency unreachable: {detail}"
 
     def _latest_timestamp(self, records: Iterable[dict[str, Any]]) -> datetime | None:
         latest: datetime | None = None

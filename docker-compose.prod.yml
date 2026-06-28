@@ -4,7 +4,7 @@
 services:
   api:
     environment:
-      API_HEALTHCHECK_URL: http://host.docker.internal:18000/healthz
+      API_HEALTHCHECK_URL: http://host.docker.internal:18000/readyz
       PKM_ENVIRONMENT: prod
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
