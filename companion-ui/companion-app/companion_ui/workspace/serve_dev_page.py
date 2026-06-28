@@ -14546,12 +14546,14 @@ def handle_get(
         # OBSSTAB-08 (#2615): fetch live runtime health on the entry-state path
         # (cold_start / orienting / no-vault) so the ambient operator-health
         # glyph reflects the REAL runtime, not a defaulted "Nere". Mirrors the
-        # orientation fetch above (same client, same WorkspaceClientError
-        # handling). On a genuine fetch failure/timeout health stays None, which
-        # the glyph renders as "Nere" (runtime unreachable) — the honest mode.
+        # orientation fetch above (same client). Health is a NON-critical ambient
+        # signal: any fetch failure/timeout must degrade to `health=None` (the
+        # glyph then renders "Nere" — runtime unreachable, the honest mode) and
+        # must never break the page render, so this catches broadly rather than
+        # only WorkspaceClientError.
         try:
             health = client.get("/api/health", params={})
-        except WorkspaceClientError:
+        except Exception:
             health = None
         try:
             browser_params: dict = {
