@@ -274,6 +274,88 @@ def test_drawer_sections_render_and_display_prefs_work() -> None:
 
 
 # ---------------------------------------------------------------------------
+# NAV-2 / NAV-4 (ui-audit): direct bottom-bar launchers for History/Receipts,
+# Memory, and Search (⌘K). NAV-1 added the Settings launcher to the composed
+# bottom bar so preferences were reachable without first opening the System
+# Map; NAV-2 extends that to the remaining frequently-used secondary surfaces
+# (History/Receipts, Memory) and NAV-4 adds the Search / ⌘K palette pill. The
+# map is the complete index, not the only door — every launcher reuses the
+# existing intent + host occupant, and the System Map node stays too.
+# ---------------------------------------------------------------------------
+
+
+def _bottom_bar(html: str) -> str:
+    match = re.search(
+        r'<[^>]*data-region="bottom-bar"[^>]*>(.*?)</(?:div|footer|nav)>',
+        html,
+        re.S,
+    )
+    assert match is not None, "composed bottom bar must render"
+    return match.group(1)
+
+
+def test_bottom_bar_direct_launchers_nav2_nav4() -> None:
+    html = _render()
+    bottom_bar = _bottom_bar(html)
+
+    # AC1: History/Receipts, Memory, and Search are each reachable in 1 click
+    # from the working shell — direct launchers in the composed bottom bar,
+    # not only via the map. Each emits the surface's existing open intent.
+    for testid, intent in (
+        ("workspace-surface-icon-receipts", "receipts.open"),
+        ("workspace-surface-icon-memory", "memory.open"),
+        ("workspace-surface-icon-cmd", "cmd.open"),
+    ):
+        assert f'data-testid="{testid}"' in bottom_bar, (
+            f"NAV-2/NAV-4: the {testid} launcher must sit in the composed bottom bar"
+        )
+        assert f'data-intent="{intent}"' in bottom_bar, (
+            f"NAV-2/NAV-4: the bottom-bar launcher must emit {intent}"
+        )
+
+    # NAV-4: the Search pill carries the ⌘K hint in its title so the
+    # keyboard-first fast path is discoverable from the visible affordance.
+    cmd_launcher = re.search(
+        r'<button[^>]*data-testid="workspace-surface-icon-cmd"[^>]*>',
+        bottom_bar,
+    )
+    assert cmd_launcher, "NAV-4: the Search / ⌘K launcher must render"
+    assert "⌘K" in cmd_launcher.group(0), (
+        "NAV-4: the Search launcher title must carry the ⌘K hint"
+    )
+
+    # AC2: launchers reuse existing intents/host occupants — no invented
+    # surfaces. receipts.open / memory.open / cmd.open are the shipped
+    # overlay-open intents; the launchers mount the same registered occupants.
+    for intent, occupant in (
+        ("receipts.open", "receipts"),
+        ("memory.open", "memory"),
+        ("cmd.open", "cmd"),
+    ):
+        assert occupant in SHIPPED_OVERLAY_OCCUPANTS, (
+            f"{occupant} must be a shipped overlay occupant the launcher reuses"
+        )
+        assert f"overlayHost.mount('{occupant}')" in bottom_bar, (
+            f"the bottom-bar launcher must mount the existing {occupant} occupant"
+        )
+
+    # AC2: the System Map nodes are retained — additive direct access, not a
+    # removal. Each surface still has its routing node in the map overlay.
+    for surface_id, intent in (
+        ("receipts", "receipts.open"),
+        ("memory", "memory.open"),
+        ("palette", "cmd.open"),
+    ):
+        map_node = re.search(
+            rf'<button[^>]*data-surface-id="{surface_id}"[^>]*>', html
+        )
+        assert map_node, (
+            f"{surface_id} must remain reachable via the System Map overlay node"
+        )
+        assert f'data-intent="{intent}"' in map_node.group(0)
+
+
+# ---------------------------------------------------------------------------
 # White-input AC (#2448, D4): no input renders with default white chrome
 # against the dark theme. The settings time inputs are brought onto the dark
 # palette via a design-system class / variables; no inline white background.

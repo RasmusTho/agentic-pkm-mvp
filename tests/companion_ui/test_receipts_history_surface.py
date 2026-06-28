@@ -302,13 +302,18 @@ def test_history_renders_runtime_receipt_projections() -> None:
     assert RECEIPTS_OVERLAY_ID in SHIPPED_OVERLAY_OCCUPANTS
     # CUIDR-04 (#2447): the receipts launcher is displaced off the topbar
     # (IDENTITY + Capture only). It is reachable via the System Map overlay's
-    # receipts node (receipts.open), a never-clipping surface.
+    # receipts node (receipts.open), a never-clipping surface — and, since
+    # NAV-2 (ui-audit), via a direct launcher in the composed bottom bar.
     assert RECEIPTS_OVERLAY_ID not in SHIPPED_TOPBAR_SURFACES
     html = _render_workspace()
     modal = _modal(html)
     assert 'data-overlay-id="receipts"' in modal
     assert 'data-authority="receipt"' in modal
-    assert 'data-testid="workspace-surface-icon-receipts"' not in html, (
+    topbar = re.search(
+        r'<header[^>]*data-region="workspace-header".*?</header>', html, re.S
+    )
+    assert topbar, "topbar (data-region=workspace-header) must render"
+    assert 'data-testid="workspace-surface-icon-receipts"' not in topbar.group(0), (
         "the receipts launcher must not sit on the topbar"
     )
     map_node = re.search(

@@ -9754,10 +9754,12 @@ def _render_help_toggle(include_settings: bool = False) -> str:
     """The composed bottom bar (#2447, CUIDR-04) — one container, no stray
     fixed siblings at the bottom edge.
 
-    ``include_settings`` (NAV-1) emits the direct Settings launcher. It is only
-    set on the working shell, where the settings drawer occupant is registered;
-    the entry/orientation bundles do not mount that occupant, so the button is
-    omitted there rather than left as a dead ``settings.open`` affordance.
+    ``include_settings`` (NAV-1, NAV-2, NAV-4) emits the direct working-shell
+    launchers: Settings (NAV-1), plus History/Receipts and Memory (NAV-2) and
+    the Search / ⌘K palette pill (NAV-4). It is only set on the working shell,
+    where those overlay occupants (``settings``/``receipts``/``memory``/``cmd``)
+    are registered; the entry/orientation bundles do not mount them, so the
+    buttons are omitted there rather than left as dead open affordances.
 
     Before CUIDR-04 the bottom edge was a collision of independently positioned
     fixed elements (the Help pill, the Operator pill, the body-edit hint, the
@@ -9784,11 +9786,41 @@ def _render_help_toggle(include_settings: bool = False) -> str:
         'title="System map — all surfaces" aria-label="Open system map" '
         'onclick="overlayHost.mount(\'map\')">'
         '<span aria-hidden="true">&#10070;</span> Map</button>'
-        # NAV-1 (ui-audit) — a direct Settings launcher so preferences are not
-        # reachable only by opening the System Map. Reuses the existing
-        # settings.open intent + host occupant; the map node stays too. Only
-        # emitted where the settings drawer is registered (the working shell).
+        # NAV-1/NAV-2/NAV-4 (ui-audit) — direct launchers so the frequently-used
+        # secondary surfaces are not reachable only by opening the System Map (a
+        # 2-click toll). The map stays the complete index; these add a 1-click
+        # door. Each reuses the surface's existing open intent + host occupant,
+        # and its map node is retained (additive, not a removal). Only emitted
+        # where those occupants are registered (the working shell), so they are
+        # never dead chrome on the entry/orientation bundles.
         + (
+            # NAV-2 — direct History/Receipts launcher (reuses receipts.open).
+            '<button type="button" class="receipts-toggle" '
+            'data-testid="workspace-surface-icon-receipts" '
+            'data-intent="receipts.open" aria-haspopup="dialog" '
+            'title="History — receipts of what happened" '
+            'aria-label="Open history" '
+            'onclick="overlayHost.mount(\'receipts\')">'
+            '<span aria-hidden="true">&#9719;</span> History</button>'
+            # NAV-2 — direct Memory review launcher (reuses memory.open).
+            '<button type="button" class="memory-toggle" '
+            'data-testid="workspace-surface-icon-memory" '
+            'data-intent="memory.open" aria-haspopup="dialog" '
+            'title="Memory — review open loops" '
+            'aria-label="Open memory review" '
+            'onclick="overlayHost.mount(\'memory\')">'
+            '<span aria-hidden="true">&#9737;</span> Memory</button>'
+            # NAV-4 — visible Search / ⌘K affordance (reuses cmd.open). The ⌘K
+            # hint lives in the title so the keyboard-first fast path stays
+            # discoverable from the visible pill.
+            '<button type="button" class="cmd-toggle" '
+            'data-testid="workspace-surface-icon-cmd" '
+            'data-intent="cmd.open" aria-haspopup="dialog" '
+            'title="Search — command palette (⌘K)" '
+            'aria-label="Open search command palette" '
+            'onclick="overlayHost.mount(\'cmd\')">'
+            '<span aria-hidden="true">&#9906;</span> Search</button>'
+            # NAV-1 — direct Settings launcher (reuses settings.open).
             '<button type="button" class="settings-toggle" '
             'data-testid="workspace-surface-icon-settings" '
             'data-intent="settings.open" aria-haspopup="dialog" '
@@ -9838,13 +9870,16 @@ def _render_help_drawer() -> str:
     @media (max-width: 899px){
       body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar{bottom:calc(60px + 18px)}
     }
-    .help-toggle,.map-toggle,.settings-toggle{position:static;
+    .help-toggle,.map-toggle,.settings-toggle,
+    .receipts-toggle,.memory-toggle,.cmd-toggle{position:static;
       display:inline-flex;align-items:center;gap:6px;
       padding:8px 16px;font:500 13px/1 'Space Grotesk',sans-serif;color:var(--cyan);
       background:var(--cyan-muted);border:1px solid var(--cyan-dim);border-radius:999px;
       cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.4)}
-    .help-toggle:hover,.map-toggle:hover,.settings-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
-    .help-toggle:focus-visible,.map-toggle:focus-visible,.settings-toggle:focus-visible{
+    .help-toggle:hover,.map-toggle:hover,.settings-toggle:hover,
+    .receipts-toggle:hover,.memory-toggle:hover,.cmd-toggle:hover{box-shadow:var(--cyan-glow);border-color:var(--border-focus)}
+    .help-toggle:focus-visible,.map-toggle:focus-visible,.settings-toggle:focus-visible,
+    .receipts-toggle:focus-visible,.memory-toggle:focus-visible,.cmd-toggle:focus-visible{
       outline:2px solid var(--border-focus);outline-offset:2px}
     .help-drawer-backdrop{position:fixed;inset:0;background:rgba(7,11,18,.62);
       opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:1000}

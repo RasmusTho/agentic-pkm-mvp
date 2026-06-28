@@ -472,12 +472,17 @@ def test_drawer_renders_candidates_and_governed_review_outcomes() -> None:
     assert "memory" in SHIPPED_OVERLAY_OCCUPANTS
     # CUIDR-04 (#2447): the memory launcher is displaced off the topbar (which
     # now keeps IDENTITY + Capture only). It is reachable via the System Map
-    # overlay's memory node (memory.open), a never-clipping surface.
+    # overlay's memory node (memory.open), a never-clipping surface — and, since
+    # NAV-2 (ui-audit), via a direct launcher in the composed bottom bar.
     assert "memory" not in SHIPPED_TOPBAR_SURFACES
     html = _render_workspace()
     drawer = _drawer(html)
     assert MEMORY_REVIEW_CALLOUT in drawer
-    assert 'data-testid="workspace-surface-icon-memory"' not in html, (
+    topbar = re.search(
+        r'<header[^>]*data-region="workspace-header".*?</header>', html, re.S
+    )
+    assert topbar, "topbar (data-region=workspace-header) must render"
+    assert 'data-testid="workspace-surface-icon-memory"' not in topbar.group(0), (
         "the memory launcher must not sit on the topbar"
     )
     map_node = re.search(
