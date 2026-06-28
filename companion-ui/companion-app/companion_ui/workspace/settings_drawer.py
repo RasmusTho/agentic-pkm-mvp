@@ -565,8 +565,10 @@ def settings_drawer_markup(fields: dict) -> str:
     {_frame_header}
     {guidance_callout_markup('settings')}
     <p class="settings-authority-note" data-testid="settings-authority-note">
-      Preferences re-render identical content. They never touch the vault
-      and are always resettable.</p>
+      Display, Listening, Behaviour and Connection preferences re-render
+      identical content — they never touch the vault and are always resettable.
+      The Vault section below is the exception: it writes scoped vault settings
+      to the runtime (governed, confirm-gated), not a local preference.</p>
     <section class="settings-section" data-testid="settings-section-display"
       data-settings-section="display" data-authority="render-only">
       <h3 class="settings-section-title">Display</h3>{_display_section_form()}

@@ -695,6 +695,15 @@ def test_vault_section_hosts_relocated_scoped_settings_as_server_write() -> None
     assert "vault-settings-panel-controller" in html
     assert "vault_init_confirmation_required" in html
 
+    # Authority labeling stays truthful (#2590 Codex P2): the drawer's authority
+    # note no longer blanket-claims "never touch the vault" — it scopes that to
+    # the preference sections and names the Vault section as the server-write
+    # exception, so a real runtime write is not mislabeled as a local preference.
+    note_start = drawer.index('data-testid="settings-authority-note"')
+    note = " ".join(drawer[note_start : drawer.index("</p>", note_start)].split())
+    assert "Vault section" in note
+    assert "writes scoped vault settings to the runtime" in note
+
 
 def test_vault_section_write_posts_to_settings_endpoint_with_confirm_preserved() -> None:
     """The relocated editor still posts vault.settings.write to
