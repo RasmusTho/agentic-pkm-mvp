@@ -197,6 +197,27 @@ def test_gfm_table_unmatched_backtick_keeps_pipes_as_delimiters() -> None:
     assert "<p>| x |" not in rendered.html
 
 
+def test_gfm_table_unclosed_wikilink_keeps_pipes_as_delimiters() -> None:
+    # An unclosed ``[[`` must not open a wikilink span that swallows later
+    # column delimiters (Codex P2 on PR #2596): only closed ``[[...]]`` tokens
+    # protect their pipes, so the malformed row keeps all its columns.
+    rendered = render_vault_markdown(
+        "\n".join(
+            [
+                "| A | B | C |",
+                "| --- | --- | --- |",
+                "| x | [[unterminated | y |",
+            ]
+        )
+    )
+
+    assert "<tbody></tbody>" not in rendered.html
+    assert rendered.html.count("<tr>") == 2
+    assert "<td>x</td>" in rendered.html
+    assert "<td>y</td>" in rendered.html
+    assert "<p>| x |" not in rendered.html
+
+
 def test_gfm_table_every_body_cell_aliased_wikilink_keeps_all_rows() -> None:
     # Every body cell holds an aliased wikilink; the pipes must not inflate the
     # column count, so all rows survive and each alias resolves to link text.

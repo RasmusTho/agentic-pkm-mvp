@@ -422,11 +422,12 @@ def _split_table_row(line: str) -> list[str]:
 
     A pipe is a cell delimiter only in ordinary text. It is treated as literal
     content — never a delimiter — when it is backslash escaped (``\\|``), inside
-    a *closed* inline code span (`` `a|b` ``), or inside an Obsidian wikilink
-    (``[[Note|Alias]]``), mirroring GFM/Obsidian. Code spans honor backtick run
-    length, so ``` `` `code` `` ``` is one span; an unmatched backtick stays
-    plain text so its trailing pipes still delimit (matching the inline
-    tokenizer, which only renders closed backtick pairs). Without this, aliased
+    a *closed* inline code span (`` `a|b` ``), or inside a *closed* Obsidian
+    wikilink (``[[Note|Alias]]``), mirroring GFM/Obsidian. Code spans honor
+    backtick run length, so ``` `` `code` `` ``` is one span. An unmatched
+    backtick run or an unclosed ``[[`` stays plain text so its trailing pipes
+    still delimit — matching the inline tokenizer, which only recognizes closed
+    backtick pairs and closed ``[[...]]`` tokens. Without this, aliased
     wikilinks (very common in real vaults) inflate the cell count, the body row
     fails ``_is_table_row``, and the table collapses to an empty ``<tbody>``
     with the rows dumped into a fallback paragraph.
@@ -434,18 +435,17 @@ def _split_table_row(line: str) -> list[str]:
     text = line.strip()
     cells: list[str] = []
     buffer: list[str] = []
-    wikilink_depth = 0  # open ``[[`` ... ``]]`` nesting depth
     index = 0
     length = len(text)
     while index < length:
         char = text[index]
         if char == "\\" and index + 1 < length:
             # Backslash escape keeps the next char (e.g. an escaped pipe or
-            # backtick) literal rather than a delimiter or code-span fence.
+            # backtick) literal rather than a delimiter or span opener.
             buffer.append(text[index : index + 2])
             index += 2
             continue
-        if char == "`" and wikilink_depth == 0:
+        if char == "`":
             run_end = index
             while run_end < length and text[run_end] == "`":
                 run_end += 1
@@ -457,16 +457,15 @@ def _split_table_row(line: str) -> list[str]:
             index = end
             continue
         if text.startswith("[[", index):
-            wikilink_depth += 1
-            buffer.append("[[")
-            index += 2
+            close = text.find("]]", index + 2)
+            # A closed wikilink is consumed whole (the ``|`` is an alias
+            # separator); an unclosed ``[[`` stays plain text so later pipes
+            # delimit, matching the inline tokenizer's closed-token rule.
+            end = close + 2 if close != -1 else index + 2
+            buffer.append(text[index:end])
+            index = end
             continue
-        if wikilink_depth > 0 and text.startswith("]]", index):
-            wikilink_depth -= 1
-            buffer.append("]]")
-            index += 2
-            continue
-        if char == "|" and wikilink_depth == 0:
+        if char == "|":
             cells.append("".join(buffer))
             buffer = []
             index += 1
