@@ -261,6 +261,7 @@ Enforcement surfaces:
 - Safe cleanup apply (clean tree required):
   - `scripts/agent_workspace_cleanup.sh --apply`
 - Cleanup apply only removes merged `codex/` branches/worktrees and old `preserve-local-drift` stashes; it skips the current checkout.
+- Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 
 The builder-agent effect: test-first discipline emerges automatically for behavioral work — the failing test is the AC's declared proof, so the agent writes or confirms it before code, then implements the smallest change to turn it green.
