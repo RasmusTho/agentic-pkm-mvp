@@ -395,29 +395,53 @@ def _render_table(
     return f"<table><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table>", index
 
 
+def _find_code_span_close(text: str, start: int, run: int) -> int | None:
+    """Return the index just past the backtick run that closes a code span.
+
+    GFM closes a code span only with a backtick run of *exactly* the opening
+    length. Returns ``None`` when no such run exists, so an unmatched backtick
+    can be treated as ordinary text (its trailing pipes stay cell delimiters).
+    """
+    index = start
+    length = len(text)
+    while index < length:
+        if text[index] != "`":
+            index += 1
+            continue
+        run_end = index
+        while run_end < length and text[run_end] == "`":
+            run_end += 1
+        if run_end - index == run:
+            return run_end
+        index = run_end
+    return None
+
+
 def _split_table_row(line: str) -> list[str]:
     """Split a Markdown table row into trimmed cell strings.
 
     A pipe is a cell delimiter only in ordinary text. It is treated as literal
     content — never a delimiter — when it is backslash escaped (``\\|``), inside
-    an inline code span (`` `a|b` ``), or inside an Obsidian wikilink
+    a *closed* inline code span (`` `a|b` ``), or inside an Obsidian wikilink
     (``[[Note|Alias]]``), mirroring GFM/Obsidian. Code spans honor backtick run
-    length, so ``` `` `code` `` ``` is one span rather than three. Without this,
-    aliased wikilinks (very common in real vaults) inflate the cell count, the
-    body row fails ``_is_table_row``, and the table collapses to an empty
-    ``<tbody>`` with the rows dumped into a fallback paragraph.
+    length, so ``` `` `code` `` ``` is one span; an unmatched backtick stays
+    plain text so its trailing pipes still delimit (matching the inline
+    tokenizer, which only renders closed backtick pairs). Without this, aliased
+    wikilinks (very common in real vaults) inflate the cell count, the body row
+    fails ``_is_table_row``, and the table collapses to an empty ``<tbody>``
+    with the rows dumped into a fallback paragraph.
     """
     text = line.strip()
     cells: list[str] = []
     buffer: list[str] = []
-    fence = 0  # open code-span backtick run length; 0 when outside a code span
     wikilink_depth = 0  # open ``[[`` ... ``]]`` nesting depth
     index = 0
     length = len(text)
     while index < length:
         char = text[index]
-        if char == "\\" and fence == 0 and index + 1 < length:
-            # Backslash escape keeps the next char (e.g. an escaped pipe) literal.
+        if char == "\\" and index + 1 < length:
+            # Backslash escape keeps the next char (e.g. an escaped pipe or
+            # backtick) literal rather than a delimiter or code-span fence.
             buffer.append(text[index : index + 2])
             index += 2
             continue
@@ -425,25 +449,24 @@ def _split_table_row(line: str) -> list[str]:
             run_end = index
             while run_end < length and text[run_end] == "`":
                 run_end += 1
-            run = run_end - index
-            if fence == 0:
-                fence = run
-            elif run == fence:
-                fence = 0
-            buffer.append(text[index:run_end])
-            index = run_end
+            close = _find_code_span_close(text, run_end, run_end - index)
+            # A closed span is consumed whole (pipes inside are literal); an
+            # unmatched backtick run stays plain text so later pipes delimit.
+            end = close if close is not None else run_end
+            buffer.append(text[index:end])
+            index = end
             continue
-        if fence == 0 and text.startswith("[[", index):
+        if text.startswith("[[", index):
             wikilink_depth += 1
             buffer.append("[[")
             index += 2
             continue
-        if fence == 0 and wikilink_depth > 0 and text.startswith("]]", index):
+        if wikilink_depth > 0 and text.startswith("]]", index):
             wikilink_depth -= 1
             buffer.append("]]")
             index += 2
             continue
-        if char == "|" and fence == 0 and wikilink_depth == 0:
+        if char == "|" and wikilink_depth == 0:
             cells.append("".join(buffer))
             buffer = []
             index += 1
