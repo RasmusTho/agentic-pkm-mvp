@@ -25,12 +25,23 @@ Anti-dashboard (per `docs/COMPANION_UI_COGNITIVE_LOAD_OPERATING_MODEL.md` and th
 
 Worst state wins (precedence top to bottom). Always shown as colour **and** glyph **and** word — never colour alone.
 
-| State | Colour | Driven by | Plain meaning |
+| State | Status colour (role, not hex) | Driven by | Plain meaning |
 |---|---|---|---|
-| **Frisk** | green | `required_ok` true · `write_guard` active · worker/watcher fresh · not degraded | allt flödar |
-| **Uppmärksamhet** | amber | worker/watcher stale · backlog growing · optional dep missing · `catch_up` (core still serves) | se över |
-| **Pausad** | coral | `authority_spine.write_guard` == blocked (degraded / safe_mode) — writes paused, reads still work | skrivningar pausade |
-| **Nere** | red | `required_ok` false · core dependency (DB / runtime) unreachable · health endpoint unreachable | kärnberoende nere |
+| **Frisk** | ok / green status token | `required_ok` true · `write_guard` active · worker/watcher fresh · not degraded | allt flödar |
+| **Uppmärksamhet** | warn / `--amber` | worker/watcher stale · backlog growing · optional dep missing · `catch_up` (core still serves) | se över |
+| **Pausad** | existing blocked/degraded posture styling | `authority_spine.write_guard` == blocked (degraded / safe_mode) — writes paused, reads still work | skrivningar pausade |
+| **Nere** | err / red status token | `required_ok` false · core dependency (DB / runtime) unreachable · health endpoint unreachable | kärnberoende nere |
+
+> The colour column names *roles*, not hex. Bind them to the repo's existing companion-ui tokens — see "Graphical expression" below.
+
+## Graphical expression — use the repo's own tokens (no new hex)
+
+The illustrative mockup used Claude's design-system colours only for the chat preview. The **implementation must use companion-ui's existing tokens and primitives — it must not introduce new hex values**:
+
+- **Palette:** `companion-ui/companion-app/colors_and_type.css` — `--accent` (#d4a843 gold), `--amber` (#f09030), `--color-bg/surface/text/muted/dim/border`, `--fg-1/2/3`. Dark, gold-accented theme.
+- **Reuse the existing posture system in `serve_dev_page.py`** — `calm_degraded()` + `humanise_degraded_reason()` already produce plain-language degraded copy, and the posture precedence `blocked > unavailable > degraded > ok` already matches the worst-of-four rule here. The glyph and the card **extend that vocabulary; they do not introduce a parallel one.**
+- **Status colours:** reuse the established `ok / warn / err` status colours already used by the panel/posture surfaces (e.g. `--panel-accent-ok` / `-warn` / `-err`), mapped per the state table above.
+- If a needed role genuinely has no token yet, add it once to `colors_and_type.css` — never hardcode a hex at the call site.
 
 ## The four groups (Level 1 — grouped by the human's question)
 
