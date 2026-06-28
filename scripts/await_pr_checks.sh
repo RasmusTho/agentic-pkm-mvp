@@ -147,11 +147,17 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
     || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
   cr_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
     || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
+  # Codex also leaves findings as PR conversation comments (/issues/<pr>/comments), which are not
+  # commit-tied; every Codex finding carries the "Useful? React" footer, so treat such a comment
+  # created after the verified head as a blocking finding for this head.
+  conv_ts=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and (.body | contains(\"Useful? React\"))) | .created_at" 2>/dev/null) \
+    || { echo "codex: conversation comments read failed — failing closed" >&2; exit 2; }
   pos_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="+1"||$1=="heart"||$1=="hooray"||$1=="rocket"||$1=="laugh"{print $2}' | sort | tail -1)
   neg_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="-1"||$1=="confused"{print $2}' | sort | tail -1)
+  conv_ts=$(printf '%s\n' "$conv_ts" | sort | tail -1)
   findings=$(printf '%s' "$find_ids" | grep -c . || true)
   cr=$(printf '%s' "$cr_ids" | grep -c . || true)
-  echo "codex: head_ts=${head_ts:-?} positive_reaction=${pos_ts:-none} findings_on_head=${findings:-0} changes_requested=${cr:-0}"
+  echo "codex: head_ts=${head_ts:-?} positive_reaction=${pos_ts:-none} findings_on_head=${findings:-0} conversation_finding=${conv_ts:-none} changes_requested=${cr:-0}"
 
   if [ -z "$head_ts" ]; then
     echo "codex: could not resolve head commit time — failing closed" >&2; exit 2
@@ -160,9 +166,10 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   if [ "${cr:-0}" -gt 0 ] || { [ -n "$neg_ts" ] && [[ "$neg_ts" > "$head_ts" ]]; }; then
     echo "CODEX BLOCKING for $SHA (changes-requested or fresh negative reaction)" >&2; exit 3
   fi
-  # Findings on this exact head must be addressed before merge.
-  if [ "${findings:-0}" -gt 0 ]; then
-    echo "codex: $findings finding(s) on $SHA — address per verification-and-closure" >&2; exit 4
+  # Findings for this head must be addressed before merge — inline (commit-tied) or a Codex
+  # conversation comment newer than the verified head.
+  if [ "${findings:-0}" -gt 0 ] || { [ -n "$conv_ts" ] && [[ "$conv_ts" > "$head_ts" ]]; }; then
+    echo "codex: finding(s) for $SHA (inline=$findings, conversation=${conv_ts:-none}) — address per verification-and-closure" >&2; exit 4
   fi
   # Pass ONLY on a positive reaction newer than the verified head commit (i.e. the verdict is for
   # this head, not a stale 👍 carried over from an earlier push).
