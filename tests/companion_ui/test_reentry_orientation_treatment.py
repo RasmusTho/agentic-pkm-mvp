@@ -724,8 +724,12 @@ def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
         assert "Find a note" in html, label
         assert "See the map" in html, label
 
-        # No "Reorient" verb on cold_start.
-        assert "Reorient" not in html, label
+        # No "Reorient" verb on the cold_start verb line. (The closed System
+        # Map overlay lists product modes — including "Reorient" — as node
+        # chips; that is a hidden index surface, not a cold-start entry verb, so
+        # scope the check to the verb region rather than the whole page.)
+        _cold_verbs = html.split('data-region="cold-start-verbs"', 1)[1].split("</p>", 1)[0]
+        assert "Reorient" not in _cold_verbs, label
 
         # Verb-line is ranked DS buttons (one primary, one secondary), not
         # inline browser-blue links — and never an orientation grid/column/card.

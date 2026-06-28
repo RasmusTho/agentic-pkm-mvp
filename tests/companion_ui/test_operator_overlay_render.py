@@ -288,3 +288,30 @@ def test_partial_unreachable_renders_degraded_only_for_failed_panels() -> None:
     # Health/settings/events panels: render data normally (no degraded banner from them)
     assert "db" in html  # health check
     assert "watcher.tick" in html  # event
+
+
+def test_operator_drawer_retry_safe_on_transient_failure() -> None:
+    # ST-1 (ui-audit): a transient /operator fetch failure must not pin the
+    # error state. `loaded` is set only on success (with an in-flight guard) so
+    # reopening retries; the visible message is calm, raw error kept in data-*.
+    from companion_ui.workspace.serve_dev_page import render_index_html
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        fields={
+            "title": "Op",
+            "note_path": "Notes/op.md",
+            "artifact_id": "art-1",
+            "content_hash": "h",
+            "body": "# Op",
+            "runtime_environment_label": "dev",
+            "runtime_api_base_url_label": "local-dev",
+            "guard_writeguard_status": "ok",
+            "guard_canvas_enabled": False,
+            "guard_degraded": False,
+        },
+    )
+    assert "if (loaded || loading) { return; }" in html
+    assert "var loading = false;" in html
+    assert "Reopen to retry." in html
+    assert 'data-error="' in html

@@ -43,7 +43,11 @@ _TASK_RE = re.compile(r"^\s*[-*+]\s+\[([^\]])\]\s+(.*)$")
 _UNORDERED_RE = re.compile(r"^\s*[-*+]\s+(.*)$")
 _ORDERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _CALLOUT_RE = CALLOUT_HEADER_RE
-_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+# One delimiter cell of a GFM table separator row: 1+ dashes with optional
+# leading/trailing colon for column alignment (GFM requires only a single dash).
+# Table-row validity + alignment is driven by _table_alignments(), which splits
+# the separator into cells and checks each against this pattern.
+_TABLE_DELIM_CELL_RE = re.compile(r"^:?-+:?$")
 _COMMENT_RE = re.compile(r"%%.*?%%", re.DOTALL)
 _AI_METADATA_COMMENT_RE = re.compile(
     r"<!--\s*ai:(?:option_id|id|proposed)=([A-Za-z0-9_.-]+)\s*-->"
@@ -386,13 +390,25 @@ def _render_table(
 
     rows = [_split_table_row(line) for line in table_lines]
     header = rows[0]
+    alignments = _table_alignments(table_lines[1]) if len(table_lines) > 1 else None
     body_rows = rows[2:]
-    head_html = "".join(f"<th>{_render_inline(cell, context)}</th>" for cell in header)
+
+    def _cell(tag: str, cell: str, column: int) -> str:
+        align = alignments[column] if alignments and column < len(alignments) else ""
+        style = f' style="text-align:{align}"' if align else ""
+        return f"<{tag}{style}>{_render_inline(cell, context)}</{tag}>"
+
+    head_html = "".join(_cell("th", cell, col) for col, cell in enumerate(header))
     body_html = "".join(
-        "<tr>" + "".join(f"<td>{_render_inline(cell, context)}</td>" for cell in row) + "</tr>"
+        "<tr>" + "".join(_cell("td", cell, col) for col, cell in enumerate(row)) + "</tr>"
         for row in body_rows
     )
-    return f"<table><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table>", index
+    table_html = (
+        f"<table><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table>"
+    )
+    # Wrap in a horizontal-scroll container so a wide table scrolls within the
+    # reading column instead of crushing its cells or widening the viewport.
+    return f'<div class="vault-table-scroll">{table_html}</div>', index
 
 
 def _find_code_span_close(text: str, start: int, run: int) -> int | None:
@@ -479,6 +495,32 @@ def _split_table_row(line: str) -> list[str]:
     if cells and not cells[-1].strip():
         cells.pop()
     return [cell.strip() for cell in cells]
+
+
+def _table_alignments(separator_line: str) -> list[str] | None:
+    """Per-column CSS alignment from a GFM separator row.
+
+    Returns ``None`` when the line is not a valid delimiter row. Otherwise one
+    entry per column: ``"center"``/``"right"`` for ``:--:``/``--:``, and ``""``
+    for left (the default, so no redundant ``text-align`` is emitted).
+    """
+    cells = _split_table_row(separator_line)
+    if not cells:
+        return None
+    alignments: list[str] = []
+    for cell in cells:
+        token = cell.strip()
+        if not _TABLE_DELIM_CELL_RE.match(token):
+            return None
+        left = token.startswith(":")
+        right = token.endswith(":")
+        if left and right:
+            alignments.append("center")
+        elif right:
+            alignments.append("right")
+        else:
+            alignments.append("")
+    return alignments
 
 
 def _is_table_row(
@@ -1065,12 +1107,18 @@ def _render_unsupported_diagnostic(*, code: str, message: str) -> str:
 
 
 def _is_table_start(lines: list[str], index: int) -> bool:
+    if "|" not in lines[index]:
+        return False
     separator_index = _next_nonblank_index(lines, index + 1)
-    return bool(
-        separator_index is not None
-        and "|" in lines[index]
-        and bool(_TABLE_SEPARATOR_RE.match(lines[separator_index]))
-    )
+    if separator_index is None:
+        return False
+    alignments = _table_alignments(lines[separator_index])
+    if alignments is None:
+        return False
+    # GFM: the delimiter row must have the same column count as the header,
+    # so a thematic break ('---') after a line that merely contains a pipe is
+    # not mistaken for a one-column table separator.
+    return len(alignments) == len(_split_table_row(lines[index]))
 
 
 def _is_thematic_break(line: str) -> bool:

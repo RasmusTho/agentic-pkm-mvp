@@ -343,6 +343,15 @@ def test_system_map_no_issue_refs() -> None:
     # text (the parser-based helper lower-cases), while the node-copy scan runs
     # over original-case strings — re.IGNORECASE matches both.
     _sep_ref = re.compile(r"\bSEP-\d+\b", re.IGNORECASE)
+    # Same defect class as issue/SEP refs: source symbols leaking into the
+    # human-readable copy. A non-developer must never see a Python function name
+    # (e.g. _render_resurface_mode), a JS controller call (overlayHost.mount,
+    # vaultBrowser.focus), or a raw intent token (cmd.open, memory.open). The
+    # *_intent attributes and the controller script keep these tokens; the
+    # rendered copy must not.
+    _source_symbol = re.compile(
+        r"_[a-z]\w*\(|\b[a-zA-Z]\w*\.[a-z]\w*\(|\b\w+\.(?:open|focus|mount|dismiss|peek)\b"
+    )
     for node in MAP_SURFACES:
         for field_name in ("reached", "returns", "status_note"):
             value = getattr(node, field_name)
@@ -351,6 +360,9 @@ def test_system_map_no_issue_refs() -> None:
             )
             assert not _sep_ref.search(value), (
                 f"{node.surface_id}.{field_name} leaks a SEP reference: {value!r}"
+            )
+            assert not _source_symbol.search(value), (
+                f"{node.surface_id}.{field_name} leaks a source symbol/intent token: {value!r}"
             )
         # The center node copy is also user-facing.
     assert not _bare_issue.search(MAP_CENTER_NAME)
@@ -451,7 +463,7 @@ def test_shipped_nodes_route_and_unshipped_nodes_are_inert() -> None:
         assert "onclick" not in tag, sid
         assert "data-intent" not in tag, sid
     assert 'data-surface-id="peek" data-mode="find" data-status="shipped"' in overlay
-    assert "provenance lines are live" in overlay
+    assert "shows where a detail came from" in overlay
     assert 'data-surface-id="guidance" data-mode="local-ui" data-status="shipped"' in overlay
 
     # Shipped surfaces with no map-open affordance (reached by state or by
