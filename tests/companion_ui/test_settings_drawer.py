@@ -355,14 +355,16 @@ def test_bottom_bar_direct_launchers_nav2_nav4() -> None:
         assert f'data-intent="{intent}"' in map_node.group(0)
 
 
-def test_search_pill_gated_to_registered_palette_no_dead_affordance() -> None:
-    # NAV-4 no-dead-affordance regression (Codex P2, PR #2636). The `cmd`
-    # palette occupant only registers on a loaded-note shell — panel_palette
-    # emits nothing and the controller skips registration when fields is None.
-    # The vault-selection-required and error shells render with fields is None,
-    # so a visible Search pill there would mount nothing = dead chrome. The
-    # Search pill must be ABSENT in those shells, while History / Memory /
-    # Settings (always-registered occupants) stay PRESENT.
+def test_runtime_projection_launchers_gated_to_loaded_note_shell() -> None:
+    # NAV-2/NAV-4 false-affordance regression (Codex P2, PR #2636). History,
+    # Memory, and Search surface RUNTIME PROJECTIONS that depend on a live
+    # note/runtime. On the fields-None shells (vault-selection picker, runtime
+    # error) the page's own route contract (map_available_routes) marks those
+    # surfaces unavailable — only `operator` is routable there — and Search has
+    # no registered `cmd` occupant (panel_palette emits nothing). So all three
+    # runtime-projection launchers must be ABSENT on those shells. Settings
+    # (config, legitimate on degraded shells) and Map / Help (no runtime
+    # dependency) must remain PRESENT.
     fields_none_shells = {
         "vault-selection-required": render_index_html(
             api_base_url="http://127.0.0.1:18001",
@@ -382,24 +384,33 @@ def test_search_pill_gated_to_registered_palette_no_dead_affordance() -> None:
         ),
     }
     for shell_name, shell_html in fields_none_shells.items():
-        assert 'data-testid="workspace-surface-icon-cmd"' not in shell_html, (
-            f"NAV-4: the Search / ⌘K pill must not render on the {shell_name} "
-            "shell — its `cmd` palette occupant is not registered there"
-        )
-        assert 'data-intent="cmd.open"' not in shell_html, (
-            f"no element may advertise cmd.open on the {shell_name} shell "
-            "(the palette occupant is absent there)"
-        )
-        # The always-registered occupants keep their direct launchers, so this
-        # is a tightening of Search alone, not a regression of NAV-1/NAV-2.
+        # The runtime-projection launchers AND their open intents are fully
+        # absent — no bottom-bar pill and no live map routing node (those
+        # surfaces are not routable when fields is None).
+        for testid, intent in (
+            ("workspace-surface-icon-receipts", "receipts.open"),
+            ("workspace-surface-icon-memory", "memory.open"),
+            ("workspace-surface-icon-cmd", "cmd.open"),
+        ):
+            assert f'data-testid="{testid}"' not in shell_html, (
+                f"NAV-2/NAV-4: the {testid} runtime-projection launcher must "
+                f"not render on the {shell_name} shell (surface unavailable there)"
+            )
+            assert f'data-intent="{intent}"' not in shell_html, (
+                f"no element may advertise {intent} on the {shell_name} shell "
+                "(the surface is not routable when fields is None)"
+            )
+        # Settings (config) and Map / Help (no runtime dependency) stay present,
+        # so this gates the runtime-projection launchers alone, not NAV-1 or the
+        # always-present wayfinding affordances.
         for testid in (
-            "workspace-surface-icon-receipts",
-            "workspace-surface-icon-memory",
             "workspace-surface-icon-settings",
+            "workspace-surface-icon-map",
+            "workspace-help-toggle",
         ):
             assert f'data-testid="{testid}"' in shell_html, (
-                f"NAV-1/NAV-2: the {testid} launcher must still render on the "
-                f"{shell_name} shell (its occupant registers regardless of fields)"
+                f"the {testid} launcher must still render on the {shell_name} "
+                "shell (Settings is config; Map/Help have no runtime dependency)"
             )
 
 

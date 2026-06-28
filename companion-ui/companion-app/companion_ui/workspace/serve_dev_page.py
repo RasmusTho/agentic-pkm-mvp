@@ -9751,28 +9751,31 @@ def load_help_guide_html() -> str:
 
 
 def _render_help_toggle(
-    include_settings: bool = False, include_search: bool = False
+    include_settings: bool = False, include_runtime_launchers: bool = False
 ) -> str:
     """The composed bottom bar (#2447, CUIDR-04) — one container, no stray
     fixed siblings at the bottom edge.
 
-    ``include_settings`` (NAV-1, NAV-2) emits the direct working-shell
-    launchers whose occupants register on every shell this template renders:
-    Settings (NAV-1, ``settings_drawer_markup`` emits regardless of fields),
-    plus History/Receipts and Memory (NAV-2, whose ``receipts``/``memory``
-    occupants take no ``fields`` and always register). The entry/orientation
-    bundles do not mount those occupants, so the buttons are omitted there
-    rather than left as dead open affordances.
+    Bottom-bar launcher model (NAV-1/NAV-2/NAV-4, ui-audit; Codex P2 #2636):
 
-    ``include_search`` (NAV-4) emits the Search / ⌘K palette pill and is gated
-    *more tightly* than the others: the ``cmd`` palette occupant only registers
-    on a loaded-note shell (``panel_palette_markup`` returns "" and the
-    controller skips registration when ``fields is None`` — the host keeps ⌘K a
-    graceful no-op). The vault-selection and error shells this template also
-    renders run with ``fields is None``, so a visible Search pill there would
-    mount nothing = a dead affordance. The caller passes
-    ``include_search=fields is not None`` so the pill appears only where the
-    palette is actually registered.
+    - **Map / Help** are always present — wayfinding/meta affordances with no
+      runtime dependency. Map opens the never-clipping System Map (the complete
+      surface index); Help opens the in-shell guide.
+    - **Settings** (NAV-1) is gated on ``include_settings`` — the working shell.
+      Configuration is legitimately available on degraded shells too (you may
+      need to configure your way out of a no-vault / error state), and
+      ``settings_drawer_markup`` emits its occupant regardless of ``fields``.
+    - **History / Memory / Search** (NAV-2 + NAV-4) are *runtime-projection*
+      launchers, gated together on ``include_runtime_launchers`` — the caller
+      passes ``fields is not None``. They are suppressed on the ``fields is
+      None`` shells (vault-selection picker, runtime error) because their
+      content depends on a live note/runtime and the page's own route contract
+      (``map_available_routes``) marks those surfaces unavailable there: a
+      visible launcher to an unavailable surface is a false affordance. Search
+      additionally has no registered ``cmd`` occupant when ``fields is None``
+      (``panel_palette_markup`` returns "" → ⌘K is a graceful no-op), so gating
+      it here also removes that dead affordance. This mirrors the existing
+      suppression of the vault-setup form on the error shell (see below).
 
     Before CUIDR-04 the bottom edge was a collision of independently positioned
     fixed elements (the Help pill, the Operator pill, the body-edit hint, the
@@ -9800,15 +9803,18 @@ def _render_help_toggle(
         'onclick="overlayHost.mount(\'map\')">'
         '<span aria-hidden="true">&#10070;</span>'
         '<span class="launcher-label">Map</span></button>'
-        # NAV-1/NAV-2 (ui-audit) — direct launchers so the frequently-used
-        # secondary surfaces are not reachable only by opening the System Map (a
-        # 2-click toll). The map stays the complete index; these add a 1-click
-        # door. Each reuses the surface's existing open intent + host occupant,
-        # and its map node is retained (additive, not a removal). receipts /
-        # memory / settings occupants register on every shell this template
-        # emits, so the launchers are never dead chrome here. (Search/⌘K is
-        # gated separately on include_search — see below — because its `cmd`
-        # occupant only registers on a loaded-note shell.)
+        # NAV-2 + NAV-4 (ui-audit) — direct *runtime-projection* launchers so the
+        # frequently-used secondary surfaces are not reachable only by opening
+        # the System Map (a 2-click toll). The map stays the complete index;
+        # these add a 1-click door. Each reuses the surface's existing open
+        # intent + host occupant, and its map node is retained (additive, not a
+        # removal). Gated together on include_runtime_launchers (caller passes
+        # fields is not None): on the fields-None shells (vault-selection / error)
+        # the page's own route contract (map_available_routes) marks these
+        # surfaces unavailable and their content depends on a live note/runtime,
+        # so a visible launcher there is a false affordance (Search additionally
+        # has no registered `cmd` occupant — a dead no-op). Settings stays under
+        # include_settings below — config is legitimate on degraded shells.
         + (
             # NAV-2 — direct History/Receipts launcher (reuses receipts.open).
             '<button type="button" class="receipts-toggle" '
@@ -9828,25 +9834,9 @@ def _render_help_toggle(
             'onclick="overlayHost.mount(\'memory\')">'
             '<span aria-hidden="true">&#9737;</span>'
             '<span class="launcher-label">Memory</span></button>'
-            # NAV-1 — direct Settings launcher (reuses settings.open).
-            '<button type="button" class="settings-toggle" '
-            'data-testid="workspace-surface-icon-settings" '
-            'data-intent="settings.open" aria-haspopup="dialog" '
-            'title="Settings — your preferences" aria-label="Open settings" '
-            'onclick="overlayHost.mount(\'settings\')">'
-            '<span aria-hidden="true">&#9881;</span>'
-            '<span class="launcher-label">Settings</span></button>'
-            if include_settings
-            else ""
-        )
-        # NAV-4 — visible Search / ⌘K affordance (reuses cmd.open). Gated on
-        # include_search (caller passes fields is not None) because the `cmd`
-        # palette occupant only registers on a loaded-note shell; without that
-        # gate the pill would be a silent no-op on the vault-selection / error
-        # shells (fields is None), which the no-dead-affordance contract forbids
-        # (Codex P2, PR #2636). The ⌘K hint lives in the title so the
-        # keyboard-first fast path stays discoverable from the visible pill.
-        + (
+            # NAV-4 — visible Search / ⌘K affordance (reuses cmd.open). The ⌘K
+            # hint lives in the title so the keyboard-first fast path stays
+            # discoverable from the visible pill.
             '<button type="button" class="cmd-toggle" '
             'data-testid="workspace-surface-icon-cmd" '
             'data-intent="cmd.open" aria-haspopup="dialog" '
@@ -9855,7 +9845,23 @@ def _render_help_toggle(
             'onclick="overlayHost.mount(\'cmd\')">'
             '<span aria-hidden="true">&#9906;</span>'
             '<span class="launcher-label">Search</span></button>'
-            if include_search
+            if include_runtime_launchers
+            else ""
+        )
+        # NAV-1 (ui-audit) — direct Settings launcher (reuses settings.open).
+        # Gated on include_settings (the working shell) but NOT on a loaded note:
+        # settings_drawer_markup emits its occupant regardless of fields, and
+        # configuration is a legitimate affordance on degraded shells (you may
+        # need to configure your way out of a no-vault / error state).
+        + (
+            '<button type="button" class="settings-toggle" '
+            'data-testid="workspace-surface-icon-settings" '
+            'data-intent="settings.open" aria-haspopup="dialog" '
+            'title="Settings — your preferences" aria-label="Open settings" '
+            'onclick="overlayHost.mount(\'settings\')">'
+            '<span aria-hidden="true">&#9881;</span>'
+            '<span class="launcher-label">Settings</span></button>'
+            if include_settings
             else ""
         )
         + '<button type="button" class="help-toggle" '
@@ -14039,7 +14045,7 @@ def render_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
-  {_render_help_toggle(include_settings=True, include_search=fields is not None)}
+  {_render_help_toggle(include_settings=True, include_runtime_launchers=fields is not None)}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>
