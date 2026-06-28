@@ -14801,6 +14801,11 @@ def make_handler(
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/healthz":
+                try:
+                    self._client.get("/api/health", params={})
+                except WorkspaceClientError:
+                    self._send_json(503, {"ok": False, "upstream": "unreachable"})
+                    return
                 self._send_json(200, {"ok": True, "service": "companion-ui"})
                 return
             if parsed.path == "/help":
