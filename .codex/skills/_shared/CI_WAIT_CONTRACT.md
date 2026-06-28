@@ -36,6 +36,9 @@ scripts/await_pr_checks.sh <PR> --codex    # also resolve the Codex verdict (rea
 scripts/await_pr_checks.sh --help          # flags: --initial-wait, --interval, --timeout, --sha
 ```
 
+`--sha` pins a commit for inspection and is **not** a merge gate (PR head-drift is not verified); omit
+it for the merge-gating default, where the head is auto-resolved and re-checked before success.
+
 It auto-detects the repo from the git remote, resolves the PR head SHA via REST, sleeps `--initial-wait`
 (default 180s) before the first check, then polls the REST **check-runs and classic commit-status**
 endpoints every `--interval` (default 90s, floor 60s) until all complete or `--timeout` (default 1800s),

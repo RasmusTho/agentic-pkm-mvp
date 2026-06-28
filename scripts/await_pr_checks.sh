@@ -12,6 +12,9 @@
 #   scripts/await_pr_checks.sh <PR> [--codex] [--initial-wait S] [--interval S] [--timeout S] [--sha SHA]
 #   scripts/await_pr_checks.sh --help
 #
+# --sha pins a commit for inspection and is NOT a merge gate (PR head-drift is not verified). Omit
+# --sha for the merge-gating default: the head is auto-resolved and re-checked before success.
+#
 # Exit codes:
 #   0  CI check-runs + classic commit status all passed (with --codex, Codex also gave a positive reaction)
 #   1  a required check failed
@@ -63,6 +66,13 @@ if [ -z "$SHA" ]; then
   SHA_FROM_PR=1
 fi
 echo "head=$SHA"
+if [ "$SHA_FROM_PR" -eq 0 ]; then
+  # --sha pins a specific commit for inspection; it is deliberately NOT a merge gate, because the
+  # PR head may differ from (or move away from) the pinned SHA, so a `--sha X && gh pr merge` would
+  # merge an unverified head. The merge-gating mode is the default (auto-resolved head + drift check).
+  echo "note: --sha mode is diagnostic, NOT a merge gate (PR head-drift is not verified)." >&2
+  echo "      For an autonomous merge gate, omit --sha so the head is resolved and re-checked." >&2
+fi
 
 echo "waiting ${INITIAL_WAIT}s before first check (CI runs ~4-5 min; not polling through it)..."
 sleep "$INITIAL_WAIT"
