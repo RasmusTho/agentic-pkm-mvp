@@ -54,9 +54,12 @@ def test_bilingual_ground_truth_resolves() -> None:
         doc = json.loads(line)
         corpus_ids.add(str(doc["doc_id"]))
         languages.add(str(doc["language"]))
+        payload = doc.get("payload") or {}
+        assert payload.get("trust") == doc["trust"]
+        assert payload.get("review_state") == doc["review_state"]
 
     judgments = json.loads(BILINGUAL_JUDGMENTS_PATH.read_text(encoding="utf-8"))
-    assert judgments["schema_version"] == "retrieval_eval_case.v1"
+    assert judgments["schema_version"] == "retrieval_bilingual_judgments.v1"
     assert languages == {"sv", "en"}
 
     for case in judgments["queries"]:

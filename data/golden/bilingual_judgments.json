@@ -1,5 +1,5 @@
 {
-  "schema_version": "retrieval_eval_case.v1",
+  "schema_version": "retrieval_bilingual_judgments.v1",
   "queries": [
     {
       "id": "exact-en-settings-yaml",

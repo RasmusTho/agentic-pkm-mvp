@@ -85,10 +85,14 @@ The 11-case bilingual seed covers Swedish and English across the current route
 mix: exact/lexical lookup, hybrid semantic retrieval, recall-into-ASK, and
 low-trust citation checks. Its paired deterministic ground truth lives under
 `data/golden/bilingual_corpus.jsonl` and
-`data/golden/bilingual_judgments.json`. The existing precision@k/ndcg@k runner
-continues to read `data/golden/corpus.jsonl` plus `data/golden/judgments.json`;
-the bilingual sibling is additive and backward compatible until the runner/CLI
-is intentionally extended.
+`data/golden/bilingual_judgments.json`; the judgment file uses the separate
+`retrieval_bilingual_judgments.v1` schema because it is a graded `queries`
+object, not the top-level eval-case YAML shape. Corpus trust/review metadata is
+also mirrored into each row's `payload` so existing hybrid-store loading paths
+preserve low-trust citation expectations. The existing precision@k/ndcg@k
+runner continues to read `data/golden/corpus.jsonl` plus
+`data/golden/judgments.json`; the bilingual sibling is additive and backward
+compatible until the runner/CLI is intentionally extended.
 
 ## Metrics (initial)
 - Answer relevancy / answer-quality style metrics via DeepEval.
