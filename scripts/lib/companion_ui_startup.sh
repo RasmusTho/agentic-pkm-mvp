@@ -87,16 +87,19 @@ cui_load_channel_env() {
   local root env_file
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
+  # The channel's vault is defined by .env.<channel>.local, never by an ambient
+  # VAULT_ROOT in the operator shell. load_env_defaults_file is defaults-only (it
+  # will NOT override an already-exported var), so an inherited VAULT_ROOT would
+  # otherwise stand in for — or win over — the channel file and mount the wrong
+  # vault for the channel (e.g. `VAULT_ROOT=.../Midgard make test-ui`). Clear it
+  # up front so the channel file is the sole authority; with no file and nothing
+  # to set it, the launcher enters no-vault idle boot (#2005) and serves the
+  # in-app picker.
+  if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
+    cui_warn "ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' — the ${CUI_CHANNEL} channel vault is defined by ${env_file}, not the ambient shell."
+  fi
+  unset VAULT_ROOT VAULT_HOST_ROOT
   if [ ! -f "${root}/${env_file}" ]; then
-    # No channel override present. Do NOT inherit an ambient VAULT_ROOT from the
-    # operator shell — it could belong to another channel and would defeat the
-    # advertised no-vault idle posture (e.g. `VAULT_ROOT=.../Midgard make test-ui`
-    # must not silently mount Midgård on the test channel). Clear it so this
-    # launcher and start_full_system.sh enter genuine no-vault idle boot (#2005).
-    if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
-      cui_warn "no ${env_file}; ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' — the ${CUI_CHANNEL} channel vault comes from ${env_file}, not the ambient shell."
-    fi
-    unset VAULT_ROOT VAULT_HOST_ROOT
     cui_warn "no ${env_file} in repo root (${root}) — no-vault idle boot; create it from .env.example to pin a ${CUI_CHANNEL} vault."
     return 0
   fi
@@ -168,15 +171,37 @@ cui_runtime_vault_matches_env() {
   [ "${source}" = "${VAULT_ROOT:-}" ]
 }
 
+# Returns 0 if the running channel API container has an /app/vault bind mount.
+# Used by the no-vault (picker) launch path to decide whether a healthy stack may
+# be warm-skipped: a container still bound to a previous vault must be recreated
+# so it serves the picker rather than the stale vault (#2005).
+cui_runtime_has_vault_mount() {
+  local cid source
+  cid="$(cui_api_container_id)"
+  [ -n "${cid}" ] || return 1
+  source="$(cui_container_vault_mount_source "${cid}")"
+  [ -n "${source}" ]
+}
+
 cui_start_runtime() {
-  local root _rc
+  local root _rc _skip_recreate
   root="$(cui_repo_root)"
   # Restarting the UI should not recreate an already-healthy stack. When the
   # runtime API is up, skip the full start_full_system.sh recreate (and its
   # watcher/worker health race). Set CUI_FORCE_RECREATE=1 to force a rebuild,
   # e.g. after changing runtime code or compose config.
   if [ "${CUI_FORCE_RECREATE:-0}" != "1" ] && cui_api_healthy_now; then
-    if [ -z "${VAULT_ROOT:-}" ] || [ "${CUI_CHANNEL:-}" != "prod" ] || cui_runtime_vault_matches_env; then
+    _skip_recreate=0
+    if [ -z "${VAULT_ROOT:-}" ]; then
+      # No-vault (picker) launch: only warm-skip when the live container has no
+      # vault mount. A container still bound to a previous vault must be
+      # recreated, or `make {dev,test,prod}-ui` would keep serving that vault
+      # instead of the in-app picker (#2005).
+      cui_runtime_has_vault_mount || _skip_recreate=1
+    elif [ "${CUI_CHANNEL:-}" != "prod" ] || cui_runtime_vault_matches_env; then
+      _skip_recreate=1
+    fi
+    if [ "${_skip_recreate}" = "1" ]; then
       cui_log "runtime API already healthy on port ${CUI_API_PORT} — skipping full stack recreate (set CUI_FORCE_RECREATE=1 to force)"
       return 0
     fi
@@ -420,6 +445,13 @@ cui_run_doctor() {
   local root env_file
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
+  # Mirror the launcher: the channel vault is defined by the env file, not an
+  # ambient VAULT_ROOT. Report any inherited binding as ignored, then clear it so
+  # the resolution below reflects what the launcher would actually do.
+  if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
+    echo "  [info] ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' (the ${CUI_CHANNEL} vault is defined by ${env_file}, not the shell)"
+  fi
+  unset VAULT_ROOT VAULT_HOST_ROOT
   if [ -f "${root}/${env_file}" ]; then
     echo "  [ok]   ${env_file} present"
     # shellcheck source=/dev/null
@@ -428,14 +460,7 @@ cui_run_doctor() {
     cd "${root}" 2>/dev/null && load_env_defaults_file "${env_file}" >/dev/null 2>&1 || true
   else
     # Missing override is a valid no-vault idle posture (#2005), not a failure.
-    # Mirror the launcher: an ambient VAULT_ROOT is not the channel's vault, so
-    # report it as ignored and clear it before the resolution check below.
-    if [ -n "${VAULT_ROOT:-}" ]; then
-      echo "  [info] ${env_file} absent — ignoring inherited VAULT_ROOT='${VAULT_ROOT}' (launcher idles to the picker)"
-    else
-      echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
-    fi
-    unset VAULT_ROOT VAULT_HOST_ROOT
+    echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
   fi
   if [ -n "${VAULT_ROOT:-}" ]; then
     local base base_lc
