@@ -14296,7 +14296,7 @@ def render_index_html(
       if (!data || data.state !== 'vault_selection_required') return false;
       var html = data.vault_selection_required_html || '';
       if (!html) return false;
-      if (draft && draft.text) {{
+      if (draft && Object.prototype.hasOwnProperty.call(draft, 'text')) {{
         try {{
           window.sessionStorage.setItem(refusedWriteDraftKey, JSON.stringify(draft));
         }} catch (e) {{}}
@@ -14313,7 +14313,7 @@ def render_index_html(
       if (!raw) return;
       var draft = null;
       try {{ draft = JSON.parse(raw); }} catch (e) {{ draft = null; }}
-      if (!draft || !draft.kind || !draft.text) return;
+      if (!draft || !draft.kind || !Object.prototype.hasOwnProperty.call(draft, 'text')) return;
       var restored = false;
       if (draft.kind === 'note_save') {{
         var noteEditor = document.getElementById('note-source-editor');
@@ -14321,8 +14321,9 @@ def render_index_html(
         if (noteEditor && (!draft.note_path || draft.note_path === expectedPath)) {{
           noteEditor.value = draft.text;
           noteEditor.setAttribute('data-refused-write-draft-restored', 'true');
-          if (window.noteEditor && typeof window.noteEditor.start === 'function') {{
-            window.noteEditor.start();
+          var noteEditorApi = window['noteEditor'];
+          if (noteEditorApi && typeof noteEditorApi.start === 'function') {{
+            noteEditorApi.start();
           }}
           restored = true;
         }}
