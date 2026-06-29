@@ -129,10 +129,11 @@ Contract (part of S4/S5 verification):
 
 Why it is needed: the API trusts loopback callers (`require_loopback_or_api_key` in `app/auth.py`), but when the gateway/browser reaches the API across the docker bridge, the immediate peer is the bridge address, not loopback — so a naive loopback check would reject legitimate same-host UI traffic (the #2654 symptom: vault select/initialize/browse unreachable behind the bridge).
 
-How it is implemented (already shipped, this document formalizes it): `_effective_client_host()` in `app/auth.py` reads the first `X-Forwarded-For` hop **only when the immediate peer is itself loopback** — i.e. only a loopback-local proxy is trusted to assert the real client, so an external caller cannot spoof loopback by setting the header. This is the tactical fix delivered in **PR #2665** ("Fix companion loopback trust behind proxy"). S6 in this spec is therefore **verify/formalize**, not fix-from-scratch:
-- The trusted-proxy boundary must be a loopback-local proxy (or host networking) so the `X-Forwarded-For` trust assumption holds.
+How it is implemented (already shipped, this document formalizes it): `_effective_client_host()` in `app/auth.py` reads the first `X-Forwarded-For` hop **only when the immediate peer is a trusted local proxy**: loopback by default, or an operator-declared local docker bridge proxy host via `COMPANION_TRUSTED_PROXY_HOSTS`. A direct external caller cannot spoof loopback by setting the header because non-trusted immediate peers are judged by their own address. This is the tactical fix delivered in **PR #2665** ("Fix companion loopback trust behind proxy"). S6 in this spec is therefore **verify/formalize**, not fix-from-scratch:
+- The trusted-proxy boundary must be a loopback-local proxy, an explicitly configured local docker bridge proxy, or host networking so the `X-Forwarded-For` trust assumption holds.
 - Untrusted non-loopback callers without a valid API key remain rejected (`require_loopback_or_api_key` still 401s — preserves #2223).
 - The deployment topology (managed gateway + API on the same host) must keep the proxy hop loopback-local; if a channel is ever bound to a LAN/Tailscale interface for UAT, the API-key path (not blanket loopback trust) governs untrusted callers.
+- S6 verification (#2697) locks this with `tests/api/test_auth_proxy_topology.py`: a loopback-local proxy may assert a loopback client via `X-Forwarded-For`, while a genuinely non-loopback caller with forged `X-Forwarded-For` remains rejected.
 
 ## What this supersedes
 
