@@ -277,7 +277,11 @@ If the work spans multiple sub-agents:
 - state the token/quality rationale for the parallel batch before claiming
 - claim only after the sub-agent handoff is ready
 - include the relevant owner docs, `Verify:` ledger, validation commands, and required skills in each handoff
+- include a publication preflight in each handoff: verify the eventual PR can satisfy the `publish-pr` lane classifier and closing keyword, the exact `## BuilderOps Routing` shape (`Records/projections/receipts:` and `Reason:`) when that section is required, and the repo-standard validation that applies to the touched files
+- if the handoff touches new `app/` or `tests/` files, require `ruff check app tests` in the validation plan up front
+- if the handoff adds or changes tests, require robust guard coverage up front: name the intended success path and the relevant negative or completeness path, and make enforcement tests exercise the production call site rather than a helper in isolation
 - require each sub-agent to report lifecycle actions, PR link, validation, doc writeback, and closure state
+- reference `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary instead of duplicating its full PR-body contract here
 - never let sub-agents work from parent feature issues unless the parent is explicitly one executable slice
 
 ## Verification Ledger
