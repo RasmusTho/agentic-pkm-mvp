@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-27
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state at 332317c8 on 2026-06-27
+Last reviewed: 2026-06-29
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state at 503c6c64 on 2026-06-29
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -140,6 +140,7 @@ Watcher auto-exec enablement rule:
 - Before enabling auto-exec for a wider runtime scope, confirm the effective allowlist, recent skip counters, and write-guard/provenance context are coherent across both CLI surfaces.
 - When the question is release or merge readiness rather than a live local diagnosis, corroborate the operator view with the enforced CI summary line (`CI SUMMARY GATES ok=<bool>`).
 - `python -m app.cli settings-validate` is the schema validation gate for repo-shipped panel action catalog/wiring and watcher settings. It rejects invalid panel action ids, missing required panel fields, malformed watcher `auto_run` values, and unknown watcher allowlist action ids.
+- The same governed seam now covers watcher-detected `settings/local.md` deltas for runtime-gating keys, so direct edits to `enableVaultWatcher` / `enableAutoIndexing` emit `SettingsWriteReceipt`s instead of silently waiting for the next start (#2512).
 - This validation path does not widen runtime authority: watcher auto-exec remains guarded by `WATCHER_AUTO_EXEC`, allowlist policy, and per-note `ai_panel_auto_run: never` opt-out.
 - Sync-latency measurement mode is operator-scoped: keep `vault/@Settings/watchers.md` allowlist at default (`promote.evergreen`) and run harness/measurement sessions with `WATCHER_MEASUREMENT_MODE=1`. This temporarily appends `ingest.summary.create` during the run and returns to the default posture after the process exits.
 
