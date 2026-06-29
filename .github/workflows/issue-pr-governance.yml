@@ -167,6 +167,7 @@ jobs:
               "AGENTS.md",
               "CLAUDE.md",
               ".codex/AGENTS.md",
+              ".codex/config.toml",
               ".github/github-governance.yml",
               ".github/pull_request_template.md",
               ".github/workflows/issue-pr-governance.yml",
@@ -185,12 +186,14 @@ jobs:
               "tests/ops/test_git_hygiene.py",
               "tests/architecture/test_agent_skill_entrypoints.py",
               "tests/architecture/test_pr_hot_path_governance.py",
+              "tests/governance/test_codex_agents_contract.py",
               "tests/ops/test_project_status_reconcile.py",
             ]);
             const governanceAllowedPrefixes = [
               "docs/",
               ".github/ISSUE_TEMPLATE/",
               ".codex/skills/",
+              ".codex/agents/",
             ];
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,

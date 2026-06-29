@@ -254,6 +254,15 @@ The owner is the operator and decision-maker. Human-first means optimizing for t
 - When a decision is the owner's to make, present it as: clear **Problem → Options → Consequences** (the consequences of each choice matter most). Surface the decisions that are genuinely his explicitly rather than burying them — without manufacturing choices he should not have to make.
 - Keep durable audit artifacts complete but separate from the human-facing summary: BuilderOps receipts, `Verify:` markers, and traceability live in the record, not in the lead. Do not add machinery whose only purpose is to capture reasoning for audit.
 
+## Specialist subagent roles
+
+Specialist subagents are execution roles, not workflow contracts. Repo-local skills remain canonical: a subagent run never replaces the matching `.codex/skills/**/SKILL.md`. When a task uses subagents, the coordinator and every worker must still load `AGENTS.md` and the relevant skill before workflow-boundary actions.
+
+- Use `docs/development/BUILDER_SUBAGENT_ROLES.md` for the shared role inventory, the skill-to-role routing matrix, the bounded-loop policy, and the handoff-receipt template. Keep that detail in the reference doc, not here.
+- Codex project-scoped custom agents live under `.codex/agents/**` and Codex agent settings in `.codex/config.toml`. They are Codex-specific execution-role adapters and must not duplicate skill contract text; each adapter must explicitly load the skills it needs, because Codex does not auto-discover this repo's `.codex/skills/**`.
+- Claude compatibility stays routed through `AGENTS.md`, `CLAUDE.md`, and the shared role doc. Do not assume Claude consumes Codex TOML, and do not add `.claude/agents/**` adapters without a separate decision.
+- Subagent loops are verifier-driven repair loops only: no recursive fan-out and no generic looping agent.
+
 ## Docs authoring lane
 
 Docs-only changes that evolve authoritative specification, roadmap, ADR, plan, human-flow, or governance surfaces may use the explicit docs-authoring PR lane without a governing GitHub Issue.
@@ -275,6 +284,7 @@ The governance lane is a distinct work-stream for changes to delivery-system art
 Target artifacts:
 
 - repo-local skills under `.codex/skills/**`
+- Codex specialist subagent role adapters under `.codex/agents/**` and Codex agent settings in `.codex/config.toml`
 - pull request / issue governance surfaces under `.github/**`
 - lightweight enforcement for docs/governance workflows such as `scripts/docs_guard.py`
 - focused governance tests such as `tests/architecture/test_agent_skill_entrypoints.py`

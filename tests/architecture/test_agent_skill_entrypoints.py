@@ -80,3 +80,14 @@ def test_issue_to_code_preflight_captures_expected_branch_and_worktree() -> None
     assert '--expected-worktree "$EXPECTED_WORKTREE"' in section
     assert "|| exit 1" in section
     assert "Do not continue with empty expected values" in section
+
+
+def test_subagent_role_governance_is_discoverable() -> None:
+    agents_text = _read("AGENTS.md")
+    claude_text = _read("CLAUDE.md")
+    role_doc = "docs/development/BUILDER_SUBAGENT_ROLES.md"
+
+    assert role_doc in agents_text
+    assert role_doc in claude_text
+    assert ".codex/agents" in agents_text
+    assert "skills remain" in agents_text.lower()
