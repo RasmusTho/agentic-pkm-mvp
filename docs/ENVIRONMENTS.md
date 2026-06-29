@@ -113,6 +113,14 @@ Two kinds of separation govern how `dev`, `test`, and `prod` stay isolated:
 
 **Current vs future invariants.** The separation requirements in §Separation Requirements describe the current baseline. Release-channel promotion contracts (how the `stable` ref moves, how migrations apply) are owned by `docs/RELEASE_CHANNELS/README.md` and are being hardened incrementally. The current priority is establishing a sound prod baseline; full promotion-workflow automation is a later hardening step.
 
+## Deployment
+
+**Source of truth: [`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).** That document is canonical for *how a deploy physically happens* — the build-once/promote model (CI builds a SHA-tagged image, each channel runs a pinned tag, promotion = tag bump + recreate), Companion UI gateways as managed units (retiring the ad-hoc `nohup` launch), the deploy/rollback/migration-gate/health-gate procedure, the live post-deploy UI smoke, and the auth↔topology (trusted-proxy `X-Forwarded-For`) decision. The current-reality vs target environment matrix (per-channel API ports, gateway ports, DB names, vault mounts, `.env.<env>` files) also lives there.
+
+This document (`ENVIRONMENTS.md`) continues to own environment **selection** and **path scoping** — what data and config each channel touches (`PKM_ENVIRONMENT`, vault roots, DB names, `tmp*` artifact dirs). `docs/RELEASE_CHANNELS/README.md` continues to own channel **identity**, per-channel DB isolation, the promotion-plan contract, migration reversibility classification, and rollback semantics. The deployment SoT implements the physical deploy beneath both and references them rather than restating them.
+
+Reconciliation with #2527: #2527 ("prod runs dirty `main`, not `stable`") is the symptom-level reconciliation of the prod promotion ref and the dirty/diverged prod working tree. The deployment SoT is the systemic fix it pointed at — the shared bind-mounted-checkout model (which is *why* a "dirty prod tree" was possible at all) is replaced by pinned images. The promotion-ref decision recorded by #2527 is consumed by the deployment SoT and by `docs/RELEASE_CHANNELS/README.md`; it is not re-decided in either environments doc.
+
 ## Minimal Environment Model
 
 The repo uses a lightweight but explicit environment model:
@@ -401,7 +409,7 @@ The existing `app.settings.tiering` module continues to work and is now understo
 
 - Environment selection does not redefine product semantics.
 - Channel identity, promotion, rollback, and DB-per-channel semantics are owned by `docs/RELEASE_CHANNELS/README.md`, not this document. This document continues to own environment selection and path scoping only.
-- Hosted deployment, secrets handling, and CI/CD-driven release remain out of scope. Local, single-user promotion between channels is owned by the release-channels capability.
+- Deployment mechanics (image build/promote, managed gateways, deploy/rollback/health-gate procedure, auth↔topology) are owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, not this document — see §Deployment. The target is single-host Docker Compose with pinned, CI-built images and a deploy script; a hosted/cloud PaaS remains out of scope. Local, single-user promotion between channels is owned by the release-channels capability.
 - Health/status/operator diagnostics changes are independent of environment selection.
 - Multi-user/multi-instance coordination remains orthogonal to environment selection.
 
