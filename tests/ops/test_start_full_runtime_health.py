@@ -265,6 +265,25 @@ def test_dev_start_full_returns_zero_with_deferred_index_rebuild(tmp_path: Path)
     assert "runtime verified: true" in result.stdout
 
 
+def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Path) -> None:
+    env = _runtime_env(tmp_path, _deferred_index_health())
+    env["ENVIRONMENT"] = "dev"
+
+    result = subprocess.run(
+        ["bash", "scripts/start_full_system.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "INFO: index rebuild is required but deferred" in result.stdout
+    assert "runtime verified: true" in result.stdout
+
+
 def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:
     env = _runtime_env(tmp_path, _deferred_index_health())
     env["COMPOSE_FILE"] = "docker-compose.yaml:docker-compose.prod.yml"
