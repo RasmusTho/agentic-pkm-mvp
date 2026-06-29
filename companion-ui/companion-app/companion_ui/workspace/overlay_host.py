@@ -497,18 +497,37 @@ def overlay_host_script() -> str:
         // base page-load entry — fall back to a normal pushState mount so we
         // never clobber the document anchor's history entry.
         if (!stack.length) { this.mount(id, detail); return; }
+        // NAV-3d (#2644): if the destination is already open somewhere below
+        // the current topmost overlay, do NOT replace the current marker with a
+        // duplicate destination marker. Instead close every occupant above the
+        // destination and traverse browser history back to the destination's
+        // existing entry. This reuses the original marker so the next Back is
+        // meaningful: immediate-below routes close in one press, and deeper
+        // stacks leave the correct lower overlay open.
+        var existingAt = stack.indexOf(id);
+        if (existingAt !== -1) {
+          var stepsBack = stack.length - 1 - existingAt;
+          while (stack.length > existingAt + 1) { popTopmost(); }
+          if (occ.open) { occ.open(detail || {}); }
+          try {
+            if (stepsBack > 0 && !popping && window.history) {
+              popping = true;
+              if (stepsBack === 1 && window.history.back) {
+                window.history.back();
+              } else if (window.history.go) {
+                window.history.go(-stepsBack);
+              } else if (window.history.back) {
+                window.history.back();
+              } else {
+                popping = false;
+              }
+            }
+          } catch (err) { popping = false; }
+          return;
+        }
         // Close + pop the current topmost occupant WITHOUT history.back() (no
         // pending traversal to race the swap), then push the destination.
         popTopmost();
-        // De-dup the destination before pushing (same rule as mount): if the
-        // target already sits in the stack BELOW the just-closed overlay (e.g.
-        // Memory open -> Map over it -> route to Memory), pushing again would
-        // make data-overlay-stack carry two 'id' entries while the DOM has one
-        // occupant. The next Back would pop one duplicate, hide the only drawer
-        // via its close hook, yet still report the overlay as open -> DOM/host
-        // desync. Splicing first moves it to the single top and keeps depth true.
-        var at = stack.indexOf(id);
-        if (at !== -1) { stack.splice(at, 1); }
         stack.push(id);
         sync();
         // Replace the current history entry (the one that represented the old

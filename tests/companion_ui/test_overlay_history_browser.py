@@ -339,26 +339,16 @@ def test_system_map_route_swaps_overlay_back_closes_in_one_press() -> None:
         server.shutdown()
 
 
-def test_system_map_route_to_already_open_destination_does_not_duplicate() -> None:
-    """NAV-3b (#2640) dedup: routing to a destination ALREADY in the stack must
-    NOT create a duplicate stack entry, so host bookkeeping never desyncs from
-    the DOM.
+def test_system_map_route_to_immediate_below_reuses_existing_history_entry() -> None:
+    """NAV-3d (#2644): routing to the overlay immediately below the map reuses
+    that overlay's existing history entry.
 
     Memory open -> Map opened over it (stack ``memory map``) -> click the map's
-    Memory node -> overlayHost.replace('memory') closes the map and moves Memory
-    to the single top: ``data-overlay-stack`` is exactly ``memory`` (one
-    instance, NOT ``memory memory``). Without the dedup splice the stack would
-    read ``memory memory`` while the DOM has one drawer — the bug Codex flagged:
-    a later Back pops one phantom entry and hides the only drawer while the host
-    still reports the overlay open. The single-Back-closes invariant is covered
-    by ``test_system_map_route_swaps_overlay_back_closes_in_one_press`` (route
-    over an empty stack); here the route reopens a destination that was already
-    pushed below the map, so an extra lower history entry from that original
-    push legitimately survives (history.replaceState swaps only the current
-    entry, it cannot delete the one beneath). What this test pins is that Back
-    unwinds the host->DOM relationship consistently — the host never reports an
-    overlay open after the DOM drawer is gone — which the dedup guarantees and
-    the duplicate would break.
+    Memory node -> overlayHost.replace('memory') closes only the map and
+    traverses back to Memory's original history entry. The next browser Back
+    closes Memory in one press. The old NAV-3b de-dupe kept the host/DOM stack
+    single, but wrote a second adjacent Memory marker over the map entry; that
+    made the first Back a dead press.
     """
     server, port = _make_server()
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -383,9 +373,8 @@ def test_system_map_route_to_already_open_destination_does_not_duplicate() -> No
                 _wait_stack(page, "memory map")
 
                 # Route to Memory from the map. replace('memory') closes the map
-                # and de-dups: Memory moves to the single top, NOT appended again.
-                # data-overlay-stack is exactly 'memory' (one instance) — the core
-                # dedup assertion (no 'memory memory').
+                # and returns to Memory's existing history entry; it does not
+                # write a second adjacent Memory marker over the map entry.
                 node = page.query_selector(
                     "[data-testid='system-map-node'][data-surface-id='memory']"
                 )
@@ -399,40 +388,77 @@ def test_system_map_route_to_already_open_destination_does_not_duplicate() -> No
                 )
                 assert page.url == start_url, "routing must not navigate the page away"
 
-                # Back unwinds host<->DOM consistently: each Back either keeps the
-                # drawer open (host says 'memory') or closes it (host says 'none')
-                # — the host never claims an overlay is open after the DOM drawer
-                # is closed. The drawer's open state is its data-open attribute
-                # (the memory occupant's open/close hooks toggle it); is_visible()
-                # is unreliable here because the closed drawer is only slid off
-                # via CSS transform. Walk Back until the host reports 'none'; the
-                # stack must be empty at that point and never have carried a dup.
                 drawer_open_js = (
                     "(function(){var d=document.querySelector("
                     "\"[data-overlay-id='memory']\");"
                     "return d ? d.getAttribute('data-open') : null;})()"
                 )
-                for _ in range(4):
-                    open_now = page.evaluate(_OPEN_JS)
-                    drawer_open = page.evaluate(drawer_open_js) == "true"
-                    # Host/DOM agreement: host 'memory' <=> drawer data-open=true.
-                    assert (open_now == "memory") == drawer_open, (
-                        "host bookkeeping must match the DOM: open=='memory' iff the "
-                        f"memory drawer data-open=true (open={open_now!r}, "
-                        f"drawer_open={drawer_open})"
-                    )
-                    if open_now == "none":
-                        break
-                    page.go_back()
-                    page.wait_for_timeout(150)
+                assert page.evaluate(drawer_open_js) == "true"
+
+                # One browser Back closes Memory. Against the duplicate-marker
+                # bug, this first Back landed on the adjacent Memory entry and
+                # left Memory open.
+                page.go_back()
                 _wait_open(page, "none")
                 _wait_stack(page, "")
-                # Final state agreement: drawer is closed when the host says none.
                 assert page.evaluate(drawer_open_js) == "false", (
                     "the memory drawer must be closed (data-open=false) once the "
                     "host reports no overlay open"
                 )
                 assert page.url == start_url, "Back must not navigate the page away"
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+
+def test_system_map_route_to_deeper_stack_target_reuses_existing_history_entry() -> None:
+    """NAV-3d (#2644): a deeper already-open target keeps history depth aligned.
+
+    Memory -> Command palette -> Map, then route to Command. The map closes and
+    the browser traverses back to Command's existing depth-2 history entry.
+    The next Back closes Command and leaves Memory open; it must not close the
+    wrong overlay or leave a dead duplicate route marker.
+    """
+    server, port = _make_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}/"
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                page = browser.new_page()
+                page.goto(base, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                start_url = page.url
+                assert page.evaluate(_OPEN_JS) == "none"
+
+                page.evaluate("window.overlayHost.mount('memory')")
+                _wait_stack(page, "memory")
+                page.evaluate("window.overlayHost.mount('cmd')")
+                _wait_stack(page, "memory cmd")
+                page.evaluate("window.overlayHost.mount('map')")
+                _wait_stack(page, "memory cmd map")
+
+                node = page.query_selector(
+                    "[data-testid='system-map-node'][data-surface-id='palette']"
+                )
+                assert node is not None, "map must render a clickable command route node"
+                node.click()
+                _wait_open(page, "cmd")
+                _wait_stack(page, "memory cmd")
+                assert page.url == start_url, "routing must not navigate the page away"
+
+                page.go_back()
+                _wait_open(page, "memory")
+                _wait_stack(page, "memory")
+                assert page.url == start_url, (
+                    "Back after routing to a deeper existing target must leave "
+                    "the correct underlying overlay open"
+                )
             finally:
                 browser.close()
     finally:
