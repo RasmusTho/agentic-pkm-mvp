@@ -184,6 +184,42 @@ def test_present_channel_env_overrides_inherited_vault_root(tmp_path: Path) -> N
     )
 
 
+def _load_env_with_file(tmp_path: Path, env_contents: str) -> subprocess.CompletedProcess[str]:
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    shutil.copy(
+        REPO_ROOT / "scripts/lib/load_env_defaults.sh",
+        tmp_path / "scripts/lib/load_env_defaults.sh",
+    )
+    (tmp_path / ".env.test.local").write_text(env_contents, encoding="utf-8")
+    snippet = (
+        f'cui_repo_root() {{ printf "%s" "{tmp_path}"; }}\n'
+        "cui_load_channel_env\n"
+        'echo "VAULT_ROOT_AFTER=[${VAULT_ROOT:-}]"'
+    )
+    return _run(snippet)
+
+
+def test_channel_scoped_vault_root_is_promoted(tmp_path: Path) -> None:
+    # .env.<channel>.local may pin the documented channel-scoped root
+    # (VAULT_ROOT_TEST) instead of plain VAULT_ROOT; the launcher must promote it
+    # so `make test-ui` binds the override instead of idling (Codex P2 on PR #2652).
+    r = _load_env_with_file(tmp_path, "VAULT_ROOT_TEST=/tmp/Bifrost-scoped\n")
+    assert r.returncode == 0, r.stderr
+    assert "VAULT_ROOT_AFTER=[/tmp/Bifrost-scoped]" in r.stdout, (
+        "a channel-scoped VAULT_ROOT_TEST must be promoted to VAULT_ROOT"
+    )
+
+
+def test_plain_vault_root_wins_over_channel_scoped(tmp_path: Path) -> None:
+    # If the env file sets both, the explicit base VAULT_ROOT wins (promotion only
+    # fills an empty VAULT_ROOT).
+    r = _load_env_with_file(
+        tmp_path,
+        "VAULT_ROOT=/tmp/Bifrost-plain\nVAULT_ROOT_TEST=/tmp/Bifrost-scoped\n",
+    )
+    assert "VAULT_ROOT_AFTER=[/tmp/Bifrost-plain]" in r.stdout
+
+
 def _run_start_runtime(
     tmp_path: Path, *, vault_root: str | None, mount_src: str, has_container: bool = True
 ) -> str:

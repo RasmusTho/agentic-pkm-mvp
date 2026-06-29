@@ -83,6 +83,22 @@ cui_require_config() {
 # no-vault idle boot (#2005) the stack must come up without a configured vault
 # and serve the in-app picker. start_full_system.sh re-loads this file when
 # present, so a later-created override still takes effect on the next start.
+# Promote a documented channel-scoped vault root (VAULT_ROOT_<CHANNEL>, e.g.
+# VAULT_ROOT_TEST / VAULT_ROOT_DEV / VAULT_ROOT_PROD) to the base VAULT_ROOT when
+# only the scoped form is set. The guard and start_full_system.sh bind path key
+# only on VAULT_ROOT, while the runtime resolver and test-channel tooling honor
+# the scoped name — so without this, `make {dev,test}-ui` would idle on a valid
+# channel override (#2005). An explicit base VAULT_ROOT always wins (no-op then).
+cui_promote_channel_scoped_vault_root() {
+  [ -z "${VAULT_ROOT:-}" ] || return 0
+  local scoped_name scoped_val
+  scoped_name="VAULT_ROOT_$(printf '%s' "${CUI_CHANNEL:-}" | tr '[:lower:]' '[:upper:]')"
+  scoped_val="${!scoped_name:-}"
+  [ -n "${scoped_val}" ] || return 0
+  export VAULT_ROOT="${scoped_val}"
+  cui_log "using channel-scoped ${scoped_name} as VAULT_ROOT for ${CUI_CHANNEL} ('${scoped_val}')"
+}
+
 cui_load_channel_env() {
   local root env_file
   root="$(cui_repo_root)"
@@ -99,17 +115,21 @@ cui_load_channel_env() {
     cui_warn "ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' — the ${CUI_CHANNEL} channel vault is defined by ${env_file}, not the ambient shell."
   fi
   unset VAULT_ROOT VAULT_HOST_ROOT
-  if [ ! -f "${root}/${env_file}" ]; then
+  if [ -f "${root}/${env_file}" ]; then
+    # shellcheck source=/dev/null
+    source "${root}/scripts/lib/load_env_defaults.sh"
+    ( cd "${root}" && load_env_defaults_file "${env_file}" ) >/dev/null 2>&1 || true
+    # load_env_defaults_file runs in a subshell for the parser; re-load into this
+    # shell by re-sourcing in the repo root so exported keys persist.
+    cd "${root}" || cui_die "cannot cd to repo root ${root}"
+    load_env_defaults_file "${env_file}"
+  else
     cui_warn "no ${env_file} in repo root (${root}) — no-vault idle boot; create it from .env.example to pin a ${CUI_CHANNEL} vault."
-    return 0
   fi
-  # shellcheck source=/dev/null
-  source "${root}/scripts/lib/load_env_defaults.sh"
-  ( cd "${root}" && load_env_defaults_file "${env_file}" ) >/dev/null 2>&1 || true
-  # load_env_defaults_file runs in a subshell for the parser; re-load into this
-  # shell by re-sourcing in the repo root so exported keys persist.
-  cd "${root}" || cui_die "cannot cd to repo root ${root}"
-  load_env_defaults_file "${env_file}"
+  # A .env.<channel>.local (or the operator shell) may pin the documented
+  # channel-scoped root instead of plain VAULT_ROOT; promote it so the launcher
+  # honors it rather than idling (matches the resolver + test tooling).
+  cui_promote_channel_scoped_vault_root
 }
 
 # Resolves the channel vault posture. Read-only. Honors no-vault idle boot
