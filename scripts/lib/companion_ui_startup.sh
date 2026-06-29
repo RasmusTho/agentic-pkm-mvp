@@ -78,14 +78,18 @@ cui_require_config() {
 
 # ── channel env loading + vault guard ─────────────────────────────────────────
 
-# Loads .env.<channel>.local into the environment. Fails fast if the file is
-# absent. Uses the repo's space-safe Python-based env parser.
+# Loads .env.<channel>.local into the environment when present. Uses the repo's
+# space-safe Python-based env parser. A missing file is NOT an error: under
+# no-vault idle boot (#2005) the stack must come up without a configured vault
+# and serve the in-app picker. start_full_system.sh re-loads this file when
+# present, so a later-created override still takes effect on the next start.
 cui_load_channel_env() {
   local root env_file
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
   if [ ! -f "${root}/${env_file}" ]; then
-    cui_die "missing ${env_file} in repo root (${root}). Create it with channel config (PKM_ENVIRONMENT=${CUI_CHANNEL}, VAULT_ROOT=...). See .env.example."
+    cui_warn "no ${env_file} in repo root (${root}) — continuing with no channel vault default (no-vault idle boot; create it from .env.example to pin a ${CUI_CHANNEL} vault)."
+    return 0
   fi
   # shellcheck source=/dev/null
   source "${root}/scripts/lib/load_env_defaults.sh"
@@ -96,11 +100,17 @@ cui_load_channel_env() {
   load_env_defaults_file "${env_file}"
 }
 
-# Verifies VAULT_ROOT basename matches the expected channel vault. Read-only.
+# Resolves the channel vault posture. Read-only. Honors no-vault idle boot
+# (#2005): an unset VAULT_ROOT is NOT an error — the stack boots and serves the
+# in-app vault picker. When a vault IS configured its basename is matched against
+# the expected channel vault, but under the settled selection model the active
+# vault is chosen in-app (VAULT_ROOT is only the initial default, not the source
+# of truth), so a mismatch is advisory (warn-only) rather than fatal.
 cui_guard_vault_name() {
   local base base_lc
   if [ -z "${VAULT_ROOT:-}" ]; then
-    cui_die "VAULT_ROOT is not set after loading .env.${CUI_CHANNEL}.local; cannot confirm channel vault."
+    cui_log "no vault configured (VAULT_ROOT unset) — no-vault idle boot (#2005); open a vault in the ${CUI_CHANNEL} UI to activate."
+    return 0
   fi
   base="$(basename "${VAULT_ROOT}")"
   base_lc="$(cui_lower "${base}")"
@@ -108,7 +118,7 @@ cui_guard_vault_name() {
     cui_log "vault guard OK: resolved vault '${base}' matches expected ${CUI_EXPECTED_VAULT_LABEL}"
     return 0
   fi
-  cui_die "vault guard FAILED: resolved vault '${base}' (VAULT_ROOT=${VAULT_ROOT}) does not look like ${CUI_EXPECTED_VAULT_LABEL}. Refusing to start ${CUI_CHANNEL} channel against the wrong vault."
+  cui_warn "vault guard advisory: resolved vault '${base}' (VAULT_ROOT=${VAULT_ROOT}) does not look like ${CUI_EXPECTED_VAULT_LABEL}. Continuing — the active vault is selected in-app (VAULT_ROOT is only the initial default)."
 }
 
 # ── docker / colima ───────────────────────────────────────────────────────────
@@ -407,23 +417,22 @@ cui_run_doctor() {
     source "${root}/scripts/lib/load_env_defaults.sh"
     ( cd "${root}" && load_env_defaults_file "${env_file}" ) >/dev/null 2>&1 || true
     cd "${root}" 2>/dev/null && load_env_defaults_file "${env_file}" >/dev/null 2>&1 || true
-    if [ -n "${VAULT_ROOT:-}" ]; then
-      local base base_lc
-      base="$(basename "${VAULT_ROOT}")"
-      base_lc="$(cui_lower "${base}")"
-      if printf '%s' "${base_lc}" | grep -Eq "${CUI_EXPECTED_VAULT_PATTERN}"; then
-        echo "  [ok]   vault resolves to ${CUI_EXPECTED_VAULT_LABEL} ('${base}')"
-      else
-        echo "  [FAIL] vault '${base}' does not match expected ${CUI_EXPECTED_VAULT_LABEL}"
-        rc=1
-      fi
+  else
+    # Missing override is a valid no-vault idle posture (#2005), not a failure.
+    echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
+  fi
+  if [ -n "${VAULT_ROOT:-}" ]; then
+    local base base_lc
+    base="$(basename "${VAULT_ROOT}")"
+    base_lc="$(cui_lower "${base}")"
+    if printf '%s' "${base_lc}" | grep -Eq "${CUI_EXPECTED_VAULT_PATTERN}"; then
+      echo "  [ok]   vault resolves to ${CUI_EXPECTED_VAULT_LABEL} ('${base}')"
     else
-      echo "  [FAIL] VAULT_ROOT not set by ${env_file}"
-      rc=1
+      echo "  [warn] vault '${base}' does not match expected ${CUI_EXPECTED_VAULT_LABEL} (advisory; active vault is selected in-app)"
     fi
   else
-    echo "  [FAIL] ${env_file} missing (see .env.example)"
-    rc=1
+    # Unset VAULT_ROOT is the no-vault idle posture, not a failure.
+    echo "  [info] VAULT_ROOT unset — no-vault idle boot; open a vault in the ${CUI_CHANNEL} UI to activate"
   fi
 
   # 3. API health (read-only)

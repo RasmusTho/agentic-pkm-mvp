@@ -335,7 +335,7 @@ Compose files:
 - `docker-compose.test.yml` (test overrides)
 
 Notes:
-- `make start-test-system` and `make test-bootstrap` remain unchanged and are still the canonical local `test` verification workflow.
+- `make start-test-system` and `make test-bootstrap` remain the canonical **local** `test` verification workflow (resettable UAT). `start-test-system` honors no-vault idle boot (#2005): it starts even with no `VAULT_ROOT` and serves the in-app picker, while `test-bootstrap` still requires a test vault because it *seeds* one. This is distinct from `make test-start-full VAULT_ROOT=<path>`, the canonical **promotion-verification** test startup, which deliberately requires an explicit vault — see the startup-command table in `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md`.
 - The `test` compose override sets `PKM_ENVIRONMENT: test` (first-class as of Issue #848 / PR #940); test-channel isolation comes from the matching scoped DB (`app_test`), scoped vault (`vault-test/` or `VAULT_ROOT_TEST`), scoped artifact paths (`tmp-test/`), and port separation.
 - Full parallel isolation still depends on DB separation work tracked by Issue #594.
 
