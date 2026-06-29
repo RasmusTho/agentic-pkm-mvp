@@ -92,6 +92,7 @@ from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
 from app.vault.manager import (
+    SETTINGS_DIR_NAME,
     MachineRole,
     VaultContext,
     existing_init_target_entries,
@@ -2687,9 +2688,15 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
 
     Human-notes only: files under the system directory (VAULT_SYSTEM_DIR_REL,
     which contains companion notes and other machine-generated artefacts) are
-    excluded.  Notes whose only available label is a bare UUID stem (no H1
-    heading) are also excluded — a UUID is an internal identity marker, not a
-    human-meaningful label.
+    excluded.  Files under the Design-Handoff ``settings/`` directory
+    (``vault.md``, ``local.md`` and the rest of the scaffold) are excluded for
+    the same reason — they are machine configuration, never human notes. Since
+    the orientation entry projection now only runs for an *initialized* vault
+    (#2653), which always carries that scaffold, surfacing a settings file as
+    "your most recent note" would otherwise be a real production mis-projection.
+    Notes whose only available label is a bare UUID stem (no H1 heading) are also
+    excluded — a UUID is an internal identity marker, not a human-meaningful
+    label.
     """
     system_dir_rel = resolve_vault_system_dir_rel_or_default(vault_root)
     try:
@@ -2698,6 +2705,10 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
         return None
     system_dir_abs = vault_root / system_dir_rel
     system_dir_resolved = (vault_root / system_dir_rel).resolve(strict=False)
+    # The committed Design-Handoff settings scaffold is machine config, not a
+    # human note (mirrors the system-dir exclusion above).
+    settings_dir_abs = vault_root / SETTINGS_DIR_NAME
+    settings_dir_resolved = settings_dir_abs.resolve(strict=False)
 
     def _is_relative_to(path: Path, parent: Path) -> bool:
         try:
@@ -2714,10 +2725,14 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
                     continue
                 if _is_relative_to(path, system_dir_abs):
                     continue
+                if _is_relative_to(path, settings_dir_abs):
+                    continue
                 resolved_path = path.resolve(strict=True)
                 if not _is_relative_to(resolved_path, vault_root_resolved):
                     continue
                 if _is_relative_to(resolved_path, system_dir_resolved):
+                    continue
+                if _is_relative_to(resolved_path, settings_dir_resolved):
                     continue
                 candidates.append((resolved_path.stat().st_mtime, str(path), path, resolved_path))
             except Exception:
@@ -3822,7 +3837,25 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
     stale_after = generated_at + datetime.timedelta(seconds=ORIENTATION_STALE_AFTER_SECONDS)
 
     try:
-        vault_root = _active_companion_vault_root_or_picker(trace_id=trace_id)
+        # The orientation/entry projection applies the ``status == "selected"``
+        # selection gate (``require_initialized=True``), the same gate the write
+        # boundary uses. A configured ``VAULT_ROOT`` is never silently resolved as
+        # the active vault when nothing is *selected*: a ``none`` context yields
+        # the ``no_vault_bound`` picker and a selected-but-``uninitialized`` bare
+        # directory (``active_vault_id is null``) yields the ``uninitialized``
+        # picker — never a ``VAULT_ROOT``-derived orientation that the page maps to
+        # ``cold_start`` (the #2309 Option-2 split-brain on the entry path, #2653).
+        #
+        # This is narrower than read tolerance on the *content* surfaces: a
+        # selected-but-``uninitialized`` directory stays readable for the note read
+        # and vault-browser enumeration (#2312). Only the entry projection requires
+        # ``selected``, because ``SYSTEM_ENTRY_POINT_SPEC.md`` gates the
+        # ``cold_start`` state on a *bound/selected* vault — an unselected vault is
+        # the ``no_vault`` picker, not ``cold_start``.
+        vault_root = _active_companion_vault_root_or_picker(
+            trace_id=trace_id,
+            require_initialized=True,
+        )
         if isinstance(vault_root, VaultSelectionRequiredResponse):
             return vault_root
         identity = _orientation_identity(vault_root)

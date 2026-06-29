@@ -24,12 +24,14 @@ from app.resurfacing.runtime import (
     ResurfacingSignal,
     ResurfacingWhyNow,
 )
-from tests.api._vault_test_helpers import bind_selected_vault
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 
 @pytest.fixture(autouse=True)
 def _clear_runtime_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    bind_selected_vault(monkeypatch, tmp_path, channel="test")
+    # Orientation requires a *selected* (initialized) vault (#2653); a bare
+    # ``uninitialized`` directory now routes to the picker.
+    bind_initialized_vault(monkeypatch, tmp_path, channel="test")
     monkeypatch.setenv("PKM_CHANNEL", "test")
     monkeypatch.setenv("LEAVE_POINT_TRACE_DB", str(tmp_path / "runtime" / "leave-point.sqlite3"))
     monkeypatch.setenv(
