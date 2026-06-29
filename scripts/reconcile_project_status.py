@@ -23,6 +23,50 @@ PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
 GH_RETRY_ATTEMPTS = 5
 GH_RETRY_BASE_DELAY_SECONDS = 0.4
 
+# GitHub's shared GraphQL pool (~5000 points/hr, shared across every tool/agent
+# on this identity) exhausts long before REST core. Below these remaining-budget
+# floors we shed the most expensive GraphQL work instead of pushing an already
+# strained pool into hard exhaustion. Env-overridable for incident tuning.
+# See docs/audits/GITHUB_API_EXHAUSTION_2026-06-29.md :: GHAPI-C2 / GHAPI-H3.
+GRAPHQL_SCAN_MIN_BUDGET = int(os.environ.get("RECONCILE_GRAPHQL_SCAN_MIN_BUDGET", "500"))
+GRAPHQL_OPTIONAL_MIN_BUDGET = int(
+    os.environ.get("RECONCILE_GRAPHQL_OPTIONAL_MIN_BUDGET", "250")
+)
+# Never block a CI runner waiting on a far-off reset; above this many seconds we
+# stop retrying and defer to the next (daily / event-driven) reconcile.
+GH_MAX_RATE_LIMIT_WAIT_SECONDS = int(
+    os.environ.get("RECONCILE_MAX_RATE_LIMIT_WAIT_SECONDS", "120")
+)
+
+
+def _api_class(args: tuple[str, ...]) -> str:
+    """Best-effort classification of which GitHub quota pool a `gh` call spends."""
+    if not args:
+        return "unknown"
+    head = args[0]
+    if head == "project":
+        return "graphql"  # every `gh project` subcommand is GraphQL-only
+    if head in {"issue", "pr"}:
+        return "rest"
+    if head == "api":
+        # `gh api rate_limit` is REST core and does not count against any quota.
+        return "rest-core"
+    return "unknown"
+
+
+def _rw_class(args: tuple[str, ...]) -> str:
+    return "write" if any(a in {"item-edit", "item-add"} for a in args) else "read"
+
+
+def _log_event(event: dict[str, Any]) -> None:
+    """Emit one structured JSON record to stderr (stdout stays human-readable)."""
+    try:
+        sys.stderr.write(
+            json.dumps({"component": "reconcile_project_status", **event}) + "\n"
+        )
+    except Exception:
+        pass
+
 
 def _should_retry_gh_error(exc: subprocess.CalledProcessError) -> bool:
     combined = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
@@ -40,8 +84,64 @@ def _should_retry_gh_error(exc: subprocess.CalledProcessError) -> bool:
     return any(marker in combined for marker in retry_markers)
 
 
+def graphql_rate_limit() -> tuple[int | None, int | None]:
+    """Return ``(remaining, reset_epoch)`` for the GraphQL pool via the REST
+    ``rate_limit`` endpoint, which itself does not count against any quota.
+
+    Returns ``(None, None)`` when the budget cannot be determined (fail-open:
+    an unreadable meta-probe must not permanently disable reconciliation).
+    """
+    try:
+        out = run_gh(
+            "api",
+            "rate_limit",
+            "--jq",
+            ".resources.graphql.remaining,.resources.graphql.reset",
+        )
+        remaining_str, reset_str = out.split()
+        remaining, reset = int(remaining_str), int(reset_str)
+        _log_event(
+            {
+                "event": "github.budget",
+                "api": "graphql",
+                "remaining": remaining,
+                "reset": reset,
+            }
+        )
+        return remaining, reset
+    except Exception:
+        return None, None
+
+
+def graphql_budget_remaining() -> int | None:
+    return graphql_rate_limit()[0]
+
+
+def _rate_limit_wait_seconds(exc: subprocess.CalledProcessError) -> int | None:
+    """Seconds to wait before retrying a rate-limited call.
+
+    Honors an explicit ``Retry-After`` in stderr; otherwise waits until the
+    GraphQL reset (read from the REST ``rate_limit`` endpoint, since the `gh`
+    subcommands do not surface response headers). Returns ``None`` when this is
+    not a rate-limit error, so the caller falls back to plain jittered backoff.
+    """
+    combined = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
+    match = re.search(r"retry[- ]after[:\s]+(\d+)", combined)
+    if match:
+        return int(match.group(1))
+    if "rate limit" in combined:
+        _remaining, reset = graphql_rate_limit()
+        if reset is not None:
+            return max(0, reset - int(time.time()))
+    return None
+
+
 def run_gh(*args: str) -> str:
+    op = " ".join(args[:2])
+    api = _api_class(args)
+    rw = _rw_class(args)
     for attempt in range(1, GH_RETRY_ATTEMPTS + 1):
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 ["gh", *args],
@@ -49,12 +149,54 @@ def run_gh(*args: str) -> str:
                 capture_output=True,
                 text=True,
             )
+            _log_event(
+                {
+                    "event": "github.call",
+                    "op": op,
+                    "api": api,
+                    "rw": rw,
+                    "attempt": attempt,
+                    "status": "ok",
+                    "latency_ms": round((time.monotonic() - started) * 1000),
+                }
+            )
             return result.stdout.strip()
         except subprocess.CalledProcessError as exc:
+            _log_event(
+                {
+                    "event": "github.call",
+                    "op": op,
+                    "api": api,
+                    "rw": rw,
+                    "attempt": attempt,
+                    "status": "error",
+                    "latency_ms": round((time.monotonic() - started) * 1000),
+                    "error": (exc.stderr or exc.stdout or "")[:200].strip(),
+                }
+            )
             if attempt == GH_RETRY_ATTEMPTS or not _should_retry_gh_error(exc):
                 raise
-            # Bounded jittered backoff for flaky `gh project`/GraphQL responses.
-            sleep_seconds = GH_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)) + random.uniform(0.0, 0.25)
+            wait = _rate_limit_wait_seconds(exc)
+            if wait is not None:
+                # Rate-limited: wait until reset / Retry-After, but never burn the
+                # runner on a far-off reset, and never re-issue the same expensive
+                # GraphQL query into a fully exhausted pool.
+                if wait > GH_MAX_RATE_LIMIT_WAIT_SECONDS:
+                    _log_event(
+                        {
+                            "event": "github.retry.abort",
+                            "op": op,
+                            "reason": "reset_beyond_cap",
+                            "wait_s": wait,
+                        }
+                    )
+                    raise
+                sleep_seconds = float(wait) + 1.0
+            else:
+                # Transient (non-rate-limit) error: bounded jittered backoff.
+                sleep_seconds = GH_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)) + random.uniform(
+                    0.0, 0.25
+                )
             time.sleep(sleep_seconds)
     raise RuntimeError("unreachable")
 
@@ -231,6 +373,17 @@ def reconcile_issue(
     if not desired:
         print(f"skip issue #{args.issue}: no derived status")
         return 0
+    budget = graphql_budget_remaining()
+    if budget is not None and budget < GRAPHQL_OPTIONAL_MIN_BUDGET:
+        print(
+            f"skip issue #{args.issue}: GraphQL budget low (remaining={budget} < "
+            f"{GRAPHQL_OPTIONAL_MIN_BUDGET}); issue truth remains authoritative, the "
+            "daily reconcile will project this card"
+        )
+        _log_event(
+            {"event": "github.budget.skip", "target": f"issue#{args.issue}", "remaining": budget}
+        )
+        return 0
     items = list_project_items(owner, project["number"])
     item = find_item_by_number(items, "Issue", args.issue)
     if item is None:
@@ -277,6 +430,17 @@ def reconcile_pr(
     if not desired:
         print(f"skip pr #{args.pr}: no derived status")
         return 0
+    budget = graphql_budget_remaining()
+    if budget is not None and budget < GRAPHQL_OPTIONAL_MIN_BUDGET:
+        print(
+            f"skip pr #{args.pr}: GraphQL budget low (remaining={budget} < "
+            f"{GRAPHQL_OPTIONAL_MIN_BUDGET}); PR truth remains authoritative, the "
+            "daily reconcile will project this card"
+        )
+        _log_event(
+            {"event": "github.budget.skip", "target": f"pr#{args.pr}", "remaining": budget}
+        )
+        return 0
     items = list_project_items(owner, project["number"])
     item = find_item_by_number(items, "PullRequest", args.pr)
     if item is None:
@@ -318,6 +482,15 @@ def reconcile_scan(
     status_field_id: str,
     status_options: dict[str, str],
 ) -> int:
+    budget = graphql_budget_remaining()
+    if budget is not None and budget < GRAPHQL_SCAN_MIN_BUDGET:
+        print(
+            f"skip project scan: GraphQL budget low (remaining={budget} < "
+            f"{GRAPHQL_SCAN_MIN_BUDGET}); deferring to the next daily or manual "
+            "reconcile so the shared pool is not pushed into exhaustion"
+        )
+        _log_event({"event": "github.budget.skip", "target": "scan", "remaining": budget})
+        return 0
     items = list_project_items(owner, project["number"])
     repo = args.repo
     changes = 0
