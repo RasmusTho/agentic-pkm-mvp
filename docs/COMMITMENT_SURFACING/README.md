@@ -13,7 +13,7 @@ related_docs:
   - docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md
 ---
 
-State: Active specification lane. Parent validation hub filed as GitHub Issue **#1960** (open, `agent:blocked` validation hub). This directory is the system-level source of truth for what must be built; GitHub is the authoritative backlog and validation record. Shaped by the owner decision recorded on #1960 (2026-06-15): durable persistence is a prerequisite and the substrate is the vault, in the companion-note family — not a new DB, not transient `AgentState`.
+State: Delivered capability specification lane. Parent validation hub **#1960** closed as completed on 2026-06-18 after child slices #2073-#2075 delivered; this directory remains the system-level source record for what shipped, and GitHub remains the authoritative backlog and validation record. Shaped by the owner decision recorded on #1960 (2026-06-15): durable persistence is a prerequisite and the substrate is the vault, in the companion-note family — not a new DB, not transient `AgentState`.
 
 # Commitment Surfacing
 

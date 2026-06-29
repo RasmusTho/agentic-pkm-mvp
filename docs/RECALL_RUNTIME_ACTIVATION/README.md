@@ -1,4 +1,4 @@
-State: Active specification directory (forward line; not shipped reality). Parent feature issue #1959; child issues filed on GitHub, which is the authoritative backlog.
+State: Delivered capability specification directory. Parent validation hub #1959 closed as completed on 2026-06-15 after child slices #1970-#1972 delivered; GitHub remains the authoritative backlog and validation record.
 Doc role: Capability specification
 Authority: Specifies the runtime activation of guarded memory recall. Semantic authority for memory remains in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; the durable-memory model/boundary remains in `docs/DURABLE_MEMORY_AND_RECALL/` and `docs/AGENT_MEMORY/`; current runtime posture remains in `docs/STATUS.md`.
 

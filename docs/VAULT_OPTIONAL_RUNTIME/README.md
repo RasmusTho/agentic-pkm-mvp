@@ -1,6 +1,6 @@
 # Vault Optional at Runtime
 
-State: Specification filed. Parent feature issue **#2003** (validation hub); children #2004-#2007. Follow-up eager resolver migration hub **#2311** is split into Slices 05A-05D. See `PARENT_FEATURE_ISSUE.md`.
+State: Delivered capability specification directory. Parent validation hub **#2003** closed as completed on 2026-06-18 after children #2004-#2007 closed; follow-up eager resolver migration hub **#2311** remains split into Slices 05A-05D. See `PARENT_FEATURE_ISSUE.md`.
 Doc role: Capability specification / source of truth for the breakdown.
 Owner decision: 2026-06-14 — a vault is **not required at initiation**; the runtime boots
 with no vault bound and idles until one is opened; vaults can be opened, switched, and
