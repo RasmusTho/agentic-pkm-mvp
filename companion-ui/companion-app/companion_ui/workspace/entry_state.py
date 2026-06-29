@@ -14,7 +14,7 @@ State enum (exactly five; adding or removing one is a spec change):
 - ``no_vault``     runtime aggregate unreachable (HTTP 503
                    ``runtime_unavailable`` per
                    ``WORKSPACE_ORIENTATION_CONTRACT.md §Runtime Unavailable``).
-- ``cold_start``   first contact or cold trajectory (> 14 days): no admissible
+- ``cold_start``   first contact or cold trajectory (> 7 days): no admissible
                    leave point. Renders no re-entry overlay of any kind.
 - ``orienting``    returning with a recoverable trajectory; carries a re-entry
                    shape derived from the gap per the latency ladder in
@@ -72,7 +72,7 @@ _GAP_NO_MIST_MAX = 90  # < 90s
 _GAP_THREAD_FADE_MAX = 15 * 60  # 90s – 15m
 _GAP_SOFT_MIST_MAX = 2 * 60 * 60  # 15m – 2h
 _GAP_FULL_MIST_MAX = 3 * 24 * 60 * 60  # 2h – 3d
-_GAP_COLD_THRESHOLD = 14 * 24 * 60 * 60  # > 14d → cold_start, not a shape
+_GAP_COLD_THRESHOLD = 7 * 24 * 60 * 60  # > 7d -> cold_start, not a shape
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ def _parse_timestamp(value: object) -> datetime | None:
 
 
 def _shape_for_gap(gap_seconds: float) -> str | None:
-    """Latency-ladder shape for a gap; ``None`` means cold (> 14 days)."""
+    """Latency-ladder shape for a gap; ``None`` means cold (> 7 days)."""
     if gap_seconds < _GAP_NO_MIST_MAX:
         return "no_mist"
     if gap_seconds < _GAP_THREAD_FADE_MAX:
@@ -220,7 +220,7 @@ def _resolve_from_orientation(orientation: dict) -> EntryStateResolution:
     else:
         shape = _shape_for_gap(gap)
         if shape is None:
-            # Cold trajectory (> 14 days) is not an orienting shape — it
+            # Cold trajectory (> 7 days) is not an orienting shape — it
             # resolves to cold_start and renders no re-entry overlay.
             return EntryStateResolution(state="cold_start", degraded_reasons=tuple(reasons))
 

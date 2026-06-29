@@ -896,7 +896,7 @@ def test_entry_point_node_renders_provenance_projection() -> None:
     # --- Pure-function path: the markup accepts the provenance params ---
     fragment = system_map_overlay_markup(
         available_routes=("vault",),
-        entry_trajectory="cold (>14d)",
+        entry_trajectory="cold (>7d)",
         entry_leave_point="present",
     )
     center_start = fragment.find('data-testid="system-map-center"')
@@ -910,7 +910,7 @@ def test_entry_point_node_renders_provenance_projection() -> None:
     assert prov_row, "provenance projection must render in the entry-point node"
     # Read-only projection authority — no mutation affordance, mirrors #2174.
     assert 'data-authority="read-only-projection"' in prov_row.group(0)
-    assert "cold (&gt;14d)" in center_html or "cold (>14d)" in center_html
+    assert "cold (&gt;7d)" in center_html or "cold (>7d)" in center_html
     assert "present" in center_html
 
     # No zero-state: with neither token supplied, the row is omitted entirely.
