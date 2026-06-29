@@ -70,6 +70,9 @@ def test_codex_agent_model_reasoning_and_sandbox_are_bounded() -> None:
 
 
 def test_codex_subagent_config_limits_fanout() -> None:
+    # Codex root session is depth 0; root -> coordinator(1) -> worker(2) is the supported
+    # topology. max_depth = 2 allows the single coordinator dispatch hop while still blocking
+    # workers from spawning workers (depth 3). max_threads bounds concurrent width.
     data = tomllib.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     assert data["agents"]["max_threads"] == 3
-    assert data["agents"]["max_depth"] == 1
+    assert data["agents"]["max_depth"] == 2

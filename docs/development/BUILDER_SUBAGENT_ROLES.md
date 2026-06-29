@@ -73,8 +73,10 @@ If a task does not match a role, do not invent one: run the matching skill direc
 
 - Subagent loops are **verifier-driven repair loops only** — a worker produces, a verifier checks, the
   worker repairs against named findings.
-- No recursive fan-out: a worker does not spawn workers. Fan-out depth is capped in `.codex/config.toml`
-  (`[agents] max_depth = 1`) and width by `max_threads = 3`.
+- One dispatch hop, no recursion. Codex counts the root session as depth 0, so the supported topology
+  is root(0) → `issue_set_coordinator`(1) → worker(2). `.codex/config.toml` sets `[agents] max_depth = 2`,
+  which permits the coordinator to dispatch workers but blocks workers from spawning their own workers
+  (depth 3 is refused). Width is bounded by `max_threads = 3`.
 - No generic looping agent. Loops terminate on a concrete verification verdict, not on a turn budget.
 
 ## Handoff receipt
