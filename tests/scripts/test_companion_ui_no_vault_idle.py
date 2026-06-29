@@ -95,6 +95,36 @@ def test_matching_prod_vault_passes() -> None:
     assert "vault guard OK" in (r.stdout + r.stderr)
 
 
+def test_doctor_prod_vault_mismatch_fails() -> None:
+    # The read-only doctor must FAIL on a prod vault mismatch, mirroring the
+    # launcher guard — otherwise prod-ui-doctor green-lights a vault prod-ui
+    # refuses to boot against (Codex P2, PR #2652).
+    harness = (
+        "VAULT_ROOT='/tmp/Niflheim'\n"
+        "CUI_CHANNEL=prod\n"
+        "CUI_EXPECTED_VAULT_PATTERN='midg(å|a)rd'\n"
+        "CUI_EXPECTED_VAULT_LABEL='Midgård/Midgard'\n"
+        "cui_doctor_vault_name_status\necho RC=$?"
+    )
+    r = _run(harness)
+    assert "[fail] prod vault" in (r.stdout + r.stderr)
+    assert "RC=1" in r.stdout, "prod mismatch must fail the doctor check"
+
+
+def test_doctor_non_prod_vault_mismatch_is_advisory() -> None:
+    # _CONFIG is the test channel: a mismatch warns but does not fail the doctor.
+    r = _run("VAULT_ROOT='/tmp/Niflheim'\ncui_doctor_vault_name_status\necho RC=$?")
+    assert "[warn] vault" in (r.stdout + r.stderr)
+    assert "[fail]" not in (r.stdout + r.stderr)
+    assert "RC=0" in r.stdout
+
+
+def test_doctor_no_vault_is_idle_not_failure() -> None:
+    r = _run("unset VAULT_ROOT\ncui_doctor_vault_name_status\necho RC=$?")
+    assert "no-vault idle boot" in (r.stdout + r.stderr)
+    assert "RC=0" in r.stdout
+
+
 def test_missing_channel_env_file_is_not_fatal(tmp_path: Path) -> None:
     # A repo root with no .env.test.local must not abort the launcher.
     snippet = (

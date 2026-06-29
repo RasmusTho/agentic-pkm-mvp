@@ -437,6 +437,32 @@ cui_run_start() {
 }
 
 # Read-only diagnostic. Never starts services or mutates vault/runtime state.
+# Read-only vault-name posture for the doctor. Echoes one status line for the
+# already-resolved VAULT_ROOT and returns non-zero ONLY when the doctor should
+# fail: a prod vault-name mismatch (mirrors cui_guard_vault_name, which aborts
+# the real prod-ui boot for the same condition). dev/test mismatches stay
+# advisory (warn, return 0); an unset VAULT_ROOT is the no-vault idle posture.
+# Pure — no docker/curl/env-file side effects — so it is unit-testable directly.
+cui_doctor_vault_name_status() {
+  local base base_lc
+  if [ -z "${VAULT_ROOT:-}" ]; then
+    echo "  [info] VAULT_ROOT unset — no-vault idle boot; open a vault in the ${CUI_CHANNEL} UI to activate"
+    return 0
+  fi
+  base="$(basename "${VAULT_ROOT}")"
+  base_lc="$(cui_lower "${base}")"
+  if printf '%s' "${base_lc}" | grep -Eq "${CUI_EXPECTED_VAULT_PATTERN}"; then
+    echo "  [ok]   vault resolves to ${CUI_EXPECTED_VAULT_LABEL} ('${base}')"
+    return 0
+  fi
+  if [ "${CUI_CHANNEL:-}" = "prod" ]; then
+    echo "  [fail] prod vault '${base}' is not ${CUI_EXPECTED_VAULT_LABEL} — prod-ui will refuse to boot (fix .env.${CUI_CHANNEL}.local)"
+    return 1
+  fi
+  echo "  [warn] vault '${base}' does not match expected ${CUI_EXPECTED_VAULT_LABEL} (advisory; active vault is selected in-app)"
+  return 0
+}
+
 cui_run_doctor() {
   cui_require_config
   local rc=0
@@ -472,19 +498,7 @@ cui_run_doctor() {
     # Missing override is a valid no-vault idle posture (#2005), not a failure.
     echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
   fi
-  if [ -n "${VAULT_ROOT:-}" ]; then
-    local base base_lc
-    base="$(basename "${VAULT_ROOT}")"
-    base_lc="$(cui_lower "${base}")"
-    if printf '%s' "${base_lc}" | grep -Eq "${CUI_EXPECTED_VAULT_PATTERN}"; then
-      echo "  [ok]   vault resolves to ${CUI_EXPECTED_VAULT_LABEL} ('${base}')"
-    else
-      echo "  [warn] vault '${base}' does not match expected ${CUI_EXPECTED_VAULT_LABEL} (advisory; active vault is selected in-app)"
-    fi
-  else
-    # Unset VAULT_ROOT is the no-vault idle posture, not a failure.
-    echo "  [info] VAULT_ROOT unset — no-vault idle boot; open a vault in the ${CUI_CHANNEL} UI to activate"
-  fi
+  cui_doctor_vault_name_status || rc=1
 
   # 3. API health (read-only)
   if curl -fsS --max-time 3 "http://127.0.0.1:${CUI_API_PORT}/healthz" >/dev/null 2>&1; then
