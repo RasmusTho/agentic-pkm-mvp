@@ -155,9 +155,12 @@ When two or more tasks read or write the same state, the capability `README.md` 
 Trigger this skill when any of the following are true:
 
 - one docs item clearly spans multiple PRs or implementation surfaces
+- a new mechanism has to preserve one invariant across several existing interaction sites, even if each local edit looks small
 - the work needs one parent capability outcome and several implementation tasks
 - post-merge validation matters enough that a parent issue should remain open after task merges
 - acceptance should be explicit before owner docs are promoted again
+
+By contrast, additive work on a single surface that mirrors an existing pattern can stay a single bounded slice when it does not introduce a new cross-cutting invariant.
 
 ## First context to load
 
