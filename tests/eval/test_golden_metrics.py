@@ -11,6 +11,7 @@ pytestmark = pytest.mark.not_pg
 
 BILINGUAL_CORPUS_PATH = Path("data/golden/bilingual_corpus.jsonl")
 BILINGUAL_JUDGMENTS_PATH = Path("data/golden/bilingual_judgments.json")
+CANONICAL_REVIEW_STATES = {"draft", "provisional", "reviewed", "protected", "archived"}
 
 
 def test_precision_bounds() -> None:
@@ -54,6 +55,7 @@ def test_bilingual_ground_truth_resolves() -> None:
         doc = json.loads(line)
         corpus_ids.add(str(doc["doc_id"]))
         languages.add(str(doc["language"]))
+        assert doc["review_state"] in CANONICAL_REVIEW_STATES
         payload = doc.get("payload") or {}
         assert payload.get("trust") == doc["trust"]
         assert payload.get("review_state") == doc["review_state"]

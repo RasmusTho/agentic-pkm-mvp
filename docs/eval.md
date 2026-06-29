@@ -64,6 +64,7 @@ cases:
     query: "Where is the canonical system settings YAML?"
     relevant_artifact_ids:
       - bg-doc-settings-en
+      - bg-doc-settings-sv
     route_intent: exact_lexical
     provenance_expectation: "source_ref points to vault/_system/settings/system-settings.yaml"
     trust_expectation: own
@@ -76,7 +77,7 @@ Required case fields:
 | `id` | Stable case id, unique within the seed. |
 | `language` | Required language tag; allowed values are `sv` and `en`. |
 | `query` | User-facing retrieval/ASK query in the tagged language. |
-| `relevant_artifact_ids` | Non-empty list of resolvable ids in the paired golden corpus. |
+| `relevant_artifact_ids` | Non-empty list of resolvable ids in the paired golden corpus. For paired graded judgments, this must match every doc id with positive relevance for the same case id. |
 | `route_intent` | Descriptive route label. Current deterministic seed labels are `exact_lexical`, `hybrid_semantic`, `recall_into_ask`, and `low_trust_citation`; this is not a final route taxonomy. |
 | `provenance_expectation` | Human-readable expectation for source/provenance visibility. |
 | `trust_expectation` | Human-readable trust/review-state expectation for retrieved evidence. |
@@ -87,10 +88,12 @@ low-trust citation checks. Its paired deterministic ground truth lives under
 `data/golden/bilingual_corpus.jsonl` and
 `data/golden/bilingual_judgments.json`; the judgment file uses the separate
 `retrieval_bilingual_judgments.v1` schema because it is a graded `queries`
-object, not the top-level eval-case YAML shape. Corpus trust/review metadata is
-also mirrored into each row's `payload` so existing hybrid-store loading paths
-preserve low-trust citation expectations. The existing precision@k/ndcg@k
-runner continues to read `data/golden/corpus.jsonl` plus
+object, not the top-level eval-case YAML shape. Corpus trust metadata and
+canonical `review_state` values are also mirrored into each row's `payload` so
+existing hybrid-store loading paths preserve low-trust citation expectations
+without writing legacy review-state values such as `processed` or `promoted`;
+workflow, promotion, or maturity markers belong in separate metadata fields.
+The existing precision@k/ndcg@k runner continues to read `data/golden/corpus.jsonl` plus
 `data/golden/judgments.json`; the bilingual sibling is additive and backward
 compatible until the runner/CLI is intentionally extended.
 
