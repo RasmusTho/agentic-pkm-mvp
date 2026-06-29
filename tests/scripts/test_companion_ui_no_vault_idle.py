@@ -184,7 +184,9 @@ def test_present_channel_env_overrides_inherited_vault_root(tmp_path: Path) -> N
     )
 
 
-def _run_start_runtime(tmp_path: Path, *, vault_root: str | None, mount_src: str) -> str:
+def _run_start_runtime(
+    tmp_path: Path, *, vault_root: str | None, mount_src: str, has_container: bool = True
+) -> str:
     """Drive cui_start_runtime with a stubbed Docker layer; returns RECREATED|SKIPPED.
 
     The runtime API is stubbed healthy; cui_start_runtime either warm-skips or
@@ -205,7 +207,7 @@ def _run_start_runtime(tmp_path: Path, *, vault_root: str | None, mount_src: str
         "export CUI_FORCE_RECREATE=0\n"
         f'cui_repo_root() {{ printf "%s" "{tmp_path}"; }}\n'
         "cui_api_healthy_now() { return 0; }\n"
-        "cui_api_container_id() { printf 'fakecid'; }\n"
+        f"cui_api_container_id() {{ printf '%s' '{'fakecid' if has_container else ''}'; }}\n"
         f"cui_container_vault_mount_source() {{ printf '%s' '{mount_src}'; }}\n"
         f"{vault_line}\n"
         "cui_start_runtime >/dev/null 2>&1 || true\n"
@@ -233,6 +235,16 @@ def test_no_vault_launch_recreates_stale_vault_mount(tmp_path: Path) -> None:
 def test_no_vault_launch_warm_skips_when_no_mount(tmp_path: Path) -> None:
     # An already-idle container (no vault mount) + a no-vault launch may warm-skip.
     assert _run_start_runtime(tmp_path, vault_root=None, mount_src="") == "SKIPPED"
+
+
+def test_no_vault_launch_recreates_when_no_channel_container(tmp_path: Path) -> None:
+    # A healthy /healthz with NO channel container (e.g. a foreign or stale process
+    # answering on the channel port) must recreate the channel stack, not warm-skip
+    # onto the unrelated runtime (Codex P2 on PR #2652).
+    assert (
+        _run_start_runtime(tmp_path, vault_root=None, mount_src="", has_container=False)
+        == "RECREATED"
+    )
 
 
 def test_configured_vault_recreates_when_mount_missing(tmp_path: Path) -> None:

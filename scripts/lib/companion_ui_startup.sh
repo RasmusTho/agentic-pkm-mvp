@@ -177,16 +177,17 @@ cui_runtime_vault_matches_env() {
   [ "${source}" = "${VAULT_ROOT:-}" ]
 }
 
-# Returns 0 if the running channel API container has an /app/vault bind mount.
-# Used by the no-vault (picker) launch path to decide whether a healthy stack may
-# be warm-skipped: a container still bound to a previous vault must be recreated
-# so it serves the picker rather than the stale vault (#2005).
-cui_runtime_has_vault_mount() {
+# Returns 0 only when a running channel API container exists AND has NO /app/vault
+# bind mount — the single state a no-vault (picker) launch may warm-skip. A missing
+# channel container (e.g. a foreign or stale process answering /healthz on the
+# channel port) or a container still bound to a vault must recreate, so the channel
+# serves its own idle stack rather than an unrelated runtime or a stale vault (#2005).
+cui_runtime_is_idle_channel_container() {
   local cid source
   cid="$(cui_api_container_id)"
   [ -n "${cid}" ] || return 1
   source="$(cui_container_vault_mount_source "${cid}")"
-  [ -n "${source}" ]
+  [ -z "${source}" ]
 }
 
 cui_start_runtime() {
@@ -199,11 +200,12 @@ cui_start_runtime() {
   if [ "${CUI_FORCE_RECREATE:-0}" != "1" ] && cui_api_healthy_now; then
     _skip_recreate=0
     if [ -z "${VAULT_ROOT:-}" ]; then
-      # No-vault (picker) launch: only warm-skip when the live container has no
-      # vault mount. A container still bound to a previous vault must be
-      # recreated, or `make {dev,test,prod}-ui` would keep serving that vault
-      # instead of the in-app picker (#2005).
-      cui_runtime_has_vault_mount || _skip_recreate=1
+      # No-vault (picker) launch: only warm-skip when THIS channel has a live
+      # container with no vault mount. No channel container (a foreign/stale
+      # process answering /healthz on the port) or a container still bound to a
+      # previous vault must recreate, so `make {dev,test,prod}-ui` serves the
+      # channel's own in-app picker, not an unrelated or stale runtime (#2005).
+      cui_runtime_is_idle_channel_container && _skip_recreate=1
     elif cui_runtime_vault_matches_env; then
       # Vault configured (all channels alike): only warm-skip when the live
       # container is already bound to exactly that vault. Otherwise recreate so a
