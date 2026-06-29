@@ -1,0 +1,96 @@
+schema_version: retrieval_eval_case.v1
+cases:
+  - id: exact-en-settings-yaml
+    language: en
+    query: "Where is the canonical system settings YAML?"
+    relevant_artifact_ids:
+      - bg-doc-settings-en
+      - bg-doc-settings-sv
+    route_intent: exact_lexical
+    provenance_expectation: "source_ref points to vault/_system/settings/system-settings.yaml"
+    trust_expectation: own
+  - id: exact-sv-settings-yaml
+    language: sv
+    query: "Var ligger den kanoniska systeminställningsfilen?"
+    relevant_artifact_ids:
+      - bg-doc-settings-sv
+      - bg-doc-settings-en
+    route_intent: exact_lexical
+    provenance_expectation: "source_ref pekar på vault/_system/settings/system-settings.yaml"
+    trust_expectation: own
+  - id: exact-en-event-catalog
+    language: en
+    query: "Which folder holds the system event catalog?"
+    relevant_artifact_ids:
+      - bg-doc-event-catalog-en
+    route_intent: exact_lexical
+    provenance_expectation: "source_ref points to vault/_system/events/"
+    trust_expectation: own
+  - id: hybrid-en-decision-support
+    language: en
+    query: "What should a decision maker have before committing to an action?"
+    relevant_artifact_ids:
+      - bg-doc-decision-en
+      - bg-doc-decision-sv
+    route_intent: hybrid_semantic
+    provenance_expectation: "source_ref points to the decision science note"
+    trust_expectation: reviewed
+  - id: hybrid-sv-decision-support
+    language: sv
+    query: "Vad behöver en beslutsfattare innan den binder sig till en åtgärd?"
+    relevant_artifact_ids:
+      - bg-doc-decision-sv
+      - bg-doc-decision-en
+    route_intent: hybrid_semantic
+    provenance_expectation: "source_ref pekar på beslutsvetenskapsanteckningen"
+    trust_expectation: reviewed
+  - id: hybrid-sv-context-switch
+    language: sv
+    query: "Hur ska systemet hjälpa när användaren återvänder till ett sammanhang?"
+    relevant_artifact_ids:
+      - bg-doc-context-sv
+    route_intent: hybrid_semantic
+    provenance_expectation: "source_ref pekar på continuity/context-noten"
+    trust_expectation: own
+  - id: recall-en-project-next-actions
+    language: en
+    query: "What are the next actions for the Galaxy draft?"
+    relevant_artifact_ids:
+      - bg-doc-project-en
+      - bg-doc-project-sv
+    route_intent: recall_into_ask
+    provenance_expectation: "source_ref points to vault/Workbench/galaxy-test.md"
+    trust_expectation: promoted
+  - id: recall-sv-project-next-actions
+    language: sv
+    query: "Vilka nästa steg finns för Galaxy-utkastet?"
+    relevant_artifact_ids:
+      - bg-doc-project-sv
+      - bg-doc-project-en
+    route_intent: recall_into_ask
+    provenance_expectation: "source_ref pekar på vault/Workbench/galaxy-test-sv.md"
+    trust_expectation: promoted
+  - id: recall-en-memory-review
+    language: en
+    query: "Which memory candidates still require review?"
+    relevant_artifact_ids:
+      - bg-doc-memory-review-en
+    route_intent: recall_into_ask
+    provenance_expectation: "source_ref points to the memory review queue"
+    trust_expectation: unreviewed
+  - id: lowtrust-en-web-citation
+    language: en
+    query: "Which imported web clip needs citation before use?"
+    relevant_artifact_ids:
+      - bg-doc-lowtrust-web-en
+    route_intent: low_trust_citation
+    provenance_expectation: "source_ref keeps imported URL visible"
+    trust_expectation: low
+  - id: lowtrust-sv-web-citation
+    language: sv
+    query: "Vilket importerat webbklipp behöver källkontroll före användning?"
+    relevant_artifact_ids:
+      - bg-doc-lowtrust-web-sv
+    route_intent: low_trust_citation
+    provenance_expectation: "source_ref behåller importerad URL synlig"
+    trust_expectation: low

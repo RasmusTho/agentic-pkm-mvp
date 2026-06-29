@@ -1,0 +1,110 @@
+{
+  "schema_version": "retrieval_bilingual_judgments.v1",
+  "queries": [
+    {
+      "id": "exact-en-settings-yaml",
+      "language": "en",
+      "route_intent": "exact_lexical",
+      "query": "Where is the canonical system settings YAML?",
+      "relevance": [
+        {"doc_id": "bg-doc-settings-en", "relevance": 3},
+        {"doc_id": "bg-doc-settings-sv", "relevance": 2}
+      ]
+    },
+    {
+      "id": "exact-sv-settings-yaml",
+      "language": "sv",
+      "route_intent": "exact_lexical",
+      "query": "Var ligger den kanoniska systeminställningsfilen?",
+      "relevance": [
+        {"doc_id": "bg-doc-settings-sv", "relevance": 3},
+        {"doc_id": "bg-doc-settings-en", "relevance": 2}
+      ]
+    },
+    {
+      "id": "exact-en-event-catalog",
+      "language": "en",
+      "route_intent": "exact_lexical",
+      "query": "Which folder holds the system event catalog?",
+      "relevance": [
+        {"doc_id": "bg-doc-event-catalog-en", "relevance": 3}
+      ]
+    },
+    {
+      "id": "hybrid-en-decision-support",
+      "language": "en",
+      "route_intent": "hybrid_semantic",
+      "query": "What should a decision maker have before committing to an action?",
+      "relevance": [
+        {"doc_id": "bg-doc-decision-en", "relevance": 3},
+        {"doc_id": "bg-doc-decision-sv", "relevance": 2}
+      ]
+    },
+    {
+      "id": "hybrid-sv-decision-support",
+      "language": "sv",
+      "route_intent": "hybrid_semantic",
+      "query": "Vad behöver en beslutsfattare innan den binder sig till en åtgärd?",
+      "relevance": [
+        {"doc_id": "bg-doc-decision-sv", "relevance": 3},
+        {"doc_id": "bg-doc-decision-en", "relevance": 2}
+      ]
+    },
+    {
+      "id": "hybrid-sv-context-switch",
+      "language": "sv",
+      "route_intent": "hybrid_semantic",
+      "query": "Hur ska systemet hjälpa när användaren återvänder till ett sammanhang?",
+      "relevance": [
+        {"doc_id": "bg-doc-context-sv", "relevance": 3}
+      ]
+    },
+    {
+      "id": "recall-en-project-next-actions",
+      "language": "en",
+      "route_intent": "recall_into_ask",
+      "query": "What are the next actions for the Galaxy draft?",
+      "relevance": [
+        {"doc_id": "bg-doc-project-en", "relevance": 3},
+        {"doc_id": "bg-doc-project-sv", "relevance": 2}
+      ]
+    },
+    {
+      "id": "recall-sv-project-next-actions",
+      "language": "sv",
+      "route_intent": "recall_into_ask",
+      "query": "Vilka nästa steg finns för Galaxy-utkastet?",
+      "relevance": [
+        {"doc_id": "bg-doc-project-sv", "relevance": 3},
+        {"doc_id": "bg-doc-project-en", "relevance": 2}
+      ]
+    },
+    {
+      "id": "recall-en-memory-review",
+      "language": "en",
+      "route_intent": "recall_into_ask",
+      "query": "Which memory candidates still require review?",
+      "relevance": [
+        {"doc_id": "bg-doc-memory-review-en", "relevance": 3}
+      ]
+    },
+    {
+      "id": "lowtrust-en-web-citation",
+      "language": "en",
+      "route_intent": "low_trust_citation",
+      "query": "Which imported web clip needs citation before use?",
+      "relevance": [
+        {"doc_id": "bg-doc-lowtrust-web-en", "relevance": 3}
+      ]
+    },
+    {
+      "id": "lowtrust-sv-web-citation",
+      "language": "sv",
+      "route_intent": "low_trust_citation",
+      "query": "Vilket importerat webbklipp behöver källkontroll före användning?",
+      "relevance": [
+        {"doc_id": "bg-doc-lowtrust-web-sv", "relevance": 3}
+      ]
+    }
+  ]
+}
