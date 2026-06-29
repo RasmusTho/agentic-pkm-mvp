@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader
@@ -34,9 +34,38 @@ def _is_loopback_host(host: str | None) -> bool:
         return False
 
 
+def _configured_trusted_proxy_hosts() -> list[str]:
+    raw = settings.companion_trusted_proxy_hosts or ""
+    return [entry.strip() for entry in raw.split(",") if entry.strip()]
+
+
+def _is_configured_trusted_proxy(host: str | None) -> bool:
+    if host is None:
+        return False
+    try:
+        host_ip = ip_address(host)
+    except ValueError:
+        host_ip = None
+
+    for entry in _configured_trusted_proxy_hosts():
+        if host_ip is not None:
+            try:
+                if host_ip in ip_network(entry, strict=False):
+                    return True
+            except ValueError:
+                pass
+        if host == entry:
+            return True
+    return False
+
+
+def _can_trust_forwarded_for(immediate_host: str | None) -> bool:
+    return _is_loopback_host(immediate_host) or _is_configured_trusted_proxy(immediate_host)
+
+
 def _effective_client_host(request: Request) -> str | None:
     immediate_host = request.client.host if request.client else None
-    if not _is_loopback_host(immediate_host):
+    if not _can_trust_forwarded_for(immediate_host):
         return immediate_host
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for is None:
