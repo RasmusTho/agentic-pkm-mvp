@@ -26,14 +26,18 @@ from app.orientation.leave_point_cursor import (
     latest_leave_point_projection,
 )
 from app.services import outbox as outbox_service
-from tests.api._vault_test_helpers import bind_selected_vault
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 
 @pytest.fixture(autouse=True)
 def _runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
-    bind_selected_vault(monkeypatch, vault_root, channel="test")
+    # Orientation requires a *selected* (initialized) vault (#2653); a bare
+    # ``uninitialized`` directory now routes to the picker. The leave-point
+    # cursor identity keys on the configured vault name ("vault-test") and
+    # channel below, which are unchanged, so cursor matching is unaffected.
+    bind_initialized_vault(monkeypatch, vault_root, channel="test")
     monkeypatch.setenv("PKM_CHANNEL", "test")
     monkeypatch.setenv("LEAVE_POINT_TRACE_DB", str(tmp_path / "runtime" / "leave-point.sqlite3"))
     monkeypatch.setattr(companion_module, "_configured_vault_name", lambda: "vault-test")
@@ -276,8 +280,14 @@ def test_orientation_read_does_not_write_cursor(
 
 
 def test_no_vault_write_for_cursor_capture(tmp_path: Path) -> None:
+    # Cursor capture persists to the trace DB, never as vault ``.md`` files.
+    # Snapshot before/after so the Design-Handoff settings scaffold the
+    # autouse fixture writes (an initialized vault, #2653) is not mistaken for a
+    # capture-side write: the invariant is that ``_capture()`` adds NO new ``.md``.
+    before = set(tmp_path.rglob("*.md"))
     _capture()
-    assert list(tmp_path.rglob("*.md")) == []
+    after = set(tmp_path.rglob("*.md"))
+    assert after == before
 
 
 def test_no_receipt_write_for_cursor_capture(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -328,15 +328,23 @@ def test_uninitialized_selected_vault_is_readable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Selecting an existing bare folder resolves to ``uninitialized`` and is readable.
+    """Selecting an existing bare folder resolves to ``uninitialized`` and is content-readable.
 
     Reads must NOT require initialization: a selected directory with no
-    Design Handoff settings must still be browsable/readable. Only
-    writes/permissions/watcher/index require initialization.
+    Design Handoff settings must still be browsable/readable on the *content*
+    surfaces. Only writes/permissions/watcher/index require initialization.
 
     Confirms the ``_active_companion_vault_root`` selection-status gate allows
-    reads for the ``uninitialized`` status via ``_READABLE_SELECTED_STATUSES``
-    (#2309, #2312).
+    content reads for the ``uninitialized`` status via
+    ``_READABLE_SELECTED_STATUSES`` (#2309, #2312).
+
+    Reconciliation with #2653: the orientation/entry *projection* is NOT a
+    content surface — its ``cold_start`` claim is gated on a *bound/selected*
+    vault (``SYSTEM_ENTRY_POINT_SPEC.md``), so a selected-but-``uninitialized``
+    vault routes ``/orientation`` to the ``vault_selection_required`` picker
+    rather than fabricating a ``VAULT_ROOT``-derived orientation. Content reads
+    (note read, vault-browser enumeration) stay readable; the entry projection
+    routes to the picker.
     """
     vault = tmp_path / "existing-bare-vault"
     (vault / "notes").mkdir(parents=True, exist_ok=True)
@@ -375,12 +383,20 @@ def test_uninitialized_selected_vault_is_readable(
         "vault-browser returned vault_selection_required for an uninitialized-but-selected vault"
     )
 
-    # Orientation must be readable.
+    # Orientation is the entry *projection*, not a content surface: a
+    # selected-but-uninitialized vault routes to the picker (#2653), because
+    # ``cold_start`` is gated on a bound/selected vault. This is distinct from
+    # the content reads above, which stay readable.
     orientation = client.get("/api/companion/orientation")
     assert orientation.status_code == 200, orientation.text
     orientation_body = orientation.json()
-    assert orientation_body.get("state") != "vault_selection_required", (
-        "orientation returned vault_selection_required for an uninitialized-but-selected vault"
+    assert orientation_body.get("state") == "vault_selection_required", (
+        "orientation must route an uninitialized-but-selected vault to the picker "
+        "(#2653): the entry projection's cold_start claim requires a bound/selected vault"
+    )
+    assert orientation_body.get("reason") == "uninitialized", (
+        "the orientation picker names the residual ``uninitialized`` state, not "
+        "``no_vault_bound`` (#2336)"
     )
 
 

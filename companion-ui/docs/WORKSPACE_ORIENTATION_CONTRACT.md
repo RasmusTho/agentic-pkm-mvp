@@ -548,6 +548,7 @@ Rules:
 - The UI must **never** auto-open this path on mount; it is an affordance only.
 - The UI must **omit the sub-affordance entirely** when the field is absent.
 - Deterministic tiebreak: when multiple notes share the same `mtime`, the lexicographically first path (ascending) wins, ensuring stable server-side resolution.
+- **Human notes only.** Machine-config files are excluded from the candidate set: the system directory (`VAULT_SYSTEM_DIR_REL`, companion notes and other machine artefacts) and the committed Design-Handoff `settings/` scaffold (`vault.md`, `local.md`, …). The orientation entry projection only runs for an initialized vault (which always carries that scaffold, #2653), so a settings file must never surface as "your most recent note". Notes whose only available label is a bare UUID stem are likewise skipped to the next valid human note.
 
 Shape:
 

@@ -22,12 +22,17 @@ from app.resurfacing.runtime import (
     ResurfacingSignal,
     ResurfacingWhyNow,
 )
-from tests.api._vault_test_helpers import bind_selected_vault
+from tests.api._vault_test_helpers import bind_initialized_vault
 
 
 @pytest.fixture(autouse=True)
 def _clear_runtime_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    bind_selected_vault(monkeypatch, tmp_path, channel="test")
+    # The orientation entry projection requires a *selected* (initialized) vault
+    # (#2653): a bare ``uninitialized`` directory now routes to the picker, so
+    # these orientation-rendering tests bind an initialized vault. The
+    # ``scope.vault_id`` still comes from the configured name below, so asserted
+    # identity values are unchanged.
+    bind_initialized_vault(monkeypatch, tmp_path, channel="test")
     monkeypatch.setenv("PKM_CHANNEL", "test")
     monkeypatch.setenv("LEAVE_POINT_TRACE_DB", str(tmp_path / "runtime" / "leave-point.sqlite3"))
     monkeypatch.setenv(
@@ -323,6 +328,55 @@ def test_recents_anchor_excludes_system_dir_and_uuid_only_label(
     assert result is not None, "human note with H1 must surface as recents anchor"
     assert result.display_label == "My Project"
     assert result.note_path == "My Project.md"
+
+
+def test_recents_anchor_excludes_design_handoff_settings_scaffold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Design-Handoff ``settings/`` scaffold is machine config, not a human note.
+
+    #2653: the orientation entry projection now runs only for an *initialized*
+    vault, which always carries the committed ``settings/*.md`` scaffold
+    (``vault.md``, ``local.md``, …). Those files must never surface as the
+    "most recent note" — even when they have the newest mtime — exactly as the
+    system-dir files are excluded.
+    """
+    import time
+
+    from app.api.routes.companion import _orientation_recents_anchor
+
+    # The autouse fixture initializes ``tmp_path`` itself (writing a settings
+    # scaffold there), so use a clean sub-vault for this unit assertion.
+    vault = tmp_path / "sub-vault"
+    vault.mkdir()
+    settings_dir = vault / "settings"
+    settings_dir.mkdir()
+    (settings_dir / "vault.md").write_text(
+        "---\nschema: design-handoff.vault.v1\n---\n# Vault Settings\n", encoding="utf-8"
+    )
+    (settings_dir / "companion-ui.md").write_text(
+        "---\nschema: design-handoff.companion-ui.v1\n---\n# Companion UI Settings\n",
+        encoding="utf-8",
+    )
+
+    # With only the settings scaffold present, there is no human note → None,
+    # even though the settings files have a fresh mtime.
+    time.sleep(0.01)
+    (settings_dir / "vault.md").touch()
+    assert _orientation_recents_anchor(vault) is None, (
+        "settings/*.md must not surface as the recents anchor"
+    )
+
+    # A real human note still wins over the (newer-touched) settings scaffold.
+    human_note = vault / "My Project.md"
+    human_note.write_text("# My Project\n\nContent.\n", encoding="utf-8")
+    time.sleep(0.01)
+    (settings_dir / "vault.md").touch()  # settings is newest on disk...
+    result = _orientation_recents_anchor(vault)
+    assert result is not None
+    assert result.note_path == "My Project.md"  # ...but the human note still wins
+    assert result.display_label == "My Project"
 
 
 def test_recents_anchor_rejects_symlink_escape(

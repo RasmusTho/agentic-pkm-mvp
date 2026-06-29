@@ -116,6 +116,39 @@ def test_home_picker_payload_renders_picker_not_cold_start() -> None:
     assert any(url == "/api/companion/orientation" for url, _ in client.get_calls)
 
 
+def test_unselected_vault_with_configured_root_renders_picker_not_cold_start() -> None:
+    """#2653: VAULT_ROOT configured but nothing *selected* → picker, not cold_start.
+
+    The #2653 repro is a selected-but-``uninitialized`` vault
+    (``status != "selected"`` / ``active_vault_id is null``): orientation USED to
+    resolve the configured ``VAULT_ROOT`` and the page rendered
+    ``data-entry-state="cold_start"``. With the orientation selection gate in
+    place the runtime returns the ``vault_selection_required`` picker (here with
+    ``reason="uninitialized"``), and the entry surface must render the
+    "Choose a vault" picker (``data-testid="vault-picker-title"``) — never the
+    ``cold_start`` door for an unselected vault.
+    """
+    payload = dict(_PICKER_PAYLOAD)
+    payload["reason"] = "uninitialized"
+    payload["context"] = {"status": "uninitialized"}
+    client = _PickerClient(payload)
+    html = handle_get(
+        query_string="",
+        client=client,
+        api_base_url="http://127.0.0.1:18001",
+    )
+    # The "Choose a vault" picker is rendered...
+    assert 'data-testid="vault-picker-title"' in html
+    assert 'data-testid="vault-selection-required"' in html
+    assert 'data-entry-state="no_vault"' in html
+    # ...and the page is NOT a fabricated cold_start orientation.
+    assert 'data-entry-state="cold_start"' not in html
+    assert 'data-region="cold-start-threshold"' not in html
+    assert 'data-region="reentry-card"' not in html
+    # The orientation boundary was queried (the entry path, not a note load).
+    assert any(url == "/api/companion/orientation" for url, _ in client.get_calls)
+
+
 def test_no_vault_orientation_unavailable_suppresses_degraded_banner() -> None:
     client = _OrientationUnavailableClient(_vault_browser_payload())
 
