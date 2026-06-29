@@ -265,6 +265,27 @@ def test_dev_start_full_returns_zero_with_deferred_index_rebuild(tmp_path: Path)
     assert "runtime verified: true" in result.stdout
 
 
+def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:
+    env = _runtime_env(tmp_path, _deferred_index_health())
+    env["COMPOSE_FILE"] = "docker-compose.yaml:docker-compose.prod.yml"
+    env["COMPOSE_PROJECT_NAME"] = "pkm-prod"
+    env["PKM_ENVIRONMENT"] = "prod"
+
+    result = subprocess.run(
+        ["bash", "scripts/start_full_system.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 1
+    assert "required health ok=true not met" in result.stdout
+    assert "runtime verified: true" not in result.stdout
+
+
 def test_runtime_verify_rejects_hard_health_failures(tmp_path: Path) -> None:
     env = _runtime_env(tmp_path, _hard_failure_health())
     env["RUNTIME_VERIFY_ALLOW_DEFERRED_INDEX_REBUILD"] = "1"

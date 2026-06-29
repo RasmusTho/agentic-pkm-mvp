@@ -2478,7 +2478,7 @@ fi
 
 set_phase "runtime_verify"
 runtime_verify_allow_deferred_index_rebuild=0
-if [ "${VERIFY_ACTIVE:-0}" -ne 1 ] && [ "$index_rebuild_status" = "required" ]; then
+if [ "${VERIFY_ACTIVE:-0}" -ne 1 ] && [ "$index_rebuild_status" = "required" ] && [ "${PKM_ENVIRONMENT:-}" = "dev" ]; then
   runtime_verify_allow_deferred_index_rebuild=1
 fi
 if ! RUNTIME_ENV_PATH="$runtime_env_path" API_BASE_URL="$API_BASE_URL" RUNTIME_VERIFY_ALLOW_DEFERRED_INDEX_REBUILD="$runtime_verify_allow_deferred_index_rebuild" bash scripts/verify_runtime_stack.sh; then
