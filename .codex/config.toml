@@ -1,0 +1,10 @@
+# Codex project-scoped settings for this repository.
+# Builder System governance surface; see docs/development/BUILDER_SUBAGENT_ROLES.md
+# and docs/architecture/SBS_OPERATING_MODEL.md. Not Product/Runtime truth.
+
+# Bound specialist-subagent fan-out: many agents already run against this repo, so
+# coordination/rework cost dominates. max_depth = 1 forbids recursive fan-out
+# (workers do not spawn workers); max_threads caps concurrent agent threads.
+[agents]
+max_threads = 3
+max_depth = 1

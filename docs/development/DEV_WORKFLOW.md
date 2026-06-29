@@ -144,6 +144,8 @@ Use this lane only when:
   - `CLAUDE.md`
   - `.codex/AGENTS.md`
   - `.codex/skills/**`
+  - `.codex/agents/**`
+  - `.codex/config.toml`
   - `.github/github-governance.yml`
   - `.github/ISSUE_TEMPLATE/*.yml`
   - `.github/pull_request_template.md`
@@ -151,6 +153,7 @@ Use this lane only when:
   - `scripts/docs_guard.py`
   - `scripts/await_pr_checks.sh`
   - `tests/architecture/test_agent_skill_entrypoints.py`
+  - `tests/governance/test_codex_agents_contract.py`
 - the PR is limited to repo governance, agent workflow, or lightweight enforcement
 - the PR does not change product/runtime implementation or shipped feature behavior
 
