@@ -771,9 +771,17 @@ def test_uninitialized_write_refusal_renders_picker_with_initialize() -> None:
     assert 'data-vault-path="/Users/me/Vaults/Niflheim"' in picker_page
     assert 'data-region="document-anchor"' not in picker_page
     assert "window.renderVaultSelectionRequiredPicker" in picker_page
-    assert "window.renderVaultSelectionRequiredPicker(res.data)" in picker_page
-    assert "window.renderVaultSelectionRequiredPicker(result.data)" in picker_page
-    assert "renderVaultSelectionRequired(ack)" in picker_page
+    assert "window.sessionStorage.setItem(refusedWriteDraftKey" in picker_page
+    assert "window.restoreRefusedWriteDraft" in picker_page
+    assert "vault-selection-required" in picker_page
+    assert "window.sessionStorage.removeItem(refusedWriteDraftKey)" in picker_page
+    assert "kind: 'note_save'" in picker_page
+    assert "text: ta.value" in picker_page
+    assert "kind: 'body_edit'" in picker_page
+    assert "text: newBody" in picker_page
+    assert "kind: 'capture'" in picker_page
+    assert "renderVaultSelectionRequired(ack, text)" in picker_page
+    assert "data-refused-write-draft-restored" in picker_page
 
 
 def test_vault_root_misconfigured_reason_renders_initialize_affordance() -> None:

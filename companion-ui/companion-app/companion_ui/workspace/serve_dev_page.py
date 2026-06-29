@@ -1860,7 +1860,11 @@ def _note_editor_script() -> str:
           return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; });
         }).then(function (res) {
           if (window.renderVaultSelectionRequiredPicker &&
-              window.renderVaultSelectionRequiredPicker(res.data)) {
+              window.renderVaultSelectionRequiredPicker(res.data, {
+                kind: 'note_save',
+                note_path: notePath,
+                text: ta.value
+              })) {
             return;
           }
           if (res.ok) {
@@ -14287,14 +14291,62 @@ def render_index_html(
   </script>
   <script>
   (function() {{
-    window.renderVaultSelectionRequiredPicker = function(data) {{
+    var refusedWriteDraftKey = 'companion.refusedWriteDraft.v1';
+    window.renderVaultSelectionRequiredPicker = function(data, draft) {{
       if (!data || data.state !== 'vault_selection_required') return false;
       var html = data.vault_selection_required_html || '';
       if (!html) return false;
+      if (draft && draft.text) {{
+        try {{
+          window.sessionStorage.setItem(refusedWriteDraftKey, JSON.stringify(draft));
+        }} catch (e) {{}}
+      }}
       document.open();
       document.write(html);
       document.close();
       return true;
+    }};
+    window.restoreRefusedWriteDraft = function() {{
+      if (document.querySelector('[data-testid="vault-selection-required"]')) return;
+      var raw = null;
+      try {{ raw = window.sessionStorage.getItem(refusedWriteDraftKey); }} catch (e) {{ raw = null; }}
+      if (!raw) return;
+      var draft = null;
+      try {{ draft = JSON.parse(raw); }} catch (e) {{ draft = null; }}
+      if (!draft || !draft.kind || !draft.text) return;
+      var restored = false;
+      if (draft.kind === 'note_save') {{
+        var noteEditor = document.getElementById('note-source-editor');
+        var expectedPath = (noteEditor && noteEditor.getAttribute('data-note-path') || '').split('#')[0];
+        if (noteEditor && (!draft.note_path || draft.note_path === expectedPath)) {{
+          noteEditor.value = draft.text;
+          noteEditor.setAttribute('data-refused-write-draft-restored', 'true');
+          if (window.noteEditor && typeof window.noteEditor.start === 'function') {{
+            window.noteEditor.start();
+          }}
+          restored = true;
+        }}
+      }} else if (draft.kind === 'body_edit') {{
+        var container = document.getElementById('body-edit-codemirror');
+        var bodyPath = container && container.getAttribute('data-note-path');
+        if (container && window._cmView && (!draft.note_path || draft.note_path === bodyPath)) {{
+          window._cmView.dispatch({{
+            changes: {{from: 0, to: window._cmView.state.doc.length, insert: draft.text}}
+          }});
+          container.setAttribute('data-refused-write-draft-restored', 'true');
+          restored = true;
+        }}
+      }} else if (draft.kind === 'capture') {{
+        var captureInput = document.getElementById('capture-input');
+        if (captureInput) {{
+          captureInput.value = draft.text;
+          captureInput.setAttribute('data-refused-write-draft-restored', 'true');
+          restored = true;
+        }}
+      }}
+      if (restored) {{
+        try {{ window.sessionStorage.removeItem(refusedWriteDraftKey); }} catch (e) {{}}
+      }}
     }};
   }})();
   </script>
@@ -14375,7 +14427,11 @@ def render_index_html(
         .then(function(r) {{ return r.json().then(function(d) {{ return {{ok: r.ok, data: d}}; }}); }})
         .then(function(res) {{
           if (window.renderVaultSelectionRequiredPicker &&
-              window.renderVaultSelectionRequiredPicker(res.data)) {{
+              window.renderVaultSelectionRequiredPicker(res.data, {{
+                kind: 'body_edit',
+                note_path: notePath,
+                text: newBody
+              }})) {{
             return;
           }}
           if (res.ok) {{
@@ -14693,6 +14749,26 @@ def render_index_html(
   {_display_preferences_script()}
   {_note_readback_script()}
   {_note_editor_script()}
+  <script>
+  (function() {{
+    function runRestore(attempt) {{
+      if (window.restoreRefusedWriteDraft) {{
+        window.restoreRefusedWriteDraft();
+      }}
+      if (attempt < 20) {{
+        try {{
+          var raw = window.sessionStorage.getItem('companion.refusedWriteDraft.v1');
+          if (raw) {{ window.setTimeout(function() {{ runRestore(attempt + 1); }}, 25); }}
+        }} catch (e) {{}}
+      }}
+    }}
+    if (document.readyState === 'loading') {{
+      document.addEventListener('DOMContentLoaded', function() {{ runRestore(0); }});
+    }} else {{
+      runRestore(0);
+    }}
+  }})();
+  </script>
   {_note_chrome_script()}
   {settings_drawer_script()}
   {vault_settings_panel_js}

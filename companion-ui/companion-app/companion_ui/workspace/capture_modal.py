@@ -391,15 +391,29 @@ def capture_modal_script() -> str:
       if (input.value === text) { input.value = ''; }
     }
 
-    function renderVaultSelectionRequired(data) {
+    function preserveRefusedCaptureDraft(text) {
+      if (!text) { return; }
+      try {
+        window.sessionStorage.setItem('companion.refusedWriteDraft.v1', JSON.stringify({
+          kind: 'capture',
+          text: text
+        }));
+      } catch (e) {}
+    }
+
+    function renderVaultSelectionRequired(data, text) {
       if (window.renderVaultSelectionRequiredPicker &&
-          window.renderVaultSelectionRequiredPicker(data)) {
+          window.renderVaultSelectionRequiredPicker(data, {
+            kind: 'capture',
+            text: text
+          })) {
         return true;
       }
       if (!data || data.state !== 'vault_selection_required' ||
           !data.vault_selection_required_html) {
         return false;
       }
+      preserveRefusedCaptureDraft(text);
       document.open();
       document.write(data.vault_selection_required_html);
       document.close();
@@ -453,7 +467,7 @@ def capture_modal_script() -> str:
           if (resp.ok) {
             return resp.json().then(function(ack) {
               if (ack && ack.state === 'vault_selection_required') {
-                if (renderVaultSelectionRequired(ack)) { return; }
+                if (renderVaultSelectionRequired(ack, text)) { return; }
                 onNotWritten(
                   text,
                   ack.message || 'No vault is selected. Open a vault before capturing.'
@@ -465,7 +479,7 @@ def capture_modal_script() -> str:
           }
           return resp.json().catch(function() { return null; }).then(function(body) {
             if (body && body.state === 'vault_selection_required' &&
-                renderVaultSelectionRequired(body)) {
+                renderVaultSelectionRequired(body, text)) {
               return;
             }
             var detail = body && body.detail ? body.detail : null;
