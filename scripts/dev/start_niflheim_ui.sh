@@ -11,19 +11,13 @@
 #   scripts/dev/start_niflheim_ui.sh
 #
 # Optional environment:
-#   CUI_BIND_LAN=0                 bind the UI to 127.0.0.1 loopback-only
-#                                  (dev default: 0.0.0.0 for LAN/Tailscale UAT)
+#   CUI_BIND_LAN=1                 bind the UI to 0.0.0.0 for LAN/Tailscale UAT
 #   CUI_TARGET_NOTE=<rel-path>     verify a note path via /api/companion/workspace
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=../lib/companion_ui_startup.sh
 source "${SCRIPT_DIR}/../lib/companion_ui_startup.sh"
-
-# Dev channel binds the UI to 0.0.0.0 by default for LAN/Tailscale UAT.
-# Operator can force loopback-only with CUI_BIND_LAN=0.
-CUI_BIND_LAN="${CUI_BIND_LAN:-1}"
-export CUI_BIND_LAN
 
 CUI_CHANNEL="dev"
 CUI_EXPECTED_VAULT_PATTERN="nife?lheim"

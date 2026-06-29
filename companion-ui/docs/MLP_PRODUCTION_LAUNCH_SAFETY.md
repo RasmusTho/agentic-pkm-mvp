@@ -30,7 +30,7 @@ From the repository root:
 
 ```bash
 cd companion-ui/companion-app
-COMPANION_API_BASE_URL=http://127.0.0.1:18000 HOST=0.0.0.0 PORT=8113 \
+COMPANION_API_BASE_URL=http://127.0.0.1:18000 HOST=127.0.0.1 PORT=8113 \
   python -m companion_ui.workspace.serve_production_page
 ```
 
@@ -51,20 +51,22 @@ The runtime API must already be running on the configured production API base UR
 
 ## Bind Address
 
-Default production binding is server/LAN:
+Default production binding is loopback:
 
 ```text
-HOST=0.0.0.0
+HOST=127.0.0.1
 ```
 
-Loopback-only binding remains available as an explicit operator opt-out:
+LAN/Tailscale binding remains available as an explicit operator opt-in:
 
 ```bash
-HOST=127.0.0.1 PORT=8113 COMPANION_API_BASE_URL=http://127.0.0.1:18000 \
+HOST=0.0.0.0 PORT=8113 COMPANION_API_BASE_URL=http://127.0.0.1:18000 \
   python -m companion_ui.workspace.serve_production_page
 ```
 
-Use LAN/Tailscale only on trusted personal networks or trusted tailnets. Prefer Tailscale over open LAN when another device needs access.
+Use LAN/Tailscale only on trusted personal networks or trusted tailnets, and only after deliberately
+setting `HOST=0.0.0.0` for this lower-level production shell. Prefer Tailscale over open LAN when
+another device needs access.
 
 The production and dev/test UI launchers use threaded request handling so a slow browser, LAN, or Tailscale client connection does not block unrelated local requests. This does not change the exposure posture: public internet exposure remains unsupported.
 
