@@ -80,7 +80,8 @@ Delivery rules:
 - Do not claim the whole epic or entire Kanban pool up front.
 - Do not claim more issues than there are ready sub-agent execution slots.
 - Never make speculative claims. Every claimed issue must have an owner agent, worktree/branch plan, validation plan, and expected return receipt.
-- Confirm each selected issue is claimable before dispatching: `Status=Ready`, labeled `agent:ready`, and carrying no conflicting prior claim. Do not pre-transition status or remove `agent:ready` from the coordinator before dispatch — `issue-to-code` selects only `Ready` + `agent:ready` issues, so pre-claiming would force a compliant sub-agent to reject the assignment. The fast-claim handshake (`Ready -> In Progress` + remove `agent:ready` via `scripts/issue_pickup_claim.sh`) is performed by the sub-agent as the first step of its own `issue-to-code` pickup. An issue counts as dispatched only once that pickup has acquired the lease and recorded a claim receipt comment naming the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
+- Before dispatching any issue or batch, reconcile the candidate set against current `origin/main` and live GitHub state. Re-read the issue body/state, linked PRs, and existing claim receipts on the current branch tip so already-delivered, superseded, closed, merged, or otherwise stale work is dropped before a slice is assigned. A dispatch plan built from stale local context or pre-merge assumptions is non-authoritative; if `origin/main`, the issue, or a linked PR disagrees with the earlier plan, current repo/GitHub truth wins and the coordinator must recompute the pickup target before dispatch.
+- Confirm each selected issue is claimable before dispatching: `Status=Ready`, labeled `agent:ready`, and carrying no conflicting prior claim. Do not pre-transition status or remove `agent:ready` from the coordinator before dispatch — `issue-to-code` selects only `Ready` + `agent:ready` issues, so pre-claiming would force a compliant sub-agent to reject the assignment. If dispatcher state is unavailable, GitHub-label fallback alone is not enough to exclude parallel coordinators or sub-agents; before proceeding, the coordinator and assignee must verify the latest live lease/claim receipt from GitHub issue state plus the newest claim/release/superseded comments. The fast-claim handshake (`Ready -> In Progress` + remove `agent:ready` via `scripts/issue_pickup_claim.sh`) is performed by the sub-agent as the first step of its own `issue-to-code` pickup. An issue counts as dispatched only once that pickup has acquired the lease and recorded a claim receipt comment naming the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
 - For each issue, follow `issue-to-code` from claim through implementation and local validation.
 - Use `publish-pr` for branch, commit, push, and PR creation/update.
 - Use `pr-integration` only when the PR needs readiness or repair before verification.
@@ -104,15 +105,18 @@ If any parallel worker stalls, fails claim, loses branch/worktree truth, or disc
 
 If a sub-agent starts pickup and finds an existing claim receipt or lifecycle claim that does not match
 the dispatching coordinator, scope the collision check to the active/latest unreleased lease before
-deciding. Because an Issue can be claimed, released, closed, and re-Readied over its lifetime, only the
-most recent lease that is still open governs pickup. A non-matching receipt counts as a real collision
-only when it is the latest lease and has not been released or superseded — i.e. the Issue is currently
-`In Progress` / not `agent:ready`, and no later release/superseded receipt or re-Ready transition has
-reclaimed it. Stale receipts from a prior, already-released lease on a re-Readied Issue (the Issue is
-back to `Ready` + `agent:ready` with no live foreign lease) do not block valid pickup; treat them as
-historical and proceed. When the latest lease is a genuine foreign claim, stop and report the collision
-instead of implementing — do not rationalize a live foreign claim as belonging to the current dispatch;
-the coordinator must reconcile, release, or choose a different issue before work continues.
+deciding. Because an Issue can be claimed, released, superseded, closed, and re-Readied over its
+lifetime, only the most recent lease that is still open governs pickup. Use the latest evidence across
+issue state, linked PR state, and claim/release/superseded receipts. A non-matching receipt counts as a
+real collision only when it is the latest live lease and has not been released or superseded — i.e.
+the Issue is currently `In Progress` / not `agent:ready`, and no later release/superseded receipt or
+re-Ready transition has reclaimed it. Stale receipts from a prior, already-released or superseded lease
+on a re-Readied Issue (the Issue is back to `Ready` + `agent:ready` with no live foreign lease) do not
+block valid pickup; treat them as historical and proceed. When the latest lease is a genuine foreign
+claim, stop and report the collision instead of implementing — do not rationalize a live foreign claim
+as belonging to the current dispatch, and do not let dispatcher-unavailable label fallback override
+that evidence; the coordinator must reconcile, release, or choose a different issue before work
+continues.
 
 Delivery mode is complete only when every in-scope issue is either:
 
