@@ -24,9 +24,11 @@ SIDE_EFFECT_FUNCTION_NAMES = frozenset(
         "_worker_run_once",
         "append_jsonl_outbox_event",
         "audit_event",
+        "emit",
         "execute_panel_intent",
         "plan_panel_actions",
         "write_companion",
+        "write_note_from_absolute",
         "write_outbox_event",
     }
 )
@@ -103,6 +105,18 @@ ALLOWED_DIRECT_SIDE_EFFECTS: dict[SideEffectCall, AllowedSideEffect] = {
     SideEffectCall("app/agents/note_hygiene/fs.py", "archive_path", "pathlib.Path().mkdir"): AllowedSideEffect(
         1,
         "Legacy note-hygiene archive directory creation helper.",
+    ),
+    SideEffectCall("app/agents/note_hygiene/agent.py", "classify_and_act", "emit"): AllowedSideEffect(
+        3,
+        "Legacy note-hygiene cleanup event emission.",
+    ),
+    SideEffectCall(
+        "app/agents/note_hygiene/agent.py",
+        "_write",
+        "write_note_from_absolute",
+    ): AllowedSideEffect(
+        1,
+        "Legacy note-hygiene vault-note write wrapper.",
     ),
     SideEffectCall("app/agents/panel/writeback.py", "upsert_executed_ids", "store.save_object"): AllowedSideEffect(
         1,
