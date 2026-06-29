@@ -12,6 +12,7 @@ from uuid import uuid4
 from app.watcher.config import WatcherConfig
 from app.watcher.heartbeat import write_heartbeat
 from app.watcher.relevance_tick import relevance_tick_enabled, run_relevance_tick
+from app.watcher.settings_delta import handle_settings_local_delta
 from app.watcher.state import WatcherState
 
 
@@ -294,7 +295,34 @@ def run_tick(
     for rel, mtime, digest in changed_entries:
         rel_str = str(rel)
         last_seen = state.last_seen(rel_str)
-        state.update_file_state(rel_str, mtime=mtime, content_hash=digest, seen_at=now)
+        settings_delta = handle_settings_local_delta(
+            vault_root=cfg.vault_path,
+            rel_path=rel,
+            previous_values=state.last_settings_runtime_values(rel_str),
+        )
+        if settings_delta.errors:
+            state.errors += len(settings_delta.errors)
+            summary["settings_write_errors_in_tick"] = int(summary.get("settings_write_errors_in_tick", 0)) + len(
+                settings_delta.errors
+            )
+        if settings_delta.receipts:
+            summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
+                settings_delta.receipts
+            )
+            try:
+                mtime = (cfg.vault_path / rel).stat().st_mtime
+            except OSError:
+                pass
+            hashed = _hash_file(cfg.vault_path / rel)
+            if hashed is not None:
+                digest = hashed[0]
+        state.update_file_state(
+            rel_str,
+            mtime=mtime,
+            content_hash=digest,
+            settings_runtime_values=settings_delta.values,
+            seen_at=now,
+        )
         if last_seen is not None and (now - last_seen) * 1000 < cfg.debounce_ms:
             continue
         if state.rate_window_count(now) >= cfg.rate_limit_per_min:

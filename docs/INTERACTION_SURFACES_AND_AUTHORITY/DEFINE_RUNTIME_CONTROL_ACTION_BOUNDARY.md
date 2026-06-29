@@ -70,8 +70,8 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 **Valid origins of the same seam (no new surfaces here):**
 - UI → `POST /api/companion/vault/settings` (surface=`'api'`) — **wired** (sole caller: `app/api/routes/companion.py:826`)
 - CLI → existing `app.cli vault` commands (surface=`'cli'`) — **NOT yet wired** (the `app.cli vault` group does init/preflight only; no command toggles runtime-gating settings through the seam; addable when a consumer exists)
-- File edit → watcher-detected `settings/local.md` delta (surface=`'file'`) — **NOT yet wired**;
-  tracked by #2512
+- File edit → watcher-detected `settings/local.md` delta (surface=`'file'`) — **wired** for
+  runtime-gating key deltas by #2512
 - Future MCP/API → addable when there is a consumer (out of scope here)
 
 ### Tier 3 — External-boundary enable
@@ -79,13 +79,13 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 TTS provider enable crosses an external boundary. EBF applies. Not re-decided here; governed by
 `#2086` / `#1699`.
 
-## Audit blind-spot — partially closed
+## Audit blind-spot — closed for runtime-gating settings
 
 A direct hand-edit of `settings/local.md` previously produced no receipt — only the watcher
-picking it up at next start. This PR closes the blind-spot for the **API door** only (the CLI `app.cli vault` group is init/preflight only and not yet wired).
-The **file-originated door** (watcher-detected `settings/local.md` delta → `surface='file'`)
-is NOT yet wired: the watcher does not call `update_setting`, so a human hand-edit still produces
-no receipt. Closing that door is tracked by #2512.
+picking it up at next start. The API door is wired, and #2512 wires the file-originated door for
+runtime-gating deltas (`enableVaultWatcher` / `enableAutoIndexing`) through
+`SettingsService.update_setting(..., surface='file', actor='human')`. The CLI `app.cli vault`
+group is init/preflight only and still has no runtime-gating toggle command to wire.
 
 ## Server-authoritative classification rule
 

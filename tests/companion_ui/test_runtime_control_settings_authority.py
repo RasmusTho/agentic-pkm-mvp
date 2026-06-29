@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
+import os
 
 import yaml
 from fastapi.testclient import TestClient
@@ -38,6 +39,10 @@ from app.vault.settings_service import (
     SettingsService,
     SettingsWriteReceipt,
 )
+from app.vault.markdown_settings import MarkdownSettingsStore
+from app.watcher.config import WatcherConfig
+from app.watcher.state import WatcherState
+from app.watcher.watcher import run_tick
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +63,35 @@ def _frontmatter(path: Path) -> dict:
     data = yaml.safe_load(frontmatter)
     assert isinstance(data, dict)
     return data
+
+
+def _write_frontmatter(path: Path, updates: dict) -> None:
+    store = MarkdownSettingsStore()
+    document = store.read(path)
+    frontmatter = dict(document.frontmatter)
+    frontmatter.update(updates)
+    store.write_frontmatter(path, frontmatter, body=document.body)
+
+
+def _watcher_config(tmp_path: Path, vault: Path) -> WatcherConfig:
+    return WatcherConfig(
+        enable=True,
+        vault_path=vault,
+        scope_glob="*.md,**/*.md",
+        debounce_ms=0,
+        rate_limit_per_min=30,
+        backoff_seconds=10,
+        state_path=tmp_path / "watcher-state.json",
+        stop_file=tmp_path / "WATCHER_STOP",
+        outbox_path=tmp_path / "watcher-outbox.jsonl",
+        summary_interval=10,
+        tick_sleep_seconds=0.0,
+        tick_log_path=tmp_path / "watcher-tick.jsonl",
+    )
+
+
+def _touch_after_write(path: Path, timestamp: float) -> None:
+    os.utime(path, (timestamp, timestamp))
 
 
 # ---------------------------------------------------------------------------
@@ -249,3 +283,84 @@ def test_runtime_gating_settings_constant_covers_both_keys() -> None:
     """RUNTIME_GATING_SETTINGS must enumerate both authority-bearing runtime-gating keys."""
     assert "enableVaultWatcher" in RUNTIME_GATING_SETTINGS
     assert "enableAutoIndexing" in RUNTIME_GATING_SETTINGS
+
+
+def test_watcher_settings_delta_routes_runtime_gating_key_through_settings_service(tmp_path: Path) -> None:
+    manager, vault = _manager(tmp_path)
+    del manager
+    cfg = _watcher_config(tmp_path, vault)
+    state = WatcherState()
+    local_md = vault / "settings" / "local.md"
+    captured_calls: list[tuple[str, object, str, str]] = []
+    original_update = SettingsService.update_setting
+
+    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
+        captured_calls.append((key, value, surface, actor))
+        return original_update(self, context, key, value, surface=surface, actor=actor)
+
+    first = run_tick(cfg, state, now=1_700_000_000.0)
+    assert first["changed_in_tick"] >= 1
+
+    _write_frontmatter(local_md, {"enableVaultWatcher": False})
+    _touch_after_write(local_md, 1_700_000_010.0)
+
+    with patch.object(SettingsService, "update_setting", _spy_update):
+        second = run_tick(cfg, state, now=1_700_000_010.0)
+
+    assert second["settings_receipts_in_tick"] == 1
+    assert captured_calls == [("enableVaultWatcher", False, "file", "human")]
+
+
+def test_watcher_settings_delta_emits_file_surface_receipt(tmp_path: Path) -> None:
+    manager, vault = _manager(tmp_path)
+    del manager
+    cfg = _watcher_config(tmp_path, vault)
+    state = WatcherState()
+    local_md = vault / "settings" / "local.md"
+    captured_receipts: list[SettingsWriteReceipt] = []
+    original_update = SettingsService.update_setting
+
+    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
+        effective, receipt = original_update(self, context, key, value, surface=surface, actor=actor)
+        captured_receipts.append(receipt)
+        return effective, receipt
+
+    run_tick(cfg, state, now=1_700_000_000.0)
+    _write_frontmatter(local_md, {"enableAutoIndexing": False})
+    _touch_after_write(local_md, 1_700_000_020.0)
+
+    with patch.object(SettingsService, "update_setting", _spy_update):
+        run_tick(cfg, state, now=1_700_000_020.0)
+
+    assert len(captured_receipts) == 1
+    receipt = captured_receipts[0]
+    assert receipt.key == "enableAutoIndexing"
+    assert receipt.value is False
+    assert receipt.surface == "file"
+    assert receipt.actor == "human"
+    assert receipt.is_runtime_gating is True
+
+
+def test_watcher_settings_delta_receipt_scope_is_runtime_gating_only(tmp_path: Path) -> None:
+    manager, vault = _manager(tmp_path)
+    del manager
+    cfg = _watcher_config(tmp_path, vault)
+    state = WatcherState()
+    local_md = vault / "settings" / "local.md"
+    captured_receipts: list[SettingsWriteReceipt] = []
+    original_update = SettingsService.update_setting
+
+    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
+        effective, receipt = original_update(self, context, key, value, surface=surface, actor=actor)
+        captured_receipts.append(receipt)
+        return effective, receipt
+
+    run_tick(cfg, state, now=1_700_000_000.0)
+    _write_frontmatter(local_md, {"allowWritesToVault": False})
+    _touch_after_write(local_md, 1_700_000_030.0)
+
+    with patch.object(SettingsService, "update_setting", _spy_update):
+        summary = run_tick(cfg, state, now=1_700_000_030.0)
+
+    assert summary.get("settings_receipts_in_tick", 0) == 0
+    assert captured_receipts == []
