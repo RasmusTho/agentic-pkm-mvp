@@ -3,19 +3,19 @@ name: Commitment Surfacing — Parent Feature Issue
 description: Local source for the parent validation hub of the commitment-surfacing capability
 parent_capability: Commitment Surfacing
 github_issue: 1960
-lifecycle_state: open (validation hub, agent:blocked)
+lifecycle_state: closed (completed 2026-06-18; delivered via child slices)
 ---
 
-State: The parent feature issue for this capability is **live on GitHub as Issue #1960** (open). #1960 pre-existed this breakdown as a `type:feature` issue and was reshaped — not replaced — into the parent validation hub for the COMMITMENT_SURFACING capability per the owner decision recorded on it (2026-06-15). This file is the local source mirror of that hub; GitHub is authoritative.
+State: The parent feature issue for this capability, **GitHub Issue #1960**, closed as completed on 2026-06-18 after child slices #2073-#2075 delivered and the repo-verifiable acceptance evidence landed on `main`. This file is the local source mirror of that delivered hub; GitHub is authoritative.
 
 # Commitment Surfacing — Parent Feature Issue (#1960)
 
-## Live parent hub
+## Parent hub
 
 - **GitHub issue:** #1960
-- **Role:** parent feature / validation hub for the COMMITMENT_SURFACING capability. It is **not** a direct pickup issue while child slices are outstanding.
-- **Labels:** `type:feature`, `agent:blocked`, `prio:med`, `area:companion-ui`, `panel`.
-- **Project status:** `Backlog` (validation hub posture; child slices carry the active pickup state).
+- **Role:** parent feature / validation hub for the COMMITMENT_SURFACING capability; closed as delivered after the child slices landed.
+- **Labels at closure:** `type:feature`, `prio:med`, `area:companion-ui`, `panel`.
+- **Project status:** `Done`.
 
 ## Capability intent
 
@@ -27,13 +27,13 @@ The commitment domain model ships, but there is no durable persistence/query pat
 
 ## Acceptance criteria (capability level)
 
-See `README.md :: Acceptance`. The capability is accepted (and #1960 closes) when durable persistence, companion-route exposure, and UI render are all green on merged heads and the xfail architecture guard flips.
+See `README.md :: Acceptance`. Hub #1960 closed after durable persistence, companion-route exposure, and UI render were green on merged heads and the xfail architecture guard flipped.
 
 ## Implementation tasks
 
 See `README.md :: Implementation tasks` and the three task files in this directory. Execution order: PERSIST_COMMITMENTS_AS_VAULT_ARTEFACTS (#2073) → EXPOSE_COMMITMENTS_IN_COMPANION_ROUTE (#2074) → RENDER_COMMITMENTS_IN_PANEL_UI (#2075).
 
-Child issues (filed 2026-06-15): **#2073** (slice 1, `Ready`/`agent:ready`), **#2074** (slice 2, `agent:blocked`), **#2075** (slice 3, `agent:blocked`).
+Child issues (filed 2026-06-15, now all closed/completed): **#2073** (slice 1), **#2074** (slice 2), **#2075** (slice 3).
 
 ## Verification path
 
@@ -41,9 +41,9 @@ See `README.md :: Verification path`.
 
 ## Validation / acceptance path
 
-See `README.md :: Validation / Acceptance path`. Each child PR posts a validation receipt to #1960; owner-doc promotion is decided only after end-to-end operator validation.
+See `README.md :: Validation / Acceptance path`. Each child PR posted a validation receipt to #1960; the closure receipt recorded delivered implementation while noting owner-doc promotion as a follow-up after end-to-end operator validation.
 
 ## Lifecycle notes
 
 - Reshaped into the parent hub on 2026-06-15 (this breakdown).
-- When #1960 closes after acceptance, update this file's `lifecycle_state` and the `README.md` `State:` line + acceptance checklist together so neither continues to read as an active pre-delivery lane.
+- Closed as completed on 2026-06-18 after slices #2073-#2075 delivered and the acceptance evidence was recorded on the hub.

@@ -1,6 +1,6 @@
 # Vault Optional at Runtime
 
-State: Specification filed. Parent feature issue **#2003** (validation hub); children #2004-#2007. Follow-up eager resolver migration hub **#2311** is split into Slices 05A-05D. See `PARENT_FEATURE_ISSUE.md`.
+State: Delivered capability specification directory. Parent validation hub **#2003** closed as completed on 2026-06-18 after children #2004-#2007 closed; follow-up eager resolver migration hub **#2311** later closed as completed on 2026-06-24 after Slices 05A-05D delivered, including the legacy `/app/vault` compatibility-path re-baseline recorded in 05D. See `PARENT_FEATURE_ISSUE.md`.
 Doc role: Capability specification / source of truth for the breakdown.
 Owner decision: 2026-06-14 — a vault is **not required at initiation**; the runtime boots
 with no vault bound and idles until one is opened; vaults can be opened, switched, and
@@ -57,7 +57,7 @@ Out of scope (this capability):
 | 1 | [RESOLVE_NO_VAULT_STATE](RESOLVE_NO_VAULT_STATE.md) | #2004 | config resolver returns a no-vault state when `VAULT_ROOT` is unset (stop defaulting to `./vault`) | Delivered (`resolve_optional_vault_root` in `app/config/paths.py`) |
 | 2 | [BOOT_RUNTIME_WITHOUT_VAULT](BOOT_RUNTIME_WITHOUT_VAULT.md) | #2005 | watcher idles instead of fail-exiting; `start_full_system.sh` boots with no vault; #1991 flip + F4 producer/preflight updates | Delivered (#2005 closed 2026-06-15; prerequisite #2004 delivered) |
 | 3 | [COMPANION_NO_VAULT_ROUTING](COMPANION_NO_VAULT_ROUTING.md) | #2006 | companion `vault_selection_required` covers the *unset* case; open/switch/register verified end-to-end | Delivered (`/api/companion/vault/context` returns `reason="no_vault_bound"` with `recent_vaults`; verified by `tests/api/test_companion_vault_routing.py`) |
-| later | [PIN_VAULT_DEFINITION](PIN_VAULT_DEFINITION.md) | #2007 | pin the overloaded "vault" term across docs | Deferred (needs-human) |
+| later | [PIN_VAULT_DEFINITION](PIN_VAULT_DEFINITION.md) | #2007 | pin the overloaded "vault" term across docs | Delivered (#2007 closed 2026-06-15; `docs/ENVIRONMENTS.md :: Vault terminology` promoted before parent closure) |
 
 ## Follow-up eager resolver migration (#2311)
 
@@ -69,10 +69,10 @@ and final runtime mount cleanup can be verified independently.
 
 | Order | Task | Issue | Adds | Status |
 | --- | --- | --- | --- | --- |
-| 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | #2383 | capture/artifacts/canvas/debug and companion request helpers return picker/empty no-vault responses instead of `./vault` fallback | First pickup target; deliver before 05B/05C/05D unless explicitly parallelized |
+| 05A | [API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES](API_ENDPOINT_OPTIONAL_VAULT_BOUNDARIES.md) | #2383 | capture/artifacts/canvas/debug and companion request helpers return picker/empty no-vault responses instead of `./vault` fallback | Delivered (#2383 closed 2026-06-21) |
 | 05B | [BACKGROUND_OPTIONAL_VAULT_IDLE](BACKGROUND_OPTIONAL_VAULT_IDLE.md) | #2384 | outbox worker, watcher/health settings, inbox appenders, and vault path helpers idle or report no-vault when no vault is selected | Delivered (`outbox_worker.run_once` idles `no_vault`; watcher settings empty source; health reports `vault.status` none/not_selected; inbox appenders skip; vault path helpers raise `NoVaultSelectedError`; CWD `./vault` fallback removed; guarded by `tests/api/test_no_silent_cwd_vault_fallback.py::test_background_resolvers_do_not_fallback_to_cwd_vault`) |
 | 05C | [PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION](PROMOTION_CLI_AGENT_OPTIONAL_VAULT_RESOLUTION.md) | #2385 | promotion queue import becomes lazy; CLI/agent/helper/MCP/knowledge callers make vault requirements explicit or optional | Delivered (promotion queue/agent lazy paths; CLI/MCP/knowledge no `./vault` fallback; guarded by `tests/api/test_no_silent_cwd_vault_fallback.py::test_promotion_cli_agent_mcp_knowledge_do_not_fallback_to_cwd_vault`) |
-| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | #2386 | legacy `/app/vault` compose/runtime-env fallback is removed or re-baselined after resolver consumers no longer require it | Blocked/backlog until 05A-05C land |
+| 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | #2386 | legacy `/app/vault` compose/runtime-env fallback is removed or re-baselined after resolver consumers no longer require it | Delivered (#2386 closed 2026-06-22; follow-up hub #2311 closed 2026-06-24) |
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -111,18 +111,20 @@ then `LEGACY_VAULT_MOUNT_REMOVAL` unless the coordinator confirms non-overlappin
 
 ## Capability acceptance
 
-- [ ] The runtime stack boots with `VAULT_ROOT` unset and the watcher idles (no fail-exit, no crash). Verify: `tests/runtime/` boot/idle test named in `BOOT_RUNTIME_WITHOUT_VAULT`.
+- [x] The runtime stack boots with `VAULT_ROOT` unset and the watcher idles (no fail-exit, no crash). Verify: `tests/runtime/test_start_full_system_no_vault.py::test_boots_idle_without_vault_root`.
 - [x] With no vault bound, the companion boundary returns `vault_selection_required` (not 500 / not a `./vault` default). Verify: `tests/api/test_companion_vault_routing.py::test_no_vault_returns_selection_required` (and `::test_selection_required_lists_known_vaults` for the `known_vaults` recent list).
 - [x] Opening a vault re-resolves in-process; switching between ≥2 registered vaults persists last-active. Verify: `tests/api/test_companion_vault_routing.py::{test_select_vault_reresolves_in_process,test_switch_between_known_vaults_persists_last_active}`.
-- [ ] No producer of the vault-required invariant still assumes a vault is mandatory (the #1991 flip is complete and symmetric). Verify: `BOOT_RUNTIME_WITHOUT_VAULT` AC + the #1997 channel preflight still requires a vault for the *test* channel only.
-- [ ] The "vault" definition is pinned in docs. Verify: `PIN_VAULT_DEFINITION` doc anchor (deferred).
+- [x] No producer of the vault-required invariant still assumes a vault is mandatory (the #1991 flip is complete and symmetric). Verify: `tests/watcher/test_watcher_idle_without_vault.py::test_uninitialized_vault_idles_not_exits` + the #1997 channel preflight still requires a vault for the *test* channel only.
+- [x] The "vault" definition is pinned in docs. Verify: `docs/ENVIRONMENTS.md :: Vault terminology`.
 
 ## Relationship to GitHub issues
 
-The specification is the source of truth; the GitHub issues track pickup. The parent feature
-issue is the live validation hub (`agent:blocked` while children are outstanding). Each child
-implements one task file and posts a validation receipt to the parent before the next is
-picked up. See `PARENT_FEATURE_ISSUE.md` for the live issue number once filed.
+The specification is the source of truth; the GitHub issues track delivery history. Parent
+hub **#2003** closed as completed on 2026-06-18 after children #2004-#2007 delivered, and
+follow-up hub **#2311** closed as completed on 2026-06-24 after slices 05A-05D delivered,
+with 05D recording the legacy `/app/vault` compatibility-path re-baseline rather than
+claiming every compatibility mount was removed. See `PARENT_FEATURE_ISSUE.md` for the local
+mirror of those hub closures.
 
 ## Related docs
 

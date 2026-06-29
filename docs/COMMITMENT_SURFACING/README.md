@@ -13,7 +13,7 @@ related_docs:
   - docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md
 ---
 
-State: Active specification lane. Parent validation hub filed as GitHub Issue **#1960** (open, `agent:blocked` validation hub). This directory is the system-level source of truth for what must be built; GitHub is the authoritative backlog and validation record. Shaped by the owner decision recorded on #1960 (2026-06-15): durable persistence is a prerequisite and the substrate is the vault, in the companion-note family — not a new DB, not transient `AgentState`.
+State: Delivered capability specification lane. Parent validation hub **#1960** closed as completed on 2026-06-18 after child slices #2073-#2075 delivered; this directory remains the system-level source record for what shipped, and GitHub remains the authoritative backlog and validation record. Shaped by the owner decision recorded on #1960 (2026-06-15): durable persistence is a prerequisite and the substrate is the vault, in the companion-note family — not a new DB, not transient `AgentState`.
 
 # Commitment Surfacing
 
@@ -77,15 +77,15 @@ If any of these seams could not be given an invariant, the slice boundaries woul
 
 ## Acceptance
 
-This capability is accepted (parent #1960 closes) when all of the following are true:
+Hub #1960 closed as delivered on 2026-06-18 after the repo-verifiable implementation acceptance below landed on `main`. The closure receipt left owner-doc promotion as a follow-up docs step rather than a blocker for closing the validation hub.
 
-- [ ] `CommitmentRecord`s persist as agent-maintained durable vault artefacts in the companion-note family and survive a process restart.
+- [x] `CommitmentRecord`s persist as agent-maintained durable vault artefacts in the companion-note family and survive a process restart.
   - Verify: `tests/commitments/test_commitment_persistence.py` (new) — durability across a simulated restart + WriteGuard enforcement at the production call site.
-- [ ] Active commitments (next_action / waiting / review_return) are exposed in the companion workspace state, read-only, backed by the durable source (not `AgentState`).
+- [x] Active commitments (next_action / waiting / review_return) are exposed in the companion workspace state, read-only, backed by the durable source (not `AgentState`).
   - Verify: `tests/api/test_companion_commitments.py::test_commitments_in_workspace_state` (new).
-- [ ] Next-action and review-cycle commitments are visually distinguished in the Panel/Companion UI.
+- [x] Next-action and review-cycle commitments are visually distinguished in the Panel/Companion UI.
   - Verify: `tests/companion_ui/test_commitment_surface.py` (new).
-- [ ] The architecture guard `tests/api/test_arch_commitment_and_canvas.py::test_commitments_surface_in_workspace_state` flips from xfail to pass on merged heads (the workspace surface exposes a commitment field).
+- [x] The architecture guard `tests/api/test_arch_commitment_and_canvas.py::test_commitments_surface_in_workspace_state` flips from xfail to pass on merged heads (the workspace surface exposes a commitment field).
   - Verify: `tests/api/test_arch_commitment_and_canvas.py::test_commitments_surface_in_workspace_state` passes (xfail removed).
 - [ ] Owner-doc promotion decided once the shipped source and surface are accepted (see Validation / Acceptance Path).
   - Verify: doc writeback at `docs/COMMITMENT_AS_FIRST_CLASS/README.md` or `docs/STATUS.md` recording commitment surfacing as shipped (only when accepted).
@@ -97,23 +97,23 @@ Task-level proof surfaces (each task names its own tests; this is the rollup):
 - Slice 1: `tests/commitments/test_commitment_persistence.py` — durability across restart, read/proposal-only, WriteGuard asserted at the production write call site.
 - Slice 2: `tests/api/test_companion_commitments.py::test_commitments_in_workspace_state` + an architecture assertion that the route reads the durable query path (not `AgentState`).
 - Slice 3: `tests/companion_ui/test_commitment_surface.py` — next-action vs review-cycle distinguished; read-only projection (no mutation affordances).
-- Capability guard: `tests/api/test_arch_commitment_and_canvas.py::test_commitments_surface_in_workspace_state` (currently xfail; flips when the surface lands).
+- Capability guard: `tests/api/test_arch_commitment_and_canvas.py::test_commitments_surface_in_workspace_state` — xfail removed; passes on merged heads after the workspace commitment surface landed.
 
 ## Validation / Acceptance path
 
-- Each delivered child PR posts a validation receipt to parent #1960 naming the merged SHA, the tests that ran green, and whether the capability is closer to acceptance.
-- After all three slices merge and the xfail guard flips, the operator validates the surfacing end-to-end (a real commitment persisted, read through the route, rendered in the UI, and still present after a runtime restart).
-- Owner-doc promotion (recording commitment surfacing as shipped reality) happens **only** after that operator validation, per the feature-breakdown evidence-surface rule — not for every post-merge rerun.
+- Each delivered child PR posted a validation receipt to parent #1960 naming the merged SHA, the tests that ran green, and whether the capability was closer to acceptance.
+- After all three slices merged and the xfail guard flipped, the operator validation path remained: a real commitment persisted, read through the route, rendered in the UI, and still present after a runtime restart.
+- The 2026-06-18 closure receipt closed #1960 as delivered while leaving owner-doc promotion (recording commitment surfacing as shipped reality) as a follow-up docs step after that operator validation, per the feature-breakdown evidence-surface rule.
 
 ## Relationship to GitHub issues
 
-- **Parent / validation hub:** Issue **#1960** (open, `type:feature`, `agent:blocked`, `Status=Backlog`). It is **not** a direct pickup issue while child slices are outstanding; it is the live validation hub.
+- **Parent / validation hub:** Issue **#1960** (`CLOSED` / `COMPLETED`, `Status=Done`). It is not a pickup issue; it is the delivered validation record for this capability.
 - **Child slices** (each references "Implements COMMITMENT_SURFACING/{TASK}" and carries `Parent: #1960`):
-  - Slice 1 → **#2073** `[Commitment Surfacing] persist-commitments-as-vault-artefacts` — `Status=Ready`, `agent:ready`, `prio:med`, `area:runtime`.
-  - Slice 2 → **#2074** `[Commitment Surfacing] expose-commitments-in-companion-route` — `agent:blocked` (depends on slice 1), `prio:med`, `area:runtime`.
-  - Slice 3 → **#2075** `[Commitment Surfacing] render-commitments-in-panel-ui` — `agent:blocked` (depends on slice 2), `prio:med`, `area:companion-ui`, `panel`.
+  - Slice 1 → **#2073** `[Commitment Surfacing] persist-commitments-as-vault-artefacts` — closed/completed.
+  - Slice 2 → **#2074** `[Commitment Surfacing] expose-commitments-in-companion-route` — closed/completed.
+  - Slice 3 → **#2075** `[Commitment Surfacing] render-commitments-in-panel-ui` — closed/completed.
 
-The specification in this directory is the source of truth for *what the system needs to do*; the GitHub issues track *what work to pick up next*.
+The specification in this directory is the source of truth for *what the system needed to do*; the GitHub issues now serve as the delivered validation history for that work.
 
 ## Navigation
 

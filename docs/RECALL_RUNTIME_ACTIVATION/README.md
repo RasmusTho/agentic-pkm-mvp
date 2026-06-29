@@ -1,4 +1,4 @@
-State: Active specification directory (forward line; not shipped reality). Parent feature issue #1959; child issues filed on GitHub, which is the authoritative backlog.
+State: Delivered capability specification directory. Parent validation hub #1959 closed as completed on 2026-06-15 after child slices #1970-#1972 delivered; GitHub remains the authoritative backlog and validation record.
 Doc role: Capability specification
 Authority: Specifies the runtime activation of guarded memory recall. Semantic authority for memory remains in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; the durable-memory model/boundary remains in `docs/DURABLE_MEMORY_AND_RECALL/` and `docs/AGENT_MEMORY/`; current runtime posture remains in `docs/STATUS.md`.
 
@@ -48,6 +48,6 @@ depends on slice 1; slice 3 depends on slice 2 **and** an owner decision on the 
 ## Relationship to GitHub issues
 
 Parent feature/validation hub: **#1959** (was the original "invoke guarded recall" issue, reshaped
-here after a pre-implementation scoping finding). Each child posts a validation receipt to #1959; the
-final child (`SURFACE_RECALL_IN_ANSWER`) carries the parent-closure + owner-doc promotion handoff.
-Part of the v6.1 delivery hub #1956.
+here after a pre-implementation scoping finding). Each child posted a validation receipt to #1959; the
+final child (`SURFACE_RECALL_IN_ANSWER`) carried the parent-closure + owner-doc promotion handoff, and
+the hub closed as completed on 2026-06-15. Part of the v6.1 delivery hub #1956.
