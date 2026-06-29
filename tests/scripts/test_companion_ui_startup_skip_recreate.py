@@ -30,6 +30,11 @@ chmod +x "$FAKE_ROOT/scripts/start_full_system.sh"
 source "$LIB"
 cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
 curl() { return "$CURL_RC"; }
+# Simulate a live channel container with no vault mount (the no-vault idle
+# stack): a warm-skip now requires a real channel container, not just a healthy
+# /healthz (Codex P2 on PR #2652).
+cui_api_container_id() { printf 'fakecid'; }
+cui_container_vault_mount_source() { printf ''; }
 
 cui_start_runtime >/dev/null 2>&1 || true
 

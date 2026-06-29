@@ -78,29 +78,74 @@ cui_require_config() {
 
 # ── channel env loading + vault guard ─────────────────────────────────────────
 
-# Loads .env.<channel>.local into the environment. Fails fast if the file is
-# absent. Uses the repo's space-safe Python-based env parser.
+# Loads .env.<channel>.local into the environment when present. Uses the repo's
+# space-safe Python-based env parser. A missing file is NOT an error: under
+# no-vault idle boot (#2005) the stack must come up without a configured vault
+# and serve the in-app picker. start_full_system.sh re-loads this file when
+# present, so a later-created override still takes effect on the next start.
+# Promote a documented channel-scoped vault root (VAULT_ROOT_<CHANNEL>, e.g.
+# VAULT_ROOT_TEST / VAULT_ROOT_DEV / VAULT_ROOT_PROD) to the base VAULT_ROOT when
+# only the scoped form is set. The guard and start_full_system.sh bind path key
+# only on VAULT_ROOT, while the runtime resolver and test-channel tooling honor
+# the scoped name — so without this, `make {dev,test}-ui` would idle on a valid
+# channel override (#2005). An explicit base VAULT_ROOT always wins (no-op then).
+cui_promote_channel_scoped_vault_root() {
+  [ -z "${VAULT_ROOT:-}" ] || return 0
+  local scoped_name scoped_val
+  scoped_name="VAULT_ROOT_$(printf '%s' "${CUI_CHANNEL:-}" | tr '[:lower:]' '[:upper:]')"
+  scoped_val="${!scoped_name:-}"
+  [ -n "${scoped_val}" ] || return 0
+  export VAULT_ROOT="${scoped_val}"
+  cui_log "using channel-scoped ${scoped_name} as VAULT_ROOT for ${CUI_CHANNEL} ('${scoped_val}')"
+}
+
 cui_load_channel_env() {
   local root env_file
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
-  if [ ! -f "${root}/${env_file}" ]; then
-    cui_die "missing ${env_file} in repo root (${root}). Create it with channel config (PKM_ENVIRONMENT=${CUI_CHANNEL}, VAULT_ROOT=...). See .env.example."
+  # The channel's vault is defined by .env.<channel>.local, never by an ambient
+  # VAULT_ROOT in the operator shell. load_env_defaults_file is defaults-only (it
+  # will NOT override an already-exported var), so an inherited VAULT_ROOT would
+  # otherwise stand in for — or win over — the channel file and mount the wrong
+  # vault for the channel (e.g. `VAULT_ROOT=.../Midgard make test-ui`). Clear it
+  # up front so the channel file is the sole authority; with no file and nothing
+  # to set it, the launcher enters no-vault idle boot (#2005) and serves the
+  # in-app picker.
+  if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
+    cui_warn "ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' — the ${CUI_CHANNEL} channel vault is defined by ${env_file}, not the ambient shell."
   fi
-  # shellcheck source=/dev/null
-  source "${root}/scripts/lib/load_env_defaults.sh"
-  ( cd "${root}" && load_env_defaults_file "${env_file}" ) >/dev/null 2>&1 || true
-  # load_env_defaults_file runs in a subshell for the parser; re-load into this
-  # shell by re-sourcing in the repo root so exported keys persist.
-  cd "${root}" || cui_die "cannot cd to repo root ${root}"
-  load_env_defaults_file "${env_file}"
+  unset VAULT_ROOT VAULT_HOST_ROOT
+  if [ -f "${root}/${env_file}" ]; then
+    # shellcheck source=/dev/null
+    source "${root}/scripts/lib/load_env_defaults.sh"
+    ( cd "${root}" && load_env_defaults_file "${env_file}" ) >/dev/null 2>&1 || true
+    # load_env_defaults_file runs in a subshell for the parser; re-load into this
+    # shell by re-sourcing in the repo root so exported keys persist.
+    cd "${root}" || cui_die "cannot cd to repo root ${root}"
+    load_env_defaults_file "${env_file}"
+  else
+    cui_warn "no ${env_file} in repo root (${root}) — no-vault idle boot; create it from .env.example to pin a ${CUI_CHANNEL} vault."
+  fi
+  # A .env.<channel>.local (or the operator shell) may pin the documented
+  # channel-scoped root instead of plain VAULT_ROOT; promote it so the launcher
+  # honors it rather than idling (matches the resolver + test tooling).
+  cui_promote_channel_scoped_vault_root
 }
 
-# Verifies VAULT_ROOT basename matches the expected channel vault. Read-only.
+# Resolves the channel vault posture. Read-only. Honors no-vault idle boot
+# (#2005): an unset VAULT_ROOT is NOT an error — the stack boots and serves the
+# in-app vault picker. When a vault IS configured its basename is matched against
+# the expected channel vault. A mismatch is FATAL on prod and advisory on
+# dev/test: prod binds the operator's real content vault and start_full_system.sh
+# runs a write-capable worker against it, so booting prod against the wrong vault
+# risks writing it (Codex P1, PR #2652) — fail loud. dev/test bind scratch vaults
+# and the active vault is still chosen in-app (VAULT_ROOT is only the initial
+# default), so a mismatch there is warn-only.
 cui_guard_vault_name() {
   local base base_lc
   if [ -z "${VAULT_ROOT:-}" ]; then
-    cui_die "VAULT_ROOT is not set after loading .env.${CUI_CHANNEL}.local; cannot confirm channel vault."
+    cui_log "no vault configured (VAULT_ROOT unset) — no-vault idle boot (#2005); open a vault in the ${CUI_CHANNEL} UI to activate."
+    return 0
   fi
   base="$(basename "${VAULT_ROOT}")"
   base_lc="$(cui_lower "${base}")"
@@ -108,7 +153,10 @@ cui_guard_vault_name() {
     cui_log "vault guard OK: resolved vault '${base}' matches expected ${CUI_EXPECTED_VAULT_LABEL}"
     return 0
   fi
-  cui_die "vault guard FAILED: resolved vault '${base}' (VAULT_ROOT=${VAULT_ROOT}) does not look like ${CUI_EXPECTED_VAULT_LABEL}. Refusing to start ${CUI_CHANNEL} channel against the wrong vault."
+  if [ "${CUI_CHANNEL:-}" = "prod" ]; then
+    cui_die "vault guard: resolved prod vault '${base}' (VAULT_ROOT=${VAULT_ROOT}) is not ${CUI_EXPECTED_VAULT_LABEL}. Refusing to boot the prod channel against a mismatched vault — its write-capable worker would bind and write it. Fix .env.prod.local, or unset VAULT_ROOT for no-vault idle boot."
+  fi
+  cui_warn "vault guard advisory: resolved vault '${base}' (VAULT_ROOT=${VAULT_ROOT}) does not look like ${CUI_EXPECTED_VAULT_LABEL}. Continuing — the active vault is selected in-app (VAULT_ROOT is only the initial default)."
 }
 
 # ── docker / colima ───────────────────────────────────────────────────────────
@@ -149,15 +197,43 @@ cui_runtime_vault_matches_env() {
   [ "${source}" = "${VAULT_ROOT:-}" ]
 }
 
+# Returns 0 only when a running channel API container exists AND has NO /app/vault
+# bind mount — the single state a no-vault (picker) launch may warm-skip. A missing
+# channel container (e.g. a foreign or stale process answering /healthz on the
+# channel port) or a container still bound to a vault must recreate, so the channel
+# serves its own idle stack rather than an unrelated runtime or a stale vault (#2005).
+cui_runtime_is_idle_channel_container() {
+  local cid source
+  cid="$(cui_api_container_id)"
+  [ -n "${cid}" ] || return 1
+  source="$(cui_container_vault_mount_source "${cid}")"
+  [ -z "${source}" ]
+}
+
 cui_start_runtime() {
-  local root _rc
+  local root _rc _skip_recreate
   root="$(cui_repo_root)"
   # Restarting the UI should not recreate an already-healthy stack. When the
   # runtime API is up, skip the full start_full_system.sh recreate (and its
   # watcher/worker health race). Set CUI_FORCE_RECREATE=1 to force a rebuild,
   # e.g. after changing runtime code or compose config.
   if [ "${CUI_FORCE_RECREATE:-0}" != "1" ] && cui_api_healthy_now; then
-    if [ -z "${VAULT_ROOT:-}" ] || [ "${CUI_CHANNEL:-}" != "prod" ] || cui_runtime_vault_matches_env; then
+    _skip_recreate=0
+    if [ -z "${VAULT_ROOT:-}" ]; then
+      # No-vault (picker) launch: only warm-skip when THIS channel has a live
+      # container with no vault mount. No channel container (a foreign/stale
+      # process answering /healthz on the port) or a container still bound to a
+      # previous vault must recreate, so `make {dev,test,prod}-ui` serves the
+      # channel's own in-app picker, not an unrelated or stale runtime (#2005).
+      cui_runtime_is_idle_channel_container && _skip_recreate=1
+    elif cui_runtime_vault_matches_env; then
+      # Vault configured (all channels alike): only warm-skip when the live
+      # container is already bound to exactly that vault. Otherwise recreate so a
+      # newly added/changed .env.<channel>.local vault actually takes effect —
+      # covers wrong-vault and no-mount containers, not just prod.
+      _skip_recreate=1
+    fi
+    if [ "${_skip_recreate}" = "1" ]; then
       cui_log "runtime API already healthy on port ${CUI_API_PORT} — skipping full stack recreate (set CUI_FORCE_RECREATE=1 to force)"
       return 0
     fi
@@ -383,6 +459,32 @@ cui_run_start() {
 }
 
 # Read-only diagnostic. Never starts services or mutates vault/runtime state.
+# Read-only vault-name posture for the doctor. Echoes one status line for the
+# already-resolved VAULT_ROOT and returns non-zero ONLY when the doctor should
+# fail: a prod vault-name mismatch (mirrors cui_guard_vault_name, which aborts
+# the real prod-ui boot for the same condition). dev/test mismatches stay
+# advisory (warn, return 0); an unset VAULT_ROOT is the no-vault idle posture.
+# Pure — no docker/curl/env-file side effects — so it is unit-testable directly.
+cui_doctor_vault_name_status() {
+  local base base_lc
+  if [ -z "${VAULT_ROOT:-}" ]; then
+    echo "  [info] VAULT_ROOT unset — no-vault idle boot; open a vault in the ${CUI_CHANNEL} UI to activate"
+    return 0
+  fi
+  base="$(basename "${VAULT_ROOT}")"
+  base_lc="$(cui_lower "${base}")"
+  if printf '%s' "${base_lc}" | grep -Eq "${CUI_EXPECTED_VAULT_PATTERN}"; then
+    echo "  [ok]   vault resolves to ${CUI_EXPECTED_VAULT_LABEL} ('${base}')"
+    return 0
+  fi
+  if [ "${CUI_CHANNEL:-}" = "prod" ]; then
+    echo "  [fail] prod vault '${base}' is not ${CUI_EXPECTED_VAULT_LABEL} — prod-ui will refuse to boot (fix .env.${CUI_CHANNEL}.local)"
+    return 1
+  fi
+  echo "  [warn] vault '${base}' does not match expected ${CUI_EXPECTED_VAULT_LABEL} (advisory; active vault is selected in-app)"
+  return 0
+}
+
 cui_run_doctor() {
   cui_require_config
   local rc=0
@@ -401,30 +503,24 @@ cui_run_doctor() {
   local root env_file
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
+  # Mirror the launcher: the channel vault is defined by the env file, not an
+  # ambient VAULT_ROOT. Report any inherited binding as ignored, then clear it so
+  # the resolution below reflects what the launcher would actually do.
+  if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
+    echo "  [info] ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' (the ${CUI_CHANNEL} vault is defined by ${env_file}, not the shell)"
+  fi
+  unset VAULT_ROOT VAULT_HOST_ROOT
   if [ -f "${root}/${env_file}" ]; then
     echo "  [ok]   ${env_file} present"
     # shellcheck source=/dev/null
     source "${root}/scripts/lib/load_env_defaults.sh"
     ( cd "${root}" && load_env_defaults_file "${env_file}" ) >/dev/null 2>&1 || true
     cd "${root}" 2>/dev/null && load_env_defaults_file "${env_file}" >/dev/null 2>&1 || true
-    if [ -n "${VAULT_ROOT:-}" ]; then
-      local base base_lc
-      base="$(basename "${VAULT_ROOT}")"
-      base_lc="$(cui_lower "${base}")"
-      if printf '%s' "${base_lc}" | grep -Eq "${CUI_EXPECTED_VAULT_PATTERN}"; then
-        echo "  [ok]   vault resolves to ${CUI_EXPECTED_VAULT_LABEL} ('${base}')"
-      else
-        echo "  [FAIL] vault '${base}' does not match expected ${CUI_EXPECTED_VAULT_LABEL}"
-        rc=1
-      fi
-    else
-      echo "  [FAIL] VAULT_ROOT not set by ${env_file}"
-      rc=1
-    fi
   else
-    echo "  [FAIL] ${env_file} missing (see .env.example)"
-    rc=1
+    # Missing override is a valid no-vault idle posture (#2005), not a failure.
+    echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
   fi
+  cui_doctor_vault_name_status || rc=1
 
   # 3. API health (read-only)
   if curl -fsS --max-time 3 "http://127.0.0.1:${CUI_API_PORT}/healthz" >/dev/null 2>&1; then
