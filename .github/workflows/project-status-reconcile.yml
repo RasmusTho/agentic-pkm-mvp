@@ -7,7 +7,7 @@ on:
     # Daily drift-catch only. The hourly scan was the dominant GraphQL drain
     # (full board re-paginated + every item re-read, 24x/day). During a
     # GraphQL-budget incident prefer a manual `workflow_dispatch` full scan.
-    # See docs/audits/GITHUB_API_EXHAUSTION_2026-06-29.md :: GHAPI-C2.
+    # See issue #2681 (daily + budget-gated reconcile) for rationale.
     - cron: '17 7 * * *'
   workflow_dispatch:
 

@@ -27,7 +27,8 @@ GH_RETRY_BASE_DELAY_SECONDS = 0.4
 # on this identity) exhausts long before REST core. Below these remaining-budget
 # floors we shed the most expensive GraphQL work instead of pushing an already
 # strained pool into hard exhaustion. Env-overridable for incident tuning.
-# See docs/audits/GITHUB_API_EXHAUSTION_2026-06-29.md :: GHAPI-C2 / GHAPI-H3.
+# See issues #2681 (daily, budget-gated reconcile) and #2684 (GitHub-API
+# observability) for the rationale and thresholds.
 GRAPHQL_SCAN_MIN_BUDGET = int(os.environ.get("RECONCILE_GRAPHQL_SCAN_MIN_BUDGET", "500"))
 GRAPHQL_OPTIONAL_MIN_BUDGET = int(
     os.environ.get("RECONCILE_GRAPHQL_OPTIONAL_MIN_BUDGET", "250")
