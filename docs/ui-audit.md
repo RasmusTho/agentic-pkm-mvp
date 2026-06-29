@@ -17,14 +17,14 @@ State: Point-in-time UX audit + correction record for the Companion UI (2026-06-
 2. **The right "suggestions" rail could not scroll** — with several staged proposals the lower cards and their confirm/decline controls were clipped off-screen and unreachable. *(P1)*
 3. **The System Map — a 1-click, default-view human surface — read like an internal engineering document:** it leaked a literal Python function name, JS API calls, raw intent tokens, a runtime trace id, and architecture jargon. *(P1)*
 4. **The System Map is the *only* door to Settings, History/Receipts, Memory, and Search (⌘K).** Settings has no direct affordance anywhere; the map is a mandatory 2-click toll for routine surfaces. *(P1)*
-5. **Overlays are invisible to the browser:** none are deep-linkable and none push history, so pressing browser **Back** to dismiss a modal throws the user off the page, and no surface can be bookmarked/shared. *(P1)*
+5. **Overlays are invisible to the browser:** none are deep-linkable and none push history, so pressing browser **Back** to dismiss a modal throws the user off the page, and no surface can be bookmarked/shared. *(P1)* — **Fixed (NAV-3):** overlays now push history (Back closes the topmost overlay) and are deep-linkable via `?overlay=<id>`.
 
 ### Top 5 recommended fixes
 1. Fix the GFM table parser (dash count, alignment, escaped pipes, single column) + wrap wide tables for horizontal scroll. — **DONE**
 2. Give the right rail body `min-height:0; overflow-y:auto`. — **DONE**
 3. Rewrite the System Map copy into human language; gate the trace id behind the existing `?diagnostics=1` mode; humanise the mode chips. — **DONE**
-4. Add a direct **Settings** launcher so the map is the *complete index*, not the *only door*. — **DONE (NAV-1)**; promoting History + Search filed as **NAV-2** (#2610).
-5. Make overlays participate in browser history (pushState on mount, popstate → dismiss). — **Filed as NAV-3** (#2611; behavioural change warranting a live smoke).
+4. Add a direct **Settings** launcher so the map is the *complete index*, not the *only door*. — **DONE (NAV-1)**; History + Search promoted to direct launchers — **DONE (NAV-2 / NAV-4, #2610)**.
+5. Make overlays participate in browser history (pushState on mount, popstate → dismiss) and deep-linkable via `?overlay=`. — **DONE (NAV-3):** NAV-3a #2639 (history) + NAV-3b #2640 (route swap) + NAV-3c #2641 (deep-link); NAV-3d #2644 (already-stacked-route history alignment) is a tracked follow-up.
 
 ### Fixed in this pass
 - **Markdown tables (MD-1…MD-5):** separator now accepts GFM 1+ dash & single-column tables; per-column alignment (`:--`,`--:`,`:--:`) is applied; escaped/awkward pipes no longer drop the row; wide tables are wrapped in a horizontal-scroll container. + new tests. **MD-7** (span-aware splitting for pipes inside inline code / aliased wikilinks) landed independently on main via **#2596**; this PR builds on that splitter and keeps its regression tests.
@@ -34,12 +34,14 @@ State: Point-in-time UX audit + correction record for the Companion UI (2026-06-
 - **Long-content robustness (ST-4, ST-5):** `.note-title` and proposal cards now wrap long unbroken tokens.
 - **Accessibility (A11Y-1, A11Y-2, A11Y-3):** vault-action and filter-chip controls are now keyboard-operable (`role=button`, `tabindex`, Enter/Space) with visible `:focus-visible`; Help & Memory drawers now toggle `inert` when closed (no off-screen focus trap), matching the Settings-drawer precedent.
 - **NAV-1 — direct Settings launcher:** added a labelled Settings control to the composed bottom bar (reuses `settings.open` + the host occupant); the System Map node is retained. This **knowingly reverses the #2447 "settings off the chrome" choice for settings only** (at the owner's request); the `test_settings_drawer` contract was updated to encode the new state.
+- **NAV-2 / NAV-4 — direct launchers (#2610):** History/Receipts, Memory, and Search (⌘K) promoted to direct launchers so routine surfaces no longer cost the map's 2-click toll; the map remains the complete index.
+- **NAV-3 — overlay browser-history + deep-link:** overlays now participate in browser history and are deep-linkable. Delivered as a cluster — **NAV-3a #2639** (mount pushes one history entry; browser Back closes the topmost overlay via `popstate`; Esc/scrim dismissal preserved), **NAV-3b #2640** (System Map route is an atomic `overlayHost.replace` swap at constant history depth), and **NAV-3c #2641** (`?overlay=<id>` auto-mounts a declared+shipped overlay on load on both the note and orientation shells; unknown/unshipped/empty → calm no-op; boot script emitted after every occupant registration so nothing — Settings included — mounts before its occupant; the `vault` deep-link honours the browse-surface duality via `vaultBrowser.focus()` rather than a raw modal mount). The shipped contract is documented in `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md :: Overlay browser-history + deep-link contract`. **NAV-3d #2644** (history alignment for an already-stacked route destination) is a tracked follow-up.
 - **ST-1 — Operator drawer retry:** `loaded` is now set only on fetch success (with an in-flight guard), so a transient gateway failure no longer pins the error state; the banner is calm copy, the raw error kept in `data-error` for operators.
 - **ST-2 — ⌘K palette actions:** the POST now disables the button in-flight (no double-submit) and reflects success/error via `data-action-state`.
 - **ST-3 — ⌘K palette filter:** a "No proposals match your filter." state shows when a filter excludes every row, instead of a blank list.
 
 ### What remains (recommended, not yet implemented)
-- **NAV-2 / NAV-3:** promote History + Memory to direct launchers (#2610), and integrate overlays with browser history so Back closes a modal and surfaces are deep-linkable (#2611). Filed as issues.
+- **NAV-3d (#2644):** history alignment for an already-stacked route destination — a tracked follow-up on top of the shipped NAV-3 cluster (the common single/stacked/route/deep-link cases ship; this is the remaining edge).
 - **MAP-7 (mode chip) / MAP-8 (operator node):** further softening is possible; the operator node could be diagnostics-gated.
 - **A11Y-4 / A11Y-5:** move initial focus into overlays on open + restore on close; arrow-key roving for the left-panel tablist.
 
@@ -96,9 +98,9 @@ Status: **Fixed** (this pass) · **Documented** (recommended; not changed).
 | MAP-7 | System map / contract | P2 | The "no internal refs" contract only caught issue/SEP numbers, not source symbols | `test_system_map_overlay.py` C4 | Future copy can re-leak symbols | Extend contract to forbid `_fn(`, `x.y(`, `*.open/focus/mount` | **Fixed** |
 | MAP-8 | System map / operator node | P2 | "Operator diagnostics" node advertised to all users in the default view | `system_map_overlay.py` operator node | Non-tech user offered a diagnostics surface | Renamed to "System status"; humanised. Consider diagnostics-gating the node | **Fixed** (rename) / **Documented** (gating) |
 | NAV-1 | Reachability / Settings | P1 | Settings had **no direct affordance**; reachable only via the map (2 clicks, 19-node grid) | `overlay_host.py:127` (`SHIPPED_TOPBAR_SURFACES=("capture",)`); map route only | Users can't find "preferences" | Added a direct Settings launcher to the bottom bar (reuses `settings.open` + host occupant); map node retained. Knowingly reverses #2447 for settings; contract test updated. | **Fixed** |
-| NAV-2 | Reachability / map-as-hub | P1 | Map is a mandatory 2-click toll for History/Memory/Governance (Settings now direct via NAV-1) | bottom-bar = Map+Settings+Help `:8327-8336` | Routine surfaces cost double clicks | Promote History + Memory to direct launchers | **Filed #2610** |
-| NAV-3 | Overlays / browser history | P1 | No overlay is deep-linkable; mount/dismiss never touch URL/history → browser Back leaves the page | `overlay_host.py:359-370`; `do_GET` has no `?overlay` | Back doesn't close modals; no bookmarking | pushState on mount + popstate→dismiss; honour `?overlay=` | **Filed #2611** |
-| NAV-4 | Search / palette launcher | P2 | ⌘K palette (the search/fast path) has no visible launcher | `overlay_host.py:406`; not in topbar/bottom-bar | Mouse-only users can't find search | Add a search pill (⌘K hint) emitting `cmd.open` | **Documented** |
+| NAV-2 | Reachability / map-as-hub | P1 | Map is a mandatory 2-click toll for History/Memory/Governance (Settings now direct via NAV-1) | bottom-bar = Map+Settings+Help `:8327-8336` | Routine surfaces cost double clicks | Promote History + Memory to direct launchers | **Fixed** (#2610) |
+| NAV-3 | Overlays / browser history | P1 | No overlay is deep-linkable; mount/dismiss never touch URL/history → browser Back leaves the page | `overlay_host.py:359-370`; `do_GET` has no `?overlay` | Back doesn't close modals; no bookmarking | pushState on mount + popstate→dismiss; honour `?overlay=` | **Fixed** — NAV-3a #2639 (history) + NAV-3b #2640 (route swap) + NAV-3c #2641 (`?overlay=` deep-link); NAV-3d #2644 (already-stacked-route history alignment) tracked follow-up |
+| NAV-4 | Search / palette launcher | P2 | ⌘K palette (the search/fast path) has no visible launcher | `overlay_host.py:406`; not in topbar/bottom-bar | Mouse-only users can't find search | Add a search pill (⌘K hint) emitting `cmd.open` | **Fixed** (#2610) |
 | NAV-5 | Ambiguous "settings" controls | P2 | Icon-only "V" (Vault settings) collides with the hidden Local-UI "Settings" | `serve_dev_page.py:590` | Two different "settings", one a bare letter | Label distinctly (Vault config vs Preferences) | **Documented** |
 | NAV-6 | Vault chip affordance | P3 | Vault chip is both identity and the only Browse launcher; looks like a label | `serve_dev_page.py:584` | No labelled "Browse" affordance | Add a Browse verb / folder glyph | **Documented** |
 | A11Y-1 | Vault-browser action strip | P1 | "Copy path / Find related / Queue for review" were `<div onclick>` — no role/tabindex/keydown/focus | `serve_dev_page.py` `_action()` builder | Keyboard/SR users can't fire 3 of 4 note actions | Add `role=button`+`tabindex`+Enter/Space (this.click) + `:focus-visible` | **Fixed** |
@@ -126,15 +128,15 @@ Standard: primary actions 1–2 clicks · secondary 2–3 · rare/admin deeper b
 | Vault browser | Vault chip → `vaultBrowser.focus()` | 1 | 1 | Chip looks like a label (NAV-6) | add Browse cue |
 | Open a note | `?note_path=` link / recents | 1–2 | 1–2 | only deep-linkable destination | none |
 | Right panel / proposals | Ambient rail | 0–1 | 0–1 | — | none |
-| **Command palette / search** | ⌘K *or* Map→palette | 2 (mouse) | 1 | **no visible launcher (NAV-4)** | add search pill |
+| **Command palette / search** | ⌘K *or* Map→palette | 2 (mouse) | 1 | ~~no visible launcher (NAV-4)~~ **Fixed (#2610)** | done — direct launcher shipped |
 | **Settings** | Map → scroll grid → node | 2 | 1 | **zero direct affordance (NAV-1)** | add Settings launcher |
-| **Memory review** | Map → node | 2 | 1 | map-only (NAV-2) | direct launcher |
-| **Receipts / history** | Map → node | 2 | 1 | map-only (NAV-2) | direct launcher |
+| **Memory review** | Map → node | 2 | 1 | ~~map-only (NAV-2)~~ **Fixed (#2610)** | done — direct launcher shipped |
+| **Receipts / history** | Map → node | 2 | 1 | ~~map-only (NAV-2)~~ **Fixed (#2610)** | done — direct launcher shipped |
 | Governance counts | Map → node → receipts | 2 | 2 | via receipts | OK if receipts gets a launcher |
 | System map | Bottom-bar Map | 1 | 1 | — | none |
 | Capture / create | Button / ⌘N | 1 | 1 | — | none |
 | Operator / diagnostics | Map → node | 2 | 2 | by design (rare) | OK (consider gating) |
-| **Back / close overlay** | Esc / scrim only | — | — | **browser Back fails (NAV-3)** | pushState + popstate |
+| **Back / close overlay** | Esc / scrim / **browser Back** | — | — | ~~browser Back fails (NAV-3)~~ **Fixed (#2639/#2640/#2641)** | done — Back closes the topmost overlay; `?overlay=` deep-links |
 
 ---
 
@@ -205,8 +207,8 @@ The map is a **default human-view surface** (1 click), so all visible copy is us
 ## 8. Remaining risks & next actions
 
 **Recommended product decisions (not changed unilaterally — the map-as-hub was deliberate in #2447):**
-1. **NAV-1/2/4 — direct launchers.** Add a bottom-bar **Settings** (gear) launcher reusing `data-intent="settings.open"`, and promote **History** and a **Search** (⌘K) pill. Keep the map as the complete index. This directly serves the core principle "reach every important function in the minimum practical clicks without hidden knowledge." *Recommended: implement.*
-2. **NAV-3 — browser history for overlays.** `history.pushState` on `overlayHost.mount`, a `popstate` listener calling `dismiss`, and honour `?overlay=<id>` in `do_GET`. Makes Back close modals and surfaces shareable. *Recommended: implement after a live smoke (it changes navigation semantics).*
+1. **NAV-1/2/4 — direct launchers.** ✅ **Delivered.** Bottom-bar **Settings** (gear) launcher (NAV-1) plus **History** and **Search** (⌘K) promoted to direct launchers (NAV-2/NAV-4, #2610). The map remains the complete index. This serves the core principle "reach every important function in the minimum practical clicks without hidden knowledge."
+2. **NAV-3 — browser history + deep links for overlays.** ✅ **Delivered.** `history.pushState` on mount with a `popstate` listener dismissing the topmost overlay (NAV-3a #2639), an atomic `overlayHost.replace` swap for the System Map route (NAV-3b #2640), and `?overlay=<id>` deep-linking honoured server-side in `handle_get` (NAV-3c #2641). Back now closes modals and surfaces are shareable. The shipped contract is in `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md :: Overlay browser-history + deep-link contract`. *Remaining:* NAV-3d #2644 (already-stacked-route history alignment) — tracked follow-up.
 
 **Behavioural JS fixes worth a live-runtime pass:**
 3. **ST-1** Operator drawer: set `loaded` only on fetch success; render a calm, retryable error.
