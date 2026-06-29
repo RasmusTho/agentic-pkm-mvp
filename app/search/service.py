@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import asdict
 from uuid import UUID, uuid4
 from typing import Any, Iterable
 import logging
@@ -260,17 +261,51 @@ def search(query_text: str, k: int = 5, *_a, **_k) -> list:
 
 # --- Ingest (canonical embeddings) -------------------------------------------
 
-def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
-    oid = object_id or uuid4()
-    safe_text = strip_ai_panels(text)
+def _indexed_unit_payload(
+    *,
+    object_id,
+    kind: str,
+    source_ref: str,
+    payload: dict,
+    text: str,
+    embedding_identity,
+) -> dict:
     payload_out = dict(payload or {})
-    payload_out.setdefault("text", safe_text)
-    payload_out.setdefault("content", safe_text)
+    safe_source_ref = str(source_ref)
+    safe_object_id = str(object_id)
+
+    payload_out.setdefault("text", text)
+    payload_out.setdefault("content", text)
     payload_out.setdefault("object_type", kind)
     payload_out.setdefault("system_intent", "learn")
     payload_out.setdefault("emergent_tags", [])
 
+    payload_out.setdefault("artifact_id", safe_object_id)
+    payload_out.setdefault("stable_id", safe_object_id)
+    payload_out.setdefault("path", safe_source_ref)
+    payload_out.setdefault("source_ref", safe_source_ref)
+    payload_out.setdefault("language", str(payload_out.get("lang") or "und"))
+    payload_out.setdefault("source_role", str(payload_out.get("origin") or kind))
+    payload_out.setdefault("origin", str(payload_out.get("origin") or "unknown"))
+    payload_out.setdefault("trust", str(payload_out.get("trust") or "unreviewed"))
+    payload_out.setdefault("review_state", str(payload_out.get("review_state") or "provisional"))
+    payload_out["embedding_identity"] = asdict(embedding_identity)
+    return payload_out
+
+
+def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
+    oid = object_id or uuid4()
+    safe_text = strip_ai_panels(text)
+
     embedding, identity = embed_query(safe_text)
+    payload_out = _indexed_unit_payload(
+        object_id=oid,
+        kind=kind,
+        source_ref=source_ref,
+        payload=payload,
+        text=safe_text,
+        embedding_identity=identity,
+    )
     idx = get_vector_index()
     try:
         idx.upsert(

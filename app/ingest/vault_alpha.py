@@ -439,6 +439,8 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
 
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)
     review_state = str(frontmatter.get("review_state") or "provisional")
+    trust = str(frontmatter.get("trust") or "unreviewed")
+    language = str(frontmatter.get("language") or frontmatter.get("lang") or "und")
     maturity = str(frontmatter.get("maturity") or "note")
     domain = str(frontmatter.get("domain") or "").strip() or "unscoped"
     stripped_body = strip_ai_panels(body)
@@ -499,6 +501,8 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "title": title,
         "review_state": review_state,
         "origin": "vault",
+        "source_ref": str(path),
+        "trust": trust,
         "domain": domain,
     }
 
@@ -533,10 +537,18 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         object_uuid = uuid.uuid4()
 
     store_payload = {
+        "artifact_id": str(object_uuid),
+        "stable_id": str(object_uuid),
         "title": title,
         "origin": "vault",
+        "source_role": "vault_note",
         "source": str(path),
+        "source_ref": str(path),
+        "path": str(path),
         "domain": domain,
+        "language": language,
+        "trust": trust,
+        "review_state": review_state,
         "text": stripped_text,
         "ingest_fingerprint": ingest_fingerprint,
     }
@@ -567,7 +579,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
             object_id=object_uuid,
             kind="note",
             source_ref=str(path),
-            payload={"title": title, "origin": "vault", "source": str(path), "domain": domain},
+            payload=store_payload,
             text=stripped_text,
         )
     except Exception:

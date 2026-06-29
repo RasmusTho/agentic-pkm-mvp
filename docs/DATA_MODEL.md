@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Current persistence and mirror model for the runtime; explains how Core-6 and derived system artifacts are represented without redefining semantic ownership.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py (2026-06-15)
+Last verified against: app/stores/pg.py (2026-06-30)
 # Data Model
 
 The DB is a normalized mirror of the note contract and system overlays. It is not the source of
@@ -171,6 +171,15 @@ The `payload` contains the Core-6 projection plus any policy-enabled state axes 
 In current runtime practice it may also contain execution-state or legacy compressed semantics that
 the ontology keeps separate.
 
+Indexed/retrieved unit contract:
+- `object_id` is the stable runtime id for the indexed unit; payload mirrors it as `artifact_id`
+  and `stable_id` for payload-only consumers.
+- `source_ref` is the persisted locator/path; payload mirrors it as `path` and `source_ref`.
+- payload must carry `language` (`und` when undetermined), `origin`, `source_role`, `trust`, and
+  canonical `review_state`.
+- `uuid` from source-note frontmatter is lineage metadata. It improves continuity when present, but
+  it is not a render/retrieval gate; uuid-less notes still produce a derived runtime `object_id`.
+
 ### `store_vector_index` (canonical)
 - `object_id` uuid pk
 - `kind` text not null
@@ -179,12 +188,17 @@ the ontology keeps separate.
 - `embedding` `double precision[]` not null
 - `dim` integer not null
 - `model` text not null
+- `provider` text nullable
+- `normalize` boolean nullable
 - `updated_at` timestamptz not null default now()
 
 The vector index is a derived runtime artifact. Embeddings are stored as a `double precision[]`
 array (not a `vector`-extension column); similarity is computed in application code, and the index
-is rebuildable from `store_objects` payloads. Every row is tagged with the generating `model` and
-its `dim`.
+is rebuildable from `store_objects` payloads. Every row is tagged with its generating embedding
+identity: `provider`, `model`, `dim`, and `normalize` (older rows may backfill nullable provider /
+normalize from `vector_index_meta`). The row payload must preserve the retrieved-unit metadata from
+`store_objects` plus `embedding_identity` so retrieval consumers can inspect the evidence unit
+without consulting hidden process state.
 
 ### `store_relations` (canonical)
 - `src_id` uuid not null
