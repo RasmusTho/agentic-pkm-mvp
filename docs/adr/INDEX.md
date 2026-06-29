@@ -36,3 +36,4 @@
 - [ADR-0037: ContextEnvelope composes ContextBundle](./ADR-0037-context-envelope-composes-context-bundle.md)
 - [ADR-0038: MetadataBundle is required for usable objects](./ADR-0038-metadata-bundle-is-required-for-usable-objects.md)
 - [ADR-0039: RetrievalResult is candidate context, not authority](./ADR-0039-retrieval-result-is-candidate-context-not-authority.md)
+- [ADR-0040: Prod promotion ref — `main` interim baseline; gated `stable` deferred](./ADR-0040-prod-promotion-ref-main-interim.md)

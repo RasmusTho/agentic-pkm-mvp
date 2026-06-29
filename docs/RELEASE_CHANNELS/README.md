@@ -18,8 +18,8 @@ Doc role: Core SoT for the release-channels capability
 Owner: `docs/ROADMAP.md`
 Temporal class: strategic
 Review cadence: biweekly
-Last reviewed: 2026-04-21
-Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md
+Last reviewed: 2026-06-29
+Last verified against: docs/ENVIRONMENTS.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/DB_SCHEMA.md, docs/adr/ADR-0040-prod-promotion-ref-main-interim.md
 
 # Release Channels Specification
 
@@ -90,7 +90,7 @@ DB isolation is two-layer: a **container layer** (shipped, PR #596) provides phy
 
 | Channel | Environment | Compose target | Postgres port | Code ref | Vault | Runtime artifacts |
 | --- | --- | --- | --- | --- | --- | --- |
-| **stable** | `prod` | `make prod-up` | 15432 | `stable` (tag or branch) | real operator vault | `tmp/` |
+| **stable** | `prod` | `make prod-up` | 15432 | `main` (interim baseline — gated `stable` deferred; see [Promotion model](#promotion-model)) | real operator vault | `tmp/` |
 | **dev** | `dev` | `make dev-up` | 15433 | `main` or feature branch | `vault-dev/` | `tmp-dev/` |
 | **test** | `test` (workflow-driven) | `make test-up` | 15434 | current worktree | `vault-test/` | `tmp-test/` |
 
@@ -103,7 +103,7 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 1. **DB-per-channel.** Each channel runs against a separate logical Postgres database in a single local cluster. The outbox, event log, and any schema-carrying table lives in the channel's own DB. No cross-channel writes. No cross-channel consumers.
 2. **Vault-per-channel.** No channel ever writes to another channel's vault root. The prod vault is never targeted by dev or test processes, including during migration, reset, or experimentation.
 3. **Runtime-artifacts-per-channel.** Watcher state, heartbeats, incident logs, event logs, and all other runtime artifacts stay under the channel's runtime-artifact directory. Already partially true via [ENVIRONMENTS.md §Stores and Persistence](../ENVIRONMENTS.md); this capability extends the same rule to the DB.
-4. **Code-ref-per-channel.** The prod process runs from a checkout pinned to the `stable` ref. Dev work must not be able to swap code under a running prod process. On a single-user machine this is satisfied by running prod and dev from separate checkouts (git worktrees are the recommended shape).
+4. **Code-ref-per-channel.** The prod process runs from a checkout pinned to the agreed **promotion ref**, which the prod runtime must match exactly with a clean working tree — no machine-local uncommitted state acting as durable truth (Issue #2527). That ref is currently `main` (interim baseline); a gated `stable` ref is the deferred target (see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md)). Divergence from the promotion ref or a dirty prod tree is flagged by the read-only fitness guard `app/release_channels/prod_ref_fitness.py`. Dev work must not be able to swap code under a running prod process. On a single-user machine this is satisfied by running prod and dev from separate checkouts (git worktrees are the recommended shape).
 5. **Promotion is explicit and recorded.** No implicit promotion. Every stable-ref movement is an intentional operator act with a resolvable receipt (git tag annotation, log entry, or equivalent).
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
@@ -139,7 +139,29 @@ expressions, because Compose must still resolve and load the service's `env_file
 
 The guard is **read-only**: it reports and fail-closes; it never edits operator files. When it fails, the operator must correct the compose overlay to match the intended channel before proceeding.
 
+## Promotion model
+
+This section records the **current** prod promotion model and how it relates to the **target** gated model below. It is the authoritative reconciliation of the channel table and Invariant 4 with what prod actually runs (Issue #2527; [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md)).
+
+### Current: prod tracks `main` (interim baseline)
+
+Prod's promotion ref is **`main`**. The prod process runs from a checkout pinned to `main` with a clean working tree; there is no gated `stable` indirection in force today. This is the interim baseline established while the UI and docs capabilities stabilize in dev — establishing a trustworthy prod runtime comes before promotion-governance hardening (see [Current direction](#current-direction-prod-baseline-before-promotion-hardening)).
+
+`origin/stable` (`e2892b18`) is **dormant** and does **not** reflect what prod runs: as of 2026-06-29 it is not an ancestor of `origin/main` (hundreds of commits of divergence under squash-merge history). It must not be treated as the prod source-of-truth until it is restored as a gated ref. The promotion **skills** (`prepare-promotion`, `execute-promotion`, `verify-promotion`, `promote-test-to-prod`) describe the target gated model and remain valid for that future; they do not describe the current `main`-tracking baseline.
+
+**Reproducibility invariant.** Prod must be reconstructible from git alone. The prod runtime HEAD must equal the promotion ref and the working tree must be clean — no uncommitted, machine-local state as durable truth (the Issue #2527 finding was a prod checkout dirty with tracked modifications that existed nowhere in git). The read-only guard `app/release_channels/prod_ref_fitness.py` (Issue #2527 AC3) flags a prod checkout that diverges from the promotion ref or runs a dirty tree; the operator runs it on the prod host to produce the clean-tree receipt:
+
+```
+python -m app.release_channels.prod_ref_fitness /Users/rasmus/workspace --promotion-ref main
+```
+
+### Target: gated `stable` promotion (deferred hardening)
+
+The four-phase gated model in [Promotion contract](#promotion-contract) — prepare → execute → verify → rollback, advancing a protected `stable` ref — is the **target**, deferred to promotion hardening (see [Future promotion hardening](#future-promotion-hardening)). Restoring `stable` as a gated promotion ref, and switching prod from `main`-tracking to `stable`-tracking, is future work that descends from Issue #2527; until then the current baseline above governs.
+
 ## Promotion contract
+
+> **This section describes the _target_ gated model — deferred promotion hardening.** The current prod baseline tracks `main` directly; see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md).
 
 Promotion is the operation that turns an accepted commit on `main` into the running `stable` build in prod. It has four explicit phases:
 
