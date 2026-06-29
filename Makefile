@@ -17,12 +17,15 @@ TEST_LLM_MODEL ?= llama3.1:8b
 SMOKE_WORKERS ?= auto
 SMOKE_E2E_WORKERS ?= 0
 APP_CODE_BIND_COMPOSE ?= docker-compose.app-bind.yml
+COMPOSE_UP_BUILD := $(if $(strip $(APP_CODE_BIND_COMPOSE)),--build,)
+COMPOSE_DEV_FILES := docker-compose.yaml$(if $(strip $(APP_CODE_BIND_COMPOSE)),:$(APP_CODE_BIND_COMPOSE)):docker-compose.dev.yml
+COMPOSE_TEST_FILES := docker-compose.yaml$(if $(strip $(APP_CODE_BIND_COMPOSE)),:$(APP_CODE_BIND_COMPOSE)):docker-compose.test.yml
+COMPOSE_PROD_FILES := docker-compose.yaml$(if $(strip $(APP_CODE_BIND_COMPOSE)),:$(APP_CODE_BIND_COMPOSE)):docker-compose.prod.yml
 COMPOSE_BASE := docker compose -f docker-compose.yaml $(if $(strip $(APP_CODE_BIND_COMPOSE)),-f $(APP_CODE_BIND_COMPOSE),)
-COMPOSE_DEV := $(COMPOSE_BASE) -f docker-compose.dev.yml -p pkm-dev
-COMPOSE_TEST := $(COMPOSE_BASE) -f docker-compose.test.yml -p pkm-test
-COMPOSE_PROD := $(COMPOSE_BASE) -f docker-compose.prod.yml -p pkm-prod
-TEST_COMPOSE_FILES := docker-compose.yaml$(if $(strip $(APP_CODE_BIND_COMPOSE)),:$(APP_CODE_BIND_COMPOSE)):docker-compose.test.yml
-TEST_COMPOSE_ENV := COMPOSE_FILE=$(TEST_COMPOSE_FILES) COMPOSE_PROJECT_NAME=pkm-test
+COMPOSE_DEV := $(COMPOSE_BASE) --env-file config/deploy/dev.env -f docker-compose.dev.yml -p pkm-dev
+COMPOSE_TEST := $(COMPOSE_BASE) --env-file config/deploy/test.env -f docker-compose.test.yml -p pkm-test
+COMPOSE_PROD := $(COMPOSE_BASE) --env-file config/deploy/prod.env -f docker-compose.prod.yml -p pkm-prod
+TEST_COMPOSE_ENV := COMPOSE_FILE=$(COMPOSE_TEST_FILES) COMPOSE_PROJECT_NAME=pkm-test
 # Runtime version marker (issue #2602). Computed once and exported so every
 # `docker compose build` invocation (dev-up, prod-up, test-up, alpha-up) bakes
 # the real git SHA + build time into the image via compose build-args. Override
@@ -144,13 +147,13 @@ test-bootstrap: require-test-vault-root
 	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" $(PYTHON) -m app.cli uat-run-vault-test --vault-root "$(TEST_VAULT_ROOT)" --assert
 
 dev-up:
-	@$(COMPOSE_DEV) up -d --build
+	@$(COMPOSE_DEV) up -d $(COMPOSE_UP_BUILD)
 
 dev-down:
 	@$(COMPOSE_DEV) down --remove-orphans
 
 dev-start-full:
-	@COMPOSE_FILE="docker-compose.yaml:docker-compose.dev.yml" \
+	@COMPOSE_FILE="$(COMPOSE_DEV_FILES)" \
 	COMPOSE_PROJECT_NAME="pkm-dev" \
 	PKM_ENVIRONMENT="dev" \
 	START_MODE=runtime \
@@ -185,20 +188,20 @@ prod-ui-doctor:
 	@bash scripts/prod/prod_ui_doctor.sh
 
 prod-up:
-	@$(COMPOSE_PROD) up -d --build
+	@$(COMPOSE_PROD) up -d $(COMPOSE_UP_BUILD)
 
 prod-down:
 	@$(COMPOSE_PROD) down --remove-orphans
 
 prod-start-full:
-	COMPOSE_FILE="docker-compose.yaml:docker-compose.prod.yml" \
+	COMPOSE_FILE="$(COMPOSE_PROD_FILES)" \
 	COMPOSE_PROJECT_NAME="pkm-prod" \
 	PKM_ENVIRONMENT="prod" \
 	VERIFY_RUNTIME_SERVICE_WAIT_SECONDS=60 \
 	bash scripts/prod/start_midgard_stack.sh
 
 test-start-full: require-vault-root
-	COMPOSE_FILE="docker-compose.yaml:docker-compose.test.yml" \
+	COMPOSE_FILE="$(COMPOSE_TEST_FILES)" \
 	COMPOSE_PROJECT_NAME="pkm-test" \
 	PKM_ENVIRONMENT="test" \
 	VAULT_ROOT="$(VAULT_ROOT)" \
@@ -206,7 +209,7 @@ test-start-full: require-vault-root
 	scripts/start_full_system.sh
 
 test-up:
-	@VAULT_ROOT="$(TEST_VAULT_ROOT)" VAULT_HOST_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) -f docker-compose.legacy-vault.yml up -d --build
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" VAULT_HOST_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) -f docker-compose.legacy-vault.yml up -d $(COMPOSE_UP_BUILD)
 
 test-down:
 	@$(COMPOSE_TEST) down --remove-orphans

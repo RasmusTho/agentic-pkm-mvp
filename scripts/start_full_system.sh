@@ -38,6 +38,14 @@ unset _pkm_initial_channel _pkm_initial_channel_lower
 
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
+_pkm_deploy_pin_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
+_pkm_deploy_pin_channel="$(printf '%s' "${_pkm_deploy_pin_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_deploy_pin_channel}")"
+case "${_pkm_deploy_pin_channel:-}" in
+  dev|test|prod)
+    load_env_defaults_file "config/deploy/${_pkm_deploy_pin_channel}.env"
+    ;;
+esac
+unset _pkm_deploy_pin_channel
 
 if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -eq 0 ]; then
   # A bare start with no caller- or channel-selected vault must stay in the
@@ -45,6 +53,11 @@ if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -
   # (LLM, DB, ports), but it must not silently bind an operator vault.
   unset VAULT_ROOT
   unset VAULT_HOST_ROOT
+fi
+
+compose_up_build_args=("--build")
+if [ "${APP_CODE_BIND_MOUNT:-1}" = "0" ]; then
+  compose_up_build_args=()
 fi
 unset _pkm_caller_vault_root_set _pkm_channel_vault_root_set
 
@@ -1709,11 +1722,11 @@ PY
 
 if [ "$START_MODE" = "diagnostic" ]; then
   echo "START_MODE=diagnostic: running API in the foreground (no detach)"
-  run_docker_compose up --build db api
+  run_docker_compose up "${compose_up_build_args[@]}" db api
   exit $?
 fi
 
-if ! capture_step compose_up "db_api" compose_up --build db api; then
+if ! capture_step compose_up "db_api" compose_up "${compose_up_build_args[@]}" db api; then
   EXIT_REASON="compose_up_failed"
   EXIT_CODE=1
   export EXIT_REASON EXIT_CODE
@@ -1953,12 +1966,12 @@ fi
 # startup from OOM-killing each other. Keep the startup order staggered and
 # leave the host configured with at least 4 GB for this wrapper.
 if [ "$START_WORKER" -eq 1 ]; then
-  compose_up --build worker
+  compose_up "${compose_up_build_args[@]}" worker
   run_worker_probe
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
-  compose_up --build watcher
+  compose_up "${compose_up_build_args[@]}" watcher
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then

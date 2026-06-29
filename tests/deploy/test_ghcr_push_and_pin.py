@@ -54,7 +54,13 @@ def test_compose_image_uses_pinned_tag_and_mount_is_flagged() -> None:
     assert "- ./:/app" not in compose
     assert "- ./:/app" in overlay
     assert "APP_CODE_BIND_COMPOSE ?= docker-compose.app-bind.yml" in makefile
+    assert "COMPOSE_UP_BUILD := $(if $(strip $(APP_CODE_BIND_COMPOSE)),--build,)" in makefile
+    assert "--env-file config/deploy/dev.env" in makefile
+    assert "COMPOSE_FILE=\"$(COMPOSE_DEV_FILES)\"" in makefile
     assert "-f $(APP_CODE_BIND_COMPOSE)" in makefile
     assert 'APP_CODE_BIND_MOUNT:-1' in start_full_system
+    assert 'load_env_defaults_file "config/deploy/${_pkm_deploy_pin_channel}.env"' in start_full_system
+    assert 'compose_up_build_args=("--build")' in start_full_system
+    assert "compose_up_build_args=()" in start_full_system
     assert 'app_code_bind_overlay=":docker-compose.app-bind.yml"' in start_full_system
     assert 'docker-compose.yaml${app_code_bind_overlay}:docker-compose.dev.yml' in start_full_system
