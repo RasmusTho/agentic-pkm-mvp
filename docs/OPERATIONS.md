@@ -220,9 +220,8 @@ Companion docs:
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
 - Companion UI channel launchers (`make dev-ui`, `make test-ui`, `make prod-ui`) bind the browser
-  UI to `127.0.0.1` by default for `test` and `prod`; `dev-ui` binds to `0.0.0.0` by default for
-  trusted LAN/Tailscale UAT. Set `CUI_BIND_LAN=1` to explicitly opt a non-dev channel into a
-  `0.0.0.0` bind. Public internet exposure remains unsupported.
+  UI to `127.0.0.1` by default. Set `CUI_BIND_LAN=1` to explicitly opt a channel into a
+  `0.0.0.0` bind for trusted LAN/Tailscale UAT. Public internet exposure remains unsupported.
 - The Companion UI proxy pins `/api/companion/*` to the same runtime origin so browser UAT does not
   cross providers or devices accidentally. Runtime-unreachable and wrong-device states are distinct
   operator-visible failures rather than generic vault setup prompts.

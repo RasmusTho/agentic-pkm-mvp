@@ -100,19 +100,20 @@ For environment and port details, see `docs/ENVIRONMENTS.md`.
 
 ## 4. Access Model
 
-**Default: server/LAN bind.**
+**Default: loopback bind.**
 
 | Bind target | When to use | Notes |
 |---|---|---|
-| LAN IP / `0.0.0.0` | Default server access | Trusted-device personal use |
-| Tailscale IP / `0.0.0.0` | Default tailnet access | Preferred for personal remote access |
-| `127.0.0.1` (localhost) | Explicit opt-out | Local-only fallback |
+| `127.0.0.1` (localhost) | Default local access | Local-only personal use |
+| LAN IP / `0.0.0.0` | Explicit opt-in | Trusted-device UAT only |
+| Tailscale IP / `0.0.0.0` | Explicit opt-in | Preferred over open LAN for personal multi-device UAT |
 | Public internet | Not supported now | Requires future auth/TLS/reverse-proxy hardening |
 
 Rules:
 
-- The dev server binds to `0.0.0.0` by default for server use.
-- Loopback-only binding must be an explicit operator choice (e.g., `HOST=127.0.0.1`).
+- Companion UI channel launchers bind to `127.0.0.1` by default.
+- LAN/Tailscale binding must be an explicit operator choice (for channel launchers,
+  `CUI_BIND_LAN=1`; for lower-level manual server starts, `HOST=0.0.0.0`).
 - Companion UI must never be exposed to the public internet without auth/TLS/reverse-proxy hardening.
   That hardening is deferred; it is not part of the dev server scope.
 - Work-computer access is deferred unless already safely reachable through the operator's approved

@@ -110,16 +110,13 @@ make dev-ui-doctor     # read-only diagnostic (no services started, no vault wri
   SSH/Colima/Docker process — and starts the dev page;
 - prints the final UAT URL(s) and the API/UI log paths.
 
-The dev channel binds the UI to `0.0.0.0` by default (LAN/Tailscale UAT). To
-force loopback-only, opt out explicitly:
+The dev channel binds the UI to `127.0.0.1` by default. To opt into LAN/Tailscale
+UAT, set `CUI_BIND_LAN=1` explicitly:
 
 ```bash
-CUI_BIND_LAN=0 make dev-ui                     # loopback-only (127.0.0.1)
+CUI_BIND_LAN=1 make dev-ui                     # LAN/Tailscale bind (0.0.0.0)
 CUI_TARGET_NOTE="Some Note.md" make dev-ui     # also verify a note via the API
 ```
-
-Note: `test-ui` and `prod-ui` keep the loopback default and still require
-`CUI_BIND_LAN=1` for LAN/Tailscale UAT — only the dev launcher defaults to LAN.
 
 ### UAT note staging paths
 
