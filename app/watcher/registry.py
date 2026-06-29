@@ -25,6 +25,7 @@ from app.settings.panel_actions import PanelActionMapping, load_panel_action_map
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.vault.manager import VaultManager
+from app.vault.manager import iter_vault_markdown_files
 from app.vault.layout import load_layout
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
@@ -105,7 +106,7 @@ def _scan_markdown_many(
 ) -> Iterable[tuple[Path, float, Path]]:
     seen: set[Path] = set()
     for scan_root in scan_roots:
-        for path in sorted(scan_root.rglob("*.md")):
+        for path in iter_vault_markdown_files(vault_root, subtree_root=scan_root):
             try:
                 rel = path.relative_to(vault_root)
             except Exception:

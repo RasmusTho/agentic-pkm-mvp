@@ -47,11 +47,13 @@ class FsVaultAdapter:
         return WriteReceipt(operation="prepend_note", locator=locator, adapter="fs_vault")
 
     def search_notes(self, vault: str, query: str, *, limit: int = 20) -> list[SearchHit]:
+        from app.vault.manager import iter_vault_markdown_files
+
         hits: list[SearchHit] = []
         needle = query.lower().strip()
         if not needle:
             return hits
-        for note in self.vault_root.rglob("*.md"):
+        for note in iter_vault_markdown_files(self.vault_root):
             if any(part.startswith(".obsidian") for part in note.parts):
                 continue
             text = note.read_text(encoding="utf-8")

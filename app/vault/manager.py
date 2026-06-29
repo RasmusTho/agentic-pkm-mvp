@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterator, Literal
 from uuid import uuid4
 
 from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
@@ -189,6 +190,58 @@ def nearest_enclosing_vault_root(
         if parent == current:  # filesystem root guard
             return None
         current = parent
+
+
+def iter_vault_markdown_files(
+    vault_root: Path, *, subtree_root: Path | None = None
+) -> Iterator[Path]:
+    """Yield markdown files owned by ``vault_root`` only (#2522).
+
+    Nested-vault boundary: traversal of a parent vault STOPS at any deeper
+    initialized child vault root (``settings/vault.md``). This keeps ingest,
+    indexing, watcher scans, and recall-style enumeration from treating a child
+    vault's notes as parent-owned content.
+
+    ``subtree_root`` narrows traversal to an explicit folder under the selected
+    vault. If that folder itself belongs to a deeper child vault, nothing is
+    yielded under the parent identity. Traversal prunes nested child vault
+    roots in-place, so the boundary stays cheap on large trees.
+    """
+    selected_root = vault_root.expanduser().resolve()
+    walk_root = (subtree_root or vault_root).expanduser().resolve()
+    try:
+        walk_root.relative_to(selected_root)
+    except ValueError:
+        return
+    if not walk_root.is_dir():
+        return
+    if walk_root != selected_root:
+        if nearest_enclosing_vault_root(walk_root, search_root=selected_root) != selected_root:
+            return
+
+    for dirpath, dirnames, filenames in os.walk(str(walk_root)):
+        kept: list[str] = []
+        for name in dirnames:
+            child = Path(dirpath) / name
+            if is_vault_root(child):
+                continue
+            kept.append(name)
+        dirnames[:] = sorted(kept)
+
+        for filename in sorted(filenames):
+            if not filename.endswith(".md"):
+                continue
+            candidate = Path(dirpath) / filename
+            if not candidate.is_file():
+                continue
+            if candidate.is_symlink():
+                try:
+                    real = candidate.resolve()
+                except OSError:
+                    continue
+                if nearest_enclosing_vault_root(real, search_root=selected_root) != selected_root:
+                    continue
+            yield candidate
 
 
 class VaultManager:
@@ -679,6 +732,7 @@ __all__ = [
     "existing_init_target_entries",
     "get_vault_manager",
     "is_vault_root",
+    "iter_vault_markdown_files",
     "nearest_enclosing_vault_root",
     "no_vault_context",
 ]

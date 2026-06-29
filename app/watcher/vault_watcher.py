@@ -21,6 +21,7 @@ from app.settings.watcher_settings import load_watcher_settings, resolve_auto_ex
 from app.objects import ObjectStore
 from app.watcher.events import emit_watcher_run_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+from app.vault.manager import iter_vault_markdown_files
 from scripts.yaml_roundtrip import load_frontmatter
 
 Snapshot = dict[str, float]
@@ -64,7 +65,7 @@ def save_snapshot(path: Path, snapshot: Snapshot) -> None:
 
 def _scan_md_files(vault_root: Path) -> dict[str, float]:
     current: dict[str, float] = {}
-    for path in sorted(vault_root.rglob("*.md")):
+    for path in iter_vault_markdown_files(vault_root):
         try:
             rel = path.relative_to(vault_root)
         except Exception:

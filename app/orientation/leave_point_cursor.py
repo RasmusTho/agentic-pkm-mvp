@@ -14,6 +14,7 @@ import yaml
 from app.text.helpers import content_hash as _content_hash
 from app.text.helpers import extract_title as _extract_title
 from app.text.helpers import split_frontmatter as _split_frontmatter
+from app.vault.manager import iter_vault_markdown_files
 
 LEAVE_POINT_EVENT_TYPE = "workspace.leave_point.captured.v1"
 LEAVE_POINT_CURSOR_VERSION = 1
@@ -158,7 +159,7 @@ def _artifact_metadata(path: Path, vault_root: Path) -> tuple[str | None, str, s
 def find_artifact_by_uuid(vault_root: Path, artifact_uuid: str) -> tuple[str, str, str] | None:
     if not vault_root.exists():
         return None
-    for path in vault_root.rglob("*.md"):
+    for path in iter_vault_markdown_files(vault_root):
         if not path.is_file():
             continue
         try:

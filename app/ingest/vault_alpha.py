@@ -38,6 +38,7 @@ from app.objects import DomainObject, ObjectStore
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
+from app.vault.manager import iter_vault_markdown_files
 
 #: Sentinel written to created_by_instance when runtime identity is unavailable.
 _UNKNOWN_INSTANCE = "unknown"
@@ -366,7 +367,7 @@ def _select_candidates(
             root = vault_root / folder
         if not root.exists() or not root.is_dir():
             continue
-        for path in sorted(root.rglob("*.md")):
+        for path in iter_vault_markdown_files(vault_root, subtree_root=root):
             try:
                 rel_path = path.relative_to(vault_root)
             except ValueError:
