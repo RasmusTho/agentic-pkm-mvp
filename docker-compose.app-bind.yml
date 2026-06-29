@@ -1,0 +1,19 @@
+---
+# Default-on development overlay for the repo source bind mount.
+#
+# S3 introduces the pinned-image path in the base compose file. Until S5 retires
+# the bind mount completely, normal local starts keep today's hot-reload behavior
+# by including this overlay. Set APP_CODE_BIND_MOUNT=0, or omit this overlay from
+# COMPOSE_FILE / APP_CODE_BIND_COMPOSE, to exercise the pinned-image code path.
+services:
+  api:
+    volumes:
+      - ./:/app
+
+  worker:
+    volumes:
+      - ./:/app
+
+  watcher:
+    volumes:
+      - ./:/app

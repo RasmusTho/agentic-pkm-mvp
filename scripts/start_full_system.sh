@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+app_code_bind_overlay=""
+if [ "${APP_CODE_BIND_MOUNT:-1}" != "0" ]; then
+  app_code_bind_overlay=":docker-compose.app-bind.yml"
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: docker is required for scripts/start_full_system.sh. Install Docker Desktop or make docker available on PATH, then retry." >&2
   exit 127
@@ -677,17 +682,17 @@ resolve_channel_defaults() {
   normalized_env="$(printf "%s" "$raw_env" | tr '[:upper:]' '[:lower:]' | xargs)"
   case "$normalized_env" in
     dev)
-      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.dev.yml}"
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml${app_code_bind_overlay}:docker-compose.dev.yml}"
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-dev}"
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18001}"
       ;;
     test)
-      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.test.yml}"
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml${app_code_bind_overlay}:docker-compose.test.yml}"
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-test}"
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18002}"
       ;;
     prod)
-      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.prod.yml}"
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml${app_code_bind_overlay}:docker-compose.prod.yml}"
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-prod}"
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
       ;;
@@ -891,7 +896,7 @@ else
   # explicitly so a bare active-vault start keeps the override's worker env
   # (OPENAI_BASE_URL / OPENAI_API_KEY).
   if [ -z "${COMPOSE_FILE:-}" ]; then
-    COMPOSE_FILE="docker-compose.yaml"
+    COMPOSE_FILE="docker-compose.yaml${app_code_bind_overlay}"
     if [ -f "docker-compose.override.yml" ]; then
       COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.override.yml"
     fi

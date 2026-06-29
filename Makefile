@@ -16,11 +16,13 @@ TEST_LLM_PROVIDER ?= mock
 TEST_LLM_MODEL ?= llama3.1:8b
 SMOKE_WORKERS ?= auto
 SMOKE_E2E_WORKERS ?= 0
-COMPOSE_BASE := docker compose -f docker-compose.yaml
+APP_CODE_BIND_COMPOSE ?= docker-compose.app-bind.yml
+COMPOSE_BASE := docker compose -f docker-compose.yaml $(if $(strip $(APP_CODE_BIND_COMPOSE)),-f $(APP_CODE_BIND_COMPOSE),)
 COMPOSE_DEV := $(COMPOSE_BASE) -f docker-compose.dev.yml -p pkm-dev
 COMPOSE_TEST := $(COMPOSE_BASE) -f docker-compose.test.yml -p pkm-test
 COMPOSE_PROD := $(COMPOSE_BASE) -f docker-compose.prod.yml -p pkm-prod
-TEST_COMPOSE_ENV := COMPOSE_FILE=docker-compose.yaml:docker-compose.test.yml COMPOSE_PROJECT_NAME=pkm-test
+TEST_COMPOSE_FILES := docker-compose.yaml$(if $(strip $(APP_CODE_BIND_COMPOSE)),:$(APP_CODE_BIND_COMPOSE)):docker-compose.test.yml
+TEST_COMPOSE_ENV := COMPOSE_FILE=$(TEST_COMPOSE_FILES) COMPOSE_PROJECT_NAME=pkm-test
 # Runtime version marker (issue #2602). Computed once and exported so every
 # `docker compose build` invocation (dev-up, prod-up, test-up, alpha-up) bakes
 # the real git SHA + build time into the image via compose build-args. Override
