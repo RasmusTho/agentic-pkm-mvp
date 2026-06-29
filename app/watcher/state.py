@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 _MIN_VALID_TS = 1_000_000_000
@@ -39,6 +39,9 @@ def _sanitize_files(raw: dict[str, dict[str, Any]] | Any) -> dict[str, dict[str,
                 new_entry["hash"] = str(entry["hash"])
             except Exception:
                 pass
+        settings_values = entry.get("settings_runtime_values")
+        if isinstance(settings_values, dict):
+            new_entry["settings_runtime_values"] = dict(settings_values)
         seen = _sanitize_ts(entry.get("last_seen"))
         emitted = _sanitize_ts(entry.get("last_emitted"))
         if seen is not None:
@@ -63,7 +66,7 @@ def _sanitize_rate_window(raw: list[float] | Any) -> list[float]:
 
 @dataclass
 class WatcherState:
-    files: dict[str, dict[str, float | str | None]] = field(default_factory=dict)
+    files: dict[str, dict[str, Any]] = field(default_factory=dict)
     changed_detected: int = 0
     intents_emitted: int = 0
     ticks_run: int = 0
@@ -135,6 +138,7 @@ class WatcherState:
         *,
         mtime: float,
         content_hash: str | None = None,
+        settings_runtime_values: Mapping[str, Any] | None = None,
         seen_at: float | None = None,
         emitted_at: float | None = None,
     ) -> None:
@@ -142,6 +146,8 @@ class WatcherState:
         entry["mtime"] = mtime
         if content_hash is not None:
             entry["hash"] = content_hash
+        if settings_runtime_values is not None:
+            entry["settings_runtime_values"] = dict(settings_runtime_values)
         if seen_at is not None:
             entry["last_seen"] = seen_at
         if emitted_at is not None:
@@ -169,6 +175,11 @@ class WatcherState:
         entry = self.files.get(rel_path) or {}
         value = entry.get("hash")
         return str(value) if value is not None else None
+
+    def last_settings_runtime_values(self, rel_path: str) -> dict[str, Any] | None:
+        entry = self.files.get(rel_path) or {}
+        value = entry.get("settings_runtime_values")
+        return dict(value) if isinstance(value, dict) else None
 
     def record_rate_event(self, now: float) -> None:
         self.rate_window.append(now)

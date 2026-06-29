@@ -29,6 +29,7 @@ from app.vault.layout import load_layout
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.scope import derive_scope_roots, matches_scope
+from app.watcher.settings_delta import handle_settings_local_delta
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
@@ -887,7 +888,35 @@ def _collect_changed_entries(
         if previous_hash is not None and previous_hash == digest:
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             continue
+        settings_delta = handle_settings_local_delta(
+            vault_root=cfg.vault_path,
+            rel_path=rel,
+            previous_values=state.last_settings_runtime_values(rel_str),
+        )
+        if settings_delta.errors:
+            state.errors += len(settings_delta.errors)
+            summary["settings_write_errors_in_tick"] = int(summary.get("settings_write_errors_in_tick", 0)) + len(
+                settings_delta.errors
+            )
+        if settings_delta.receipts:
+            summary["settings_receipts_in_tick"] = int(summary.get("settings_receipts_in_tick", 0)) + len(
+                settings_delta.receipts
+            )
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                pass
+            hashed = _hash_file(path)
+            if hashed is not None:
+                digest = hashed[0]
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
+        if settings_delta.values is not None:
+            state.update_file_state(
+                rel_str,
+                mtime=mtime,
+                content_hash=digest,
+                settings_runtime_values=settings_delta.values,
+            )
     return changed_entries, scanned_paths
 
 
