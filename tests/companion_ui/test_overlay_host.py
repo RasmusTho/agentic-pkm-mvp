@@ -429,26 +429,37 @@ def test_overlay_host_replace_swaps_history_entry_at_constant_depth() -> None:
     assert "popTopmost()" in code, (
         "replace must close the current topmost occupant via the shared pop"
     )
-    assert "history.back" not in code, (
+    swap_branch_start = code.find("popTopmost();\n        stack.push(id);")
+    assert swap_branch_start != -1, "non-existing-target swap branch must be present"
+    swap_branch = code[swap_branch_start:]
+    assert "history.back" not in swap_branch, (
         "replace must NOT call history.back() — that pending traversal is the "
-        "race NAV-3b removes"
+        "race NAV-3b removes on the new-destination swap path"
     )
 
-    # It de-dups the destination before pushing (same rule as mount): when the
-    # target already sits in the stack BELOW the just-closed overlay (Memory ->
-    # Map over it -> route to Memory), replace must remove the existing instance
-    # before push so data-overlay-stack never carries the id twice while the DOM
-    # has one occupant — a duplicate would desync host bookkeeping from the DOM
-    # on the next Back (one pop hides the only drawer, host still reports it
-    # open). The splice must precede the push.
-    assert "stack.indexOf(id)" in code and "stack.splice(" in code, (
-        "replace must de-dup the destination (splice an existing instance) "
-        "before pushing, like mount"
+    # NAV-3d: when the destination already exists below the current topmost
+    # overlay, replace must not write a second adjacent history marker for the
+    # same destination. It closes occupants above the existing target and
+    # guarded-traverses browser history back to that target's original entry.
+    assert "existingAt = stack.indexOf(id)" in code, (
+        "replace must detect already-stacked route targets"
     )
-    splice_pos = code.find("stack.splice(")
-    push_pos = code.find("stack.push(id)")
-    assert splice_pos != -1 and push_pos != -1 and splice_pos < push_pos, (
-        "replace must remove any existing instance of id BEFORE stack.push(id)"
+    assert "stepsBack = stack.length - 1 - existingAt" in code, (
+        "replace must compute how many history entries sit above the target"
+    )
+    assert "while (stack.length > existingAt + 1) { popTopmost(); }" in code, (
+        "replace must close occupants above an already-stacked target"
+    )
+    assert "window.history.go(-stepsBack)" in code, (
+        "deeper already-stacked targets must use a guarded history traversal"
+    )
+    existing_branch = code[code.find("if (existingAt !== -1)"):swap_branch_start]
+    assert "popping = true" in existing_branch, (
+        "the already-stacked traversal must guard the resulting popstate"
+    )
+    assert "history.replaceState" not in existing_branch, (
+        "already-stacked routes must reuse the existing entry, not replace the "
+        "current marker with a duplicate destination marker"
     )
 
     # It swaps the SAME history entry (replaceState) at constant depth — the
