@@ -1859,6 +1859,14 @@ def _note_editor_script() -> str:
         }).then(function (r) {
           return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; });
         }).then(function (res) {
+          if (window.renderVaultSelectionRequiredPicker &&
+              window.renderVaultSelectionRequiredPicker(res.data, {
+                kind: 'note_save',
+                note_path: notePath,
+                text: ta.value
+              })) {
+            return;
+          }
           if (res.ok) {
             setStatus('ok', 'Saved. Reloading\\u2026');
             window.location.reload();
@@ -14281,6 +14289,68 @@ def render_index_html(
     // the host dismisses the topmost overlay back to the document anchor.
   }})();
   </script>
+  <script>
+  (function() {{
+    var refusedWriteDraftKey = 'companion.refusedWriteDraft.v1';
+    window.renderVaultSelectionRequiredPicker = function(data, draft) {{
+      if (!data || data.state !== 'vault_selection_required') return false;
+      var html = data.vault_selection_required_html || '';
+      if (!html) return false;
+      if (draft && Object.prototype.hasOwnProperty.call(draft, 'text')) {{
+        try {{
+          window.sessionStorage.setItem(refusedWriteDraftKey, JSON.stringify(draft));
+        }} catch (e) {{}}
+      }}
+      document.open();
+      document.write(html);
+      document.close();
+      return true;
+    }};
+    window.restoreRefusedWriteDraft = function() {{
+      if (document.querySelector('[data-testid="vault-selection-required"]')) return;
+      var raw = null;
+      try {{ raw = window.sessionStorage.getItem(refusedWriteDraftKey); }} catch (e) {{ raw = null; }}
+      if (!raw) return;
+      var draft = null;
+      try {{ draft = JSON.parse(raw); }} catch (e) {{ draft = null; }}
+      if (!draft || !draft.kind || !Object.prototype.hasOwnProperty.call(draft, 'text')) return;
+      var restored = false;
+      if (draft.kind === 'note_save') {{
+        var noteEditor = document.getElementById('note-source-editor');
+        var expectedPath = (noteEditor && noteEditor.getAttribute('data-note-path') || '').split('#')[0];
+        if (noteEditor && (!draft.note_path || draft.note_path === expectedPath)) {{
+          noteEditor.value = draft.text;
+          noteEditor.setAttribute('data-refused-write-draft-restored', 'true');
+          var noteEditorApi = window['noteEditor'];
+          if (noteEditorApi && typeof noteEditorApi.start === 'function') {{
+            noteEditorApi.start();
+          }}
+          restored = true;
+        }}
+      }} else if (draft.kind === 'body_edit') {{
+        var container = document.getElementById('body-edit-codemirror');
+        var bodyPath = container && container.getAttribute('data-note-path');
+        if (container && window._cmView && (!draft.note_path || draft.note_path === bodyPath)) {{
+          window._cmView.dispatch({{
+            changes: {{from: 0, to: window._cmView.state.doc.length, insert: draft.text}}
+          }});
+          container.setAttribute('data-refused-write-draft-restored', 'true');
+          restored = true;
+        }}
+      }} else if (draft.kind === 'capture') {{
+        var captureInput = document.getElementById('capture-input');
+        if (captureInput) {{
+          captureInput.value = draft.text;
+          captureInput.setAttribute('data-refused-write-draft-restored', 'true');
+          restored = true;
+        }}
+      }}
+      if (restored) {{
+        try {{ window.sessionStorage.removeItem(refusedWriteDraftKey); }} catch (e) {{}}
+      }}
+    }};
+  }})();
+  </script>
   {overlay_host_script()}
   {capture_modal_script()}
   {panel_palette_script()}
@@ -14357,6 +14427,14 @@ def render_index_html(
         }})
         .then(function(r) {{ return r.json().then(function(d) {{ return {{ok: r.ok, data: d}}; }}); }})
         .then(function(res) {{
+          if (window.renderVaultSelectionRequiredPicker &&
+              window.renderVaultSelectionRequiredPicker(res.data, {{
+                kind: 'body_edit',
+                note_path: notePath,
+                text: newBody
+              }})) {{
+            return;
+          }}
           if (res.ok) {{
             statusEl.className = 'body-edit-status ok';
             statusEl.textContent = 'Updated. hash=' + res.data.content_hash;
@@ -14525,8 +14603,10 @@ def render_index_html(
           action.setAttribute('data-affordance-status', 'vault_selection_required');
           action.setAttribute('data-pending-state', 'vault_selection_required');
           action.setAttribute('data-vault-selection-required', 'true');
-          // Re-resolve the entry state so the vault picker surfaces.
-          window.location.reload();
+          if (!(window.renderVaultSelectionRequiredPicker &&
+              window.renderVaultSelectionRequiredPicker(result.data))) {{
+            window.location.reload();
+          }}
           return;
         }}
         action.removeAttribute('data-submitting');
@@ -14670,6 +14750,26 @@ def render_index_html(
   {_display_preferences_script()}
   {_note_readback_script()}
   {_note_editor_script()}
+  <script>
+  (function() {{
+    function runRestore(attempt) {{
+      if (window.restoreRefusedWriteDraft) {{
+        window.restoreRefusedWriteDraft();
+      }}
+      if (attempt < 20) {{
+        try {{
+          var raw = window.sessionStorage.getItem('companion.refusedWriteDraft.v1');
+          if (raw) {{ window.setTimeout(function() {{ runRestore(attempt + 1); }}, 25); }}
+        }} catch (e) {{}}
+      }}
+    }}
+    if (document.readyState === 'loading') {{
+      document.addEventListener('DOMContentLoaded', function() {{ runRestore(0); }});
+    }} else {{
+      runRestore(0);
+    }}
+  }})();
+  </script>
   {_note_chrome_script()}
   {settings_drawer_script()}
   {vault_settings_panel_js}
@@ -14685,6 +14785,36 @@ def _is_vault_selection_required(payload: object) -> bool:
     """True when a runtime payload is the no-vault `vault_selection_required`
     picker state (#2309). Server declares; the page renders the picker."""
     return isinstance(payload, dict) and payload.get("state") == "vault_selection_required"
+
+
+def _is_uninitialized_vault_write_refusal(payload: object) -> bool:
+    """True for the server-declared uninitialized vault write refusal (#2574)."""
+    return _is_vault_selection_required(payload) and payload.get("reason") == "uninitialized"
+
+
+def _decorate_uninitialized_write_refusal(
+    payload: dict,
+    *,
+    api_base_url: str,
+    note_path: str = "",
+) -> dict:
+    """Attach the server-rendered picker page for uninitialized write refusals.
+
+    The runtime remains the authority for ``vault_selection_required`` and its
+    ``reason``. The Companion UI proxy only gives the client a rendered
+    ``render_index_html`` page so write handlers can show the existing picker
+    without reloading back into the readable normal workspace.
+    """
+    if not _is_uninitialized_vault_write_refusal(payload):
+        return payload
+    decorated = dict(payload)
+    requested_note_path = str(payload.get("requested_note_path") or note_path or "")
+    decorated["vault_selection_required_html"] = render_index_html(
+        api_base_url=api_base_url,
+        note_path=requested_note_path,
+        vault_selection_required=payload,
+    )
+    return decorated
 
 
 def _relocated_orientation_telemetry_fields(orientation: object) -> dict[str, str]:
@@ -14859,7 +14989,12 @@ def make_handler(
             self.end_headers()
             self.wfile.write(body)
 
-        def _proxy_error(self, exc: WorkspaceClientError) -> None:
+        def _proxy_error(
+            self,
+            exc: WorkspaceClientError,
+            *,
+            request_payload: Optional[dict] = None,
+        ) -> None:
             if isinstance(exc, WorkspaceClientHTTPError):
                 # Forward the runtime's JSON error body verbatim when it is JSON
                 # (preserving the original status code) so structured handoff
@@ -14872,6 +15007,12 @@ def make_handler(
                 except (json.JSONDecodeError, TypeError):
                     runtime_body = None
                 if isinstance(runtime_body, dict):
+                    if request_payload is not None:
+                        runtime_body = _decorate_uninitialized_write_refusal(
+                            runtime_body,
+                            api_base_url=self._api_base_url,
+                            note_path=str(request_payload.get("note_path") or ""),
+                        )
                     self._send_json(exc.status_code, runtime_body)
                     return
                 self._send_json(
@@ -15317,6 +15458,15 @@ def make_handler(
                 "/api/companion/vault/browse",
             }
         )
+        _WRITE_REFUSAL_PICKER_PATHS = frozenset(
+            {
+                "/api/companion/workspace/body",
+                "/api/companion/workspace/update",
+                "/api/companion/capture",
+                "/api/companion/note/save",
+                "/api/companion/vault-browser/actions/queue-review",
+            }
+        )
 
         # Dynamic POST proxy paths (session id in the path). The live canvas
         # co-authoring loop (#1733) posts the user's intent here; the runtime
@@ -15405,8 +15555,17 @@ def make_handler(
                 else:
                     data = self._client.post(runtime_path, json=payload)
             except WorkspaceClientError as exc:
-                self._proxy_error(exc)
+                self._proxy_error(
+                    exc,
+                    request_payload=payload if parsed.path in self._WRITE_REFUSAL_PICKER_PATHS else None,
+                )
                 return
+            if parsed.path in self._WRITE_REFUSAL_PICKER_PATHS:
+                data = _decorate_uninitialized_write_refusal(
+                    data,
+                    api_base_url=self._api_base_url,
+                    note_path=str(payload.get("note_path") or ""),
+                )
             self._send_json(200, data)
 
         def do_DELETE(self) -> None:

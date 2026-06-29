@@ -11,7 +11,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from companion_ui.workspace.serve_dev_page import handle_get, render_index_html
+from companion_ui.workspace.serve_dev_page import (
+    _decorate_uninitialized_write_refusal,
+    handle_get,
+    render_index_html,
+)
 from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
 
 from tests.companion_ui._visible_text import visible_text as _visible_text
@@ -738,6 +742,48 @@ def test_uninitialized_reason_renders_initialize_affordance() -> None:
     assert 'name="machineRole"' not in html
     assert "Path for a new vault" not in html
     assert "Path to an existing vault" not in html
+
+
+def test_uninitialized_write_refusal_renders_picker_with_initialize() -> None:
+    """#2574: write refusals reach the existing Initialize-capable picker.
+
+    Read endpoints can still render the normal workspace for a readable but
+    uninitialized vault, so write handlers must not reload to re-resolve state.
+    The page-server proxy decorates the server-declared refusal with a
+    ``render_index_html`` picker page that the client can swap in directly.
+    """
+    payload = _uninitialized_payload()
+
+    decorated = _decorate_uninitialized_write_refusal(
+        payload,
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Daily.md",
+    )
+
+    assert decorated["state"] == "vault_selection_required"
+    assert decorated["reason"] == "uninitialized"
+    picker_page = decorated["vault_selection_required_html"]
+    assert 'data-testid="vault-selection-required"' in picker_page
+    assert 'data-reason="uninitialized"' in picker_page
+    assert 'data-testid="vault-picker-initialize-submit"' in picker_page
+    assert 'data-intent="vault.initialize"' in picker_page
+    assert 'data-api-path="/api/companion/vault/initialize"' in picker_page
+    assert 'data-vault-path="/Users/me/Vaults/Niflheim"' in picker_page
+    assert 'data-region="document-anchor"' not in picker_page
+    assert "window.renderVaultSelectionRequiredPicker" in picker_page
+    assert "Object.prototype.hasOwnProperty.call(draft, 'text')" in picker_page
+    assert "window.sessionStorage.setItem(refusedWriteDraftKey" in picker_page
+    assert "window.restoreRefusedWriteDraft" in picker_page
+    assert "vault-selection-required" in picker_page
+    assert "window.sessionStorage.removeItem(refusedWriteDraftKey)" in picker_page
+    assert "window['noteEditor']" in picker_page
+    assert "kind: 'note_save'" in picker_page
+    assert "text: ta.value" in picker_page
+    assert "kind: 'body_edit'" in picker_page
+    assert "text: newBody" in picker_page
+    assert "kind: 'capture'" in picker_page
+    assert "renderVaultSelectionRequired(ack, text)" in picker_page
+    assert "data-refused-write-draft-restored" in picker_page
 
 
 def test_vault_root_misconfigured_reason_renders_initialize_affordance() -> None:
