@@ -4,6 +4,15 @@ on:
   pull_request:
     types: [ready_for_review, converted_to_draft, closed]
 
+concurrency:
+  # Shared group with the other GitHub Project board workflows so only one board
+  # writer runs at a time (prevents the multi-workflow GraphQL stampede).
+  # `queue: max` keeps pending runs (FIFO, up to 100) so burst board events are
+  # not dropped; the default `queue: single` would cancel all but the latest.
+  group: github-project-board-reconcile
+  cancel-in-progress: false
+  queue: max
+
 permissions:
   contents: read
   pull-requests: read
@@ -18,7 +27,7 @@ jobs:
         # Stage-change events are deterministic: ready -> Review,
         # draft -> In Progress, closed (merged or unmerged) -> Done. The closed
         # trigger makes terminal projection event-driven instead of relying on
-        # the best-effort hourly reconcile scan.
+        # the best-effort daily reconcile scan.
         env:
           # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
           # token with Projects read/write is required. Falls back to the default

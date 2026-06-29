@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -422,3 +423,144 @@ def test_reconcile_pr_soft_fails_on_transient_project_add_failure(
     output = capsys.readouterr().out
     assert 'soft-fail pr #2140: failed to add to project "Agent Delivery Control Plane"' in output
     assert 'soft-fail issue #2144: failed to add to project "Agent Delivery Control Plane"' in output
+
+
+# --- GraphQL-budget incident remediation (GHAPI-C2 / GHAPI-H2 / GHAPI-H3) ---
+
+
+def test_scan_is_daily_and_rate_limit_gated(monkeypatch, capsys) -> None:
+    # The hourly full-board scan was the dominant GraphQL drain; cron must be daily.
+    workflow = Path(".github/workflows/project-status-reconcile.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "cron: '17 * * * *'" not in workflow, "hourly project scan must be removed"
+    assert "cron: '17 7 * * *'" in workflow, "scan cron must be daily"
+
+    # And a low GraphQL budget must skip the scan BEFORE project discovery,
+    # which itself spends `gh project` GraphQL calls.
+    def fail_discover(*_args, **_kwargs):
+        raise AssertionError("must not discover the project when GraphQL budget is low")
+
+    monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 100)
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fail_discover)
+    monkeypatch.setattr(
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--scan"]
+    )
+    assert reconcile_project_status.main() == 0
+    out = capsys.readouterr().out
+    assert "skip project scan: GraphQL budget low" in out
+    assert "before project discovery" in out
+
+
+def test_project_board_workflows_share_serial_concurrency_group() -> None:
+    # All board reconcile/mutation workflows must serialize through one shared
+    # concurrency group so they cannot stampede the GraphQL pool concurrently.
+    for path in (
+        ".github/workflows/project-status-reconcile.yml",
+        ".github/workflows/project-pr-opened.yml",
+        ".github/workflows/project-pr-stage-change.yml",
+    ):
+        content = Path(path).read_text(encoding="utf-8")
+        assert (
+            "group: github-project-board-reconcile" in content
+        ), f"{path} must join the shared board concurrency group"
+        assert (
+            "cancel-in-progress: false" in content
+        ), f"{path} must queue board updates, not cancel them"
+        assert (
+            "queue: max" in content
+        ), f"{path} must keep pending board runs (queue: max); default queue: single drops them"
+
+
+def test_main_reaches_discovery_when_budget_healthy(monkeypatch) -> None:
+    # With healthy budget, main() proceeds to project discovery (which then
+    # short-circuits via the unavailable path here).
+    reached = {"discover": False}
+
+    def fake_discover(_owner, _name):
+        reached["discover"] = True
+        raise RuntimeError("stop after discovery")
+
+    monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 5000)
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fake_discover)
+    monkeypatch.setattr(
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--scan"]
+    )
+    assert reconcile_project_status.main() == 0
+    assert reached["discover"] is True
+
+
+def test_main_skips_event_before_discovery_when_budget_low(monkeypatch, capsys) -> None:
+    # Codex review fix: the budget guard must run BEFORE discover_project /
+    # get_status_field, or a burst of low-budget events still spends GraphQL on
+    # discovery before skipping.
+    def fail_discover(*_args, **_kwargs):
+        raise AssertionError("must not discover the project when GraphQL budget is low")
+
+    monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 100)
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fail_discover)
+    monkeypatch.setattr(
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--issue", "495"]
+    )
+    assert reconcile_project_status.main() == 0
+    out = capsys.readouterr().out
+    assert "skip issue #495: GraphQL budget low" in out
+    assert "before project discovery" in out
+
+
+def test_run_gh_aborts_retry_when_reset_beyond_cap(monkeypatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(reconcile_project_status.time, "sleep", lambda s: slept.append(s))
+
+    def always_rate_limited(cmd, **_kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=1, cmd=cmd, stderr="GraphQL: secondary rate limit"
+        )
+
+    monkeypatch.setattr(reconcile_project_status.subprocess, "run", always_rate_limited)
+    # Reset is far in the future -> wait exceeds the cap -> stop, never sleep.
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "graphql_rate_limit",
+        lambda: (0, int(reconcile_project_status.time.time()) + 100_000),
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        reconcile_project_status.run_gh("project", "item-list", "1")
+    assert slept == [], "must not block the runner waiting on a far-off reset"
+
+
+def test_run_gh_waits_until_reset_within_cap_then_succeeds(monkeypatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(reconcile_project_status.time, "sleep", lambda s: slept.append(s))
+    calls = {"n": 0}
+
+    def rate_limited_then_ok(cmd, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=cmd, stderr="API rate limit exceeded"
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(reconcile_project_status.subprocess, "run", rate_limited_then_ok)
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "graphql_rate_limit",
+        lambda: (0, int(reconcile_project_status.time.time()) + 5),
+    )
+    assert reconcile_project_status.run_gh("project", "item-list", "1") == "ok"
+    assert slept, "must wait until reset before retrying"
+    assert 1 <= slept[0] <= reconcile_project_status.GH_MAX_RATE_LIMIT_WAIT_SECONDS + 1
+
+
+def test_rate_limit_wait_prefers_retry_after_header(monkeypatch) -> None:
+    monkeypatch.setattr(
+        reconcile_project_status, "graphql_rate_limit", lambda: (0, 10**12)
+    )
+    exc = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=["gh"],
+        stderr="You have exceeded a secondary rate limit. Retry-After: 7",
+    )
+    # Explicit Retry-After wins over the (far) reset epoch.
+    assert reconcile_project_status._rate_limit_wait_seconds(exc) == 7
