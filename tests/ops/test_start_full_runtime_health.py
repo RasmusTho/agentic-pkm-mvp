@@ -68,6 +68,7 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
         bin_dir / "docker",
         f"""
         #!/usr/bin/env python3
+        import json
         import sys
 
         HEALTH = {health_json!r}
@@ -143,6 +144,7 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
             if service == "api" and "app.cli health --json" in command:
                 print("health prelude")
                 print(HEALTH)
+                raise SystemExit(0 if json.loads(HEALTH).get("ok") else 1)
             elif service == "api" and "app.cli status" in command:
                 print("runtime status ok")
             elif service == "api" and "app.cli store stats --json" in command:

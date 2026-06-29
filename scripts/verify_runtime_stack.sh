@@ -160,7 +160,9 @@ fi
 printf "→ Checking API health... "
 if check_service "api"; then
   # Verify API is actually responsive using Python (curl not available in container)
+  set +e
   health_output=$(run_docker_compose exec -T api python -m app.cli health --json)
+  set -e
   health_json=$(printf "%s\n" "$health_output" | extract_json_payload)
   health_ok=$(printf "%s\n" "$health_json" | python3 -c 'import json, sys; print(str(bool(json.load(sys.stdin).get("ok"))).lower())')
   if [ "$health_ok" = "true" ]; then
