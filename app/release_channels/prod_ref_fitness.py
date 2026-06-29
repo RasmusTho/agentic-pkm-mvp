@@ -138,7 +138,14 @@ def check_prod_head_matches_promotion_ref_and_clean(
     current_branch = git_runner(
         ["rev-parse", "--abbrev-ref", "HEAD"], checkout_path
     ).strip()
-    porcelain = git_runner(["status", "--porcelain"], checkout_path)
+    # --untracked-files=all forces untracked files to be reported even when the
+    # operator's local/global git config sets status.showUntrackedFiles=no — the
+    # #2527 finding included untracked dirs in the prod tree, so the clean-tree
+    # receipt must not be silenced by operator config. (Ignored files are still
+    # excluded, which is correct: ignored artifacts like tmp/ are not drift.)
+    porcelain = git_runner(
+        ["status", "--porcelain", "--untracked-files=all"], checkout_path
+    )
     dirty_paths = tuple(
         line[3:] if len(line) > 3 else line
         for line in porcelain.splitlines()

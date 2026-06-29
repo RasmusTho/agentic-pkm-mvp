@@ -313,3 +313,18 @@ def test_prod_head_matches_promotion_ref_and_clean(tmp_path: Path) -> None:
     assert diverged.matches_compare_ref is False
     assert diverged.compare_to_sha == base_sha
     assert any("diverge" in v for v in diverged.violations), diverged.violations
+
+    # --- untracked files are flagged even with status.showUntrackedFiles=no ---
+    # A prod host configured (locally or globally) with showUntrackedFiles=no must
+    # not silence the clean-tree receipt: the #2527 finding included untracked dirs
+    # in the prod tree. The guard forces --untracked-files=all.
+    hidden_repo = tmp_path / "prod-hidden-untracked"
+    _init_repo_on_main(hidden_repo)
+    _git(hidden_repo, "config", "status.showUntrackedFiles", "no")
+    (hidden_repo / "machine_local.txt").write_text("local-only\n", encoding="utf-8")
+    # Sanity: with showUntrackedFiles=no a plain porcelain status hides it...
+    assert _git(hidden_repo, "status", "--porcelain").strip() == ""
+    # ...but the guard must still flag it.
+    hidden = check_prod_head_matches_promotion_ref_and_clean(hidden_repo)
+    assert not hidden.ok, "untracked files must be flagged despite showUntrackedFiles=no"
+    assert "machine_local.txt" in hidden.dirty_paths, hidden.dirty_paths

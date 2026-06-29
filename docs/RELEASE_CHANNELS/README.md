@@ -193,7 +193,7 @@ git merge-base --is-ancestor origin/stable <candidate-sha>
 
 If this check fails, promotion aborts fail-closed with a reconciliation-PR instruction. Promotion cannot proceed until `stable` is an ancestor of the candidate.
 
-**Current state (verified 2026-06-06):** `git merge-base --is-ancestor origin/stable origin/main` returns exit 0 — PASS. stable/main divergence is resolved.
+**Current state (2026-06-29, Issue #2527):** `git merge-base --is-ancestor origin/stable origin/main` returns **non-zero** — `origin/stable` (`e2892b18`) is **not** an ancestor of `origin/main` (hundreds of commits of divergence under squash-merge history; an earlier 2026-06-06 reconciliation has since drifted). This is the dormant-`stable` drift recorded in [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md). It does **not** block the current baseline — prod tracks `main` directly — but the gated `stable` promotion path above cannot run until `stable` is restored as an ancestor of the candidate.
 
 ## Rollback posture
 
