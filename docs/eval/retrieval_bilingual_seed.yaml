@@ -5,6 +5,7 @@ cases:
     query: "Where is the canonical system settings YAML?"
     relevant_artifact_ids:
       - bg-doc-settings-en
+      - bg-doc-settings-sv
     route_intent: exact_lexical
     provenance_expectation: "source_ref points to vault/_system/settings/system-settings.yaml"
     trust_expectation: own
@@ -13,6 +14,7 @@ cases:
     query: "Var ligger den kanoniska systeminställningsfilen?"
     relevant_artifact_ids:
       - bg-doc-settings-sv
+      - bg-doc-settings-en
     route_intent: exact_lexical
     provenance_expectation: "source_ref pekar på vault/_system/settings/system-settings.yaml"
     trust_expectation: own
@@ -55,6 +57,7 @@ cases:
     query: "What are the next actions for the Galaxy draft?"
     relevant_artifact_ids:
       - bg-doc-project-en
+      - bg-doc-project-sv
     route_intent: recall_into_ask
     provenance_expectation: "source_ref points to vault/Workbench/galaxy-test.md"
     trust_expectation: promoted
@@ -63,6 +66,7 @@ cases:
     query: "Vilka nästa steg finns för Galaxy-utkastet?"
     relevant_artifact_ids:
       - bg-doc-project-sv
+      - bg-doc-project-en
     route_intent: recall_into_ask
     provenance_expectation: "source_ref pekar på vault/Workbench/galaxy-test-sv.md"
     trust_expectation: promoted

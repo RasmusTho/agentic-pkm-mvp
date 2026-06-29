@@ -11,6 +11,7 @@ pytestmark = pytest.mark.not_pg
 
 CASES_PATH = Path("docs/eval/retrieval_bilingual_seed.yaml")
 CORPUS_PATH = Path("data/golden/bilingual_corpus.jsonl")
+JUDGMENTS_PATH = Path("data/golden/bilingual_judgments.json")
 
 REQUIRED_FIELDS = {
     "id",
@@ -44,6 +45,19 @@ def _load_corpus_ids(path: Path = CORPUS_PATH) -> set[str]:
         doc = json.loads(line)
         ids.add(str(doc["doc_id"]))
     return ids
+
+
+def _load_positive_judgment_ids(path: Path = JUDGMENTS_PATH) -> dict[str, set[str]]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == "retrieval_bilingual_judgments.v1"
+    return {
+        str(query["id"]): {
+            str(entry["doc_id"])
+            for entry in query["relevance"]
+            if int(entry["relevance"]) > 0
+        }
+        for query in raw["queries"]
+    }
 
 
 def _validate_cases(cases: list[dict[str, Any]], valid_ids: set[str]) -> None:
@@ -88,6 +102,18 @@ def test_seed_covers_slices() -> None:
     for route, languages in by_route.items():
         assert languages == LANGUAGES, (
             f"{route} must include at least one Swedish and one English case"
+        )
+
+
+def test_seed_relevant_ids_match_positive_judgments() -> None:
+    cases = _load_cases()
+    positive_judgments = _load_positive_judgment_ids()
+
+    assert set(positive_judgments) == {str(case["id"]) for case in cases}
+    for case in cases:
+        case_id = str(case["id"])
+        assert set(case["relevant_artifact_ids"]) == positive_judgments[case_id], (
+            f"{case_id} relevant_artifact_ids must match positive judgment doc ids"
         )
 
 
