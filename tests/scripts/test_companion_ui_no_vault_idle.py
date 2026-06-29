@@ -72,3 +72,23 @@ def test_missing_channel_env_file_is_not_fatal(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     assert "LOAD_RETURNED" in r.stdout
     assert "no .env.test.local" in (r.stdout + r.stderr)
+
+
+def test_missing_channel_env_clears_inherited_vault_root(tmp_path: Path) -> None:
+    # An ambient VAULT_ROOT must not leak into a channel with no env file —
+    # otherwise `VAULT_ROOT=/x make test-ui` would mount the wrong vault instead
+    # of idling to the picker (Codex review on PR #2652).
+    snippet = (
+        f'cui_repo_root() {{ printf "%s" "{tmp_path}"; }}\n'
+        "export VAULT_ROOT=/tmp/Some-Other-Vault\n"
+        "export VAULT_HOST_ROOT=/tmp/Some-Other-Vault\n"
+        "cui_load_channel_env\n"
+        'echo "VAULT_ROOT_AFTER=[${VAULT_ROOT:-}]"\n'
+        'echo "VAULT_HOST_ROOT_AFTER=[${VAULT_HOST_ROOT:-}]"'
+    )
+    r = _run(snippet)
+    assert r.returncode == 0, r.stderr
+    assert "VAULT_ROOT_AFTER=[]" in r.stdout, (
+        "inherited VAULT_ROOT must be cleared when the channel env file is absent"
+    )
+    assert "VAULT_HOST_ROOT_AFTER=[]" in r.stdout

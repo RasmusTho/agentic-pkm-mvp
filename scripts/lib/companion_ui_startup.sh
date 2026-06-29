@@ -88,7 +88,16 @@ cui_load_channel_env() {
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
   if [ ! -f "${root}/${env_file}" ]; then
-    cui_warn "no ${env_file} in repo root (${root}) — continuing with no channel vault default (no-vault idle boot; create it from .env.example to pin a ${CUI_CHANNEL} vault)."
+    # No channel override present. Do NOT inherit an ambient VAULT_ROOT from the
+    # operator shell — it could belong to another channel and would defeat the
+    # advertised no-vault idle posture (e.g. `VAULT_ROOT=.../Midgard make test-ui`
+    # must not silently mount Midgård on the test channel). Clear it so this
+    # launcher and start_full_system.sh enter genuine no-vault idle boot (#2005).
+    if [ -n "${VAULT_ROOT:-}" ] || [ -n "${VAULT_HOST_ROOT:-}" ]; then
+      cui_warn "no ${env_file}; ignoring inherited VAULT_ROOT='${VAULT_ROOT:-}' — the ${CUI_CHANNEL} channel vault comes from ${env_file}, not the ambient shell."
+    fi
+    unset VAULT_ROOT VAULT_HOST_ROOT
+    cui_warn "no ${env_file} in repo root (${root}) — no-vault idle boot; create it from .env.example to pin a ${CUI_CHANNEL} vault."
     return 0
   fi
   # shellcheck source=/dev/null
@@ -419,7 +428,14 @@ cui_run_doctor() {
     cd "${root}" 2>/dev/null && load_env_defaults_file "${env_file}" >/dev/null 2>&1 || true
   else
     # Missing override is a valid no-vault idle posture (#2005), not a failure.
-    echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
+    # Mirror the launcher: an ambient VAULT_ROOT is not the channel's vault, so
+    # report it as ignored and clear it before the resolution check below.
+    if [ -n "${VAULT_ROOT:-}" ]; then
+      echo "  [info] ${env_file} absent — ignoring inherited VAULT_ROOT='${VAULT_ROOT}' (launcher idles to the picker)"
+    else
+      echo "  [info] ${env_file} absent — no-vault idle boot (create from .env.example to pin a ${CUI_CHANNEL} vault)"
+    fi
+    unset VAULT_ROOT VAULT_HOST_ROOT
   fi
   if [ -n "${VAULT_ROOT:-}" ]; then
     local base base_lc
