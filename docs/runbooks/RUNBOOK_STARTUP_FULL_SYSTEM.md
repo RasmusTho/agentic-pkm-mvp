@@ -217,6 +217,12 @@ A startup is complete and healthy when:
 
 Check the receipt before enabling watcher auto-exec or accepting traffic.
 
+In normal dev startup, a required embedding index rebuild can be deferred when the API, DB, watcher,
+and worker services are otherwise healthy. In that case `make dev-start-full` may complete with
+`index rebuild: required`; run `AUTO_BOOTSTRAP=1 make dev-start-full` or the printed index rebuild
+command to repair the derived index. Strict verification mode still fails until the rebuild is
+completed.
+
 Watcher startup readiness is gated by the watcher heartbeat file for the selected channel
 (`/app/tmp-test/watcher_heartbeat.json` for `pkm-test`, `/app/tmp/watcher_heartbeat.json` otherwise).
 The wrapper waits up to `WATCHER_HEARTBEAT_TIMEOUT` seconds and treats a heartbeat observed on the
