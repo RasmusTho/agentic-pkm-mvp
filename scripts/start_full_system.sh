@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+app_code_bind_overlay=""
+if [ "${APP_CODE_BIND_MOUNT:-1}" != "0" ]; then
+  app_code_bind_overlay=":docker-compose.app-bind.yml"
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: docker is required for scripts/start_full_system.sh. Install Docker Desktop or make docker available on PATH, then retry." >&2
   exit 127
@@ -33,6 +38,14 @@ unset _pkm_initial_channel _pkm_initial_channel_lower
 
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
+_pkm_deploy_pin_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}"
+_pkm_deploy_pin_channel="$(printf '%s' "${_pkm_deploy_pin_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_deploy_pin_channel}")"
+case "${_pkm_deploy_pin_channel:-}" in
+  dev|test|prod)
+    load_env_defaults_file "config/deploy/${_pkm_deploy_pin_channel}.env"
+    ;;
+esac
+unset _pkm_deploy_pin_channel
 
 if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -eq 0 ]; then
   # A bare start with no caller- or channel-selected vault must stay in the
@@ -40,6 +53,11 @@ if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -
   # (LLM, DB, ports), but it must not silently bind an operator vault.
   unset VAULT_ROOT
   unset VAULT_HOST_ROOT
+fi
+
+compose_up_build_args=("--build")
+if [ "${APP_CODE_BIND_MOUNT:-1}" = "0" ]; then
+  compose_up_build_args=()
 fi
 unset _pkm_caller_vault_root_set _pkm_channel_vault_root_set
 
@@ -677,17 +695,17 @@ resolve_channel_defaults() {
   normalized_env="$(printf "%s" "$raw_env" | tr '[:upper:]' '[:lower:]' | xargs)"
   case "$normalized_env" in
     dev)
-      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.dev.yml}"
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml${app_code_bind_overlay}:docker-compose.dev.yml}"
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-dev}"
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18001}"
       ;;
     test)
-      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.test.yml}"
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml${app_code_bind_overlay}:docker-compose.test.yml}"
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-test}"
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18002}"
       ;;
     prod)
-      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml:docker-compose.prod.yml}"
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml${app_code_bind_overlay}:docker-compose.prod.yml}"
       COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-pkm-prod}"
       API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:18000}"
       ;;
@@ -891,7 +909,7 @@ else
   # explicitly so a bare active-vault start keeps the override's worker env
   # (OPENAI_BASE_URL / OPENAI_API_KEY).
   if [ -z "${COMPOSE_FILE:-}" ]; then
-    COMPOSE_FILE="docker-compose.yaml"
+    COMPOSE_FILE="docker-compose.yaml${app_code_bind_overlay}"
     if [ -f "docker-compose.override.yml" ]; then
       COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.override.yml"
     fi
@@ -1704,11 +1722,11 @@ PY
 
 if [ "$START_MODE" = "diagnostic" ]; then
   echo "START_MODE=diagnostic: running API in the foreground (no detach)"
-  run_docker_compose up --build db api
+  run_docker_compose up "${compose_up_build_args[@]}" db api
   exit $?
 fi
 
-if ! capture_step compose_up "db_api" compose_up --build db api; then
+if ! capture_step compose_up "db_api" compose_up "${compose_up_build_args[@]}" db api; then
   EXIT_REASON="compose_up_failed"
   EXIT_CODE=1
   export EXIT_REASON EXIT_CODE
@@ -1948,12 +1966,12 @@ fi
 # startup from OOM-killing each other. Keep the startup order staggered and
 # leave the host configured with at least 4 GB for this wrapper.
 if [ "$START_WORKER" -eq 1 ]; then
-  compose_up --build worker
+  compose_up "${compose_up_build_args[@]}" worker
   run_worker_probe
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
-  compose_up --build watcher
+  compose_up "${compose_up_build_args[@]}" watcher
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then

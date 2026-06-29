@@ -40,7 +40,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: workspace-app
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
     working_dir: /app
     env_file:
       - ./config/runtime.defaults.env
@@ -48,7 +48,6 @@ services:
         required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
-      - ./:/app
       # Legacy /app/vault compatibility mount removed from the base compose
       # (#2386, Slice 05D of #2311): a no-vault startup must not synthesize a
       # repo-local ./vault bind. The /app/vault compatibility mount now lives in
@@ -105,7 +104,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: workspace-app
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
     working_dir: /app
     env_file:
       - ./config/runtime.defaults.env
@@ -113,7 +112,6 @@ services:
         required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
-      - ./:/app
       # Legacy /app/vault compatibility mount moved to docker-compose.legacy-vault.yml
       # (#2386); included only for explicit-vault startups, never a no-vault ./vault fallback.
       # Full host filesystem for in-process vault selection (#2310): /Users
@@ -149,7 +147,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: workspace-app
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
     working_dir: /app
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     env_file:
@@ -157,7 +155,6 @@ services:
       - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
         required: false
     volumes:
-      - ./:/app
       # Legacy /app/vault compatibility mount moved to docker-compose.legacy-vault.yml
       # (#2386); included only for explicit-vault startups, never a no-vault ./vault fallback.
       # Full host filesystem for in-process vault selection (#2310): /Users

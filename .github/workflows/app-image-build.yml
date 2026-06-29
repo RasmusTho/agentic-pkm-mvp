@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   build-app-image:
@@ -35,6 +36,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Login to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build app image
         uses: docker/build-push-action@v6
         with:
@@ -55,3 +64,10 @@ jobs:
             --entrypoint python \
             "${{ steps.build-identity.outputs.image }}" \
             -c 'from app.version import get_runtime_version; import os; version = get_runtime_version(); assert version["git_sha"] == os.environ["VCS_REF"], version; assert version["built_at"] == os.environ["BUILT_AT"], version'
+
+      - name: Push app image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "${{ steps.build-identity.outputs.image }}"

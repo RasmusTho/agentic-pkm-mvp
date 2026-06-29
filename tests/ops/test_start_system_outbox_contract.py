@@ -141,9 +141,9 @@ def test_start_full_system_derives_watcher_scope_from_layout_inbox() -> None:
 def test_start_full_system_staggers_worker_before_watcher() -> None:
     script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
     startup_block = script.split('reset_runtime_state="${RESET_RUNTIME_STATE:-1}"', 1)[1]
-    worker_start = startup_block.index("compose_up --build worker")
+    worker_start = startup_block.index('compose_up "${compose_up_build_args[@]}" worker')
     worker_probe = startup_block.index("run_worker_probe")
-    watcher_start = startup_block.index("compose_up --build watcher")
+    watcher_start = startup_block.index('compose_up "${compose_up_build_args[@]}" watcher')
     assert worker_start < worker_probe < watcher_start
 
 
