@@ -25,6 +25,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
      workflow defects route through the Builder System boundary/artifact map; boundary defects name
      both sides.
    - Include exact repro steps and observed/expected results when available.
+   - **Verify Source Anchors own the behavior — a grep/keyword hit is a *candidate*, not a confirmed anchor.** Before naming a `file::symbol` as the seam or candidate fix location, open it and confirm it is on the actual call path and owns the state in question. If you cannot confirm the precise seam, anchor the *symptom site* (the endpoint/render/log that misbehaves) and write "trace from here" rather than asserting a specific, possibly-wrong fix location. A keyword-matched-but-wrong anchor sends every downstream implementer — and any parallel sibling — re-tracing the same ground.
    - Do not create a micro-issue for routine repair, reconciliation, or bookkeeping churn; route those signals to the maintenance skills instead.
    - Acceptance Criteria must carry `Verify:` markers:
      - The primary behavioral AC ("bug no longer reproduces") points to a regression test the fix will add: `Verify: \`tests/<path>::test_<bug_name>\`` — the test should fail against current code and go green after the fix.
@@ -45,7 +46,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
 Set `agent:ready` when all are true:
 - Concrete scope and acceptance criteria are present.
 - Every AC carries a resolvable `Verify:` target; the repro is expressible as a named failing test.
-- Source anchors point to specific files or docs.
+- Source anchors point to specific files or docs **and are verified to own the behavior** (read the symbol/section to confirm it is the real seam, not merely a keyword match).
 - No unresolved decisions or missing contract inputs.
 - The bug is a real defect, not a low-signal maintenance correction that should be batched into audit or retrospective work.
 
