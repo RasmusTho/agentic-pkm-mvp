@@ -207,6 +207,85 @@ def dismiss(state: OverlayHostState) -> OverlayHostState:
     return replace(state, stack=state.stack[:-1])
 
 
+def resolve_deep_link_overlay(
+    overlay_id: str | None,
+    *,
+    occupants: tuple[str, ...] = SHIPPED_OVERLAY_OCCUPANTS,
+) -> str | None:
+    """Resolve a ``?overlay=<id>`` deep-link request to an auto-mountable id.
+
+    NAV-3 (#2611): a surface may be opened directly by URL. Only a **declared
+    and shipped** overlay is honoured — an undeclared id, an empty value, or a
+    declared-but-unshipped id (no registered occupant) resolves to ``None`` so
+    the page never auto-mounts a dead surface (the #2610 lesson: don't invent a
+    mount for an occupant that only registers on a particular shell). The
+    returned id, when present, is safe to hand to ``overlayHost.mount`` on load.
+    """
+    if not overlay_id:
+        return None
+    candidate = overlay_id.strip()
+    if candidate not in DECLARED_OVERLAYS:
+        return None
+    if candidate not in occupants:
+        return None
+    return candidate
+
+
+def overlay_deep_link_boot_script(overlay_id: str | None) -> str:
+    """Boot script that auto-mounts a deep-linked overlay on load (NAV-3).
+
+    Returns an empty string unless ``overlay_id`` is an already-resolved,
+    declared+shipped id (see :func:`resolve_deep_link_overlay`); callers MUST
+    resolve first, so this only ever embeds a known-safe literal. The script
+    MUST be emitted **after every occupant-registration script** on the shell
+    so ``overlayHost`` and the target occupant both exist by the time it runs
+    (#2611, Codex findings on closed PR #2637: a boot emitted before
+    ``settings_drawer_script()`` mounted ``?overlay=settings`` before its
+    occupant registered, a silent no-op). ``mount`` stays a calm no-op if the
+    occupant did not register on this particular shell (declared-but-inert), so
+    a deep link to an absent surface degrades calmly instead of erroring.
+
+    Special case ``vault`` (#2645 Codex P2): ``vault`` is a shipped occupant,
+    but on desktop the canonical browse surface is the inline LEFT PANE, not
+    the modal overlay — raw-mounting ``vault`` opens the narrow fallback modal
+    unconditionally and produces a duplicate browse surface, violating the
+    single-surface invariant (``test_desktop_browse_does_not_open_duplicate_
+    modal``). ``vaultBrowser.focus()`` already encapsulates the wide/narrow
+    split established in NAV-3b (#2640): inline pane on desktop, modal fallback
+    on narrow. So the vault deep-link routes through ``focus()`` and only falls
+    back to a raw ``mount('vault')`` if ``vaultBrowser`` is somehow absent.
+    """
+    if not overlay_id or overlay_id not in DECLARED_OVERLAYS:
+        return ""
+    if overlay_id == "vault":
+        # Honor the canonical browse affordance (inline pane on desktop, modal
+        # on narrow) instead of always opening the modal. focus() is defined on
+        # the note shell earlier than this last-emitted boot; the guard keeps
+        # it inert if it is absent (e.g. a shell without the vault browser).
+        return """
+  <script>
+  /* overlay-deep-link-boot (NAV-3, #2611) */
+  (function() {
+    if (window.vaultBrowser) {
+      try { window.vaultBrowser.focus(); } catch (err) { /* inert */ }
+    } else if (window.overlayHost) {
+      try { window.overlayHost.mount('vault'); } catch (err) { /* inert */ }
+    }
+  })();
+  /* /overlay-deep-link-boot */
+  </script>"""
+    # overlay_id is a fixed member of DECLARED_OVERLAYS — a safe JS literal.
+    return f"""
+  <script>
+  /* overlay-deep-link-boot (NAV-3, #2611) */
+  (function() {{
+    if (!window.overlayHost) {{ return; }}
+    try {{ window.overlayHost.mount('{overlay_id}'); }} catch (err) {{ /* inert */ }}
+  }})();
+  /* /overlay-deep-link-boot */
+  </script>"""
+
+
 def keyboard_intent(key: str) -> str | None:
     """Resolve a normalized key chord to its declared intent, or ``None``."""
     return KEYBOARD_MAP.get(key)

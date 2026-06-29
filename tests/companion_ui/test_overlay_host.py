@@ -44,6 +44,8 @@ from companion_ui.workspace.overlay_host import (
     dismiss,
     keyboard_intent,
     mount,
+    overlay_deep_link_boot_script,
+    resolve_deep_link_overlay,
 )
 from companion_ui.workspace.serve_dev_page import render_index_html
 
@@ -103,6 +105,23 @@ def _render(**overrides: Any) -> str:
         api_base_url="http://127.0.0.1:18001",
         note_path=str(fields["note_path"]),
         fields=fields,
+    )
+
+
+def _render_note(*, boot_overlay: str = "", **field_overrides: Any) -> str:
+    """Render the loaded-note shell, threading ``boot_overlay`` to the renderer.
+
+    ``_render`` funnels all kwargs into ``_fields`` (note frontmatter), so it
+    cannot carry ``boot_overlay`` — which is a top-level ``render_index_html``
+    argument, not a note field. This helper keeps the two namespaces separate
+    for the NAV-3c deep-link tests.
+    """
+    fields = _fields(**field_overrides)
+    return render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path=str(fields["note_path"]),
+        fields=fields,
+        boot_overlay=boot_overlay,
     )
 
 
@@ -833,3 +852,220 @@ def test_capture_open_mounts_capture_on_entry_surface() -> None:
     )
     assert host_script_m, "overlay-host-controller script must render"
     assert "'capture'" in host_script_m.group(1)
+
+
+# ---------------------------------------------------------------------------
+# NAV-3c (#2641): ?overlay=<id> deep-link — pure resolver + boot script +
+# per-shell auto-mount ordering (the settings-ordering bug from closed PR
+# #2637, Codex findings 2 + 3, must NOT recur: the boot script is emitted
+# AFTER every occupant-registration script on each shell, settings included).
+# ---------------------------------------------------------------------------
+
+# Stable markers emitted by the deep-link boot script and the settings
+# occupant registration, used to assert emission ordering in the rendered HTML.
+_DEEP_LINK_BOOT_MARKER = "/* overlay-deep-link-boot (NAV-3, #2611) */"
+_SETTINGS_OCCUPANT_MARKER = "/* settings-drawer-controller */"
+
+
+def test_resolve_deep_link_overlay_honours_declared_and_shipped_only() -> None:
+    """The resolver maps ?overlay=<id> to a declared+shipped id, else None.
+
+    A declared+shipped id resolves to itself; a declared-but-unshipped id
+    (``peek`` / ``posture`` — no registered occupant), an undeclared id, an
+    empty value, and ``None`` all resolve to ``None`` so the page never
+    auto-mounts a dead surface.
+    """
+    # Declared + shipped → resolves to itself (every shipped occupant).
+    for shipped in SHIPPED_OVERLAY_OCCUPANTS:
+        assert shipped in DECLARED_OVERLAYS
+        assert resolve_deep_link_overlay(shipped) == shipped
+    # settings is the load-bearing case for the ordering bug — confirm it
+    # resolves so the per-shell tests below have something to mount.
+    assert resolve_deep_link_overlay("settings") == "settings"
+    assert resolve_deep_link_overlay("memory") == "memory"
+
+    # Declared but unshipped → None (inert; no occupant to mount).
+    for declared_unshipped in ("peek", "posture"):
+        assert declared_unshipped in DECLARED_OVERLAYS
+        assert declared_unshipped not in SHIPPED_OVERLAY_OCCUPANTS
+        assert resolve_deep_link_overlay(declared_unshipped) is None
+
+    # Undeclared / empty / None → None (never auto-mount an unknown id).
+    assert resolve_deep_link_overlay("task-popup") is None
+    assert resolve_deep_link_overlay("notifications") is None
+    assert resolve_deep_link_overlay("VAULT") is None
+    assert resolve_deep_link_overlay("") is None
+    assert resolve_deep_link_overlay(None) is None
+    # Whitespace around a shipped id is stripped before matching.
+    assert resolve_deep_link_overlay("  settings  ") == "settings"
+
+
+def test_overlay_deep_link_boot_script_emits_only_for_resolved_id() -> None:
+    """The boot script embeds a mount call only for an already-resolved id.
+
+    It is inert (empty string) for ``None`` and for any non-resolved value;
+    when present it embeds exactly the resolved id as a safe JS literal.
+    """
+    # Inert for None / unresolved input (callers must resolve first).
+    assert overlay_deep_link_boot_script(None) == ""
+    assert overlay_deep_link_boot_script("") == ""
+    # Defensive: an undeclared id handed in directly is still inert.
+    assert overlay_deep_link_boot_script("task-popup") == ""
+
+    # Resolved id → a script that mounts exactly that id.
+    script = overlay_deep_link_boot_script(resolve_deep_link_overlay("settings"))
+    assert _DEEP_LINK_BOOT_MARKER in script
+    assert "window.overlayHost.mount('settings')" in script
+    # Guards the host existence before mounting (calm no-op pre-registration).
+    assert "if (!window.overlayHost)" in script
+
+    memory_script = overlay_deep_link_boot_script(resolve_deep_link_overlay("memory"))
+    assert "window.overlayHost.mount('memory')" in memory_script
+
+
+def test_note_shell_deep_links_settings_after_occupant_script() -> None:
+    """?overlay=settings auto-mounts on the NOTE shell, boot AFTER the occupant.
+
+    This is the regression guard for the closed-PR-#2637 ordering bug: the
+    boot script that mounts ``settings`` MUST be emitted after
+    ``settings_drawer_script()`` (which registers the ``settings`` occupant
+    ~hundreds of lines after the other occupant scripts), or the mount runs
+    before the occupant registers and silently no-ops.
+    """
+    html = _render_note(boot_overlay="settings")
+
+    # The deep-link boot script is present and mounts settings.
+    assert _DEEP_LINK_BOOT_MARKER in html
+    assert "window.overlayHost.mount('settings')" in html
+
+    # Ordering: the settings occupant registration precedes the deep-link boot.
+    settings_at = html.index(_SETTINGS_OCCUPANT_MARKER)
+    boot_at = html.index(_DEEP_LINK_BOOT_MARKER)
+    assert settings_at < boot_at, (
+        "deep-link boot script must be emitted AFTER settings_drawer_script() "
+        "on the note shell, else ?overlay=settings mounts before the occupant "
+        "registers (closed-PR-#2637 ordering bug)"
+    )
+    # And after every shipped occupant's registration script on the note shell.
+    assert "overlayHost.register('settings'" in html
+    register_at = html.index("overlayHost.register('settings'")
+    assert register_at < boot_at
+
+
+def test_note_shell_deep_links_memory_after_occupant_script() -> None:
+    """?overlay=memory auto-mounts on the note shell with the boot script."""
+    html = _render_note(boot_overlay="memory")
+    assert _DEEP_LINK_BOOT_MARKER in html
+    assert "window.overlayHost.mount('memory')" in html
+
+
+def test_note_shell_unknown_or_unshipped_deep_link_is_calm_no_op() -> None:
+    """Unknown / unshipped / empty ?overlay= → no boot script on the note shell."""
+    for bogus in ("", "task-popup", "peek", "posture", "notifications"):
+        html = _render_note(boot_overlay=bogus)
+        assert _DEEP_LINK_BOOT_MARKER not in html, (
+            f"?overlay={bogus!r} must not emit a deep-link boot script "
+            "(calm no-op, no dead surface)"
+        )
+
+
+def test_orientation_shell_deep_links_after_occupant_scripts() -> None:
+    """?overlay=<shipped> auto-mounts on the ORIENTATION shell, boot last.
+
+    The cold_start orientation substrate registers the capture, system-map and
+    memory occupants; the deep-link boot script is threaded through the
+    orientation early-return path and emitted as the genuinely last script.
+    """
+    # capture is registered on the cold_start orientation substrate (#2172).
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_start_orientation(),
+        boot_overlay="capture",
+    )
+    assert 'data-entry-state="cold_start"' in html
+    assert _DEEP_LINK_BOOT_MARKER in html
+    assert "window.overlayHost.mount('capture')" in html
+    # The boot runs after the capture occupant registers on this shell.
+    assert "overlayHost.register('capture'" in html
+    register_at = html.index("overlayHost.register('capture'")
+    boot_at = html.index(_DEEP_LINK_BOOT_MARKER)
+    assert register_at < boot_at, (
+        "deep-link boot must be emitted after the occupant scripts on the "
+        "orientation shell too"
+    )
+
+
+def test_orientation_shell_unknown_deep_link_is_calm_no_op() -> None:
+    """Unknown / unshipped ?overlay= → no boot script on the orientation shell."""
+    for bogus in ("", "task-popup", "peek", "posture"):
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            orientation=_cold_start_orientation(),
+            boot_overlay=bogus,
+        )
+        assert _DEEP_LINK_BOOT_MARKER not in html, (
+            f"?overlay={bogus!r} must not emit a deep-link boot script on the "
+            "orientation shell"
+        )
+
+
+def test_vault_deep_link_boot_routes_through_focus_not_bare_mount() -> None:
+    """?overlay=vault honours the canonical browse affordance, not a raw mount.
+
+    #2645 Codex P2: ``vault`` is a shipped occupant, but raw-mounting it opens
+    the NARROW fallback modal unconditionally — on desktop the canonical browse
+    surface is the inline left pane. The boot must route through
+    ``vaultBrowser.focus()`` (which encapsulates the NAV-3b wide/narrow split:
+    inline pane on desktop, modal fallback on narrow), with a bare
+    ``mount('vault')`` only as the ``vaultBrowser``-absent fallback.
+    """
+    # vault is still a valid deep-link target (the resolver returns it).
+    assert resolve_deep_link_overlay("vault") == "vault"
+
+    script = overlay_deep_link_boot_script(resolve_deep_link_overlay("vault"))
+    assert _DEEP_LINK_BOOT_MARKER in script
+    # Routes through the canonical browse controller, guarded by its presence.
+    assert "window.vaultBrowser.focus()" in script
+    assert "if (window.vaultBrowser)" in script
+    # The bare mount survives ONLY inside the vaultBrowser-absent else branch,
+    # never as the primary path: focus() must be reached first.
+    focus_at = script.index("window.vaultBrowser.focus()")
+    mount_at = script.index("window.overlayHost.mount('vault')")
+    assert focus_at < mount_at, (
+        "vault deep-link must prefer vaultBrowser.focus() over a bare "
+        "overlayHost.mount('vault') (else it opens a duplicate modal on desktop)"
+    )
+
+
+def test_note_shell_vault_deep_link_does_not_open_duplicate_modal() -> None:
+    """?overlay=vault on the note shell does not raw-mount the modal overlay.
+
+    Guards the single-surface invariant (test_desktop_browse_does_not_open_
+    duplicate_modal): the deep-link boot routes through vaultBrowser.focus(),
+    so on desktop it focuses the inline pane and never opens a competing modal.
+    The modal stays reachable only via focus()'s narrow responsive fallback.
+    """
+    html = _render_note(boot_overlay="vault")
+
+    assert _DEEP_LINK_BOOT_MARKER in html
+    # The deep-link boot routes through the canonical browse controller.
+    assert "window.vaultBrowser.focus()" in html
+
+    # The boot block must NOT contain a primary bare mount('vault') as a browse
+    # entrypoint — isolate the deep-link boot script and assert focus precedes
+    # any (fallback-only) mount within it.
+    boot_m = re.search(
+        r"/\* overlay-deep-link-boot \(NAV-3, #2611\) \*/(.*?)"
+        r"/\* /overlay-deep-link-boot \*/",
+        html,
+        re.S,
+    )
+    assert boot_m, "deep-link boot block must render for ?overlay=vault"
+    boot_block = boot_m.group(1)
+    assert "window.vaultBrowser.focus()" in boot_block
+    focus_at = boot_block.index("window.vaultBrowser.focus()")
+    mount_at = boot_block.index("window.overlayHost.mount('vault')")
+    assert focus_at < mount_at, (
+        "vault deep-link boot on the note shell must prefer focus() over a "
+        "bare mount('vault') (duplicate-modal regression, #2645)"
+    )
