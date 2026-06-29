@@ -217,6 +217,17 @@ A startup is complete and healthy when:
 
 Check the receipt before enabling watcher auto-exec or accepting traffic.
 
+Watcher startup readiness is gated by the watcher heartbeat file for the selected channel
+(`/app/tmp-test/watcher_heartbeat.json` for `pkm-test`, `/app/tmp/watcher_heartbeat.json` otherwise).
+The wrapper waits up to `WATCHER_HEARTBEAT_TIMEOUT` seconds and treats a heartbeat observed on the
+timeout boundary as ready, so slow first startup can pass when the watcher did become healthy within
+the configured window. Increase `WATCHER_HEARTBEAT_TIMEOUT` for cold image rebuilds or slow first
+watcher bootstraps; do not use it to mask a watcher that never writes a heartbeat.
+
+If no heartbeat is written within the timeout, startup still fails loud with
+`watcher_heartbeat_timeout`, writes `tmp/startup_status.json`, and captures compose/service
+diagnostics under `tmp/startup-logs/` before exiting.
+
 ## Command-first startup (dev/test)
 1. From repo root, run:
 ```

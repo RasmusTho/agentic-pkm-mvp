@@ -17,6 +17,7 @@ Spec: docs/LOCAL_TEST_BOOTSTRAP/START_FULL_SYSTEM.md :: BOOTSTRAP-03
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -38,6 +39,22 @@ def _startup_env(**extra: str) -> dict[str, str]:
     }
     env.update(extra)
     return env
+
+
+def _extract_shell_function(script: str, name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{\n.*?^}}\n", script, re.MULTILINE | re.DOTALL)
+    assert match is not None, f"{name} function not found"
+    return match.group(0)
+
+
+def _watcher_wait_functions() -> str:
+    script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+    return "\n\n".join(
+        [
+            _extract_shell_function(script, "watcher_heartbeat_ready"),
+            _extract_shell_function(script, "wait_for_watcher_heartbeat"),
+        ]
+    )
 
 
 class TestBootstrapStartContract:
@@ -80,15 +97,27 @@ class TestBootstrapStartContract:
             f"Expected the no-vault idle banner; got: {combined[:600]}"
         )
 
-    @_requires_docker
     def test_exits_on_missing_vault_directory(self, tmp_path: Path) -> None:
         """Script exits non-zero with a clear error when VAULT_ROOT dir does not exist."""
         missing_vault = tmp_path / "does-not-exist"
+        fake_docker = tmp_path / "docker"
+        fake_docker.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "${1:-}" = "info" ]; then exit 0; fi\n'
+            "echo fake docker should not reach compose commands >&2\n"
+            "exit 99\n",
+            encoding="utf-8",
+        )
+        fake_docker.chmod(0o755)
         result = subprocess.run(
             ["bash", "scripts/start_full_system.sh"],
             capture_output=True,
             text=True,
-            env=_startup_env(VAULT_ROOT=str(missing_vault)),
+            env=_startup_env(
+                PATH=f"{tmp_path}:{_SUBPROCESS_PATH}",
+                START_FLIGHT_RECORDER="0",
+                VAULT_ROOT=str(missing_vault),
+            ),
         )
         assert result.returncode != 0, "Expected non-zero exit when VAULT_ROOT dir is missing"
         stderr = result.stderr + result.stdout
@@ -244,3 +273,87 @@ class TestBootstrapStartContract:
         )
         assert 'VAULT_ROOT="vault-test"' in combined
         assert '--vault-root "vault-test"' in combined
+
+    def test_watcher_readiness_accepts_heartbeat_at_timeout_boundary(self) -> None:
+        """A heartbeat observed on the timeout boundary must satisfy startup readiness."""
+        functions = _watcher_wait_functions()
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                functions
+                + r'''
+SECONDS=0
+WATCHER_HEARTBEAT_TIMEOUT=3
+WATCHER_HEARTBEAT_POLL_SECONDS=2
+container_watcher_heartbeat_path=/app/tmp-test/watcher_heartbeat.json
+run_docker_compose() {
+  [ "$SECONDS" -ge 3 ]
+}
+sleep() {
+  SECONDS=$((SECONDS + $1))
+}
+write_startup_status() {
+  echo "status:$*"
+}
+capture_startup_logs() {
+  echo "capture"
+}
+debug_dump() {
+  echo "debug"
+}
+wait_for_watcher_heartbeat
+printf "SECONDS=%s EXIT_REASON=%s\n" "$SECONDS" "${EXIT_REASON:-}"
+''',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert "SECONDS=3 EXIT_REASON=" in result.stdout
+        assert "watcher_heartbeat_timeout" not in result.stdout + result.stderr
+
+    def test_watcher_readiness_timeout_reports_diagnostics(self) -> None:
+        """A truly missing watcher heartbeat remains a strict failure with diagnostics."""
+        functions = _watcher_wait_functions()
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                functions
+                + r'''
+SECONDS=0
+WATCHER_HEARTBEAT_TIMEOUT=1
+WATCHER_HEARTBEAT_POLL_SECONDS=2
+container_watcher_heartbeat_path=/app/tmp-test/watcher_heartbeat.json
+run_docker_compose() {
+  return 1
+}
+sleep() {
+  SECONDS=$((SECONDS + $1))
+}
+write_startup_status() {
+  echo "status:$*"
+}
+capture_startup_logs() {
+  echo "capture"
+}
+debug_dump() {
+  echo "debug"
+}
+wait_for_watcher_heartbeat
+''',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 1
+        assert "status:0 watcher_heartbeat_timeout" in combined
+        assert "capture" in combined
+        assert "debug" in combined
+        assert "watcher heartbeat not detected at /app/tmp-test/watcher_heartbeat.json" in combined
