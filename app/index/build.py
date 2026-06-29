@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Tuple
 import fnmatch
 
 from app.domain.state_axes import normalize_artifact_state_axes
+from app.vault.manager import iter_vault_markdown_files
 from app.vault.paths import get_vault_inbox_dir_rel
 
 from .ingest_md import parse_markdown
@@ -11,7 +12,7 @@ from .rules import compile_rules, score_for
 
 
 def walk_markdown_files(root: Path, ignore_glob: List[str]) -> List[Path]:
-    files = [p for p in root.rglob("*.md") if p.is_file()]
+    files = list(iter_vault_markdown_files(root))
     if not ignore_glob:
         return files
     out: List[Path] = []

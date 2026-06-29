@@ -14,6 +14,7 @@ from app.watcher.heartbeat import write_heartbeat
 from app.watcher.relevance_tick import relevance_tick_enabled, run_relevance_tick
 from app.watcher.settings_delta import handle_settings_local_delta
 from app.watcher.state import WatcherState
+from app.vault.manager import iter_vault_markdown_files
 
 
 def _now_iso_from_timestamp(value: float) -> str:
@@ -39,7 +40,7 @@ def _scan_markdown_many(
 ) -> Iterable[tuple[Path, float, Path]]:
     seen: set[Path] = set()
     for scan_root in scan_roots:
-        for path in sorted(scan_root.rglob("*.md")):
+        for path in iter_vault_markdown_files(vault_root, subtree_root=scan_root):
             try:
                 rel = path.relative_to(vault_root)
             except Exception:

@@ -28,6 +28,7 @@ from app.relevance.schema import (
     SurfacedRef,
     UrgencyBand,
 )
+from app.vault.manager import iter_vault_markdown_files
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 
 EVALUATOR_ID = "relevance-evaluator@deterministic-fallback"
@@ -174,7 +175,7 @@ class DeterministicRelevanceEvaluator:
     def _read_vault_notes(self) -> list[_VaultNote]:
         notes: list[_VaultNote] = []
         skip_prefixes = (f"{self._system_dir}/", f"{self.daily_dir}/")
-        for path in sorted(self.vault_root.rglob("*.md")):
+        for path in iter_vault_markdown_files(self.vault_root):
             rel = path.relative_to(self.vault_root).as_posix()
             if rel.startswith(skip_prefixes) or rel == f"{self.daily_dir}":
                 continue
