@@ -91,9 +91,14 @@ def test_test_start_target_binds_test_environment() -> None:
         "Makefile 'test-start-full' target does not set COMPOSE_PROJECT_NAME=pkm-test. "
         "Test and prod channels must use distinct project names (Issue #967)."
     )
-    assert re.search(r'docker-compose\.test\.yml', body), (
-        "Makefile 'test-start-full' target does not reference docker-compose.test.yml. "
-        "The test overlay must be included in the test startup (Issue #967)."
+    assert "COMPOSE_TEST_FILES" in body, (
+        "Makefile 'test-start-full' target does not use COMPOSE_TEST_FILES. "
+        "The test overlay and deploy pin env must be included in the test startup "
+        "(Issue #967)."
+    )
+    assert "docker-compose.test.yml" in makefile_text, (
+        "Makefile does not define docker-compose.test.yml for test startup "
+        "(Issue #967)."
     )
 
 
@@ -120,9 +125,14 @@ def test_prod_start_target_binds_prod_environment() -> None:
         "Makefile 'prod-start-full' target does not set COMPOSE_PROJECT_NAME=pkm-prod. "
         "Prod channel must use an explicit project name (Issue #967)."
     )
-    assert re.search(r'docker-compose\.prod\.yml', body), (
-        "Makefile 'prod-start-full' target does not reference docker-compose.prod.yml. "
-        "The prod overlay must be included in the prod startup (Issue #967)."
+    assert "COMPOSE_PROD_FILES" in body, (
+        "Makefile 'prod-start-full' target does not use COMPOSE_PROD_FILES. "
+        "The prod overlay and deploy pin env must be included in the prod startup "
+        "(Issue #967)."
+    )
+    assert "docker-compose.prod.yml" in makefile_text, (
+        "Makefile does not define docker-compose.prod.yml for prod startup "
+        "(Issue #967)."
     )
     assert "scripts/prod/start_midgard_stack.sh" in body, (
         "Makefile 'prod-start-full' target must route through the Midgård prod "
