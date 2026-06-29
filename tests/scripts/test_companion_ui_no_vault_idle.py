@@ -5,8 +5,10 @@ The dev/test/prod Companion UI wrappers all delegate to
 invariant (#2005) and in-app vault selection, the launcher must:
 
   * boot to the picker when no vault is configured (NOT hard-fail), and
-  * treat a configured-but-mismatched vault as advisory (warn-only) on all
-    channels, since the active vault is selected in-app.
+  * treat a configured-but-mismatched vault as advisory (warn-only) on dev/test
+    (scratch vaults; the active vault is selected in-app), but FATAL on prod,
+    whose write-capable worker would otherwise bind and write the wrong real
+    vault (Codex P1, PR #2652).
 
 These tests exercise the bash guard functions directly so they need neither
 Docker nor a real vault.
@@ -55,11 +57,42 @@ def test_matching_vault_passes() -> None:
     assert "vault guard OK" in (r.stdout + r.stderr)
 
 
-def test_mismatched_vault_is_advisory_by_default() -> None:
+def test_mismatched_vault_is_advisory_on_non_prod() -> None:
+    # _CONFIG is the test channel: a mismatch warns but does not hard-fail.
     r = _run("VAULT_ROOT='/tmp/Niflheim'\ncui_guard_vault_name\necho GUARD_RETURNED")
-    assert r.returncode == 0, "a mismatched vault must NOT hard-fail in the default advisory mode"
+    assert r.returncode == 0, "a mismatched dev/test vault must NOT hard-fail (advisory)"
     assert "GUARD_RETURNED" in r.stdout
     assert "advisory" in (r.stdout + r.stderr)
+
+
+def test_mismatched_prod_vault_is_fatal() -> None:
+    # Prod binds the operator's real vault and runs a write-capable worker, so a
+    # configured-but-wrong prod vault must hard-fail rather than warn (Codex P1).
+    harness = (
+        "VAULT_ROOT='/tmp/Niflheim'\n"
+        "CUI_CHANNEL=prod\n"
+        "CUI_EXPECTED_VAULT_PATTERN='midg(å|a)rd'\n"
+        "CUI_EXPECTED_VAULT_LABEL='Midgård/Midgard'\n"
+        "cui_guard_vault_name\necho GUARD_RETURNED"
+    )
+    r = _run(harness)
+    assert r.returncode != 0, "a mismatched prod vault must hard-fail"
+    assert "GUARD_RETURNED" not in r.stdout, "guard must exit before returning on prod mismatch"
+    assert "Refusing to boot the prod channel" in (r.stdout + r.stderr)
+
+
+def test_matching_prod_vault_passes() -> None:
+    harness = (
+        "VAULT_ROOT='/tmp/Midgard'\n"
+        "CUI_CHANNEL=prod\n"
+        "CUI_EXPECTED_VAULT_PATTERN='midg(å|a)rd'\n"
+        "CUI_EXPECTED_VAULT_LABEL='Midgård/Midgard'\n"
+        "cui_guard_vault_name\necho GUARD_RETURNED"
+    )
+    r = _run(harness)
+    assert r.returncode == 0, r.stderr
+    assert "GUARD_RETURNED" in r.stdout
+    assert "vault guard OK" in (r.stdout + r.stderr)
 
 
 def test_missing_channel_env_file_is_not_fatal(tmp_path: Path) -> None:

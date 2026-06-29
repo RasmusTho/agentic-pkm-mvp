@@ -115,9 +115,12 @@ cui_load_channel_env() {
 # Resolves the channel vault posture. Read-only. Honors no-vault idle boot
 # (#2005): an unset VAULT_ROOT is NOT an error — the stack boots and serves the
 # in-app vault picker. When a vault IS configured its basename is matched against
-# the expected channel vault, but under the settled selection model the active
-# vault is chosen in-app (VAULT_ROOT is only the initial default, not the source
-# of truth), so a mismatch is advisory (warn-only) rather than fatal.
+# the expected channel vault. A mismatch is FATAL on prod and advisory on
+# dev/test: prod binds the operator's real content vault and start_full_system.sh
+# runs a write-capable worker against it, so booting prod against the wrong vault
+# risks writing it (Codex P1, PR #2652) — fail loud. dev/test bind scratch vaults
+# and the active vault is still chosen in-app (VAULT_ROOT is only the initial
+# default), so a mismatch there is warn-only.
 cui_guard_vault_name() {
   local base base_lc
   if [ -z "${VAULT_ROOT:-}" ]; then
@@ -129,6 +132,9 @@ cui_guard_vault_name() {
   if printf '%s' "${base_lc}" | grep -Eq "${CUI_EXPECTED_VAULT_PATTERN}"; then
     cui_log "vault guard OK: resolved vault '${base}' matches expected ${CUI_EXPECTED_VAULT_LABEL}"
     return 0
+  fi
+  if [ "${CUI_CHANNEL:-}" = "prod" ]; then
+    cui_die "vault guard: resolved prod vault '${base}' (VAULT_ROOT=${VAULT_ROOT}) is not ${CUI_EXPECTED_VAULT_LABEL}. Refusing to boot the prod channel against a mismatched vault — its write-capable worker would bind and write it. Fix .env.prod.local, or unset VAULT_ROOT for no-vault idle boot."
   fi
   cui_warn "vault guard advisory: resolved vault '${base}' (VAULT_ROOT=${VAULT_ROOT}) does not look like ${CUI_EXPECTED_VAULT_LABEL}. Continuing — the active vault is selected in-app (VAULT_ROOT is only the initial default)."
 }
