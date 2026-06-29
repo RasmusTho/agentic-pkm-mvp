@@ -90,6 +90,8 @@ PROJECTION_SPECS: dict[str, BuilderOpsProjectionSpec] = {
     ),
 }
 
+TERMINAL_QUEUE_LIFECYCLE_STATES = frozenset({"discarded", "superseded"})
+
 
 class BuilderOpsProjectionGenerator:
     """Render non-authoritative Markdown projections from a BuilderOps store."""
@@ -113,6 +115,14 @@ class BuilderOpsProjectionGenerator:
                 str(record.get("id", "")),
             ),
         )
+        if spec.projection_type != "learning-summary":
+            # Queue-style projections are active work surfaces; retrospective summaries keep
+            # terminal history visible for review and learning.
+            records = [
+                record
+                for record in records
+                if record.get("lifecycle_state") not in TERMINAL_QUEUE_LIFECYCLE_STATES
+            ]
         return _render_projection(spec, records, timestamp)
 
     def write_projections(

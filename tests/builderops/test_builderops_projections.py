@@ -106,6 +106,245 @@ def test_learning_summary_projection_matches_seeded_builderops_records(
     )
 
 
+def test_queue_projections_exclude_terminal_records(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    queue_records = (
+        (
+            "docs-freshness",
+            store.create_docs_freshness_record,
+            {
+                "id": "docsfresh_active_001",
+                "summary": "Active docs freshness record",
+                "doc_ref": {"ref_type": "repo_doc", "ref": "docs/active.md"},
+                "owner": "BuilderOps governance",
+                "review_cadence": "event-driven",
+                "freshness_posture": "current",
+                "drift_status": "none",
+                "last_reviewed_at": "2026-06-01T00:00:00Z",
+                "last_verified_against": [{"ref_type": "repo_doc", "ref": "docs/active.md"}],
+                "last_verified_at": "2026-06-01T00:00:00Z",
+                "next_review_due_at": "2026-06-08T00:00:00Z",
+                "stale_reasons": ["none"],
+                "freshness_evidence_refs": [{"ref_type": "github_issue", "ref": "#1001"}],
+                "next_review_owner": "BuilderOps governance",
+                "source_refs": [{"ref_type": "repo_doc", "ref": "docs/active.md"}],
+                "created_by": _actor(),
+            },
+            (
+                {
+                    "id": "docsfresh_discarded_001",
+                    "summary": "Discarded docs freshness record",
+                    "doc_ref": {"ref_type": "repo_doc", "ref": "docs/discarded.md"},
+                    "owner": "BuilderOps governance",
+                    "review_cadence": "event-driven",
+                    "freshness_posture": "likely_stale",
+                    "drift_status": "confirmed_stale",
+                    "last_reviewed_at": "2026-06-01T00:00:00Z",
+                    "last_verified_against": [{"ref_type": "repo_doc", "ref": "docs/discarded.md"}],
+                    "last_verified_at": "2026-06-01T00:00:00Z",
+                    "next_review_due_at": "2026-06-08T00:00:00Z",
+                    "stale_reasons": ["discarded"],
+                    "freshness_evidence_refs": [{"ref_type": "github_issue", "ref": "#1002"}],
+                    "next_review_owner": "BuilderOps governance",
+                    "lifecycle_state": "discarded",
+                    "promotion_status": "discarded",
+                    "source_refs": [{"ref_type": "repo_doc", "ref": "docs/discarded.md"}],
+                    "created_by": _actor(),
+                },
+                {
+                    "id": "docsfresh_superseded_001",
+                    "summary": "Superseded docs freshness record",
+                    "doc_ref": {"ref_type": "repo_doc", "ref": "docs/superseded.md"},
+                    "owner": "BuilderOps governance",
+                    "review_cadence": "event-driven",
+                    "freshness_posture": "likely_stale",
+                    "drift_status": "confirmed_stale",
+                    "last_reviewed_at": "2026-06-01T00:00:00Z",
+                    "last_verified_against": [{"ref_type": "repo_doc", "ref": "docs/superseded.md"}],
+                    "last_verified_at": "2026-06-01T00:00:00Z",
+                    "next_review_due_at": "2026-06-08T00:00:00Z",
+                    "stale_reasons": ["superseded"],
+                    "freshness_evidence_refs": [{"ref_type": "github_issue", "ref": "#1003"}],
+                    "next_review_owner": "BuilderOps governance",
+                    "lifecycle_state": "superseded",
+                    "promotion_status": "superseded",
+                    "source_refs": [{"ref_type": "repo_doc", "ref": "docs/superseded.md"}],
+                    "created_by": _actor(),
+                },
+            ),
+        ),
+        (
+            "roadmap-execution",
+            store.create_roadmap_execution_item,
+            {
+                "id": "roadexec_active_001",
+                "summary": "Active roadmap execution item",
+                "roadmap_ref": {"ref_type": "github_issue", "ref": "#2001"},
+                "theme": "BuilderOps Vault",
+                "capability": "queue rendering",
+                "execution_state": "in_progress",
+                "status": "active",
+                "owner": "BuilderOps governance",
+                "active_issues": [{"ref_type": "github_issue", "ref": "#2002"}],
+                "blockers": ["none"],
+                "last_movement": "Active item remains in progress.",
+                "next_decision": "Continue queue rendering work.",
+                "shipped_refs": [{"ref_type": "pull_request", "ref": "#2003"}],
+                "source_refs": [{"ref_type": "github_issue", "ref": "#2001"}],
+                "created_by": _actor(),
+            },
+            (
+                {
+                    "id": "roadexec_discarded_001",
+                    "summary": "Discarded roadmap execution item",
+                    "roadmap_ref": {"ref_type": "github_issue", "ref": "#2004"},
+                    "theme": "BuilderOps Vault",
+                    "capability": "queue rendering",
+                    "execution_state": "done",
+                    "status": "discarded",
+                    "owner": "BuilderOps governance",
+                    "active_issues": [{"ref_type": "github_issue", "ref": "#2004"}],
+                    "blockers": ["discarded"],
+                    "last_movement": "Superseded by a later execution item.",
+                    "next_decision": "none",
+                    "shipped_refs": [{"ref_type": "pull_request", "ref": "#2004"}],
+                    "lifecycle_state": "discarded",
+                    "promotion_status": "discarded",
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#2004"}],
+                    "created_by": _actor(),
+                },
+                {
+                    "id": "roadexec_superseded_001",
+                    "summary": "Superseded roadmap execution item",
+                    "roadmap_ref": {"ref_type": "github_issue", "ref": "#2005"},
+                    "theme": "BuilderOps Vault",
+                    "capability": "queue rendering",
+                    "execution_state": "done",
+                    "status": "superseded",
+                    "owner": "BuilderOps governance",
+                    "active_issues": [{"ref_type": "github_issue", "ref": "#2005"}],
+                    "blockers": ["superseded"],
+                    "last_movement": "Superseded by a later execution item.",
+                    "next_decision": "none",
+                    "shipped_refs": [{"ref_type": "pull_request", "ref": "#2005"}],
+                    "lifecycle_state": "superseded",
+                    "promotion_status": "superseded",
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#2005"}],
+                    "created_by": _actor(),
+                },
+            ),
+        ),
+        (
+            "promotion-queue",
+            store.create_promotion_intent,
+            {
+                "id": "prom_active_001",
+                "summary": "Active promotion intent",
+                "target_authority_surface": "github_issue",
+                "target_action": "create",
+                "target_ref": "#3001",
+                "target_authority_class": "operational",
+                "intended_output": "Bounded GitHub issue",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3001"}],
+                "created_by": _actor(),
+            },
+            (
+                {
+                    "id": "prom_discarded_001",
+                    "summary": "Discarded promotion intent",
+                    "target_authority_surface": "github_issue",
+                    "target_action": "create",
+                    "target_ref": "#3002",
+                    "target_authority_class": "operational",
+                    "intended_output": "Discard receipt",
+                    "lifecycle_state": "discarded",
+                    "promotion_status": "discarded",
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#3002"}],
+                    "created_by": _actor(),
+                },
+                {
+                    "id": "prom_superseded_001",
+                    "summary": "Superseded promotion intent",
+                    "target_authority_surface": "github_issue",
+                    "target_action": "create",
+                    "target_ref": "#3003",
+                    "target_authority_class": "operational",
+                    "intended_output": "Superseded replacement",
+                    "lifecycle_state": "superseded",
+                    "promotion_status": "superseded",
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#3003"}],
+                    "created_by": _actor(),
+                },
+            ),
+        ),
+    )
+
+    for projection_type, creator, active_record, terminal_records in queue_records:
+        creator(**active_record)
+        for terminal_record in terminal_records:
+            creator(**terminal_record)
+
+        markdown = BuilderOpsProjectionGenerator(store).render_projection(
+            projection_type,
+            generated_at=GENERATED_AT,
+        )
+
+        assert f"Projection type: {projection_type}" in markdown
+        assert "Record count: 1" in markdown
+        assert active_record["summary"] in markdown
+        for terminal_record in terminal_records:
+            assert terminal_record["summary"] not in markdown
+
+
+def test_learning_summary_keeps_terminal_learning_records(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    store.create_learning_signal(
+        id="lrn_learning_active_001",
+        summary="Active learning signal",
+        content="Active learning content.",
+        signal_type="workflow",
+        source_refs=[{"ref_type": "github_issue", "ref": "#4001"}],
+        receipt_refs=["receipt_lrn_active_001"],
+        created_by=_actor(),
+    )
+    store.create_learning_signal(
+        id="lrn_learning_discarded_001",
+        summary="Discarded learning signal",
+        content="Discarded learning content.",
+        signal_type="workflow",
+        lifecycle_state="discarded",
+        promotion_status="discarded",
+        source_refs=[{"ref_type": "github_issue", "ref": "#4002"}],
+        receipt_refs=["receipt_lrn_discarded_001"],
+        created_by=_actor(),
+    )
+    store.create_learning_signal(
+        id="lrn_learning_superseded_001",
+        summary="Superseded learning signal",
+        content="Superseded learning content.",
+        signal_type="workflow",
+        lifecycle_state="superseded",
+        promotion_status="superseded",
+        source_refs=[{"ref_type": "github_issue", "ref": "#4003"}],
+        receipt_refs=["receipt_lrn_superseded_001"],
+        created_by=_actor(),
+    )
+
+    markdown = BuilderOpsProjectionGenerator(store).render_projection(
+        "learning-summary",
+        generated_at=GENERATED_AT,
+    )
+
+    assert "Record count: 3" in markdown
+    assert "Active learning signal" in markdown
+    assert "Discarded learning signal" in markdown
+    assert "Superseded learning signal" in markdown
+    assert "receipt_lrn_discarded_001" in markdown
+    assert "receipt_lrn_superseded_001" in markdown
+
+
 def test_write_projections_emits_expected_repo_markdown_files(
     store: SqliteBuilderOpsStore,
     tmp_path: Path,
