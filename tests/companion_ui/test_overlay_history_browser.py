@@ -602,3 +602,58 @@ def test_overlay_query_deep_link_auto_mounts_on_load() -> None:
                 browser.close()
     finally:
         server.shutdown()
+
+
+def test_vault_deep_link_honours_surface_duality_by_viewport() -> None:
+    """``?overlay=vault`` routes through ``vaultBrowser.focus()`` per viewport.
+
+    #2645 Codex P2: on a desktop viewport the canonical browse surface is the
+    inline left pane (focus() focuses it; the modal stays closed — no duplicate
+    surface). On a narrow viewport the inline pane is unavailable, so focus()
+    falls through to open() and the modal becomes reachable.
+    """
+    server, port = _make_deep_link_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deep_link = f"http://127.0.0.1:{port}/?overlay=vault"
+    modal_open_js = (
+        "document.getElementById('vault-browser-overlay')"
+        ".classList.contains('open')"
+    )
+    pane_focused_js = (
+        "document.getElementById('vault-browser-left-pane')"
+        ".getAttribute('data-browse-focused')"
+    )
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                # DESKTOP: focus() targets the inline pane; the modal stays shut.
+                page = browser.new_page(viewport={"width": 1200, "height": 900})
+                page.goto(deep_link, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                # The inline pane gets browse focus...
+                page.wait_for_function(f"{pane_focused_js} === 'true'", timeout=5000)
+                # ...and the responsive-fallback modal is NOT opened (no
+                # duplicate browse surface, single-surface invariant holds).
+                assert page.evaluate(modal_open_js) is False, (
+                    "desktop ?overlay=vault must focus the inline pane, not open "
+                    "the modal (duplicate-surface regression, #2645)"
+                )
+                # The overlay host did not mount 'vault' as an overlay either.
+                assert page.evaluate(_OPEN_JS) == "none"
+                page.close()
+
+                # NARROW: no inline pane → focus() falls through to the modal.
+                page = browser.new_page(viewport={"width": 600, "height": 900})
+                page.goto(deep_link, wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                page.wait_for_function(f"{modal_open_js} === true", timeout=5000)
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()

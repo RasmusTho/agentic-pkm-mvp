@@ -244,9 +244,36 @@ def overlay_deep_link_boot_script(overlay_id: str | None) -> str:
     occupant registered, a silent no-op). ``mount`` stays a calm no-op if the
     occupant did not register on this particular shell (declared-but-inert), so
     a deep link to an absent surface degrades calmly instead of erroring.
+
+    Special case ``vault`` (#2645 Codex P2): ``vault`` is a shipped occupant,
+    but on desktop the canonical browse surface is the inline LEFT PANE, not
+    the modal overlay — raw-mounting ``vault`` opens the narrow fallback modal
+    unconditionally and produces a duplicate browse surface, violating the
+    single-surface invariant (``test_desktop_browse_does_not_open_duplicate_
+    modal``). ``vaultBrowser.focus()`` already encapsulates the wide/narrow
+    split established in NAV-3b (#2640): inline pane on desktop, modal fallback
+    on narrow. So the vault deep-link routes through ``focus()`` and only falls
+    back to a raw ``mount('vault')`` if ``vaultBrowser`` is somehow absent.
     """
     if not overlay_id or overlay_id not in DECLARED_OVERLAYS:
         return ""
+    if overlay_id == "vault":
+        # Honor the canonical browse affordance (inline pane on desktop, modal
+        # on narrow) instead of always opening the modal. focus() is defined on
+        # the note shell earlier than this last-emitted boot; the guard keeps
+        # it inert if it is absent (e.g. a shell without the vault browser).
+        return """
+  <script>
+  /* overlay-deep-link-boot (NAV-3, #2611) */
+  (function() {
+    if (window.vaultBrowser) {
+      try { window.vaultBrowser.focus(); } catch (err) { /* inert */ }
+    } else if (window.overlayHost) {
+      try { window.overlayHost.mount('vault'); } catch (err) { /* inert */ }
+    }
+  })();
+  /* /overlay-deep-link-boot */
+  </script>"""
     # overlay_id is a fixed member of DECLARED_OVERLAYS — a safe JS literal.
     return f"""
   <script>

@@ -1007,3 +1007,65 @@ def test_orientation_shell_unknown_deep_link_is_calm_no_op() -> None:
             f"?overlay={bogus!r} must not emit a deep-link boot script on the "
             "orientation shell"
         )
+
+
+def test_vault_deep_link_boot_routes_through_focus_not_bare_mount() -> None:
+    """?overlay=vault honours the canonical browse affordance, not a raw mount.
+
+    #2645 Codex P2: ``vault`` is a shipped occupant, but raw-mounting it opens
+    the NARROW fallback modal unconditionally — on desktop the canonical browse
+    surface is the inline left pane. The boot must route through
+    ``vaultBrowser.focus()`` (which encapsulates the NAV-3b wide/narrow split:
+    inline pane on desktop, modal fallback on narrow), with a bare
+    ``mount('vault')`` only as the ``vaultBrowser``-absent fallback.
+    """
+    # vault is still a valid deep-link target (the resolver returns it).
+    assert resolve_deep_link_overlay("vault") == "vault"
+
+    script = overlay_deep_link_boot_script(resolve_deep_link_overlay("vault"))
+    assert _DEEP_LINK_BOOT_MARKER in script
+    # Routes through the canonical browse controller, guarded by its presence.
+    assert "window.vaultBrowser.focus()" in script
+    assert "if (window.vaultBrowser)" in script
+    # The bare mount survives ONLY inside the vaultBrowser-absent else branch,
+    # never as the primary path: focus() must be reached first.
+    focus_at = script.index("window.vaultBrowser.focus()")
+    mount_at = script.index("window.overlayHost.mount('vault')")
+    assert focus_at < mount_at, (
+        "vault deep-link must prefer vaultBrowser.focus() over a bare "
+        "overlayHost.mount('vault') (else it opens a duplicate modal on desktop)"
+    )
+
+
+def test_note_shell_vault_deep_link_does_not_open_duplicate_modal() -> None:
+    """?overlay=vault on the note shell does not raw-mount the modal overlay.
+
+    Guards the single-surface invariant (test_desktop_browse_does_not_open_
+    duplicate_modal): the deep-link boot routes through vaultBrowser.focus(),
+    so on desktop it focuses the inline pane and never opens a competing modal.
+    The modal stays reachable only via focus()'s narrow responsive fallback.
+    """
+    html = _render_note(boot_overlay="vault")
+
+    assert _DEEP_LINK_BOOT_MARKER in html
+    # The deep-link boot routes through the canonical browse controller.
+    assert "window.vaultBrowser.focus()" in html
+
+    # The boot block must NOT contain a primary bare mount('vault') as a browse
+    # entrypoint — isolate the deep-link boot script and assert focus precedes
+    # any (fallback-only) mount within it.
+    boot_m = re.search(
+        r"/\* overlay-deep-link-boot \(NAV-3, #2611\) \*/(.*?)"
+        r"/\* /overlay-deep-link-boot \*/",
+        html,
+        re.S,
+    )
+    assert boot_m, "deep-link boot block must render for ?overlay=vault"
+    boot_block = boot_m.group(1)
+    assert "window.vaultBrowser.focus()" in boot_block
+    focus_at = boot_block.index("window.vaultBrowser.focus()")
+    mount_at = boot_block.index("window.overlayHost.mount('vault')")
+    assert focus_at < mount_at, (
+        "vault deep-link boot on the note shell must prefer focus() over a "
+        "bare mount('vault') (duplicate-modal regression, #2645)"
+    )
