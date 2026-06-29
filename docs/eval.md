@@ -47,6 +47,49 @@ Implementation note: the eval harness configures `OPENAI_BASE_URL` / `OPENAI_API
   ```
 - Thresholds are conservative (~0.5) and should be tightened as retrieval quality improves; add more cases over time.
 
+### Deterministic retrieval eval-case schema
+
+The deterministic retrieval golden seed uses the versioned
+`retrieval_eval_case.v1` schema in `docs/eval/retrieval_bilingual_seed.yaml`.
+This seed is human-labeled fixture data, not an LLM-judge output; Ragas and
+DeepEval remain opt-in layers on top of deterministic cases.
+
+Required top-level shape:
+
+```yaml
+schema_version: retrieval_eval_case.v1
+cases:
+  - id: exact-en-settings-yaml
+    language: en  # required: sv|en
+    query: "Where is the canonical system settings YAML?"
+    relevant_artifact_ids:
+      - bg-doc-settings-en
+    route_intent: exact_lexical
+    provenance_expectation: "source_ref points to vault/_system/settings/system-settings.yaml"
+    trust_expectation: own
+```
+
+Required case fields:
+
+| Field | Contract |
+| --- | --- |
+| `id` | Stable case id, unique within the seed. |
+| `language` | Required language tag; allowed values are `sv` and `en`. |
+| `query` | User-facing retrieval/ASK query in the tagged language. |
+| `relevant_artifact_ids` | Non-empty list of resolvable ids in the paired golden corpus. |
+| `route_intent` | Descriptive route label. Current deterministic seed labels are `exact_lexical`, `hybrid_semantic`, `recall_into_ask`, and `low_trust_citation`; this is not a final route taxonomy. |
+| `provenance_expectation` | Human-readable expectation for source/provenance visibility. |
+| `trust_expectation` | Human-readable trust/review-state expectation for retrieved evidence. |
+
+The 11-case bilingual seed covers Swedish and English across the current route
+mix: exact/lexical lookup, hybrid semantic retrieval, recall-into-ASK, and
+low-trust citation checks. Its paired deterministic ground truth lives under
+`data/golden/bilingual_corpus.jsonl` and
+`data/golden/bilingual_judgments.json`. The existing precision@k/ndcg@k runner
+continues to read `data/golden/corpus.jsonl` plus `data/golden/judgments.json`;
+the bilingual sibling is additive and backward compatible until the runner/CLI
+is intentionally extended.
+
 ## Metrics (initial)
 - Answer relevancy / answer-quality style metrics via DeepEval.
 - Faithfulness/hallucination metrics can be added once context is surfaced in ASK responses.

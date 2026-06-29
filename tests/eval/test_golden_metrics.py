@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from app.eval.golden import evaluate_golden_set, evaluate_vs_baseline, ndcg_at_k, precision_at_k
 
 pytestmark = pytest.mark.not_pg
+
+BILINGUAL_CORPUS_PATH = Path("data/golden/bilingual_corpus.jsonl")
+BILINGUAL_JUDGMENTS_PATH = Path("data/golden/bilingual_judgments.json")
 
 
 def test_precision_bounds() -> None:
@@ -37,3 +43,31 @@ def test_ce_local_meets_eval_thresholds() -> None:
     assert 0 <= base["ndcg@k"] <= 1
     assert 0 <= cand["ndcg@k"] <= 1
     assert delta_p >= 0.005 or delta_ndcg >= 0.01
+
+
+def test_bilingual_ground_truth_resolves() -> None:
+    corpus_ids: set[str] = set()
+    languages: set[str] = set()
+    for line in BILINGUAL_CORPUS_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        doc = json.loads(line)
+        corpus_ids.add(str(doc["doc_id"]))
+        languages.add(str(doc["language"]))
+
+    judgments = json.loads(BILINGUAL_JUDGMENTS_PATH.read_text(encoding="utf-8"))
+    assert judgments["schema_version"] == "retrieval_eval_case.v1"
+    assert languages == {"sv", "en"}
+
+    for case in judgments["queries"]:
+        assert case["language"] in {"sv", "en"}
+        assert case["relevance"], f"{case['id']} must name relevant docs"
+        unresolved = {
+            entry["doc_id"]
+            for entry in case["relevance"]
+            if entry["doc_id"] not in corpus_ids
+        }
+        assert not unresolved, (
+            f"{case['id']} references unresolved data/golden doc ids: "
+            f"{sorted(unresolved)}"
+        )
