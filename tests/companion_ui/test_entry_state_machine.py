@@ -10,7 +10,7 @@ orientation/workspace renderer branch in ``serve_dev_page.py``
 - ``data-entry-state`` declared on the shell root (``<body>``) in every render
   path; ``data-reentry-shape`` only when ``orienting``; ``degraded`` / ``stale``
   as cross-flag attributes, never separate states;
-- ``cold_start`` (first contact and >14d cold trajectories) and ``no_vault``
+- ``cold_start`` (first contact and >7d cold trajectories) and ``no_vault``
   render no re-entry overlay of any kind;
 - input combinations outside the enumerated transitions resolve to the nearest
   declared state and are surfaced as degraded reasons, never as implicit states.
@@ -319,7 +319,7 @@ def test_boot_is_client_transient_pre_resolution_state() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC: leave_point.status absent / >14d cold → cold_start, no re-entry overlay
+# AC: leave_point.status absent / >7d cold → cold_start, no re-entry overlay
 # ---------------------------------------------------------------------------
 
 
@@ -328,7 +328,7 @@ def test_cold_start_shows_no_reentry_overlay() -> None:
     absent = _render(orientation=_orientation_payload(leave_status="absent"))
     # No leave point at all (null) is the same first-contact posture.
     null_leave = _render(orientation=_orientation_payload(leave_status=None))
-    # Cold trajectory: leave point present but the gap exceeds 14 days.
+    # Cold trajectory: leave point present but the gap exceeds 7 days.
     cold_gap = _render(
         orientation=_orientation_payload(leave_status="present", gap=timedelta(days=20))
     )

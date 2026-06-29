@@ -7505,7 +7505,7 @@ def _reentry_traj_state(leave: dict) -> str:
 
     Rendered as supplied when the payload declares one; otherwise the server
     render derives it from the same declared signals as the shape: the card
-    renders only for full/long-mist gaps (2h–14d), which the
+    renders only for full/long-mist gaps (2h–7d), which the
     CONTINUITY_AND_DECAY.md trajectory table classifies as dormant. Never
     re-derived client-side.
     """
@@ -7977,7 +7977,7 @@ def _render_orientation_index_html(
     # Latency-ladder re-entry treatment (#1784, SEP-02). The shape is the
     # server-resolved SEP-01 attribute; no client-side gap computation.
     shape = entry_resolution.reentry_shape if entry_resolution.state == "orienting" else None
-    # cold_start (first contact / >14d cold) is the anti-dashboard posture:
+    # cold_start (first contact / >7d cold) is the anti-dashboard posture:
     # no re-entry overlay, no orientation sections, just vault + map affordances
     # (SYSTEM_ENTRY_POINT_SPEC.md §Anti-dashboard; REENTRY_ORIENTATION_TREATMENT.md §Cold).
     # no_vault via the orientation-unavailable frame (orientation fetch failed,
@@ -8143,8 +8143,8 @@ def _render_orientation_index_html(
         _prov_leave_absent = (not _prov_lp) or _prov_lp_status == "absent"
         _prov_first_contact = _prov_leave_absent and not bool(_prov_recents)
         # First contact carries no trajectory token (the door line did not
-        # either); the cold-trajectory variant declares "cold (>14d)".
-        _map_entry_trajectory = "" if _prov_first_contact else "cold (>14d)"
+        # either); the cold-trajectory variant declares "cold (>7d)".
+        _map_entry_trajectory = "" if _prov_first_contact else "cold (>7d)"
         _map_entry_leave_point = "absent" if _prov_leave_absent else "present"
     overlay_host_overlays_html = (
         overlay_host_markup(anchor_note_path="")
@@ -8194,7 +8194,7 @@ def _render_orientation_index_html(
     # cold_start threshold body (AC2, #2171).
     # Variant is determined server-side from the orientation payload: first
     # contact when leave_point is absent/missing; cold trajectory when a
-    # leave_point exists but the gap exceeded 14 d.  No client-side
+    # leave_point exists but the gap exceeded 7 d.  No client-side
     # re-derivation — the orientation payload is the server-declared source.
     # #2243: "First contact / Nothing is open yet." is reserved for a genuinely
     # empty vault.  If recents_anchor is present the runtime is signalling a
@@ -8240,9 +8240,9 @@ def _render_orientation_index_html(
         # NOTE (#2453 / E1, owner decision 2026-06-23): no "resume the thread?"
         # continuity affordance is rendered on the long-absence cold surface. A
         # true resume signal can't exist here by design — the only continuity
-        # pointer (leave_point) is TTL-capped at 7 days (ADR-0008), while
-        # cold_start is a >14d return, so a present leave_point never coincides
-        # with cold_start; recents_anchor is recency, not continuity. The owner
+        # pointer (leave_point) is TTL-capped at 7 days (ADR-0008), so
+        # cold_start has no recoverable re-entry overlay; recents_anchor is recency,
+        # not continuity. The owner
         # accepted the existing calm anchor — the recents.open "Open your most
         # recent note" link below — as E1's answer (no durable continuity signal,
         # no dashboard; the system keeps its deliberate forget-fast posture).

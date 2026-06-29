@@ -13,7 +13,7 @@ def _iso(value: datetime) -> str:
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _orientation_payload() -> dict[str, Any]:
+def _orientation_payload(*, gap: timedelta = timedelta(hours=5)) -> dict[str, Any]:
     return {
         "scope": {"kind": "workspace", "vault_id": "dev-vault", "channel": "dev"},
         "meta": {
@@ -31,7 +31,7 @@ def _orientation_payload() -> dict[str, Any]:
                 "logical_ref": "Notes/resume.md",
                 "title": "Resume plan",
             },
-            "captured_at": _iso(_AS_OF - timedelta(hours=5)),
+            "captured_at": _iso(_AS_OF - gap),
             "last_session_id": None,
             "authority_role": "operational_trace_pointer",
             "source_ref": {"kind": "artifact_activation", "trace_id": "trace-leave"},
@@ -77,6 +77,18 @@ def test_start_fresh_dismisses_orienting_card_and_opens_shell() -> None:
     assert "siblingCues[i].remove()" in body
     assert "document.body.dataset.entryState = 'shell_active'" in body
     assert "data-entry-state', 'shell_active'" in body
+
+
+def test_gap_over_seven_days_resolves_cold_start() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_orientation_payload(gap=timedelta(days=8)),
+    )
+
+    assert 'data-entry-state="cold_start"' in html
+    assert 'data-region="cold-start-threshold"' in html
+    assert 'data-region="reentry-card"' not in html
+    assert 'data-reentry-shape="long_mist"' not in html
 
 
 def _cold_orientation_payload() -> dict[str, Any]:

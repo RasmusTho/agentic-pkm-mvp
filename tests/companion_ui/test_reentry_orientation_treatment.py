@@ -706,7 +706,7 @@ def test_cold_start_threshold_renders_inline_intent_verbs() -> None:
     """
     # First-contact variant (leave_point absent)
     first_contact = _render(orientation=_orientation_payload(leave_status="absent"))
-    # Cold-trajectory variant (gap > 14 d)
+    # Cold-trajectory variant (gap > 7 d)
     cold_traj = _render(orientation=_orientation_payload(gap=_GAP_COLD))
 
     for html, label in [(first_contact, "first-contact"), (cold_traj, "cold-trajectory")]:
@@ -890,7 +890,7 @@ def _render_no_vault_orientation() -> str:
 
 
 def test_cold_start_omits_refresh_and_map_bar() -> None:
-    """#2525: cold_start (and the >14d cold trajectory) render no ambient-refresh
+    """#2525: cold_start (and the >7d cold trajectory) render no ambient-refresh
     / System-map bar — on cold_start the vault is already resolved, so the
     manual-refresh affordance is an orienting/shell leak and the standalone
     "System map" button duplicates the verb-line "See the map". The bar still

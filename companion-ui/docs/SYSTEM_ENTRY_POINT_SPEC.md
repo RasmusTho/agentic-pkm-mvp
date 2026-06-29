@@ -79,7 +79,7 @@ The entry point is a small explicit state machine wrapping the existing renderer
 | `soft_mist` | 15m – 2h | residual ambient cues only; no re-entry card |
 | `full_mist` | 2h – 3d | the four fixed re-entry questions; canonical re-entry |
 | `long_mist` | 3d – 7d | full mist + delta strip + whisper column |
-| (cold) | > 7d | **not an `orienting` shape** — resolves to `cold_start`; no re-entry overlay (leave-point cursor TTL hard-capped at 7d, ADR-0008). **Current-state caveat:** the runtime resolver constant `_GAP_COLD_THRESHOLD` (`companion-ui/companion-app/companion_ui/workspace/entry_state.py:75`) encodes 14d; 8–14d gaps currently resolve to `long_mist`/`orienting` instead of `cold_start`. The reconciliation to the 7d decided contract (ADR-0008 / #2489) is tracked by #2513 and is a runtime behavior change requiring a separate slice + UAT. |
+| (cold) | > 7d | **not an `orienting` shape** — resolves to `cold_start`; no re-entry overlay (leave-point cursor TTL hard-capped at 7d, ADR-0008). |
 
 Two **cross-flags** may decorate `orienting` and `shell_active` without being separate states:
 
