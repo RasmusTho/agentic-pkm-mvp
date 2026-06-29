@@ -6,11 +6,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - "Dockerfile"
-      - "app/**"
-      - "requirements*.txt"
-      - ".github/workflows/app-image-build.yml"
 
 permissions:
   contents: read
