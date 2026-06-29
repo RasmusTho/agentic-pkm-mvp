@@ -1859,6 +1859,10 @@ def _note_editor_script() -> str:
         }).then(function (r) {
           return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; });
         }).then(function (res) {
+          if (window.renderVaultSelectionRequiredPicker &&
+              window.renderVaultSelectionRequiredPicker(res.data)) {
+            return;
+          }
           if (res.ok) {
             setStatus('ok', 'Saved. Reloading\\u2026');
             window.location.reload();
@@ -14281,6 +14285,19 @@ def render_index_html(
     // the host dismisses the topmost overlay back to the document anchor.
   }})();
   </script>
+  <script>
+  (function() {{
+    window.renderVaultSelectionRequiredPicker = function(data) {{
+      if (!data || data.state !== 'vault_selection_required') return false;
+      var html = data.vault_selection_required_html || '';
+      if (!html) return false;
+      document.open();
+      document.write(html);
+      document.close();
+      return true;
+    }};
+  }})();
+  </script>
   {overlay_host_script()}
   {capture_modal_script()}
   {panel_palette_script()}
@@ -14357,6 +14374,10 @@ def render_index_html(
         }})
         .then(function(r) {{ return r.json().then(function(d) {{ return {{ok: r.ok, data: d}}; }}); }})
         .then(function(res) {{
+          if (window.renderVaultSelectionRequiredPicker &&
+              window.renderVaultSelectionRequiredPicker(res.data)) {{
+            return;
+          }}
           if (res.ok) {{
             statusEl.className = 'body-edit-status ok';
             statusEl.textContent = 'Updated. hash=' + res.data.content_hash;
@@ -14525,8 +14546,10 @@ def render_index_html(
           action.setAttribute('data-affordance-status', 'vault_selection_required');
           action.setAttribute('data-pending-state', 'vault_selection_required');
           action.setAttribute('data-vault-selection-required', 'true');
-          // Re-resolve the entry state so the vault picker surfaces.
-          window.location.reload();
+          if (!(window.renderVaultSelectionRequiredPicker &&
+              window.renderVaultSelectionRequiredPicker(result.data))) {{
+            window.location.reload();
+          }}
           return;
         }}
         action.removeAttribute('data-submitting');
@@ -14685,6 +14708,36 @@ def _is_vault_selection_required(payload: object) -> bool:
     """True when a runtime payload is the no-vault `vault_selection_required`
     picker state (#2309). Server declares; the page renders the picker."""
     return isinstance(payload, dict) and payload.get("state") == "vault_selection_required"
+
+
+def _is_uninitialized_vault_write_refusal(payload: object) -> bool:
+    """True for the server-declared uninitialized vault write refusal (#2574)."""
+    return _is_vault_selection_required(payload) and payload.get("reason") == "uninitialized"
+
+
+def _decorate_uninitialized_write_refusal(
+    payload: dict,
+    *,
+    api_base_url: str,
+    note_path: str = "",
+) -> dict:
+    """Attach the server-rendered picker page for uninitialized write refusals.
+
+    The runtime remains the authority for ``vault_selection_required`` and its
+    ``reason``. The Companion UI proxy only gives the client a rendered
+    ``render_index_html`` page so write handlers can show the existing picker
+    without reloading back into the readable normal workspace.
+    """
+    if not _is_uninitialized_vault_write_refusal(payload):
+        return payload
+    decorated = dict(payload)
+    requested_note_path = str(payload.get("requested_note_path") or note_path or "")
+    decorated["vault_selection_required_html"] = render_index_html(
+        api_base_url=api_base_url,
+        note_path=requested_note_path,
+        vault_selection_required=payload,
+    )
+    return decorated
 
 
 def _relocated_orientation_telemetry_fields(orientation: object) -> dict[str, str]:
@@ -14859,7 +14912,12 @@ def make_handler(
             self.end_headers()
             self.wfile.write(body)
 
-        def _proxy_error(self, exc: WorkspaceClientError) -> None:
+        def _proxy_error(
+            self,
+            exc: WorkspaceClientError,
+            *,
+            request_payload: Optional[dict] = None,
+        ) -> None:
             if isinstance(exc, WorkspaceClientHTTPError):
                 # Forward the runtime's JSON error body verbatim when it is JSON
                 # (preserving the original status code) so structured handoff
@@ -14872,6 +14930,12 @@ def make_handler(
                 except (json.JSONDecodeError, TypeError):
                     runtime_body = None
                 if isinstance(runtime_body, dict):
+                    if request_payload is not None:
+                        runtime_body = _decorate_uninitialized_write_refusal(
+                            runtime_body,
+                            api_base_url=self._api_base_url,
+                            note_path=str(request_payload.get("note_path") or ""),
+                        )
                     self._send_json(exc.status_code, runtime_body)
                     return
                 self._send_json(
@@ -15317,6 +15381,15 @@ def make_handler(
                 "/api/companion/vault/browse",
             }
         )
+        _WRITE_REFUSAL_PICKER_PATHS = frozenset(
+            {
+                "/api/companion/workspace/body",
+                "/api/companion/workspace/update",
+                "/api/companion/capture",
+                "/api/companion/note/save",
+                "/api/companion/vault-browser/actions/queue-review",
+            }
+        )
 
         # Dynamic POST proxy paths (session id in the path). The live canvas
         # co-authoring loop (#1733) posts the user's intent here; the runtime
@@ -15405,8 +15478,17 @@ def make_handler(
                 else:
                     data = self._client.post(runtime_path, json=payload)
             except WorkspaceClientError as exc:
-                self._proxy_error(exc)
+                self._proxy_error(
+                    exc,
+                    request_payload=payload if parsed.path in self._WRITE_REFUSAL_PICKER_PATHS else None,
+                )
                 return
+            if parsed.path in self._WRITE_REFUSAL_PICKER_PATHS:
+                data = _decorate_uninitialized_write_refusal(
+                    data,
+                    api_base_url=self._api_base_url,
+                    note_path=str(payload.get("note_path") or ""),
+                )
             self._send_json(200, data)
 
         def do_DELETE(self) -> None:

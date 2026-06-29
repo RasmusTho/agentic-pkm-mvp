@@ -391,6 +391,21 @@ def capture_modal_script() -> str:
       if (input.value === text) { input.value = ''; }
     }
 
+    function renderVaultSelectionRequired(data) {
+      if (window.renderVaultSelectionRequiredPicker &&
+          window.renderVaultSelectionRequiredPicker(data)) {
+        return true;
+      }
+      if (!data || data.state !== 'vault_selection_required' ||
+          !data.vault_selection_required_html) {
+        return false;
+      }
+      document.open();
+      document.write(data.vault_selection_required_html);
+      document.close();
+      return true;
+    }
+
     function onWritten(text, ack) {
       // The written claim is made only here, from the runtime
       // acknowledgement payload — never locally.
@@ -438,6 +453,7 @@ def capture_modal_script() -> str:
           if (resp.ok) {
             return resp.json().then(function(ack) {
               if (ack && ack.state === 'vault_selection_required') {
+                if (renderVaultSelectionRequired(ack)) { return; }
                 onNotWritten(
                   text,
                   ack.message || 'No vault is selected. Open a vault before capturing.'
@@ -448,6 +464,10 @@ def capture_modal_script() -> str:
             });
           }
           return resp.json().catch(function() { return null; }).then(function(body) {
+            if (body && body.state === 'vault_selection_required' &&
+                renderVaultSelectionRequired(body)) {
+              return;
+            }
             var detail = body && body.detail ? body.detail : null;
             var msg = (detail && detail.message)
               ? body.detail.message
