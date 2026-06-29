@@ -93,6 +93,13 @@ owner, active issues, blockers, last movement, next decision, and shipped refs w
 present. This projection is the repo-readable execution movement view after #1508; it does not
 replace `docs/ROADMAP.md` as the strategic sequencing authority.
 
+## Lifecycle Filtering
+
+Queue-style projections are active review surfaces, so they omit terminal `discarded` and
+`superseded` records from the rendered queue output. The `learning-summary` projection stays
+retrospective and keeps historical LearningSignal records visible, including terminal ones with
+their receipt refs, so review and learning can see what happened after the fact.
+
 ## Authority Boundary
 
 Generated projections are non-authoritative exports from BuilderOps Vault. A human or agent may use
