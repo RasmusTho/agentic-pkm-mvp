@@ -104,8 +104,10 @@ from companion_ui.workspace.memory_review_drawer import (
 from companion_ui.workspace.overlay_host import (
     DEFAULT_POSTURE_EMPHASIS,
     coarse_vault_posture,
+    overlay_deep_link_boot_script,
     overlay_host_markup,
     overlay_host_script,
+    resolve_deep_link_overlay,
 )
 from companion_ui.workspace.panel_palette import (
     panel_palette_markup,
@@ -7918,6 +7920,7 @@ def _render_orientation_index_html(
     ambient_refresh_enabled: bool = False,
     entry_resolution: Optional[EntryStateResolution] = None,
     health: Optional[dict] = None,
+    boot_overlay: str = "",
 ) -> str:
     if entry_resolution is None:
         entry_resolution = resolve_entry_state(orientation=orientation)
@@ -8178,6 +8181,15 @@ def _render_orientation_index_html(
         # gate and the UI-local toggle controller ship with the substrate.
         + guidance_layer_style()
         + guidance_layer_script()
+        # NAV-3 (#2611): ?overlay=<id> deep-link on the entry/orientation shell.
+        # Emitted as the genuinely LAST script — after every occupant-
+        # registration script above (overlay host, memory drawer, system map,
+        # capture modal on cold_start) — so a declared+shipped id (e.g.
+        # ?overlay=map) auto-mounts only once its occupant has registered. An
+        # id whose occupant is not registered on this shell (e.g. ?overlay=
+        # memory when the drawer is absent) is an inert host no-op and degrades
+        # calmly. Untrusted query input is resolved internally, never embedded.
+        + overlay_deep_link_boot_script(resolve_deep_link_overlay(boot_overlay))
     )
     # cold_start threshold body (AC2, #2171).
     # Variant is determined server-side from the orientation payload: first
@@ -10045,6 +10057,7 @@ def render_index_html(
     route_error: bool = False,
     vault_selection_required: Optional[dict] = None,
     health: Optional[dict] = None,
+    boot_overlay: str = "",
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -10099,6 +10112,7 @@ def render_index_html(
             ambient_refresh_enabled=ambient_refresh_enabled,
             entry_resolution=entry_resolution,
             health=health,
+            boot_overlay=boot_overlay,
         )
 
     content_section = ""
@@ -10236,6 +10250,16 @@ def render_index_html(
     # here so the f-string below carries no inline comment (Python 3.11 forbids
     # comments inside f-string replacement fields).
     operator_health_glyph_shell_html = _render_ambient_health_glyph(health)
+    # NAV-3 (#2611): ?overlay=<id> deep-link. Resolve the untrusted query value
+    # to a declared+shipped id (or "" for unknown/unshipped) and emit a boot
+    # script that auto-mounts it. Computed here so the note-shell f-string below
+    # carries no inline comment; emitted as the genuinely LAST script (after
+    # settings_drawer_script() and every other occupant registration) near
+    # </body> so no surface — settings included — is mounted before its
+    # occupant registers (the closed-PR-#2637 ordering bug).
+    overlay_deep_link_boot_html = overlay_deep_link_boot_script(
+        resolve_deep_link_overlay(boot_overlay)
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -14652,6 +14676,7 @@ def render_index_html(
   {_canvas_coauthor_script(canvas_enabled)}
   {_render_help_drawer()}
   {_render_operator_drawer(operator_telemetry_html)}
+  {overlay_deep_link_boot_html}
 </body>
 </html>"""
 
@@ -14704,6 +14729,10 @@ def handle_get(
         browser_limit = 250
     # #1418 — diagnostics/operator chrome is opt-in via an explicit route.
     diagnostics = params.get("diagnostics", ["0"])[0].strip().lower() in {"1", "true", "yes", "on"}
+    # NAV-3 (#2611) — ?overlay=<id> deep-link request. Passed through verbatim;
+    # render_index_html resolves it to a declared+shipped id (else a no-op) so
+    # an unknown or unshipped id never auto-mounts a dead surface.
+    boot_overlay = params.get("overlay", [""])[0].strip()
     fields: Optional[dict] = None
     orientation: Optional[dict] = None
     orientation_vault_browser: Optional[dict] = None
@@ -14799,6 +14828,7 @@ def handle_get(
         page_origin_hostname=page_origin_host,
         vault_selection_required=vault_selection_required,
         health=health,
+        boot_overlay=boot_overlay,
     )
 
 

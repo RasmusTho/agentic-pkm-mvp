@@ -25,9 +25,10 @@ of truth for which overlay is mounted) plus URL invariance:
 Scope: NAV-3a (#2639) is the CORE overlay↔history mechanism (single + stacked);
 NAV-3b (#2640) adds the System Map route swap (``overlayHost.replace`` —
 ``dismiss→mount`` would race history and desync the stack). The ``?overlay=``
-deep-link is #2641 (NAV-3c) and is not exercised here. This shell is rendered
-without any ``boot_overlay`` threading, so the only history entries are the ones
-the host itself creates.
+deep-link is #2641 (NAV-3c) and IS exercised here by the deep-link auto-mount
+smoke at the bottom (a query-honoring server that threads ``boot_overlay``);
+the NAV-3a/3b smokes above render the shell without any ``boot_overlay``
+threading, so their only history entries are the ones the host itself creates.
 
 Guard: Playwright + a Chromium/Chrome must be available; otherwise the module
 is skipped (not failed). Enable via COMPANION_UI_BROWSER_TESTS=1. Deterministic
@@ -42,6 +43,7 @@ import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -502,6 +504,100 @@ def test_system_map_vault_route_swaps_on_narrow_back_closes_in_one_press() -> No
                 assert page.url == start_url, (
                     "one Back must close the vault route without navigating away"
                 )
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# NAV-3c (#2641): ?overlay=<id> deep-link auto-mounts on load.
+# ---------------------------------------------------------------------------
+
+
+def _make_deep_link_server() -> tuple[HTTPServer, int]:
+    """Server that honours ``?overlay=<id>`` like the real ``handle_get``.
+
+    The query value is threaded verbatim into ``render_index_html`` as
+    ``boot_overlay``; the renderer resolves it internally to a declared+shipped
+    id (else a no-op), so an unknown id never auto-mounts a dead surface.
+    """
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path == "/":
+                boot_overlay = parse_qs(parsed.query).get("overlay", [""])[0].strip()
+                body = render_index_html(
+                    api_base_url="http://127.0.0.1:18001",
+                    note_path="Notes/note.md",
+                    fields=dict(_FIELDS),
+                    boot_overlay=boot_overlay,
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    return server, server.server_address[1]
+
+
+def test_overlay_query_deep_link_auto_mounts_on_load() -> None:
+    """``?overlay=memory`` and ``?overlay=settings`` auto-mount on page load.
+
+    The deep-link boot script runs after the occupant scripts register, so the
+    mount lands a real overlay (the host element records it as topmost). The
+    ``settings`` case is the load-bearing one (closed-PR-#2637 ordering bug):
+    its occupant script is emitted ~hundreds of lines after the others, and the
+    boot must still run after it.
+    """
+    server, port = _make_deep_link_server()
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as pw:
+            browser = _launch(pw)
+            try:
+                page = browser.new_page()
+                # ?overlay=memory auto-mounts the memory drawer on load.
+                page.goto(
+                    f"http://127.0.0.1:{port}/?overlay=memory",
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                _wait_open(page, "memory")
+
+                # ?overlay=settings auto-mounts the settings drawer on load —
+                # proving the boot script runs AFTER the late settings occupant
+                # script (the regression that no-op'd in closed PR #2637).
+                page.goto(
+                    f"http://127.0.0.1:{port}/?overlay=settings",
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                _wait_open(page, "settings")
+
+                # Unknown id is a calm no-op: nothing mounts.
+                page.goto(
+                    f"http://127.0.0.1:{port}/?overlay=task-popup",
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_selector(
+                    '[data-region="overlay-host"]', state="attached", timeout=5000
+                )
+                assert page.evaluate(_OPEN_JS) == "none"
             finally:
                 browser.close()
     finally:
