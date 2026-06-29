@@ -43,6 +43,49 @@ for line in reversed(lines):
         print(line)
         raise SystemExit(0)
 raise SystemExit("health json payload not found in output")
+	'
+}
+
+deferred_index_rebuild_only() {
+  if [ "${RUNTIME_VERIFY_ALLOW_DEFERRED_INDEX_REBUILD:-0}" != "1" ]; then
+    printf "false\n"
+    return 0
+  fi
+
+  python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+actions = payload.get("suggested_actions") or []
+has_required_rebuild = any(
+    isinstance(action, dict)
+    and action.get("id") == "index_rebuild"
+    and str(action.get("severity") or "").lower() == "required"
+    for action in actions
+)
+checks = payload.get("checks") or {}
+runtime = payload.get("runtime") or {}
+failed_required_checks = [
+    key
+    for key, value in checks.items()
+    if isinstance(value, dict)
+    and value.get("required", True)
+    and value.get("ok") is not True
+]
+failed_runtime = [
+    key
+    for key, value in runtime.items()
+    if isinstance(value, dict) and value.get("ok") is not True
+]
+embedding_index = checks.get("embedding_index") or {}
+allowed = (
+    has_required_rebuild
+    and failed_runtime == []
+    and set(failed_required_checks) == {"embedding_index"}
+    and embedding_index.get("rebuild_required") is True
+)
+print("true" if allowed else "false")
 '
 }
 
@@ -122,6 +165,9 @@ if check_service "api"; then
   health_ok=$(printf "%s\n" "$health_json" | python3 -c 'import json, sys; print(str(bool(json.load(sys.stdin).get("ok"))).lower())')
   if [ "$health_ok" = "true" ]; then
     printf "✓ OK\n"
+    api_ready="true"
+  elif [ "$(printf "%s\n" "$health_json" | deferred_index_rebuild_only)" = "true" ]; then
+    printf "✓ deferred index rebuild tolerated\n"
     api_ready="true"
   else
     printf "✗ required health ok=true not met\n"

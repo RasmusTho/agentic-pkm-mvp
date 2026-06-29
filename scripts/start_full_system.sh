@@ -2477,7 +2477,11 @@ PY
 fi
 
 set_phase "runtime_verify"
-if ! RUNTIME_ENV_PATH="$runtime_env_path" API_BASE_URL="$API_BASE_URL" bash scripts/verify_runtime_stack.sh; then
+runtime_verify_allow_deferred_index_rebuild=0
+if [ "${VERIFY_ACTIVE:-0}" -ne 1 ] && [ "$index_rebuild_status" = "required" ]; then
+  runtime_verify_allow_deferred_index_rebuild=1
+fi
+if ! RUNTIME_ENV_PATH="$runtime_env_path" API_BASE_URL="$API_BASE_URL" RUNTIME_VERIFY_ALLOW_DEFERRED_INDEX_REBUILD="$runtime_verify_allow_deferred_index_rebuild" bash scripts/verify_runtime_stack.sh; then
   EXIT_REASON="runtime_verify_failed"
   EXIT_CODE=1
   export EXIT_REASON EXIT_CODE
