@@ -311,7 +311,7 @@ class VaultWatcherResult:
 
 class VaultWatcher:
     def __init__(self, vault_root: Path, snapshot_path: Path | None = None) -> None:
-        self.vault_root = vault_root.expanduser().resolve()
+        self.vault_root = vault_root.expanduser()
         self.snapshot_path = snapshot_path or _default_snapshot_path(self.vault_root)
 
     def run(self, *, save: bool = True) -> VaultWatcherResult:

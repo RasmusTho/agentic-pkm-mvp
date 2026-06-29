@@ -205,18 +205,24 @@ def iter_vault_markdown_files(
     ``subtree_root`` narrows traversal to an explicit folder under the selected
     vault. If that folder itself belongs to a deeper child vault, nothing is
     yielded under the parent identity. Traversal prunes nested child vault
-    roots in-place, so the boundary stays cheap on large trees.
+    roots in-place, so the boundary stays cheap on large trees. Yielded paths
+    stay in the caller's namespace (for example a symlinked selected vault
+    root) while resolved paths are used only for containment/ownership checks.
     """
-    selected_root = vault_root.expanduser().resolve()
-    walk_root = (subtree_root or vault_root).expanduser().resolve()
+    selected_root = vault_root.expanduser()
+    walk_root = (subtree_root or vault_root).expanduser()
     try:
-        walk_root.relative_to(selected_root)
+        selected_root_real = selected_root.resolve()
+        walk_root_real = walk_root.resolve()
+        walk_root_real.relative_to(selected_root_real)
     except ValueError:
+        return
+    except OSError:
         return
     if not walk_root.is_dir():
         return
-    if walk_root != selected_root:
-        if nearest_enclosing_vault_root(walk_root, search_root=selected_root) != selected_root:
+    if walk_root_real != selected_root_real:
+        if nearest_enclosing_vault_root(walk_root_real, search_root=selected_root_real) != selected_root_real:
             return
 
     for dirpath, dirnames, filenames in os.walk(str(walk_root)):
@@ -239,7 +245,7 @@ def iter_vault_markdown_files(
                     real = candidate.resolve()
                 except OSError:
                     continue
-                if nearest_enclosing_vault_root(real, search_root=selected_root) != selected_root:
+                if nearest_enclosing_vault_root(real, search_root=selected_root_real) != selected_root_real:
                     continue
             yield candidate
 

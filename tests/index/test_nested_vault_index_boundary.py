@@ -59,6 +59,13 @@ def _build_parent_with_nested_child(vault_root: Path) -> tuple[Path, dict[str, s
     return child_root, uuids
 
 
+def _symlinked_selected_root(tmp_path: Path) -> tuple[Path, Path]:
+    real_root = tmp_path / "real-vault"
+    selected_root = tmp_path / "selected-vault"
+    selected_root.symlink_to(real_root, target_is_directory=True)
+    return real_root, selected_root
+
+
 def test_index_build_excludes_child_vault_notes(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -106,6 +113,30 @@ def test_index_build_excludes_child_vault_notes(
     assert parent_artifact[0] == "notes/Parent Note.md"
 
     adapter = FsVaultAdapter(vault_root)
+    parent_hits = adapter.search_notes("Parent", "roadmap", limit=10)
+    assert [hit.locator.path for hit in parent_hits] == ["projects/Roadmap.md"]
+    assert adapter.search_notes("Parent", "secret", limit=10) == []
+
+
+def test_symlinked_selected_vault_preserves_caller_namespace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    real_root, selected_root = _symlinked_selected_root(tmp_path)
+    child_root, _uuids = _build_parent_with_nested_child(real_root)
+    (real_root / "notes" / "link-to-secret.md").symlink_to(child_root / "Secret Plan.md")
+
+    monkeypatch.setattr(vault_alpha, "get_vault_system_dir_rel", lambda _root: "_system")
+
+    walked = {path.relative_to(selected_root).as_posix() for path in walk_markdown_files(selected_root, [])}
+    assert walked == {"notes/Parent Note.md", "projects/Roadmap.md"}
+
+    index_paths = {
+        Path(doc["path"]).relative_to(selected_root).as_posix()
+        for doc in build_index(selected_root, RULES, ignore_glob=[])
+    }
+    assert index_paths == walked
+
+    adapter = FsVaultAdapter(selected_root)
     parent_hits = adapter.search_notes("Parent", "roadmap", limit=10)
     assert [hit.locator.path for hit in parent_hits] == ["projects/Roadmap.md"]
     assert adapter.search_notes("Parent", "secret", limit=10) == []
