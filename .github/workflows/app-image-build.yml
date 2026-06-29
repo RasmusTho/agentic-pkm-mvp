@@ -1,0 +1,57 @@
+---
+name: App Image Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-app-image:
+    name: Build SHA-tagged app image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute build identity
+        id: build-identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          vcs_ref="${GITHUB_SHA}"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/pkm-app:${vcs_ref}"
+
+          echo "VCS_REF=${vcs_ref}" >> "${GITHUB_ENV}"
+          echo "BUILT_AT=${built_at}" >> "${GITHUB_ENV}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.build-identity.outputs.image }}
+          build-args: |
+            VCS_REF=${{ env.VCS_REF }}
+            BUILT_AT=${{ env.BUILT_AT }}
+
+      - name: Verify image runtime version
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --entrypoint python \
+            "${{ steps.build-identity.outputs.image }}" \
+            -c 'from app.version import get_runtime_version; import os; version = get_runtime_version(); assert version["git_sha"] == os.environ["VCS_REF"], version; assert version["built_at"] == os.environ["BUILT_AT"], version'
