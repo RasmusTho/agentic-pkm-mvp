@@ -163,6 +163,7 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | `entry.resume` | orienting | → `shell_active` at the leave point | no (navigation) |
 | `entry.dismiss` | orienting | → `shell_active`, fresh | no |
 | `vault.open` | shell / entry | open/focus the Vault Browser pane (narrow: modal) | no |
+| `vault.switch.open` | shell header (`V` chip) | open the loaded-note Choose-a-vault switch overlay reused from the no-vault picker (§#2590); switching remains visual/selective, never a typed-path form | no |
 | `vault.pick` | Vault Browser | re-anchor shell to a note via `GET /api/companion/workspace?note_path` (§Resolved Q8) | no (read) |
 | `recents.open` | cold_start | re-anchor shell to the server-declared `recents_anchor` via `GET /api/companion/workspace?note_path` (§Q1) | no (read) |
 | `vault.queue` | Vault Browser | `queue_review` via `POST /api/companion/vault-browser/actions/queue-review` | **yes — governed handoff** |
