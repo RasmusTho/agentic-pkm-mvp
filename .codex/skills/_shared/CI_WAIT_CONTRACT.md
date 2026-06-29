@@ -5,8 +5,11 @@ State: Shared skill contract. Canonical procedure for waiting on CI checks and t
 Single source for **how** to wait on PR checks and the Codex review verdict without draining the
 shared GitHub API budget. Skills that wait before handoff or merge (`verification-and-closure`,
 `pr-integration`, `deliver-issue-set`) reference this contract by name instead of carrying inline
-poll loops. This contract is the *how*; the *when/whether to merge* stays in those skills. Governs
-`AGENTS.md :: Parallel-agent execution` (shared-budget awareness) at the command level.
+poll loops. The shared helper is `app.dispatcher.poll_backoff`; it owns interval + cap +
+exponential backoff semantics, honors `Retry-After` and `x-ratelimit-reset`, and resolves Codex
+evidence with one combined query where possible. This contract is the *how*; the *when/whether to
+merge* stays in those skills. Governs `AGENTS.md :: Parallel-agent execution` (shared-budget
+awareness) at the command level.
 
 ## Why this exists
 
@@ -26,13 +29,15 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
    assuming exhaustion, and compare `.graphql.remaining` vs `.core.remaining`.
 5. **Codex is variable and may stall — never hard-wait on it.** Resolve its verdict on the same cadence
    as CI, with the stall escape hatch (see `verification-and-closure` :: *Reading the Codex verdict*).
-6. **Prefer the blessed script** below over a hand-rolled loop — it encodes rules 1–5.
+6. **Use the shared helper, preferably through the blessed script.** Do not hand-roll CI or Codex
+   wait loops; `scripts/await_pr_checks.sh` delegates shared backoff/verdict behavior to
+   `app.dispatcher.poll_backoff`.
 
 ## Blessed path
 
 ```bash
 scripts/await_pr_checks.sh <PR>            # wait for required check-runs, REST-only, calibrated backoff
-scripts/await_pr_checks.sh <PR> --codex    # also resolve the Codex verdict (reactions + reviews)
+scripts/await_pr_checks.sh <PR> --codex    # also resolve the Codex verdict with one combined query
 scripts/await_pr_checks.sh --help          # flags: --initial-wait, --interval, --timeout, --sha
 ```
 
@@ -44,21 +49,20 @@ It auto-detects the repo from the git remote, resolves the PR head SHA via REST,
 endpoints every `--interval` (default 90s, floor 60s) until all complete or `--timeout` (default 1800s),
 failing **closed** on any fetch error (an unverifiable state never reports success). Exit codes:
 
-- `0` — CI passed (with `--codex`, Codex also gave a positive reaction)
+- `0` — CI passed (with `--codex`, Codex also passed)
 - `1` — a required check failed
 - `2` — timed out before checks were confirmed complete
 - `3` — Codex verdict is blocking (only with `--codex`)
 - `4` — Codex verdict unresolved (only with `--codex`) — resolve before merge
 - `5` — the PR head moved during the wait (when SHA is auto-resolved) — verified checks are stale; re-run
 
-It never issues a GraphQL call. For an autonomous `&& gh pr merge`, run with `--codex` and require exit
-`0`: exit `4` means stop and resolve the Codex verdict yourself per *Reading the Codex verdict* (do not
-hard-wait, and do not auto-merge on an unresolved verdict). The `--codex` verdict is resolved
-**head-specifically** — a pass requires a Codex review whose `commit_id` equals the verified head (the
-strongest marker), or a positive reaction newer than the head's **check-run start time** — a reliable
-GitHub-side head-push timestamp, immune to a backdated cherry-picked/locally-created commit. Findings /
-changes-requested are matched to the exact SHA. If the head-push time can't be resolved the reaction
-fallback is skipped (reviewed-review only), so a stale reaction can never pass on its own.
+The CI wait never issues a GraphQL check-state call. For an autonomous `&& gh pr merge`, run with
+`--codex` and require exit `0`: exit `4` means stop and resolve the Codex verdict yourself per
+*Reading the Codex verdict* (do not hard-wait, and do not auto-merge on an unresolved verdict). The
+`--codex` verdict is resolved by `python3 -m app.dispatcher.poll_backoff codex-verdict`, which queries
+reactions, reviews, pull comments, and issue comments in one combined GraphQL request where GitHub
+supports it. Findings / changes-requested are matched to the exact SHA where commit-specific evidence
+is available.
 `verification-and-closure` remains the merge authority for genuinely ambiguous calls; the script gates
 the *wait* and reports a head-pinned verdict — it does not replace the skill's judgment.
 
@@ -82,11 +86,9 @@ gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
 # Mergeability (REST, not GraphQL):
 gh api "repos/$REPO/pulls/$PR" --jq '.mergeable, .mergeable_state'
 
-# Codex verdict — primary signal is an emoji reaction, not a review (see [[reference_codex_review_emoji_verdict]]):
-gh api "repos/$REPO/issues/$PR/reactions" \
-  --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .content'   # +1 = pass, -1/confused = block
-gh api "repos/$REPO/pulls/$PR/reviews"  --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .state'
-gh api "repos/$REPO/pulls/$PR/comments" --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .body'
+# Codex verdict — primary signal can be an emoji reaction or a review.
+# Use the helper so the verdict surfaces are collapsed into one query where possible.
+python3 -m app.dispatcher.poll_backoff codex-verdict --repo "$REPO" --pr "$PR" --sha "$SHA"
 ```
 
 Sleep between iterations with `sleep 90` (or longer); do not drop below 60s.

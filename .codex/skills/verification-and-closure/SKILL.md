@@ -98,7 +98,7 @@ Verification owns the merge decision.
 
 For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks to go green and resolve Codex review, then merge — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch does not relax them); only the human watching is removed.
 
-Wait **how** matters: follow `_shared/CI_WAIT_CONTRACT.md` — REST check-runs only, sleep the bulk of CI up front, back off ≥60–120s, and prefer `scripts/await_pr_checks.sh <PR> --codex`. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
+Wait **how** matters: follow `_shared/CI_WAIT_CONTRACT.md` — use the shared `app.dispatcher.poll_backoff` helper through `scripts/await_pr_checks.sh <PR> --codex`, REST check-runs only, interval + cap + exponential backoff, honor `Retry-After` and x-ratelimit-reset headers, sleep the bulk of CI up front, and back off ≥60–120s. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
 
 Prerequisites for merge:
 
@@ -119,7 +119,9 @@ Codex (`chatgpt-codex-connector[bot]`) reviews PRs in this repo automatically an
 verdict with an **emoji reaction on the PR itself**, not a formal review or comment. Checking only
 `/pulls/<n>/reviews` and `/comments` will miss it and read as "Codex hasn't reviewed yet."
 
-Resolve the verdict from all three surfaces:
+Resolve the verdict through `_shared/CI_WAIT_CONTRACT.md` / `app.dispatcher.poll_backoff` so the
+reactions, reviews, pull comments, and issue comments are read with one combined query where GitHub
+supports it. The surfaces remain:
 
 - Reactions (primary): `gh api repos/<owner>/<repo>/issues/<pr>/reactions --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .content'`
   - 👍 `+1` (also `heart` ❤️, `hooray` 🎉, `rocket` 🚀, `laugh` 😄) → reviewed, no blocking findings → **pass**.
