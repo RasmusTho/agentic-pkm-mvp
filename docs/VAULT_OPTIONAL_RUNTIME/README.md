@@ -1,6 +1,6 @@
 # Vault Optional at Runtime
 
-State: Delivered capability specification directory. Parent validation hub **#2003** closed as completed on 2026-06-18 after children #2004-#2007 closed; follow-up eager resolver migration hub **#2311** later closed as completed on 2026-06-24 after Slices 05A-05D delivered. See `PARENT_FEATURE_ISSUE.md`.
+State: Delivered capability specification directory. Parent validation hub **#2003** closed as completed on 2026-06-18 after children #2004-#2007 closed; follow-up eager resolver migration hub **#2311** later closed as completed on 2026-06-24 after Slices 05A-05D delivered, including the legacy `/app/vault` compatibility-path re-baseline recorded in 05D. See `PARENT_FEATURE_ISSUE.md`.
 Doc role: Capability specification / source of truth for the breakdown.
 Owner decision: 2026-06-14 — a vault is **not required at initiation**; the runtime boots
 with no vault bound and idles until one is opened; vaults can be opened, switched, and
@@ -121,8 +121,10 @@ then `LEGACY_VAULT_MOUNT_REMOVAL` unless the coordinator confirms non-overlappin
 
 The specification is the source of truth; the GitHub issues track delivery history. Parent
 hub **#2003** closed as completed on 2026-06-18 after children #2004-#2007 delivered, and
-follow-up hub **#2311** closed as completed on 2026-06-24 after slices 05A-05D delivered.
-See `PARENT_FEATURE_ISSUE.md` for the local mirror of those hub closures.
+follow-up hub **#2311** closed as completed on 2026-06-24 after slices 05A-05D delivered,
+with 05D recording the legacy `/app/vault` compatibility-path re-baseline rather than
+claiming every compatibility mount was removed. See `PARENT_FEATURE_ISSUE.md` for the local
+mirror of those hub closures.
 
 ## Related docs
 

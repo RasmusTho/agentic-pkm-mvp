@@ -97,7 +97,7 @@ Task-level proof surfaces (each task names its own tests; this is the rollup):
 - Slice 1: `tests/commitments/test_commitment_persistence.py` — durability across restart, read/proposal-only, WriteGuard asserted at the production write call site.
 - Slice 2: `tests/api/test_companion_commitments.py::test_commitments_in_workspace_state` + an architecture assertion that the route reads the durable query path (not `AgentState`).
 - Slice 3: `tests/companion_ui/test_commitment_surface.py` — next-action vs review-cycle distinguished; read-only projection (no mutation affordances).
-- Capability guard: `tests/api/test_arch_commitment_and_canvas.py::test_commitments_surface_in_workspace_state` (currently xfail; flips when the surface lands).
+- Capability guard: `tests/api/test_arch_commitment_and_canvas.py::test_commitments_surface_in_workspace_state` — xfail removed; passes on merged heads after the workspace commitment surface landed.
 
 ## Validation / Acceptance path
 

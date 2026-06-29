@@ -1,6 +1,6 @@
 # Parent Feature Issue
 
-State: **Delivered and closed**. Parent validation hub #2003 closed as completed on 2026-06-18 after children #2004-#2007 delivered; follow-up hub #2311 later closed as completed on 2026-06-24 after slices 05A-05D delivered.
+State: **Delivered and closed**. Parent validation hub #2003 closed as completed on 2026-06-18 after children #2004-#2007 delivered; follow-up hub #2311 later closed as completed on 2026-06-24 after slices 05A-05D delivered, including the legacy `/app/vault` compatibility-path re-baseline recorded in 05D.
 
 - GitHub: **#2003** - `feature: vault optional at runtime - boot with no vault, open/switch, multi-vault` (`CLOSED` / `COMPLETED`, `Status=Done`).
 - Follow-up hub: **#2311** - `refactor: migrate eager resolve_vault_root() consumers to optional/picker (no silent ./vault)` (`CLOSED` / `COMPLETED`, `Status=Done`).
@@ -25,8 +25,10 @@ State: **Delivered and closed**. Parent validation hub #2003 closed as completed
 | 05D | [LEGACY_VAULT_MOUNT_REMOVAL](LEGACY_VAULT_MOUNT_REMOVAL.md) | #2386 | closed/completed |
 
 #2311 was the validation hub for the follow-up migration and closed as completed once all
-four child slices delivered. The same evidence could be linked to #2003 for traceability,
-but #2311 did not reopen the original #2003 closure contract.
+four child slices delivered. Its 05D closure records the legacy `/app/vault` compatibility
+path as re-baselined, not that every compatibility-mount reference vanished from owner docs.
+The same evidence could be linked to #2003 for traceability, but #2311 did not reopen the
+original #2003 closure contract.
 
 ## Closure handoff
 #2003 closed after the capability acceptance receipt confirmed the original checklist on
