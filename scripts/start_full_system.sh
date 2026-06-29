@@ -733,6 +733,50 @@ debug_dump() {
   run_docker_compose logs --tail=200 api || true
 }
 
+watcher_heartbeat_ready() {
+  run_docker_compose exec -T watcher sh -c "test -s ${container_watcher_heartbeat_path}" >/dev/null 2>&1
+}
+
+wait_for_watcher_heartbeat() {
+  local watcher_deadline watcher_sleep remaining sleep_for
+  watcher_deadline=$((SECONDS + WATCHER_HEARTBEAT_TIMEOUT))
+  watcher_sleep="${WATCHER_HEARTBEAT_POLL_SECONDS:-2}"
+
+  while true; do
+    if watcher_heartbeat_ready; then
+      return 0
+    fi
+    if [ "$SECONDS" -ge "$watcher_deadline" ]; then
+      break
+    fi
+    remaining=$((watcher_deadline - SECONDS))
+    if [ "$remaining" -lt "$watcher_sleep" ]; then
+      sleep_for="$remaining"
+    else
+      sleep_for="$watcher_sleep"
+    fi
+    if [ "$sleep_for" -le 0 ]; then
+      break
+    fi
+    sleep "$sleep_for"
+  done
+
+  # Boundary check: accept a heartbeat that arrived before the configured
+  # timeout but would otherwise be missed by the poll sleep.
+  if watcher_heartbeat_ready; then
+    return 0
+  fi
+
+  EXIT_REASON="watcher_heartbeat_timeout"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  write_startup_status 0 "$EXIT_REASON"
+  echo "ERROR: watcher heartbeat not detected at ${container_watcher_heartbeat_path} after $WATCHER_HEARTBEAT_TIMEOUT seconds" >&2
+  capture_startup_logs || true
+  debug_dump
+  return 1
+}
+
 for dir in tmp logs tmp/startup-logs; do
   mkdir -p "$dir"
   if [ ! -w "$dir" ]; then
@@ -1913,17 +1957,7 @@ if [ "$START_WATCHERS" -eq 1 ]; then
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
-  watcher_ready=0
-  watcher_deadline=$((SECONDS + WATCHER_HEARTBEAT_TIMEOUT))
-  while [ $SECONDS -lt $watcher_deadline ]; do
-    if run_docker_compose exec -T watcher sh -c "test -s ${container_watcher_heartbeat_path}" >/dev/null 2>&1; then
-      watcher_ready=1
-      break
-    fi
-    sleep 2
-  done
-  if [ "$watcher_ready" -ne 1 ]; then
-    echo "ERROR: watcher heartbeat not detected at ${container_watcher_heartbeat_path} after $WATCHER_HEARTBEAT_TIMEOUT seconds" >&2
+  if ! wait_for_watcher_heartbeat; then
     exit 1
   fi
 fi
