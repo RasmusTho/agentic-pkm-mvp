@@ -198,7 +198,11 @@ cui_start_runtime() {
       # recreated, or `make {dev,test,prod}-ui` would keep serving that vault
       # instead of the in-app picker (#2005).
       cui_runtime_has_vault_mount || _skip_recreate=1
-    elif [ "${CUI_CHANNEL:-}" != "prod" ] || cui_runtime_vault_matches_env; then
+    elif cui_runtime_vault_matches_env; then
+      # Vault configured (all channels alike): only warm-skip when the live
+      # container is already bound to exactly that vault. Otherwise recreate so a
+      # newly added/changed .env.<channel>.local vault actually takes effect —
+      # covers wrong-vault and no-mount containers, not just prod.
       _skip_recreate=1
     fi
     if [ "${_skip_recreate}" = "1" ]; then

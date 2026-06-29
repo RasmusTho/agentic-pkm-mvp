@@ -170,3 +170,28 @@ def test_no_vault_launch_recreates_stale_vault_mount(tmp_path: Path) -> None:
 def test_no_vault_launch_warm_skips_when_no_mount(tmp_path: Path) -> None:
     # An already-idle container (no vault mount) + a no-vault launch may warm-skip.
     assert _run_start_runtime(tmp_path, vault_root=None, mount_src="") == "SKIPPED"
+
+
+def test_configured_vault_recreates_when_mount_missing(tmp_path: Path) -> None:
+    # A non-prod channel with a configured vault but a container that has no mount
+    # (e.g. booted earlier via the no-vault path, or a freshly added
+    # .env.<channel>.local) must recreate so the configured vault takes effect —
+    # not warm-skip just because /healthz is up (Codex P2 on PR #2652).
+    assert (
+        _run_start_runtime(tmp_path, vault_root="/tmp/Bifrost", mount_src="")
+        == "RECREATED"
+    )
+
+
+def test_configured_vault_recreates_when_mount_wrong(tmp_path: Path) -> None:
+    assert (
+        _run_start_runtime(tmp_path, vault_root="/tmp/Bifrost", mount_src="/tmp/Niflheim")
+        == "RECREATED"
+    )
+
+
+def test_configured_vault_warm_skips_when_mount_matches(tmp_path: Path) -> None:
+    assert (
+        _run_start_runtime(tmp_path, vault_root="/tmp/Bifrost", mount_src="/tmp/Bifrost")
+        == "SKIPPED"
+    )
