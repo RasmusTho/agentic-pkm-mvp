@@ -373,17 +373,6 @@ def reconcile_issue(
     if not desired:
         print(f"skip issue #{args.issue}: no derived status")
         return 0
-    budget = graphql_budget_remaining()
-    if budget is not None and budget < GRAPHQL_OPTIONAL_MIN_BUDGET:
-        print(
-            f"skip issue #{args.issue}: GraphQL budget low (remaining={budget} < "
-            f"{GRAPHQL_OPTIONAL_MIN_BUDGET}); issue truth remains authoritative, the "
-            "daily reconcile will project this card"
-        )
-        _log_event(
-            {"event": "github.budget.skip", "target": f"issue#{args.issue}", "remaining": budget}
-        )
-        return 0
     items = list_project_items(owner, project["number"])
     item = find_item_by_number(items, "Issue", args.issue)
     if item is None:
@@ -430,17 +419,6 @@ def reconcile_pr(
     if not desired:
         print(f"skip pr #{args.pr}: no derived status")
         return 0
-    budget = graphql_budget_remaining()
-    if budget is not None and budget < GRAPHQL_OPTIONAL_MIN_BUDGET:
-        print(
-            f"skip pr #{args.pr}: GraphQL budget low (remaining={budget} < "
-            f"{GRAPHQL_OPTIONAL_MIN_BUDGET}); PR truth remains authoritative, the "
-            "daily reconcile will project this card"
-        )
-        _log_event(
-            {"event": "github.budget.skip", "target": f"pr#{args.pr}", "remaining": budget}
-        )
-        return 0
     items = list_project_items(owner, project["number"])
     item = find_item_by_number(items, "PullRequest", args.pr)
     if item is None:
@@ -482,15 +460,6 @@ def reconcile_scan(
     status_field_id: str,
     status_options: dict[str, str],
 ) -> int:
-    budget = graphql_budget_remaining()
-    if budget is not None and budget < GRAPHQL_SCAN_MIN_BUDGET:
-        print(
-            f"skip project scan: GraphQL budget low (remaining={budget} < "
-            f"{GRAPHQL_SCAN_MIN_BUDGET}); deferring to the next daily or manual "
-            "reconcile so the shared pool is not pushed into exhaustion"
-        )
-        _log_event({"event": "github.budget.skip", "target": "scan", "remaining": budget})
-        return 0
     items = list_project_items(owner, project["number"])
     repo = args.repo
     changes = 0
@@ -548,6 +517,37 @@ def main() -> int:
 
     owner = args.owner or args.repo.split("/", 1)[0]
     project_name = load_governance_project_name()
+
+    # Budget pre-gate — runs BEFORE any `gh project` GraphQL. `discover_project`
+    # and `get_status_field` below each spend a GraphQL call, so the budget must
+    # be checked here, not inside the per-mode reconcilers, or a burst of
+    # low-budget events still drains the pool on discovery before skipping. The
+    # probe itself is the free REST rate_limit endpoint. Scan uses the higher
+    # floor; event reconciles use the optional floor.
+    budget = graphql_budget_remaining()
+    budget_floor = GRAPHQL_SCAN_MIN_BUDGET if args.scan else GRAPHQL_OPTIONAL_MIN_BUDGET
+    if budget is not None and budget < budget_floor:
+        target = (
+            "project scan"
+            if args.scan
+            else f"issue #{args.issue}"
+            if args.issue
+            else f"pr #{args.pr}"
+        )
+        print(
+            f"skip {target}: GraphQL budget low (remaining={budget} < {budget_floor}) "
+            "before project discovery; deferring to the next daily or manual reconcile"
+        )
+        _log_event(
+            {
+                "event": "github.budget.skip",
+                "target": target,
+                "stage": "pre-discovery",
+                "remaining": budget,
+            }
+        )
+        return 0
+
     try:
         project = discover_project(owner, project_name)
         status_field_id, status_options = get_status_field(owner, project["number"])

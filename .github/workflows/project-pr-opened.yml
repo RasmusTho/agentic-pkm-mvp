@@ -7,8 +7,11 @@ on:
 concurrency:
   # Shared group with the other GitHub Project board workflows so only one board
   # writer runs at a time (prevents the multi-workflow GraphQL stampede).
+  # `queue: max` keeps pending runs (FIFO, up to 100) so burst board events are
+  # not dropped; the default `queue: single` would cancel all but the latest.
   group: github-project-board-reconcile
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read

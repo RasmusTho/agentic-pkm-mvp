@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -435,24 +436,20 @@ def test_scan_is_daily_and_rate_limit_gated(monkeypatch, capsys) -> None:
     assert "cron: '17 * * * *'" not in workflow, "hourly project scan must be removed"
     assert "cron: '17 7 * * *'" in workflow, "scan cron must be daily"
 
-    # And the scan must shed work when the shared GraphQL pool is low rather than
-    # re-paginating the whole board into exhaustion.
-    def fail_list(*_args, **_kwargs):
-        raise AssertionError("scan must not list the board when GraphQL budget is low")
+    # And a low GraphQL budget must skip the scan BEFORE project discovery,
+    # which itself spends `gh project` GraphQL calls.
+    def fail_discover(*_args, **_kwargs):
+        raise AssertionError("must not discover the project when GraphQL budget is low")
 
     monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 100)
-    monkeypatch.setattr(reconcile_project_status, "list_project_items", fail_list)
-
-    args = reconcile_project_status.argparse.Namespace(
-        repo="RasmusTho/agentic-pkm-mvp", dry_run=False, status=None
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fail_discover)
+    monkeypatch.setattr(
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--scan"]
     )
-    assert (
-        reconcile_project_status.reconcile_scan(
-            args, "RasmusTho", {"number": 1}, "field", {}
-        )
-        == 0
-    )
-    assert "skip project scan: GraphQL budget low" in capsys.readouterr().out
+    assert reconcile_project_status.main() == 0
+    out = capsys.readouterr().out
+    assert "skip project scan: GraphQL budget low" in out
+    assert "before project discovery" in out
 
 
 def test_project_board_workflows_share_serial_concurrency_group() -> None:
@@ -470,50 +467,45 @@ def test_project_board_workflows_share_serial_concurrency_group() -> None:
         assert (
             "cancel-in-progress: false" in content
         ), f"{path} must queue board updates, not cancel them"
+        assert (
+            "queue: max" in content
+        ), f"{path} must keep pending board runs (queue: max); default queue: single drops them"
 
 
-def test_reconcile_scan_proceeds_when_graphql_budget_healthy(monkeypatch, capsys) -> None:
+def test_main_reaches_discovery_when_budget_healthy(monkeypatch) -> None:
+    # With healthy budget, main() proceeds to project discovery (which then
+    # short-circuits via the unavailable path here).
+    reached = {"discover": False}
+
+    def fake_discover(_owner, _name):
+        reached["discover"] = True
+        raise RuntimeError("stop after discovery")
+
     monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 5000)
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fake_discover)
     monkeypatch.setattr(
-        reconcile_project_status, "list_project_items", lambda *_a, **_k: []
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--scan"]
     )
-    args = reconcile_project_status.argparse.Namespace(
-        repo="RasmusTho/agentic-pkm-mvp", dry_run=False, status=None
-    )
-    assert (
-        reconcile_project_status.reconcile_scan(
-            args, "RasmusTho", {"number": 1}, "field", {}
-        )
-        == 0
-    )
-    assert "scan complete: 0 change(s)" in capsys.readouterr().out
+    assert reconcile_project_status.main() == 0
+    assert reached["discover"] is True
 
 
-def test_reconcile_issue_skips_when_graphql_budget_below_optional_threshold(
-    monkeypatch, capsys
-) -> None:
-    monkeypatch.setattr(
-        reconcile_project_status,
-        "get_issue",
-        lambda _repo, _number: {
-            "number": 495,
-            "state": "OPEN",
-            "labels": [{"name": "agent:ready"}],
-            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/495",
-        },
-    )
+def test_main_skips_event_before_discovery_when_budget_low(monkeypatch, capsys) -> None:
+    # Codex review fix: the budget guard must run BEFORE discover_project /
+    # get_status_field, or a burst of low-budget events still spends GraphQL on
+    # discovery before skipping.
+    def fail_discover(*_args, **_kwargs):
+        raise AssertionError("must not discover the project when GraphQL budget is low")
+
     monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 100)
-
-    def fail_list(*_args, **_kwargs):
-        raise AssertionError("must not list the board when GraphQL budget is low")
-
-    monkeypatch.setattr(reconcile_project_status, "list_project_items", fail_list)
-
-    args = reconcile_project_status.argparse.Namespace(
-        repo="RasmusTho/agentic-pkm-mvp", issue=495, dry_run=False, status=None
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fail_discover)
+    monkeypatch.setattr(
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--issue", "495"]
     )
-    assert reconcile_issue(args, "RasmusTho", {"number": 1}, "field", {"Ready": "opt"}) == 0
-    assert "skip issue #495: GraphQL budget low" in capsys.readouterr().out
+    assert reconcile_project_status.main() == 0
+    out = capsys.readouterr().out
+    assert "skip issue #495: GraphQL budget low" in out
+    assert "before project discovery" in out
 
 
 def test_run_gh_aborts_retry_when_reset_beyond_cap(monkeypatch) -> None:
