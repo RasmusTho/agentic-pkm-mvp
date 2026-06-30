@@ -21,6 +21,15 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
 
+  companion-ui:
+    ports: !override
+      - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:8113:8113"
+    environment:
+      PKM_ENVIRONMENT: prod
+      PORT: 8113
+      COMPANION_API_BASE_URL: http://api:8000
+      COMPANION_UI_SERVE_MODULE: companion_ui.workspace.serve_production_page
+
   db:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-app}

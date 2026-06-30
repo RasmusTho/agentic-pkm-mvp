@@ -187,5 +187,37 @@ services:
       timeout: 2s
       retries: 10
 
+  companion-ui:
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+        BUILT_AT: ${BUILT_AT:-unknown}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    working_dir: /app/companion-ui/companion-app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    command:
+      - /bin/bash
+      - -c
+      - python -m "$${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}"
+    environment:
+      HOST: 0.0.0.0
+      PORT: ${COMPANION_UI_PORT:-8111}
+      COMPANION_API_BASE_URL: ${COMPANION_UI_API_BASE_URL:-http://api:8000}
+      COMPANION_UI_SERVE_MODULE: ${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}
+      PKM_ENVIRONMENT: ${PKM_ENVIRONMENT:-dev}
+      PYTHONPATH: /app/companion-ui/companion-app:/app
+    ports:
+      - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:${COMPANION_UI_HOST_PORT:-8111}:${COMPANION_UI_PORT:-8111}"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport os, urllib.request, sys\nport = os.environ.get('PORT', '8111')\ntry:\n    urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=2)\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
 volumes:
   ollama:

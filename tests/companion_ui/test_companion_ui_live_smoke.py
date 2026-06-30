@@ -37,6 +37,7 @@ from urllib.parse import urljoin
 import pytest
 
 _SMOKE_URL = os.environ.get("COMPANION_UI_SMOKE_URL")
+_EXPECTED_CHANNEL = os.environ.get("COMPANION_UI_EXPECTED_CHANNEL")
 if not _SMOKE_URL:
     pytest.skip(
         "Set COMPANION_UI_SMOKE_URL=<gateway root URL> to run the live UI smoke.",
@@ -99,5 +100,14 @@ def test_live_gateway_is_healthy_and_not_in_error_state() -> None:
             assert ("Workspace Orientation" in title) or (
                 "Real-Note Workspace" in title
             ), f"unexpected page title: {title!r}"
+
+            if _EXPECTED_CHANNEL:
+                marker = page.locator('[data-testid="workspace-vault-channel"]').first
+                assert marker.count() == 1, "runtime channel marker missing"
+                marker_text = (marker.text_content() or "").lower()
+                assert _EXPECTED_CHANNEL.lower() in marker_text, (
+                    f"runtime channel marker {marker_text!r} did not match "
+                    f"{_EXPECTED_CHANNEL!r}"
+                )
         finally:
             browser.close()

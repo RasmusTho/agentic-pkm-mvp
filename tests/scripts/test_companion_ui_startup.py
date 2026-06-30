@@ -24,12 +24,14 @@ source "$LIB"
 cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
 cui_python_bin() { printf '/bin/echo'; }
 cui_free_ui_port() { return 0; }
+cui_compose() { return 0; }
 curl() { return 0; }
 
 export CUI_CHANNEL=test
 export CUI_API_PORT=18002
 export CUI_UI_PORT=8112
 export CUI_COMPOSE_PROJECT=pkm-test
+export CUI_COMPOSE_FILES=docker-compose.yaml
 export CUI_SERVE_MODULE=companion_ui.workspace.serve_dev_page
 if [ "$BIND_LAN" = "__unset__" ]; then
   unset CUI_BIND_LAN
