@@ -720,12 +720,38 @@ resolve_channel_defaults() {
   export COMPOSE_FILE COMPOSE_PROJECT_NAME API_BASE_URL
 }
 
+export_prod_build_identity() {
+  local should_export=0
+  case "${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-}}}}" in
+    prod) should_export=1 ;;
+  esac
+  case "${COMPOSE_PROJECT_NAME:-}" in
+    pkm-prod) should_export=1 ;;
+  esac
+  if [ "$should_export" -ne 1 ]; then
+    return 0
+  fi
+  if [ -z "${VCS_REF:-}" ] || [ "${VCS_REF:-}" = "unknown" ]; then
+    VCS_REF="$(git rev-parse HEAD 2>/dev/null || printf '%s' "${VCS_REF:-unknown}")"
+  fi
+  if [ -z "${VCS_REF:-}" ] || [ "${VCS_REF:-}" = "unknown" ]; then
+    echo "ERROR: prod startup requires a non-unknown VCS_REF for image build identity." >&2
+    echo "Set VCS_REF explicitly or run from a git checkout before starting prod." >&2
+    exit 2
+  fi
+  if [ -z "${BUILT_AT:-}" ] || [ "${BUILT_AT:-}" = "unknown" ]; then
+    BUILT_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  fi
+  export VCS_REF BUILT_AT
+}
+
 START_FLIGHT_RECORDER="${START_FLIGHT_RECORDER:-1}"
 FLIGHT_RECORDER_INTERVAL="${FLIGHT_RECORDER_INTERVAL:-5}"
 FLIGHT_RECORDER_DURATION="${FLIGHT_RECORDER_DURATION:-0}"
 VERIFY_ACTIVE="${VERIFY_ACTIVE:-0}"
 ALLOW_LEGACY_VAULT="${ALLOW_LEGACY_VAULT:-0}"
 resolve_channel_defaults
+export_prod_build_identity
 API_BASE_URL="${API_BASE_URL%/}"
 HEALTH_ENDPOINT="${HEALTH_ENDPOINT:-$API_BASE_URL/healthz}"
 HEALTH_MAX_ATTEMPTS="${HEALTH_MAX_ATTEMPTS:-12}"
