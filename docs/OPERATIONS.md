@@ -250,9 +250,11 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 `ops/host-setup/mac-mini/prod_probe.py` is the hard-down backstop probe installed as
 a launchd job (`com.yggdrasil.prod-probe`) on the mac mini. It runs on a configurable
 interval (default 60 s), curls `/readyz` and `/api/health` `required_ok` (NOT the
-top-level `ok`), checks worker-heartbeat staleness, and dispatches exactly one push
-notification per failure interval to the configured channel (ntfy / Telegram / mail —
-channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
+top-level `ok`), checks worker-heartbeat staleness, and dispatches one push alert on
+the first outage transition. Once the probe sees the first healthy run after that
+outage, it emits one recovery signal and clears the outage state so a later distinct
+outage can alert again. The configured channel remains pluggable (ntfy / Telegram /
+mail — channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
 
 **Two distinct Makefile targets — do not confuse them:**
 
@@ -262,10 +264,11 @@ channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
 | `make check-prod-channel` | Runs the pytest channel-isolation suites (`tests/ops/test_release_channel_isolation.py`, `tests/ops/test_release_channel_startup_targets.py`) to confirm that prod and test channels are correctly isolated. No live network calls to the running stack. |
 | `make check-test-channel` | Same channel-isolation suites plus the test-channel preflight (`tests/release_channels/test_channel_isolation_preflight.py`). |
 
-**Debounce / one-shot guarantee:** A second prod-down in the same probe interval does
-NOT send a duplicate push. A launchd restart does NOT re-fire while the state marker
-(`PROD_PROBE_STATE_FILE`, default `/tmp/yggdrasil-prod-probe.state`) is present.
-Delete that file to reset the debounce.
+**Transition / recovery guarantee:** A sustained outage sends one down alert, repeated
+down probes suppress while the outage remains active, and the first healthy run sends one
+recovery signal and clears the outage state. A later distinct outage alerts again.
+The state marker (`PROD_PROBE_STATE_FILE`, default `/tmp/yggdrasil-prod-probe.state`)
+is rebuildable; delete it to reset the transition state manually.
 
 **Install:** See `ops/host-setup/mac-mini/install.sh` for how to register the launchd
 job. The plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist`.

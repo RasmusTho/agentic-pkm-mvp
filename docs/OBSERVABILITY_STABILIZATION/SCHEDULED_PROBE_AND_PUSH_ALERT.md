@@ -1,9 +1,10 @@
 ---
 name: Scheduled Probe And Push Alert
 description: >
-  A host launchd job that probes /readyz + /api/health required_ok and pushes
-  one notification on failure; relabel verify-*-channel so the name does not
-  imply a live probe.
+  A host launchd job that probes /readyz + /api/health required_ok and emits
+  one down alert on the outage transition, then one recovery signal on the
+  first healthy run; relabel verify-*-channel so the name does not imply a
+  live probe.
 task_id: OBSSTAB-04
 source_anchor: "ops/host-setup/mac-mini/com.yggdrasil.llm-gateway.plist :: launchd pattern ; Makefile :: verify-prod-channel"
 parent_capability: Observability Stabilization
@@ -31,9 +32,11 @@ Add a host launchd plist (modelled on
 `ops/host-setup/mac-mini/com.yggdrasil.llm-gateway.plist`) that runs a small
 probe script under `ops/` on a configurable interval. The script curls
 `/readyz` and the `/api/health` `required_ok` field (not the top-level `ok`)
-and checks worker-heartbeat staleness; on any failure it dispatches exactly one
-push notification via a pluggable channel (ntfy / Telegram / mail — channel
-choice is a deferred operator decision). Relabel the existing Makefile targets
+and checks worker-heartbeat staleness; on the first outage transition it
+dispatches one push notification via a pluggable channel (ntfy / Telegram /
+mail — channel choice is a deferred operator decision), then clears that state
+after the first healthy run so a later distinct outage can alert again.
+Relabel the existing Makefile targets
 `verify-prod-channel` (line 210) and `verify-test-channel` (line 204) so their
 names reflect what they actually do — run pytest channel-isolation suites — and
 add a distinct `live-prod-probe` target that invokes the probe script directly.
@@ -44,14 +47,16 @@ add a distinct `live-prod-probe` target that invokes the probe script directly.
 # Simulate prod down
 docker compose stop api
 
-# Within the probe interval exactly one push is delivered.
+# Within the outage exactly one push is delivered, then one recovery signal
+# lands on the first healthy run.
 # Verify the job is loaded:
 launchctl list | grep yggdrasil
 # → com.yggdrasil.prod-probe   0   com.yggdrasil.prod-probe
 
-# After restart the alert does not re-fire (idempotent / one-shot):
+# While the outage remains active the alert does not re-fire; after recovery a
+# later distinct outage can alert again:
 docker compose start api
-# (no second notification)
+# (first healthy run sends recovery; later outage re-arms)
 
 # Relabelled Makefile targets:
 make check-prod-channel   # was: verify-prod-channel — runs pytest isolation suite
@@ -69,15 +74,14 @@ the launchd job.
 
 ## Acceptance Criteria
 
-- [ ] A simulated prod-down results in exactly one push within the probe
-      interval.
-  - Verify: `tests/ops/test_synthetic_probe.py::test_probe_pushes_once_on_prod_down`
-- [ ] A second prod-down in the same interval does not send a duplicate push
-      (debounce / one-shot behaviour).
-  - Verify: `tests/ops/test_synthetic_probe.py::test_probe_no_duplicate_push`
+- [ ] A sustained prod outage results in one down alert, and the first healthy
+      run sends one recovery signal.
+  - Verify: `tests/ops/test_prod_probe_alert_state.py::test_sustained_outage_alerts_once_and_recovers`
+- [ ] A distinct outage after recovery re-alerts.
+  - Verify: `tests/ops/test_prod_probe_alert_state.py::test_distinct_outage_realerts_after_recovery`
 - [ ] The probe evaluates `/api/health` `required_ok`, not the top-level `ok`
       field.
-  - Verify: `tests/ops/test_synthetic_probe.py::test_probe_reads_required_ok`
+  - Verify: `tests/ops/test_prod_probe_alert_state.py::test_probe_reads_required_ok`
 - [ ] `verify-prod-channel` and `verify-test-channel` are relabelled (e.g.
       `check-prod-channel` / `check-test-channel`) and a distinct
       `live-prod-probe` target exists in the Makefile.
@@ -87,7 +91,7 @@ the launchd job.
 
 ```bash
 # Run all probe unit tests
-pytest tests/ops/test_synthetic_probe.py -v
+pytest -q tests/ops/test_prod_probe_alert_state.py
 
 # Confirm Makefile targets exist with correct names
 grep -n "live-prod-probe\|check-prod-channel\|check-test-channel" Makefile
