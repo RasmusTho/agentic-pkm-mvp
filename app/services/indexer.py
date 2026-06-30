@@ -146,11 +146,10 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):
         try:
             vector_index.purge_vectors(object_uuid_val, view=DEFAULT_EMBEDDING_VIEW)
-            vector_index.upsert(
-                object_uuid_val,
-                kind=domain.kind,
-                source_ref=domain.source_ref or "",
-                payload=build_indexed_unit_payload(
+            upsert_kwargs = {
+                "kind": domain.kind,
+                "source_ref": domain.source_ref or "",
+                "payload": build_indexed_unit_payload(
                     object_id=object_uuid_val,
                     kind=domain.kind,
                     source_ref=domain.source_ref or "",
@@ -158,11 +157,13 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
                     text=str(content or ""),
                     embedding_identity=actual_identity,
                 ),
-                embedding=embedding,
-                model=model_name,
-                identity=actual_identity,
-                reconcilable_fallback=is_fallback,
-            )
+                "embedding": embedding,
+                "model": model_name,
+                "identity": actual_identity,
+            }
+            if is_fallback:
+                upsert_kwargs["reconcilable_fallback"] = True
+            vector_index.upsert(object_uuid_val, **upsert_kwargs)
             emit_index_object_embedded(
                 object_id=object_uuid,
                 trace_id=trace_id,

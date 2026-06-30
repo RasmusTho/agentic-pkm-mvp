@@ -142,11 +142,10 @@ def process_event(evt: Dict[str, Any]) -> None:
 
     idx = get_vector_index()
     _purge_vectors(idx, obj_uuid)
-    idx.upsert(
-        object_id=obj_uuid,
-        kind=str(obj.kind or "note"),
-        source_ref=str(obj.source_ref or ""),
-        payload=build_indexed_unit_payload(
+    upsert_kwargs = {
+        "kind": str(obj.kind or "note"),
+        "source_ref": str(obj.source_ref or ""),
+        "payload": build_indexed_unit_payload(
             object_id=obj_uuid,
             kind=str(obj.kind or "note"),
             source_ref=str(obj.source_ref or ""),
@@ -154,11 +153,13 @@ def process_event(evt: Dict[str, Any]) -> None:
             text=text,
             embedding_identity=actual_identity,
         ),
-        embedding=embedding,
-        model=actual_identity.model,
-        identity=actual_identity,
-        reconcilable_fallback=is_fallback,
-    )
+        "embedding": embedding,
+        "model": actual_identity.model,
+        "identity": actual_identity,
+    }
+    if is_fallback:
+        upsert_kwargs["reconcilable_fallback"] = True
+    idx.upsert(object_id=obj_uuid, **upsert_kwargs)
 
     outbox_events.emit_index_embedding_created(
         object_id=obj_uuid,
