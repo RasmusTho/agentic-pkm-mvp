@@ -5,7 +5,8 @@
 # This repo runs many concurrent agents against ONE 5,000/hr GitHub API budget; GraphQL exhausts
 # first. `gh pr checks` / `gh pr view --json mergeStateStatus` are GraphQL, and a tight poll loop
 # starves every other agent. This script polls the REST check-runs and classic commit-status
-# endpoints only, sleeps the bulk of CI up front, and backs off >=60s on the tail.
+# endpoints only, sleeps the bulk of CI up front, and backs off >=60s on the tail. The shared
+# Python helper owns bounded backoff semantics and the single-query Codex verdict resolver.
 # Contract: .codex/skills/_shared/CI_WAIT_CONTRACT.md
 #
 # Usage:
@@ -16,7 +17,7 @@
 # --sha for the merge-gating default: the head is auto-resolved and re-checked before success.
 #
 # Exit codes:
-#   0  CI check-runs + classic commit status all passed (with --codex, Codex also gave a positive reaction)
+#   0  CI check-runs + classic commit status all passed (with --codex, Codex also passed)
 #   1  a required check failed
 #   2  timed out before checks were confirmed complete
 #   3  Codex verdict is blocking         (only with --codex)
@@ -149,63 +150,26 @@ fi
 echo "all required checks passed on $SHA"
 
 if [ "$CHECK_CODEX" -eq 1 ]; then
-  bot="chatgpt-codex-connector[bot]"
-  # Resolve the verdict against the EXACT verified commit. The strongest head marker is a Codex REVIEW
-  # whose commit_id == SHA; Codex also commonly signals a clean pass with only a 👍 reaction, honored
-  # as a fallback whose freshness is anchored to the head's check-run start time (see below). All
-  # evidence reads are PAGINATED and fail CLOSED: a read error aborts (exit 2) rather than degrading to
-  # "no block", and --paginate ensures page-2+ feedback is not missed (REST lists default to 30/page).
-  reviewed_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
-    || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
-  cr_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .state==\"CHANGES_REQUESTED\" and .commit_id==\"$SHA\") | .id" 2>/dev/null) \
-    || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
-  # A COMMENTED review on this SHA whose body itself carries findings (the "Useful? React" footer that
-  # the generic Codex wrapper lacks) must block too — findings can live in the review body, not only
-  # inline. verification-and-closure treats a COMMENTED review with findings as blocking.
-  review_find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq ".[] | select(.user.login==\"$bot\" and .commit_id==\"$SHA\" and ((.body // \"\") | contains(\"Useful? React\"))) | .id" 2>/dev/null) \
-    || { echo "codex: reviews read failed — failing closed" >&2; exit 2; }
-  find_ids=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and .original_commit_id==\"$SHA\") | .id" 2>/dev/null) \
-    || { echo "codex: PR comments read failed — failing closed" >&2; exit 2; }
-  # Anchor reaction/conversation freshness to the EARLIEST check-run start time for this head — the
-  # reliable GitHub-side moment the head was pushed, unlike a commit's embedded committer date which a
-  # cherry-picked or locally-created head can backdate (a stale 👍 could then look "fresh"). If it
-  # can't be resolved, every comparison below is skipped, so a reaction can never pass on its own —
-  # fail safe to reviewed_head. Conversation comments (/issues/<pr>/comments) aren't commit-tied;
-  # every Codex finding carries the "Useful? React" footer.
+  # Resolve the verdict with one combined GraphQL query through the shared helper instead of
+  # re-reading reactions, reviews, issue comments, and pull comments as separate calls.
   head_ts=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '[.check_runs[].started_at | select(.!=null)] | min // ""' 2>/dev/null) || head_ts=""
-  conv_ts=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq ".[] | select(.user.login==\"$bot\" and ((.body // \"\") | contains(\"Useful? React\"))) | .created_at" 2>/dev/null) \
-    || { echo "codex: conversation comments read failed — failing closed" >&2; exit 2; }
-  conv_ts=$(printf '%s\n' "$conv_ts" | sort | tail -1)
-  react_lines=$(gh api --paginate "repos/$REPO/issues/$PR/reactions" --jq ".[] | select(.user.login==\"$bot\") | \"\(.content)\t\(.created_at)\"" 2>/dev/null) \
-    || { echo "codex: reactions read failed — failing closed" >&2; exit 2; }
-  pos_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="+1"||$1=="heart"||$1=="hooray"||$1=="rocket"||$1=="laugh"{print $2}' | sort | tail -1)
-  neg_ts=$(printf '%s\n' "$react_lines" | awk -F'\t' '$1=="-1"||$1=="confused"{print $2}' | sort | tail -1)
-  reviewed=$(printf '%s' "$reviewed_ids" | grep -c . || true)
-  cr=$(printf '%s' "$cr_ids" | grep -c . || true)
-  findings=$(printf '%s' "$find_ids" | grep -c . || true)
-  review_findings=$(printf '%s' "$review_find_ids" | grep -c . || true)
-  echo "codex: reviewed_head=${reviewed:-0} changes_requested=${cr:-0} findings_on_head=${findings:-0} review_body_findings=${review_findings:-0} conversation_finding=${conv_ts:-none} positive_reaction=${pos_ts:-none} negative_reaction=${neg_ts:-none}"
-
-  # Blocking: changes-requested on this commit, or a negative reaction newer than the head.
-  if [ "${cr:-0}" -gt 0 ] || { [ -n "$neg_ts" ] && [ -n "$head_ts" ] && [[ "$neg_ts" > "$head_ts" ]]; }; then
-    echo "CODEX BLOCKING for $SHA (changes-requested or fresh negative reaction)" >&2; exit 3
+  codex_args=(codex-verdict --repo "$REPO" --pr "$PR" --sha "$SHA")
+  if [ -n "$head_ts" ]; then
+    codex_args+=(--head-started-at "$head_ts")
   fi
-  # Findings to address — inline (commit-tied), in the review body, or a Codex conversation comment
-  # after the head.
-  if [ "${findings:-0}" -gt 0 ] || [ "${review_findings:-0}" -gt 0 ] || { [ -n "$conv_ts" ] && [ -n "$head_ts" ] && [[ "$conv_ts" > "$head_ts" ]]; }; then
-    echo "codex: finding(s) for $SHA (inline=$findings, review_body=$review_findings, conversation=${conv_ts:-none}) — address per verification-and-closure" >&2; exit 4
+  codex_json=$(python3 -m app.dispatcher.poll_backoff "${codex_args[@]}" 2>/dev/null)
+  codex_rc=$?
+  if [ "$codex_rc" -eq 0 ]; then
+    echo "codex: $codex_json"; exit 0
+  elif [ "$codex_rc" -eq 3 ]; then
+    echo "CODEX BLOCKING for $SHA: $codex_json" >&2; exit 3
+  elif [ "$codex_rc" -eq 4 ]; then
+    echo "codex: unresolved for $SHA: $codex_json" >&2
+    echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
+    exit 4
   fi
-  # Pass when Codex reviewed THIS exact commit (review.commit_id == SHA; strongest marker) or left a
-  # positive reaction newer than the head — and nothing above blocked.
-  if [ "${reviewed:-0}" -gt 0 ]; then
-    echo "codex: pass (Codex reviewed this exact head $SHA with no findings)"; exit 0
-  fi
-  if [ -n "$pos_ts" ] && [ -n "$head_ts" ] && [[ "$pos_ts" > "$head_ts" ]]; then
-    echo "codex: pass (positive reaction $pos_ts newer than head check-run start $head_ts)"; exit 0
-  fi
-  echo "codex: no Codex review for this exact head yet — resolve per verification-and-closure :: Reading the Codex verdict;" >&2
-  echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
-  exit 4
+  echo "codex: combined verdict query failed — failing closed" >&2
+  exit 2
 fi
 
 exit 0
