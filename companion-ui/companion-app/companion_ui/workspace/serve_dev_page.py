@@ -1982,6 +1982,79 @@ def _note_editor_script() -> str:
   </script>"""
 
 
+def _refused_write_draft_restore_script() -> str:
+    """Restore refused note/capture/body drafts from sessionStorage.
+
+    The shared picker helper stores the refused draft before swapping the page
+    to the vault-selection picker. This runner restores the stored draft on the
+    next truthful page render, including empty-string edits that must remain
+    distinguishable from missing state.
+    """
+    return """
+  <script>
+  (function() {
+    var refusedWriteDraftKey = 'companion.refusedWriteDraft.v1';
+    window.renderVaultSelectionRequiredPicker = function(data, draft) {
+      if (!data || data.state !== 'vault_selection_required') return false;
+      var html = data.vault_selection_required_html || '';
+      if (!html) return false;
+      if (draft && Object.prototype.hasOwnProperty.call(draft, 'text')) {
+        try {
+          window.sessionStorage.setItem(refusedWriteDraftKey, JSON.stringify(draft));
+        } catch (e) {}
+      }
+      document.open();
+      document.write(html);
+      document.close();
+      return true;
+    };
+    window.restoreRefusedWriteDraft = function() {
+      if (document.querySelector('[data-testid="vault-selection-required"]')) return;
+      var raw = null;
+      try { raw = window.sessionStorage.getItem(refusedWriteDraftKey); } catch (e) { raw = null; }
+      if (!raw) return;
+      var draft = null;
+      try { draft = JSON.parse(raw); } catch (e) { draft = null; }
+      if (!draft || !draft.kind || !Object.prototype.hasOwnProperty.call(draft, 'text')) return;
+      var restored = false;
+      if (draft.kind === 'note_save') {
+        var noteEditor = document.getElementById('note-source-editor');
+        var expectedPath = (noteEditor && noteEditor.getAttribute('data-note-path') || '').split('#')[0];
+        if (noteEditor && (!draft.note_path || draft.note_path === expectedPath)) {
+          noteEditor.value = draft.text;
+          noteEditor.setAttribute('data-refused-write-draft-restored', 'true');
+          var noteEditorApi = window['noteEditor'];
+          if (noteEditorApi && typeof noteEditorApi.start === 'function') {
+            noteEditorApi.start();
+          }
+          restored = true;
+        }
+      } else if (draft.kind === 'body_edit') {
+        var container = document.getElementById('body-edit-codemirror');
+        var bodyPath = container && container.getAttribute('data-note-path');
+        if (container && window._cmView && (!draft.note_path || draft.note_path === bodyPath)) {
+          window._cmView.dispatch({
+            changes: {from: 0, to: window._cmView.state.doc.length, insert: draft.text}
+          });
+          container.setAttribute('data-refused-write-draft-restored', 'true');
+          restored = true;
+        }
+      } else if (draft.kind === 'capture') {
+        var captureInput = document.getElementById('capture-input');
+        if (captureInput) {
+          captureInput.value = draft.text;
+          captureInput.setAttribute('data-refused-write-draft-restored', 'true');
+          restored = true;
+        }
+      }
+      if (restored) {
+        try { window.sessionStorage.removeItem(refusedWriteDraftKey); } catch (e) {}
+      }
+    };
+  })();
+  </script>"""
+
+
 def _canvas_coauthor_script(canvas_enabled: bool) -> str:
     """Live canvas co-authoring loop wiring (#1733).
 
@@ -8251,6 +8324,7 @@ def _render_orientation_index_html(
         + memory_drawer_script_html
         + system_map_overlay_script()
         + (capture_modal_script() if is_cold else "")
+        + (_refused_write_draft_restore_script() if is_cold else "")
         # Guidance layer (#1788, SEP-06): the re-entry card and the map head
         # carry the ⓘ affordance on the entry surfaces, so the visibility
         # gate and the UI-local toggle controller ship with the substrate.
@@ -14356,68 +14430,7 @@ def render_index_html(
     // the host dismisses the topmost overlay back to the document anchor.
   }})();
   </script>
-  <script>
-  (function() {{
-    var refusedWriteDraftKey = 'companion.refusedWriteDraft.v1';
-    window.renderVaultSelectionRequiredPicker = function(data, draft) {{
-      if (!data || data.state !== 'vault_selection_required') return false;
-      var html = data.vault_selection_required_html || '';
-      if (!html) return false;
-      if (draft && Object.prototype.hasOwnProperty.call(draft, 'text')) {{
-        try {{
-          window.sessionStorage.setItem(refusedWriteDraftKey, JSON.stringify(draft));
-        }} catch (e) {{}}
-      }}
-      document.open();
-      document.write(html);
-      document.close();
-      return true;
-    }};
-    window.restoreRefusedWriteDraft = function() {{
-      if (document.querySelector('[data-testid="vault-selection-required"]')) return;
-      var raw = null;
-      try {{ raw = window.sessionStorage.getItem(refusedWriteDraftKey); }} catch (e) {{ raw = null; }}
-      if (!raw) return;
-      var draft = null;
-      try {{ draft = JSON.parse(raw); }} catch (e) {{ draft = null; }}
-      if (!draft || !draft.kind || !Object.prototype.hasOwnProperty.call(draft, 'text')) return;
-      var restored = false;
-      if (draft.kind === 'note_save') {{
-        var noteEditor = document.getElementById('note-source-editor');
-        var expectedPath = (noteEditor && noteEditor.getAttribute('data-note-path') || '').split('#')[0];
-        if (noteEditor && (!draft.note_path || draft.note_path === expectedPath)) {{
-          noteEditor.value = draft.text;
-          noteEditor.setAttribute('data-refused-write-draft-restored', 'true');
-          var noteEditorApi = window['noteEditor'];
-          if (noteEditorApi && typeof noteEditorApi.start === 'function') {{
-            noteEditorApi.start();
-          }}
-          restored = true;
-        }}
-      }} else if (draft.kind === 'body_edit') {{
-        var container = document.getElementById('body-edit-codemirror');
-        var bodyPath = container && container.getAttribute('data-note-path');
-        if (container && window._cmView && (!draft.note_path || draft.note_path === bodyPath)) {{
-          window._cmView.dispatch({{
-            changes: {{from: 0, to: window._cmView.state.doc.length, insert: draft.text}}
-          }});
-          container.setAttribute('data-refused-write-draft-restored', 'true');
-          restored = true;
-        }}
-      }} else if (draft.kind === 'capture') {{
-        var captureInput = document.getElementById('capture-input');
-        if (captureInput) {{
-          captureInput.value = draft.text;
-          captureInput.setAttribute('data-refused-write-draft-restored', 'true');
-          restored = true;
-        }}
-      }}
-      if (restored) {{
-        try {{ window.sessionStorage.removeItem(refusedWriteDraftKey); }} catch (e) {{}}
-      }}
-    }};
-  }})();
-  </script>
+  {_refused_write_draft_restore_script()}
   {overlay_host_script()}
   {capture_modal_script()}
   {panel_palette_script()}

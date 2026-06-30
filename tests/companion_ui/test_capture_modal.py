@@ -620,3 +620,78 @@ def test_entry_capture_preserves_unsent_text_without_claiming_write() -> None:
     for forbidden in ("location.href", "location.assign", "location.reload",
                       "history.pushState"):
         assert forbidden not in script
+
+
+def test_refused_capture_draft_restored_after_cold_start_picker_swap() -> None:
+    """The refusal restore runner ships on both the cold-start and picker pages.
+
+    A capture draft refused with ``vault_selection_required`` must survive the
+    page transition into the picker, and the same restore helper must be
+    present on the cold-start shell that mounts the capture modal.
+    """
+    cold = _render_cold_start()
+    picker = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/note.md",
+        vault_selection_required={
+            "state": "vault_selection_required",
+            "reason": "no_vault_bound",
+            "message": "No vault is selected. Open a vault to continue.",
+            "requested_note_path": "Notes/note.md",
+            "context": {"status": "none"},
+            "actions": [],
+        },
+    )
+
+    for html in (cold, picker):
+        assert "window.restoreRefusedWriteDraft" in html
+        assert "kind: 'capture'" in html
+        assert "captureInput.value = draft.text" in html
+        assert "data-refused-write-draft-restored" in html
+
+
+def test_capture_input_preserved_before_document_write_on_vault_selection_required() -> None:
+    """Capture refusal stores the draft before the picker replaces the page."""
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/note.md",
+        vault_selection_required={
+            "state": "vault_selection_required",
+            "reason": "no_vault_bound",
+            "message": "No vault is selected. Open a vault to continue.",
+            "requested_note_path": "Notes/note.md",
+            "context": {"status": "none"},
+            "actions": [],
+        },
+    )
+    script = _script(html)
+
+    assert "renderVaultSelectionRequired(ack, text)" in script
+    assert "renderVaultSelectionRequired(body, text)" in script
+    assert "kind: 'capture'" in html
+    assert "window.sessionStorage.setItem(refusedWriteDraftKey" in html
+    assert "window.renderVaultSelectionRequiredPicker" in html
+
+
+def test_refused_note_draft_preserves_empty_string_edits() -> None:
+    """The shared refusal restore path keeps empty-string note edits alive."""
+    picker = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/note.md",
+        fields=_fields(
+            body="# Note\n\nBody paragraph.",
+        ),
+        vault_selection_required={
+            "state": "vault_selection_required",
+            "reason": "no_vault_bound",
+            "message": "No vault is selected. Open a vault to continue.",
+            "requested_note_path": "Notes/note.md",
+            "context": {"status": "none"},
+            "actions": [],
+        },
+    )
+
+    assert "kind: 'note_save'" in picker
+    assert "Object.prototype.hasOwnProperty.call(draft, 'text')" in picker
+    assert "noteEditor.value = draft.text" in picker
+    assert "window.restoreRefusedWriteDraft" in picker
