@@ -163,11 +163,11 @@ class TestBootstrapStartContract:
         ), f"Script rejected an existing VAULT_ROOT as missing: {stderr[:500]}"
 
     def test_make_start_test_system_target_exists(self) -> None:
-        """make start-test-system is declared in the Makefile (wired for BOOTSTRAP-03).
+        """make start-test-system is declared in the Makefile and defaults to idle.
 
-        No vault is configured here: the start target must NOT require one — the
-        runtime boots the no-vault idle posture (#2005) — so the dry-run resolves
-        cleanly with no VAULT_ROOT in the environment.
+        No vault is configured here: the start target must NOT force the
+        repo-local scratch vault. A fresh checkout should dry-run with an empty
+        VAULT_ROOT so the runtime boots the no-vault idle posture (#2005).
         """
         env = {k: v for k, v in os.environ.items() if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")}
         result = subprocess.run(
@@ -182,6 +182,12 @@ class TestBootstrapStartContract:
         combined = result.stdout + result.stderr
         assert "start_full_system" in combined, (
             f"Expected start_full_system.sh in dry-run output; got: {combined[:500]}"
+        )
+        assert 'VAULT_ROOT=""' in combined, (
+            f"Expected start-test-system to leave VAULT_ROOT empty by default; got: {combined[:500]}"
+        )
+        assert "vault-test" not in combined, (
+            f"start-test-system must not force the repo-local scratch vault by default; got: {combined[:500]}"
         )
 
     def test_make_start_test_system_ignores_plain_vault_root(self) -> None:
@@ -207,9 +213,10 @@ class TestBootstrapStartContract:
                 f"Plain operator VAULT_ROOT must not select test vault for "
                 f"make --dry-run {target}; got: {combined[:500]}"
             )
-            assert 'VAULT_ROOT="vault-test"' in combined, (
-                f"Expected repo-local vault-test fallback in make --dry-run "
-                f"{target}; got: {combined[:500]}"
+            expected_binding = 'VAULT_ROOT=""' if target == "start-test-system" else 'VAULT_ROOT="vault-test"'
+            assert expected_binding in combined, (
+                f"Unexpected VAULT_ROOT binding for make --dry-run {target}; "
+                f"got: {combined[:500]}"
             )
 
     def test_make_test_targets_honor_vault_root_test_override(self) -> None:
@@ -231,27 +238,58 @@ class TestBootstrapStartContract:
         )
 
     def test_start_targets_boot_without_a_vault_selected(self) -> None:
-        """The runtime must start without a vault (#2005): start-test-system and
-        test-up resolve with no VAULT_ROOT and never demand one."""
+        """The runtime must start without a vault (#2005) on the start-test path."""
         env = {
             k: v
             for k, v in os.environ.items()
             if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")
         }
-        for target in ("start-test-system", "test-up"):
-            result = subprocess.run(
-                ["make", "--dry-run", target],
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            combined = result.stderr + result.stdout
-            assert result.returncode == 0, (
-                f"make {target} must boot idle without a vault: {combined[:500]}"
-            )
-            assert "is required" not in combined, (
-                f"{target} must not demand a vault to start: {combined[:500]}"
-            )
+        result = subprocess.run(
+            ["make", "--dry-run", "start-test-system"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        combined = result.stderr + result.stdout
+        assert result.returncode == 0, (
+            f"make start-test-system must boot idle without a vault: {combined[:500]}"
+        )
+        assert 'VAULT_ROOT=""' in combined, (
+            f"start-test-system must resolve to an empty VAULT_ROOT by default: {combined[:500]}"
+        )
+        assert "is required" not in combined, (
+            f"start-test-system must not demand a vault to start: {combined[:500]}"
+        )
+
+    def test_make_start_test_system_explicit_missing_test_vault_fails_loud(self, tmp_path: Path) -> None:
+        """An explicit missing TEST_VAULT_ROOT must still fail loudly."""
+        missing_vault = tmp_path / "missing-test-vault"
+        fake_docker = tmp_path / "docker"
+        fake_docker.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "${1:-}" = "info" ]; then exit 0; fi\n'
+            "echo fake docker should not reach compose commands >&2\n"
+            "exit 99\n",
+            encoding="utf-8",
+        )
+        fake_docker.chmod(0o755)
+        result = subprocess.run(
+            ["make", "start-test-system", f"TEST_VAULT_ROOT={missing_vault}"],
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PATH": f"{tmp_path}:{_SUBPROCESS_PATH}",
+                "VAULT_ROOT": "",
+            },
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, (
+            f"Explicit missing TEST_VAULT_ROOT must fail loudly; got rc={result.returncode}: {combined[:500]}"
+        )
+        assert "Vault root is missing" in combined or "missing" in combined.lower(), (
+            f"Expected a clear missing-vault error for explicit TEST_VAULT_ROOT; got: {combined[:500]}"
+        )
 
     def test_seed_flow_uses_repo_local_vault_test_fallback(self) -> None:
         """Provisioning can seed the repo-local test scratch vault by default."""
