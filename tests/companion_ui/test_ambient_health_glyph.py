@@ -38,17 +38,21 @@ def _health_payload(
     worker_ok: bool = True,
     watcher_status: str = "ok",
     watcher_ok: bool = True,
+    db_ok: bool = True,
+    llm_ok: bool = True,
 ) -> dict[str, Any]:
     write_guard_ok = True
-    required_ok = True
+    required_ok = worker_ok and watcher_ok and db_ok and llm_ok
     return {
         "required_ok": required_ok,
-        "ok": required_ok and worker_ok and watcher_ok and write_guard_ok,
+        "ok": required_ok and write_guard_ok,
         "checks": {},
         "authority_spine": {"write_guard": "active"},
         "runtime": {
             "worker": {"status": worker_status, "ok": worker_ok},
             "watcher": {"status": watcher_status, "ok": watcher_ok},
+            "db": {"status": "ok" if db_ok else "fail", "ok": db_ok},
+            "llm": {"status": "ok" if llm_ok else "fail", "ok": llm_ok},
         },
         "suggested_actions": [],
     }
@@ -90,3 +94,17 @@ def test_dead_watcher_never_renders_healthy() -> None:
 
         assert _glyph_state(html) == "uppmärksamhet"
         assert 'data-health-state="frisk"' not in html
+
+
+def test_core_dependency_failure_still_renders_down() -> None:
+    html = _render_entry(
+        _health_payload(
+            worker_status="ok",
+            worker_ok=True,
+            watcher_status="ok",
+            watcher_ok=True,
+            db_ok=False,
+        ),
+    )
+
+    assert _glyph_state(html) == "nere"
