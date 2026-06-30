@@ -13,6 +13,7 @@ from app.auth import require_loopback_or_api_key
 @pytest.fixture(autouse=True)
 def reset_auth_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(auth_module.settings, "api_key", None)
+    monkeypatch.setattr(auth_module.settings, "companion_trusted_proxy_hosts", "")
 
 
 @pytest.fixture()
@@ -50,3 +51,30 @@ def test_untrusted_non_loopback_caller_rejected_even_with_xff(
 
     assert response.status_code == 401
     assert response.json()["detail"] == "API key required for non-loopback request"
+
+
+def test_configured_bridge_proxy_xff_is_trusted(guarded_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth_module.settings, "companion_trusted_proxy_hosts", "172.18.0.1")
+
+    response = _client_from(guarded_app, "172.18.0.1").post(
+        "/guarded",
+        headers={"X-Forwarded-For": "127.0.0.1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_configured_proxy_cidr_xff_is_trusted(
+    guarded_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(auth_module.settings, "companion_trusted_proxy_hosts", "172.18.0.0/24")
+
+    response = _client_from(guarded_app, "172.18.0.5").post(
+        "/guarded",
+        headers={"X-Forwarded-For": "127.0.0.1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}

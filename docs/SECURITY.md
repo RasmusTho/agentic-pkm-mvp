@@ -38,13 +38,15 @@ Current implementation:
   request supplies the matching `X-API-Key` header
 - the Companion UI same-origin proxy forwards the browser client address for vault select,
   initialize, and browse routes. The runtime honors `X-Forwarded-For` only when the immediate peer is
-  the loopback-local same-origin proxy; a raw docker-bridge, gateway, or other NAT hop is not a
-  trusted proxy boundary and cannot make a non-loopback caller count as loopback by sending
-  `X-Forwarded-For: 127.0.0.1`.
+  loopback or is listed in the opt-in `COMPANION_TRUSTED_PROXY_HOSTS` allowlist, so a configured
+  same-host docker-bridge gateway can preserve loopback-local operation without letting arbitrary
+  callers spoof loopback.
 - rate limiting is implemented via `slowapi` where routers apply explicit limit decorators
 
 Current configuration surface:
 - `API_KEY`
+- `COMPANION_TRUSTED_PROXY_HOSTS` (comma-separated trusted proxy IPs/hosts/CIDRs whose
+  `X-Forwarded-For` value may be used for Companion vault-route loopback/auth decisions)
 - `rate_limit_enabled`
 - `rate_limit_default`
 
@@ -52,9 +54,9 @@ Operational stance:
 - default to auth disabled for loopback-local operation unless explicitly configured
 - non-loopback use of state-changing Companion vault selection/initialization requires `API_KEY`
   and should fail with `401` when missing or invalid
-- keep the Companion proxy hop loopback-local when relying on forwarded client identity; a raw bridge
-  or gateway hop is not sufficient unless it is replaced by an authenticated or sanitizing proxy
-  boundary
+- docker-bridge or reverse-proxy deployments may add only the Companion gateway/proxy hop to
+  `COMPANION_TRUSTED_PROXY_HOSTS`; do not add broad untrusted LAN ranges unless that network is an
+  intentional trusted proxy boundary
 - rate limiting should protect public API surfaces without blocking internal trusted automation
 
 Remaining gaps:

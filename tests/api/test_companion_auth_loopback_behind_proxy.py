@@ -21,6 +21,7 @@ UNSAFE_BRIDGE_PEER = "172.18.0.5"
 @pytest.fixture(autouse=True)
 def reset_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(auth_module.settings, "api_key", None)
+    monkeypatch.setattr(auth_module.settings, "companion_trusted_proxy_hosts", "")
 
 
 @pytest.fixture()
@@ -136,6 +137,27 @@ def test_spoofed_forwarded_loopback_from_unsafe_bridge_peer_is_rejected(
     assert response.json()["detail"] == "API key required for non-loopback request"
     if created_path is not None:
         assert not created_path.exists()
+
+
+@pytest.mark.parametrize("route_request", ROUTE_REQUESTS, ids=("browse", "select", "initialize"))
+def test_forwarded_loopback_from_configured_bridge_proxy_is_allowed(
+    manager: VaultManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    route_request,
+) -> None:
+    monkeypatch.setattr(auth_module.settings, "companion_trusted_proxy_hosts", UNSAFE_BRIDGE_PEER)
+
+    response, created_path = route_request(
+        _client_from(UNSAFE_BRIDGE_PEER),
+        manager,
+        tmp_path,
+        headers={"X-Forwarded-For": "127.0.0.1"},
+    )
+
+    assert response.status_code == 200
+    if created_path is not None:
+        assert created_path.exists()
 
 
 def test_loopback_local_select_is_allowed_without_api_key(
