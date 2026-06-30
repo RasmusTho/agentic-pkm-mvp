@@ -43,8 +43,8 @@ stub are **not** the same operation):
 `memory_state` is a **superset of the canonical [semantic-dimensions](semantic-dimensions.md) review
 family** (`unreviewed`, `reviewed`, `corrected`, `decayed`, `forgotten`) plus the existence states
 (`active`, `invalidated`, `purged_stub`). Promotion and visibility are deliberately held in the other
-two fields, so no value is duplicated and the states cannot contradict (`memory_state` has no
-`promoted` value).
+two fields, so no value is duplicated and the states cannot contradict (`memory_state` contains only
+recall/existence values and has no suppression or promotion values).
 
 The lifecycle states this contract must support map to **exactly one** field each — no value is
 duplicated across fields, so a memory can never look (e.g.) promoted in one field while another says

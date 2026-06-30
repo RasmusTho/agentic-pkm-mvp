@@ -53,7 +53,7 @@
 
     "memory_state": {
       "$ref": "_defs.schema.json#/$defs/memory_state",
-      "description": "Coarse lifecycle position. active | suppressed | invalidated | tombstoned | purged_stub | promotion_requested | promoted | rejected. These are distinct states for distinct operations."
+      "description": "Coarse recall/existence lifecycle. Valid values are the memory-state axis in `_defs.schema.json#/$defs/memory_state`: unreviewed, reviewed, active, corrected, decayed, invalidated, forgotten, purged_stub. Promotion and visibility are tracked separately in `promotion_state` and `suppression_state`."
     },
     "suppression_state": {
       "$ref": "_defs.schema.json#/$defs/suppression_state",
