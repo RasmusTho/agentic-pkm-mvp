@@ -53,7 +53,8 @@ def test_compose_image_uses_pinned_tag_and_mount_is_flagged() -> None:
     assert "image: workspace-app" not in compose
     assert "- ./:/app" not in compose
     assert "- ./:/app" in overlay
-    assert "APP_CODE_BIND_COMPOSE ?= docker-compose.app-bind.yml" in makefile
+    assert "APP_CODE_BIND_COMPOSE ?=" in makefile
+    assert "APP_CODE_BIND_COMPOSE ?= docker-compose.app-bind.yml" not in makefile
     assert "COMPOSE_UP_BUILD := $(if $(strip $(APP_CODE_BIND_COMPOSE)),--build,)" in makefile
     assert "--env-file config/deploy/dev.env" in makefile
     assert "COMPOSE_FILE=\"$(COMPOSE_DEV_FILES)\"" in makefile
