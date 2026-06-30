@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from app.builderops.projections import PROJECTION_SPECS, BuilderOpsProjectionGenerator
+from app.builderops.projections import (
+    PROJECTION_SPECS,
+    BuilderOpsProjectionGenerator,
+    BuilderOpsValidationError,
+)
 from app.builderops.store import SqliteBuilderOpsStore
 
 
@@ -106,8 +110,9 @@ def test_learning_summary_projection_matches_seeded_builderops_records(
     )
 
 
-def test_queue_projections_exclude_terminal_records(
+def test_queue_projection_metadata_counts_exclude_terminal_records(
     store: SqliteBuilderOpsStore,
+    tmp_path: Path,
 ) -> None:
     queue_records = (
         (
@@ -285,16 +290,128 @@ def test_queue_projections_exclude_terminal_records(
         for terminal_record in terminal_records:
             creator(**terminal_record)
 
-        markdown = BuilderOpsProjectionGenerator(store).render_projection(
-            projection_type,
+        output_dir = tmp_path / projection_type
+        result = BuilderOpsProjectionGenerator(store).write_projections(
+            output_dir,
+            projection_types=[projection_type],
             generated_at=GENERATED_AT,
         )
 
+        assert result == [
+            {
+                "projection_type": projection_type,
+                "object_type": PROJECTION_SPECS[projection_type].object_type,
+                "path": str(output_dir / PROJECTION_SPECS[projection_type].filename),
+                "record_count": 1,
+                "generated_at": GENERATED_AT,
+            }
+        ]
+        markdown = (output_dir / PROJECTION_SPECS[projection_type].filename).read_text(
+            encoding="utf-8",
+        )
         assert f"Projection type: {projection_type}" in markdown
         assert "Record count: 1" in markdown
         assert active_record["summary"] in markdown
         for terminal_record in terminal_records:
             assert terminal_record["summary"] not in markdown
+
+
+def test_queue_projection_shrink_guard_uses_filtered_active_count(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "generated" / "builderops"
+
+    existing_store = SqliteBuilderOpsStore(tmp_path / "existing.sqlite3")
+    existing_store.initialize()
+    existing_store.create_docs_freshness_record(
+        id="docsfresh_existing_active_001",
+        summary="Existing active docs freshness record 1",
+        doc_ref={"ref_type": "repo_doc", "ref": "docs/existing-1.md"},
+        owner="BuilderOps governance",
+        review_cadence="event-driven",
+        freshness_posture="current",
+        drift_status="none",
+        last_reviewed_at="2026-06-01T00:00:00Z",
+        last_verified_against=[{"ref_type": "repo_doc", "ref": "docs/existing-1.md"}],
+        last_verified_at="2026-06-01T00:00:00Z",
+        next_review_due_at="2026-06-08T00:00:00Z",
+        stale_reasons=["none"],
+        freshness_evidence_refs=[{"ref_type": "github_issue", "ref": "#1001"}],
+        next_review_owner="BuilderOps governance",
+        source_refs=[{"ref_type": "repo_doc", "ref": "docs/existing-1.md"}],
+        created_by=_actor(),
+    )
+    existing_store.create_docs_freshness_record(
+        id="docsfresh_existing_active_002",
+        summary="Existing active docs freshness record 2",
+        doc_ref={"ref_type": "repo_doc", "ref": "docs/existing-2.md"},
+        owner="BuilderOps governance",
+        review_cadence="event-driven",
+        freshness_posture="current",
+        drift_status="none",
+        last_reviewed_at="2026-06-01T00:00:00Z",
+        last_verified_against=[{"ref_type": "repo_doc", "ref": "docs/existing-2.md"}],
+        last_verified_at="2026-06-01T00:00:00Z",
+        next_review_due_at="2026-06-08T00:00:00Z",
+        stale_reasons=["none"],
+        freshness_evidence_refs=[{"ref_type": "github_issue", "ref": "#1002"}],
+        next_review_owner="BuilderOps governance",
+        source_refs=[{"ref_type": "repo_doc", "ref": "docs/existing-2.md"}],
+        created_by=_actor(),
+    )
+    BuilderOpsProjectionGenerator(existing_store).write_projections(
+        output_dir,
+        projection_types=["docs-freshness"],
+        generated_at=GENERATED_AT,
+    )
+
+    incomplete_store = SqliteBuilderOpsStore(tmp_path / "incomplete.sqlite3")
+    incomplete_store.initialize()
+    incomplete_store.create_docs_freshness_record(
+        id="docsfresh_incomplete_active_001",
+        summary="Incomplete active docs freshness record",
+        doc_ref={"ref_type": "repo_doc", "ref": "docs/incomplete.md"},
+        owner="BuilderOps governance",
+        review_cadence="event-driven",
+        freshness_posture="current",
+        drift_status="none",
+        last_reviewed_at="2026-06-01T00:00:00Z",
+        last_verified_against=[{"ref_type": "repo_doc", "ref": "docs/incomplete.md"}],
+        last_verified_at="2026-06-01T00:00:00Z",
+        next_review_due_at="2026-06-08T00:00:00Z",
+        stale_reasons=["none"],
+        freshness_evidence_refs=[{"ref_type": "github_issue", "ref": "#1003"}],
+        next_review_owner="BuilderOps governance",
+        source_refs=[{"ref_type": "repo_doc", "ref": "docs/incomplete.md"}],
+        created_by=_actor(),
+    )
+    incomplete_store.create_docs_freshness_record(
+        id="docsfresh_incomplete_discarded_001",
+        summary="Incomplete discarded docs freshness record",
+        doc_ref={"ref_type": "repo_doc", "ref": "docs/incomplete.md"},
+        owner="BuilderOps governance",
+        review_cadence="event-driven",
+        freshness_posture="likely_stale",
+        drift_status="confirmed_stale",
+        last_reviewed_at="2026-06-01T00:00:00Z",
+        last_verified_against=[{"ref_type": "repo_doc", "ref": "docs/incomplete.md"}],
+        last_verified_at="2026-06-01T00:00:00Z",
+        next_review_due_at="2026-06-08T00:00:00Z",
+        stale_reasons=["discarded"],
+        freshness_evidence_refs=[{"ref_type": "github_issue", "ref": "#1004"}],
+        next_review_owner="BuilderOps governance",
+        lifecycle_state="discarded",
+        promotion_status="discarded",
+        source_refs=[{"ref_type": "repo_doc", "ref": "docs/incomplete.md"}],
+        created_by=_actor(),
+    )
+
+    with pytest.raises(BuilderOpsValidationError, match="selected store appears incomplete"):
+        BuilderOpsProjectionGenerator(incomplete_store).write_projections(
+            output_dir,
+            projection_types=["docs-freshness"],
+            generated_at=GENERATED_AT,
+        )
 
 
 def test_learning_summary_keeps_terminal_learning_records(
@@ -395,6 +512,36 @@ def test_write_projections_emits_expected_repo_markdown_files(
         source_refs=[{"ref_type": "github_issue", "ref": "#1505"}],
         created_by=_actor(),
     )
+    store.create_learning_signal(
+        id="lrn_projection_active_001",
+        summary="Projection write keeps terminal learning history",
+        content="Learning summary metadata still counts terminal records.",
+        signal_type="workflow",
+        source_refs=[{"ref_type": "github_issue", "ref": "#1505"}],
+        created_by=_actor(),
+    )
+    store.create_learning_signal(
+        id="lrn_projection_discarded_001",
+        summary="Discarded projection learning history",
+        content="Discarded learning summary content.",
+        signal_type="workflow",
+        lifecycle_state="discarded",
+        promotion_status="discarded",
+        source_refs=[{"ref_type": "github_issue", "ref": "#1506"}],
+        receipt_refs=["receipt_lrn_projection_discarded_001"],
+        created_by=_actor(),
+    )
+    store.create_learning_signal(
+        id="lrn_projection_superseded_001",
+        summary="Superseded projection learning history",
+        content="Superseded learning summary content.",
+        signal_type="workflow",
+        lifecycle_state="superseded",
+        promotion_status="superseded",
+        source_refs=[{"ref_type": "github_issue", "ref": "#1507"}],
+        receipt_refs=["receipt_lrn_projection_superseded_001"],
+        created_by=_actor(),
+    )
 
     output_dir = tmp_path / "generated" / "builderops"
     result = BuilderOpsProjectionGenerator(store).write_projections(
@@ -414,6 +561,8 @@ def test_write_projections_emits_expected_repo_markdown_files(
         "promotion-queue.md",
         "roadmap-execution.md",
     ]
+    result_by_type = {item["projection_type"]: item for item in result}
+    assert result_by_type["learning-summary"]["record_count"] == 3
     docs_freshness = (output_dir / "docs-freshness.md").read_text(encoding="utf-8")
     assert "- Drift status: none" in docs_freshness
     assert "- Last verified against: repo_doc:docs/ARCHITECTURE.md" in docs_freshness
@@ -429,6 +578,11 @@ def test_write_projections_emits_expected_repo_markdown_files(
     assert "- Blockers: none" in roadmap_execution
     assert "- Last movement: PR #1519 merged #1507." in roadmap_execution
     assert "- Shipped refs: pull_request:#1519" in roadmap_execution
+    learning_summary = (output_dir / "learning-summary.md").read_text(encoding="utf-8")
+    assert "Record count: 3" in learning_summary
+    assert "Projection write keeps terminal learning history" in learning_summary
+    assert "Discarded projection learning history" in learning_summary
+    assert "Superseded projection learning history" in learning_summary
     promotion_queue = (output_dir / "promotion-queue.md").read_text(encoding="utf-8")
     assert "Source of truth: BuilderOps Vault" in promotion_queue
     assert "non-authoritative" in promotion_queue
