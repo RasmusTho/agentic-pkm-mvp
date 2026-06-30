@@ -82,6 +82,13 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
             source_ref=existing.source_ref,
             created_at=existing.created_at,
         )
+    domain.payload = build_indexed_unit_payload(
+        object_id=domain.uuid,
+        kind=domain.kind,
+        source_ref=domain.source_ref or "",
+        payload=domain.payload,
+        text=str(content or ""),
+    )
     store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
     identity = get_embedding_identity()
