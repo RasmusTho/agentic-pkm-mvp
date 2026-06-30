@@ -151,15 +151,18 @@ How the human first meets, leaves, and re-meets the system.
 - **Situation:** the human returns after a short absence with a live leave point.
 - **Human intent:** low-cost cognitive re-entry — enough context to resume the trajectory without
   reconstructing it — felt at the periphery, never as a dashboard. The treatment is calibrated to the
-  gap (identity under ~90s; faint ambient cues through a few hours; a four-question "full mist" card
-  for longer short gaps), and unresolved tension shows as *counts, not enumerations*
+  gap (identity under ~90s and thread fade with no card; ambient cues for soft mist across the next few
+  hours; a four-question card only for `full_mist` and `long_mist`), and unresolved tension shows as
+  *counts, not enumerations*
   (`companion-ui/docs/CONTINUITY_AND_DECAY.md`; `docs/SYSTEM_ENTRY_POINT/REENTRY_ORIENTATION_TREATMENT.md`).
 - **Good:** a warm re-entry shape sized to the gap; resume is a peripheral affordance; visible items
   are capped (display budget), the shell opens in a recovery posture.
 - **Bad:** a card that enumerates/badges/centers on the document (an inbox, not a continuity aid); any
   notification/urgency/push semantics; asking the human to declare their trajectory state.
 - **Realized by:** `orienting` + `data-reentry-shape`; `leave_point` projected by orientation (ADR-0008).
-- **Status:** `settled` (SEP-01/SEP-02; ≤7d return resumes via a warm re-entry card, #2453).
+- **Status:** `settled` (SEP-01/SEP-02; warm return now follows the latency ladder: short rungs use
+  ambient/quiet re-entry cues, while four-question cards are reserved for `full_mist` and `long_mist`,
+  with no blanket `≤7d` card guarantee, #2453).
 
 ### A4. Returning cold — long gap ⚠
 
