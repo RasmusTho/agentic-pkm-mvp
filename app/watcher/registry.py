@@ -861,6 +861,23 @@ def _emit_panel_events(
     return trace_id
 
 
+def _sync_settings_local_state(
+    states: Mapping[str, WatcherState],
+    *,
+    rel_str: str,
+    mtime: float,
+    digest: str,
+    values: Mapping[str, object],
+) -> None:
+    for state in states.values():
+        state.update_file_state(
+            rel_str,
+            mtime=mtime,
+            content_hash=digest,
+            settings_runtime_values=values,
+        )
+
+
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -868,6 +885,7 @@ def _collect_changed_entries(
     summary: dict[str, object],
     *,
     scan_roots: Iterable[Path],
+    states: Mapping[str, WatcherState],
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
@@ -912,12 +930,7 @@ def _collect_changed_entries(
                 digest = hashed[0]
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
         if settings_delta.values is not None:
-            state.update_file_state(
-                rel_str,
-                mtime=mtime,
-                content_hash=digest,
-                settings_runtime_values=settings_delta.values,
-            )
+            _sync_settings_local_state(states, rel_str=rel_str, mtime=mtime, digest=digest, values=settings_delta.values)
     return changed_entries, scanned_paths
 
 
@@ -1117,6 +1130,7 @@ def _run_spec_tick(
     state: WatcherState,
     *,
     now: float,
+    states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
 ) -> dict[str, object]:
     tick_start = now
@@ -1164,7 +1178,15 @@ def _run_spec_tick(
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
     scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
-    changed_entries, scanned_paths = _collect_changed_entries(cfg, spec, state, summary, scan_roots=scan_roots)
+    active_states = states or {spec.name: state}
+    changed_entries, scanned_paths = _collect_changed_entries(
+        cfg,
+        spec,
+        state,
+        summary,
+        scan_roots=scan_roots,
+        states=active_states,
+    )
 
     summary["changed_in_tick"] = len(changed_entries)
     state.changed_detected += len(changed_entries)
@@ -1231,6 +1253,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
             spec,
             states[spec.name],
             now=now,
+            states=states,
             process_panel_notes_inline=True,
         )
         for spec in cfg.specs
@@ -1262,7 +1285,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
     while True:
         now = time.time()
         summaries = {
-            spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now)
+            spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now, states=states)
             for spec in cfg.specs
         }
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())

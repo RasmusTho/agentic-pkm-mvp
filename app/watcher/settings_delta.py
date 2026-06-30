@@ -51,14 +51,6 @@ def handle_settings_local_delta(
     if previous_values is None:
         return SettingsDeltaResult(values=current_values)
 
-    changed_keys = [
-        key
-        for key, value in current_values.items()
-        if previous_values.get(key) != value
-    ]
-    if not changed_keys:
-        return SettingsDeltaResult(values=current_values)
-
     manager = VaultManager(markdown_store=store)
     context = manager.validate_vault(vault_root)
     if context.status != "selected":
@@ -69,16 +61,34 @@ def handle_settings_local_delta(
         )
 
     service = settings_service or SettingsService(markdown_store=store)
+    resolution = service.resolve(context)
+    previous_keys = set(previous_values)
+    current_keys = set(current_values)
+    changed_keys = []
+    for key in sorted(previous_keys | current_keys):
+        current_present = key in current_keys
+        previous_present = key in previous_keys
+        if current_present != previous_present:
+            changed_keys.append(key)
+            continue
+        if current_present and previous_values.get(key) != current_values[key]:
+            changed_keys.append(key)
+    if not changed_keys:
+        return SettingsDeltaResult(values=current_values)
+
     receipts: list[SettingsWriteReceipt] = []
     errors: list[str] = []
     for key in changed_keys:
         try:
+            persist = key in current_keys
+            value = current_values[key] if persist else resolution.settings[key].value
             _effective, receipt = service.update_setting(
                 context,
                 key,
-                current_values[key],
+                value,
                 surface="file",
                 actor="human",
+                persist=persist,
             )
         except SettingsWriteError as exc:
             errors.append(str(exc))

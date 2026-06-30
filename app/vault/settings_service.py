@@ -234,6 +234,7 @@ class SettingsService:
         *,
         surface: str = "api",
         actor: str = "human",
+        persist: bool = True,
     ) -> tuple[EffectiveSetting, SettingsWriteReceipt]:
         """Write a single setting and return (effective_setting, receipt).
 
@@ -242,6 +243,10 @@ class SettingsService:
         WriteGuard health-gate is asserted first, then an actor-tagged receipt
         is emitted.  Non-runtime-gating settings follow the same path but are
         not write-guarded.
+
+        ``persist=False`` keeps the governed receipt path but skips writing the
+        file back. The watcher uses that mode when a runtime-gating key is
+        removed from frontmatter and the receipt should still be emitted.
 
         ``surface`` names the interaction origin (``'api'``, ``'cli'``,
         ``'file'``, ``'mcp'``); ``actor`` is the stable actor identity
@@ -294,7 +299,8 @@ class SettingsService:
 
         frontmatter = dict(document.frontmatter)
         frontmatter[key] = value
-        self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
+        if persist:
+            self.markdown_store.write_frontmatter(path, frontmatter, body=document.body)
 
         effective = EffectiveSetting(
             key=key,

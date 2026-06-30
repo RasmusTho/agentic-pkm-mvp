@@ -112,8 +112,12 @@ def test_runtime_gating_setting_write_is_governed(tmp_path: Path) -> None:
     captured_receipts: list[SettingsWriteReceipt] = []
     original_update = SettingsService.update_setting
 
-    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
-        result, receipt = original_update(self, context, key, value, surface=surface, actor=actor)
+    def _spy_update(
+        self: SettingsService, context, key, value, *, surface="api", actor="human", persist=True
+    ):
+        result, receipt = original_update(
+            self, context, key, value, surface=surface, actor=actor, persist=persist
+        )
         captured_receipts.append(receipt)
         return result, receipt
 
@@ -151,8 +155,12 @@ def test_auto_indexing_setting_write_is_governed(tmp_path: Path) -> None:
     captured_receipts: list[SettingsWriteReceipt] = []
     original_update = SettingsService.update_setting
 
-    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
-        result, receipt = original_update(self, context, key, value, surface=surface, actor=actor)
+    def _spy_update(
+        self: SettingsService, context, key, value, *, surface="api", actor="human", persist=True
+    ):
+        result, receipt = original_update(
+            self, context, key, value, surface=surface, actor=actor, persist=persist
+        )
         captured_receipts.append(receipt)
         return result, receipt
 
@@ -182,8 +190,12 @@ def test_non_runtime_gating_setting_write_emits_receipt_not_gated(tmp_path: Path
     captured_receipts: list[SettingsWriteReceipt] = []
     original_update = SettingsService.update_setting
 
-    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
-        result, receipt = original_update(self, context, key, value, surface=surface, actor=actor)
+    def _spy_update(
+        self: SettingsService, context, key, value, *, surface="api", actor="human", persist=True
+    ):
+        result, receipt = original_update(
+            self, context, key, value, surface=surface, actor=actor, persist=persist
+        )
         captured_receipts.append(receipt)
         return result, receipt
 
@@ -294,9 +306,11 @@ def test_watcher_settings_delta_routes_runtime_gating_key_through_settings_servi
     captured_calls: list[tuple[str, object, str, str]] = []
     original_update = SettingsService.update_setting
 
-    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
+    def _spy_update(
+        self: SettingsService, context, key, value, *, surface="api", actor="human", persist=True
+    ):
         captured_calls.append((key, value, surface, actor))
-        return original_update(self, context, key, value, surface=surface, actor=actor)
+        return original_update(self, context, key, value, surface=surface, actor=actor, persist=persist)
 
     first = run_tick(cfg, state, now=1_700_000_000.0)
     assert first["changed_in_tick"] >= 1
@@ -320,8 +334,12 @@ def test_watcher_settings_delta_emits_file_surface_receipt(tmp_path: Path) -> No
     captured_receipts: list[SettingsWriteReceipt] = []
     original_update = SettingsService.update_setting
 
-    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
-        effective, receipt = original_update(self, context, key, value, surface=surface, actor=actor)
+    def _spy_update(
+        self: SettingsService, context, key, value, *, surface="api", actor="human", persist=True
+    ):
+        effective, receipt = original_update(
+            self, context, key, value, surface=surface, actor=actor, persist=persist
+        )
         captured_receipts.append(receipt)
         return effective, receipt
 
@@ -350,8 +368,12 @@ def test_watcher_settings_delta_receipt_scope_is_runtime_gating_only(tmp_path: P
     captured_receipts: list[SettingsWriteReceipt] = []
     original_update = SettingsService.update_setting
 
-    def _spy_update(self: SettingsService, context, key, value, *, surface="api", actor="human"):
-        effective, receipt = original_update(self, context, key, value, surface=surface, actor=actor)
+    def _spy_update(
+        self: SettingsService, context, key, value, *, surface="api", actor="human", persist=True
+    ):
+        effective, receipt = original_update(
+            self, context, key, value, surface=surface, actor=actor, persist=persist
+        )
         captured_receipts.append(receipt)
         return effective, receipt
 
