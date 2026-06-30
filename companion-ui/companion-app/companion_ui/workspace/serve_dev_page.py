@@ -830,6 +830,29 @@ _GLYPH_STATE_CHAR: dict[str, str] = {
     _GLYPH_NERE: "○",
 }
 
+_GLYPH_ATTENTION_LIVENESS_STATUSES: frozenset[str] = frozenset(
+    {
+        "dead",
+        "future",
+        "invalid",
+        "malformed",
+        "missing",
+        "stalled",
+        "stale",
+        "unavailable",
+    }
+)
+
+
+def _liveness_needs_attention(runtime_state: object) -> bool:
+    """Return True when a runtime liveness payload should degrade the glyph."""
+    if not isinstance(runtime_state, dict):
+        return False
+    status = str(runtime_state.get("status") or "").lower()
+    if status in _GLYPH_ATTENTION_LIVENESS_STATUSES:
+        return True
+    return runtime_state.get("ok") is False
+
 
 def _derive_health_glyph_state(
     health: Optional[dict],
@@ -870,9 +893,14 @@ def _derive_health_glyph_state(
     if write_guard == "blocked":
         return _GLYPH_PAUSAD, "Skrivningar pausade"
 
-    # uppmärksamhet: worker stale or missing heartbeat.
-    if worker is None or (isinstance(worker, dict) and worker.get("status") in ("stale", "missing", "unavailable")):
+    # uppmärksamhet: worker stalled / missing / otherwise unhealthy.
+    if worker is None or _liveness_needs_attention(worker):
         return _GLYPH_UPPMÄRKSAMHET, "Worker stalled"
+
+    # uppmärksamhet: watcher stalled / missing / otherwise unhealthy.
+    watcher = runtime.get("watcher") if isinstance(runtime, dict) else None
+    if _liveness_needs_attention(watcher):
+        return _GLYPH_UPPMÄRKSAMHET, "Watcher needs attention"
 
     # uppmärksamhet: write_guard not active (unavailable = degraded path).
     if write_guard is not None and write_guard not in ("active",):
