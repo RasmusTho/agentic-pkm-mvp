@@ -46,7 +46,7 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
   - Setting this changes the embedding **identity** (provider) and therefore requires a vector-index rebuild — see *Change policy* and the re-index path.
 - `EMBED_FALLBACK_PROVIDER`
-  - Optional secondary provider consulted only on primary-provider failure (read by the fallback orchestration; the registry slice only wires selection). A **dimension-matched (768), L2-renormalized** fallback is required; its write is **MIXED-IDENTITY** (carries the fallback provider's identity) and **reconcilable**, with the query path always using the primary identity (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The sanctioned posture is Ollama-primary with a Gemini `gemini-embedding-001` @ `output_dimensionality=768` fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; see the disciplined-fallback / reconcile path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
+  - Optional secondary provider consulted only after the primary embed path exhausts its retry budget. A **dimension-matched (768), L2-renormalized** fallback is required; its write is **MIXED-IDENTITY** (carries the fallback provider's identity) and **reconcilable**, with the query path always using the primary identity (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The sanctioned posture is Ollama-primary with a Gemini `gemini-embedding-001` @ `output_dimensionality=768` fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; when no Gemini key is present (`GEMINI_API_KEY` or `GOOGLE_API_KEY`), the object is dead-lettered locally and no Google egress occurs. See the disciplined-fallback / reconcile path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
@@ -215,6 +215,7 @@ For each object:
   - provenance (provider/model/identity)
   - view (e.g., `markdown.semantic`)
   - actual_dim (record what we got back)
+  - when fallback is used, `provenance.provider` reflects the fallback provider (`gemini`) and event `meta` includes `fallback_used=true` plus `primary_provider=<primary>`
 
 ### Failure
 

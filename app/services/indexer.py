@@ -8,7 +8,8 @@ from typing import Dict
 
 from app.components.embeddings import get_embedding_client, get_embedding_identity
 from app.index.artifact_metadata import build_indexed_unit_payload
-from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
+from app.llm.embed_queue import EmbedDeadLetterError
+from app.llm.fallback_orchestrator import embed_with_fallback
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.objects import DomainObject, ObjectStore
@@ -92,17 +93,17 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     store.save_object(domain, emit_outbox=False, trace_id=trace_id)
 
     identity = get_embedding_identity()
+    actual_identity = identity
     embedding: list[float] | None = None
     actual_dim: int | None = None
+    is_fallback = False
 
     try:
-        embedding = embed_with_retry(
+        embedding, actual_identity, is_fallback = embed_with_fallback(
             content,
-            dim=identity.dim,
+            primary_identity=identity,
             object_id=object_uuid,
-            # Retry the injected embedder so test doubles and the configured client
-            # stay on the path; the callable owns provider/model/dim/normalize.
-            embed_callable=lambda: llm_embed_text(
+            primary_embed_callable=lambda: llm_embed_text(
                 text=content,
                 provider=identity.provider,
                 model=identity.model,
@@ -139,35 +140,45 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         return
 
     vector_index = get_vector_index()
-    model_name = identity.model
+    model_name = actual_identity.model
 
     object_uuid_val = _uuid.UUID(object_uuid)
     with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):
         try:
             vector_index.purge_vectors(object_uuid_val, view=DEFAULT_EMBEDDING_VIEW)
-            vector_index.upsert(
-                object_uuid_val,
-                kind=domain.kind,
-                source_ref=domain.source_ref or "",
-                payload=build_indexed_unit_payload(
+            upsert_kwargs = {
+                "kind": domain.kind,
+                "source_ref": domain.source_ref or "",
+                "payload": build_indexed_unit_payload(
                     object_id=object_uuid_val,
                     kind=domain.kind,
                     source_ref=domain.source_ref or "",
                     payload=domain.payload,
                     text=str(content or ""),
-                    embedding_identity=identity,
+                    embedding_identity=actual_identity,
                 ),
-                embedding=embedding,
-                model=model_name,
-                identity=identity,
-            )
+                "embedding": embedding,
+                "model": model_name,
+                "identity": actual_identity,
+            }
+            if is_fallback:
+                upsert_kwargs["reconcilable_fallback"] = True
+            vector_index.upsert(object_uuid_val, **upsert_kwargs)
             emit_index_object_embedded(
                 object_id=object_uuid,
                 trace_id=trace_id,
                 source_ref=domain.source_ref,
-                provider=identity.provider,
+                provider=actual_identity.provider,
                 model=model_name,
                 dim=actual_dim,
+                meta=(
+                    {
+                        "fallback_used": True,
+                        "primary_provider": identity.provider,
+                    }
+                    if is_fallback
+                    else None
+                ),
             )
         except Exception as exc:  # pragma: no cover - best-effort logging path
             logger.exception("Vector index ingest failed for %s", object_uuid)
@@ -175,9 +186,9 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
                 object_id=object_uuid,
                 trace_id=trace_id,
                 source_ref=domain.source_ref,
-                provider=identity.provider,
+                provider=actual_identity.provider,
                 model=model_name,
-                expected_dim=identity.dim,
+                expected_dim=actual_identity.dim,
                 actual_dim=actual_dim,
                 error=str(exc),
             )

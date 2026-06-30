@@ -136,17 +136,26 @@ def _build_index_record(
     return record
 
 
-def emit_index_embedding_created(*, object_id: UUID, trace_id: str | None = None, source: str = "indexer") -> None:
+def emit_index_embedding_created(
+    *,
+    object_id: UUID,
+    trace_id: str | None = None,
+    source: str = "indexer",
+    provider: str | None = None,
+    model: str | None = None,
+    dim: int | None = None,
+    meta: Dict[str, Any] | None = None,
+) -> None:
     envelope = make_outbox_event(
         INDEX_EMBEDDING_CREATED,
         source=source,
         trace_id=trace_id,
         payload={"object_id": str(object_id)},
-        meta={},
+        meta=meta or {},
     )
 
-    metrics = {"vectors": 1, "dim": get_embed_dim(), "view": DEFAULT_EMBEDDING_VIEW}
-    provenance = {"model": EMBED_MODEL, "version": "1.0"}
+    metrics = {"vectors": 1, "dim": dim or get_embed_dim(), "view": DEFAULT_EMBEDDING_VIEW}
+    provenance = {"model": model or EMBED_MODEL, "provider": provider or "indexer", "version": "1.0"}
     record = _build_index_record(envelope, object_id=str(object_id), metrics=metrics, provenance=provenance)
     _append_record_best_effort(record, event_name=INDEX_EMBEDDING_CREATED)
 
