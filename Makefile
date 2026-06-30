@@ -8,11 +8,12 @@ PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python;
 # implicitly. `start-test-system` has a separate idle-by-default derivation
 # below so a fresh checkout can boot with no vault selected.
 TEST_VAULT_ROOT ?= $(or $(VAULT_ROOT_TEST),vault-test)
-# `start-test-system` should only honor an explicitly supplied test vault path.
-# If neither TEST_VAULT_ROOT nor VAULT_ROOT_TEST was explicitly set by the
-# caller, leave VAULT_ROOT empty so scripts/start_full_system.sh enters the
-# no-vault idle posture instead of forcing the repo-local scratch vault.
-START_TEST_SYSTEM_VAULT_ROOT := $(if $(filter command line environment,$(origin TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),$(if $(filter command line environment,$(origin VAULT_ROOT_TEST)),$(VAULT_ROOT_TEST),))
+# `start-test-system` should honor explicit test vault paths, and it should
+# keep the documented seeded local bootstrap path bound to vault-test after
+# `make test-vault-init` creates it. A fresh checkout with no seeded vault
+# leaves VAULT_ROOT empty so scripts/start_full_system.sh enters the no-vault
+# idle posture instead of failing on a missing scratch vault.
+START_TEST_SYSTEM_VAULT_ROOT := $(if $(filter command line environment,$(origin TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),$(if $(filter command line environment,$(origin VAULT_ROOT_TEST)),$(VAULT_ROOT_TEST),$(if $(wildcard $(TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),)))
 # Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
 # promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
 # the in-container `db:5432` address is unreachable from the host (issue #1997

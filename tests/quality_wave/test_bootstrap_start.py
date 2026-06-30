@@ -291,6 +291,36 @@ class TestBootstrapStartContract:
             f"Expected a clear missing-vault error for explicit TEST_VAULT_ROOT; got: {combined[:500]}"
         )
 
+    def test_make_start_test_system_uses_seeded_repo_local_vault(self, tmp_path: Path) -> None:
+        """After test-vault-init creates vault-test, start-test-system binds it."""
+        (tmp_path / "vault-test").mkdir()
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")
+        }
+        result = subprocess.run(
+            [
+                "make",
+                "--dry-run",
+                "-f",
+                str(Path.cwd() / "Makefile"),
+                "-C",
+                str(tmp_path),
+                "start-test-system",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        combined = result.stderr + result.stdout
+        assert result.returncode == 0, (
+            f"make start-test-system must resolve with a seeded vault-test: {combined[:500]}"
+        )
+        assert 'VAULT_ROOT="vault-test"' in combined, (
+            f"Expected seeded repo-local vault-test to bind start-test-system; got: {combined[:500]}"
+        )
+
     def test_seed_flow_uses_repo_local_vault_test_fallback(self) -> None:
         """Provisioning can seed the repo-local test scratch vault by default."""
         env = {
