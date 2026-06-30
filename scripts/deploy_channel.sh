@@ -30,8 +30,34 @@ EOF
 
 action="${1:-}"
 channel="${2:-}"
-target_sha="${3:-}"
-shift $(( $# < 3 ? $# : 3 ))
+target_sha=""
+
+case "${action}" in
+  deploy)
+    [ "$#" -ge 3 ] || { usage; exit 2; }
+    target_sha="${3:-}"
+    case "${target_sha}" in
+      --*)
+        usage
+        exit 2
+        ;;
+    esac
+    shift 3
+    ;;
+  rollback)
+    [ "$#" -ge 2 ] || { usage; exit 2; }
+    if [ "$#" -ge 3 ] && [[ "${3:-}" != --* ]]; then
+      target_sha="${3}"
+      shift 3
+    else
+      shift 2
+    fi
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
 
 dry_run="${DEPLOY_DRY_RUN:-0}"
 ack_forward_only="${DEPLOY_ACK_FORWARD_ONLY:-0}"
@@ -43,11 +69,6 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-
-case "${action}" in
-  deploy|rollback) ;;
-  *) usage; exit 2 ;;
-esac
 
 case "${channel}" in
   dev)
