@@ -69,7 +69,7 @@ def test_wrappers_invoke_managed_unit() -> None:
     for wrapper in wrappers:
         text = (REPO_ROOT / wrapper).read_text(encoding="utf-8")
         assert "cui_run_start" in text
-        assert "docker-compose.app-bind.yml" in text
+        assert "docker-compose.app-bind.yml" not in text
         assert "nohup" not in text
 
 

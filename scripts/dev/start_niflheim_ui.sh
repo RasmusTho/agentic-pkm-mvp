@@ -24,7 +24,7 @@ CUI_EXPECTED_VAULT_PATTERN="nife?lheim"
 CUI_EXPECTED_VAULT_LABEL="Niflheim/Nifelheim"
 CUI_API_PORT="18001"
 CUI_UI_PORT="8111"
-CUI_COMPOSE_FILES="docker-compose.yaml:docker-compose.app-bind.yml:docker-compose.dev.yml"
+CUI_COMPOSE_FILES="docker-compose.yaml:docker-compose.dev.yml"
 CUI_COMPOSE_PROJECT="pkm-dev"
 CUI_SERVE_MODULE="companion_ui.workspace.serve_dev_page"
 export CUI_CHANNEL CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL \
