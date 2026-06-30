@@ -1,4 +1,5 @@
 import os
+import shlex
 import typing as t
 
 
@@ -24,6 +25,25 @@ def dsn() -> str:
     return resolve_dsn()
 
 
+def _keyword_conninfo_parts(conninfo: str) -> t.Optional[dict[str, str]]:
+    if "://" in conninfo or "=" not in conninfo:
+        return None
+    try:
+        fields = shlex.split(conninfo)
+    except ValueError:
+        return {}
+
+    parts: dict[str, str] = {}
+    for field in fields:
+        if "=" not in field:
+            return {}
+        key, value = field.split("=", 1)
+        if not key:
+            return {}
+        parts[key.lower()] = value
+    return parts
+
+
 def looks_like_prod_dsn(conninfo: t.Optional[str] = None) -> bool:
     """Heuristic: does this DSN point at the production database?
 
@@ -39,6 +59,24 @@ def looks_like_prod_dsn(conninfo: t.Optional[str] = None) -> bool:
     url = resolve_dsn(conninfo)
     if not url:
         return False
+
+    keyword_parts = _keyword_conninfo_parts(url)
+    if keyword_parts is not None:
+        if not keyword_parts:
+            return True
+        if keyword_parts.get("dbname") == "app":
+            return True
+        port = keyword_parts.get("port")
+        if port is not None:
+            try:
+                return int(port) == 15432
+            except ValueError:
+                return True
+        return False
+
+    if "://" not in url:
+        return True
+
     try:
         from urllib.parse import urlsplit  # noqa: PLC0415
 

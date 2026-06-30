@@ -331,12 +331,22 @@ def test_looks_like_prod_dsn_flags_prod_port() -> None:
     assert looks_like_prod_dsn("postgresql://app:app@127.0.0.1:15432/somedb") is True
 
 
+def test_looks_like_prod_dsn_flags_keyword_prod_conninfo() -> None:
+    from app.db.dsn import looks_like_prod_dsn  # noqa: PLC0415
+
+    assert looks_like_prod_dsn("host=127.0.0.1 port=15432 dbname=app user=app") is True
+    assert looks_like_prod_dsn("host=127.0.0.1 port=15433 dbname=app user=app") is True
+    assert looks_like_prod_dsn("host=127.0.0.1 port=15432 dbname=app_dev user=app") is True
+
+
 def test_looks_like_prod_dsn_allows_dev_and_test() -> None:
     from app.db.dsn import looks_like_prod_dsn  # noqa: PLC0415
 
     # Dev = app_dev:15433, test = app_test:15434 — neither should flag.
     assert looks_like_prod_dsn("postgresql://app:app@127.0.0.1:15433/app_dev") is False
     assert looks_like_prod_dsn("postgresql://app:app@127.0.0.1:15434/app_test") is False
+    assert looks_like_prod_dsn("host=127.0.0.1 port=15433 dbname=app_dev user=app") is False
+    assert looks_like_prod_dsn("host=127.0.0.1 port=15434 dbname=app_test user=app") is False
     # Empty DSN is not prod.
     assert looks_like_prod_dsn("") is False
 

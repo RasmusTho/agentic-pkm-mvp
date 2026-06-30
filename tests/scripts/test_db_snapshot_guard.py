@@ -7,6 +7,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,8 +30,16 @@ def _write_fake_pg_dump(bin_dir: Path, marker_path: Path) -> None:
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
 
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql+psycopg://app:app@127.0.0.1:15432/app",
+        "host=127.0.0.1 port=15432 dbname=app user=app",
+    ],
+)
 def test_db_snapshot_refuses_prod_dsn_or_never_emits_dev_prefixed_dump(
     tmp_path: Path,
+    database_url: str,
 ) -> None:
     snapshot_dir = tmp_path / ".db-snapshots"
     fake_bin = tmp_path / "bin"
@@ -39,7 +49,7 @@ def test_db_snapshot_refuses_prod_dsn_or_never_emits_dev_prefixed_dump(
     env = os.environ.copy()
     env.update(
         {
-            "DATABASE_URL": "postgresql+psycopg://app:app@127.0.0.1:15432/app",
+            "DATABASE_URL": database_url,
             "DB_DSN": "",
             "PATH": f"{fake_bin}{os.pathsep}{env.get('PATH', '')}",
             "PYTHON": sys.executable,
