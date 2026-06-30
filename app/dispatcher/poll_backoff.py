@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timezone
 import email.utils
@@ -122,11 +123,19 @@ def poll_until(
 
 
 CODEX_VERDICT_QUERY = """
-query CodexVerdict($owner: String!, $repo: String!, $pr: Int!) {
+query CodexVerdict(
+  $owner: String!,
+  $repo: String!,
+  $pr: Int!,
+  $reviewsCursor: String,
+  $threadsCursor: String,
+  $issueCommentsCursor: String,
+  $reactionsCursor: String
+) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
-      reviews(first: 100) {
-        pageInfo { hasNextPage }
+      reviews(first: 100, after: $reviewsCursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           author { login }
           state
@@ -134,11 +143,12 @@ query CodexVerdict($owner: String!, $repo: String!, $pr: Int!) {
           commit { oid }
         }
       }
-      reviewThreads(first: 100) {
-        pageInfo { hasNextPage }
+      reviewThreads(first: 100, after: $threadsCursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
+          id
           comments(first: 100) {
-            pageInfo { hasNextPage }
+            pageInfo { hasNextPage endCursor }
             nodes {
               author { login }
               body
@@ -147,16 +157,16 @@ query CodexVerdict($owner: String!, $repo: String!, $pr: Int!) {
           }
         }
       }
-      comments(first: 100) {
-        pageInfo { hasNextPage }
+      comments(first: 100, after: $issueCommentsCursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           author { login }
           body
           createdAt
         }
       }
-      reactions(first: 100) {
-        pageInfo { hasNextPage }
+      reactions(first: 100, after: $reactionsCursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           content
           createdAt
@@ -173,6 +183,24 @@ query CodexVerdict($owner: String!, $repo: String!, $pr: Int!) {
               login
             }
           }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+CODEX_THREAD_COMMENTS_QUERY = """
+query CodexThreadComments($threadId: ID!, $commentsCursor: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $commentsCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          author { login }
+          body
+          originalCommit { oid }
         }
       }
     }
@@ -289,6 +317,80 @@ class GraphQLClient(Protocol):
     def __call__(self, query: str, variables: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
+def _pull_request(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    return payload.get("data", {}).get("repository", {}).get("pullRequest") or {}
+
+
+def _connection(payload: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    return _pull_request(payload).get(name) or {}
+
+
+def _page_info(connection: Mapping[str, Any]) -> Mapping[str, Any]:
+    return connection.get("pageInfo") or {}
+
+
+def _merge_connection_nodes(target: dict[str, Any], page: Mapping[str, Any], name: str) -> None:
+    target_pr = target["data"]["repository"]["pullRequest"]
+    target_connection = target_pr.setdefault(name, {"nodes": [], "pageInfo": {}})
+    page_connection = _connection(page, name)
+    target_connection.setdefault("nodes", []).extend(page_connection.get("nodes") or [])
+    target_connection["pageInfo"] = dict(_page_info(page_connection))
+
+
+def _fetch_complete_codex_payload(
+    client: GraphQLClient,
+    variables: Mapping[str, Any],
+    *,
+    max_pages: int = 100,
+) -> Mapping[str, Any]:
+    payload = deepcopy(client(CODEX_VERDICT_QUERY, variables))
+    cursor_vars = {
+        "reviews": "reviewsCursor",
+        "reviewThreads": "threadsCursor",
+        "comments": "issueCommentsCursor",
+        "reactions": "reactionsCursor",
+    }
+
+    for _ in range(max_pages):
+        cursors = {
+            var_name: _page_info(_connection(payload, connection_name)).get("endCursor")
+            for connection_name, var_name in cursor_vars.items()
+            if _page_info(_connection(payload, connection_name)).get("hasNextPage")
+        }
+        if not cursors:
+            break
+        if any(cursor in (None, "") for cursor in cursors.values()):
+            return payload
+
+        page_variables = dict(variables)
+        page_variables.update(cursors)
+        page = client(CODEX_VERDICT_QUERY, page_variables)
+        for connection_name, var_name in cursor_vars.items():
+            if var_name in cursors:
+                _merge_connection_nodes(payload, page, connection_name)
+
+    review_threads = ((_pull_request(payload).get("reviewThreads") or {}).get("nodes") or [])
+    for thread in review_threads:
+        comments = thread.get("comments") or {}
+        for _ in range(max_pages):
+            page_info = _page_info(comments)
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+            thread_id = thread.get("id")
+            if not cursor or not thread_id:
+                break
+            page = client(
+                CODEX_THREAD_COMMENTS_QUERY,
+                {"threadId": thread_id, "commentsCursor": cursor},
+            )
+            page_comments = ((page.get("data") or {}).get("node") or {}).get("comments") or {}
+            comments.setdefault("nodes", []).extend(page_comments.get("nodes") or [])
+            comments["pageInfo"] = dict(_page_info(page_comments))
+            thread["comments"] = comments
+    return payload
+
+
 def resolve_codex_verdict(
     *,
     repo: str,
@@ -302,7 +404,7 @@ def resolve_codex_verdict(
     owner, name = repo.split("/", 1)
     if client is None:
         client = gh_graphql
-    payload = client(CODEX_VERDICT_QUERY, {"owner": owner, "repo": name, "pr": pr})
+    payload = _fetch_complete_codex_payload(client, {"owner": owner, "repo": name, "pr": pr})
     return parse_codex_verdict(payload, head_sha=head_sha, head_started_at=head_started_at)
 
 
