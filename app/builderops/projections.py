@@ -108,21 +108,7 @@ class BuilderOpsProjectionGenerator:
     ) -> str:
         spec = _projection_spec(projection_type)
         timestamp = generated_at or utc_now()
-        records = sorted(
-            self._store.list_records(spec.object_type),
-            key=lambda record: (
-                str(record.get("created_at", "")),
-                str(record.get("id", "")),
-            ),
-        )
-        if spec.projection_type != "learning-summary":
-            # Queue-style projections are active work surfaces; retrospective summaries keep
-            # terminal history visible for review and learning.
-            records = [
-                record
-                for record in records
-                if record.get("lifecycle_state") not in TERMINAL_QUEUE_LIFECYCLE_STATES
-            ]
+        records = _projection_records(self._store, spec)
         return _render_projection(spec, records, timestamp)
 
     def write_projections(
@@ -135,7 +121,7 @@ class BuilderOpsProjectionGenerator:
         selected = _selected_specs(projection_types)
         timestamp = generated_at or utc_now()
         record_counts = {
-            spec.projection_type: len(self._store.list_records(spec.object_type))
+            spec.projection_type: len(_projection_records(self._store, spec))
             for spec in selected
         }
         _guard_against_incomplete_projection_store(
@@ -147,10 +133,8 @@ class BuilderOpsProjectionGenerator:
         output_dir.mkdir(parents=True, exist_ok=True)
         results: list[dict[str, Any]] = []
         for spec in selected:
-            markdown = self.render_projection(
-                spec.projection_type,
-                generated_at=timestamp,
-            )
+            records = _projection_records(self._store, spec)
+            markdown = _render_projection(spec, records, timestamp)
             record_count = record_counts[spec.projection_type]
             path = output_dir / spec.filename
             path.write_text(markdown, encoding="utf-8")
@@ -184,6 +168,28 @@ def _selected_specs(
     if not selected:
         return [PROJECTION_SPECS[key] for key in sorted(PROJECTION_SPECS)]
     return selected
+
+
+def _projection_records(
+    store: SqliteBuilderOpsStore,
+    spec: BuilderOpsProjectionSpec,
+) -> list[dict[str, Any]]:
+    records = sorted(
+        store.list_records(spec.object_type),
+        key=lambda record: (
+            str(record.get("created_at", "")),
+            str(record.get("id", "")),
+        ),
+    )
+    if spec.projection_type == "learning-summary":
+        return records
+    # Queue-style projections are active work surfaces; retrospective summaries keep
+    # terminal history visible for review and learning.
+    return [
+        record
+        for record in records
+        if record.get("lifecycle_state") not in TERMINAL_QUEUE_LIFECYCLE_STATES
+    ]
 
 
 def _guard_against_incomplete_projection_store(
