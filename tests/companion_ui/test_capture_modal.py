@@ -645,6 +645,7 @@ def test_refused_capture_draft_restored_after_cold_start_picker_swap() -> None:
 
     for html in (cold, picker):
         assert "window.restoreRefusedWriteDraft" in html
+        assert "function runRestore(attempt)" in html
         assert "kind: 'capture'" in html
         assert "captureInput.value = draft.text" in html
         assert "data-refused-write-draft-restored" in html
@@ -668,6 +669,8 @@ def test_capture_input_preserved_before_document_write_on_vault_selection_requir
 
     assert "renderVaultSelectionRequired(ack, text)" in script
     assert "renderVaultSelectionRequired(body, text)" in script
+    assert "var draftText = input ? input.value : text;" in script
+    assert "text: draftText" in script
     assert "kind: 'capture'" in html
     assert "window.sessionStorage.setItem(refusedWriteDraftKey" in html
     assert "window.renderVaultSelectionRequiredPicker" in html

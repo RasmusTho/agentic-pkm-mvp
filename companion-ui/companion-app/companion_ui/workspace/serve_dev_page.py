@@ -2055,6 +2055,31 @@ def _refused_write_draft_restore_script() -> str:
   </script>"""
 
 
+def _refused_write_draft_restore_boot_script() -> str:
+    """Run refused-draft restore after the page and late-mounted editors settle."""
+    return """
+  <script>
+  (function() {
+    function runRestore(attempt) {
+      if (window.restoreRefusedWriteDraft) {
+        window.restoreRefusedWriteDraft();
+      }
+      if (attempt < 20) {
+        try {
+          var raw = window.sessionStorage.getItem('companion.refusedWriteDraft.v1');
+          if (raw) { window.setTimeout(function() { runRestore(attempt + 1); }, 25); }
+        } catch (e) {}
+      }
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function() { runRestore(0); });
+    } else {
+      runRestore(0);
+    }
+  })();
+  </script>"""
+
+
 def _canvas_coauthor_script(canvas_enabled: bool) -> str:
     """Live canvas co-authoring loop wiring (#1733).
 
@@ -8325,6 +8350,7 @@ def _render_orientation_index_html(
         + system_map_overlay_script()
         + (capture_modal_script() if is_cold else "")
         + (_refused_write_draft_restore_script() if is_cold else "")
+        + (_refused_write_draft_restore_boot_script() if is_cold else "")
         # Guidance layer (#1788, SEP-06): the re-entry card and the map head
         # carry the ⓘ affordance on the entry surfaces, so the visibility
         # gate and the UI-local toggle controller ship with the substrate.
@@ -14830,26 +14856,7 @@ def render_index_html(
   {_display_preferences_script()}
   {_note_readback_script()}
   {_note_editor_script()}
-  <script>
-  (function() {{
-    function runRestore(attempt) {{
-      if (window.restoreRefusedWriteDraft) {{
-        window.restoreRefusedWriteDraft();
-      }}
-      if (attempt < 20) {{
-        try {{
-          var raw = window.sessionStorage.getItem('companion.refusedWriteDraft.v1');
-          if (raw) {{ window.setTimeout(function() {{ runRestore(attempt + 1); }}, 25); }}
-        }} catch (e) {{}}
-      }}
-    }}
-    if (document.readyState === 'loading') {{
-      document.addEventListener('DOMContentLoaded', function() {{ runRestore(0); }});
-    }} else {{
-      runRestore(0);
-    }}
-  }})();
-  </script>
+  {_refused_write_draft_restore_boot_script()}
   {_note_chrome_script()}
   {settings_drawer_script()}
   {vault_settings_panel_js}
