@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
     api_key: str | None = None
-    companion_trusted_proxy_hosts: str = ""
     rate_limit_enabled: bool = False
     rate_limit_redis_url: str | None = None
     rate_limit_default: str = "60/minute"

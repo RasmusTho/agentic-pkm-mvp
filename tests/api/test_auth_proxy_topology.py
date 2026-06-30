@@ -13,7 +13,6 @@ from app.auth import require_loopback_or_api_key
 @pytest.fixture(autouse=True)
 def reset_auth_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(auth_module.settings, "api_key", None)
-    monkeypatch.setattr(auth_module.settings, "companion_trusted_proxy_hosts", "")
 
 
 @pytest.fixture()
