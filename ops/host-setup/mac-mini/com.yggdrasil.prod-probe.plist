@@ -4,9 +4,9 @@
      __PROBE__ with the absolute path to prod_probe.py.
      Runs the prod-down backstop probe on a configurable interval (default 60 s).
      The probe curls /readyz and /api/health required_ok, checks worker-heartbeat
-     staleness, and dispatches exactly one push notification on failure.
-     Debounce / one-shot: a second prod-down in the same interval does not
-     re-fire; restart does not re-fire while the state marker is present. -->
+     staleness, dispatches one down alert on the first outage transition, then
+     emits one recovery signal on the first healthy run and clears the outage
+     state so a later distinct outage can alert again. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -45,7 +45,7 @@
     <!-- Seconds before a worker heartbeat is considered stale -->
     <key>WORKER_HEARTBEAT_STALE_SECONDS</key>
     <string>60</string>
-    <!-- Debounce state file (rebuildable; delete to reset) -->
+    <!-- Outage state file (rebuildable; delete to reset transition state) -->
     <key>PROD_PROBE_STATE_FILE</key>
     <string>/tmp/yggdrasil-prod-probe.state</string>
     <!-- Probe interval in seconds — should match StartInterval above -->

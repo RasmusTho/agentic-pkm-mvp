@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""Scheduled prod-down probe — hard-down backstop alert.
+"""Scheduled prod-down probe — transition-based hard-down backstop alert.
 
 Curls /readyz AND /api/health required_ok, checks worker-heartbeat staleness.
-On any failure dispatches exactly ONE push via a pluggable notification channel.
-
-Debounce / one-shot guarantee
-------------------------------
-A state marker file (ALERT_STATE_FILE, default tmp/prod_probe_alert.state) tracks
-the last alert epoch. A second prod-down in the same interval does NOT re-send.
-A restart does NOT re-fire if the state file is present and the epoch matches.
-The state file is intentionally ephemeral (rebuildable); to reset the debounce
-just delete it.
+On the first transition into an outage it dispatches one down alert and records
+the down state. Repeated down probes suppress while the outage remains active.
+On the first healthy run after recovery it emits one recovery signal and clears
+the outage state so a later distinct outage can alert again.
 
 Channel selection
 -----------------
@@ -67,8 +62,7 @@ ALERT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 PROD_PROBE_CHANNEL = os.environ.get("PROD_PROBE_CHANNEL", "ntfy")
 
-# Probe interval bucket — used for debounce epoch rounding (seconds).
-# Should match the launchd StartInterval value.
+# Launchd cadence mirror only; alert transitions are state-based, not bucketed.
 PROBE_INTERVAL_SECONDS = int(os.environ.get("PROBE_INTERVAL_SECONDS", "60"))
 
 
@@ -171,29 +165,68 @@ def build_channel(name: str) -> NotificationChannel:
 
 
 # ---------------------------------------------------------------------------
-# Debounce / one-shot state
+# Outage state
 # ---------------------------------------------------------------------------
-def _current_epoch() -> int:
-    """Round current time to the nearest probe interval bucket."""
-    return int(time.time()) // PROBE_INTERVAL_SECONDS
-
-
-def _alert_already_sent() -> bool:
-    """True if an alert was already dispatched in the current interval bucket."""
+def _load_alert_state() -> dict[str, Any] | None:
+    """Return the persisted alert state, or None if absent/invalid."""
     if not ALERT_STATE_FILE.exists():
-        return False
+        return None
     try:
-        state = json.loads(ALERT_STATE_FILE.read_text())
-        return state.get("epoch") == _current_epoch()
+        payload = json.loads(ALERT_STATE_FILE.read_text())
     except Exception:
-        return False
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
-def _record_alert_sent() -> None:
-    """Persist the current epoch so subsequent calls in this bucket are no-ops."""
+def _outage_state_is_active(state: dict[str, Any] | None) -> bool:
+    return bool(state and state.get("status") == "down")
+
+
+def _record_outage_state(failures: list[str]) -> None:
+    """Persist the current outage state after a successful down alert."""
     ALERT_STATE_FILE.write_text(
-        json.dumps({"epoch": _current_epoch(), "ts": int(time.time())})
+        json.dumps(
+            {
+                "status": "down",
+                "ts": int(time.time()),
+                "failures": failures,
+            },
+            sort_keys=True,
+        )
     )
+
+
+def _clear_alert_state() -> None:
+    try:
+        ALERT_STATE_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _send_down_alert(channel: NotificationChannel, failures: list[str]) -> bool:
+    subject = "Prod down — Yggdrasil"
+    body = "Failures detected:\n" + "\n".join(f"  - {f}" for f in failures)
+    try:
+        channel.send(subject, body)
+    except Exception as exc:
+        log.error("failed to send prod-down alert: %s", exc)
+        return False
+    _record_outage_state(failures)
+    log.warning("prod-down alert sent and outage state recorded. failures=%s", failures)
+    return True
+
+
+def _send_recovery_alert(channel: NotificationChannel) -> bool:
+    subject = "Prod recovered — Yggdrasil"
+    body = "The prod probe saw a healthy run after a previous outage."
+    try:
+        channel.send(subject, body)
+    except Exception as exc:
+        log.error("failed to send prod-recovered alert: %s", exc)
+        return False
+    _clear_alert_state()
+    log.info("prod-recovered alert sent; outage state cleared")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +291,7 @@ def _probe_health_required_ok(
         required_ok = body.get("required_ok")
         if required_ok is True:
             return True, "health required_ok=true"
+
         return False, f"health required_ok={required_ok!r}"
     except Exception as exc:
         return False, f"/api/health unreachable: {exc}"
@@ -323,27 +357,30 @@ def run_probe(
         failures.append(reason_hb)
 
     if not failures:
-        log.info("probe ok: readyz=%s health=%s heartbeat=%s", reason_readyz, reason_health, reason_hb)
+        log.info(
+            "probe ok: readyz=%s health=%s heartbeat=%s",
+            reason_readyz,
+            reason_health,
+            reason_hb,
+        )
+        state = _load_alert_state()
+        if _outage_state_is_active(state):
+            _send_recovery_alert(channel)
+        elif state is not None:
+            _clear_alert_state()
         return True
 
-    # Something is down — check debounce gate before alerting
-    if _alert_already_sent():
+    # Something is down — suppress duplicate alerts while the outage remains active.
+    state = _load_alert_state()
+    if _outage_state_is_active(state):
         log.info(
-            "prod-down detected but alert already sent in this interval (debounce). failures=%s",
+            "prod-down detected but outage already recorded; suppressing duplicate alert. failures=%s",
             failures,
         )
         return False
 
-    # First detection in this interval: send push + record state
-    subject = "Prod down — Yggdrasil"
-    body = "Failures detected:\n" + "\n".join(f"  - {f}" for f in failures)
-    try:
-        channel.send(subject, body)
-        _record_alert_sent()
-        log.warning("prod-down alert sent. failures=%s", failures)
-    except Exception as exc:
-        log.error("failed to send prod-down alert: %s", exc)
-
+    # First detection in this outage: send push + record state only after a successful send.
+    _send_down_alert(channel, failures)
     return False
 
 
