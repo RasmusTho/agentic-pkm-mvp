@@ -81,7 +81,7 @@ Delivery rules:
 - Do not claim more issues than there are ready sub-agent execution slots.
 - Never make speculative claims. Every claimed issue must have an owner agent, worktree/branch plan, validation plan, and expected return receipt.
 - Before dispatching any issue or batch, reconcile the candidate set against current `origin/main` and live GitHub state. Re-read the issue body/state, linked PRs, and existing claim receipts on the current branch tip so already-delivered, superseded, closed, merged, or otherwise stale work is dropped before a slice is assigned. A dispatch plan built from stale local context or pre-merge assumptions is non-authoritative; if `origin/main`, the issue, or a linked PR disagrees with the earlier plan, current repo/GitHub truth wins and the coordinator must recompute the pickup target before dispatch.
-- Confirm each selected issue is claimable before dispatching: `Status=Ready`, labeled `agent:ready`, and carrying no conflicting prior claim. Do not pre-transition status or remove `agent:ready` from the coordinator before dispatch — `issue-to-code` selects only `Ready` + `agent:ready` issues, so pre-claiming would force a compliant sub-agent to reject the assignment. If dispatcher state is unavailable, GitHub-label fallback alone is not enough to exclude parallel coordinators or sub-agents; before proceeding, the coordinator and assignee must verify the latest live lease/claim receipt from GitHub issue state plus the newest claim/release/superseded comments. The fast-claim handshake (`Ready -> In Progress` + remove `agent:ready` via `scripts/issue_pickup_claim.sh`) is performed by the sub-agent as the first step of its own `issue-to-code` pickup. An issue counts as dispatched only once that pickup has acquired the lease and recorded a claim receipt comment naming the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
+- Confirm each selected issue is claimable before dispatching: `Status=Ready`, labeled `agent:ready`, and carrying no conflicting prior claim. Do not pre-transition status or remove `agent:ready` from the coordinator before dispatch — `issue-to-code` selects only `Ready` + `agent:ready` issues, so pre-claiming would force a compliant sub-agent to reject the assignment. If the dispatcher is unavailable, use GitHub-label-only claim fallback and coordinate from the live issue/project state; there is no dispatcher lease to reconcile. The fast-claim handshake (`Ready -> In Progress` + remove `agent:ready` via `scripts/issue_pickup_claim.sh`) is performed by the sub-agent as the first step of its own `issue-to-code` pickup. An issue counts as dispatched only once that pickup has acquired the lease and recorded a claim receipt comment naming the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
 - For each issue, follow `issue-to-code` from claim through implementation and local validation.
 - Use `publish-pr` for branch, commit, push, and PR creation/update.
 - Use `pr-integration` only when the PR needs readiness or repair before verification.
@@ -113,10 +113,9 @@ the Issue is currently `In Progress` / not `agent:ready`, and no later release/s
 re-Ready transition has reclaimed it. Stale receipts from a prior, already-released or superseded lease
 on a re-Readied Issue (the Issue is back to `Ready` + `agent:ready` with no live foreign lease) do not
 block valid pickup; treat them as historical and proceed. When the latest lease is a genuine foreign
-claim, stop and report the collision instead of implementing — do not rationalize a live foreign claim
-as belonging to the current dispatch, and do not let dispatcher-unavailable label fallback override
-that evidence; the coordinator must reconcile, release, or choose a different issue before work
-continues.
+claim, stop and report the collision instead of implementing. If the dispatcher is unavailable, resolve
+collision checks against the live issue/project state and explicit lease signal; when live evidence
+conflicts, the coordinator must reconcile, release, or choose a different issue before work continues.
 
 Delivery mode is complete only when every in-scope issue is either:
 
@@ -278,7 +277,7 @@ If the work spans multiple sub-agents:
 - claim only after the sub-agent handoff is ready
 - include the relevant owner docs, `Verify:` ledger, validation commands, and required skills in each handoff
 - include a publication preflight in each handoff: verify the eventual PR can satisfy the `publish-pr` lane classifier and closing keyword, the exact `## BuilderOps Routing` shape (`Records/projections/receipts:` and `Reason:`) when that section is required, and the repo-standard validation that applies to the touched files
-- if the handoff touches new `app/` or `tests/` files, require `ruff check app tests` in the validation plan up front
+- if the handoff touches `app/` or `tests/` files, require `ruff check app tests` in the validation plan up front
 - if the handoff adds or changes tests, require robust guard coverage up front: name the intended success path and the relevant negative or completeness path, and make enforcement tests exercise the production call site rather than a helper in isolation
 - require each sub-agent to report lifecycle actions, PR link, validation, doc writeback, and closure state
 - reference `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary instead of duplicating its full PR-body contract here
