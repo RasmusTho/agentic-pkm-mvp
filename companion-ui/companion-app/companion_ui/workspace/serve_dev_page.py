@@ -830,6 +830,50 @@ _GLYPH_STATE_CHAR: dict[str, str] = {
     _GLYPH_NERE: "○",
 }
 
+_GLYPH_ATTENTION_LIVENESS_STATUSES: frozenset[str] = frozenset(
+    {
+        "dead",
+        "future",
+        "invalid",
+        "malformed",
+        "missing",
+        "stalled",
+        "stale",
+        "unavailable",
+    }
+)
+
+
+def _liveness_needs_attention(runtime_state: object) -> bool:
+    """Return True when a runtime liveness payload should degrade the glyph."""
+    if not isinstance(runtime_state, dict):
+        return False
+    status = str(runtime_state.get("status") or "").lower()
+    if status in _GLYPH_ATTENTION_LIVENESS_STATUSES:
+        return True
+    return runtime_state.get("ok") is False
+
+
+def _required_check_failed(checks: object) -> bool:
+    if not isinstance(checks, dict):
+        return False
+    for check in checks.values():
+        if not isinstance(check, dict):
+            continue
+        if check.get("required", True) and check.get("ok") is False:
+            return True
+    return False
+
+
+def _core_runtime_failed(runtime: object) -> bool:
+    if not isinstance(runtime, dict):
+        return False
+    for runtime_key in ("db", "llm"):
+        state = runtime.get(runtime_key)
+        if isinstance(state, dict) and state.get("ok") is False:
+            return True
+    return False
+
 
 def _derive_health_glyph_state(
     health: Optional[dict],
@@ -859,20 +903,43 @@ def _derive_health_glyph_state(
     required_ok = bool(health.get("required_ok", False))
     spine = health.get("authority_spine") or {}
     runtime = health.get("runtime") or {}
-    worker = runtime.get("worker") if isinstance(runtime, dict) else None
+    runtime_is_dict = isinstance(runtime, dict)
+    worker_seen = runtime_is_dict and "worker" in runtime
+    watcher_seen = runtime_is_dict and "watcher" in runtime
+    worker = runtime.get("worker") if runtime_is_dict else None
+    watcher = runtime.get("watcher") if runtime_is_dict else None
+    worker_needs_attention = worker_seen and (
+        worker is None or _liveness_needs_attention(worker)
+    )
+    watcher_needs_attention = watcher_seen and _liveness_needs_attention(watcher)
+    liveness_needs_attention = worker_needs_attention or watcher_needs_attention
+    write_guard = spine.get("write_guard") if isinstance(spine, dict) else None
 
-    # nere: required_ok false (a required dependency / runtime check failed).
     if not required_ok:
+        if (
+            liveness_needs_attention
+            and not _required_check_failed(health.get("checks"))
+            and not _core_runtime_failed(runtime)
+        ):
+            if write_guard == "blocked":
+                return _GLYPH_PAUSAD, "Skrivningar pausade"
+            if worker_needs_attention:
+                return _GLYPH_UPPMÄRKSAMHET, "Worker stalled"
+            return _GLYPH_UPPMÄRKSAMHET, "Watcher needs attention"
+        # nere: required_ok false from a core dependency / runtime check.
         return _GLYPH_NERE, "Kärnberoende nere"
 
     # pausad: write_guard blocked (writes paused, reads still work).
-    write_guard = spine.get("write_guard") if isinstance(spine, dict) else None
     if write_guard == "blocked":
         return _GLYPH_PAUSAD, "Skrivningar pausade"
 
-    # uppmärksamhet: worker stale or missing heartbeat.
-    if worker is None or (isinstance(worker, dict) and worker.get("status") in ("stale", "missing", "unavailable")):
+    # uppmärksamhet: worker stalled / missing / otherwise unhealthy.
+    if worker_needs_attention:
         return _GLYPH_UPPMÄRKSAMHET, "Worker stalled"
+
+    # uppmärksamhet: watcher stalled / missing / otherwise unhealthy.
+    if watcher_needs_attention:
+        return _GLYPH_UPPMÄRKSAMHET, "Watcher needs attention"
 
     # uppmärksamhet: write_guard not active (unavailable = degraded path).
     if write_guard is not None and write_guard not in ("active",):
