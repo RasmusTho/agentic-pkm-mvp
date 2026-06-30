@@ -9,7 +9,8 @@ from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import coerce_floats
 from app.index.artifact_metadata import build_indexed_unit_payload
-from app.llm.embed_queue import embed_with_retry
+from app.llm.embed_queue import EmbedDeadLetterError
+from app.llm.fallback_orchestrator import embed_with_fallback
 from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
 from app.objects import ObjectStore
@@ -118,17 +119,26 @@ def process_event(evt: Dict[str, Any]) -> None:
     identity = get_embedding_identity(client=embedder)
     trace_id = str(evt.get("trace_id") or "").strip() or None
 
-    # Consumer/worker path: retry the injected embedder for transient blips, but on
-    # exhaustion (or any non-transient error) let it propagate to the outbox worker,
-    # which keeps the row pending and retries when the provider recovers. Swallowing
-    # a transient outage here would permanently drop the object (at-least-once break).
-    embedding = embed_with_retry(
-        text,
-        dim=identity.dim,
-        object_id=object_id_raw,
-        embed_callable=lambda: embedder.embed_text(text),
-        dead_letter_on_exhaustion=False,
-    )
+    actual_identity = identity
+    is_fallback = False
+    try:
+        embedding, actual_identity, is_fallback = embed_with_fallback(
+            text,
+            primary_identity=identity,
+            object_id=object_id_raw,
+            primary_embed_callable=lambda: embedder.embed_text(text),
+        )
+    except EmbedDeadLetterError as exc:
+        outbox_events.emit_index_embedding_failed(
+            object_id=obj_uuid,
+            trace_id=trace_id,
+            source_ref=str(obj.source_ref or ""),
+            provider=identity.provider,
+            model=identity.model,
+            expected_dim=identity.dim,
+            error=str(exc),
+        )
+        return
 
     idx = get_vector_index()
     _purge_vectors(idx, obj_uuid)
@@ -142,14 +152,29 @@ def process_event(evt: Dict[str, Any]) -> None:
             source_ref=str(obj.source_ref or ""),
             payload=obj_payload,
             text=text,
-            embedding_identity=identity,
+            embedding_identity=actual_identity,
         ),
         embedding=embedding,
-        model=identity.model,
-        identity=identity,
+        model=actual_identity.model,
+        identity=actual_identity,
+        reconcilable_fallback=is_fallback,
     )
 
-    outbox_events.emit_index_embedding_created(object_id=obj_uuid, trace_id=trace_id)
+    outbox_events.emit_index_embedding_created(
+        object_id=obj_uuid,
+        trace_id=trace_id,
+        provider=actual_identity.provider,
+        model=actual_identity.model,
+        dim=len(embedding),
+        meta=(
+            {
+                "fallback_used": True,
+                "primary_provider": identity.provider,
+            }
+            if is_fallback
+            else None
+        ),
+    )
 
 
 __all__ = ["process_event"]
