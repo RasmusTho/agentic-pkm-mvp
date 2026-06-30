@@ -17,3 +17,7 @@ services:
   watcher:
     volumes:
       - ./:/app
+
+  companion-ui:
+    volumes:
+      - ./:/app

@@ -100,9 +100,10 @@ cui_promote_channel_scoped_vault_root() {
 }
 
 cui_load_channel_env() {
-  local root env_file
+  local root env_file deploy_pin_file
   root="$(cui_repo_root)"
   env_file=".env.${CUI_CHANNEL}.local"
+  deploy_pin_file="config/deploy/${CUI_CHANNEL}.env"
   # The channel's vault is defined by .env.<channel>.local, never by an ambient
   # VAULT_ROOT in the operator shell. load_env_defaults_file is defaults-only (it
   # will NOT override an already-exported var), so an inherited VAULT_ROOT would
@@ -125,6 +126,12 @@ cui_load_channel_env() {
     load_env_defaults_file "${env_file}"
   else
     cui_warn "no ${env_file} in repo root (${root}) — no-vault idle boot; create it from .env.example to pin a ${CUI_CHANNEL} vault."
+  fi
+  if [ -f "${root}/${deploy_pin_file}" ]; then
+    # shellcheck source=/dev/null
+    source "${root}/scripts/lib/load_env_defaults.sh"
+    cd "${root}" || cui_die "cannot cd to repo root ${root}"
+    load_env_defaults_file "${deploy_pin_file}"
   fi
   # A .env.<channel>.local (or the operator shell) may pin the documented
   # channel-scoped root instead of plain VAULT_ROOT; promote it so the launcher
@@ -178,6 +185,11 @@ cui_api_healthy_now() {
 cui_api_container_id() {
   docker ps --filter "label=com.docker.compose.project=${CUI_COMPOSE_PROJECT}" \
     --filter "name=api" --format '{{.ID}}' 2>/dev/null | head -n1
+}
+
+cui_companion_ui_container_id() {
+  docker ps --filter "label=com.docker.compose.project=${CUI_COMPOSE_PROJECT}" \
+    --filter "name=companion-ui" --format '{{.ID}}' 2>/dev/null | head -n1
 }
 
 cui_container_vault_mount_source() {
@@ -258,6 +270,17 @@ cui_start_runtime() {
   }
 }
 
+cui_compose() {
+  local root
+  root="$(cui_repo_root)"
+  (
+    cd "${root}" || exit 1
+    COMPOSE_FILE="${CUI_COMPOSE_FILES}" \
+    COMPOSE_PROJECT_NAME="${CUI_COMPOSE_PROJECT}" \
+    docker compose "$@"
+  )
+}
+
 # Polls the runtime API /healthz. Read-only. Returns 0 on healthy.
 cui_wait_healthz() {
   local url attempts i
@@ -324,6 +347,10 @@ cui_free_ui_port() {
   if [ -z "${pids}" ]; then
     return 0
   fi
+  if [ -n "$(cui_companion_ui_container_id)" ]; then
+    cui_log "UI port ${CUI_UI_PORT} is managed by the ${CUI_COMPOSE_PROJECT} companion-ui unit; compose will recreate it"
+    return 0
+  fi
   for pid in ${pids}; do
     if cui_pid_is_companion "${pid}"; then
       cui_log "replacing stale Companion UI listener on ${CUI_UI_PORT} (pid ${pid})"
@@ -353,12 +380,10 @@ cui_tailscale_ip() {
 # ── Companion UI server ────────────────────────────────────────────────────────
 
 cui_start_ui() {
-  local root py app_dir host log_path
+  local root host log_path
   root="$(cui_repo_root)"
-  app_dir="${root}/companion-ui/companion-app"
   log_path="${root}/tmp/companion-ui-${CUI_CHANNEL}.log"
   mkdir -p "${root}/tmp"
-  py="$(cui_python_bin)" || cui_die "no usable python interpreter found for Companion UI server"
 
   if [ "${CUI_BIND_LAN:-0}" = "1" ]; then
     host="0.0.0.0"
@@ -370,16 +395,16 @@ cui_start_ui() {
 
   cui_free_ui_port
 
-  cui_log "starting Companion UI (${CUI_SERVE_MODULE}) on ${host}:${CUI_UI_PORT}"
-  (
-    cd "${app_dir}" || exit 1
-    COMPANION_API_BASE_URL="http://127.0.0.1:${CUI_API_PORT}" \
-    HOST="${host}" \
-    PORT="${CUI_UI_PORT}" \
-    nohup "${py}" -m "${CUI_SERVE_MODULE}" >"${log_path}" 2>&1 &
-    printf '%s' "$!" >"${root}/tmp/companion-ui-${CUI_CHANNEL}.pid"
-  )
-  CUI_UI_LOG_PATH="${log_path}"
+  cui_log "recreating managed Companion UI unit (${CUI_SERVE_MODULE}) on ${host}:${CUI_UI_PORT}"
+  COMPANION_UI_BIND_HOST="${host}" \
+  COMPANION_UI_HOST_PORT="${CUI_UI_PORT}" \
+  COMPANION_UI_PORT="${CUI_UI_PORT}" \
+  COMPANION_UI_API_BASE_URL="http://api:8000" \
+  COMPANION_UI_SERVE_MODULE="${CUI_SERVE_MODULE}" \
+  PKM_ENVIRONMENT="${CUI_CHANNEL}" \
+  cui_compose up -d --force-recreate companion-ui
+
+  CUI_UI_LOG_PATH="docker compose logs --tail=200 companion-ui (${CUI_COMPOSE_PROJECT})"
   CUI_UI_HOST="${host}"
 
   # wait for the UI to accept connections
@@ -392,7 +417,7 @@ cui_start_ui() {
     sleep 1
     i=$((i + 1))
   done
-  cui_warn "Companion UI health did not respond on 127.0.0.1:${CUI_UI_PORT} within timeout; check ${log_path}"
+  cui_warn "Companion UI health did not respond on 127.0.0.1:${CUI_UI_PORT} within timeout; inspect with: ${CUI_UI_LOG_PATH}"
   return 1
 }
 

@@ -56,3 +56,12 @@ services:
       VAULT_SYSTEM_DIR_REL: "⚙️ System"
       VAULT_INBOX_DIR_REL: "📥 Inbox"
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
+
+  companion-ui:
+    ports: !override
+      - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:8112:8112"
+    environment:
+      PKM_ENVIRONMENT: test
+      PORT: 8112
+      COMPANION_API_BASE_URL: http://api:8000
+      COMPANION_UI_SERVE_MODULE: companion_ui.workspace.serve_dev_page
