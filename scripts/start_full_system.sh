@@ -734,6 +734,11 @@ export_prod_build_identity() {
   if [ -z "${VCS_REF:-}" ] || [ "${VCS_REF:-}" = "unknown" ]; then
     VCS_REF="$(git rev-parse HEAD 2>/dev/null || printf '%s' "${VCS_REF:-unknown}")"
   fi
+  if [ -z "${VCS_REF:-}" ] || [ "${VCS_REF:-}" = "unknown" ]; then
+    echo "ERROR: prod startup requires a non-unknown VCS_REF for image build identity." >&2
+    echo "Set VCS_REF explicitly or run from a git checkout before starting prod." >&2
+    exit 2
+  fi
   if [ -z "${BUILT_AT:-}" ] || [ "${BUILT_AT:-}" = "unknown" ]; then
     BUILT_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   fi
