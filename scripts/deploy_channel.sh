@@ -30,8 +30,34 @@ EOF
 
 action="${1:-}"
 channel="${2:-}"
-target_sha="${3:-}"
-shift $(( $# < 3 ? $# : 3 ))
+target_sha=""
+
+case "${action}" in
+  deploy)
+    [ "$#" -ge 3 ] || { usage; exit 2; }
+    target_sha="${3:-}"
+    case "${target_sha}" in
+      --*)
+        usage
+        exit 2
+        ;;
+    esac
+    shift 3
+    ;;
+  rollback)
+    [ "$#" -ge 2 ] || { usage; exit 2; }
+    if [ "$#" -ge 3 ] && [[ "${3:-}" != --* ]]; then
+      target_sha="${3}"
+      shift 3
+    else
+      shift 2
+    fi
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
 
 dry_run="${DEPLOY_DRY_RUN:-0}"
 ack_forward_only="${DEPLOY_ACK_FORWARD_ONLY:-0}"
@@ -43,11 +69,6 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-
-case "${action}" in
-  deploy|rollback) ;;
-  *) usage; exit 2 ;;
-esac
 
 case "${channel}" in
   dev)
@@ -98,6 +119,14 @@ resolve_target_sha() {
   fi
   if [ "${action}" = "rollback" ] && [ -f "${previous_pin_file}" ]; then
     read_pin "${previous_pin_file}"
+    return 0
+  fi
+  if [ "${action}" = "rollback" ] && [ "${dry_run}" = "1" ]; then
+    if [ -n "${current_sha}" ]; then
+      printf '%s\n' "${current_sha}"
+      return 0
+    fi
+    git -C "${ROOT}" rev-parse HEAD
     return 0
   fi
   echo "target sha is required" >&2
@@ -250,6 +279,10 @@ PY
 }
 
 echo "deploy plan: action=${action} channel=${channel} current=${current_sha:-unset} target=${target_sha} image=${image_repository}:${target_sha}"
+if [ "${action}" = "rollback" ] && [ "${dry_run}" = "1" ]; then
+  echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
+  exit 0
+fi
 migration_gate "${current_sha:-}" "${target_sha}"
 
 if [ "${dry_run}" = "1" ]; then

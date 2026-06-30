@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 
 import yaml
@@ -25,6 +28,56 @@ _ComposeLoader.add_constructor("!override", _construct_override)
 
 def _compose(path: str) -> dict:
     return yaml.load((REPO_ROOT / path).read_text(encoding="utf-8"), Loader=_ComposeLoader)
+
+
+def _run_script(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _git_sha(ref: str) -> str:
+    return subprocess.check_output(["git", "rev-parse", ref], cwd=REPO_ROOT, text=True).strip()
+
+
+def _read_pin_tag(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("APP_IMAGE_TAG="):
+            return line.split("=", 1)[1]
+    raise AssertionError(f"missing APP_IMAGE_TAG in {path}")
+
+
+@contextmanager
+def _without_previous_pin(channel: str) -> Iterator[Path]:
+    path = REPO_ROOT / "config" / "deploy" / f"{channel}.previous.env"
+    original = path.read_text(encoding="utf-8") if path.exists() else None
+    path.unlink(missing_ok=True)
+    try:
+        yield path
+    finally:
+        if original is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(original, encoding="utf-8")
+
+
+def _stub_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker_marker = tmp_path / "docker-called"
+    curl_marker = tmp_path / "curl-called"
+    for name, marker in ("docker", docker_marker), ("curl", curl_marker):
+        stub = bin_dir / name
+        stub.write_text(f"#!/usr/bin/env bash\ntouch '{marker}'\nexit 99\n", encoding="utf-8")
+        stub.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    return env, docker_marker, curl_marker
 
 
 def test_deploy_sequence_and_forward_only_ack_gate() -> None:
@@ -68,6 +121,40 @@ def test_rollback_uses_previous_pin_and_skips_forward_only_reversal() -> None:
     assert "forward_only" in text
     assert "ack_forward_only" in text
     assert "reverse" not in re.sub(r"reversibility|reversible", "", text)
+
+
+def test_rollback_dry_run_without_sha_parses_flag_and_skips_writes(tmp_path: Path) -> None:
+    pin_path = REPO_ROOT / "config" / "deploy" / "dev.env"
+    original_pin = pin_path.read_text(encoding="utf-8")
+    current_sha = _read_pin_tag(pin_path)
+    env, docker_marker, curl_marker = _stub_env(tmp_path)
+
+    with _without_previous_pin("dev"):
+        result = _run_script("rollback", "dev", "--dry-run", env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"target={current_sha}" in result.stdout
+    assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
+    assert pin_path.read_text(encoding="utf-8") == original_pin
+    assert not docker_marker.exists()
+    assert not curl_marker.exists()
+
+
+def test_rollback_with_explicit_sha_still_allows_flags(tmp_path: Path) -> None:
+    explicit_sha = _git_sha("HEAD")
+    pin_path = REPO_ROOT / "config" / "deploy" / "dev.env"
+    original_pin = pin_path.read_text(encoding="utf-8")
+    env, docker_marker, curl_marker = _stub_env(tmp_path)
+
+    with _without_previous_pin("dev"):
+        result = _run_script("rollback", "dev", explicit_sha, "--dry-run", env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"target={explicit_sha}" in result.stdout
+    assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
+    assert pin_path.read_text(encoding="utf-8") == original_pin
+    assert not docker_marker.exists()
+    assert not curl_marker.exists()
 
 
 def test_app_bind_mount_removed_and_version_authoritative() -> None:
