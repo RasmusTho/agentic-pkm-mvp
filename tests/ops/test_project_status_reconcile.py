@@ -7,6 +7,7 @@ import pytest
 from scripts import project_status
 from scripts import reconcile_project_status
 from scripts.reconcile_project_status import (
+    ProjectItemListDeferred,
     desired_pr_status,
     get_pr,
     list_project_items,
@@ -134,31 +135,18 @@ def test_list_project_items_fetches_beyond_initial_limit(monkeypatch) -> None:
         {"id": f"item-{index}", "content": {"type": "Issue", "number": index}}
         for index in range(200)
     ]
-    full_items = [
-        *first_page_items,
-        {"id": "item-201", "content": {"type": "Issue", "number": 201}},
-    ]
 
     def fake_run_gh(*args: str) -> str:
         commands.append(args)
-        limit = args[args.index("--limit") + 1]
-        if limit == "200":
-            return reconcile_project_status.json.dumps(
-                {"items": first_page_items, "totalCount": 201}
-            )
-        if limit == "201":
-            return reconcile_project_status.json.dumps(
-                {"items": full_items, "totalCount": 201}
-            )
-        raise AssertionError(f"unexpected limit: {limit}")
+        return reconcile_project_status.json.dumps(
+            {"items": first_page_items, "totalCount": 201}
+        )
 
     monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
 
-    assert list_project_items("RasmusTho", 1) == full_items
-    assert [command[command.index("--limit") + 1] for command in commands] == [
-        "200",
-        "201",
-    ]
+    with pytest.raises(ProjectItemListDeferred):
+        list_project_items("RasmusTho", 1)
+    assert [command[command.index("--limit") + 1] for command in commands] == ["200"]
 
 
 def test_reconcile_issue_does_not_add_item_found_after_initial_limit(
@@ -219,7 +207,7 @@ def test_reconcile_issue_does_not_add_item_found_after_initial_limit(
 
     assert reconcile_issue(args, "RasmusTho", {"number": 1}, "field", {"Ready": "opt"}) == 0
     assert add_calls == []
-    assert "issue #495: already Ready" in capsys.readouterr().out
+    assert "skip issue #495: project item-list returned a partial board snapshot" in capsys.readouterr().out
 
 
 def test_reconcile_pr_does_not_add_item_found_after_initial_limit(
@@ -287,7 +275,7 @@ def test_reconcile_pr_does_not_add_item_found_after_initial_limit(
         == 0
     )
     assert add_calls == []
-    assert "pr #501: already Review" in capsys.readouterr().out
+    assert "skip pr #501: project item-list returned a partial board snapshot" in capsys.readouterr().out
 
 
 def test_reconcile_issue_stops_when_project_listing_fails_before_mutation(

@@ -16,6 +16,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.dispatcher.sync_github import classify_github_api_failure
+
 
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
 DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
@@ -38,6 +44,10 @@ GRAPHQL_OPTIONAL_MIN_BUDGET = int(
 GH_MAX_RATE_LIMIT_WAIT_SECONDS = int(
     os.environ.get("RECONCILE_MAX_RATE_LIMIT_WAIT_SECONDS", "120")
 )
+
+
+class ProjectItemListDeferred(RuntimeError):
+    """Raised when the project item list cannot be safely materialized."""
 
 
 def _api_class(args: tuple[str, ...]) -> str:
@@ -70,19 +80,8 @@ def _log_event(event: dict[str, Any]) -> None:
 
 
 def _should_retry_gh_error(exc: subprocess.CalledProcessError) -> bool:
-    combined = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
-    retry_markers = (
-        "unknown owner type",
-        "api rate limit exceeded",
-        "secondary rate limit",
-        "temporarily unavailable",
-        "service unavailable",
-        "internal server error",
-        "gateway timeout",
-        "connection reset",
-        "tls handshake timeout",
-    )
-    return any(marker in combined for marker in retry_markers)
+    classification = classify_github_api_failure(exc)
+    return classification.kind in {"primary_quota", "secondary_quota", "network"}
 
 
 def graphql_rate_limit() -> tuple[int | None, int | None]:
@@ -126,14 +125,16 @@ def _rate_limit_wait_seconds(exc: subprocess.CalledProcessError) -> int | None:
     subcommands do not surface response headers). Returns ``None`` when this is
     not a rate-limit error, so the caller falls back to plain jittered backoff.
     """
-    combined = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
-    match = re.search(r"retry[- ]after[:\s]+(\d+)", combined)
-    if match:
-        return int(match.group(1))
-    if "rate limit" in combined:
-        _remaining, reset = graphql_rate_limit()
-        if reset is not None:
-            return max(0, reset - int(time.time()))
+    classification = classify_github_api_failure(exc)
+    if classification.kind not in {"primary_quota", "secondary_quota"}:
+        return None
+    if classification.retry_after_seconds is not None:
+        return classification.retry_after_seconds
+    if classification.reset_epoch is not None:
+        return max(0, classification.reset_epoch - int(time.time()))
+    _remaining, reset = graphql_rate_limit()
+    if reset is not None:
+        return max(0, reset - int(time.time()))
     return None
 
 
@@ -250,7 +251,7 @@ def get_status_field(owner: str, project_number: int) -> tuple[str, dict[str, st
 
 def list_project_items(owner: str, project_number: int) -> list[dict[str, Any]]:
     limit = PROJECT_ITEM_LIST_INITIAL_LIMIT
-    while True:
+    try:
         payload = json.loads(
             run_gh_project(
                 owner,
@@ -262,16 +263,24 @@ def list_project_items(owner: str, project_number: int) -> list[dict[str, Any]]:
                 "json",
             )
         )
-        items = payload.get("items", [])
-        total_count = payload.get("totalCount")
-        if not isinstance(total_count, int) or len(items) >= total_count:
-            return items
-        if total_count <= limit:
-            raise RuntimeError(
-                "Project item-list returned"
-                f" {len(items)} of {total_count} item(s) with limit {limit}"
-            )
-        limit = total_count
+    except subprocess.CalledProcessError as exc:
+        classification = classify_github_api_failure(exc)
+        if classification.kind == "resource_limit":
+            raise ProjectItemListDeferred(
+                "project item-list deferred after resource-limit failure; cannot safely "
+                "materialize the full board without pagination"
+            ) from exc
+        raise
+    items = payload.get("items", [])
+    total_count = payload.get("totalCount")
+    if not isinstance(total_count, int):
+        return items
+    if len(items) >= total_count:
+        return items
+    raise ProjectItemListDeferred(
+        "project item-list returned a partial board snapshot; cannot safely "
+        "materialize the full board without pagination"
+    )
 
 
 def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> dict[str, Any] | None:
@@ -374,7 +383,11 @@ def reconcile_issue(
     if not desired:
         print(f"skip issue #{args.issue}: no derived status")
         return 0
-    items = list_project_items(owner, project["number"])
+    try:
+        items = list_project_items(owner, project["number"])
+    except ProjectItemListDeferred as exc:
+        print(f"skip issue #{args.issue}: {exc}")
+        return 0
     item = find_item_by_number(items, "Issue", args.issue)
     if item is None:
         print(f'add issue #{args.issue} to project "{project["title"]}"')
@@ -420,7 +433,11 @@ def reconcile_pr(
     if not desired:
         print(f"skip pr #{args.pr}: no derived status")
         return 0
-    items = list_project_items(owner, project["number"])
+    try:
+        items = list_project_items(owner, project["number"])
+    except ProjectItemListDeferred as exc:
+        print(f"skip pr #{args.pr}: {exc}")
+        return 0
     item = find_item_by_number(items, "PullRequest", args.pr)
     if item is None:
         print(f'add pr #{args.pr} to project "{project["title"]}"')
@@ -461,7 +478,11 @@ def reconcile_scan(
     status_field_id: str,
     status_options: dict[str, str],
 ) -> int:
-    items = list_project_items(owner, project["number"])
+    try:
+        items = list_project_items(owner, project["number"])
+    except ProjectItemListDeferred as exc:
+        print(f"skip project scan: {exc}")
+        return 0
     repo = args.repo
     changes = 0
     for item in items:
