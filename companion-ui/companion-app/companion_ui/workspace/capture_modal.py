@@ -402,10 +402,11 @@ def capture_modal_script() -> str:
     }
 
     function renderVaultSelectionRequired(data, text) {
+      var draftText = input ? input.value : text;
       if (window.renderVaultSelectionRequiredPicker &&
           window.renderVaultSelectionRequiredPicker(data, {
             kind: 'capture',
-            text: text
+            text: draftText
           })) {
         return true;
       }
@@ -413,7 +414,7 @@ def capture_modal_script() -> str:
           !data.vault_selection_required_html) {
         return false;
       }
-      preserveRefusedCaptureDraft(text);
+      preserveRefusedCaptureDraft(draftText);
       document.open();
       document.write(data.vault_selection_required_html);
       document.close();
