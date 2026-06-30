@@ -16,6 +16,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.dispatcher.sync_github import classify_github_api_failure
+
 
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
 DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
@@ -70,19 +76,8 @@ def _log_event(event: dict[str, Any]) -> None:
 
 
 def _should_retry_gh_error(exc: subprocess.CalledProcessError) -> bool:
-    combined = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
-    retry_markers = (
-        "unknown owner type",
-        "api rate limit exceeded",
-        "secondary rate limit",
-        "temporarily unavailable",
-        "service unavailable",
-        "internal server error",
-        "gateway timeout",
-        "connection reset",
-        "tls handshake timeout",
-    )
-    return any(marker in combined for marker in retry_markers)
+    classification = classify_github_api_failure(exc)
+    return classification.kind in {"primary_quota", "secondary_quota", "network"}
 
 
 def graphql_rate_limit() -> tuple[int | None, int | None]:
@@ -126,14 +121,16 @@ def _rate_limit_wait_seconds(exc: subprocess.CalledProcessError) -> int | None:
     subcommands do not surface response headers). Returns ``None`` when this is
     not a rate-limit error, so the caller falls back to plain jittered backoff.
     """
-    combined = f"{exc.stdout or ''}\n{exc.stderr or ''}".lower()
-    match = re.search(r"retry[- ]after[:\s]+(\d+)", combined)
-    if match:
-        return int(match.group(1))
-    if "rate limit" in combined:
-        _remaining, reset = graphql_rate_limit()
-        if reset is not None:
-            return max(0, reset - int(time.time()))
+    classification = classify_github_api_failure(exc)
+    if classification.kind not in {"primary_quota", "secondary_quota"}:
+        return None
+    if classification.retry_after_seconds is not None:
+        return classification.retry_after_seconds
+    if classification.reset_epoch is not None:
+        return max(0, classification.reset_epoch - int(time.time()))
+    _remaining, reset = graphql_rate_limit()
+    if reset is not None:
+        return max(0, reset - int(time.time()))
     return None
 
 
@@ -250,21 +247,44 @@ def get_status_field(owner: str, project_number: int) -> tuple[str, dict[str, st
 
 def list_project_items(owner: str, project_number: int) -> list[dict[str, Any]]:
     limit = PROJECT_ITEM_LIST_INITIAL_LIMIT
+    reduced_for_cost = False
     while True:
-        payload = json.loads(
-            run_gh_project(
-                owner,
-                "item-list",
-                str(project_number),
-                "--limit",
-                str(limit),
-                "--format",
-                "json",
+        try:
+            payload = json.loads(
+                run_gh_project(
+                    owner,
+                    "item-list",
+                    str(project_number),
+                    "--limit",
+                    str(limit),
+                    "--format",
+                    "json",
+                )
             )
-        )
+        except subprocess.CalledProcessError as exc:
+            classification = classify_github_api_failure(exc)
+            if classification.kind == "resource_limit" and limit > 1:
+                next_limit = max(1, limit // 2)
+                if next_limit == limit:
+                    raise
+                reduced_for_cost = True
+                _log_event(
+                    {
+                        "event": "github.query.shrink",
+                        "op": "project item-list",
+                        "limit": limit,
+                        "next_limit": next_limit,
+                        "reason": classification.kind,
+                    }
+                )
+                limit = next_limit
+                continue
+            raise
         items = payload.get("items", [])
         total_count = payload.get("totalCount")
         if not isinstance(total_count, int) or len(items) >= total_count:
+            return items
+        if reduced_for_cost:
             return items
         if total_count <= limit:
             raise RuntimeError(

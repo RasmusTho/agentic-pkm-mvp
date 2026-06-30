@@ -10,7 +10,10 @@ Design constraints (from #625):
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 import uuid
 from typing import Any, Protocol
 
@@ -18,6 +21,210 @@ from app.dispatcher.models import EventRecord, SyncState, TaskRecord
 from app.dispatcher.store import DispatcherStore
 
 PROVIDER_IDENTITY = "github"
+
+_GITHUB_FAILURE_NETWORK_MARKERS = (
+    "connection reset",
+    "connection refused",
+    "dns",
+    "eof",
+    "gateway timeout",
+    "network is unreachable",
+    "temporarily unavailable",
+    "tls handshake timeout",
+    "timed out",
+)
+
+_GITHUB_FAILURE_PRIMARY_QUOTA_MARKERS = (
+    "api rate limit exceeded",
+    "primary rate limit",
+    "x-ratelimit-remaining: 0",
+)
+
+_GITHUB_FAILURE_SECONDARY_QUOTA_MARKERS = (
+    "secondary rate limit",
+    "retry-after",
+)
+
+_GITHUB_FAILURE_RESOURCE_LIMIT_MARKERS = (
+    "resource_limits_exceeded",
+    "resource limits exceeded",
+    "node limit",
+    "node-limit",
+    "query timeout",
+    "graphql timeout",
+    "timeout exceeded",
+)
+
+_GITHUB_FAILURE_WRITE_LIMIT_MARKERS = (
+    "abuse detection",
+    "content creation limit",
+    "write limit",
+    "mutation limit",
+)
+
+
+@dataclass(frozen=True)
+class GitHubFailureClassification:
+    """Best-effort GitHub API failure bucket."""
+
+    kind: str
+    http_status: int | None = None
+    graphql_error_type: str | None = None
+    retry_after_seconds: int | None = None
+    reset_epoch: int | None = None
+    retryable: bool = False
+    reduce_page_size: bool = False
+
+    def to_extra(self) -> dict[str, Any]:
+        extra: dict[str, Any] = {"failure_class": self.kind}
+        if self.http_status is not None:
+            extra["failure_http_status"] = self.http_status
+        if self.graphql_error_type is not None:
+            extra["failure_graphql_error_type"] = self.graphql_error_type
+        if self.retry_after_seconds is not None:
+            extra["failure_retry_after_seconds"] = self.retry_after_seconds
+        if self.reset_epoch is not None:
+            extra["failure_reset_epoch"] = self.reset_epoch
+        return extra
+
+
+def _failure_text(error: Exception | str) -> str:
+    if isinstance(error, str):
+        return error
+    parts = [str(error)]
+    for attr in ("stderr", "stdout"):
+        value = getattr(error, attr, None)
+        if value:
+            parts.append(str(value))
+    return "\n".join(part for part in parts if part)
+
+
+def _header_value(headers: Mapping[str, Any] | None, name: str) -> str | None:
+    if headers is None:
+        return None
+    needle = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == needle:
+            return str(value)
+    return None
+
+
+def _parse_retry_after(
+    text: str,
+    headers: Mapping[str, Any] | None,
+) -> int | None:
+    header_value = _header_value(headers, "retry-after")
+    if header_value is not None:
+        try:
+            return max(0, int(float(header_value)))
+        except (TypeError, ValueError):
+            pass
+    match = re.search(r"retry[- ]after[:\s]+(\d+)", text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _parse_reset_epoch(headers: Mapping[str, Any] | None) -> int | None:
+    reset_value = _header_value(headers, "x-ratelimit-reset")
+    if reset_value is None:
+        return None
+    try:
+        return int(float(reset_value))
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_github_api_failure(
+    error: Exception | str,
+    *,
+    http_status: int | None = None,
+    graphql_error_type: str | None = None,
+    headers: Mapping[str, Any] | None = None,
+) -> GitHubFailureClassification:
+    """Bucket GitHub API failures for retry / backoff decisions."""
+
+    text = _failure_text(error).lower()
+    normalized_error_type = (graphql_error_type or "").upper()
+    retry_after_seconds = _parse_retry_after(text, headers)
+    reset_epoch = _parse_reset_epoch(headers)
+
+    if (
+        normalized_error_type in {"RESOURCE_LIMITS_EXCEEDED", "NODE_LIMIT_EXCEEDED", "TIMEOUT"}
+        or any(marker in text for marker in _GITHUB_FAILURE_RESOURCE_LIMIT_MARKERS)
+    ):
+        return GitHubFailureClassification(
+            kind="resource_limit",
+            http_status=http_status,
+            graphql_error_type=normalized_error_type or None,
+            retry_after_seconds=retry_after_seconds,
+            reset_epoch=reset_epoch,
+            retryable=False,
+            reduce_page_size=True,
+        )
+
+    if any(marker in text for marker in _GITHUB_FAILURE_WRITE_LIMIT_MARKERS):
+        return GitHubFailureClassification(
+            kind="write_content_limit",
+            http_status=http_status,
+            graphql_error_type=normalized_error_type or None,
+            retry_after_seconds=retry_after_seconds,
+            reset_epoch=reset_epoch,
+            retryable=False,
+            reduce_page_size=False,
+        )
+
+    if any(marker in text for marker in _GITHUB_FAILURE_SECONDARY_QUOTA_MARKERS) or (
+        http_status in {403, 429} and retry_after_seconds is not None
+    ):
+        return GitHubFailureClassification(
+            kind="secondary_quota",
+            http_status=http_status,
+            graphql_error_type=normalized_error_type or None,
+            retry_after_seconds=retry_after_seconds,
+            reset_epoch=reset_epoch,
+            retryable=True,
+            reduce_page_size=False,
+        )
+
+    if any(marker in text for marker in _GITHUB_FAILURE_PRIMARY_QUOTA_MARKERS) or (
+        http_status in {403, 429} and ("rate limit" in text or "remaining" in text)
+    ):
+        return GitHubFailureClassification(
+            kind="primary_quota",
+            http_status=http_status,
+            graphql_error_type=normalized_error_type or None,
+            retry_after_seconds=retry_after_seconds,
+            reset_epoch=reset_epoch,
+            retryable=True,
+            reduce_page_size=False,
+        )
+
+    if any(marker in text for marker in _GITHUB_FAILURE_NETWORK_MARKERS) or http_status in {
+        500,
+        502,
+        503,
+        504,
+    }:
+        return GitHubFailureClassification(
+            kind="network",
+            http_status=http_status,
+            graphql_error_type=normalized_error_type or None,
+            retry_after_seconds=retry_after_seconds,
+            reset_epoch=reset_epoch,
+            retryable=True,
+            reduce_page_size=False,
+        )
+
+    return GitHubFailureClassification(
+        kind="unknown",
+        http_status=http_status,
+        graphql_error_type=normalized_error_type or None,
+        retry_after_seconds=retry_after_seconds,
+        reset_epoch=reset_epoch,
+        retryable=False,
+        reduce_page_size=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +337,15 @@ def record_sync_failure(
     provider: str,
     pull_at: str,
     error: str,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     """Persist a sync failure metadata record without touching task rows."""
+    merged: dict[str, Any] = dict(extra or {})
     sync_state = SyncState(
         last_pull_at=pull_at,
         sync_result="error",
         sync_note=error,
+        extra=merged,
     )
     _write_sync_meta(store, provider, sync_state, pull_at)
 
@@ -320,7 +530,14 @@ class PullSyncAdapter:
         try:
             ready_issues = self._source.list_issues(repo, **kwargs)
         except Exception as exc:
-            record_sync_failure(self._store, self._provider, pull_at, str(exc))
+            failure = classify_github_api_failure(exc)
+            record_sync_failure(
+                self._store,
+                self._provider,
+                pull_at,
+                f"{failure.kind}: {exc}",
+                extra=failure.to_extra(),
+            )
             return []
 
         open_issues_available = True
