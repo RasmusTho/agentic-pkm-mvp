@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py (2026-06-15)
+Last verified against: app/stores/pg.py (2026-06-30)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -89,6 +89,13 @@ They remain mirror/projection surfaces and do not hold semantic authority over t
 - Notes:
   - `kind="note"` is a runtime/storage label and may represent a projection of a vault note rather
     than the full semantic class of the human artifact.
+  - The retrieved-unit payload contract requires `artifact_id` / `stable_id`, `path`, `source_ref`,
+    `language`, `origin`, `source_role`, `trust`, and canonical `review_state`. These are persisted
+    in `payload` because the active table has no separate columns for those semantic projection
+    fields beyond `object_id`, `kind`, and `source_ref`.
+  - A source note's frontmatter `uuid` is lineage metadata. It may seed continuity, but a missing
+    source-note `uuid` must not prevent indexing; runtime identity can be derived and persisted as
+    `object_id`.
   - StorePort classification: rebuildable. The current object-store path is resolved through
     `app.stores.resolve_object_store_port`, with recovery posture anchored in vault notes and
     companion-note identity continuity rather than in this table as semantic authority.
@@ -109,6 +116,10 @@ They remain mirror/projection surfaces and do not hold semantic authority over t
   - embeddings are stored as a `double precision[]` array; there is no `vector`-extension column and
     no separate `chunk_id` in the active store — similarity is computed in application code
   - every row carries its full generating embedding identity tuple `(provider, model, dim, normalize)`; the index-level primary identity lives in `vector_index_meta`
+  - the row `payload` carries the same retrieved-unit metadata as `store_objects` plus
+    `embedding_identity`, so retrieval/ContextPack consumers can inspect stable id, locator,
+    language, provenance/source-role, trust/review posture, and embedding identity from the
+    retrieved unit
   - an ordinary upsert must match the primary identity; a reconcilable fallback write may record a divergent per-row `provider`/`model`/`normalize` (with the same `dim`), making fallback-written vectors visible and reconcilable (EMBEDREL-06 Phase A, `app/stores/pg.py::PgVectorIndex.upsert`)
   - the `dim` guard is unconditional — a dimension mismatch fails loud and writes no row
   - embeddings do not participate in the identity-history/SCD pattern

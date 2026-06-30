@@ -5,6 +5,7 @@ import logging
 
 from app.components.retrieval import embed_query
 from app.agents.panel.filters import strip_ai_panels
+from app.index.artifact_metadata import build_indexed_unit_payload
 
 logger = logging.getLogger(__name__)
 
@@ -258,19 +259,19 @@ search_hybrid = hybrid_search  # legacy
 def search(query_text: str, k: int = 5, *_a, **_k) -> list:
     return bm25_search(query_text, k=k)
 
-# --- Ingest (canonical embeddings) -------------------------------------------
-
 def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
     oid = object_id or uuid4()
     safe_text = strip_ai_panels(text)
-    payload_out = dict(payload or {})
-    payload_out.setdefault("text", safe_text)
-    payload_out.setdefault("content", safe_text)
-    payload_out.setdefault("object_type", kind)
-    payload_out.setdefault("system_intent", "learn")
-    payload_out.setdefault("emergent_tags", [])
 
     embedding, identity = embed_query(safe_text)
+    payload_out = build_indexed_unit_payload(
+        object_id=oid,
+        kind=kind,
+        source_ref=source_ref,
+        payload=payload,
+        text=safe_text,
+        embedding_identity=identity,
+    )
     idx = get_vector_index()
     try:
         idx.upsert(

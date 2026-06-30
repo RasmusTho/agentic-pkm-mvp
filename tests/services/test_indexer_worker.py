@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from app.services.indexer import handle_ingest_object_created
+from app.store import object_store as object_store_module
+from app.objects import ObjectStore
 
 
 def _make_event(source_ref: str = "vault/path", trace_id: str | None = None) -> dict:
@@ -21,6 +23,7 @@ def _make_event(source_ref: str = "vault/path", trace_id: str | None = None) -> 
 
 
 def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
+    object_store_module._MEMORY_STORE.clear()
     calls: list[dict] = []
 
     class DummyIndex:
@@ -67,6 +70,17 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
     assert events
     assert not failures
     assert any(isinstance(call["object_id"], UUID) for call in calls)
+    stored = ObjectStore().get_object(event["uuid"])
+    assert stored is not None
+    assert stored.payload["artifact_id"] == event["uuid"]
+    assert stored.payload["stable_id"] == event["uuid"]
+    assert stored.payload["path"] == event["source_ref"]
+    assert stored.payload["source_ref"] == event["source_ref"]
+    assert stored.payload["language"] == "und"
+    assert stored.payload["source_role"] == "note"
+    assert stored.payload["trust"] == "unreviewed"
+    assert stored.payload["review_state"] == event["review_state"]
+    assert "embedding_identity" not in stored.payload
 
 
 def test_handle_ingest_object_created_emits_failure_event(monkeypatch):

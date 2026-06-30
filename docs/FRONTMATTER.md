@@ -34,6 +34,23 @@ Frontmatter may contain multiple layers of metadata, each with distinct ownershi
 - Derived / overlay fields: system-computed overlays (e.g., zone, recency, salience) that should remain system-owned.
 
 Not all semantics must be explicit in YAML. Core-6 fields may be implicit or derived when unambiguous.
+For indexed/retrieved units, the runtime projection must carry the metadata needed by retrieval
+consumers even when the source note's YAML remains intentionally small:
+
+- stable identity: persisted as the indexed unit's `object_id` and mirrored as payload
+  `artifact_id` / `stable_id` for consumers that only see payloads
+- locator/path: persisted as `source_ref` and mirrored as payload `path` / `source_ref`
+- language: payload `language`; use `und` when no detector or explicit frontmatter value is
+  available
+- provenance/source role: `kind`, payload `origin`, and payload `source_role`
+- trust/review posture: payload `trust` and canonical payload `review_state`
+- embedding identity: the vector row's provider/model/dim/normalize stamp and the payload
+  `embedding_identity` copy used by retrieved-unit consumers
+
+This projection references the ownership rules below; it does not authorize broadening source-note
+frontmatter writes. In particular, `uuid` remains lineage metadata. A uuid-less source note must
+still render and index by deriving runtime identity from companion/fingerprint/path continuity; a
+missing source-note `uuid` is not a render or retrieval precondition.
 
 Normalization note:
 - `review_state` is the review/mutation-posture axis.
