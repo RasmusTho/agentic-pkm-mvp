@@ -8,10 +8,12 @@ from uuid import uuid4
 import psycopg
 from psycopg import sql
 import pytest
+from psycopg.errors import UndefinedTable
 
 from app.db.dsn import resolve_dsn
 from app.outbox import events
 from app.objects import DomainObject, ObjectStore
+from app.settings.models import SettingsBundle
 
 
 def _pg_available() -> bool:
@@ -76,6 +78,9 @@ def _configure_isolated_pg_test(tmp_path, monkeypatch) -> tuple[str, str]:
     monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "mock")
     monkeypatch.delenv("EMBED_PROFILE", raising=False)
     monkeypatch.setenv("EMBED_DIM", "8")
+    monkeypatch.setattr(
+        "app.components.llm.router.get_settings_bundle", lambda: SettingsBundle(), raising=False
+    )
     fake_path = tmp_path / "index-outbox.jsonl"
     monkeypatch.setattr(events, "INDEX_OUTBOX_PATH", fake_path, raising=False)
     _reset_store_backend_cache_only()
@@ -125,6 +130,32 @@ def _undelivered_rows_for_object(dsn: str, object_id: str) -> list[tuple[str, st
     return rows
 
 
+def _active_schema_from_dsn(dsn: str) -> str:
+    parts = urlsplit(dsn)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    options = query.get("options", "")
+    for token in options.split():
+        if token.startswith("-csearch_path="):
+            value = token.split("=", 1)[1]
+            if value:
+                return value.split(",", 1)[0].strip()
+    return ""
+
+
+def _store_objects_table(dsn: str) -> sql.Identifier:
+    schema = _active_schema_from_dsn(dsn)
+    if schema:
+        return sql.Identifier(schema, "store_objects")
+    return sql.Identifier("store_objects")
+
+
+def _vector_index_table(dsn: str) -> sql.Identifier:
+    schema = _active_schema_from_dsn(dsn)
+    if schema:
+        return sql.Identifier(schema, "store_vector_index")
+    return sql.Identifier("store_vector_index")
+
+
 def _drain_db_outbox_embedding_spine(dsn: str, object_id: str) -> int:
     """Drain ONLY this test's seeded embedding-request rows, leaving others intact.
 
@@ -158,7 +189,10 @@ def _drain_db_outbox_embedding_spine(dsn: str, object_id: str) -> int:
 def _store_objects_row_count(dsn: str) -> int:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM store_objects")
+            try:
+                cur.execute(sql.SQL("SELECT count(*) FROM {table}").format(table=_store_objects_table(dsn)))
+            except UndefinedTable:
+                return 0
             row = cur.fetchone()
     return int(row[0] or 0) if row else 0
 
@@ -167,8 +201,9 @@ def _vector_index_rows_with_embedding(dsn: str) -> list[tuple]:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT object_id, embedding FROM store_vector_index "
-                "WHERE embedding IS NOT NULL AND array_length(embedding, 1) > 0"
+                sql.SQL(
+                    "SELECT object_id, embedding FROM {table} WHERE embedding IS NOT NULL AND array_length(embedding, 1) > 0"
+                ).format(table=_vector_index_table(dsn))
             )
             return list(cur.fetchall())
 
@@ -193,9 +228,8 @@ def test_outbox_roundtrip_embeds(tmp_path, monkeypatch) -> None:
 
         legacy_object_store._MEMORY_STORE.clear()
 
-        objects_before = _store_objects_row_count(dsn)
-
         store = ObjectStore()
+        objects_before = _store_objects_row_count(dsn)
         oid = uuid4()
         store.save_object(
             DomainObject(

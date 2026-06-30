@@ -7,6 +7,8 @@ from pathlib import Path
 import psycopg
 from psycopg import Error
 from psycopg.errors import DependentObjectsStillExist, DuplicateObject, InsufficientPrivilege
+from psycopg.errors import UndefinedColumn
+from psycopg.errors import InvalidTableDefinition
 from psycopg.rows import dict_row
 
 from app.config.database import resolve_runtime_database_url
@@ -80,6 +82,29 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             upper_stmt = statement.upper()
             if "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt:
                 _LOGGER.info("objects_pkey already present; skipping duplicate ADD CONSTRAINT")
+                continue
+            raise
+        except InvalidTableDefinition as exc:
+            conn.rollback()
+            upper_stmt = statement.upper()
+            if (
+                "ALTER TABLE PUBLIC.OBJECTS ADD CONSTRAINT OBJECTS_PKEY PRIMARY KEY (ID)" in upper_stmt
+                and "MULTIPLE PRIMARY KEYS FOR TABLE" in str(exc).upper()
+            ):
+                _LOGGER.warning(
+                    "objects table already has a primary key; skipping add-constraint statement"
+                )
+                continue
+            raise
+        except UndefinedColumn as exc:
+            conn.rollback()
+            upper_stmt = statement.upper()
+            if (
+                "CREATE INDEX" in upper_stmt
+                and "OBJECTS_SOURCE_REF_IDX" in upper_stmt
+                and "SOURCE_REF" in str(exc).upper()
+            ):
+                _LOGGER.warning("objects.source_ref missing; skipping objects_source_ref_idx")
                 continue
             raise
         except Error:

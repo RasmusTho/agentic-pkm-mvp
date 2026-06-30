@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -44,6 +45,10 @@ def _pg_available() -> bool:
         return False
 
 
+def _pg_tools_available() -> bool:
+    return bool(shutil.which("pg_dump") and shutil.which("pg_restore"))
+
+
 def _snapshot_dir_from_makefile() -> Path:
     """Extract the snapshot directory path used by db-snapshot from the Makefile."""
     text = MAKEFILE.read_text(encoding="utf-8")
@@ -68,6 +73,8 @@ def test_snapshot_restore_roundtrips_row(tmp_path: Path) -> None:
     """
     if not _pg_available():
         pytest.skip("Postgres backend not available")
+    if not _pg_tools_available():
+        pytest.skip("pg_dump/pg_restore not available")
 
     import psycopg  # noqa: PLC0415
 
