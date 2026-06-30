@@ -108,6 +108,7 @@ cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
 cui_api_healthy_now() { return 0; }
 cui_runtime_is_idle_channel_container() { return 0; }
 cui_runtime_vault_matches_env() { return 1; }
+unset VAULT_ROOT VAULT_HOST_ROOT
 
 export CUI_API_PORT=18002
 export CUI_CHANNEL=test
