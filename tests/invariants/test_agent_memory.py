@@ -8,7 +8,7 @@ Issues: #2550 (registry), #2552 (skeletons). Contract: docs/architecture/memory-
 
 from __future__ import annotations
 
-from tests.invariants._helpers import load_schema, value_family
+from tests.invariants._helpers import load_schema, read_doc, value_family
 
 
 def test_memory_item_authority_is_noncanonical() -> None:
@@ -39,3 +39,34 @@ def test_remember_not_canonical() -> None:
     assert mi["authority_state"].get("const") == "noncanonical"
     # And `noncanonical` is distinct from the canonical authority family.
     assert "noncanonical" not in set(value_family("canonical_authority_state"))
+
+
+def test_memory_state_description_matches_split_lifecycle_contract() -> None:
+    # Invariant registry: docs/testing/invariant-tests.md :: memory_item_authority_is_noncanonical (extended static check)
+    # MemoryItem schema annotation and memory-model prose both describe the split lifecycle contract
+    # without promotion/visibility values leaking into ``memory_state``.
+    memory_schema = load_schema("memory-item.schema.json")
+    memory_state_description = memory_schema["properties"]["memory_state"]["description"]
+    memory_state_values = set(value_family("memory_state"))
+    promotion_state_values = set(value_family("promotion_state"))
+    suppression_state_values = set(value_family("suppression_state"))
+
+    for value in sorted(memory_state_values):
+        assert value in memory_state_description
+
+    assert "promotion_state" in memory_state_description
+    assert "suppression_state" in memory_state_description
+
+    for value in sorted(promotion_state_values | suppression_state_values):
+        assert value not in memory_state_description
+
+    doc = read_doc("docs/architecture/memory-model.md")
+    recall_row = next(
+        line for line in doc.splitlines()
+        if line.strip().startswith("| Recall / existence | `memory_state` |")
+    )
+    for value in sorted(memory_state_values):
+        assert value in recall_row
+
+    for value in sorted(promotion_state_values | suppression_state_values):
+        assert value not in recall_row
