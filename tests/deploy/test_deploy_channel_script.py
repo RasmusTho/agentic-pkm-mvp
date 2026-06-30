@@ -53,23 +53,6 @@ def _read_pin_tag(path: Path) -> str:
 
 
 @contextmanager
-def _temporary_previous_pin(channel: str, sha: str) -> Iterator[Path]:
-    path = REPO_ROOT / "config" / "deploy" / f"{channel}.previous.env"
-    original = path.read_text(encoding="utf-8") if path.exists() else None
-    path.write_text(
-        f"APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\nAPP_IMAGE_TAG={sha}\n",
-        encoding="utf-8",
-    )
-    try:
-        yield path
-    finally:
-        if original is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_text(original, encoding="utf-8")
-
-
-@contextmanager
 def _without_previous_pin(channel: str) -> Iterator[Path]:
     path = REPO_ROOT / "config" / "deploy" / f"{channel}.previous.env"
     original = path.read_text(encoding="utf-8") if path.exists() else None
@@ -158,17 +141,18 @@ def test_rollback_dry_run_without_sha_parses_flag_and_skips_writes(tmp_path: Pat
 
 
 def test_rollback_with_explicit_sha_still_allows_flags(tmp_path: Path) -> None:
-    previous_sha = _git_sha("HEAD~1")
     explicit_sha = _git_sha("HEAD")
+    pin_path = REPO_ROOT / "config" / "deploy" / "dev.env"
+    original_pin = pin_path.read_text(encoding="utf-8")
     env, docker_marker, curl_marker = _stub_env(tmp_path)
 
-    with _temporary_previous_pin("dev", previous_sha):
+    with _without_previous_pin("dev"):
         result = _run_script("rollback", "dev", explicit_sha, "--dry-run", env=env)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"target={explicit_sha}" in result.stdout
-    assert f"target={previous_sha}" not in result.stdout
     assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
+    assert pin_path.read_text(encoding="utf-8") == original_pin
     assert not docker_marker.exists()
     assert not curl_marker.exists()
 

@@ -279,6 +279,10 @@ PY
 }
 
 echo "deploy plan: action=${action} channel=${channel} current=${current_sha:-unset} target=${target_sha} image=${image_repository}:${target_sha}"
+if [ "${action}" = "rollback" ] && [ "${dry_run}" = "1" ]; then
+  echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
+  exit 0
+fi
 migration_gate "${current_sha:-}" "${target_sha}"
 
 if [ "${dry_run}" = "1" ]; then
