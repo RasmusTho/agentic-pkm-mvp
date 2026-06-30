@@ -865,17 +865,10 @@ def _sync_settings_local_state(
     states: Mapping[str, WatcherState],
     *,
     rel_str: str,
-    mtime: float,
-    digest: str,
     values: Mapping[str, object],
 ) -> None:
     for state in states.values():
-        state.update_file_state(
-            rel_str,
-            mtime=mtime,
-            content_hash=digest,
-            settings_runtime_values=values,
-        )
+        state.update_file_state(rel_str, settings_runtime_values=values)
 
 
 def _collect_changed_entries(
@@ -930,7 +923,7 @@ def _collect_changed_entries(
                 digest = hashed[0]
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
         if settings_delta.values is not None:
-            _sync_settings_local_state(states, rel_str=rel_str, mtime=mtime, digest=digest, values=settings_delta.values)
+            _sync_settings_local_state(states, rel_str=rel_str, values=settings_delta.values)
     return changed_entries, scanned_paths
 
 

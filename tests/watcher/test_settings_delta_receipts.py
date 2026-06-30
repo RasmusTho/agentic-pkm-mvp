@@ -91,6 +91,10 @@ def test_multiple_watcher_specs_emit_one_settings_receipt_per_delta(
     total_receipts = sum(int(summary.get("settings_receipts_in_tick", 0)) for summary in summaries.values())
 
     assert total_receipts == 1
+    assert summaries["panel"]["changed_in_tick"] >= 1
+    assert summaries["ingest"]["changed_in_tick"] >= 1
+    assert summaries["panel"]["emitted_in_tick"] >= 1
+    assert summaries["ingest"]["emitted_in_tick"] >= 1
 
 
 def test_runtime_gating_key_removal_routes_settings_receipt(tmp_path: Path) -> None:

@@ -136,14 +136,15 @@ class WatcherState:
         self,
         rel_path: str,
         *,
-        mtime: float,
+        mtime: float | None = None,
         content_hash: str | None = None,
         settings_runtime_values: Mapping[str, Any] | None = None,
         seen_at: float | None = None,
         emitted_at: float | None = None,
     ) -> None:
         entry = dict(self.files.get(rel_path) or {})
-        entry["mtime"] = mtime
+        if mtime is not None:
+            entry["mtime"] = mtime
         if content_hash is not None:
             entry["hash"] = content_hash
         if settings_runtime_values is not None:
