@@ -46,6 +46,10 @@ GH_MAX_RATE_LIMIT_WAIT_SECONDS = int(
 )
 
 
+class ProjectItemListDeferred(RuntimeError):
+    """Raised when the project item list cannot be safely materialized."""
+
+
 def _api_class(args: tuple[str, ...]) -> str:
     """Best-effort classification of which GitHub quota pool a `gh` call spends."""
     if not args:
@@ -247,51 +251,36 @@ def get_status_field(owner: str, project_number: int) -> tuple[str, dict[str, st
 
 def list_project_items(owner: str, project_number: int) -> list[dict[str, Any]]:
     limit = PROJECT_ITEM_LIST_INITIAL_LIMIT
-    reduced_for_cost = False
-    while True:
-        try:
-            payload = json.loads(
-                run_gh_project(
-                    owner,
-                    "item-list",
-                    str(project_number),
-                    "--limit",
-                    str(limit),
-                    "--format",
-                    "json",
-                )
+    try:
+        payload = json.loads(
+            run_gh_project(
+                owner,
+                "item-list",
+                str(project_number),
+                "--limit",
+                str(limit),
+                "--format",
+                "json",
             )
-        except subprocess.CalledProcessError as exc:
-            classification = classify_github_api_failure(exc)
-            if classification.kind == "resource_limit" and limit > 1:
-                next_limit = max(1, limit // 2)
-                if next_limit == limit:
-                    raise
-                reduced_for_cost = True
-                _log_event(
-                    {
-                        "event": "github.query.shrink",
-                        "op": "project item-list",
-                        "limit": limit,
-                        "next_limit": next_limit,
-                        "reason": classification.kind,
-                    }
-                )
-                limit = next_limit
-                continue
-            raise
-        items = payload.get("items", [])
-        total_count = payload.get("totalCount")
-        if not isinstance(total_count, int) or len(items) >= total_count:
-            return items
-        if reduced_for_cost:
-            return items
-        if total_count <= limit:
-            raise RuntimeError(
-                "Project item-list returned"
-                f" {len(items)} of {total_count} item(s) with limit {limit}"
-            )
-        limit = total_count
+        )
+    except subprocess.CalledProcessError as exc:
+        classification = classify_github_api_failure(exc)
+        if classification.kind == "resource_limit":
+            raise ProjectItemListDeferred(
+                "project item-list deferred after resource-limit failure; cannot safely "
+                "materialize the full board without pagination"
+            ) from exc
+        raise
+    items = payload.get("items", [])
+    total_count = payload.get("totalCount")
+    if not isinstance(total_count, int):
+        return items
+    if len(items) >= total_count:
+        return items
+    raise ProjectItemListDeferred(
+        "project item-list returned a partial board snapshot; cannot safely "
+        "materialize the full board without pagination"
+    )
 
 
 def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> dict[str, Any] | None:
@@ -394,7 +383,11 @@ def reconcile_issue(
     if not desired:
         print(f"skip issue #{args.issue}: no derived status")
         return 0
-    items = list_project_items(owner, project["number"])
+    try:
+        items = list_project_items(owner, project["number"])
+    except ProjectItemListDeferred as exc:
+        print(f"skip issue #{args.issue}: {exc}")
+        return 0
     item = find_item_by_number(items, "Issue", args.issue)
     if item is None:
         print(f'add issue #{args.issue} to project "{project["title"]}"')
@@ -440,7 +433,11 @@ def reconcile_pr(
     if not desired:
         print(f"skip pr #{args.pr}: no derived status")
         return 0
-    items = list_project_items(owner, project["number"])
+    try:
+        items = list_project_items(owner, project["number"])
+    except ProjectItemListDeferred as exc:
+        print(f"skip pr #{args.pr}: {exc}")
+        return 0
     item = find_item_by_number(items, "PullRequest", args.pr)
     if item is None:
         print(f'add pr #{args.pr} to project "{project["title"]}"')
@@ -481,7 +478,11 @@ def reconcile_scan(
     status_field_id: str,
     status_options: dict[str, str],
 ) -> int:
-    items = list_project_items(owner, project["number"])
+    try:
+        items = list_project_items(owner, project["number"])
+    except ProjectItemListDeferred as exc:
+        print(f"skip project scan: {exc}")
+        return 0
     repo = args.repo
     changes = 0
     for item in items:

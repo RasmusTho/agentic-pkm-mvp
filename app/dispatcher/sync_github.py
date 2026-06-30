@@ -27,11 +27,15 @@ _GITHUB_FAILURE_NETWORK_MARKERS = (
     "connection refused",
     "dns",
     "eof",
+    "internal server error",
     "gateway timeout",
+    "server error",
+    "service unavailable",
     "network is unreachable",
     "temporarily unavailable",
     "tls handshake timeout",
     "timed out",
+    "bad gateway",
 )
 
 _GITHUB_FAILURE_PRIMARY_QUOTA_MARKERS = (

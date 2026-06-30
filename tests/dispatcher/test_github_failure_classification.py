@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 
 import pytest
 
 from app.dispatcher.sync_github import classify_github_api_failure
 from scripts import reconcile_project_status
+from scripts.reconcile_project_status import ProjectItemListDeferred
 
 
 def test_classifies_primary_secondary_resource_timeout_network() -> None:
@@ -32,6 +32,16 @@ def test_classifies_primary_secondary_resource_timeout_network() -> None:
             RuntimeError("GraphQL query timed out"),
             {"graphql_error_type": "TIMEOUT"},
             "resource_limit",
+        ),
+        (
+            RuntimeError("Internal Server Error"),
+            {},
+            "network",
+        ),
+        (
+            RuntimeError("Service Unavailable"),
+            {},
+            "network",
         ),
         (
             RuntimeError("abuse detection mechanism triggered"),
@@ -77,28 +87,28 @@ def test_quota_sleeps_until_reset_and_cost_shrinks_page(monkeypatch: pytest.Monk
     assert reconcile_project_status.run_gh("project", "item-list", "1") == "ok"
     assert slept == [8.0]
 
-    item_list_limits: list[str] = []
-
-    def shrink_then_succeed(*args: str) -> str:
-        item_list_limits.append(args[args.index("--limit") + 1])
-        if item_list_limits[-1] == "200":
-            raise subprocess.CalledProcessError(
-                returncode=1,
-                cmd=["gh", *args],
-                stderr="GraphQL: RESOURCE_LIMITS_EXCEEDED",
-            )
-        return json.dumps(
-            {
-                "items": [
-                    {"id": "item-1", "content": {"type": "Issue", "number": 1}},
-                ],
-                "totalCount": 1,
-            }
+    def resource_limited(*args: str) -> str:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["gh", *args],
+            stderr="GraphQL: RESOURCE_LIMITS_EXCEEDED",
         )
 
-    monkeypatch.setattr(reconcile_project_status, "run_gh", shrink_then_succeed)
+    monkeypatch.setattr(reconcile_project_status, "run_gh_project", resource_limited)
 
-    items = reconcile_project_status.list_project_items("RasmusTho", 1)
+    with pytest.raises(ProjectItemListDeferred):
+        reconcile_project_status.list_project_items("RasmusTho", 1)
 
-    assert item_list_limits == ["200", "100"]
-    assert items == [{"id": "item-1", "content": {"type": "Issue", "number": 1}}]
+
+def test_textual_5xx_called_process_errors_remain_retryable() -> None:
+    for stderr in ("Internal Server Error", "Service Unavailable"):
+        exc = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["gh", "project", "item-list", "1"],
+            stderr=stderr,
+        )
+
+        classification = classify_github_api_failure(exc)
+
+        assert classification.kind == "network"
+        assert reconcile_project_status._should_retry_gh_error(exc) is True
