@@ -59,17 +59,16 @@ def _is_configured_trusted_proxy(host: str | None) -> bool:
     return False
 
 
-def _can_trust_forwarded_for(immediate_host: str | None) -> bool:
-    # X-Forwarded-For is security-sensitive: only same-host loopback proxies
-    # and operator-declared local proxy hosts may assert the browser client.
-    # A direct LAN/Tailscale caller that sends XFF is still judged by its
-    # immediate peer address and must use the API-key path.
-    return _is_loopback_host(immediate_host) or _is_configured_trusted_proxy(immediate_host)
+def _is_trusted_forwarding_peer(host: str | None) -> bool:
+    # X-Forwarded-For is security-sensitive: trust loopback by default and
+    # explicit operator-declared proxy peers only. A direct LAN/Tailscale caller
+    # that sends XFF is still judged by its immediate peer address.
+    return _is_loopback_host(host) or _is_configured_trusted_proxy(host)
 
 
 def _effective_client_host(request: Request) -> str | None:
     immediate_host = request.client.host if request.client else None
-    if not _can_trust_forwarded_for(immediate_host):
+    if not _is_trusted_forwarding_peer(immediate_host):
         return immediate_host
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for is None:

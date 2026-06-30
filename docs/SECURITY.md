@@ -39,8 +39,8 @@ Current implementation:
 - the Companion UI same-origin proxy forwards the browser client address for vault select,
   initialize, and browse routes. The runtime honors `X-Forwarded-For` only when the immediate peer is
   loopback or is listed in the opt-in `COMPANION_TRUSTED_PROXY_HOSTS` allowlist, so a configured
-  docker-bridge gateway can preserve loopback-local operation without letting arbitrary callers spoof
-  loopback.
+  same-host docker-bridge gateway can preserve loopback-local operation without letting arbitrary
+  callers spoof loopback.
 - rate limiting is implemented via `slowapi` where routers apply explicit limit decorators
 
 Current configuration surface:
