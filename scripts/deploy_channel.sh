@@ -121,6 +121,14 @@ resolve_target_sha() {
     read_pin "${previous_pin_file}"
     return 0
   fi
+  if [ "${action}" = "rollback" ] && [ "${dry_run}" = "1" ]; then
+    if [ -n "${current_sha}" ]; then
+      printf '%s\n' "${current_sha}"
+      return 0
+    fi
+    git -C "${ROOT}" rev-parse HEAD
+    return 0
+  fi
   echo "target sha is required" >&2
   exit 2
 }

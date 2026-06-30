@@ -45,6 +45,13 @@ def _git_sha(ref: str) -> str:
     return subprocess.check_output(["git", "rev-parse", ref], cwd=REPO_ROOT, text=True).strip()
 
 
+def _read_pin_tag(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("APP_IMAGE_TAG="):
+            return line.split("=", 1)[1]
+    raise AssertionError(f"missing APP_IMAGE_TAG in {path}")
+
+
 @contextmanager
 def _temporary_previous_pin(channel: str, sha: str) -> Iterator[Path]:
     path = REPO_ROOT / "config" / "deploy" / f"{channel}.previous.env"
@@ -53,6 +60,20 @@ def _temporary_previous_pin(channel: str, sha: str) -> Iterator[Path]:
         f"APP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\nAPP_IMAGE_TAG={sha}\n",
         encoding="utf-8",
     )
+    try:
+        yield path
+    finally:
+        if original is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(original, encoding="utf-8")
+
+
+@contextmanager
+def _without_previous_pin(channel: str) -> Iterator[Path]:
+    path = REPO_ROOT / "config" / "deploy" / f"{channel}.previous.env"
+    original = path.read_text(encoding="utf-8") if path.exists() else None
+    path.unlink(missing_ok=True)
     try:
         yield path
     finally:
@@ -120,16 +141,16 @@ def test_rollback_uses_previous_pin_and_skips_forward_only_reversal() -> None:
 
 
 def test_rollback_dry_run_without_sha_parses_flag_and_skips_writes(tmp_path: Path) -> None:
-    explicit_previous_sha = _git_sha("HEAD")
     pin_path = REPO_ROOT / "config" / "deploy" / "dev.env"
     original_pin = pin_path.read_text(encoding="utf-8")
+    current_sha = _read_pin_tag(pin_path)
     env, docker_marker, curl_marker = _stub_env(tmp_path)
 
-    with _temporary_previous_pin("dev", explicit_previous_sha):
+    with _without_previous_pin("dev"):
         result = _run_script("rollback", "dev", "--dry-run", env=env)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"target={explicit_previous_sha}" in result.stdout
+    assert f"target={current_sha}" in result.stdout
     assert "dry-run: stopping before pin write, docker recreate, health gate, and receipt write" in result.stdout
     assert pin_path.read_text(encoding="utf-8") == original_pin
     assert not docker_marker.exists()
