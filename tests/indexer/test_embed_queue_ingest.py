@@ -18,7 +18,7 @@ from app.llm.embed_queue import EmbedDeadLetterError
 # ---------------------------------------------------------------------------
 
 def test_exhausted_embed_dead_letters_and_continues(monkeypatch):
-    """EmbedDeadLetterError in handle_ingest_object_created → emits failed + continues.
+    """EmbedDeadLetterError in handle_ingest_object_created emits failed + continues.
 
     This test drives the production call site (app.services.indexer) so the
     wiring is exercised, not just an isolated unit.
@@ -44,7 +44,7 @@ def test_exhausted_embed_dead_letters_and_continues(monkeypatch):
     def fake_emit_failed(**kwargs):
         emit_calls.append(kwargs)
 
-    with patch("app.services.indexer.embed_with_retry", side_effect=dead_letter_exc):
+    with patch("app.services.indexer.embed_with_fallback", side_effect=dead_letter_exc):
         with patch("app.services.indexer.emit_index_embedding_failed", side_effect=fake_emit_failed):
             # Must not raise
             from app.services.indexer import handle_ingest_object_created
@@ -63,7 +63,7 @@ def test_exhausted_embed_dead_letters_and_continues(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_dead_letter_does_not_abort_ingest(monkeypatch):
-    """Patch embed_with_retry to raise EmbedDeadLetterError; assert no exception propagates."""
+    """Patch embed_with_fallback to raise EmbedDeadLetterError; assert no exception propagates."""
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_DIM", "8")
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -79,7 +79,7 @@ def test_dead_letter_does_not_abort_ingest(monkeypatch):
     }
 
     with patch(
-        "app.services.indexer.embed_with_retry",
+        "app.services.indexer.embed_with_fallback",
         side_effect=EmbedDeadLetterError("embed exhausted after 3 attempts (transient): EOF"),
     ):
         with patch("app.services.indexer.emit_index_embedding_failed") as mock_emit:
