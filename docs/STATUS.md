@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-06-29
+Last reviewed: 2026-06-30
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142, and current repo state at 503c6c64 on 2026-06-29
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
@@ -42,6 +42,12 @@ trust-boundary, data-flow, API-matrix, and STRIDE-lite companions) is now the re
 for security framing. The recent security hardening PRs (#1581-#1586/#1591) add review inputs and
 targeted path/error-detail fixes; they do not change the local-first runtime exposure model or
 promote public internet readiness.
+
+2026-06-28/29 delivery wave writeback:
+- Companion UI NAV-2/NAV-3 shipped (#2636, #2642, #2643, #2645): direct bottom-bar launchers for History, Memory, and Search now participate in browser history, the System Map route stays in history sync, and overlays are deep-linkable via `?overlay=<id>`.
+- Observability Stabilization epic #2597 delivered its 11 child slices on 2026-06-28 (cb239a3f): honest health signals, one real alert path, silent audit lie stopped, and running commit observable. AC1-AC4 and AC7 still await operator test-deploy ack, and #2597 remains open and not closed.
+- Prod promotion model fix (#2656): AC1 and AC3 are done, while AC2 remains operator-gated pending operator receipt and sibling-doc reconciliation.
+- Delivery wave follow-on receipts: GraphQL exhaustion fix #2686, watcher settings receipts #2678, nested-vault boundary enforcement #2689, and deployment environment-separation spec #2692 are merged and reflected in the current shipped baseline.
 
 ## Health spine
 - HealthContract + WriteGuard + incident logging now form the deterministic spine for startup readiness; this snapshot is the baseline for initial go-live visibility.
