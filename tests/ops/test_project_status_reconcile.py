@@ -442,6 +442,23 @@ def test_scan_is_daily_and_rate_limit_gated(monkeypatch, capsys) -> None:
     assert "before project discovery" in out
 
 
+def test_scheduled_scan_restores_watermark_cache() -> None:
+    workflow = Path(".github/workflows/project-status-reconcile.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "uses: actions/cache@v4" in workflow
+    assert (
+        "path: runtime/dispatcher/project_status_reconcile_scan_watermark.json"
+        in workflow
+    )
+    assert (
+        "key: project-status-reconcile-scan-watermark-${{ github.run_id }}"
+        in workflow
+    )
+    assert "project-status-reconcile-scan-watermark-" in workflow
+
+
 def test_project_board_workflows_share_serial_concurrency_group() -> None:
     # All board reconcile/mutation workflows must serialize through one shared
     # concurrency group so they cannot stampede the GraphQL pool concurrently.
