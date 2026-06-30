@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -494,6 +496,126 @@ def test_main_skips_event_before_discovery_when_budget_low(monkeypatch, capsys) 
     out = capsys.readouterr().out
     assert "skip issue #495: GraphQL budget low" in out
     assert "before project discovery" in out
+
+
+def test_scan_is_incremental_by_updated_at(monkeypatch, tmp_path) -> None:
+    watermark_path = tmp_path / "project_status_reconcile_scan_watermark.json"
+    monkeypatch.setattr(reconcile_project_status, "SCAN_WATERMARK_PATH", watermark_path)
+
+    items = [
+        {
+            "id": "item-old",
+            "content": {
+                "type": "Issue",
+                "number": 101,
+                "updatedAt": "2026-06-28T12:00:00Z",
+            },
+            "status": "Ready",
+        },
+        {
+            "id": "item-new",
+            "content": {
+                "type": "PullRequest",
+                "number": 202,
+                "updatedAt": "2026-06-30T13:00:00Z",
+            },
+            "status": "In Progress",
+        },
+    ]
+    issue_calls: list[int] = []
+    pr_calls: list[int] = []
+    status_calls: list[tuple[str, str, str, str, str, bool]] = []
+
+    def fake_run_gh(*args: str) -> str:
+        if args[:3] == ("project", "item-list", "1"):
+            return reconcile_project_status.json.dumps({"items": items, "totalCount": 2})
+        raise AssertionError(f"unexpected gh command: {args}")
+
+    def fake_get_issue(_repo: str, number: int) -> dict[str, object]:
+        issue_calls.append(number)
+        return {
+            "number": number,
+            "state": "OPEN",
+            "labels": [{"name": "agent:ready"}],
+            "url": f"https://github.com/RasmusTho/agentic-pkm-mvp/issues/{number}",
+        }
+
+    def fake_get_pr(_repo: str, number: int) -> dict[str, object]:
+        pr_calls.append(number)
+        return {
+            "number": number,
+            "state": "OPEN",
+            "isDraft": False,
+            "mergedAt": None,
+            "url": f"https://github.com/RasmusTho/agentic-pkm-mvp/pull/{number}",
+        }
+
+    def fake_set_project_status(owner, project_id, item_id, field_id, option_id, dry_run):
+        status_calls.append((owner, project_id, item_id, field_id, option_id, dry_run))
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+    monkeypatch.setattr(reconcile_project_status, "get_issue", fake_get_issue)
+    monkeypatch.setattr(reconcile_project_status, "get_pr", fake_get_pr)
+    monkeypatch.setattr(
+        reconcile_project_status, "set_project_status", fake_set_project_status
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "_scan_started_at",
+        lambda: datetime(2026, 6, 30, 12, 30, tzinfo=timezone.utc),
+    )
+
+    args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp",
+        dry_run=False,
+        status=None,
+    )
+    project = {"id": "project-1", "number": 1, "title": "Agent Delivery Control Plane"}
+    status_options = {"Ready": "ready-id", "Review": "review-id"}
+
+    watermark_path.write_text(
+        json.dumps({"last_scan_started_at": "2026-06-29T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    assert (
+        reconcile_project_status.reconcile_scan(
+            args, "RasmusTho", project, "field-id", status_options
+        )
+        == 0
+    )
+    assert issue_calls == []
+    assert pr_calls == [202]
+    assert status_calls == [
+        ("RasmusTho", "project-1", "item-new", "field-id", "review-id", False)
+    ]
+    assert json.loads(watermark_path.read_text(encoding="utf-8")) == {
+        "last_scan_started_at": "2026-06-30T12:30:00Z"
+    }
+
+    issue_calls.clear()
+    pr_calls.clear()
+    status_calls.clear()
+    watermark_path.write_text("not-json", encoding="utf-8")
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "_scan_started_at",
+        lambda: datetime(2026, 7, 1, 8, 45, tzinfo=timezone.utc),
+    )
+
+    assert (
+        reconcile_project_status.reconcile_scan(
+            args, "RasmusTho", project, "field-id", status_options
+        )
+        == 0
+    )
+    assert issue_calls == [101]
+    assert pr_calls == [202]
+    assert status_calls == [
+        ("RasmusTho", "project-1", "item-new", "field-id", "review-id", False)
+    ]
+    assert json.loads(watermark_path.read_text(encoding="utf-8")) == {
+        "last_scan_started_at": "2026-07-01T08:45:00Z"
+    }
 
 
 def test_run_gh_aborts_retry_when_reset_beyond_cap(monkeypatch) -> None:

@@ -6,6 +6,7 @@ Reconcile GitHub Project v2 Status for repository issues and pull requests.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import random
@@ -25,6 +26,7 @@ from app.dispatcher.sync_github import classify_github_api_failure
 
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
 DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
+SCAN_WATERMARK_PATH = REPO_ROOT / "runtime" / "dispatcher" / "project_status_reconcile_scan_watermark.json"
 PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
 GH_RETRY_ATTEMPTS = 5
 GH_RETRY_BASE_DELAY_SECONDS = 0.4
@@ -77,6 +79,52 @@ def _log_event(event: dict[str, Any]) -> None:
         )
     except Exception:
         pass
+
+
+def _github_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_github_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
+def _scan_started_at() -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def load_scan_watermark() -> datetime | None:
+    try:
+        payload = json.loads(SCAN_WATERMARK_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, str):
+        return _github_timestamp(payload)
+    if not isinstance(payload, dict):
+        return None
+    return _github_timestamp(payload.get("last_scan_started_at"))
+
+
+def persist_scan_watermark(scan_started_at: datetime) -> None:
+    SCAN_WATERMARK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SCAN_WATERMARK_PATH.write_text(
+        json.dumps(
+            {"last_scan_started_at": _format_github_timestamp(scan_started_at)},
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _should_retry_gh_error(exc: subprocess.CalledProcessError) -> bool:
@@ -478,6 +526,8 @@ def reconcile_scan(
     status_field_id: str,
     status_options: dict[str, str],
 ) -> int:
+    scan_started_at = _scan_started_at()
+    watermark = load_scan_watermark()
     try:
         items = list_project_items(owner, project["number"])
     except ProjectItemListDeferred as exc:
@@ -490,6 +540,9 @@ def reconcile_scan(
         kind = content.get("type")
         number = content.get("number")
         if kind not in {"Issue", "PullRequest"} or not number:
+            continue
+        content_updated_at = _github_timestamp(content.get("updatedAt"))
+        if watermark is not None and content_updated_at is not None and content_updated_at < watermark:
             continue
         current = item.get("status")
         desired = None
@@ -518,6 +571,8 @@ def reconcile_scan(
         changes += 1
         if item.get("id") is None and not args.dry_run and url:
             add_item_to_project(owner, project["number"], url)
+    if not args.dry_run:
+        persist_scan_watermark(scan_started_at)
     print(f"scan complete: {changes} change(s)")
     return 0
 
