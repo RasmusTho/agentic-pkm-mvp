@@ -362,14 +362,18 @@ dispatcher-sync:
 # SAFETY: db-restore defaults to the newest dev_*/test_* snapshot only
 # (never a prod_*.dump) and refuses to run against a prod DSN unless
 # ALLOW_PROD_RESTORE=1 is set. db-dump-prod is dump-only; it never restores.
+# db-snapshot refuses prod-looking DSNs so prod capture stays on the explicit
+# db-dump-prod path and never lands in a dev_-prefixed snapshot.
 
 SNAPSHOT_DIR ?= .db-snapshots
 
 db-snapshot:
-	@mkdir -p "$(SNAPSHOT_DIR)"
 	@STAMP=$$(date -u +%Y%m%dT%H%M%SZ); \
 	DSN=$$($(PYTHON) -c "from app.db.dsn import resolve_dsn; print(resolve_dsn())"); \
 	if [ -z "$$DSN" ]; then echo "ERROR: DATABASE_URL / DB_DSN is not set"; exit 1; fi; \
+	if $(PYTHON) -c "import sys; from app.db.dsn import looks_like_prod_dsn; sys.exit(0 if looks_like_prod_dsn() else 1)"; then \
+		echo "REFUSING: db-snapshot target DSN looks like prod (db 'app' or port 15432). Use db-dump-prod for prod forensic dumps."; exit 1; fi; \
+	mkdir -p "$(SNAPSHOT_DIR)"; \
 	DUMP_FILE="$(SNAPSHOT_DIR)/dev_$$STAMP.dump"; \
 	echo "Snapshotting dev DB → $$DUMP_FILE"; \
 	pg_dump --format=custom --no-password --file="$$DUMP_FILE" "$$DSN" && \

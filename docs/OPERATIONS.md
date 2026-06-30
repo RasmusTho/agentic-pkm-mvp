@@ -401,7 +401,7 @@ Three targets are available:
 
 | Target | Purpose |
 |---|---|
-| `make db-snapshot` | Dumps the dev/test DB to a timestamped `.dump` file under `.db-snapshots/dev_<UTCstamp>.dump`. |
+| `make db-snapshot` | Dumps the dev/test DB to a timestamped `.dump` file under `.db-snapshots/dev_<UTCstamp>.dump`. Refuses prod-looking DSNs; use `make db-dump-prod` for explicit prod forensic dumps. |
 | `make db-restore` | Restores from the most-recent **dev_/test_** snapshot (or pass `SNAPSHOT=<path>` for a named file). |
 | `make db-dump-prod` | Writes a timestamped forensic dump from the prod DB on demand (no scheduling). Source `.env.prod.local` first. Dump-only — it never restores. |
 
