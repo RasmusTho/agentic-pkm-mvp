@@ -515,6 +515,97 @@ def test_main_skips_event_before_discovery_when_budget_low(monkeypatch, capsys) 
     assert "before project discovery" in out
 
 
+def test_scan_item_list_fetches_updated_at_from_graphql(monkeypatch) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run_gh(*args: str) -> str:
+        commands.append(args)
+        return reconcile_project_status.json.dumps(
+            {
+                "data": {
+                    "user": {
+                        "projectV2": {
+                            "items": {
+                                "pageInfo": {
+                                    "hasNextPage": False,
+                                    "endCursor": None,
+                                },
+                                "nodes": [
+                                    {
+                                        "id": "item-1",
+                                        "content": {
+                                            "__typename": "Issue",
+                                            "number": 101,
+                                            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/101",
+                                            "updatedAt": "2026-06-30T12:00:00Z",
+                                        },
+                                        "fieldValues": {
+                                            "nodes": [
+                                                {
+                                                    "name": "Ready",
+                                                    "field": {"name": "Status"},
+                                                }
+                                            ]
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+
+    assert reconcile_project_status.list_project_items_for_scan("RasmusTho", 1) == [
+        {
+            "id": "item-1",
+            "content": {
+                "type": "Issue",
+                "number": 101,
+                "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/101",
+                "updatedAt": "2026-06-30T12:00:00Z",
+            },
+            "status": "Ready",
+        }
+    ]
+    assert commands[0][:2] == ("api", "graphql")
+
+
+def test_scan_item_list_fails_loud_without_updated_at(monkeypatch) -> None:
+    def fake_run_gh(*_args: str) -> str:
+        return reconcile_project_status.json.dumps(
+            {
+                "data": {
+                    "user": {
+                        "projectV2": {
+                            "items": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [
+                                    {
+                                        "id": "item-1",
+                                        "content": {
+                                            "__typename": "PullRequest",
+                                            "number": 202,
+                                            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/pull/202",
+                                        },
+                                        "fieldValues": {"nodes": []},
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+
+    with pytest.raises(RuntimeError, match="missing Issue/PullRequest updatedAt"):
+        reconcile_project_status.list_project_items_for_scan("RasmusTho", 1)
+
+
 def test_scan_is_incremental_by_updated_at(monkeypatch, tmp_path) -> None:
     watermark_path = tmp_path / "project_status_reconcile_scan_watermark.json"
     monkeypatch.setattr(reconcile_project_status, "SCAN_WATERMARK_PATH", watermark_path)
@@ -543,11 +634,6 @@ def test_scan_is_incremental_by_updated_at(monkeypatch, tmp_path) -> None:
     pr_calls: list[int] = []
     status_calls: list[tuple[str, str, str, str, str, bool]] = []
 
-    def fake_run_gh(*args: str) -> str:
-        if args[:3] == ("project", "item-list", "1"):
-            return reconcile_project_status.json.dumps({"items": items, "totalCount": 2})
-        raise AssertionError(f"unexpected gh command: {args}")
-
     def fake_get_issue(_repo: str, number: int) -> dict[str, object]:
         issue_calls.append(number)
         return {
@@ -570,7 +656,11 @@ def test_scan_is_incremental_by_updated_at(monkeypatch, tmp_path) -> None:
     def fake_set_project_status(owner, project_id, item_id, field_id, option_id, dry_run):
         status_calls.append((owner, project_id, item_id, field_id, option_id, dry_run))
 
-    monkeypatch.setattr(reconcile_project_status, "run_gh", fake_run_gh)
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "list_project_items_for_scan",
+        lambda _owner, _project_number: items,
+    )
     monkeypatch.setattr(reconcile_project_status, "get_issue", fake_get_issue)
     monkeypatch.setattr(reconcile_project_status, "get_pr", fake_get_pr)
     monkeypatch.setattr(

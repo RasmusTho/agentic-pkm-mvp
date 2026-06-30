@@ -28,8 +28,52 @@ GOVERNANCE_PATH = Path(".github/github-governance.yml")
 DEFAULT_PROJECT_NAME = "Agent Delivery Control Plane"
 SCAN_WATERMARK_PATH = REPO_ROOT / "runtime" / "dispatcher" / "project_status_reconcile_scan_watermark.json"
 PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
+PROJECT_ITEM_SCAN_PAGE_SIZE = 100
 GH_RETRY_ATTEMPTS = 5
 GH_RETRY_BASE_DELAY_SECONDS = 0.4
+PROJECT_ITEMS_WITH_UPDATED_AT_QUERY = """
+query($owner: String!, $number: Int!, $after: String) {
+  user(login: $owner) {
+    projectV2(number: $number) {
+      items(first: 100, after: $after) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          content {
+            __typename
+            ... on Issue {
+              number
+              url
+              updatedAt
+            }
+            ... on PullRequest {
+              number
+              url
+              updatedAt
+            }
+          }
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field {
+                  ... on ProjectV2SingleSelectField {
+                    name
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
 # GitHub's shared GraphQL pool (~5000 points/hr, shared across every tool/agent
 # on this identity) exhausts long before REST core. Below these remaining-budget
@@ -61,6 +105,8 @@ def _api_class(args: tuple[str, ...]) -> str:
         return "graphql"  # every `gh project` subcommand is GraphQL-only
     if head in {"issue", "pr"}:
         return "rest"
+    if head == "api" and len(args) > 1 and args[1] == "graphql":
+        return "graphql"
     if head == "api":
         # `gh api rate_limit` is REST core and does not count against any quota.
         return "rest-core"
@@ -331,6 +377,74 @@ def list_project_items(owner: str, project_number: int) -> list[dict[str, Any]]:
     )
 
 
+def _status_from_field_values(item: dict[str, Any]) -> str | None:
+    field_values = item.get("fieldValues") or {}
+    for field_value in field_values.get("nodes", []):
+        field = field_value.get("field") or {}
+        if field.get("name") == "Status":
+            return field_value.get("name")
+    return None
+
+
+def _scan_item_from_graphql_node(node: dict[str, Any]) -> dict[str, Any] | None:
+    content = node.get("content") or {}
+    typename = content.get("__typename")
+    if typename not in {"Issue", "PullRequest"}:
+        return None
+    updated_at = content.get("updatedAt")
+    if not updated_at:
+        raise RuntimeError(
+            "project scan item is missing Issue/PullRequest updatedAt; cannot "
+            "safely run incremental scan"
+        )
+    return {
+        "id": node.get("id"),
+        "content": {
+            "type": typename,
+            "number": content.get("number"),
+            "url": content.get("url"),
+            "updatedAt": updated_at,
+        },
+        "status": _status_from_field_values(node),
+    }
+
+
+def list_project_items_for_scan(owner: str, project_number: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    after: str | None = None
+    while True:
+        cmd = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={PROJECT_ITEMS_WITH_UPDATED_AT_QUERY}",
+            "-F",
+            f"owner={owner}",
+            "-F",
+            f"number={project_number}",
+        ]
+        if after:
+            cmd.extend(["-F", f"after={after}"])
+        payload = json.loads(run_gh(*cmd))
+        project = ((payload.get("data") or {}).get("user") or {}).get("projectV2")
+        if not project:
+            raise RuntimeError(f'Project #{project_number} not found for owner "{owner}"')
+        page = project.get("items") or {}
+        for node in page.get("nodes", []):
+            item = _scan_item_from_graphql_node(node)
+            if item is not None:
+                items.append(item)
+        page_info = page.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        after = page_info.get("endCursor")
+        if not after:
+            raise ProjectItemListDeferred(
+                "project scan pagination did not return an end cursor"
+            )
+    return items
+
+
 def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> dict[str, Any] | None:
     for item in items:
         content = item.get("content") or {}
@@ -529,7 +643,7 @@ def reconcile_scan(
     scan_started_at = _scan_started_at()
     watermark = load_scan_watermark()
     try:
-        items = list_project_items(owner, project["number"])
+        items = list_project_items_for_scan(owner, project["number"])
     except ProjectItemListDeferred as exc:
         print(f"skip project scan: {exc}")
         return 0
