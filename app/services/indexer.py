@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from app.components.embeddings import get_embedding_client, get_embedding_identity
+from app.index.artifact_metadata import build_indexed_unit_payload
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
@@ -141,7 +142,14 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
                 object_uuid_val,
                 kind=domain.kind,
                 source_ref=domain.source_ref or "",
-                payload=domain.payload,
+                payload=build_indexed_unit_payload(
+                    object_id=object_uuid_val,
+                    kind=domain.kind,
+                    source_ref=domain.source_ref or "",
+                    payload=domain.payload,
+                    text=str(content or ""),
+                    embedding_identity=identity,
+                ),
                 embedding=embedding,
                 model=model_name,
                 identity=identity,

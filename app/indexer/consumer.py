@@ -8,6 +8,7 @@ from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMTaskIntent
 from app.embedding_config import coerce_floats
+from app.index.artifact_metadata import build_indexed_unit_payload
 from app.llm.embed_queue import embed_with_retry
 from app.llm.embeddings import EMBED_MODEL
 from app.outbox import events as outbox_events
@@ -61,6 +62,13 @@ def process_event(evt: Dict[str, Any]) -> None:
 
         idx = get_vector_index()
         _purge_vectors(idx, object_id)
+        payload = build_indexed_unit_payload(
+            object_id=object_id,
+            kind=kind,
+            source_ref=source_ref,
+            payload=payload,
+            embedding_identity=identity,
+        )
         idx.upsert(
             object_id=object_id,
             kind=kind,
@@ -128,7 +136,14 @@ def process_event(evt: Dict[str, Any]) -> None:
         object_id=obj_uuid,
         kind=str(obj.kind or "note"),
         source_ref=str(obj.source_ref or ""),
-        payload=obj_payload,
+        payload=build_indexed_unit_payload(
+            object_id=obj_uuid,
+            kind=str(obj.kind or "note"),
+            source_ref=str(obj.source_ref or ""),
+            payload=obj_payload,
+            text=text,
+            embedding_identity=identity,
+        ),
         embedding=embedding,
         model=identity.model,
         identity=identity,

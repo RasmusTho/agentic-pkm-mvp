@@ -98,6 +98,10 @@ def test_required_metadata_present(monkeypatch: pytest.MonkeyPatch) -> None:
         kind="note",
         source_ref="vault/Notes/retrieved-unit.md",
         payload={
+            "artifact_id": "stale-artifact",
+            "stable_id": "stale-stable-id",
+            "path": "vault/Old/stale.md",
+            "source_ref": "vault/Old/stale.md",
             "title": "Retrieved Unit",
             "origin": "vault",
             "language": "en",

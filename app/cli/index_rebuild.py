@@ -11,6 +11,7 @@ from uuid import UUID
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
+from app.index.artifact_metadata import build_indexed_unit_payload
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app.store import object_store as legacy_store
 from app.stores import get_vector_index, resolve_store_backend
@@ -315,7 +316,14 @@ def rebuild(
                 object_id=UUID(str(domain_obj.uuid)),
                 kind=str(domain_obj.kind or "note"),
                 source_ref=str(domain_obj.source_ref or ""),
-                payload=dict(domain_obj.payload or {}),
+                payload=build_indexed_unit_payload(
+                    object_id=UUID(str(domain_obj.uuid)),
+                    kind=str(domain_obj.kind or "note"),
+                    source_ref=str(domain_obj.source_ref or ""),
+                    payload=dict(domain_obj.payload or {}),
+                    text=text,
+                    embedding_identity=identity,
+                ),
                 embedding=embedding,
                 model=identity.model,
                 identity=identity,
