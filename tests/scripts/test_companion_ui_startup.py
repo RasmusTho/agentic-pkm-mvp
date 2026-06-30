@@ -12,6 +12,7 @@ START_SCRIPTS = (
     REPO_ROOT / "scripts" / "test" / "start_bifrost_ui.sh",
     REPO_ROOT / "scripts" / "prod" / "start_midgard_ui.sh",
 )
+TEST_UI_SCRIPT = REPO_ROOT / "scripts" / "test" / "start_bifrost_ui.sh"
 
 _START_UI_HARNESS = r"""
 set -euo pipefail
@@ -81,3 +82,58 @@ def test_bind_lan_flag_exposes_lan_urls(tmp_path: Path) -> None:
     assert "HOST=0.0.0.0" in output
     assert "UI (LAN)    : http://192.0.2.10:8112/" in output
     assert "UI (Tailscale): http://100.64.0.10:8112/" in output
+
+
+def test_test_ui_does_not_force_recreate_by_default() -> None:
+    text = TEST_UI_SCRIPT.read_text(encoding="utf-8")
+
+    assert "CUI_FORCE_RECREATE=1" not in text
+    assert 'CUI_FORCE_RECREATE="${CUI_FORCE_RECREATE:-1}"' not in text
+
+
+def test_healthy_api_skips_recreate_when_force_false(tmp_path: Path) -> None:
+    harness = r"""
+set -euo pipefail
+FAKE_ROOT="$1"
+
+mkdir -p "$FAKE_ROOT/scripts"
+cat > "$FAKE_ROOT/scripts/start_full_system.sh" <<'EOS'
+#!/usr/bin/env bash
+touch "$(pwd)/.full_system_ran"
+EOS
+chmod +x "$FAKE_ROOT/scripts/start_full_system.sh"
+
+source "$LIB"
+cui_repo_root() { printf '%s' "$FAKE_ROOT"; }
+cui_api_healthy_now() { return 0; }
+cui_runtime_is_idle_channel_container() { return 0; }
+cui_runtime_vault_matches_env() { return 1; }
+unset VAULT_ROOT VAULT_HOST_ROOT
+
+export CUI_API_PORT=18002
+export CUI_CHANNEL=test
+export CUI_COMPOSE_PROJECT=pkm-test
+export CUI_COMPOSE_FILES=docker-compose.yaml
+export CUI_FORCE_RECREATE=0
+
+cui_start_runtime >/dev/null 2>&1 || true
+
+if [ -f "$FAKE_ROOT/.full_system_ran" ]; then
+  echo RECREATED
+else
+  echo SKIPPED
+fi
+"""
+
+    env = dict(os.environ)
+    env["LIB"] = str(LIB)
+    result = subprocess.run(
+        ["bash", "-c", harness, "harness", str(tmp_path)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip().splitlines()[-1] == "SKIPPED"
