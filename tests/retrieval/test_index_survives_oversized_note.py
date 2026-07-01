@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import httpx
 import numpy as np
+import pytest
 
 import app.components.retrieval as retrieval_module
 import app.llm.embeddings as emb
 from app.components.embeddings import EmbeddingIdentity
 from app.index import embeddings as index_emb
+from app.ingest.chunk_policy import build_structural_chunks
 from app.llm.embeddings import embed_texts
 from app.retrieval.hybrid import MemoryHybridStore
 
@@ -124,4 +126,64 @@ def test_failing_note_degraded_to_zero_vector(monkeypatch) -> None:
     # The poison note is degraded to a zero vector of the correct dimension,
     # not an exception that aborts the build.
     assert vectors[1] == [0.0, 0.0, 0.0]
+    emb._embed_single.cache_clear()
+
+
+def test_oversized_note_chunks(monkeypatch) -> None:
+    """The structural chunker's chunk boundaries (issue #2323) reconcile
+    cleanly with the independent oversized-input mean-pooling defense in
+    ``app.llm.embeddings._embed_single`` (#2110): a structural chunk that is
+    itself still over the embedding provider's window is mean-pooled the same
+    way a whole oversized note is, and every structural chunk keeps a valid,
+    reconstructible char-offset span regardless of how the embedding layer
+    internally sub-splits it for the provider call.
+    """
+    dim = 4
+    max_chars = 3000  # structural chunker's section budget
+    embed_window = 50  # provider embedding window (independent from chunker)
+
+    # A note with two headed sections; the second section is itself oversized
+    # relative to the *embedding* window (though under the chunker's section
+    # budget), so it must be mean-pooled by _embed_single, not aborted.
+    text = (
+        "# Title\n\n"
+        "Short intro.\n\n"
+        "## Big Section\n\n" + ("z" * (embed_window * 4)) + "\n"
+    )
+
+    structural_chunks = build_structural_chunks(text, max_chars=max_chars)
+    assert len(structural_chunks) == 2
+    # Every structural chunk keeps valid, reconstructible offsets independent
+    # of what the embedding layer does internally with the chunk's text.
+    for chunk in structural_chunks:
+        assert text[chunk["char_start"] : chunk["char_end"]] == chunk["text"]
+
+    monkeypatch.setenv("EMBED_MAX_INPUT_CHARS", str(embed_window))
+    monkeypatch.setenv("LLM_TIMEOUT", "5")
+    monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    monkeypatch.setenv("EMBED_DIM", str(dim))
+
+    def fake_embed_api(embed_text, model, d, timeout):
+        if len(embed_text) > embed_window:
+            raise RuntimeError(
+                "Ollama /api/embeddings returned HTTP 500: the input length exceeds the context length"
+            )
+        return tuple(0.1 for _ in range(d))
+
+    monkeypatch.setattr(emb, "_ollama_embed_api", fake_embed_api)
+    emb._embed_single.cache_clear()
+
+    vectors = embed_texts(
+        [chunk["text"] for chunk in structural_chunks],
+        provider="ollama",
+        dim=dim,
+        normalize=False,
+    )
+
+    assert len(vectors) == len(structural_chunks)
+    # The short intro chunk is under the embedding window: embeds directly.
+    assert vectors[0] == [0.1, 0.1, 0.1, 0.1]
+    # The oversized structural section chunk is mean-pooled rather than
+    # aborting the build; mean of constant 0.1 sub-vectors is still 0.1.
+    assert vectors[1] == pytest.approx([0.1, 0.1, 0.1, 0.1])
     emb._embed_single.cache_clear()
