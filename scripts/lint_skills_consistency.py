@@ -49,6 +49,8 @@ CANONICAL_LABELS = [
 # reference, mark it planned, or add the term here if it is plain vocabulary.
 KNOWN_NON_SKILL_TERMS = {
     "agentic-pkm-mvp",  # repository name
+    "code-review",  # Claude Code's built-in /code-review slash-command skill, not a repo-local skill dir
+    "code-reviewer",  # Claude Code's built-in code-review subagent type, not a repo-local skill dir
     "blocked-ci-failure",  # PR escalation classifications
     "blocked-contract-drift",
     "blocked-merge-conflict",
