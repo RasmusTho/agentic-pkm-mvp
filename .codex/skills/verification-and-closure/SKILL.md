@@ -105,7 +105,7 @@ Prerequisites for merge:
 - current SHA truth is intact
 - required checks are green on the current head SHA
 - no unresolved blocking review comments remain
-- the local review gate is resolved (see `Running the local review gate` below) — a clean run, or a run whose findings are all fixed or explicitly waived by the owner, is a pass; any unresolved finding blocks until addressed
+- the local review gate is resolved (see `Running the local review gate` below, including `Re-triggering after a fix`) — a clean run, or a run whose findings are all fixed-and-re-verified or explicitly waived by the owner, is a pass; any unresolved finding blocks until addressed; a fix alone, without the required re-verification, does not satisfy this prerequisite
 - when a review-thread closure trigger applies, no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
 - no scope drift remains
 - the PR fits one of the two verification modes above
