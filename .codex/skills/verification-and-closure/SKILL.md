@@ -130,8 +130,9 @@ external GitHub-native reviewer bot. Run it once the PR's required checks are gr
 
 Resolve the verdict:
 
-- **Pass** — the run reports no findings, or every finding it reported has since been fixed (verify
-  the fix against the current head SHA) or explicitly waived by the owner with a stated reason.
+- **Pass** — the run reports no findings, or every finding it reported has since been fixed and
+  re-verified per `Re-triggering after a fix` below, or explicitly waived by the owner with a stated
+  reason.
 - **Blocking** — any unresolved finding from the run blocks merge until addressed, fixed-and-reverified,
   or waived.
 - Record the run's outcome (clean / findings-fixed / owner-waived) in the delivery receipt so the gate
@@ -140,6 +141,26 @@ Resolve the verdict:
   (tool failure, timeout, repeated crash), surface the stall to the owner as a merge-gate decision
   rather than retrying forever. A demonstrable tooling outage is input, not an absolute block — but the
   waiver is the owner's call, not a silent default.
+
+#### Re-triggering after a fix
+
+One round is not sufficient once a finding leads to a code change — a fix can introduce a defect the
+original round never looked for, and self-verification by the same agent that wrote the fix is weaker
+than independent re-review.
+
+- After a **substantive** fix (anything beyond a one-line wording/doc/formatting change with no logic
+  change), re-run the local review gate scoped to the diff since the last review round before treating
+  that finding as resolved. Do not rely on the fixing agent's own read of the diff as the verdict.
+- A **trivial** fix (single-line wording/doc/formatting, no logic change) may be self-verified against
+  the current head SHA without a full re-run.
+- **Stop condition:** the gate passes once a round comes back clean (no new findings). For PRs touching
+  security/data/migration/auth/concurrency/external-API surfaces (`AGENTS.md :: Total Cost of
+  Development` escalation tier), require 2 consecutive clean rounds before passing.
+- If the same finding, or a new one at the same mechanism, reappears after 2 fix attempts, that is an
+  escalation trigger per `AGENTS.md :: Agency default` — stop looping and surface it to the owner rather
+  than attempting a third fix blind.
+- Record each round's outcome and the final round count in the delivery receipt so convergence is
+  auditable after merge.
 
 ### Reading the Codex verdict 🤖 (inactive — kept for reactivation)
 
