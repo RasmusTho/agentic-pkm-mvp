@@ -12,7 +12,19 @@ masked.
 
 from __future__ import annotations
 
-from tests.invariants._helpers import load_schema, require_future_runtime
+from tests.invariants._helpers import load_schema, read_doc, require_future_runtime, value_family
+
+# First-class metadata-bearing objects named in functional-ontology.md §3 ("Knowledge and meaning
+# terms"). HumanArtifact and AcceptedArtifact are states/subtypes of Artifact (distinguished by
+# source_role/authority_state, not a separate object_type) and are intentionally excluded here.
+_METADATA_BEARING_ONTOLOGY_OBJECTS = {
+    "artifact",
+    "segment",
+    "claim",
+    "concept",
+    "relation",
+    "source",
+}
 
 # Core semantics + provenance every usable object must carry — a "naked vector" has none of these.
 _CORE_SEMANTIC_PROVENANCE = {
@@ -38,6 +50,34 @@ def test_metadata_bundle_required() -> None:
     props = schema.get("properties", {})
     for dim in ("source_role", "authority_state", "evidence_role"):
         assert dim in props, f"{dim} must be its own field"
+
+
+def test_object_type_enum_covers_metadata_bearing_functional_objects() -> None:
+    # Invariant registry: docs/testing/invariant-tests.md :: metadata_bundle_required
+    # Reconciliation contract (#2723): every first-class, metadata-bearing object that
+    # docs/architecture/functional-ontology.md §3 describes as usable must be representable via
+    # schemas/_defs.schema.json::$defs.object_type — no ontology object may be simultaneously
+    # "usable" and "impossible to validate" through the MetadataBundle contract.
+    object_type_enum = set(value_family("object_type"))
+    missing = _METADATA_BEARING_ONTOLOGY_OBJECTS - object_type_enum
+    assert not missing, (
+        f"object_type enum is missing first-class metadata-bearing ontology objects: {sorted(missing)}"
+    )
+
+    # Prose mirror must not contradict the schema: metadata-bundle.md §2 must name every reconciled
+    # object type, and functional-ontology.md §3 must still name Concept/Relation/Source as the
+    # ontology objects this enum reconciles against.
+    bundle_doc = read_doc("docs/architecture/metadata-bundle.md")
+    for object_type in _METADATA_BEARING_ONTOLOGY_OBJECTS:
+        assert f"`{object_type}`" in bundle_doc, (
+            f"metadata-bundle.md must list object_type `{object_type}` in its supported object types"
+        )
+
+    ontology_doc = read_doc("docs/architecture/functional-ontology.md")
+    for term in ("Concept", "Relation", "Source"):
+        assert f"`{term}`" in ontology_doc, (
+            f"functional-ontology.md must still define {term} as a knowledge/meaning term"
+        )
 
 
 def test_store_no_naked_vectors() -> None:

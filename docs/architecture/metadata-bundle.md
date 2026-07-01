@@ -5,7 +5,7 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (metadata bundle contract); subordinate to doctrine, ontology, semantic dimensions
-Last reviewed: 2026-06-27
+Last reviewed: 2026-07-01
 Last verified against: docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/foundation/00-yggdrasil-doctrine.md, schemas/metadata-bundle.schema.json
 
 # Yggdrasil Metadata Bundle
@@ -32,7 +32,7 @@ this batch — [context-envelope](context-envelope.md), [memory-model](memory-mo
 
 | Family | Fields | Notes |
 | --- | --- | --- |
-| **identity** | `object_id`, `object_type` | What this object is. `object_type` ∈ artifact, segment, claim, memory_item, proposal, projection, retrieval_result, context_item, authority_transition, execution_effect. |
+| **identity** | `object_id`, `object_type` | What this object is. `object_type` ∈ artifact, segment, claim, concept, relation, source, memory_item, proposal, projection, retrieval_result, context_item, authority_transition, execution_effect. |
 | **location / context** | `vault_id`, `workspace_id`, `scope_id`, `sphere`, `principal_id`, `scope_binding` | Where and in what frame it lives. `vault_id` is storage topology; **it is not equivalent to `scope_id`** (a scope is a cognitive/audience/policy/provenance frame). |
 | **semantics** | `source_role`, `authority_state`, `evidence_role`, `sensitivity`, `suppression_state` | The orthogonal [semantic dimensions](semantic-dimensions.md). The three role dimensions answer different questions and are never collapsed. |
 | **provenance** | `created_by`, `created_at`, `derived_from`, `content_hash`, `provenance_event_ids` | Where it came from and **why it has the standing it has**. Provenance survives derivation. |
@@ -40,10 +40,19 @@ this batch — [context-envelope](context-envelope.md), [memory-model](memory-mo
 
 ## 2. Supported object types
 
-The same bundle describes every usable object: `artifact`, `segment`, `claim`, `memory_item`,
-`proposal`, `projection`, `retrieval_result`, `context_item`, `authority_transition`, and
-`execution_effect`. Not every type can carry every field, so the schema uses **conditional
-requirements** (§4) rather than forcing one rigid shape.
+The same bundle describes every usable object: `artifact`, `segment`, `claim`, `concept`,
+`relation`, `source`, `memory_item`, `proposal`, `projection`, `retrieval_result`, `context_item`,
+`authority_transition`, and `execution_effect`. Not every type can carry every field, so the schema
+uses **conditional requirements** (§4) rather than forcing one rigid shape.
+
+This set is reconciled against the first-class metadata-bearing objects named in
+[functional-ontology §3](functional-ontology.md#3-knowledge-and-meaning-terms): `Concept`,
+`Relation`, and `Source` are usable, metadata-bearing ontology objects and are therefore
+first-class `object_type` values here, alongside `Artifact`, `Segment`, and `Claim`.
+`HumanArtifact` and `AcceptedArtifact` are states/subtypes of `Artifact` (distinguished by
+`source_role`/`authority_state`, not by a separate `object_type`), so they carry `object_type:
+artifact` rather than their own enum value. No first-class metadata-bearing ontology object is
+usable per the functional ontology while being absent from this enum.
 
 ## 3. Required rules
 
