@@ -1,11 +1,19 @@
 .PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
-# Test vault root. Honors an explicit TEST_VAULT_ROOT make/env override first,
-# then VAULT_ROOT_TEST, then the repo-local scratch vault. Plain VAULT_ROOT is a
-# runtime binding and may point at the operator/prod vault, so it must not select
-# the test seed vault implicitly.
+# Test vault root for bootstrap / seeded test startup lanes. Honors an
+# explicit TEST_VAULT_ROOT make/env override first, then VAULT_ROOT_TEST, then
+# the repo-local scratch vault. Plain VAULT_ROOT is a runtime binding and may
+# point at the operator/prod vault, so it must not select the test seed vault
+# implicitly. `start-test-system` has a separate idle-by-default derivation
+# below so a fresh checkout can boot with no vault selected.
 TEST_VAULT_ROOT ?= $(or $(VAULT_ROOT_TEST),vault-test)
+# `start-test-system` should honor explicit test vault paths, and it should
+# keep the documented seeded local bootstrap path bound to vault-test after
+# `make test-vault-init` creates it. A fresh checkout with no seeded vault
+# leaves VAULT_ROOT empty so scripts/start_full_system.sh enters the no-vault
+# idle posture instead of failing on a missing scratch vault.
+START_TEST_SYSTEM_VAULT_ROOT := $(if $(filter command line environment,$(origin TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),$(if $(filter command line environment,$(origin VAULT_ROOT_TEST)),$(VAULT_ROOT_TEST),$(if $(wildcard $(TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),)))
 # Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
 # promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
 # the in-container `db:5432` address is unreachable from the host (issue #1997
@@ -137,7 +145,7 @@ reset-zero-force:
 # to the no-vault idle posture (picker state), and fails loud only on a
 # set-but-missing path — so requiring a vault here would defeat idle boot.
 start-test-system:
-	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(TEST_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" API_BASE_URL="$(TEST_API_BASE_URL)" HEALTH_ENDPOINT="$(TEST_API_BASE_URL)/healthz" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" scripts/start_full_system.sh
+	@$(TEST_COMPOSE_ENV) VAULT_ROOT="$(START_TEST_SYSTEM_VAULT_ROOT)" DATABASE_URL="$(TEST_DATABASE_URL)" DB_DSN="$(TEST_DATABASE_URL)" API_BASE_URL="$(TEST_API_BASE_URL)" HEALTH_ENDPOINT="$(TEST_API_BASE_URL)/healthz" LLM_PROVIDER="$(TEST_LLM_PROVIDER)" LLM_MODEL="$(TEST_LLM_MODEL)" scripts/start_full_system.sh
 
 test-bootstrap: require-test-vault-root
 	@$(TEST_COMPOSE_ENV) RESET_FORCE=1 bash scripts/reset_to_zero.sh
