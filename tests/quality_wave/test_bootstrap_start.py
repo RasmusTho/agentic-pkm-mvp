@@ -333,7 +333,12 @@ class TestBootstrapStartContract:
         """
         repo_root = Path.cwd()
         vault_dir = repo_root / "vault-test"
-        assert not vault_dir.exists(), "test requires a clean vault-test/ state"
+        if vault_dir.exists():
+            pytest.skip(
+                "vault-test/ already exists in this checkout (e.g. from a prior "
+                "`make test-vault-init`); this test needs a clean state to observe "
+                "the directory it creates itself and must not touch real local state."
+            )
         probe_mk = repo_root / "_probe_vault_root.mk"
         probe_mk.write_text(
             'probe-vault-root:\n\t@echo "PROBE_VAULT_ROOT=$(START_TEST_SYSTEM_VAULT_ROOT)"\n',
