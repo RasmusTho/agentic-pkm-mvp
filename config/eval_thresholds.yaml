@@ -1,0 +1,26 @@
+# Deterministic retrieval/memory eval thresholds for `python -m app.eval.run`.
+#
+# These are conservative floors for the current baseline retrieval quality,
+# not aspirational targets. Read by app/eval/run.py; documented in
+# docs/eval.md :: Metrics. Raise thresholds only after intentionally
+# improving retrieval and re-measuring the golden set — do not hardcode
+# aspirational numbers directly in code.
+schema_version: eval_thresholds.v1
+
+# Applied to the overall aggregate across the full bilingual seed.
+aggregate:
+  precision_at_k: 0.15
+  ndcg_at_k: 0.60
+
+# Applied per language (en, sv) over the bilingual seed.
+per_language:
+  precision_at_k: 0.10
+  ndcg_at_k: 0.55
+
+# Applied to the memory-recall slice (recall_into_ask + low_trust_citation
+# route_intents from docs/eval/retrieval_bilingual_seed.yaml).
+memory_recall:
+  precision_at_k: 0.10
+  ndcg_at_k: 0.60
+
+k: 5

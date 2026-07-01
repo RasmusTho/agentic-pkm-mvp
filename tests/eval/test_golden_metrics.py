@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from app.eval.golden import evaluate_golden_set, evaluate_vs_baseline, ndcg_at_k, precision_at_k
+from app.eval.golden import (
+    MEMORY_RECALL_ROUTE_INTENTS,
+    evaluate_bilingual_golden_set,
+    evaluate_golden_set,
+    evaluate_vs_baseline,
+    ndcg_at_k,
+    precision_at_k,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -76,3 +83,54 @@ def test_bilingual_ground_truth_resolves() -> None:
             f"{case['id']} references unresolved data/golden doc ids: "
             f"{sorted(unresolved)}"
         )
+
+
+def test_per_language_metrics() -> None:
+    """#2320: the runner must report precision@k/ndcg@k per language over the
+    W2-EVAL-01 bilingual seed, in addition to per-slice and aggregate."""
+    result = evaluate_bilingual_golden_set(k=5)
+
+    assert set(result["by_language"]) == {"en", "sv"}
+    for lang, metrics in result["by_language"].items():
+        assert 0 <= metrics["precision@k"] <= 1
+        assert 0 <= metrics["ndcg@k"] <= 1
+        assert metrics["count"] > 0
+
+    # per-slice (route_intent) coverage over the current seed taxonomy.
+    assert set(result["by_slice"]) == {
+        "exact_lexical",
+        "hybrid_semantic",
+        "recall_into_ask",
+        "low_trust_citation",
+    }
+    for metrics in result["by_slice"].values():
+        assert 0 <= metrics["precision@k"] <= 1
+        assert 0 <= metrics["ndcg@k"] <= 1
+
+    assert 0 <= result["aggregate"]["precision@k"] <= 1
+    assert 0 <= result["aggregate"]["ndcg@k"] <= 1
+    assert result["aggregate"]["count"] == len(result["queries"])
+
+
+def test_memory_recall_slice() -> None:
+    """#2320: the runner must score a memory-recall slice (recall-into-ASK /
+    low-trust citation) with deterministic ground truth from the bilingual
+    seed's `recall_into_ask` and `low_trust_citation` route_intents."""
+    result = evaluate_bilingual_golden_set(k=5)
+
+    memory_recall = result["memory_recall"]
+    assert 0 <= memory_recall["precision@k"] <= 1
+    assert 0 <= memory_recall["ndcg@k"] <= 1
+
+    expected_count = sum(
+        1 for q in result["queries"] if q["route_intent"] in MEMORY_RECALL_ROUTE_INTENTS
+    )
+    assert memory_recall["count"] == expected_count > 0
+
+    # Ground truth is deterministic: recomputing directly from the queries
+    # sliced by route_intent must match the memory_recall aggregate.
+    from statistics import fmean
+
+    recall_entries = [q for q in result["queries"] if q["route_intent"] in MEMORY_RECALL_ROUTE_INTENTS]
+    assert memory_recall["precision@k"] == fmean(e["precision@k"] for e in recall_entries)
+    assert memory_recall["ndcg@k"] == fmean(e["ndcg@k"] for e in recall_entries)
