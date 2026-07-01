@@ -188,7 +188,7 @@ def _chunk_id(source_id: Optional[str], index: int, char_start: int, char_end: i
     `app/context_bundles/schema.py` (plain string identifiers).
     """
     basis = f"{source_id or ''}:{index}:{char_start}:{char_end}"
-    digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
     return f"chunk_{digest}"
 
 
