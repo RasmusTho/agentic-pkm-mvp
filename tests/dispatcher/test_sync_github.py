@@ -8,12 +8,13 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.dispatcher.sync_github import (
     PROVIDER_IDENTITY,
+    GhCliIssueSource,
     GitHubIssueSource,
     PullSyncAdapter,
     get_sync_meta,
@@ -508,3 +509,35 @@ def test_reconcile_keeps_blocked_when_open_issue_lookup_fails(tmp_store: SqliteS
     assert stored is not None
     assert stored.status == "blocked"
     assert stored.blocked_reason == "waiting for upstream"
+
+
+def test_gh_cli_get_rate_limit_uses_valid_gh_flags_and_parses_rate_key() -> None:
+    """Regression guard: `gh api` has no `--json` field-selector flag (that's
+
+    only valid on `gh <noun> list/view`), and `gh api rate_limit`'s real JSON
+    shape is ``{"resources": {...}, "rate": {...}}`` — never a top-level
+    ``rate_limit`` key. A prior version of this call used the invalid
+    ``--json`` flag and read the wrong key, so ``get_rate_limit()`` always
+    returned ``None`` in production even though unit tests (which mock the
+    protocol, not this method) stayed green.
+    """
+    source = GhCliIssueSource()
+    fake_result = MagicMock(returncode=0, stdout='{"limit": 5000, "remaining": 4973, "reset": 1782894337, "used": 27}')
+
+    with patch("subprocess.run", return_value=fake_result) as mock_run:
+        result = source.get_rate_limit()
+
+    args = mock_run.call_args.args[0]
+    assert "--json" not in args, "gh api has no --json flag; use --jq"
+    assert result == {"limit": 5000, "remaining": 4973, "reset": 1782894337, "used": 27}
+
+
+def test_gh_cli_get_rate_limit_returns_none_on_gh_failure() -> None:
+    """Non-zero gh exit (auth failure, invalid flags, network error) yields None, not a crash."""
+    source = GhCliIssueSource()
+    fake_result = MagicMock(returncode=1, stdout="")
+
+    with patch("subprocess.run", return_value=fake_result):
+        result = source.get_rate_limit()
+
+    assert result is None

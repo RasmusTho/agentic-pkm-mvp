@@ -19,6 +19,11 @@ from typing import Any, Protocol
 
 from app.dispatcher.models import EventRecord, SyncState, TaskRecord
 from app.dispatcher.store import DispatcherStore
+from app.dispatcher.github_call_logger import (
+    is_kill_switch_active,
+    log_github_call,
+    get_last_known_remaining,
+)
 
 PROVIDER_IDENTITY = "github"
 
@@ -486,14 +491,13 @@ class GhCliIssueSource:
 
         try:
             result = subprocess.run(
-                ["gh", "api", "rate_limit", "--json", "remaining,reset"],
+                ["gh", "api", "rate_limit", "--jq", ".rate"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
             if result.returncode == 0:
-                data = json.loads(result.stdout)
-                return data.get("rate_limit", {})
+                return json.loads(result.stdout)
         except Exception:
             pass
         return None
@@ -523,17 +527,55 @@ class PullSyncAdapter:
 
         Returns the list of upserted :class:`TaskRecord` objects.
         Raises nothing; on error, records failure metadata and returns ``[]``.
+
+        Kill switch: when the last captured ``rate_limit_remaining`` is below
+        threshold, the expensive open-issues scan and stale reconcile are
+        skipped. Essential read (agent:ready list) is always attempted.
         """
+        import time as _time
         pull_at = datetime.now(timezone.utc).isoformat()
         rate_limit: dict[str, Any] | None = None
         try:
+            t0 = _time.monotonic()
             rate_limit = self._source.get_rate_limit()
-        except Exception:
-            pass
+            log_github_call(
+                operation="gh api rate_limit",
+                direction="read",
+                latency_ms=round((_time.monotonic() - t0) * 1000, 2),
+            )
+        except Exception as exc:
+            log_github_call(operation="gh api rate_limit", direction="read", error=str(exc))
+
+        # Determine last known remaining from current rate_limit response or
+        # previously stored sync-meta, then check kill switch.
+        rl_remaining: int | None = None
+        rl_reset: str | None = None
+        if rate_limit:
+            rl_remaining = rate_limit.get("remaining")
+            rl_reset = rate_limit.get("reset")
+        if rl_remaining is None:
+            last_meta = get_sync_meta(self._store, self._provider)
+            rl_remaining = get_last_known_remaining(last_meta)
+
+        kill_switch = is_kill_switch_active(rl_remaining)
 
         try:
+            t0 = _time.monotonic()
             ready_issues = self._source.list_issues(repo, **kwargs)
+            log_github_call(
+                operation="gh issue list --label agent:ready",
+                direction="read",
+                remaining=rl_remaining,
+                reset=rl_reset,
+                latency_ms=round((_time.monotonic() - t0) * 1000, 2),
+            )
         except Exception as exc:
+            log_github_call(
+                operation="gh issue list --label agent:ready",
+                direction="read",
+                remaining=rl_remaining,
+                error=str(exc),
+            )
             failure = classify_github_api_failure(exc)
             record_sync_failure(
                 self._store,
@@ -545,12 +587,31 @@ class PullSyncAdapter:
             return []
 
         open_issues_available = True
-        try:
-            open_issues = self._source.list_open_issues(repo, **kwargs)
-        except Exception:
-            # If open-issues lookup fails, still preserve current upsert behavior.
-            open_issues = []
+        if kill_switch:
+            # Non-essential scan disabled to protect remaining quota.
+            open_issues: list[dict[str, Any]] = []
             open_issues_available = False
+        else:
+            try:
+                t0 = _time.monotonic()
+                open_issues = self._source.list_open_issues(repo, **kwargs)
+                log_github_call(
+                    operation="gh issue list --all-open",
+                    direction="read",
+                    remaining=rl_remaining,
+                    reset=rl_reset,
+                    latency_ms=round((_time.monotonic() - t0) * 1000, 2),
+                )
+            except Exception as exc:
+                log_github_call(
+                    operation="gh issue list --all-open",
+                    direction="read",
+                    remaining=rl_remaining,
+                    error=str(exc),
+                )
+                # If open-issues lookup fails, still preserve current upsert behavior.
+                open_issues = []
+                open_issues_available = False
 
         upserted: list[TaskRecord] = []
         skipped: list[str] = []
@@ -584,17 +645,12 @@ class PullSyncAdapter:
         )
         self.last_reconciled_count = reconciled
 
-        rl_remaining: int | None = None
-        rl_reset: str | None = None
-        if rate_limit:
-            rl_remaining = rate_limit.get("remaining")
-            rl_reset = rate_limit.get("reset")
-
         extra: dict[str, Any] = {}
         if skipped:
             extra["skipped_count"] = len(skipped)
             extra["skipped_notes"] = skipped[:10]
         extra["reconciled_count"] = reconciled
+        extra["kill_switch_active"] = kill_switch
 
         record_sync_success(
             self._store,
