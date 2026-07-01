@@ -69,6 +69,7 @@ ops/promotions/
 verification_report.md
 
 # Local hygiene artifacts
+.codex-tmp/
 Archive/Trash/
 tmp-dev/
 tmp-test/
