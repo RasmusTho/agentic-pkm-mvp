@@ -115,11 +115,11 @@ Prerequisites for merge:
 
 ### Running the local review gate 🤖
 
-The PR review gate runs locally via the `code-review` skill instead of waiting on an external
-GitHub-native reviewer bot. Run it once the PR's required checks are green (per
+The PR review gate runs locally via the built-in `/code-review` skill instead of waiting on an
+external GitHub-native reviewer bot. Run it once the PR's required checks are green (per
 `_shared/CI_WAIT_CONTRACT.md`, without `--codex`) and before merge:
 
-- Invoke `code-review` (the `code-reviewer` subagent) against the PR's diff, with `--comment` so
+- Invoke `/code-review` (the code-reviewer subagent) against the PR's diff, with `--comment` so
   findings post as inline PR comments — this keeps the review visible on the PR itself, matching the
   old externally-visible verdict.
 - Effort level follows `AGENTS.md :: Total Cost of Development` — default to `medium`/`high` per the
