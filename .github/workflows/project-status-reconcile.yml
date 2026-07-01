@@ -50,6 +50,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Restore scan watermark
+        uses: actions/cache@v4
+        with:
+          path: runtime/dispatcher/project_status_reconcile_scan_watermark.json
+          key: project-status-reconcile-scan-watermark-${{ github.run_id }}
+          restore-keys: |
+            project-status-reconcile-scan-watermark-
       - name: Reconcile existing project items
         env:
           # GITHUB_TOKEN cannot write to a user-owned ProjectV2 board; a PAT/App
