@@ -141,6 +141,35 @@ Resolve the verdict:
   rather than retrying forever. A demonstrable tooling outage is input, not an absolute block — but the
   waiver is the owner's call, not a silent default.
 
+### Reading the Codex verdict 🤖 (inactive — kept for reactivation)
+
+> **Inactive as of the local-review-gate swap above.** This is not the current merge gate; it is kept
+> intact so Codex review can be reactivated later without reconstructing this section. `_shared/CI_WAIT_CONTRACT.md`'s
+> `--codex` flag still resolves this verdict for callers that opt into it, but `verification-and-closure`'s
+> default flow no longer requires it.
+
+Codex (`chatgpt-codex-connector[bot]`) reviews PRs in this repo automatically and often signals its
+verdict with an **emoji reaction on the PR itself**, not a formal review or comment. Checking only
+`/pulls/<n>/reviews` and `/comments` will miss it and read as "Codex hasn't reviewed yet."
+
+Resolve the verdict through `_shared/CI_WAIT_CONTRACT.md` / `app.dispatcher.poll_backoff` so the
+reactions, reviews, pull comments, and issue comments are read with one combined query where GitHub
+supports it. The surfaces remain:
+
+- Reactions (primary): `gh api repos/<owner>/<repo>/issues/<pr>/reactions --jq '.[] | select(.user.login=="chatgpt-codex-connector[bot]") | .content'`
+  - 👍 `+1` (also `heart` ❤️, `hooray` 🎉, `rocket` 🚀, `laugh` 😄) → reviewed, no blocking findings → **pass**.
+  - 👎 `-1` or `confused` 😕 → **blocking**: treat as requested changes until addressed.
+- Reviews: `gh api repos/<owner>/<repo>/pulls/<pr>/reviews` — a `CHANGES_REQUESTED` from Codex blocks; `COMMENTED` with substantive findings blocks until each is addressed or replied to.
+- Comments: `gh api repos/<owner>/<repo>/issues/<pr>/comments` and `/pulls/<pr>/comments` — Codex posts detailed findings here when it has them.
+
+Rules:
+
+- A 👍/`+1` reaction is a sufficient Codex pass even when there is no formal review or comment.
+- Do not block indefinitely on a missing verdict: if Codex has posted no reaction, review, or comment
+  and recent sibling PRs show the same silence (a repo-wide Codex stall), surface the stall to the
+  owner as a merge-gate decision rather than waiting forever. A demonstrable outage is input, not an
+  absolute block — but the waiver is the owner's call, not a silent default.
+
 When all prerequisites are met:
 
 1. confirm the PR head SHA has not changed since verification started
