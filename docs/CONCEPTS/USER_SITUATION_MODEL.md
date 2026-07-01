@@ -262,8 +262,11 @@ Which vault is active, and what happens when that changes or is unavailable.
   files; invalid/conflicted settings applied silently.
 - **Realized by:** `VaultStatus` (`none`/`selected`/`missing`/`invalid`/`uninitialized`) +
   `VaultRootMisconfiguredError`.
-- **Status:** `settled` (fail-loud on set-but-missing; recovery matrix). `partial` residual: migrating
-  legacy eager `resolve_vault_root()` consumers off the silent fallback is still in flight (#2311).
+- **Status:** `settled` (fail-loud on set-but-missing; recovery matrix). Migrating legacy eager
+  `resolve_vault_root()` consumers off the silent fallback closed with #2311 (2026-06-24, slices
+  05A-05D); the legacy `/app/vault` compatibility mount was re-baselined rather than removed
+  outright (see `docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up eager resolver migration
+  (#2311)`).
 
 ### B3. Multiple vaults across environments
 
