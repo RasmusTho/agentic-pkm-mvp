@@ -21,7 +21,7 @@ Prove the composition as a whole: render every state the spec declares from fixt
 - Asserts, across the gallery:
   - every declared entry-point transition renders, and undeclared transitions are rejected;
   - no UI-derived posture/class/authority anywhere;
-  - cold (vault-bound cold trajectory; decided 7d boundary per ADR-0008, runtime resolver still 14d pending #2513) and `no_vault` (runtime-unreachable or no-vault-bound first-contact picker) show no re-entry overlay;
+  - cold (vault-bound cold trajectory; decided 7d boundary per ADR-0008, runtime resolver reconciled to 7d by #2513, closed) and `no_vault` (runtime-unreachable or no-vault-bound first-contact picker) show no re-entry overlay;
   - governed intents surface receipts; body edits do not (receipt asymmetry);
   - blocked/stale render as guard-held states;
   - the display budget caps visible items at or below server caps;

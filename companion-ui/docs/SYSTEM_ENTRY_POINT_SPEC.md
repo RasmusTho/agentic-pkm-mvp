@@ -182,7 +182,8 @@ Each `data-intent` declares its surface, effect, and whether it routes through t
 | `overlay.dismiss` | any overlay | return to document anchor | no |
 | `guidance.toggle` | shell / entry / overlay head | toggle the guidance layer (UI-local; default off) | no |
 | `settings.open` | shell bottom bar / map | open the Settings drawer (Display / Listening / Behaviour / Connection plus the governed Vault section) | no |
-| `settings.set` | Settings | set a browser-local display/listening preference (byte-unchanged); the Vault section keeps the existing `vault.settings.write` server-write path | no |
+| `settings.set` | Settings | set a browser-local display/listening preference (byte-unchanged); does not cover the Vault section, which uses the separate `vault.settings.write` intent below | no |
+| `vault.settings.write` | Settings (Vault section) | save the scoped Markdown vault settings via `POST /api/companion/vault/settings`, with the #2518 confirm guard preserved | **yes — governed server-write; #2518 confirm-gated** |
 | `settings.reset` | Settings | reset browser-local display preferences to canonical; never resets the Vault section's scoped Markdown settings | no |
 | `tts.read` | document / map | open the read-back SpeechPlan (`POST /api/companion/tts/plan`) | no (read; only after human action) |
 | `tts.play` | read-back popover | synthesize + play (`POST /api/companion/tts/synthesize`) | no (read-only; never a mutation endpoint) |

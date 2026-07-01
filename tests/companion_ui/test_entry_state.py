@@ -2,8 +2,9 @@
 
 The five-state entry model (``entry_state.py``) must not change: a *selected*
 vault with an absent ``leave_point`` still resolves to ``cold_start`` (the
-anti-dashboard first-contact / >14d cold trajectory of a bound vault), and the
-``cold_start`` state is reserved for a vault that is already bound/selected.
+anti-dashboard first-contact / >7d cold trajectory of a bound vault, per the
+#2513 reconciliation to ADR-0008/#2489), and the ``cold_start`` state is
+reserved for a vault that is already bound/selected.
 
 This file pins the entry-model half of #2653 (the no-selection case routes to
 the picker is pinned API-side in ``tests/api/test_companion_orientation_selection_gate.py``
@@ -56,7 +57,7 @@ def test_selected_vault_absent_leave_point_still_cold_start() -> None:
 
     #2653 changes only the *no-selection* case (which must route to the picker);
     the five-state entry model is unchanged. A bound vault whose ``leave_point``
-    is absent is the canonical ``cold_start`` (first contact / >14d cold
+    is absent is the canonical ``cold_start`` (first contact / >7d cold
     trajectory of an already-selected vault, #2453) and must NOT regress to any
     other state or to the picker.
     """

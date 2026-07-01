@@ -8,11 +8,13 @@ Authority: Specifies the runtime activation of guarded memory recall. Semantic a
 
 The closed `docs/DURABLE_MEMORY_AND_RECALL/` capability shipped the memory model, durable review
 decisions, governed materialization, the authority guard, recall explanation, and
-`app/agent_memory/recall_activation.py::activate_guarded_recall` — and explicitly recorded that those
-last pieces have **zero production call sites** ("dormant by design, not by defect"): no path recalls
-promoted memory into reasoning. This capability closes exactly that gap.
+`app/agent_memory/recall_activation.py::activate_guarded_recall`. At that point those last pieces
+had **zero production call sites** ("dormant by design, not by defect"): no path recalled promoted
+memory into reasoning. This capability closed exactly that gap: `app/agents/ask/graph.py` now calls
+`activate_guarded_recall` from the ASK graph, so guarded recall has a live production call site and
+is no longer dormant.
 
-In scope:
+Historical scope (delivered):
 
 - a **retrieval** step that selects the *relevant* promoted memories for a query (not "all promoted
   memory"); scarcity matters — recall must be selective;

@@ -83,5 +83,8 @@ COMPOSE_PROJECT_NAME=pkm-dev \
   stack boots and stays healthy when the T7 is unplugged (`/Volumes` always
   exists; `/Volumes/T7` may not).
 - The legacy `${VAULT_HOST_ROOT}:/app/vault` mount and container
-  `VAULT_ROOT=/app/vault` remain until #2311 migrates the eager
-  `resolve_vault_root()` consumers; this mount is purely additive.
+  `VAULT_ROOT=/app/vault` were re-baselined (not removed) once #2311 finished migrating the
+  eager `resolve_vault_root()` consumers (closed 2026-06-24, slices 05A-05D): the mount now
+  lives only in the `docker-compose.legacy-vault.yml` compatibility overlay, included only
+  when a vault is explicitly bound. See `docs/VAULT_OPTIONAL_RUNTIME/README.md :: Follow-up
+  eager resolver migration (#2311)`. This mount is purely additive.
