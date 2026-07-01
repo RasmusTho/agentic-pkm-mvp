@@ -321,6 +321,55 @@ class TestBootstrapStartContract:
             f"Expected seeded repo-local vault-test to bind start-test-system; got: {combined[:500]}"
         )
 
+    def test_start_test_system_vault_root_sees_vault_created_earlier_in_same_invocation(
+        self,
+    ) -> None:
+        """A chained `make test-vault-init start-test-system` must observe the
+        vault-test/ that test-vault-init just created, not a parse-time snapshot.
+
+        GNU Make caches `$(wildcard)` directory reads for the whole invocation,
+        so `START_TEST_SYSTEM_VAULT_ROOT` must probe with `$(shell test -d ...)`
+        (always forks fresh) rather than `$(wildcard ...)` (cached).
+        """
+        repo_root = Path.cwd()
+        vault_dir = repo_root / "vault-test"
+        assert not vault_dir.exists(), "test requires a clean vault-test/ state"
+        probe_mk = repo_root / "_probe_vault_root.mk"
+        probe_mk.write_text(
+            'probe-vault-root:\n\t@echo "PROBE_VAULT_ROOT=$(START_TEST_SYSTEM_VAULT_ROOT)"\n',
+            encoding="utf-8",
+        )
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("VAULT_ROOT", "TEST_VAULT_ROOT", "VAULT_ROOT_TEST")
+        }
+        try:
+            result = subprocess.run(
+                [
+                    "make",
+                    "-f",
+                    "Makefile",
+                    "-f",
+                    probe_mk.name,
+                    "test-vault-init",
+                    "probe-vault-root",
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=repo_root,
+            )
+            combined = result.stdout + result.stderr
+            assert result.returncode == 0, combined[:800]
+            assert "PROBE_VAULT_ROOT=vault-test" in combined, (
+                "START_TEST_SYSTEM_VAULT_ROOT must see the vault-test/ dir created "
+                f"earlier in the same make invocation; got: {combined[:800]}"
+            )
+        finally:
+            probe_mk.unlink(missing_ok=True)
+            shutil.rmtree(vault_dir, ignore_errors=True)
+
     def test_seed_flow_uses_repo_local_vault_test_fallback(self) -> None:
         """Provisioning can seed the repo-local test scratch vault by default."""
         env = {
