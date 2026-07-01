@@ -96,16 +96,16 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 
 Verification owns the merge decision.
 
-For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks to go green and resolve Codex review, then merge — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch does not relax them); only the human watching is removed.
+For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks to go green and resolve the local review gate, then merge — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch does not relax them); only the human watching is removed.
 
-Wait **how** matters: follow `_shared/CI_WAIT_CONTRACT.md` — use the shared `app.dispatcher.poll_backoff` helper through `scripts/await_pr_checks.sh <PR> --codex`, REST check-runs only, interval + cap + exponential backoff, honor `Retry-After` and x-ratelimit-reset headers, sleep the bulk of CI up front, and back off ≥60–120s. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
+Wait **how** matters for CI: follow `_shared/CI_WAIT_CONTRACT.md` — use the shared `app.dispatcher.poll_backoff` helper through `scripts/await_pr_checks.sh <PR>` (no `--codex`; the review gate now runs locally per `Running the local review gate` below, not through the shared verdict poller), REST check-runs only, interval + cap + exponential backoff, honor `Retry-After` and x-ratelimit-reset headers, sleep the bulk of CI up front, and back off ≥60–120s. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
 
 Prerequisites for merge:
 
 - current SHA truth is intact
 - required checks are green on the current head SHA
 - no unresolved blocking review comments remain
-- the Codex review verdict is resolved (see `Reading the Codex verdict` below) — a 👍/`+1` reaction is a pass; a 👎/`-1` or any Codex review/comment with findings blocks until addressed
+- the local review gate is resolved (see `Running the local review gate` below) — a clean run, or a run whose findings are all fixed or explicitly waived by the owner, is a pass; any unresolved finding blocks until addressed
 - when a review-thread closure trigger applies, no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
 - no scope drift remains
 - the PR fits one of the two verification modes above
@@ -113,7 +113,40 @@ Prerequisites for merge:
 - if direct repair, the `Direct Repair` block and `Validation` are satisfied on the current head SHA
 - if the direct repair expands beyond bounded scope, stop and require, create, or link an issue before merge
 
-### Reading the Codex verdict 🤖
+### Running the local review gate 🤖
+
+The PR review gate runs locally via the built-in `/code-review` skill instead of waiting on an
+external GitHub-native reviewer bot. Run it once the PR's required checks are green (per
+`_shared/CI_WAIT_CONTRACT.md`, without `--codex`) and before merge:
+
+- Invoke `/code-review` (the code-reviewer subagent) against the PR's diff, with `--comment` so
+  findings post as inline PR comments — this keeps the review visible on the PR itself, matching the
+  old externally-visible verdict.
+- Effort level follows `AGENTS.md :: Total Cost of Development` — default to `medium`/`high` per the
+  PR's risk; escalate to `high`-`max` for security/data/migration/auth/concurrency/external-API
+  surfaces per the TCD model+reasoning policy.
+- Run the reviewer as a fresh subagent with no memory of the implementation reasoning, so it verifies
+  independently rather than rubber-stamping its own prior work.
+
+Resolve the verdict:
+
+- **Pass** — the run reports no findings, or every finding it reported has since been fixed (verify
+  the fix against the current head SHA) or explicitly waived by the owner with a stated reason.
+- **Blocking** — any unresolved finding from the run blocks merge until addressed, fixed-and-reverified,
+  or waived.
+- Record the run's outcome (clean / findings-fixed / owner-waived) in the delivery receipt so the gate
+  is auditable after merge.
+- Do not block indefinitely on a stalled or failed review run: if the reviewer subagent cannot complete
+  (tool failure, timeout, repeated crash), surface the stall to the owner as a merge-gate decision
+  rather than retrying forever. A demonstrable tooling outage is input, not an absolute block — but the
+  waiver is the owner's call, not a silent default.
+
+### Reading the Codex verdict 🤖 (inactive — kept for reactivation)
+
+> **Inactive as of the local-review-gate swap above.** This is not the current merge gate; it is kept
+> intact so Codex review can be reactivated later without reconstructing this section. `_shared/CI_WAIT_CONTRACT.md`'s
+> `--codex` flag still resolves this verdict for callers that opt into it, but `verification-and-closure`'s
+> default flow no longer requires it.
 
 Codex (`chatgpt-codex-connector[bot]`) reviews PRs in this repo automatically and often signals its
 verdict with an **emoji reaction on the PR itself**, not a formal review or comment. Checking only

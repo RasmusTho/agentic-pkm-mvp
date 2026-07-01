@@ -27,8 +27,12 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
 3. **Back off ≥ 60–120s** between checks on the tail. One PR's wait must not starve the shared bucket.
 4. **Preflight the free endpoint.** `gh api rate_limit` is **exempt** (does not count) — read it before
    assuming exhaustion, and compare `.graphql.remaining` vs `.core.remaining`.
-5. **Codex is variable and may stall — never hard-wait on it.** Resolve its verdict on the same cadence
-   as CI, with the stall escape hatch (see `verification-and-closure` :: *Reading the Codex verdict*).
+5. **`verification-and-closure`'s default merge gate is now a local `code-review` subagent run, not
+   Codex** (see `verification-and-closure` :: *Running the local review gate*) — CI wait no longer
+   needs `--codex` by default. `--codex` remains available below for callers that still want the
+   Codex verdict resolved; if used, Codex is variable and may stall — never hard-wait on it, and
+   resolve it on the same cadence as CI with the stall escape hatch (see `verification-and-closure` ::
+   *Reading the Codex verdict*, inactive as the default gate but kept for `--codex` callers).
 6. **Use the shared helper, preferably through the blessed script.** Do not hand-roll CI or Codex
    wait loops; `scripts/await_pr_checks.sh` delegates shared backoff/verdict behavior to
    `app.dispatcher.poll_backoff`.
@@ -56,9 +60,12 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 - `4` — Codex verdict unresolved (only with `--codex`) — resolve before merge
 - `5` — the PR head moved during the wait (when SHA is auto-resolved) — verified checks are stale; re-run
 
-The CI wait never issues a GraphQL check-state call. For an autonomous `&& gh pr merge`, run with
-`--codex` and require exit `0`: exit `4` means stop and resolve the Codex verdict yourself per
-*Reading the Codex verdict* (do not hard-wait, and do not auto-merge on an unresolved verdict). The
+The CI wait never issues a GraphQL check-state call. For an autonomous `&& gh pr merge`, run
+`scripts/await_pr_checks.sh <PR>` (no `--codex`) and require exit `0`, then run the local review gate
+per `verification-and-closure` :: *Running the local review gate* before merging. `--codex` is
+retained for callers that still want it: with `--codex`, exit `4` means stop and resolve the Codex
+verdict yourself per `verification-and-closure` :: *Reading the Codex verdict* (inactive as the
+default gate, do not hard-wait, and do not auto-merge on an unresolved verdict). The
 `--codex` verdict is resolved by `python3 -m app.dispatcher.poll_backoff codex-verdict`, which queries
 reactions, reviews, pull comments, and issue comments in one combined GraphQL request where GitHub
 supports it. Findings / changes-requested are matched to the exact SHA where commit-specific evidence
