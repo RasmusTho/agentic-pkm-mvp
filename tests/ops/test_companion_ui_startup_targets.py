@@ -189,6 +189,20 @@ def test_dev_start_binds_niflheim_channel_and_ports() -> None:
     assert "pkm-dev" in text, "dev start must target the pkm-dev compose project."
 
 
+def test_dev_start_defaults_to_lan_bind() -> None:
+    """The dev/Niflheim launcher must default CUI_BIND_LAN=1 for Tailscale UAT.
+
+    The shared library defaults to loopback (test/prod), but the dev launcher
+    must opt into LAN binding so the UI is reachable over Tailscale unless the
+    operator forces loopback with CUI_BIND_LAN=0.
+    """
+    text = DEV_START.read_text(encoding="utf-8")
+    assert re.search(r'\{CUI_BIND_LAN:=1\}', text), (
+        "dev start must default CUI_BIND_LAN=1 (e.g. `: \"${CUI_BIND_LAN:=1}\"`)."
+    )
+    assert "export CUI_BIND_LAN" in text, "dev start must export CUI_BIND_LAN to the launcher."
+
+
 @pytest.mark.parametrize(
     "vault_basename,should_match",
     [
