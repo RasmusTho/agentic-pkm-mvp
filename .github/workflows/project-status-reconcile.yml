@@ -51,6 +51,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Restore scan watermark
+        # Scheduled runs only: workflow_dispatch is the documented manual
+        # full-scan escape hatch (see the schedule comment above and issue
+        # #2681). Restoring the watermark on dispatch would make that path
+        # skip the same stale items an operator is dispatching to repair.
+        if: github.event_name == 'schedule'
         uses: actions/cache@v4
         with:
           path: runtime/dispatcher/project_status_reconcile_scan_watermark.json

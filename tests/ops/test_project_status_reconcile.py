@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+import yaml
 
 from scripts import project_status
 from scripts import reconcile_project_status
@@ -457,6 +458,24 @@ def test_scheduled_scan_restores_watermark_cache() -> None:
         in workflow
     )
     assert "project-status-reconcile-scan-watermark-" in workflow
+
+
+def test_manual_dispatch_scan_bypasses_watermark_cache() -> None:
+    # workflow_dispatch is the documented manual full-scan escape hatch for a
+    # GraphQL-budget incident (see the schedule comment). Restoring the
+    # watermark cache on dispatch too would make that path skip the same
+    # stale items an operator is dispatching to repair.
+    workflow_data = yaml.safe_load(
+        Path(".github/workflows/project-status-reconcile.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    steps = workflow_data["jobs"]["reconcile-scan"]["steps"]
+    cache_step = next(s for s in steps if s.get("uses", "").startswith("actions/cache"))
+    assert cache_step.get("if") == "github.event_name == 'schedule'", (
+        "watermark cache restore must be scheduled-run-only so workflow_dispatch "
+        f"performs a full scan; got if={cache_step.get('if')!r}"
+    )
 
 
 def test_project_board_workflows_share_serial_concurrency_group() -> None:

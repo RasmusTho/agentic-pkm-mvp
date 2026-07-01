@@ -12,8 +12,13 @@ TEST_VAULT_ROOT ?= $(or $(VAULT_ROOT_TEST),vault-test)
 # keep the documented seeded local bootstrap path bound to vault-test after
 # `make test-vault-init` creates it. A fresh checkout with no seeded vault
 # leaves VAULT_ROOT empty so scripts/start_full_system.sh enters the no-vault
-# idle posture instead of failing on a missing scratch vault.
-START_TEST_SYSTEM_VAULT_ROOT := $(if $(filter command line environment,$(origin TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),$(if $(filter command line environment,$(origin VAULT_ROOT_TEST)),$(VAULT_ROOT_TEST),$(if $(wildcard $(TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),)))
+# idle posture instead of failing on a missing scratch vault. Recursive (`=`,
+# not `:=`) and probed with `$(shell test -d ...)`, not `$(wildcard ...)`:
+# GNU Make caches `$(wildcard)` directory reads for the whole invocation, so
+# it would still miss a vault-test/ directory created by test-vault-init
+# earlier in the same `make test-vault-init start-test-system` run; `$(shell)`
+# always forks a fresh process and sees the current filesystem state.
+START_TEST_SYSTEM_VAULT_ROOT = $(if $(filter command line environment,$(origin TEST_VAULT_ROOT)),$(TEST_VAULT_ROOT),$(if $(filter command line environment,$(origin VAULT_ROOT_TEST)),$(VAULT_ROOT_TEST),$(if $(shell test -d "$(TEST_VAULT_ROOT)" && echo found),$(TEST_VAULT_ROOT),)))
 # Host-reachable test DSN. Host-side tools (migrations, `uat-run-vault-test`,
 # promote-to-test verify) reach Postgres on the published port 127.0.0.1:15434;
 # the in-container `db:5432` address is unreachable from the host (issue #1997
