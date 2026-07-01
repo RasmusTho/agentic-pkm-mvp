@@ -54,6 +54,7 @@ tmp/index.jsonl
 /runtime/orientation/
 /runtime/panel/
 /runtime/agent_memory/
+/runtime/eval/
 # companion-ui/companion-app (companion_ui tests run from this cwd and write
 # runtime/panel/panel_confirmation.sqlite3 etc. relative to it):
 /companion-ui/companion-app/runtime/settings/

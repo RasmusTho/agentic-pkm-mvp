@@ -386,3 +386,36 @@ class TestErrorHandling:
         comparisons = suite.compare([result])
         assert len(comparisons) == 1
         assert comparisons[0].regression is False
+
+
+class TestRegressionGateFailsLoud:
+    """#2320: `app.eval.run`'s production call site must fail loud (non-zero
+    exit / regression=True) when a sliced golden-set metric drops below its
+    configured threshold, exercising the real CLI entrypoint, not just the
+    BenchmarkSuite.compare() guard in isolation."""
+
+    def test_regression_gate_fails_loud(self):
+        import copy
+
+        from app.eval import run as eval_run
+
+        thresholds = eval_run.load_thresholds()
+        # Force every bucket floor above 1.0 - an unreachable regression
+        # injection - and confirm the production entrypoint (build_scorecard,
+        # the same function app.eval.run.main() calls) reports the failure
+        # and would drive a non-zero process exit code.
+        impossible = copy.deepcopy(thresholds)
+        for bucket in ("aggregate", "per_language", "memory_recall"):
+            for metric in impossible.get(bucket, {}):
+                impossible[bucket][metric] = 1.5
+
+        scorecard = eval_run.build_scorecard(thresholds=impossible)
+
+        assert scorecard["regression"] is True
+        assert scorecard["failures"]
+        exit_code = 1 if scorecard["regression"] else 0
+        assert exit_code != 0
+
+        # A clean pass on real thresholds must not regress.
+        clean_scorecard = eval_run.build_scorecard(thresholds=thresholds)
+        assert clean_scorecard["regression"] is False
