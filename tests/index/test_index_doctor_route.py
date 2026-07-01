@@ -120,3 +120,104 @@ def test_doctor_reports_indexed(tmp_path, monkeypatch) -> None:
         reset_diagnose_cache()
         _reset_store_backend_cache_only()
         _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_doctor_flags_incomplete_metadata(tmp_path, monkeypatch) -> None:
+    """#2324 AC1: doctor flags store_vector_index rows missing W3-SPINE-01 metadata.
+
+    Writes a row directly (bypassing ``build_indexed_unit_payload``, which always
+    stamps language/source_role/embedding_identity) to simulate a legacy row
+    written before the retrieved-unit payload contract, then asserts
+    ``diagnose_index()`` reports it via ``metadata_completeness`` without treating
+    it as an identity-mismatch/mixed-identity issue (#2297's concern, not this
+    issue's).
+    """
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from app.components.embeddings import EmbeddingIdentity
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    reset_diagnose_cache()
+    monkeypatch.setenv("EMBED_MODEL", "embed-test")
+    try:
+        from app.stores import get_vector_index
+
+        identity = EmbeddingIdentity(provider="mock", model="embed-test", dim=8, normalize=False)
+        index_store = get_vector_index()
+        oid = uuid4()
+        # Deliberately minimal payload: no language/source_role/embedding_identity,
+        # simulating a pre-contract legacy row.
+        index_store.upsert(
+            object_id=oid,
+            kind="note",
+            source_ref="unit-test:incomplete-metadata",
+            payload={"text": "legacy row with no provenance stamp"},
+            embedding=[0.1] * 8,
+            model=identity.model,
+            identity=identity,
+        )
+
+        reset_diagnose_cache()
+        result = diagnose_index()
+
+        completeness = result.get("metadata_completeness") or {}
+        assert completeness.get("missing_count", 0) >= 1
+        assert str(oid) in (completeness.get("missing_sample_ids") or [])
+        # This is a completeness warning, not an identity mismatch/mixed-identity issue.
+        assert result.get("mixed_identities") == []
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
+def test_health_surfaces_coverage(tmp_path, monkeypatch) -> None:
+    """#2324 AC4: app/cli/health.py surfaces the new completeness/coverage findings."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from app.components.embeddings import EmbeddingIdentity
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    reset_diagnose_cache()
+    monkeypatch.setenv("EMBED_MODEL", "embed-test")
+    try:
+        from app.cli.health import _check_embedding_index
+        from app.stores import get_vector_index
+
+        identity = EmbeddingIdentity(provider="mock", model="embed-test", dim=8, normalize=False)
+        index_store = get_vector_index()
+        oid = uuid4()
+        index_store.upsert(
+            object_id=oid,
+            kind="note",
+            source_ref="unit-test:health-coverage",
+            payload={"text": "legacy row with no provenance stamp"},
+            embedding=[0.1] * 8,
+            model=identity.model,
+            identity=identity,
+        )
+
+        reset_diagnose_cache()
+        check = _check_embedding_index()
+
+        assert "metadata_completeness" in check
+        assert check["metadata_completeness"]["missing_count"] >= 1
+        assert "vault_coverage" in check
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)

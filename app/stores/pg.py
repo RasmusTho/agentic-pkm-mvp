@@ -674,6 +674,53 @@ def inspect_pg_identity_tuples() -> list[dict]:
     return tuples
 
 
+def inspect_pg_metadata_completeness(*, limit: int = 5) -> dict:
+    """Return counts + sample ids of ``store_vector_index`` rows missing W3-SPINE-01 fields.
+
+    Checks the retrieved-unit payload contract (``docs/DB_SCHEMA.md :: store_vector_index``)
+    for the fields every row is expected to carry: ``language``, ``source_role``/``origin``
+    (provenance), and ``embedding_identity`` (the per-row embedding-identity stamp). This is
+    a completeness check (#2324), distinct from the identity-drift/mixed-identity checks
+    (#2297): a row can carry a fully consistent, non-mixed identity and still be missing
+    provenance or a language tag, e.g. rows written before the retrieved-unit payload
+    contract was ratified.
+    """
+    _ensure_tables()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT object_id,
+                       payload->>'language' AS language,
+                       payload->>'source_role' AS source_role,
+                       payload->>'origin' AS origin,
+                       payload->'embedding_identity' AS embedding_identity
+                FROM store_vector_index
+                """
+            )
+            rows = cur.fetchall()
+
+    def _missing(row: dict) -> bool:
+        language = row.get("language")
+        source_role = row.get("source_role")
+        origin = row.get("origin")
+        identity = row.get("embedding_identity")
+        if not language or str(language).strip().lower() in {"", "und"}:
+            return True
+        if not source_role and not origin:
+            return True
+        if not identity:
+            return True
+        return False
+
+    missing_rows = [row for row in rows if _missing(row)]
+    return {
+        "checked": len(rows),
+        "missing_count": len(missing_rows),
+        "missing_sample_ids": [str(row["object_id"]) for row in missing_rows[:limit]],
+    }
+
+
 def inspect_pg_index_state() -> dict:
     """Return diagnostics for the Postgres vector index (identity + dims)."""
     _ensure_tables()
