@@ -15,10 +15,28 @@ except Exception:  # pragma: no cover - memory backend optional in some contexts
     MemoryVectorIndex = None  # type: ignore
 
 try:
-    from app.stores.pg import PgVectorIndex, inspect_pg_index_state
+    from app.stores.pg import (
+        PgVectorIndex,
+        inspect_pg_identity_tuples,
+        inspect_pg_index_state,
+    )
 except Exception:  # pragma: no cover - pg backend optional in some contexts
     PgVectorIndex = None  # type: ignore
     inspect_pg_index_state = None  # type: ignore
+    inspect_pg_identity_tuples = None  # type: ignore
+
+
+_RECONCILE_HINT = "python -m app.cli index reconcile"
+
+
+def _identity_tuple(entry: Dict[str, Any]) -> tuple:
+    """Normalize a raw identity-tuple row into a comparable (provider, model, dim, normalize)."""
+    return (
+        entry.get("provider"),
+        entry.get("model"),
+        entry.get("dim"),
+        entry.get("normalize"),
+    )
 
 
 def _identity_to_dict(identity: EmbeddingIdentity | None) -> Dict[str, Any] | None:
@@ -75,6 +93,7 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
     issues: list[str] = []
     warnings: list[str] = []
     empty_index = False
+    mixed_identities: list[tuple] = []
 
     if stored_identity is None:
         warnings.append("VectorIndex has no recorded embedding identity (empty index or legacy backend).")
@@ -111,6 +130,21 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
                     f"{unembedded_count} store_objects rows have no embedded "
                     f"store_vector_index row: {sample_text}"
                 )
+            # Mixed-identity detection (CTI-1). Key on the full
+            # (provider, model, dim, normalize) tuple, not provider alone: a
+            # same-provider model swap at the same dim is still a semantically
+            # mixed index (cosine across models is meaningless) and must be
+            # reconciled. Reconcile — not a destructive full rebuild — is the
+            # recommended repair, so rebuild_reason points at it below.
+            if inspect_pg_identity_tuples is not None and not empty_index:
+                identity_tuples = inspect_pg_identity_tuples()
+                distinct = [_identity_tuple(entry) for entry in identity_tuples]
+                if len(distinct) > 1:
+                    mixed_identities = distinct
+                    issues.append(
+                        "Mixed embedding identities in index: "
+                        f"{distinct}. Run '{_RECONCILE_HINT}' to converge."
+                    )
 
     status = "ok"
     if issues:
@@ -126,6 +160,14 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
 
     rebuild_required = bool(issues)
     rebuild_reason = issues[0] if issues else None
+    # When the index is mixed-identity, reconcile (not a destructive full rebuild)
+    # is the correct repair — surface that as the primary rebuild_reason so callers
+    # route to `index reconcile` rather than clearing and re-embedding everything.
+    if mixed_identities:
+        rebuild_reason = (
+            f"Mixed embedding identities in index: {mixed_identities}. "
+            f"Run '{_RECONCILE_HINT}' to converge."
+        )
 
     result: Dict[str, Any] = {
         "timestamp": time.time(),
@@ -141,6 +183,7 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
         "warnings": warnings,
         "status": status,
         "pg_state": pg_state,
+        "mixed_identities": mixed_identities,
     }
     with _diagnose_lock:
         _diagnose_cache = (time.monotonic(), result)
