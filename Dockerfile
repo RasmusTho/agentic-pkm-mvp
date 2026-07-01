@@ -32,6 +32,12 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY . .
 RUN chmod +x scripts/start_api.sh
 
+# Pre-create the runtime scratch dir with open perms so the container can create
+# it even when run under host-uid remapping (compose `user: ${LOCAL_UID}:${LOCAL_GID}`
+# for host-owned vault writes). Without this, `mkdir -p /app/tmp` in the service
+# command is denied on the root-owned /app and the process crash-loops.
+RUN mkdir -p /app/tmp && chmod 1777 /app/tmp
+
 EXPOSE 8000
 
 CMD ["/app/scripts/start_api.sh"]

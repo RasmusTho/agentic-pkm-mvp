@@ -11,7 +11,8 @@
 #   scripts/dev/start_niflheim_ui.sh
 #
 # Optional environment:
-#   CUI_BIND_LAN=1                 bind the UI to 0.0.0.0 for LAN/Tailscale UAT
+#   CUI_BIND_LAN=<0|1>             bind the UI to 0.0.0.0 for LAN/Tailscale UAT
+#                                  (dev default: 1; set CUI_BIND_LAN=0 for loopback only)
 #   CUI_TARGET_NOTE=<rel-path>     verify a note path via /api/companion/workspace
 set -euo pipefail
 
@@ -29,5 +30,11 @@ CUI_COMPOSE_PROJECT="pkm-dev"
 CUI_SERVE_MODULE="companion_ui.workspace.serve_dev_page"
 export CUI_CHANNEL CUI_EXPECTED_VAULT_PATTERN CUI_EXPECTED_VAULT_LABEL \
   CUI_API_PORT CUI_UI_PORT CUI_COMPOSE_FILES CUI_COMPOSE_PROJECT CUI_SERVE_MODULE
+
+# Dev/Niflheim defaults to LAN binding so the UI is reachable over Tailscale for
+# UAT. Operators can force loopback with CUI_BIND_LAN=0. Test/prod launchers do
+# not set this and keep the shared-lib loopback default.
+: "${CUI_BIND_LAN:=1}"
+export CUI_BIND_LAN
 
 cui_run_start
