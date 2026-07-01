@@ -108,3 +108,39 @@ def test_observability_defaults_to_blocked_until_declared() -> None:
         [_accepted_candidate()],
     )
     assert REASON_NOT_OBSERVABLE not in declared.blocked_reasons
+
+
+def test_redteam_marker_gate() -> None:
+    """Fail-loud CI gate wiring for the memory-poisoning/prompt-injection suite
+    (#2321): every scenario in the versioned red-team scenario set must fail
+    closed when evaluated at a GOVERNED_EXECUTION posture — none may reach
+    ``activatable`` on the strength of an unreviewed/inferred/poisoned
+    candidate alone.
+
+    This is the fail-loud CI marker: importing and iterating
+    ``SCENARIOS_V1`` here means a future change that silently widens the
+    review-gated model (e.g. relaxing ``_axis_provenance`` or the memory-class
+    ceiling) breaks this test, not just the standalone poisoning-scenario
+    suite. Bilingual (sv/en) coverage is asserted directly on the imported set.
+    """
+    from tests.agent_memory.test_memory_poisoning_scenarios import (
+        SCENARIOS_V1,
+        _candidate_context,
+    )
+
+    langs = {s.lang for s in SCENARIOS_V1}
+    assert "sv" in langs and "en" in langs, "red-team gate requires bilingual coverage"
+
+    for scenario in SCENARIOS_V1:
+        candidate = _candidate_context(scenario, artifact_id=f"redteam-{scenario.scenario_id}")
+        posture = _govexec_posture(capability_id=f"redteam.{scenario.scenario_id}")
+        decision = evaluate_activation(posture, [candidate])
+
+        assert decision.activatable is False, (
+            f"redteam gate FAILED OPEN for scenario={scenario.scenario_id}: "
+            "an unreviewed/inferred/poisoned candidate reached activatable "
+            "under a GOVERNED_EXECUTION posture"
+        )
+        assert REASON_NO_ADMISSIBLE_CONTEXT in decision.blocked_reasons
+        assert candidate.artifact_id not in decision.admitted_artifact_ids
+
