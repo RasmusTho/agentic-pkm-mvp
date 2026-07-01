@@ -636,6 +636,44 @@ class PgRelationIndex(RelationIndex):
         ]
 
 
+def inspect_pg_identity_tuples() -> list[dict]:
+    """Return the distinct per-vector identity tuples present in store_vector_index.
+
+    Each entry is ``{"provider", "model", "dim", "normalize", "count"}``. This is the
+    raw material for mixed-identity detection (CTI-1): more than one entry means the
+    index contains vectors from more than one embedding identity and must be reconciled.
+
+    The grouping keys on the full ``(provider, model, dim, normalize)`` tuple — not
+    provider alone — so a same-provider model swap at the same dim (e.g.
+    ``ollama/nomic-embed-text`` -> ``ollama/mxbai-embed-large`` @ 768) is caught, not
+    just cross-provider fallback.
+    """
+    _ensure_tables()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT provider, model, dim, normalize, COUNT(*) AS count
+                FROM store_vector_index
+                GROUP BY provider, model, dim, normalize
+                ORDER BY provider, model, dim, normalize
+                """
+            )
+            rows = cur.fetchall()
+    tuples: list[dict] = []
+    for row in rows:
+        tuples.append(
+            {
+                "provider": row["provider"],
+                "model": row["model"],
+                "dim": row["dim"],
+                "normalize": row["normalize"],
+                "count": int(row["count"] or 0),
+            }
+        )
+    return tuples
+
+
 def inspect_pg_index_state() -> dict:
     """Return diagnostics for the Postgres vector index (identity + dims)."""
     _ensure_tables()

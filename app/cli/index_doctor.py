@@ -41,6 +41,12 @@ def doctor(as_json: bool, strict: bool, warn: bool) -> None:
             )
         else:
             click.echo("Stored identity: (missing)")
+        mixed = result.get("mixed_identities") or []
+        if mixed:
+            click.echo("Mixed embedding identities (provider, model, dim, normalize):")
+            for entry in mixed:
+                click.echo(f"  - {tuple(entry)}")
+            click.echo("Recommended repair: python -m app.cli index reconcile")
         if result.get("issues"):
             click.echo("Issues:")
             for entry in result["issues"]:

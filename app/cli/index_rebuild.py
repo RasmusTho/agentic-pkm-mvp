@@ -350,3 +350,245 @@ def rebuild(
     _emit_summary(summary, as_json)
     if strict and summary.get("error_count", 0) > 0:
         raise SystemExit(2)
+
+
+# ---------------------------------------------------------------------------
+# index reconcile (EMBEDREL-06 Phase B, section (c))
+# ---------------------------------------------------------------------------
+
+_RECONCILE_DEFAULT_FAILURES_PATH = Path("/app/tmp/index-reconcile-failures.jsonl")
+_RECONCILE_FAILURES_PATH_ENV = "INDEX_RECONCILE_FAILURES_PATH"
+
+
+def _reconcile_failures_path(path: Path | None) -> Path:
+    if path is not None:
+        return path
+    env_value = os.getenv(_RECONCILE_FAILURES_PATH_ENV)
+    if env_value:
+        return Path(env_value)
+    return _RECONCILE_DEFAULT_FAILURES_PATH
+
+
+def _mismatched_rows(primary: EmbeddingIdentity, limit: int | None) -> List[dict]:
+    """Return store_vector_index rows whose full identity differs from ``primary``.
+
+    Selection keys on the full ``(provider, model, dim, normalize)`` tuple — not
+    provider alone — so a same-provider model/normalize swap at the same dim is a
+    reconcile candidate too (CTI-1). Rows with a NULL provider (pre-migration) are
+    treated as mismatched so they converge to the primary identity on reconcile.
+    """
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            sql_text = """
+                SELECT object_id, kind, source_ref, payload,
+                       provider, model, dim, normalize
+                FROM store_vector_index
+                WHERE provider IS DISTINCT FROM %s
+                   OR model IS DISTINCT FROM %s
+                   OR dim IS DISTINCT FROM %s
+                   OR normalize IS DISTINCT FROM %s
+                ORDER BY object_id
+            """
+            params: list = [primary.provider, primary.model, primary.dim, primary.normalize]
+            if limit is not None:
+                sql_text += " LIMIT %s"
+                params.append(limit)
+            cur.execute(sql_text, params)
+            return list(cur.fetchall())
+
+
+def _reconcile_object_text(object_id, vector_payload: dict | None) -> str:
+    """Resolve the source text to re-embed for a row.
+
+    Prefer the authoritative ``store_objects`` payload (the durable object of
+    record); fall back to the text carried in the vector-index row payload when the
+    object row is absent, so an orphaned index row can still be reconciled.
+    """
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT payload FROM store_objects WHERE object_id = %s LIMIT 1",
+                (object_id,),
+            )
+            row = cur.fetchone()
+    if row and row.get("payload"):
+        text = _extract_text(dict(row["payload"]))
+        if text:
+            return text
+    return _extract_text(vector_payload or {})
+
+
+@index.command("reconcile", help="Re-embed non-primary-identity vectors under the primary identity (converge a mixed index).")
+@click.option("--backend", type=click.Choice(["memory", "pg"]), default=None, help="Override STORE_BACKEND for this run")
+@click.option("--profile", default="default", show_default=True, help="Embedding profile to use for the primary identity")
+@click.option("--limit", type=int, default=None, help="Maximum number of mismatched rows to process")
+@click.option("--dry-run", is_flag=True, default=False, help="Report the mismatch count without re-embedding")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON summary")
+@click.option("--strict/--no-strict", default=False, help="Exit non-zero when errors occur")
+@click.option("--failures-path", type=click.Path(path_type=Path), default=None, help="Path to JSONL failure report (env INDEX_RECONCILE_FAILURES_PATH)")
+@click.option("--max-retries", type=int, default=None, help="Max retry attempts for embed/upsert (default 2)")
+def reconcile(
+    backend: str | None,
+    profile: str,
+    limit: int | None,
+    dry_run: bool,
+    as_json: bool,
+    strict: bool,
+    failures_path: Path | None,
+    max_retries: int | None,
+) -> None:
+    """Converge a mixed-identity vector index back to a single (primary) identity.
+
+    Idempotency: candidate rows are selected by full-identity inequality against the
+    primary identity. After a row is upserted under the primary identity it no longer
+    matches the predicate, so a re-run on a converged index is a no-op.
+
+    Resumability / no-corruption: rows are processed one at a time and each upsert is
+    an atomic INSERT ... ON CONFLICT DO UPDATE that commits on its own connection. If
+    the run is interrupted (SIGINT, crash, embed failure), already-processed rows carry
+    the primary identity and unprocessed rows retain their prior (fallback) identity —
+    the index is still mixed but never missing a vector or partially written. A row is
+    never deleted; a failed re-embed leaves the original fallback vector in place and is
+    dead-lettered for retry.
+    """
+    if backend:
+        os.environ["STORE_BACKEND"] = backend
+
+    resolved_backend = resolve_store_backend()
+    summary: Dict[str, object] = {
+        "backend": resolved_backend,
+        "total_mismatched": 0,
+        "reconciled": 0,
+        "skipped": 0,
+        "errors": [],
+    }
+
+    # Reconcile is a Postgres-only migration primitive: the per-row provider column
+    # and the reconcilable-fallback write path exist only on PgVectorIndex. The memory
+    # backend has no per-row identity, so there is nothing to converge.
+    if resolved_backend != "pg":
+        summary["message"] = "index reconcile requires the Postgres backend (per-vector identity columns)."
+        _emit_reconcile_summary(summary, as_json)
+        if strict:
+            raise SystemExit(2)
+        return
+
+    path = _reconcile_failures_path(failures_path)
+    _prepare_failures_path(path)
+    retry_limit = _resolve_max_retries(max_retries)
+
+    client = get_embedding_client(profile=profile)
+    primary = client.identity
+    identity_info = _identity_summary(primary)
+    summary["identity"] = identity_info
+
+    rows = _mismatched_rows(primary, limit)
+    summary["total_mismatched"] = len(rows)
+
+    if not as_json:
+        click.echo(
+            f"Reconciling to primary identity provider={primary.provider} model={primary.model} "
+            f"dim={primary.dim} normalize={primary.normalize}"
+        )
+        click.echo(f"Mismatched rows: {len(rows)}")
+
+    if dry_run:
+        summary["message"] = "Dry run complete; no vectors re-embedded."
+        _emit_reconcile_summary(summary, as_json)
+        return
+
+    index_store = get_vector_index()
+    start = time.perf_counter()
+
+    for row in rows:
+        object_id = row["object_id"]
+        kind = str(row.get("kind") or "note")
+        source_ref = str(row.get("source_ref") or "")
+        vector_payload = dict(row.get("payload") or {})
+        domain_obj = legacy_store.DomainObject(
+            uuid=str(object_id),
+            kind=kind,
+            source_ref=source_ref,
+            payload=vector_payload,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        text = _reconcile_object_text(object_id, vector_payload)
+        if not text:
+            summary["skipped"] = int(summary["skipped"]) + 1
+            continue
+
+        embedding: list | None = None
+        try:
+            embedding = embed_with_retry(
+                text,
+                dim=primary.dim,
+                object_id=str(object_id),
+                embed_callable=lambda t=text: client.embed_text(t),
+                max_attempts=retry_limit + 1,
+            )
+        except EmbedDeadLetterError as _dead_exc:
+            _record_failure(summary, path, identity_info, domain_obj, "embed", _dead_exc, retry_limit + 1, True)
+            continue
+        except Exception as _embed_exc:
+            _record_failure(summary, path, identity_info, domain_obj, "embed", _embed_exc, 1, False)
+            continue
+
+        def _upsert_action(
+            _oid=object_id,
+            _kind=kind,
+            _source_ref=source_ref,
+            _payload=vector_payload,
+            _text=text,
+            _embedding=embedding,
+        ) -> None:
+            # Ordinary (non-fallback) upsert: the requested identity IS the primary
+            # identity, so the index-level guard passes and the row is rewritten with
+            # the primary (provider, model, dim, normalize) tuple in place.
+            index_store.upsert(
+                object_id=UUID(str(_oid)),
+                kind=_kind,
+                source_ref=_source_ref,
+                payload=build_indexed_unit_payload(
+                    object_id=UUID(str(_oid)),
+                    kind=_kind,
+                    source_ref=_source_ref,
+                    payload=_payload,
+                    text=_text,
+                    embedding_identity=primary,
+                ),
+                embedding=_embedding,
+                model=primary.model,
+                identity=primary,
+            )
+
+        _, upsert_attempts, upsert_exc, upsert_retryable = _attempt_with_retries(_upsert_action, retry_limit)
+        if upsert_exc is not None:
+            _record_failure(summary, path, identity_info, domain_obj, "upsert", upsert_exc, upsert_attempts, upsert_retryable)
+            continue
+
+        summary["reconciled"] = int(summary["reconciled"]) + 1
+
+    summary["duration_ms"] = int((time.perf_counter() - start) * 1000)
+    _emit_reconcile_summary(summary, as_json)
+    if strict and summary.get("error_count", 0) > 0:
+        raise SystemExit(2)
+
+
+def _emit_reconcile_summary(summary: Dict[str, object], as_json: bool) -> None:
+    summary["error_count"] = len(summary.get("errors", []))
+    if as_json:
+        click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
+    if summary.get("message"):
+        click.echo(str(summary["message"]))
+    click.echo(
+        f"total_mismatched={summary.get('total_mismatched', 0)} "
+        f"reconciled={summary.get('reconciled', 0)} "
+        f"skipped={summary.get('skipped', 0)} "
+        f"errors={summary['error_count']}"
+    )

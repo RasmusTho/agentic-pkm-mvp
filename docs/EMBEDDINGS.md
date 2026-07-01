@@ -40,7 +40,9 @@ comes from the compiled task policy; env vars supply defaults only when the poli
 ### Required / primary env vars
 
 - `LLM_PROVIDER`
-  - Supported: `ollama`, `mock` (registry providers also include `gemini`, `deterministic`).
+  - Supported: `ollama`, `gemini`, `mock` (registry also includes `deterministic`). `gemini`
+    (`gemini-embedding-001` @ `output_dimensionality=768`, L2-renormalized) is the sanctioned
+    dimension-matched fallback provider — see the *Fallback rule* section below.
   - Used as the **fallback** primary-provider source when `EMBED_PRIMARY_PROVIDER` is unset.
 - `EMBED_PRIMARY_PROVIDER`
   - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
@@ -134,6 +136,33 @@ This identity must be:
 - attached to emitted indexing events.
 
 ### Fallback rule
+
+**Disciplined, dim-matched fallback is permitted** as an availability bridge. The constraints are:
+
+- The fallback provider must be pinned to the **same dimension** as the primary (e.g., Gemini
+  `gemini-embedding-001` with `output_dimensionality=768`, L2-renormalized, to match Ollama
+  `nomic-embed-text` @ 768). A provider returning a different dim fails the upsert via
+  `assert_embed_dim` — it never silently writes.
+- A fallback-written index is **mixed-identity** (vectors from different providers occupy different
+  vector spaces). This state is surfaced loudly by `index doctor` as an error and is reconcilable —
+  not terminal.
+- Once the primary provider recovers, run `index reconcile` (`python -m app.cli index reconcile`) to
+  re-embed fallback-written vectors under the primary identity, converging the index back to one
+  identity (CTI-1).
+- Identity-changing fallback that changes dim or normalization is still forbidden and will be
+  rejected at upsert time.
+
+See `docs/EMBEDDING_RELIABILITY/OPERATOR_EGRESS_DECISION.md` for the egress decision (chosen posture:
+Ollama-primary + Gemini auto-fallback), and
+`docs/EMBEDDING_RELIABILITY/DIMENSION_CONSISTENCY_AND_REINDEX.md` (EMBEDREL-06) for the mixed-identity
+detection, reconcile/re-index migration path, and dim-change rebuild path.
+
+**Chosen Gemini model:** `gemini-embedding-001` with `output_dimensionality=768`, L2-renormalized
+(dimension-matched to `nomic-embed-text`). Free tier; key supplied via `GEMINI_API_KEY` or
+`GOOGLE_API_KEY`. (`text-embedding-004` was retired January 14, 2026; `gemini-embedding-001` is the
+active stable model.)
+
+The remainder of this section records the underlying ADR-0023 posture the runtime implements against.
 
 Embeddings do not allow **generic** provider fallback, but they **do** allow one sanctioned
 **dimension-matched, reconcilable** fallback. This reconciles the historical no-generic-fallback
@@ -288,6 +317,33 @@ Recommended checks:
    - no `index.embedding.failed`
    - stored identity matches runtime identity
    - retrieval/ASK uses the same identity
+
+### Same-dim provider/model swap → reconcile (not a full rebuild)
+
+When only the provider/model/normalization changed but the **dimension is unchanged** (for example a
+fallback-written mixed index, or an in-place model swap at the same dim), do **not** clear and rebuild
+the whole index. Run `python -m app.cli index reconcile`: it re-embeds only the non-primary-identity
+rows under the current primary identity and upserts them in place. Reconcile is idempotent (a
+converged index is a no-op on re-run) and resumable (an interrupted run leaves the index
+still-mixed-but-valid, never corrupt). See
+`docs/EMBEDDING_RELIABILITY/DIMENSION_CONSISTENCY_AND_REINDEX.md` (EMBEDREL-06).
+
+### Dim-change re-index (destructive full rebuild)
+
+When switching to a provider/model that **changes the dimension or normalization** (for example moving
+from `gemini-embedding-001` at `output_dimensionality=768` to the model's native 3072 default, or to
+`gemini-embedding-2` at 3072), the `store_vector_index` vectors cannot be reconciled in place — the
+column type and dimension are fixed. Reconcile does not apply; a full re-index is required:
+
+1) Update `EMBED_DIM`, `EMBED_MODEL`, `EMBED_NORMALIZE` and steering docs.
+2) Run `index doctor --strict` to confirm no vectors remain at the old dim (or that you intend to
+   discard them).
+3) Clear the index with `reset_vector_index` (via admin tooling), which drops `store_vector_index`
+   and `vector_index_meta`, followed by any pgvector column-type migration to the new dim.
+4) Run `index rebuild` under the new identity so every object is re-embedded.
+5) Run `index doctor --strict` to confirm all stored vectors match the new identity.
+
+The multi-vault / per-vault-dim scenario is tracked by epic #2143; this path is its building block.
 
 ## Change policy (steering docs)
 
