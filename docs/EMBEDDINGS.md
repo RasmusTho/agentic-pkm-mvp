@@ -240,6 +240,25 @@ A single note must never abort the whole index build (#2110). The embedding laye
 
 Together these ensure an index build over a corpus containing one oversized or pathological note completes and the rest of the corpus embeds normally.
 
+### Chunk metadata schema v1 (#2323)
+
+`app/ingest/chunk_policy.py` produces a **structural chunker** (heading/section-aware, v1: character + heading boundaries only — no tokenizer/model-based windowing; that is deferred to W5) plus a documented per-chunk metadata schema, orthogonal to the oversized-input embedding defense above:
+
+- `build_structural_chunks(text, max_chars=...)` splits markdown at heading boundaries first (tracking an h1..h6 heading-path stack), then sub-splits any section still over `max_chars` with the char/line accumulator. Every returned chunk's `char_start`/`char_end` slice of the source text reconstructs its `text` exactly.
+- `build_chunks(text, *, segments=None, source_id=None, language="und", provenance=None, max_chars=...)` is the single entrypoint: when diarization `segments` are supplied it preserves the existing speaker-aware chunking path unchanged; otherwise it runs the structural chunker. Either way, every chunk is enriched with the **chunk metadata schema v1**:
+
+  | field | meaning |
+  |---|---|
+  | `chunk_id` | stable string id, deterministic from `(source_id, index, char_start, char_end)`; stays a plain string so it is directly compatible with `IncludedItem.chunk_ids: list[str]` in `app/context_bundles/schema.py` |
+  | `source_id` | the id of the source note/object this chunk was derived from |
+  | `heading_path` | list of active heading strings (h1..hN) at the chunk's position; `[]` for non-structural (diarized) chunks |
+  | `char_start` / `char_end` | offsets into the source text; for the structural path these reconstruct the chunk verbatim |
+  | `language` | inherited from the source (`und` when undetermined, matching `docs/DATA_MODEL.md`'s `store_objects` language convention) |
+  | `provenance` | free-form source locator/lineage string (e.g. a vault path), or `None` |
+
+- **Reconciliation with oversized-input mean-pooling:** `_embed_single`'s `EMBED_MAX_INPUT_CHARS` chunking/mean-pooling (above) operates independently, one level below the structural chunker — it protects any single embedding request (whether the request text is a whole note or one structural chunk) from exceeding the provider's context window. A structural chunk that is itself still oversized relative to the embedding window is transparently mean-pooled the same way a whole oversized note is; this does not disturb the chunk's `char_start`/`char_end`/`heading_path` metadata, which describes the chunk's position in the source, not how the embedding layer internally sub-splits it for the provider call. See `tests/retrieval/test_index_survives_oversized_note.py::test_oversized_note_chunks`.
+- **Served-unit switch (explicit, not silent):** producing chunk metadata does **not** by itself change what gets served. Retrieval continues to index/serve the whole note (one `store_vector_index` row per `object_id`, as today) unless a future wave introduces an explicit `CHUNK_LEVEL_SERVING_ENABLE`-style switch and wires retrieval to consume it. This PR ships the chunker and schema only; it does not flip that switch. Chunk-level serving remains out of scope until an explicit, documented switch lands.
+
 ## Storage: VectorIndex
 
 VectorIndex stores embeddings as derived data:

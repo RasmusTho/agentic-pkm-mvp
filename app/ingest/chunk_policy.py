@@ -1,6 +1,24 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+import hashlib
+import re
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+# Chunk metadata schema v1 fields. Documented in `docs/EMBEDDINGS.md :: Oversized
+# input handling` and `docs/DATA_MODEL.md :: store_vector_index`. Every chunk
+# produced by `build_chunks`/`build_structural_chunks` carries exactly these
+# fields (heading_path is `[]` for non-structural / diarized chunks).
+CHUNK_METADATA_FIELDS_V1 = (
+    "chunk_id",
+    "source_id",
+    "heading_path",
+    "char_start",
+    "char_end",
+    "language",
+    "provenance",
+)
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S.*)$")
 
 
 def split_into_chunks(text: str, max_chars: int = 3000) -> List[str]:
@@ -22,12 +40,156 @@ def build_chunks(
     *,
     max_chars: int = 3000,
     segments: Optional[List[Dict[str, Any]]] = None,
+    source_id: Optional[str] = None,
+    language: str = "und",
+    provenance: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    """Chunk ``text`` (or diarized ``segments``) and attach chunk metadata schema v1.
+
+    Diarization/speaker-aware path is preserved unchanged when ``segments`` are
+    supplied. Otherwise markdown text is split with heading/section-aware
+    structural boundaries (v1: character + heading boundaries only; no
+    tokenizer/model-based windowing — that is deferred to W5, see #2323).
+    """
     if segments:
         normalized = _normalize_segments(segments)
         if normalized:
-            return speaker_aware_chunks(normalized, max_chars=max_chars)
-    return [{"text": chunk} for chunk in split_into_chunks(text, max_chars=max_chars)]
+            chunks = speaker_aware_chunks(normalized, max_chars=max_chars)
+            return _attach_metadata(
+                chunks, text=text, source_id=source_id, language=language, provenance=provenance
+            )
+    structural = build_structural_chunks(text, max_chars=max_chars)
+    return _attach_metadata(
+        structural, text=text, source_id=source_id, language=language, provenance=provenance
+    )
+
+
+def build_structural_chunks(text: str, *, max_chars: int = 3000) -> List[Dict[str, Any]]:
+    """Heading/section-aware structural chunker (v1: char + heading boundaries only).
+
+    Splits markdown at heading boundaries first (tracking a heading-path stack),
+    then sub-splits any section that still exceeds ``max_chars`` using the naive
+    char/line accumulator. Each returned dict carries ``text``, ``heading_path``
+    (list of heading strings from h1..hN), ``char_start``, and ``char_end``
+    (offsets into the original ``text``).
+    """
+    if not text:
+        return []
+    sections = _split_by_headings(text)
+    out: List[Dict[str, Any]] = []
+    for section_text, heading_path, section_start in sections:
+        if len(section_text) <= max_chars:
+            out.append(
+                {
+                    "text": section_text,
+                    "heading_path": list(heading_path),
+                    "char_start": section_start,
+                    "char_end": section_start + len(section_text),
+                }
+            )
+            continue
+        offset = section_start
+        for piece in split_into_chunks(section_text, max_chars=max_chars):
+            out.append(
+                {
+                    "text": piece,
+                    "heading_path": list(heading_path),
+                    "char_start": offset,
+                    "char_end": offset + len(piece),
+                }
+            )
+            offset += len(piece)
+    return out
+
+
+def _split_by_headings(text: str) -> List[Tuple[str, List[str], int]]:
+    """Split text into (section_text, heading_path, char_start) tuples.
+
+    A heading path is the stack of active headings by level (h1..h6) at the
+    point a section starts, e.g. ["Intro", "Background"] for text under an
+    `## Background` heading nested below `# Intro`.
+    """
+    lines = text.splitlines(keepends=True)
+    sections: List[Tuple[str, List[str], int]] = []
+    stack: List[Tuple[int, str]] = []  # (level, heading text)
+    cur_lines: List[str] = []
+    cur_start = 0
+    offset = 0
+
+    def flush(next_start: int) -> None:
+        nonlocal cur_lines, cur_start
+        if cur_lines:
+            sections.append(("".join(cur_lines), [h for _, h in stack], cur_start))
+        cur_lines = []
+        cur_start = next_start
+
+    for line in lines:
+        match = _HEADING_RE.match(line.rstrip("\n"))
+        if match:
+            flush(offset)
+            level = len(match.group(1))
+            heading_text = match.group(2).strip()
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, heading_text))
+            cur_lines = [line]
+            cur_start = offset
+        else:
+            cur_lines.append(line)
+        offset += len(line)
+    flush(offset)
+    return [s for s in sections if s[0].strip()]
+
+
+def _attach_metadata(
+    chunks: List[Dict[str, Any]],
+    *,
+    text: str,
+    source_id: Optional[str],
+    language: str,
+    provenance: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Attach chunk metadata schema v1 fields to each chunk record in place.
+
+    Offsets (``char_start``/``char_end``) are preserved when already present
+    (structural chunker); otherwise they are computed by locating each chunk's
+    text within the source text sequentially (diarization / naive fallback path).
+    """
+    search_from = 0
+    out: List[Dict[str, Any]] = []
+    for idx, chunk in enumerate(chunks):
+        chunk_text = chunk.get("text", "")
+        if "char_start" in chunk and "char_end" in chunk:
+            char_start = chunk["char_start"]
+            char_end = chunk["char_end"]
+        else:
+            found = text.find(chunk_text, search_from) if chunk_text else -1
+            if found < 0:
+                found = search_from
+            char_start = found
+            char_end = found + len(chunk_text)
+            search_from = char_end
+        enriched = dict(chunk)
+        enriched["chunk_id"] = _chunk_id(source_id, idx, char_start, char_end)
+        enriched["source_id"] = source_id
+        enriched.setdefault("heading_path", [])
+        enriched["char_start"] = char_start
+        enriched["char_end"] = char_end
+        enriched["language"] = language
+        enriched["provenance"] = provenance
+        out.append(enriched)
+    return out
+
+
+def _chunk_id(source_id: Optional[str], index: int, char_start: int, char_end: int) -> str:
+    """Deterministic chunk_id: stable across re-chunking the same source/offsets.
+
+    Compatible with `IncludedItem.chunk_ids: list[str]` in
+    `app/context_bundles/schema.py` (plain string identifiers).
+    """
+    basis = f"{source_id or ''}:{index}:{char_start}:{char_end}"
+    digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+    return f"chunk_{digest}"
 
 
 def speaker_aware_chunks(
@@ -145,4 +307,10 @@ def _to_float(value: Any, *, fallback: float) -> float:
         return float(fallback)
 
 
-__all__ = ["split_into_chunks", "build_chunks", "speaker_aware_chunks"]
+__all__ = [
+    "split_into_chunks",
+    "build_chunks",
+    "build_structural_chunks",
+    "speaker_aware_chunks",
+    "CHUNK_METADATA_FIELDS_V1",
+]

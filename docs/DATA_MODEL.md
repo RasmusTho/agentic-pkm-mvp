@@ -200,6 +200,16 @@ normalize from `vector_index_meta`). The row payload must preserve the retrieved
 `store_objects` plus `embedding_identity` so retrieval consumers can inspect the evidence unit
 without consulting hidden process state.
 
+**Chunk metadata schema v1 (#2323):** `app/ingest/chunk_policy.py::build_chunks` produces per-chunk
+metadata (`chunk_id`, `source_id`, `heading_path`, `char_start`, `char_end`, `language`,
+`provenance` — full field semantics in `docs/EMBEDDINGS.md :: Oversized input handling`), reusing
+this existing table rather than introducing a new chunk store. `chunk_id` is a plain string,
+compatible with `IncludedItem.chunk_ids: list[str]` in `app/context_bundles/schema.py`. As of this
+change the served/indexed unit is still the whole note (one row keyed by `object_id`, unchanged);
+chunk metadata is available for a future indexing mode but chunk-level serving is not wired in and
+must stay behind an explicit, documented switch before `store_vector_index` rows become
+per-chunk-keyed.
+
 ### `store_relations` (canonical)
 - `src_id` uuid not null
 - `dst_id` uuid not null

@@ -113,13 +113,21 @@ They remain mirror/projection surfaces and do not hold semantic authority over t
 - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
 - Interpretation:
   - the vector index is a derived runtime artifact, rebuildable from `store_objects` payloads
-  - embeddings are stored as a `double precision[]` array; there is no `vector`-extension column and
-    no separate `chunk_id` in the active store — similarity is computed in application code
+  - embeddings are stored as a `double precision[]` array; there is no `vector`-extension column, and
+    the primary key is still `object_id` (one row per whole note) — similarity is computed in
+    application code
   - every row carries its full generating embedding identity tuple `(provider, model, dim, normalize)`; the index-level primary identity lives in `vector_index_meta`
   - the row `payload` carries the same retrieved-unit metadata as `store_objects` plus
     `embedding_identity`, so retrieval/ContextPack consumers can inspect stable id, locator,
     language, provenance/source-role, trust/review posture, and embedding identity from the
     retrieved unit
+  - **chunk metadata schema v1 (#2323):** `app/ingest/chunk_policy.py::build_chunks` produces
+    per-chunk metadata (`chunk_id`, `source_id`, `heading_path`, `char_start`, `char_end`,
+    `language`, `provenance`; see `docs/EMBEDDINGS.md :: Oversized input handling` and
+    `docs/DATA_MODEL.md :: store_vector_index`) reusing this table — no new chunk store or
+    `chunk_id`-keyed table. `chunk_id` is a plain string compatible with
+    `IncludedItem.chunk_ids: list[str]`. This does not change the PK or the served unit: rows stay
+    keyed by whole-note `object_id` until an explicit, documented chunk-level-serving switch lands
   - an ordinary upsert must match the primary identity; a reconcilable fallback write may record a divergent per-row `provider`/`model`/`normalize` (with the same `dim`), making fallback-written vectors visible and reconcilable (EMBEDREL-06 Phase A, `app/stores/pg.py::PgVectorIndex.upsert`)
   - the `dim` guard is unconditional — a dimension mismatch fails loud and writes no row
   - embeddings do not participate in the identity-history/SCD pattern
