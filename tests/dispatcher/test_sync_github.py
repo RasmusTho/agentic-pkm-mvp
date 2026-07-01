@@ -541,3 +541,78 @@ def test_gh_cli_get_rate_limit_returns_none_on_gh_failure() -> None:
         result = source.get_rate_limit()
 
     assert result is None
+
+
+def test_list_open_issues_paginates() -> None:
+    """AC4 (#2746 / GHAPI-M3): list_open_issues fetches in bounded cursor pages
+    instead of one ``gh issue list --limit 1000`` burst, with unchanged result
+    semantics (same dict shape: number/title/state/labels/createdAt/updatedAt).
+    """
+    import json as _json
+
+    source = GhCliIssueSource()
+    pages = [
+        {
+            "data": {
+                "repository": {
+                    "issues": {
+                        "pageInfo": {"hasNextPage": True, "endCursor": "CURSOR-1"},
+                        "nodes": [
+                            {
+                                "number": 101,
+                                "title": "First open issue",
+                                "state": "OPEN",
+                                "labels": {"nodes": [{"name": "agent:ready"}, {"name": "prio:high"}]},
+                                "createdAt": "2026-04-20T10:00:00Z",
+                                "updatedAt": "2026-04-21T12:00:00Z",
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+        {
+            "data": {
+                "repository": {
+                    "issues": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [
+                            {
+                                "number": 102,
+                                "title": "Second open issue",
+                                "state": "OPEN",
+                                "labels": {"nodes": []},
+                                "createdAt": "2026-04-19T08:00:00Z",
+                                "updatedAt": "2026-04-19T09:00:00Z",
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    ]
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        return MagicMock(returncode=0, stdout=_json.dumps(pages[len(calls) - 1]), stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        issues = source.list_open_issues("RasmusTho/agentic-pkm-mvp")
+
+    # Unchanged result semantics.
+    assert [issue["number"] for issue in issues] == [101, 102]
+    assert issues[0]["state"] == "OPEN"
+    assert issues[0]["labels"] == [{"name": "agent:ready"}, {"name": "prio:high"}]
+    assert issues[1]["labels"] == []
+    assert issues[0]["createdAt"] == "2026-04-20T10:00:00Z"
+    assert issues[0]["updatedAt"] == "2026-04-21T12:00:00Z"
+
+    # Paginated: two bounded page fetches, cursor threaded to the second page.
+    assert len(calls) == 2
+    assert not any("after=CURSOR-1" in arg for arg in calls[0])
+    assert any("after=CURSOR-1" in arg for arg in calls[1])
+
+    # No --limit 1000 burst remains anywhere in the issued commands.
+    for command in calls:
+        assert "1000" not in command

@@ -57,13 +57,23 @@ the state at the last successful pull.
 When `rate_limit_remaining` falls below the threshold (default 200, env var
 `GITHUB_RATELIMIT_KILL_THRESHOLD`):
 
-- The hourly full open-issues scan is **skipped** — `kill_switch_active: true`
-  recorded in sync-meta.
+- The full open-issues scan is **skipped** — `kill_switch_active: true`
+  recorded in sync-meta. (When it does run, it fetches bounded cursor pages,
+  not one `--limit 1000` burst — GHAPI-M3.)
 - The essential `agent:ready` label query still runs (read-only, bounded cost).
 - Stale-ready reconcile is disabled until quota recovers.
+- `scripts/reconcile_project_status.py` skips before project discovery with a
+  `github.budget.skip` receipt carrying `kill_switch_active: true` (GHAPI-C2).
+- `app/dispatcher/poll_backoff.py::gh_graphql` (CI/Codex wait loops) refuses to
+  issue the call and raises `GitHubKillSwitchActive` (GHAPI-H1).
 
 This is a **fail-safe** design: uncertain state allows essential reads and
 disables expensive scans only.
+
+The decision itself lives in one place:
+`app/dispatcher/github_call_logger.py::is_kill_switch_active` is the shared
+enforcement point — new GitHub-API consumers must wire through it instead of
+adding parallel gates (#2746).
 
 ---
 

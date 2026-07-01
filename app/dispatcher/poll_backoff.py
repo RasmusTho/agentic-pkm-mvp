@@ -11,6 +11,8 @@ import subprocess
 import time
 from typing import Any, Callable, Mapping, Protocol, TypeVar
 
+from app.dispatcher.github_call_logger import is_kill_switch_active, log_github_call
+
 
 T = TypeVar("T")
 
@@ -408,13 +410,73 @@ def resolve_codex_verdict(
     return parse_codex_verdict(payload, head_sha=head_sha, head_started_at=head_started_at)
 
 
+class GitHubKillSwitchActive(RuntimeError):
+    """Raised when the shared GitHub API kill switch blocks a GraphQL call.
+
+    Explicit kill-switch-active outcome for callers (#2746 / GHAPI-H1): the
+    call was never issued, so there is no payload to return. Callers must
+    treat this as "back off until the rate-limit window resets", never as an
+    empty/None result.
+    """
+
+
+def _graphql_pool_remaining() -> int | None:
+    """GraphQL-pool ``remaining`` via the free REST ``rate_limit`` endpoint.
+
+    The ``rate_limit`` endpoint does not count against any quota. Returns
+    ``None`` when the probe fails (fail-open: the kill switch only activates
+    on a confirmed low value).
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "api", "rate_limit", "--jq", ".resources.graphql.remaining"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        return int(result.stdout.strip())
+    except (OSError, ValueError):
+        return None
+
+
 def gh_graphql(query: str, variables: Mapping[str, Any]) -> Mapping[str, Any]:
+    # Shared kill switch (#2746 / GHAPI-H1): the decision comes from the single
+    # enforcement point in app/dispatcher/github_call_logger.py — do not add a
+    # parallel gate or re-parse the threshold here.
+    remaining = _graphql_pool_remaining()
+    if is_kill_switch_active(remaining):
+        log_github_call(
+            operation="gh api graphql (poll_backoff)",
+            direction="read",
+            remaining=remaining,
+            error="kill_switch_active: GraphQL call skipped",
+        )
+        raise GitHubKillSwitchActive(
+            f"GitHub API kill switch active (graphql remaining={remaining}); "
+            "GraphQL call skipped — back off until the rate-limit window resets"
+        )
     args = ["gh", "api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         flag = "-F" if isinstance(value, int) else "-f"
         args.extend([flag, f"{key}={value}"])
-    result = subprocess.run(args, check=True, capture_output=True, text=True)
-    return json.loads(result.stdout)
+    t0 = time.monotonic()
+    error: str | None = None
+    try:
+        result = subprocess.run(args, check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)
+    except Exception as exc:
+        error = str(exc)
+        raise
+    finally:
+        log_github_call(
+            operation="gh api graphql (poll_backoff)",
+            direction="read",
+            remaining=remaining,
+            latency_ms=round((time.monotonic() - t0) * 1000.0, 2),
+            error=error,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

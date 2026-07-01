@@ -27,6 +27,38 @@ from app.dispatcher.github_call_logger import (
 
 PROVIDER_IDENTITY = "github"
 
+# GHAPI-M3 (#2746): the all-open-issues snapshot is fetched in bounded cursor
+# pages instead of one `gh issue list --limit 1000` burst. 10 pages of 100
+# preserves the previous 1000-issue ceiling.
+OPEN_ISSUES_PAGE_SIZE = 100
+OPEN_ISSUES_MAX_PAGES = 10
+
+OPEN_ISSUES_QUERY = """
+query($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(states: OPEN, first: $pageSize, after: $after,
+           orderBy: {field: CREATED_AT, direction: DESC}) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        number
+        title
+        state
+        labels(first: 100) {
+          nodes {
+            name
+          }
+        }
+        createdAt
+        updatedAt
+      }
+    }
+  }
+}
+"""
+
 _GITHUB_FAILURE_NETWORK_MARKERS = (
     "connection reset",
     "connection refused",
@@ -455,34 +487,77 @@ class GhCliIssueSource:
             raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
 
     def list_open_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]:
-        """List all open issues with labels from the repo."""
+        """List all open issues with labels from the repo.
+
+        GHAPI-M3 (#2746): fetches in bounded cursor pages instead of one
+        ``gh issue list --limit 1000`` burst. Each page is a plain repository
+        ``issues`` GraphQL connection (the same transport class the old
+        ``gh issue list --search`` call used, minus the stricter search pool),
+        stopping early when the last page is reached. Result semantics are
+        unchanged: the same dict shape ``gh issue list --json`` produced.
+        """
         import json
         import subprocess
 
-        try:
-            result = subprocess.run(
-                [
-                    "gh",
-                    "issue",
-                    "list",
-                    "--repo",
-                    repo,
-                    "--search",
-                    "is:open",
-                    "--json",
-                    "number,title,state,labels,createdAt,updatedAt",
-                    "--limit",
-                    "1000",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+        owner, _, name = repo.partition("/")
+        if not name:
+            raise RuntimeError(f"repo must be 'owner/name', got: {repo!r}")
+
+        issues: list[dict[str, Any]] = []
+        after: str | None = None
+        for _page in range(OPEN_ISSUES_MAX_PAGES):
+            args = [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={OPEN_ISSUES_QUERY}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+                "-F",
+                f"pageSize={OPEN_ISSUES_PAGE_SIZE}",
+            ]
+            if after:
+                args.extend(["-f", f"after={after}"])
+            try:
+                result = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except FileNotFoundError:
+                raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
             if result.returncode != 0:
                 raise RuntimeError(f"gh issue list (open) failed: {result.stderr}")
-            return json.loads(result.stdout)
-        except FileNotFoundError:
-            raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
+            payload = json.loads(result.stdout)
+            connection = (
+                ((payload.get("data") or {}).get("repository") or {}).get("issues") or {}
+            )
+            for node in connection.get("nodes") or []:
+                labels = (node.get("labels") or {}).get("nodes") or []
+                issues.append(
+                    {
+                        "number": node.get("number"),
+                        "title": node.get("title"),
+                        "state": node.get("state"),
+                        "labels": [{"name": label.get("name")} for label in labels],
+                        "createdAt": node.get("createdAt"),
+                        "updatedAt": node.get("updatedAt"),
+                    }
+                )
+            page_info = connection.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            after = page_info.get("endCursor")
+            if not after:
+                # Fail loud rather than looping on a broken cursor.
+                raise RuntimeError(
+                    "gh issue list (open) pagination did not return an end cursor"
+                )
+        return issues
 
     def get_rate_limit(self) -> dict[str, Any] | None:
         """Get current GitHub API rate limit info."""
