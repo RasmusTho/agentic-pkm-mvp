@@ -275,6 +275,13 @@ def _check_embedding_index() -> Dict[str, Any]:
         "rebuild_reason": diag.get("rebuild_reason"),
         "issues": diag.get("issues") or [],
         "warnings": diag.get("warnings") or [],
+        # #2324: metadata/provenance completeness + coverage-gap findings. These are
+        # read-only diagnostics surfaced alongside the identity-drift status above; they
+        # do not affect `ok`/`rebuild_required` (no auto-repair from a health check), but
+        # let an operator see completeness/coverage drift without running the CLI doctor
+        # separately.
+        "metadata_completeness": diag.get("metadata_completeness"),
+        "vault_coverage": diag.get("vault_coverage"),
     }
 
 

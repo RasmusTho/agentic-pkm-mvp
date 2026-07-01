@@ -19,11 +19,13 @@ try:
         PgVectorIndex,
         inspect_pg_identity_tuples,
         inspect_pg_index_state,
+        inspect_pg_metadata_completeness,
     )
 except Exception:  # pragma: no cover - pg backend optional in some contexts
     PgVectorIndex = None  # type: ignore
     inspect_pg_index_state = None  # type: ignore
     inspect_pg_identity_tuples = None  # type: ignore
+    inspect_pg_metadata_completeness = None  # type: ignore
 
 
 _RECONCILE_HINT = "python -m app.cli index reconcile"
@@ -66,13 +68,24 @@ def _cached_diagnose() -> Dict[str, Any] | None:
     return value
 
 
-def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
+def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = False) -> Dict[str, Any]:
     """Return embedding-index diagnostics.
 
     The status-request path passes ``use_cache=True`` to bound diagnostic
     work to one DB inspection per ``INDEX_DOCTOR_TTL_S`` seconds (default
     10s). Other callers default to fresh evaluation so changes in identity
     configuration are immediately visible.
+
+    ``include_vault_coverage`` additionally scans the bound vault for markdown
+    notes with no corresponding ``store_objects`` row (#2324 coverage gap).
+    It is opt-in and off by default because it performs a filesystem walk of
+    the vault, which is more expensive than the DB-only checks and requires a
+    bound ``VAULT_ROOT``; the CLI ``--coverage`` flag and ``make verify``-style
+    callers opt in explicitly. This diagnosis path is always read-only: it
+    never re-embeds or backfills. Repair is the operator's explicit,
+    opt-in job (``index rebuild`` for individual objects); #2297's
+    ``index reconcile`` remains the identity-convergence tool and is untouched
+    by this coverage/completeness path.
     """
     global _diagnose_cache
     if use_cache:
@@ -94,6 +107,7 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
     warnings: list[str] = []
     empty_index = False
     mixed_identities: list[tuple] = []
+    metadata_completeness: Dict[str, Any] | None = None
 
     if stored_identity is None:
         warnings.append("VectorIndex has no recorded embedding identity (empty index or legacy backend).")
@@ -145,6 +159,35 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
                         "Mixed embedding identities in index: "
                         f"{distinct}. Run '{_RECONCILE_HINT}' to converge."
                     )
+            # Metadata/provenance completeness (#2324). Distinct from identity drift/mixed-
+            # identity above: a row can carry one consistent identity and still be missing
+            # language/provenance/embedding-identity-stamp fields required by the
+            # W3-SPINE-01 retrieved-unit payload contract (docs/DB_SCHEMA.md ::
+            # store_vector_index). This is read-only diagnosis only; no repair here.
+            if inspect_pg_metadata_completeness is not None and not empty_index:
+                completeness = inspect_pg_metadata_completeness()
+                if completeness.get("missing_count"):
+                    metadata_completeness = completeness
+                    sample_text = ", ".join(completeness.get("missing_sample_ids") or [])
+                    if completeness["missing_count"] > len(completeness.get("missing_sample_ids") or []):
+                        sample_text = f"{sample_text}, ..." if sample_text else "..."
+                    warnings.append(
+                        f"{completeness['missing_count']} store_vector_index rows are missing "
+                        f"language/provenance/embedding-identity metadata: {sample_text}"
+                    )
+
+    vault_coverage: Dict[str, Any] | None = None
+    if include_vault_coverage:
+        vault_coverage = inspect_vault_coverage_gap()
+        if vault_coverage.get("error"):
+            warnings.append(f"Vault coverage scan skipped: {vault_coverage['error']}")
+        elif vault_coverage.get("missing_count"):
+            sample_text = ", ".join(vault_coverage.get("missing_sample_paths") or [])
+            if vault_coverage["missing_count"] > len(vault_coverage.get("missing_sample_paths") or []):
+                sample_text = f"{sample_text}, ..." if sample_text else "..."
+            warnings.append(
+                f"{vault_coverage['missing_count']} vault notes have no store_objects row: {sample_text}"
+            )
 
     status = "ok"
     if issues:
@@ -184,6 +227,8 @@ def diagnose_index(*, use_cache: bool = False) -> Dict[str, Any]:
         "status": status,
         "pg_state": pg_state,
         "mixed_identities": mixed_identities,
+        "metadata_completeness": metadata_completeness,
+        "vault_coverage": vault_coverage,
     }
     with _diagnose_lock:
         _diagnose_cache = (time.monotonic(), result)
@@ -251,6 +296,60 @@ def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
             ]
 
 
+def inspect_vault_coverage_gap(*, limit: int = 5) -> Dict[str, Any]:
+    """Return count and sample paths of vault markdown notes absent from ``store_objects``.
+
+    Coverage-gap detection (#2324): correlates the bound vault's markdown files against
+    ``store_objects`` by ``source_ref`` (the absolute file path ingest writes as
+    ``source_ref``, see ``app/ingest/vault_alpha.py``/``app/ingest/vault_root.py``). This
+    is distinct from ``inspect_unembedded_pg_objects``, which checks the next stage of the
+    same pipeline (``store_objects`` row present but never embedded into
+    ``store_vector_index``). Together the two checks span the full
+    vault -> store_objects -> store_vector_index pipeline this issue owns.
+
+    Read-only: this never ingests or writes. Returns ``{"error": <reason>}`` when no vault
+    is bound or the Postgres backend is unavailable, so callers can treat the scan as
+    best-effort rather than failing the whole diagnosis.
+    """
+    if PgVectorIndex is None:
+        return {"error": "Postgres backend not available"}
+
+    try:
+        from app.config.paths import resolve_optional_vault_root
+        from app.vault.manager import iter_vault_markdown_files
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        return {"error": f"vault modules unavailable ({exc})"}
+
+    try:
+        vault_root = resolve_optional_vault_root()
+    except Exception as exc:
+        return {"error": f"failed to resolve vault root ({exc})"}
+    if vault_root is None:
+        return {"error": "no vault bound"}
+
+    try:
+        vault_paths = {str(p) for p in iter_vault_markdown_files(vault_root)}
+    except Exception as exc:
+        return {"error": f"vault scan failed ({exc})"}
+
+    if not vault_paths:
+        return {"checked": 0, "missing_count": 0, "missing_sample_paths": []}
+
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT source_ref FROM store_objects WHERE source_ref IS NOT NULL")
+            indexed_refs = {str(row.get("source_ref") if isinstance(row, dict) else row[0]) for row in cur.fetchall()}
+
+    missing = sorted(vault_paths - indexed_refs)
+    return {
+        "checked": len(vault_paths),
+        "missing_count": len(missing),
+        "missing_sample_paths": missing[:limit],
+    }
+
+
 def verify_object_embedded(object_id: str) -> None:
     """Fail loud when ``object_id`` is present in ``store_objects`` but unembedded.
 
@@ -293,6 +392,7 @@ __all__ = [
     "diagnose_index",
     "reset_diagnose_cache",
     "inspect_unembedded_pg_objects",
+    "inspect_vault_coverage_gap",
     "verify_object_embedded",
     "IndexDriftError",
 ]
