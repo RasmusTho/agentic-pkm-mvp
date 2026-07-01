@@ -20,11 +20,7 @@ from app.dispatcher.github_call_logger import (
     is_kill_switch_active,
     log_github_call,
 )
-from app.dispatcher.sync_github import (
-    PullSyncAdapter,
-    GhCliIssueSource,
-    get_sync_meta,
-)
+from app.dispatcher.sync_github import PullSyncAdapter
 
 
 # ---------------------------------------------------------------------------
