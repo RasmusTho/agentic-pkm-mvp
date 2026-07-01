@@ -1,5 +1,7 @@
 # GitHub API Exhaustion Runbook
 
+State: Active runbook for diagnosing and recovering from GitHub API rate-limit exhaustion (kill switch, observability).
+
 ## overview
 
 This runbook covers diagnosis and recovery when the system approaches or
