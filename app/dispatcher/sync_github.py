@@ -491,14 +491,13 @@ class GhCliIssueSource:
 
         try:
             result = subprocess.run(
-                ["gh", "api", "rate_limit", "--json", "remaining,reset"],
+                ["gh", "api", "rate_limit", "--jq", ".rate"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
             if result.returncode == 0:
-                data = json.loads(result.stdout)
-                return data.get("rate_limit", {})
+                return json.loads(result.stdout)
         except Exception:
             pass
         return None
