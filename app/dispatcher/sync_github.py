@@ -531,7 +531,7 @@ class GhCliIssueSource:
             except FileNotFoundError:
                 raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
             if result.returncode != 0:
-                raise RuntimeError(f"gh issue list (open) failed: {result.stderr}")
+                raise RuntimeError(f"gh api graphql (open issues) failed: {result.stderr}")
             payload = json.loads(result.stdout)
             connection = (
                 ((payload.get("data") or {}).get("repository") or {}).get("issues") or {}
@@ -555,24 +555,47 @@ class GhCliIssueSource:
             if not after:
                 # Fail loud rather than looping on a broken cursor.
                 raise RuntimeError(
-                    "gh issue list (open) pagination did not return an end cursor"
+                    "gh api graphql (open issues) pagination did not return an end cursor"
                 )
+        else:
+            # Page cap hit with hasNextPage still true. A silently truncated
+            # snapshot would let the stale reconcile treat still-open issues
+            # as closed and mark their live tasks completed; fail loud so
+            # pull() takes its existing snapshot-unavailable path instead.
+            raise RuntimeError(
+                f"gh api graphql (open issues) exceeded {OPEN_ISSUES_MAX_PAGES} pages "
+                "with more results remaining; refusing a truncated snapshot"
+            )
         return issues
 
     def get_rate_limit(self) -> dict[str, Any] | None:
-        """Get current GitHub API rate limit info."""
+        """Current GitHub API budget signal for the kill switch.
+
+        Returns the more exhausted of the REST core and GraphQL pools:
+        ``list_open_issues`` spends GraphQL, and the audited exhaustion mode
+        (GHAPI, 2026-06-29) is GraphQL-at-zero with REST core healthy — a
+        core-only probe would never fire exactly when the guard matters.
+        Shape matches the old ``.rate`` payload (``remaining``/``reset``).
+        """
         import json
         import subprocess
 
         try:
             result = subprocess.run(
-                ["gh", "api", "rate_limit", "--jq", ".rate"],
+                ["gh", "api", "rate_limit", "--jq", ".resources"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
             if result.returncode == 0:
-                return json.loads(result.stdout)
+                resources = json.loads(result.stdout)
+                pools = [
+                    pool
+                    for pool in (resources.get("core"), resources.get("graphql"))
+                    if isinstance(pool, dict) and pool.get("remaining") is not None
+                ]
+                if pools:
+                    return min(pools, key=lambda pool: pool["remaining"])
         except Exception:
             pass
         return None

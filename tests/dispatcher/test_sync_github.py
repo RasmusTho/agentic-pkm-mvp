@@ -522,14 +522,43 @@ def test_gh_cli_get_rate_limit_uses_valid_gh_flags_and_parses_rate_key() -> None
     protocol, not this method) stayed green.
     """
     source = GhCliIssueSource()
-    fake_result = MagicMock(returncode=0, stdout='{"limit": 5000, "remaining": 4973, "reset": 1782894337, "used": 27}')
+    fake_result = MagicMock(
+        returncode=0,
+        stdout=(
+            '{"core": {"limit": 5000, "remaining": 4973, "reset": 1782894337, "used": 27},'
+            ' "graphql": {"limit": 5000, "remaining": 4990, "reset": 1782894337, "used": 10}}'
+        ),
+    )
 
     with patch("subprocess.run", return_value=fake_result) as mock_run:
         result = source.get_rate_limit()
 
     args = mock_run.call_args.args[0]
     assert "--json" not in args, "gh api has no --json flag; use --jq"
+    # The more exhausted pool wins (core here).
     assert result == {"limit": 5000, "remaining": 4973, "reset": 1782894337, "used": 27}
+
+
+def test_gh_cli_get_rate_limit_reports_graphql_pool_when_graphql_exhausted() -> None:
+    """#2746 review finding: the audited exhaustion mode is GraphQL-at-zero
+    with REST core healthy. ``list_open_issues`` spends GraphQL, so the kill
+    switch must see the GraphQL pool — a core-only probe never fires in
+    exactly the scenario the guard exists for.
+    """
+    source = GhCliIssueSource()
+    fake_result = MagicMock(
+        returncode=0,
+        stdout=(
+            '{"core": {"limit": 5000, "remaining": 4900, "reset": 1782894337, "used": 100},'
+            ' "graphql": {"limit": 5000, "remaining": 0, "reset": 1782894337, "used": 5000}}'
+        ),
+    )
+
+    with patch("subprocess.run", return_value=fake_result):
+        result = source.get_rate_limit()
+
+    assert result is not None
+    assert result["remaining"] == 0, "GraphQL exhaustion must surface as the budget signal"
 
 
 def test_gh_cli_get_rate_limit_returns_none_on_gh_failure() -> None:
@@ -616,3 +645,48 @@ def test_list_open_issues_paginates() -> None:
     # No --limit 1000 burst remains anywhere in the issued commands.
     for command in calls:
         assert "1000" not in command
+
+
+def test_list_open_issues_refuses_truncated_snapshot_at_page_cap() -> None:
+    """#2746 review finding: when the page cap is hit with ``hasNextPage``
+    still true, a silently truncated snapshot would let the stale reconcile
+    treat the missing (still-open) issues as closed and mark their live tasks
+    completed. The fetch must fail loud instead, routing ``pull()`` into its
+    existing snapshot-unavailable path.
+    """
+    import json as _json
+
+    from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES
+
+    source = GhCliIssueSource()
+    page = {
+        "data": {
+            "repository": {
+                "issues": {
+                    "pageInfo": {"hasNextPage": True, "endCursor": "CURSOR-N"},
+                    "nodes": [
+                        {
+                            "number": 1,
+                            "title": "endless",
+                            "state": "OPEN",
+                            "labels": {"nodes": []},
+                            "createdAt": "2026-04-20T10:00:00Z",
+                            "updatedAt": "2026-04-21T12:00:00Z",
+                        }
+                    ],
+                }
+            }
+        }
+    }
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        return MagicMock(returncode=0, stdout=_json.dumps(page), stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="truncated snapshot"):
+            source.list_open_issues("RasmusTho/agentic-pkm-mvp")
+
+    assert len(calls) == OPEN_ISSUES_MAX_PAGES
