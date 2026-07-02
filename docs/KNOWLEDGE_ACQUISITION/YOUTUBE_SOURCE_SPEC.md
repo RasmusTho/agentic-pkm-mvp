@@ -12,8 +12,8 @@ scheduling, more sources) is built.
 
 | Field | Value |
 | --- | --- |
-| `source_kind` | `youtube` (aligns with the existing `provenance.source_kind: youtube_url` vocabulary) |
-| `capabilities` | `fetch` (v1); `captions` (v1); `discover`, `backfill` (Phase 4); `media` (audio, fallback path only) |
+| `source_kind` | `youtube_url` — the value the existing `provenance.source_kind` vocabulary already uses (`ARTIFACT_METADATA_CONTRACT.md`, triage policy §4.3, the shipped template); no second identifier is introduced |
+| `capabilities` | `captions` (v1); `discover`, `backfill` (Phase 4); `media` (audio, fallback path only). `fetch` is the required operation, not a capability |
 | `egress_posture` | youtube.com + googlevideo.com; auth: none (logged-out); low volume (tens of items/week), politeness sleeps; PO-token provider plugin as a declared local dependency |
 | `auth_degradation` | Everything in v1 works logged-out. Cookie-based private lists (Watch Later, Liked) are a Phase 4 *optional, degradable* capability with explicit operator opt-in — 2025–2026 posture: YouTube suspends accounts / bans IPs for logged-in automated access, so absence of cookies disables only that capability. |
 
@@ -40,7 +40,8 @@ provider framework survives transparently:
 Auto-caption normalization (the rolling-cue problem — every line duplicated across overlapping
 cues) is part of the `normalize` stage: strip inline timing/styling tags, collapse consecutive
 duplicates, merge cues sharing text into single segments with combined start/end. The normalized
-transcript records `acquisition_method: captions_manual | captions_auto | asr` so downstream
+transcript records `acquisition_method: captions_manual | captions_auto | asr` — this source's
+declared acquisition-method vocabulary per `REFINEMENT_PIPELINE_CONTRACT.md` §`normalized` — so downstream
 consumers can weigh quality (manual > ASR > auto-captions, per the research memo).
 
 ## Metadata
@@ -73,12 +74,25 @@ Explicit URLs and public playlist URLs need none of this and are the v1 entry po
 
 ## Writeback
 
-The candidate stage writes through the existing `youtube_source_note` shape
-(`docs/examples/vault-templates/youtube-source-note.md`): metadata + provenance frontmatter,
-`transcript_available`, AI summary section marked non-authoritative, extraction results as
-suggestion content, `review_state: unreviewed`, `authority.requires_review: true`. Human
-takeaways and any promotion remain human acts per triage policy §4.3. Raw/normalized artifacts are
-machine-side records, not vault notes; the note references them via provenance.
+The candidate stage writes a `youtube_source_note` companion artifact based on the shipped
+template (`docs/examples/vault-templates/youtube-source-note.md`): metadata + provenance
+frontmatter, `transcript_available`, AI summary section marked non-authoritative, extraction
+results as suggestion content.
+
+The slice **extends** the template frontmatter with the initial non-authoritative posture markers
+triage policy §3 mandates for AI-generated content: `authority.requires_review: true` plus an
+explicit unreviewed review posture. The shipped template carries no `review_state` field today and
+defaults `requires_review` to `false`, so this is a template change delivered with the slice — not
+an already-existing field. Vocabulary caveat: the triage policy expresses the posture as
+`review_state: unreviewed`, while `STATE_AXES_CONTRACT.md`'s canonical `review_state` set is
+`draft / provisional / reviewed / protected / archived`; that reconciliation is a pre-existing item
+between those two owner docs (tracked as a separate issue) — this spec mandates the *posture*, not
+a specific token. Human takeaways and any promotion remain human acts per triage policy §4.3.
+
+Raw and normalized artifacts are machine-side records, not vault notes; the note references them
+via provenance. **Raw retention:** `raw` records are retained as rebuildable machine-side records
+for as long as their companion artifact exists — the replay acceptance criterion depends on them.
+Discard follows the machine-mirror rules: safe to delete and re-acquire, never silently.
 
 ## Phase 2 vertical slice (TCD milestone)
 
@@ -96,9 +110,10 @@ Acceptance criteria (each needs a concrete `Verify:` target when issues are file
       and marked as detected.
 - [ ] One extractor (e.g. `summary`) produces schema-valid output registered per the extraction
       registry; schema mismatch fails loudly.
-- [ ] Candidate written back as a `youtube_source_note` companion artifact with
-      `review_state: unreviewed`, `requires_review: true`, full provenance; triage state entry is
-      `captured`; nothing advances triage automatically.
+- [ ] Candidate written back as a `youtube_source_note` companion artifact with the mandated
+      non-authoritative posture markers (`requires_review: true` + unreviewed posture — see
+      §Writeback, including the template-frontmatter extension shipped in the same slice) and full
+      provenance; triage state entry is `captured`; nothing advances triage automatically.
 - [ ] Replay: deleting all derived levels and re-running from `raw` reproduces equivalent
       normalized/extracted/candidate artifacts without network egress.
 - [ ] Stage events appear on the outbox with the standard envelope and idempotency keys.

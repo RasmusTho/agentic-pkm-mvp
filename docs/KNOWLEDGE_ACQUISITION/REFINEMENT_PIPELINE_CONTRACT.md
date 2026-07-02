@@ -18,7 +18,7 @@ evergreen" as one ladder) collapses four axes this repo keeps separate:
 | **Refinement level** (this doc) | how far has the machine processed this acquired item? | this contract | defines `raw / normalized / extracted / candidate` |
 | Triage state (`captured`…`promoted`) | where is the artifact in the human ingestion workflow? | `INGESTION_AND_TRIAGE_POLICY.md` | pipeline output enters at `captured`; pipeline never advances triage state |
 | `lifecycle` (`ephemeral`…`rebuildable`) | how durable is this artifact? | `ARTIFACT_METADATA_CONTRACT.md` | all pipeline intermediates are `rebuildable`; the raw evidence record is retained per source spec |
-| `maturity` / `review_state` | knowledge standing / review posture | `STATE_AXES_CONTRACT.md` | pipeline never reads or writes either |
+| `maturity` / `review_state` | knowledge standing / review posture | `STATE_AXES_CONTRACT.md` | never advanced or mutated on any existing artifact; the sole interaction is stamping the mandated initial non-authoritative posture on candidate artifacts the pipeline itself creates (§`candidate`) |
 
 "Integrated" and "evergreen" are **not** refinement levels. They live entirely in the existing
 human-gated promotion path. **The pipeline ends at `candidate`.**
@@ -36,9 +36,10 @@ every later stage starts here without re-contacting the source.
 
 One source-agnostic shape per content type. For time-based media, the normalized transcript
 carries: text segments with start/end times, language (detected, marked as detected), speaker
-labels where available, chapter boundaries where available, an acquisition-method field
-(`captions_manual` / `captions_auto` / `asr`), and a quality note (e.g. auto-caption vs manual vs
-ASR provenance — consumers may weigh them differently). Normalization is deterministic: same
+labels where available, chapter boundaries where available, an acquisition-method field (values
+declared per source spec — e.g. YouTube declares `captions_manual` / `captions_auto` / `asr`; a
+podcast source would declare its own, such as `publisher_transcript` / `asr`), and a quality note
+(consumers may weigh acquisition methods differently). Normalization is deterministic: same
 `raw` in, same `normalized` out. No LLM calls at this level.
 
 ### `extracted` — structured evidence, still source-bound
@@ -50,11 +51,13 @@ carries the extractor id + version + model identity in lineage.
 
 ### `candidate` — queued for human triage
 
-A candidate bundles selected extractions into the shape the triage flow already expects: an
-artifact entering at triage state `captured` / review posture `unreviewed`, with
-`authority.requires_review: true` and full provenance, written back through the existing
-companion-note / vault mechanics named in the source spec. From this point the ingestion/triage
-policy governs; the pipeline is done.
+A candidate bundles selected extractions into the artifact shape the ingestion/triage policy
+specifies — noting that the policy is itself docs-only, target-state: no runtime triage consumer
+exists today, and the human review surface is the vault note itself. The candidate enters the
+triage workflow at its initial state (`captured`) carrying the non-authoritative posture markers
+policy §3 mandates for AI-generated content, with full provenance, written back through the
+existing companion-note / vault mechanics named in the source spec. From this point the
+ingestion/triage policy governs; the pipeline is done.
 
 ## Stage execution model
 
@@ -112,9 +115,10 @@ governance-bearing execution).
 
 ## What the pipeline MUST NOT do
 
-- Advance triage state, or write `lifecycle`, `authority`, `review_state`, `maturity`,
-  `artifact_class` on any human artifact (AI must not silently mutate governance-bearing
-  metadata — triage policy §3).
+- Advance triage state on any artifact, or mutate governance-bearing metadata (the fields
+  `INGESTION_AND_TRIAGE_POLICY.md` §3 names) on any existing artifact. Stamping the mandated
+  initial posture on candidate artifacts the pipeline itself creates (§`candidate`) is the sole
+  exception.
 - Promote anything, draft-or-otherwise, into `evergreen_note` / `synthesis_note` /
   `decision_record`.
 - Create chunks, embeddings, or index entries directly — it hands normalized/extracted artifacts

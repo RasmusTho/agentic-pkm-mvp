@@ -1,12 +1,13 @@
-State: Specification directory (docs-authoring; target-state framing). No implementation issues filed yet; issue extraction follows owner review via `feature-breakdown` / `docs-to-issue`.
+State: Specification directory (docs-authoring; target-state framing; filed via PR #2786). No implementation issues filed yet; issue extraction follows owner review via `feature-breakdown` / `docs-to-issue`.
 Doc role: Capability specification directory
 Authority: Defines the Knowledge Acquisition Platform capability boundary — source plugins, the acquisition refinement pipeline, and the extraction registry — and its reconciliation with existing owner contracts. It does not redefine ingestion/triage policy, the artifact taxonomy, state axes, promotion semantics, or the retrieval/embedding architecture; those remain with their owner docs.
 
 # Knowledge Acquisition Platform
 
 One reusable acquisition-and-refinement capability for external long-form sources, producing
-derived, non-authoritative artifacts that feed the **existing** triage, promotion, and retrieval
-architecture. YouTube is the first source instance and the proving workload; podcasts, conference
+derived, non-authoritative artifacts that conform to the **existing** triage, promotion, and
+retrieval contracts (the triage policy is itself docs-only target-state; no runtime triage
+consumer exists today). YouTube is the first source instance and the proving workload; podcasts, conference
 talks, PDFs/articles, RSS, and local media archives are later instances of the same contracts —
 not new architecture.
 
@@ -20,9 +21,10 @@ In scope:
 - **Source plugins** — a uniform contract for discovering and fetching content from an external
   source with provenance, dedup identity, and an incremental-sync cursor
   (`SOURCE_PLUGIN_CONTRACT.md`).
-- **Acquisition refinement pipeline** — the machine-side stages between "a source item exists" and
-  "candidate knowledge is queued for human triage": acquire → normalize → extract → candidate
-  (`REFINEMENT_PIPELINE_CONTRACT.md`).
+- **Acquisition refinement pipeline** — the machine-side stages between "a source plugin fetched
+  an item" and "candidate knowledge is queued for human triage": normalize → extract → candidate
+  over plugin-fetched content (`REFINEMENT_PIPELINE_CONTRACT.md`; acquisition itself is a plugin
+  operation, not a pipeline stage — only plugins have egress).
 - **Extraction registry** — an open, extensible set of extractors over normalized content. The
   initial extractors (summary, claims, entities, action items) are worked examples that prove the
   contract, **not** a definitive list.
@@ -47,9 +49,8 @@ Out of scope (owned elsewhere — this directory links, never restates):
 review, promotion into durable Human Knowledge artifacts, evergreen standing — is owned by the
 ingestion/triage policy (§6 promotion path) and the state-axes contract. The platform never
 promotes, never mutates governance-bearing metadata, and never authors human takeaways. This is
-the load-bearing reconciliation: the widely-copied community pattern ("raw → … → evergreen" as one
-pipeline) collapses machine processing depth into human knowledge standing; Yggdrasil already
-separates those axes, and this spec keeps them separated.
+the load-bearing reconciliation; `REFINEMENT_PIPELINE_CONTRACT.md` §Axis disambiguation carries
+the axis table and per-axis owners.
 
 ## Reading order
 
@@ -66,7 +67,10 @@ separates those axes, and this spec keeps them separated.
 
 **Product / Runtime System** (spec only; this directory itself is CES practice surface).
 
-- **EBF** — source plugins are External Boundary Fabric adapters (source/parser class).
+- **EBF** — source plugins are External Boundary Fabric adapters (a candidate new integration
+  class: the fabric's ten current classes do not cover networked acquisition — see
+  `SOURCE_PLUGIN_CONTRACT.md`'s Authority header; the class decision belongs to
+  `docs/INTEGRATION_FABRIC_CONTRACT.md`'s owners).
 - **DRI** — normalized/extracted artifacts are derived, rebuildable representations.
 - **CAO** — extractors are non-side-effecting cognition producing proposals.
 - **HKA / SIP / PDM** — touched only through existing contracts (companion notes, provenance,
@@ -90,8 +94,8 @@ state, never canonical authority.
 
 | Phase | Deliverable | Lane |
 | --- | --- | --- |
-| 0 | Research memo (`RESEARCH_2026-07.md`) | this docs-authoring PR |
-| 1 | Platform contracts (this directory) | this docs-authoring PR |
+| 0 | Research memo (`RESEARCH_2026-07.md`) | PR #2786 |
+| 1 | Platform contracts (this directory) | PR #2786 |
 | 2 | Vertical slice: one explicit YouTube URL → metadata → caption-first transcript → normalized artifact → one extractor → candidate + companion note, replayable | `feature-breakdown` after owner review; implementation issues TCD-routed |
 | 3 | Generalize: second source (e.g. podcast RSS or local media file) implements `SOURCE_PLUGIN_CONTRACT` unchanged | issues after Phase 2 acceptance |
 | 4 | Continuous discovery: subscription/playlist sync, scheduling, dedup at scale | last, by design |
