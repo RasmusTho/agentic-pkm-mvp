@@ -190,7 +190,5 @@ reasoning `DEFINE_CANVAS_COEDITING_MODEL.md` used for the co-editing posture its
 
 ## Related GitHub Issues
 
-Docs-authoring lane: this task does not require a governing GitHub Issue per
-`AGENTS.md :: Docs authoring lane` (docs-only, no runtime behavior change). If filed anyway for
-tracking alongside Task 2, reference "Implements CANVAS_CHAT_SURFACE Phase 5 /
-DEFINE_CHAT_ARTIFACT_DURABILITY" and link to the Phase 5 parent feature issue.
+Filed as #2806 (`agent:ready`), for tracking alongside Task 2 (#2807) even though this task did not
+strictly require a governing Issue per `AGENTS.md :: Docs authoring lane`. Parent feature issue: #2805.

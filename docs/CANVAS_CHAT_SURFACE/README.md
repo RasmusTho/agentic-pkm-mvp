@@ -240,8 +240,8 @@ Phase 5 acceptance:
       the artifact class as "HKA-owned like class 1/3, related 1:N to its parent vault note via SIP" —
       consistent with this phase's classification.
 
-Phase 5 parent feature issue: **to be filed** as part of this breakdown; this line is updated with
-the live issue number once created.
+Phase 5 parent feature issue: **#2805** — live validation hub; closes only after both children
+(#2806, #2807) are delivered and the Phase 5 acceptance checklist above is fully checked.
 
 ### Carried governance intent in routed proposal payloads (#1772)
 

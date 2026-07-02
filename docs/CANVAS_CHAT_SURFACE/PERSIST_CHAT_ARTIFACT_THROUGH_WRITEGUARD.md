@@ -178,8 +178,5 @@ Two concrete failures exist today and this task closes both:
 
 ## Related GitHub Issues
 
-Implements CANVAS_CHAT_SURFACE Phase 5 / PERSIST_CHAT_ARTIFACT_THROUGH_WRITEGUARD. Depends on
-CANVAS-DURABLE-01 (docs, this phase's Task 1) landing first so the schema/relation decisions are
-settled before implementation. Issue-first implementation lane (code-affecting): create as
-`Status=Ready` / `agent:ready` once Task 1 merges. Use the acceptance criteria above as the issue
-contract.
+Filed as #2807 (`agent:blocked` on #2806 — remove the block and add `agent:ready` once #2806 merges).
+Parent feature issue: #2805.
