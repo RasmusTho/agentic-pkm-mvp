@@ -89,7 +89,7 @@ CI and scripted UAT can satisfy the verification function of this skill **only w
 - They produced a durable machine-readable receipt that names the candidate SHA, the channel config, and the passing check suite.
 - The receipt is co-located with, or linked from, `ops/test-promotions/`.
 
-If these conditions are met, step 6 may be replaced by referencing the CI/UAT receipt instead of re-running verification locally. The receipt must still be committed and linked in the test promotion plan.
+If these conditions are met, step 6 may be replaced by referencing the CI/UAT receipt instead of re-running verification locally. The receipt must still be stored under `ops/test-promotions/` (local ops storage — the directory is gitignored per the #2081 receipts-are-local policy, so a repo-committed receipt is not expected) and linked in the test promotion plan.
 
 ## Emergency bypass (direct dev→prod)
 
