@@ -48,9 +48,10 @@ contract, not by inventing a new one.
 4. **Adds the missing row** to `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` for session/chat
    history (today absent — confirmed by direct read, no existing row covers it).
 5. **Names the schema completion**: the `type: chat-session` frontmatter (already SoT per
-   `DEFINE_CANVAS_COEDITING_MODEL.md`) gains one required field, `note_uuid`, alongside the existing
-   human-legible `note: "[[title]]"` wikilink — the durable, rename-safe half of the relationship,
-   mirroring the note-uuid + companion-note pattern already used everywhere else in this system
+   `DEFINE_CANVAS_COEDITING_MODEL.md`) gains one new durable field, `note_uuid` (nullable on read, for
+   pre-upgrade compatibility — see Task 2), alongside the existing human-legible `note: "[[title]]"`
+   wikilink — the durable, rename-safe half of the relationship, mirroring the note-uuid +
+   companion-note pattern already used everywhere else in this system
    (`docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`). `DEFINE_CANVAS_COEDITING_MODEL.md` explicitly deferred
    "the exact session-log schema beyond the minimum fields" to a later slice — this is that slice.
 6. **States the GC posture**: chat-session artifacts follow the owner-ratified D-6 posture (cold
@@ -58,6 +59,32 @@ contract, not by inventing a new one.
    language in `DEFINE_CANVAS_COEDITING_MODEL.md` §Retention and Reversibility. That section is now
    superseded on the deletion mechanism specifically; the per-note disposition-follows-note-lifecycle
    principle is unaffected.
+
+## Concretely
+
+Before this task, a reader following the owner tables directly finds no trace of the chat artifact:
+
+```
+$ grep -n "chat_for\|has_chats" docs/CONCEPTS/RELATION_TAXONOMY.md
+(no matches)
+$ grep -n -i "session/chat\|chat.session" docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md
+(no matches)
+```
+
+After this task merges, both resolve:
+
+```
+$ grep -n "chat_for\|has_chats" docs/CONCEPTS/RELATION_TAXONOMY.md
+NN:| `chat_for` | Chat artifact belongs to this note (chat → note) | ... | frontmatter | ... |
+NN:| `has_chats` | Inverse of `chat_for` (note → chat) | ... | frontmatter | ... |
+$ grep -n -i "session/chat\|chat.session" docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md
+NN:| Chat-session artifact | HKA (artifact), SIP (relation) | ... |
+```
+
+`docs/architecture/runtime-semantics.md` row 19 and its D-4 Divergences entry (already synced by
+this same PR, see the review-fix commit) point at this file's classification table as the
+canonical detail rather than restating it — a reader following either doc lands on one answer, not
+two drifting ones.
 
 ## SBS Classification (binding statement)
 
@@ -117,7 +144,7 @@ classification field, the rejection of long-lived per-note chats — stands unmo
 | # | Question | Answer |
 |---|---|---|
 | Identity | `session_id` (already assigned, UUID, `session_log.py:38`) + durable `note_uuid` reference (new field, this task) |
-| Mutation | Append-only during an active session (turns), one terminal write on close; WriteGuard-gated, single-writer (the canvas surface itself) — see Task 2 |
+| Mutation | Append-only during an active session (turns), one terminal write on close; WriteGuard-gated. Authorized by user presence during the session, same as content co-authoring (`DEFINE_CANVAS_COEDITING_MODEL.md`'s Carve-out) — not a system-autonomous write; the canvas surface is the sole *code path* that performs the write, not an independent *authorizer*. See Task 2. |
 | Canonicality | **canonical** for its own content (the intent-trail is not derivable from anything else); **not** canonical for, and never promoted to, the note's content |
 | Replayable from | none — it IS the primary source of its own intent-trail; the note's content is never reconstructed from it |
 | GC | D-6 posture: retained, tiered to cold storage as it ages past active relevance; never silently deleted; per-note disposition follows the note's own lifecycle (soft-delete/archive), consistent with `DEFINE_CANVAS_COEDITING_MODEL.md`'s per-note-disposition principle |
@@ -155,6 +182,26 @@ reasoning `DEFINE_CANVAS_COEDITING_MODEL.md` used for the co-editing posture its
       `DEFINE_CANVAS_COEDITING_MODEL.md`'s artifact-vs-provenance split.
       Verify: doc presence — this file's `## Reconciliation` section.
 
+## How to Verify (Pre-Merge)
+
+All four ACs above are doc-presence checks; no test suite applies (docs-authoring lane, no code
+change). Verify each on the PR's head SHA:
+
+- `grep -n "chat_for\|has_chats" docs/CONCEPTS/RELATION_TAXONOMY.md` — both rows present, each
+  carrying the full authorship/authority/gov-bearing/rebuildable/persistence/retrieval/projection
+  attribute set (compare column-by-column against the `companion_for`/`has_companion` rows in the
+  same table).
+- `grep -n -i "session/chat\|chat.session" docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` —
+  the new row is present and names HKA and SIP as target owners.
+- Read this file's `## Chat-Session Artifact Classification` section and confirm it states all five
+  columns (Identity, Mutation, Canonicality, Replayable from, GC).
+- Read this file's `## Reconciliation` section and confirm it states, in so many words, that content
+  authority stays with the note and only the chat artifact's governance status is elevated.
+- Read `docs/architecture/runtime-semantics.md` row 19 and its D-4 Divergences entry and confirm
+  neither still reads "not persisted at all" / "no table, no vault artifact" (the staleness this PR
+  also corrects) and that both point at this file for the detailed classification rather than
+  restating it.
+
 ## Out of Scope
 
 - Implementing the WriteGuard-gated write path (Task 2, `PERSIST_CHAT_ARTIFACT_THROUGH_WRITEGUARD.md`).
@@ -166,9 +213,14 @@ reasoning `DEFINE_CANVAS_COEDITING_MODEL.md` used for the co-editing posture its
   later design, not scoped now" (owner ratification, epic #2778) — this task only states that chat
   artifacts inherit that posture once it exists; it does not build a chat-specific GC mechanism ahead
   of the system-wide one.
-- Editing `docs/architecture/runtime-semantics.md` further — the D-4 ratification already landed via
-  PR #2803 (merged 2026-07-02); this task's classification is consistent with, not a rewrite of, that
-  entry.
+- Reopening or re-ratifying D-4 in `docs/architecture/runtime-semantics.md` — PR #2803 (merged
+  2026-07-02) already landed that ratification. This spec PR does carry one narrow, same-repo
+  **fix-doc** correction (per that file's own fix-code/fix-doc/needs-owner-decision taxonomy): PR
+  #2803 updated the Divergences prose and SBS-mapping bullet to say D-4 is ratified, but left the
+  classification table's row 19 and the Divergences heading still reading "not persisted at all... no
+  table, no vault artifact" — an internal contradiction within that single file, not a new decision.
+  This task's classification syncs that row/heading to match the ratified text already present lower
+  in the same file. The ratification's substance is unchanged.
 - Editing `DEFINE_CANVAS_COEDITING_MODEL.md`'s co-editing posture, authority split, cardinality, or
   `.chats/` location/classification conventions — all stand unmodified.
 - The `.canvas-sessions/` JSON pointer store (`app/chat/session_store.py`). That is active-session

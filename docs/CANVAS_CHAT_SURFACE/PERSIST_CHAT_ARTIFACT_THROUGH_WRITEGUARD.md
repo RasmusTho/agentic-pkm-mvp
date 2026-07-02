@@ -119,6 +119,13 @@ Two concrete failures exist today and this task closes both:
    Beyond consistency, this is the concrete mechanism the SBS forbidden-dependency rule requires: an
    interaction surface (Canvas/HIX) must not write HKA-owned durable storage directly.
 
+**On not extracting a shared helper yet.** This task inlines the WriteGuard-then-KnowledgePort-write
+sequence directly in `SessionLogWriter`'s three methods, the same shape `commitment_persistence.py`
+already uses once. That makes it the *second* HKA-family artifact doing this exact two-step pattern —
+worth naming, not worth acting on yet: extracting a shared `guarded_write_note_relative`-style helper
+now would be designing for a third caller that doesn't exist. If a third own-artefact class needs the
+same sequence, that is the point to factor it out, not before.
+
 ## Acceptance Criteria
 
 - [ ] `SessionLog` carries a `note_uuid` field, resolved via `ensure_note_uuid` at session-open time,

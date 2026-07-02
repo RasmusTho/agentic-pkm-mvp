@@ -43,7 +43,7 @@ defined terms and the Runtime Correctness Kernel (#2762) has a semantic baseline
 | 16 | Audit row | `id` UUID; `object_id` FK `ON DELETE SET NULL` (`202510241200_sot41_amg_core.py:102-112`) | append-only, best-effort writer (`services/audit.py:33-77`) | **canonical** (trace) | not reconstructible | **none** — unbounded |
 | 17 | Eval golden data (`data/golden/*`, `docs/eval/*.yaml`) | file path + committed content | PR-only mutation | **canonical** (eval ground truth) | git history | git |
 | 18 | Eval scorecard (`runtime/eval/scorecard.json`) | file path (overwritten per run) | overwrite per run; gitignored | derived | re-run `app.eval.run` | overwrite; no history kept |
-| 19 | Session / chat history | — | — | **not persisted at all** (no table, no file) — see D-4 | **nothing** — lost on restart | n/a |
+| 19 | Chat-session artifact | `session_id` UUID + durable `note_uuid` (`docs/CANVAS_CHAT_SURFACE/DEFINE_CHAT_ARTIFACT_DURABILITY.md`, spec pending #2806/#2807) | today: raw file write, no WriteGuard (`session_log.py`); target: WriteGuard-gated via KnowledgePort | **canonical** for its own intent-trail content; not note content | none — primary source for its own content | D-6 posture (cold storage, not deletion) once implemented |
 | 20 | BuilderOps record | record id in BuilderOps Vault (outside this repo/runtime) | builder-plane rules (`AGENTS.md :: BuilderOps Vault workflow boundary`) | canonical for builder ops; **never product/runtime truth** | BuilderOps Vault | builder-plane discard receipts |
 
 ## SBS boundary mapping
@@ -52,17 +52,24 @@ Each class is owned by exactly one SBS L2 boundary (`docs/SYSTEM_BREAKDOWN_STRUC
 semantics above are that boundary's contract to state. This mapping **conforms to** the current SBS
 — no reshape is proposed by this artifact:
 
-- **HKA** (Human Knowledge & Artifact): 1 vault note, 3 commitment artifact, 17 eval golden data.
+- **HKA** (Human Knowledge & Artifact): 1 vault note, 3 commitment artifact, 17 eval golden data,
+  19 chat-session artifact (target owner per ratified D-4; spec
+  `docs/CANVAS_CHAT_SURFACE/DEFINE_CHAT_ARTIFACT_DURABILITY.md`, not yet landed — tracked by issues
+  #2806/#2807).
 - **SIP** (Semantic Identity & Provenance): 2 companion note (identity/continuity half), uuid
-  lineage semantics across classes.
+  lineage semantics across classes, 19's note relationship (target `chat_for`/`has_chats` relation
+  type, not yet registered in `RELATION_TAXONOMY.md` — tracked by issue #2806).
 - **PDM** (Persistence & Data Management): 4 objects, 5 file_state, 8 outbox, 12 decisions.
 - **DRI** (Derived Representation & Indexing): 6 vectors, 7 chunks, 18 scorecard (derived half).
 - **GOV** (Governance/Receipts): 10 promotion receipt, 11 settings receipt, 16 audit.
 - **MEM** (Machine Memory & Learning): 13–15 memory classes.
 - **OEF** (Observability, Evaluation & Fitness): 9 JSONL audit trail, 17–18 eval surfaces.
-- **HIX/WSP**: 19 session history — **ratified home pending feature-breakdown (D-4): a new artifact
-  class, HKA-owned like class 1/3, related 1:N to its parent vault note via SIP.**
 - **Builder System (outside Product SBS)**: 20 BuilderOps records.
+
+Class 19 moved out of the HIX/WSP "unresolved home" bucket above: D-4 ratified its target as HKA
+(the artifact, alongside classes 1/3) with the note-relationship in SIP — see the HKA/SIP bullets
+above. The move is a doc consequence of the D-4 ratification, not a new SBS decision; the actual
+`RELATION_TAXONOMY.md`/`SBS_CURRENT_TO_TARGET_MAPPING.md` table edits remain pending on #2806.
 
 Two observations for the SBS stewardship channel (CES), flagged not enacted: (a) class 4
 (`store_objects`) currently carries PDM persistence duties *and* SIP-grade identity duties
@@ -96,9 +103,14 @@ route, not through this artifact.
 - **12–15 (judgment/memory plane).** Review decisions are the promotion precondition and genuinely
   canonical; the silent in-memory fallback in `services/decisions.py:43-45` is the same
   false-healthy pattern as the legacy store fallback (kernel I-S4 class, though a different module).
-- **19 (session history).** Nothing persists. The settled storage-substrate posture (persist by
-  who-needs-it + lifetime; session history belongs with companion-note-class artifacts) names this
-  as a gap to fill, not a design.
+- **19 (chat-session artifact).** Corrected from the original RESEARCH-01 finding: the canvas
+  chat-session artifact (`vault/.chats/<note-slug>/*.md`, `type: chat-session`) already persists —
+  it is not "nothing on restart." What was actually missing, and what D-4 ratified: formal
+  identity/canonicality/GC classification, WriteGuard gating (today's writes bypass it entirely),
+  and a registered SIP relation to its note. See
+  `docs/CANVAS_CHAT_SURFACE/DEFINE_CHAT_ARTIFACT_DURABILITY.md` for the closing classification and
+  `PERSIST_CHAT_ARTIFACT_THROUGH_WRITEGUARD.md` for the durability implementation (issues
+  #2806/#2807, not yet merged as of this row).
 
 ## Divergences
 
@@ -124,13 +136,18 @@ Each divergence is classified **fix-code**, **fix-doc**, or **needs-owner-decisi
   is alive, best-effort, with FK-failure fallback (`app/services/audit.py:33-163`). The claim in the
   2026-06-27 observability audit doc is stale. **fix-doc** (mark the finding resolved/dated).
   Follow-up filed — see below.
-- **D-4 · Session/chat history is not persisted anywhere** — no table, no vault artifact. Diverges
-  from the settled storage-substrate posture (session history as a companion-note-class,
-  human-readable artifact). **RATIFIED (2026-07-02, epic #2778): Option B — chat becomes its own
-  artifact class.** Not session-history-as-a-blob: a chat is a first-class artifact carrying a
-  relationship to the note it belongs to, and one note may have several chats attached to it
-  (note : chat is 1:N). Feature-sized; scoping tracked as a separate feature-breakdown pass (not
-  invented in this artifact).
+- **D-4 · Chat-session artifact had no identity/canonicality/GC classification or WriteGuard
+  gating** — corrected from the original finding, which said "not persisted anywhere, no table, no
+  vault artifact": the canvas chat-session artifact already persists (`vault/.chats/<note-slug>/*.md`),
+  it was simply never given the classification, WriteGuard gating, or registered note-relation every
+  other durable HKA artifact in this system has. Diverges from the settled storage-substrate posture
+  (session history as a companion-note-class, human-readable artifact) on those specifics.
+  **RATIFIED (2026-07-02, epic #2778): Option B — chat becomes its own artifact class.** Not
+  session-history-as-a-blob: a chat is a first-class artifact carrying a relationship to the note it
+  belongs to, and one note may have several chats attached to it (note : chat is 1:N). Feature-sized;
+  scoped in `docs/CANVAS_CHAT_SURFACE/DEFINE_CHAT_ARTIFACT_DURABILITY.md` +
+  `PERSIST_CHAT_ARTIFACT_THROUGH_WRITEGUARD.md` (issues #2806/#2807) as a separate feature-breakdown
+  pass (not invented in this artifact).
 - **D-5 · Decisions cascade-delete with their object.** `decisions.object_id` is
   `ON DELETE CASCADE` (`202510241200_sot41_amg_core.py:87`) while `audit.object_id` is
   `ON DELETE SET NULL` (`:104`). Two canonical append-only logs, opposite loss semantics; if object

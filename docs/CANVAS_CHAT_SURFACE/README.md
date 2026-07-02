@@ -223,9 +223,29 @@ DEFINE_CHAT_ARTIFACT_DURABILITY
 PERSIST_CHAT_ARTIFACT_THROUGH_WRITEGUARD
 ```
 
-Cross-task invariants: not formally sectioned — Phase 5 has exactly one runtime-state-writing task
-(Task 2). Task 1 is docs-only and gates Task 2 by sequencing (the schema/relation decisions must be
-settled before implementation), not by shared runtime state.
+## Cross-Task Invariants / Interaction Safety (Phase 5)
+
+Phase 5 has exactly one runtime-state-writing task (Task 2); Task 1 is docs-only. The two tasks
+share one piece of state across the seam: the `note_uuid` field name and its `chat_for`/`has_chats`
+relation semantics, defined in Task 1 and consumed by Task 2's implementation.
+
+- **Invariant.** The `note_uuid` frontmatter field is the durable source of the note↔chat
+  relationship; its registration in `RELATION_TAXONOMY.md` (Task 1) is documentation/discoverability,
+  never a runtime precondition for the field to function.
+- **Partial-failure path: Task 2 ships before Task 1.** Nothing breaks. `note_uuid` on a chat
+  artifact works identically whether or not `chat_for`/`has_chats` exist yet in
+  `RELATION_TAXONOMY.md` — the field is read/written directly, not looked up through the taxonomy at
+  runtime. Task 2's issue (#2807) is blocked on Task 1 (#2806) anyway, but that is a **process
+  ordering choice** (review the schema/relation decision in docs before code encodes it), not a hard
+  runtime dependency.
+- **Partial-failure path: Task 1's schema decision changes after Task 2 starts.** Task 1 is docs-only
+  and cheap to amend; if the `note_uuid` field name or the relation type name changed after Task 2
+  began implementation, Task 2 would need a follow-up commit to match — bounded rework, not data loss,
+  since no chat artifacts would yet exist on disk with the old field name (Task 2 hasn't merged).
+- **No seam risk to note content.** Neither task's failure mode, in either order, touches the vault
+  note's own content or frontmatter — the invariant that content authority stays with the note
+  (see `DEFINE_CHAT_ARTIFACT_DURABILITY.md :: Reconciliation`) holds regardless of Phase 5's internal
+  sequencing.
 
 Phase 5 acceptance:
 
