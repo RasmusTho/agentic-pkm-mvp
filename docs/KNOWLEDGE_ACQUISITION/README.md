@@ -65,21 +65,38 @@ the axis table and per-axis owners.
 
 ## SBS classification
 
-**Product / Runtime System** (spec only; this directory itself is CES practice surface).
+**Product / Runtime System** (spec only; this directory itself is CES practice surface). Classified
+per `docs/architecture/SBS_OPERATING_MODEL.md` §4; the nearest current-to-target mapping analog is
+the Watchers row ("source observation adapters" — EBF, DRI, OEF) in
+`docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`.
 
-- **EBF** — source plugins are External Boundary Fabric adapters (a candidate new integration
-  class: the fabric's ten current classes do not cover networked acquisition — see
-  `SOURCE_PLUGIN_CONTRACT.md`'s Authority header; the class decision belongs to
-  `docs/INTEGRATION_FABRIC_CONTRACT.md`'s owners).
-- **DRI** — normalized/extracted artifacts are derived, rebuildable representations.
+- **EBF (primary)** — source plugins are External Boundary Fabric adapters. The SBS already places
+  them here: EBF's enduring responsibility is "Boundary adapters for **sources**, providers, tools,
+  editors, parsers, models, embeddings, and egress" (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md` §Level 2)
+  — **no SBS reshaping is needed**. The only taxonomy gap is one level below the SBS:
+  `docs/INTEGRATION_FABRIC_CONTRACT.md`'s ten integration classes do not yet cover networked
+  acquisition (see `SOURCE_PLUGIN_CONTRACT.md`'s Authority header); that class decision belongs to
+  the fabric contract's owners. The EBF boundary charter itself is Pending in
+  `docs/boundaries/README.md`; its invariant — *external mechanisms do not become authority* —
+  is already enforced by this spec's authority rules.
+- **DRI** — `raw` / `normalized` / `extracted` artifacts are derived, rebuildable representations
+  (write class: derived/rebuildable; never the only copy of meaning).
 - **CAO** — extractors are non-side-effecting cognition producing proposals.
-- **HKA / SIP / PDM** — touched only through existing contracts (companion notes, provenance,
-  store); no new authority surface.
+- **HKA / SIP / PDM** — touched only through existing contracts: the candidate companion note is a
+  durable but **non-authority-bearing** vault write (write class: mechanical durable, through the
+  governed vault-write mechanics — it carries `requires_review` and unreviewed posture, so it never
+  constitutes accepted human knowledge); provenance/lineage per SIP contracts; machine-side records
+  via StorePort (PDM).
 - **GOV / MEM** — untouched: promotion and memory semantics stay with their owners.
 
-Write class: docs/spec only in this directory. Canonical control flow: `Capture / ingestion`
-(`docs/SYSTEM_BREAKDOWN_STRUCTURE.md` §Canonical control flows) — capture creates draft/unknown
-state, never canonical authority.
+Forbidden-dependency note (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md` Part 4): EBF provider/source
+concepts must not leak into HKA/SIP/GOV semantics — plugin identity and acquisition mechanics stay
+in EBF-owned artifacts; only vocabulary already owned by the taxonomy (`source_kind`) crosses.
+
+Canonical control flow: `Capture / ingestion` (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md` §Canonical
+control flows) — capture creates draft/unknown state, never canonical authority. Transition-debt
+and fitness-rule impact of this docs-only PR: none; every Phase 2+ implementation issue carries its
+own `SBS Impact` block per `SBS_OPERATING_MODEL.md` §5 (Definition of Ready).
 
 ## Relationship to epic #2314 (no parallel hubs)
 
