@@ -67,8 +67,14 @@ the axis table and per-axis owners.
 
 **Product / Runtime System** (spec only; this directory itself is CES practice surface). Classified
 per `docs/architecture/SBS_OPERATING_MODEL.md` §4; the nearest current-to-target mapping analog is
-the Watchers row ("source observation adapters" — EBF, DRI, OEF) in
-`docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`.
+the Watchers row ("source observation adapters" — EBF, SFC, DRI, OEF) in
+`docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`. SFC appears in that row for delivery/replay
+semantics of observation events; for this platform those semantics are deliberately **not**
+SFC-shaped: stage events ride the existing DB outbox under the correctness-kernel idempotency
+invariants (`REFINEMENT_PIPELINE_CONTRACT.md` §Stage execution model), the `discover` sync cursor
+is a plugin-local durable token rather than cross-device replication state, and file-sync is never
+an execution bus. If acquisition state ever needs cross-device replication, that is an SFC
+reconciliation to raise explicitly at that point.
 
 - **EBF (primary)** — source plugins are External Boundary Fabric adapters. The SBS already places
   them here: EBF's enduring responsibility is "Boundary adapters for **sources**, providers, tools,
