@@ -1,4 +1,4 @@
-State: Specification directory (docs-authoring; target-state framing; filed via PR #2786). No implementation issues filed yet; issue extraction follows owner review via `feature-breakdown` / `docs-to-issue`.
+State: Specification directory (target-state framing; contracts filed via PR #2786). **Phase 2 issue set filed 2026-07-02**: parent feature issue #2795, children #2796–#2801 (`agent:blocked` pending kernel-backlog sequencing); see `PARENT_FEATURE_ISSUE.md`. Fabric class decision resolved via #2794 (Acquisition source, class 11).
 Doc role: Capability specification directory
 Authority: Defines the Knowledge Acquisition Platform capability boundary — source plugins, the acquisition refinement pipeline, and the extraction registry — and its reconciliation with existing owner contracts. It does not redefine ingestion/triage policy, the artifact taxonomy, state axes, promotion semantics, or the retrieval/embedding architecture; those remain with their owner docs.
 
@@ -62,6 +62,40 @@ the axis table and per-axis owners.
 4. `REFINEMENT_PIPELINE_CONTRACT.md` — stages, derived artifacts, events, replay semantics, and
    the extraction registry.
 5. `YOUTUBE_SOURCE_SPEC.md` — the first source instance and the Phase 2 vertical slice.
+6. Phase 2 implementation task specs (one file per bounded task; `PARENT_FEATURE_ISSUE.md` mirrors
+   the filed issue set #2795 / #2796–#2801):
+   `ACQUIRE_YOUTUBE_CAPTIONS.md` (KA-01) → { `ASR_FALLBACK_PATH.md` (KA-02) ∥
+   `NORMALIZE_TRANSCRIPT.md` (KA-03) }; then KA-03 →
+   `EXTRACTION_REGISTRY_AND_SUMMARY_EXTRACTOR.md` (KA-04) → `CANDIDATE_WRITEBACK.md` (KA-05) →
+   `REPLAY_AND_STAGE_EVENTS.md` (KA-06, final child). KA-02 gates only parent closure (slice AC2),
+   not the KA-04..06 chain — the frontmatter `prerequisites` fields are the authoritative DAG.
+
+## Cross-Task Invariants / Interaction Safety
+
+Invariants that hold *across* the Phase 2 tasks, with their partial-failure seams:
+
+- **`content_identity` is the join key.** Every derived artifact (KA-03..06) records the raw
+  record's `content_identity` it descends from; two tasks disagreeing on identity semantics is a
+  contract defect, not a local bug. Raw records are immutable (KA-01) — no downstream task may
+  rewrite one.
+- **`acquisition_method` propagates unchanged** from raw (KA-01/KA-02) through normalized (KA-03)
+  to the written note (KA-05). A note whose method disagrees with its raw record is a lineage
+  violation.
+- **A candidate is terminal only once its note is materialized.** If KA-05's governed write is
+  blocked or fails after candidate assembly, the candidate remains re-runnable and the failure is
+  loud and item-scoped (KA-05 AC4, KA-06 dead-letter AC) — a recorded candidate with no note must
+  never read as "done".
+- **Only the plugin contacts the source.** KA-03..06 operate exclusively on stored records; the
+  replay path (KA-06) asserts zero *source* egress, which fails if any later stage grew a hidden
+  source call. Extractor LLM calls (KA-04) are model-provider egress routed per
+  `docs/LLM_ROUTING.md` — a different boundary, unaffected by this invariant.
+- **Posture markers are unconditional.** Any note reaching the vault carries
+  `requires_review: true` + unreviewed posture (KA-05); no ordering of stage execution or retry
+  may produce a note without them.
+- **Events are per-stage and idempotent.** Re-running any stage (crash recovery, replay, duplicate
+  delivery) must not duplicate effects or events (KA-04 version semantics, KA-06 idempotency
+  keys). Out-of-order execution is structurally impossible past the DAG edges; a stage invoked
+  before its input exists fails loud, never fabricates input.
 
 ## SBS classification
 
@@ -79,10 +113,10 @@ reconciliation to raise explicitly at that point.
 - **EBF (primary)** — source plugins are External Boundary Fabric adapters. The SBS already places
   them here: EBF's enduring responsibility is "Boundary adapters for **sources**, providers, tools,
   editors, parsers, models, embeddings, and egress" (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md` §Level 2)
-  — **no SBS reshaping is needed**. The only taxonomy gap is one level below the SBS:
-  `docs/INTEGRATION_FABRIC_CONTRACT.md`'s ten integration classes do not yet cover networked
-  acquisition (see `SOURCE_PLUGIN_CONTRACT.md`'s Authority header); that class decision belongs to
-  the fabric contract's owners. The EBF boundary charter itself is Pending in
+  — **no SBS reshaping is needed**. At the taxonomy level below the SBS, acquisition sources are
+  the **Acquisition source** integration class in `docs/INTEGRATION_FABRIC_CONTRACT.md` (class 11,
+  added 2026-07-02 via #2794; `SOURCE_PLUGIN_CONTRACT.md` is its instantiating contract). The EBF
+  boundary charter itself is Pending in
   `docs/boundaries/README.md`; its invariant — *external mechanisms do not become authority* —
   is already enforced by this spec's authority rules.
 - **DRI** — `raw` / `normalized` / `extracted` artifacts are derived, rebuildable representations
@@ -119,7 +153,7 @@ own `SBS Impact` block per `SBS_OPERATING_MODEL.md` §5 (Definition of Ready).
 | --- | --- | --- |
 | 0 | Research memo (`RESEARCH_2026-07.md`) | PR #2786 |
 | 1 | Platform contracts (this directory) | PR #2786 |
-| 2 | Vertical slice: one explicit YouTube URL → metadata → caption-first transcript → normalized artifact → one extractor → candidate + companion note, replayable | `feature-breakdown` after owner review; implementation issues TCD-routed |
+| 2 | Vertical slice: one explicit YouTube URL → metadata → caption-first transcript → normalized artifact → one extractor → candidate + companion note, replayable | filed: #2795 + #2796–#2801 (`agent:blocked` pending kernel-backlog sequencing); TCD-routed per task spec |
 | 3 | Generalize: second source (e.g. podcast RSS or local media file) implements `SOURCE_PLUGIN_CONTRACT` unchanged | issues after Phase 2 acceptance |
 | 4 | Continuous discovery: subscription/playlist sync, scheduling, dedup at scale | last, by design |
 

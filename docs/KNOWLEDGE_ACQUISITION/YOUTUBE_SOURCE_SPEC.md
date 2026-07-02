@@ -115,7 +115,7 @@ Acceptance criteria (each needs a concrete `Verify:` target when issues are file
       §Writeback, including the template-frontmatter extension shipped in the same slice) and full
       provenance; triage state entry is `captured`; nothing advances triage automatically.
 - [ ] Replay: deleting all derived levels and re-running from `raw` reproduces equivalent
-      normalized/extracted/candidate artifacts without network egress.
+      normalized/extracted/candidate artifacts without source egress (extractor model calls route per `docs/LLM_ROUTING.md`).
 - [ ] Stage events appear on the outbox with the standard envelope and idempotency keys.
 
 ## Out of scope for this source spec

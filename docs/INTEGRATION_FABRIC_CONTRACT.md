@@ -5,7 +5,7 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-14
+Last reviewed: 2026-07-02 (acquisition-source class added via #2794)
 Last verified against: docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/LLM.md, docs/LLM_ROUTING.md, docs/EMBEDDINGS.md, docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/AGENTS.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879.
 
 # Integration Fabric Contract
@@ -29,11 +29,11 @@ This document is target-state framing. Several integration classes already have 
 
 ## Integration classes
 
-Yggdrasil composes with ten integration classes. Each class is a category of external component that crosses a Yggdrasil boundary. A given concrete integration is typically an instance of one class (for example, a specific LLM vendor SDK is a Model provider).
+Yggdrasil composes with eleven integration classes. Each class is a category of external component that crosses a Yggdrasil boundary. A given concrete integration is typically an instance of one class (for example, a specific LLM vendor SDK is a Model provider).
 
 A concrete integration may legitimately participate in **more than one class** when it plays more than one role at the same Yggdrasil boundary. Obsidian is the canonical example: it is both the **Human surface** the human writes in (the durable surface where vault Markdown is authored) and the **External UI shell** that hosts Yggdrasil's in-note Panel surface and consumes the runtime API. When an integration spans classes this way, every applicable class's contract fields (allowed role, authority limits, persistence class, provenance requirement, event boundary, health/observability expectation, replacement strategy) must be answered for the integration's behavior in that role. The classes do not blend; the integration answers each contract surface in turn.
 
-The ten integration classes are:
+The eleven integration classes are:
 
 1. **Human surface** — external editor, browser, terminal emulator, OS-level UI shell that the human uses to interact with the vault or with Yggdrasil interaction surfaces (Obsidian, OS shell, browser hosting the HTTP API, future companion-UI host).
 2. **Model provider** — external chat/completion/reasoning model service or local model runtime (cloud LLM API, local model server, on-device model).
@@ -45,8 +45,9 @@ The ten integration classes are:
 8. **External UI shell** — external interactive shell that hosts Yggdrasil surfaces or consumes its API (Obsidian as host, companion-UI implementations, future operator dashboards, third-party UIs). Distinct from "human surface" because the UI shell is the runtime container, not the human itself.
 9. **Observer / telemetry source** — external observability or telemetry destination that consumes status, health, events, traces, or metrics (Prometheus, Grafana, log aggregators, future tracing backends).
 10. **Agent runtime** — external agent process, A2A peer, or remote orchestrator that participates through governed contracts (currently bounded in-process A2A routing and future remote agent runtimes).
+11. **Acquisition source** — external content origin from which Yggdrasil acquires third-party source material and its metadata over the network or filesystem (YouTube, podcast feeds, web articles, local media archives, future long-form sources). Distinct from Parser/OCR (which extracts content from material already acquired) and from Sync transport (which moves Yggdrasil-owned files): an acquisition source is where external source material *comes from*, so its contract surface centers on discovery/fetch semantics, dedup identity, incremental-sync cursors, declared egress posture, and auth degradation. Instantiating contract: `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md`. (Class added 2026-07-02 by the taxonomy-revisit rule below, decision tracked in #2794.)
 
-These ten classes are deliberately broad. A new integration that does not fit one of them is a signal to revisit this taxonomy at the architecture level, not to invent a hidden eleventh class inside an adapter.
+These eleven classes are deliberately broad. A new integration that does not fit one of them is a signal to revisit this taxonomy at the architecture level, not to invent a hidden twelfth class inside an adapter.
 
 ## Contract fields
 
@@ -78,6 +79,7 @@ The table below is a target-state summary. Where a class already has a shipped a
 | External UI shell | Interface (runtime container) | Not semantic authority; container does not decide meaning | None inside Yggdrasil (shell-local state is opaque) | Through the HTTP API and event envelope | `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/COMPANION_UI_PRODUCT_SPEC.md` |
 | Observer / telemetry source | Interface (read-only) | Read-only; never writes back to vault or runtime state | None inside Yggdrasil (telemetry destination owns its own storage) | Through status/health endpoints and emitted observability events | `docs/OBSERVABILITY.md`, `docs/HEALTH.md`, `docs/STATUS.md` |
 | Agent runtime | Capability / orchestration | Not semantic authority; agents propose under governance and respect authority separation | None directly; mutations go through governance/authority and event envelope | Through A2A contract and event envelope; trace correlation required | `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/AGENTS.md` |
+| Acquisition source | Capability (content acquisition: discovery + fetch of external source material) | Not semantic authority; produces immutable raw evidence with provenance; never writes durable human meaning directly (refinement candidates enter triage under review posture) | Runtime projection / staged input (raw + derived refinement records, rebuildable); durable human meaning only via governed writeback + human promotion | Through acquisition/refinement stage events on the outbox envelope; only source plugins contact acquisition sources (extractor model calls are Model-provider egress, governed by that class) | `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md`, `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` |
 
 The table is a summary, not a substitute for the per-integration contract. Health/observability and replacement strategy details belong in the owner contract doc for each integration class.
 
@@ -107,7 +109,7 @@ This is the integration-fabric **contract**, not the integration-fabric **runtim
 
 This document is verified by the existence of:
 
-- an `Integration classes` section that names the ten classes (human surface, model provider, embedding provider, storage backend, sync transport, parser/OCR, tool/MCP provider, external UI shell, observer/telemetry source, agent runtime),
+- an `Integration classes` section that names the eleven classes (human surface, model provider, embedding provider, storage backend, sync transport, parser/OCR, tool/MCP provider, external UI shell, observer/telemetry source, agent runtime, acquisition source),
 - a `Contract fields` section that defines, for each class, allowed role, authority limits, persistence class, provenance requirement, event boundary, health/observability expectation, and replacement strategy, and
 - an `Authority rule` section that states external components may provide capability, transport, inference, or interface but must not become semantic authority unless promoted through Yggdrasil contracts.
 
