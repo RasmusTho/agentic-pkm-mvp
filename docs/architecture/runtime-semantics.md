@@ -46,6 +46,30 @@ defined terms and the Runtime Correctness Kernel (#2762) has a semantic baseline
 | 19 | Session / chat history | — | — | **not persisted at all** (no table, no file) — see D-4 | **nothing** — lost on restart | n/a |
 | 20 | BuilderOps record | record id in BuilderOps Vault (outside this repo/runtime) | builder-plane rules (`AGENTS.md :: BuilderOps Vault workflow boundary`) | canonical for builder ops; **never product/runtime truth** | BuilderOps Vault | builder-plane discard receipts |
 
+## SBS boundary mapping
+
+Each class is owned by exactly one SBS L2 boundary (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md`); the
+semantics above are that boundary's contract to state. This mapping **conforms to** the current SBS
+— no reshape is proposed by this artifact:
+
+- **HKA** (Human Knowledge & Artifact): 1 vault note, 3 commitment artifact, 17 eval golden data.
+- **SIP** (Semantic Identity & Provenance): 2 companion note (identity/continuity half), uuid
+  lineage semantics across classes.
+- **PDM** (Persistence & Data Management): 4 objects, 5 file_state, 8 outbox, 12 decisions.
+- **DRI** (Derived Representation & Indexing): 6 vectors, 7 chunks, 18 scorecard (derived half).
+- **GOV** (Governance/Receipts): 10 promotion receipt, 11 settings receipt, 16 audit.
+- **MEM** (Machine Memory & Learning): 13–15 memory classes.
+- **OEF** (Observability, Evaluation & Fitness): 9 JSONL audit trail, 17–18 eval surfaces.
+- **HIX/WSP**: 19 session history (the unpersisted class — its future home when D-4 is decided).
+- **Builder System (outside Product SBS)**: 20 BuilderOps records.
+
+Two observations for the SBS stewardship channel (CES), flagged not enacted: (a) class 4
+(`store_objects`) currently carries PDM persistence duties *and* SIP-grade identity duties
+(runtime `object_id` as the FK anchor for decisions/audit) — the D-2 owner decision will determine
+whether that dual role is ratified or split; (b) class 11's ephemeral receipts sit in GOV by
+contract but exist only in HIX process memory today (D-1, #2787). Any reshape that follows from
+these goes through the SBS operationalization plan / ADR route, not through this artifact.
+
 ## Per-class notes
 
 - **1–3 (vault plane).** The portable continuity set is note + companion (contract:
