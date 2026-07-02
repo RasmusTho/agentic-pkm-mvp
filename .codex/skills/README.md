@@ -90,6 +90,8 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
   - convert active docs into bounded backlog Issues
 - `feature-breakdown`
   - break one docs-defined capability into a specification directory plus a parent feature issue and bounded child slice issues
+- `architecture-research`
+  - deliberate evidence-based research pass over the live system: parallel subsystem explorers with `file:line`-anchored evidence-only briefs, cross-system synthesis, research-question resolution, invariant extraction with enforcement categories, then backlog handoff via `feature-breakdown` (reconcile against open epics, never duplicate); output is an advisory audit doc in `docs/audits/` plus an optional specification directory
 - `bug-to-issue`
   - create a compliant GitHub Issue when a bug is discovered during analysis, testing, review, or runtime observation; classify Product/Runtime vs Builder System vs boundary before choosing labels, owner docs, and SBS Impact
 - `temporal-doc-governance`
@@ -135,6 +137,8 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
   `deliver-issue-set -> (issue-maintenance-change-control | docs-to-issue | feature-breakdown) -> issue-to-code -> publish-pr -> pr-integration as needed -> verification-and-closure`
 - Docs backlog path:
   `docs-authoring -> docs-to-issue`
+- Architecture research path:
+  `architecture-research -> feature-breakdown -> issue-to-code` (audit doc publishes via `publish-pr`; findings reconcile against open epics instead of creating parallel hubs)
 - Maintenance-learning intake path:
   `capture-learning -> learning-to-issue` (when the signal is ready for the backlog) or `learning-retrospective -> learning-to-issue` (when batched retro signals mature into bounded issues)
 - Temporal audit path:
