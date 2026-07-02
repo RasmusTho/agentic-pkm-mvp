@@ -1,0 +1,715 @@
+# Intent-classification golden set (classification_case.v1)
+#
+# Authored under issue #2784 (RESEARCH-06); adopted by KERNEL-13 (#2775), which
+# wires the runner, scorecard slice, thresholds, and CI gate. Spec:
+# docs/RUNTIME_CORRECTNESS_KERNEL/INTENT_CLASSIFICATION_GOLDEN_SET.md
+# Rationale per case family: docs/eval/classification_golden_rationale.md
+#
+# All content is SYNTHETIC. No real personal data; note references are generic.
+#
+# Per-case fields (classification_case.v1, per the KERNEL-13 spec):
+#   id                    family-language-slug (family encodes the confusion boundary probed)
+#   language              en | sv  (dominant language of the utterance; convention
+#                         carried over from retrieval_eval_case.v1)
+#   utterance             the user intent text handed to the classifier
+#   context.surface       canvas (the classifier runs on the canvas co-authoring surface)
+#   context.note_state    draft-open | seedling-open | evergreen-open | none
+#   expected_intent       co_authoring | governance_bearing | exploratory | unknown
+#                         (enum values from app/chat/intent_classifier.py::IntentClass;
+#                         `unknown` is the explicit safe-fail class added by KERNEL-07)
+#   expected_action_type  null unless expected_intent is governance_bearing; then one of
+#                         frontmatter_update | maturity_transition | note_lifecycle | cross_note
+#                         (app/chat/governance_router.py::GovernanceActionType)
+#   acceptable            intent classes OTHER than expected_intent that the scorer
+#                         treats as a pass (read-side tolerance only)
+#
+# Scoring semantics the runner must honor (KERNEL-13):
+#   - `unknown` is scored as safe-fail SEPARATELY, never as a wrong class. It is
+#     therefore never listed in `acceptable`.
+#   - HARD GATE: for every case with expected_intent in {exploratory, unknown},
+#     classification into an action-capable class (co_authoring, governance_bearing)
+#     is a blocking regression. Dataset invariant protecting that gate: such cases
+#     never list an action-capable class in `acceptable`.
+#   - Read-side confusion (expected action-capable, classified exploratory) is
+#     thresholded, not blocking.
+#
+# Families (id prefix -> boundary probed; details in the rationale doc):
+#   coauthor-*   plain body-edit requests                       (plain)
+#   gov-*        plain governance commands, all 4 action types  (plain)
+#   explore-*    plain exploratory questions                    (plain)
+#   govchat-*    governance intent phrased as casual chat       (boundary)
+#   cmdstyle-*   body edits phrased as governance-sounding commands (boundary)
+#   readvocab-*  exploratory questions carrying mutation vocabulary (boundary, hard gate)
+#   vague-*      genuinely unresolvable -> expected unknown     (boundary, hard gate)
+#   polite-*     Swedish politeness/indirection forms           (boundary)
+#   multi-*      multi-intent utterances resolved to ONE class or unknown (boundary)
+#   xlang-*      cross-language idiom (Swenglish, mixed note names) (boundary)
+
+schema_version: classification_case.v1
+cases:
+  # ---------------------------------------------------------------------------
+  # Family: coauthor — plain co-authoring (body edits of the open note)
+  # ---------------------------------------------------------------------------
+  - id: coauthor-en-tighten-intro
+    language: en
+    utterance: "Tighten the introduction — it makes the same point twice."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: coauthor-en-neutral-tone
+    language: en
+    utterance: "Rewrite the second paragraph in a more neutral tone."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: coauthor-en-add-summary
+    language: en
+    utterance: "Add a short summary at the top of the note."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: coauthor-en-bullets-to-prose
+    language: en
+    utterance: "Turn these bullet points into flowing prose."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: coauthor-sv-korta-inledning
+    language: sv
+    utterance: "Korta ner inledningen, den är alldeles för pratig."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: coauthor-sv-mindre-formellt
+    language: sv
+    utterance: "Skriv om sista stycket så att det låter mindre formellt."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: coauthor-sv-sammanfattning
+    language: sv
+    utterance: "Lägg till en kort sammanfattning längst upp i anteckningen."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: coauthor-sv-lopande-text
+    language: sv
+    utterance: "Gör om punktlistan till löpande text."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: gov — plain governance commands (all four action types, both languages)
+  # ---------------------------------------------------------------------------
+  - id: gov-en-promote-evergreen
+    language: en
+    utterance: "Promote this note to evergreen."
+    context:
+      surface: canvas
+      note_state: seedling-open
+    expected_intent: governance_bearing
+    expected_action_type: maturity_transition
+    acceptable: []
+  - id: gov-sv-uppgradera-evergreen
+    language: sv
+    utterance: "Uppgradera den här anteckningen till evergreen."
+    context:
+      surface: canvas
+      note_state: seedling-open
+    expected_intent: governance_bearing
+    expected_action_type: maturity_transition
+    acceptable: []
+  - id: gov-en-add-tags
+    language: en
+    utterance: "Add the tags #project and #q3 to this note's frontmatter."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
+  - id: gov-sv-satt-tagg
+    language: sv
+    utterance: "Sätt taggen #forskning på den här anteckningen."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
+  - id: gov-en-archive-note
+    language: en
+    utterance: "Archive this note, the project is finished."
+    context:
+      surface: canvas
+      note_state: evergreen-open
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: []
+  - id: gov-sv-dop-om-anteckning
+    language: sv
+    utterance: "Döp om den här anteckningen till 'Projektplan 2026'."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: []
+  - id: gov-en-merge-notes
+    language: en
+    utterance: "Merge this note with my other note about onboarding."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: cross_note
+    acceptable: []
+  - id: gov-sv-flytta-avsnitt
+    language: sv
+    utterance: "Flytta det här avsnittet till anteckningen om veckoplanering."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: cross_note
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: explore — plain exploratory questions (no durable mutation)
+  # ---------------------------------------------------------------------------
+  - id: explore-en-quarter-themes
+    language: en
+    utterance: "What are the main themes across my project notes this quarter?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: explore-en-compare-vendors
+    language: en
+    utterance: "Compare the pros and cons I listed for the two vendor options."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: explore-en-weekly-review
+    language: en
+    utterance: "Help me think through what a good weekly review would look like."
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: explore-sv-teman-tradgard
+    language: sv
+    utterance: "Vilka teman återkommer i mina anteckningar om trädgården?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: explore-sv-beslutsprocess
+    language: sv
+    utterance: "Vad var det jag skrev om beslutsprocessen förra veckan?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: explore-sv-resonera-fordelar
+    language: sv
+    utterance: "Hjälp mig resonera kring för- och nackdelarna i den här anteckningen."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: govchat — governance intent phrased as casual chat/musing (boundary)
+  # Wrong route mutation-side: read as co_authoring, the governance ask becomes
+  # a silent body edit (CW-2). Read as exploratory, it silently drops (thresholded).
+  # ---------------------------------------------------------------------------
+  - id: govchat-sv-markera-klar
+    language: sv
+    utterance: "kanske dags att markera den som klar snart…"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
+  - id: govchat-en-feels-evergreen
+    language: en
+    utterance: "this note honestly feels evergreen by now, doesn't it"
+    context:
+      surface: canvas
+      note_state: seedling-open
+    expected_intent: governance_bearing
+    expected_action_type: maturity_transition
+    acceptable: [exploratory]
+  - id: govchat-en-dont-need-note
+    language: en
+    utterance: "I guess we don't really need the meeting-notes note anymore"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: [exploratory]
+  - id: govchat-sv-in-i-arkivet
+    language: sv
+    utterance: "den där gamla att-göra-listan kunde nog åka in i arkivet vid det här laget"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: []
+  - id: govchat-en-belongs-elsewhere
+    language: en
+    utterance: "feels like this section belongs with the gardening note rather than here"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: cross_note
+    acceptable: [exploratory]
+  - id: govchat-sv-ligga-ihop
+    language: sv
+    utterance: "borde inte det här egentligen ligga ihop med anteckningen om huset?"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: cross_note
+    acceptable: [exploratory]
+  - id: govchat-sv-raknas-som-evergreen
+    language: sv
+    utterance: "den här känns färdig nog att räknas som evergreen nu tycker jag"
+    context:
+      surface: canvas
+      note_state: seedling-open
+    expected_intent: governance_bearing
+    expected_action_type: maturity_transition
+    acceptable: []
+  - id: govchat-en-tag-it-properly
+    language: en
+    utterance: "probably time we tagged this one properly, it keeps getting lost"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: cmdstyle — body edits phrased as governance-sounding commands (boundary)
+  # Keyword traps: delete/rename/move target IN-NOTE content, not note lifecycle.
+  # Wrong route: staging a lifecycle action the user never asked for.
+  # ---------------------------------------------------------------------------
+  - id: cmdstyle-en-delete-paragraph
+    language: en
+    utterance: "Delete the last paragraph, it adds nothing."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: cmdstyle-en-rename-heading
+    language: en
+    utterance: "Rename the section 'Background' to 'Context'."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: cmdstyle-en-move-risks
+    language: en
+    utterance: "Move the risks list up above the timeline."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: cmdstyle-sv-ta-bort-stycke
+    language: sv
+    utterance: "Ta bort sista stycket, det tillför ingenting."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: cmdstyle-sv-dop-om-rubrik
+    language: sv
+    utterance: "Döp om rubriken 'Bakgrund' till 'Kontext'."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: cmdstyle-sv-flytta-upp-risker
+    language: sv
+    utterance: "Flytta upp riskerna så de hamnar ovanför tidslinjen."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: readvocab — exploratory questions carrying mutation vocabulary
+  # (boundary, HARD GATE). Keyword heuristics would misroute these on
+  # archive/promote/merge/tag; any action-capable classification is blocking.
+  # ---------------------------------------------------------------------------
+  - id: readvocab-en-which-archived
+    language: en
+    utterance: "Which notes did I archive last month?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: readvocab-en-what-does-promote-do
+    language: en
+    utterance: "What does promoting a note to evergreen actually change?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: readvocab-en-hypothetical-merge
+    language: en
+    utterance: "If I merged my two project notes, what would I lose?"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: readvocab-en-why-tagged
+    language: en
+    utterance: "Remind me why I tagged this note #on-hold."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: readvocab-sv-vilka-arkiverade
+    language: sv
+    utterance: "Vilka anteckningar arkiverade jag i förra månaden?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: readvocab-sv-vad-innebar-promota
+    language: sv
+    utterance: "Vad innebär det egentligen att promota en anteckning till evergreen?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: readvocab-sv-hypotetisk-sammanslagning
+    language: sv
+    utterance: "Om jag skulle slå ihop de två projektanteckningarna, vad skulle försvinna?"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+  - id: readvocab-sv-varfor-taggen
+    language: sv
+    utterance: "Varför satte jag taggen #vilande på den här?"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: exploratory
+    expected_action_type: null
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: vague — genuinely unresolvable (missing antecedent) -> unknown
+  # (boundary, HARD GATE). No reading of these resolves to a concrete action;
+  # any action-capable classification is a fabricated route and is blocking.
+  # ---------------------------------------------------------------------------
+  - id: vague-en-the-thing-we-discussed
+    language: en
+    utterance: "Do the thing we talked about with this note."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+  - id: vague-en-same-as-last-time
+    language: en
+    utterance: "Same as last time, but for this one."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+  - id: vague-en-sort-this-out
+    language: en
+    utterance: "Can you sort that out before Friday?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+  - id: vague-sv-det-dar-vi-pratade-om
+    language: sv
+    utterance: "gör något åt det där vi pratade om"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+  - id: vague-sv-samma-som-forra-gangen
+    language: sv
+    utterance: "samma som förra gången fast för den här"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+  - id: vague-sv-fixa-det-dar
+    language: sv
+    utterance: "kan du fixa det där till på fredag?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: polite — Swedish politeness/indirection with a real, resolvable
+  # intent (boundary). Conditional/hedged Swedish must not be demoted to
+  # exploratory chatter or defaulted to a body edit.
+  # ---------------------------------------------------------------------------
+  - id: polite-sv-skulle-kunna-arkivera
+    language: sv
+    utterance: "Skulle du kunna arkivera den här anteckningen?"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: []
+  - id: polite-sv-vore-bra-kortare
+    language: sv
+    utterance: "Det vore bra om inledningen var lite kortare."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+  - id: polite-sv-lamplig-tagg
+    language: sv
+    utterance: "Skulle du kunna sätta en lämplig tagg på den här?"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
+  - id: polite-sv-hade-inte-skadat-evergreen
+    language: sv
+    utterance: "Det hade inte skadat om den här räknades som evergreen vid det här laget."
+    context:
+      surface: canvas
+      note_state: seedling-open
+    expected_intent: governance_bearing
+    expected_action_type: maturity_transition
+    acceptable: []
+  - id: polite-sv-man-borde-sla-ihop
+    language: sv
+    utterance: "Man borde kanske slå ihop den här med anteckningen om sommarstugan."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: cross_note
+    acceptable: []
+  - id: polite-sv-vore-fint-sammanfattning
+    language: sv
+    utterance: "Det vore fint med en liten sammanfattning överst."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: multi — multi-intent utterances the classifier must resolve to ONE
+  # class or unknown (boundary). Resolution policy (see rationale doc): when a
+  # governance component is present, the governance read must win (the gated
+  # pipeline is the safe route); contradictory combinations resolve to unknown.
+  # ---------------------------------------------------------------------------
+  - id: multi-en-tighten-then-archive
+    language: en
+    utterance: "Tighten the intro and then archive this note, we're done with it."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: []
+  - id: multi-en-typos-and-tag
+    language: en
+    utterance: "Fix the typos and tag it #travel."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
+  - id: multi-en-opinion-then-shorten
+    language: en
+    utterance: "What do you think of this draft? Maybe shorten the middle section."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: [exploratory]
+  - id: multi-en-archive-but-keep-writing
+    language: en
+    utterance: "Archive this note, but let's also keep expanding it this week."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+  - id: multi-sv-snygga-till-och-arkivera
+    language: sv
+    utterance: "Snygga till formuleringarna och arkivera den sen."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: []
+  - id: multi-sv-stavfel-och-tagg
+    language: sv
+    utterance: "Rätta stavfelen och sätt taggen #resa på den."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
+  - id: multi-sv-tycka-och-korta
+    language: sv
+    utterance: "Vad tycker du om utkastet? Korta gärna ner mitten om det behövs."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: co_authoring
+    expected_action_type: null
+    acceptable: [exploratory]
+  - id: multi-sv-arkivera-men-fortsatta
+    language: sv
+    utterance: "Arkivera den här, fast vi ska nog fortsätta skriva på den i veckan också."
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: unknown
+    expected_action_type: null
+    acceptable: []
+
+  # ---------------------------------------------------------------------------
+  # Family: xlang — cross-language idiom: Swenglish verbs, mixed note names
+  # (boundary). The classifier must resolve loanword verbs and code-switching
+  # to the same governance semantics as the native forms.
+  # ---------------------------------------------------------------------------
+  - id: xlang-sv-deleta-noten
+    language: sv
+    utterance: "kan du deleta den här noten?"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: note_lifecycle
+    acceptable: []
+  - id: xlang-sv-merga-ihop
+    language: sv
+    utterance: "merga ihop den här med onboarding-anteckningen"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: cross_note
+    acceptable: []
+  - id: xlang-en-promote-veckoplanering
+    language: en
+    utterance: "Can you promote 'Veckoplanering' to evergreen?"
+    context:
+      surface: canvas
+      note_state: none
+    expected_intent: governance_bearing
+    expected_action_type: maturity_transition
+    acceptable: []
+  - id: xlang-sv-tagga-som-done
+    language: sv
+    utterance: "tagga den som done liksom"
+    context:
+      surface: canvas
+      note_state: draft-open
+    expected_intent: governance_bearing
+    expected_action_type: frontmatter_update
+    acceptable: []
