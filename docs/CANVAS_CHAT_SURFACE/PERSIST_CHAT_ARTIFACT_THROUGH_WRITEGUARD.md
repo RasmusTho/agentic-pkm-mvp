@@ -29,10 +29,11 @@ the pattern the boundary rules exist to prevent. This task closes that gap and a
 ## What This Task Does
 
 - Adds `note_uuid: str | None` to `SessionLog` (currently `log_path`, `session_id`, `note_path`,
-  `label`, `vault_root`), resolved via `app.services.note_uuid.ensure_note_uuid(note_path,
-  vault_root=...)` at `open_session(...)` time — the same healing/read call every other
-  identity-anchored artifact in this system uses, so a note without a UUID yet gets one healed rather
-  than the session silently omitting the field. Typed `| None` (not required-only) specifically so
+  `label`, `vault_root`), resolved via
+  `app.services.note_uuid.ensure_note_uuid(note_path, vault_root=...)` at `open_session(...)` time —
+  the same healing/read call every other identity-anchored artifact in this system uses, so a note
+  without a UUID yet gets one healed rather than the session silently omitting the field. Typed
+  `| None` (not required-only) specifically so
   `SessionStore.load()` (below) can construct a `SessionLog` from pre-upgrade JSON that lacks the
   field without raising `KeyError`, rather than forcing a versioned on-disk schema migration for a
   local cache file.
@@ -46,8 +47,8 @@ the pattern the boundary rules exist to prevent. This task closes that gap and a
   than leaving it `None` indefinitely, consistent with the healed-if-absent pattern used for vault
   note UUIDs elsewhere in this codebase. `SessionStore.save()` needs no change — `asdict(session)`
   already serializes whatever fields `SessionLog` carries.
-- Writes `note_uuid: <uuid>` into the chat-session frontmatter alongside the existing `note:
-  "[[title]]"` field (both present — human-legible link kept, durable anchor added). No other
+- Writes `note_uuid: <uuid>` into the chat-session frontmatter alongside the existing
+  `note: "[[title]]"` field (both present — human-legible link kept, durable anchor added). No other
   frontmatter field from `DEFINE_CANVAS_COEDITING_MODEL.md`'s minimum set (`type`, `note`, `date`,
   `session_id`) changes shape or meaning.
 - Asserts `DEFAULT_WRITE_GUARD.assert_writes_allowed("chat_session.persist")` before every filesystem
@@ -167,8 +168,9 @@ same sequence, that is the point to factor it out, not before.
 
 ## Out of Scope
 
-- RelationIndex / `store_objects` registration (see `DEFINE_CHAT_ARTIFACT_DURABILITY.md :: Out of
-  Scope` — frontmatter-only, glob-read, following the commitment precedent).
+- RelationIndex / `store_objects` registration — see `DEFINE_CHAT_ARTIFACT_DURABILITY.md` (section
+  `Out of Scope`) for the full rationale: frontmatter-only, glob-read, following the commitment
+  precedent.
 - Cold-storage/tiering implementation (D-6 mechanism not yet designed system-wide).
 - `app/chat/session_store.py` beyond the narrow `note_uuid` backward-compatibility fix to `load()`
   described above. `SessionStore`'s role, location, and cross-process pointer semantics stay
