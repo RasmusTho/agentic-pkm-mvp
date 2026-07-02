@@ -168,9 +168,9 @@ def _update_path_only(
         )
 
 
-def _enqueue(topic: str, payload: dict[str, Any]) -> None:
+def _enqueue(topic: str, payload: dict[str, Any], *, conn: psycopg.Connection | None = None) -> None:
     trace_id = new_trace_id()
-    insert_object_and_outbox(payload, topic, trace_id)
+    insert_object_and_outbox(payload, topic, trace_id, conn=conn)
 
 
 def update_path(uuid_value: str, new_path: str) -> None:
@@ -497,7 +497,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                     (uuid_value, "note", payload_json, str(note_path)),
                 )
 
-        _enqueue(topic, obj_payload)
+        _enqueue(topic, obj_payload, conn=conn)
 
         _upsert_file_state(
             conn,
