@@ -60,15 +60,17 @@ semantics above are that boundary's contract to state. This mapping **conforms t
 - **GOV** (Governance/Receipts): 10 promotion receipt, 11 settings receipt, 16 audit.
 - **MEM** (Machine Memory & Learning): 13–15 memory classes.
 - **OEF** (Observability, Evaluation & Fitness): 9 JSONL audit trail, 17–18 eval surfaces.
-- **HIX/WSP**: 19 session history (the unpersisted class — its future home when D-4 is decided).
+- **HIX/WSP**: 19 session history — **ratified home pending feature-breakdown (D-4): a new artifact
+  class, HKA-owned like class 1/3, related 1:N to its parent vault note via SIP.**
 - **Builder System (outside Product SBS)**: 20 BuilderOps records.
 
 Two observations for the SBS stewardship channel (CES), flagged not enacted: (a) class 4
 (`store_objects`) currently carries PDM persistence duties *and* SIP-grade identity duties
-(runtime `object_id` as the FK anchor for decisions/audit) — the D-2 owner decision will determine
-whether that dual role is ratified or split; (b) class 11's ephemeral receipts sit in GOV by
-contract but exist only in HIX process memory today (D-1, #2787). Any reshape that follows from
-these goes through the SBS operationalization plan / ADR route, not through this artifact.
+(runtime `object_id` as the FK anchor for decisions/audit) — **ratified as tombstone (D-2): the
+dual role stands, unsplit**, pending the later event-triggered-decay lifecycle design; (b) class
+11's ephemeral receipts sit in GOV by contract but exist only in HIX process memory today (D-1,
+#2787). Any reshape that follows from these goes through the SBS operationalization plan / ADR
+route, not through this artifact.
 
 ## Per-class notes
 
@@ -111,17 +113,24 @@ Each divergence is classified **fix-code**, **fix-doc**, or **needs-owner-decisi
 - **D-2 · Object deletion is a `path=NULL` accident, not a semantic.** `vault_sync.delete_note()`
   nulls the path (`vault_sync.py:224-234`); `handle_ingest_object_deleted` is a no-op
   (`outbox_worker.py` ~505-513); objects rows live forever while their decisions would CASCADE if
-  the row were ever deleted. Retain-as-tombstone (lineage) and delete-with-cleanup are both
-  defensible; today's behavior is neither, by omission. **needs-owner-decision** (tombstone
-  contract vs. cleanup), surfaced on epic #2778.
+  the row were ever deleted. **RATIFIED (2026-07-02, epic #2778): tombstone.** Object rows are
+  retained as permanent lineage anchors after note deletion — today's accidental behavior becomes
+  the intentional contract; no code change required. Named explicitly as a floor, not a ceiling: a
+  future lifecycle model (active → archived → forgotten) driven by **event-triggered relevance
+  decay** — value lost at a triggering event, not on a fixed schedule (e.g. a grocery list is
+  worthless the moment the shopping trip happens, independent of age) — is a deliberate later
+  direction, input to RESEARCH-02's GC dimension and RESEARCH-04's evolution graph, not scoped here.
 - **D-3 · The June observability audit's "dead audit writer" claim is no longer true.** The writer
   is alive, best-effort, with FK-failure fallback (`app/services/audit.py:33-163`). The claim in the
   2026-06-27 observability audit doc is stale. **fix-doc** (mark the finding resolved/dated).
   Follow-up filed — see below.
 - **D-4 · Session/chat history is not persisted anywhere** — no table, no vault artifact. Diverges
   from the settled storage-substrate posture (session history as a companion-note-class,
-  human-readable artifact). Known gap, feature-sized. **needs-owner-decision** (priority call, then
-  feature-breakdown), surfaced on epic #2778.
+  human-readable artifact). **RATIFIED (2026-07-02, epic #2778): Option B — chat becomes its own
+  artifact class.** Not session-history-as-a-blob: a chat is a first-class artifact carrying a
+  relationship to the note it belongs to, and one note may have several chats attached to it
+  (note : chat is 1:N). Feature-sized; scoping tracked as a separate feature-breakdown pass (not
+  invented in this artifact).
 - **D-5 · Decisions cascade-delete with their object.** `decisions.object_id` is
   `ON DELETE CASCADE` (`202510241200_sot41_amg_core.py:87`) while `audit.object_id` is
   `ON DELETE SET NULL` (`:104`). Two canonical append-only logs, opposite loss semantics; if object
@@ -130,8 +139,11 @@ Each divergence is classified **fix-code**, **fix-doc**, or **needs-owner-decisi
 - **D-6 · Nothing in the system is garbage-collected.** Outbox delivered rows, audit rows, JSONL
   files, review decisions, commitments: no retention policy exists anywhere, and no doc states this
   as a decision. Unbounded growth is currently the *implicit* durability contract.
-  **needs-owner-decision** (a retention/rotation policy per class — cheap for JSONL/outbox, subtle
-  for audit/decisions), surfaced on epic #2778.
+  **RATIFIED (2026-07-02, epic #2778): Option B, non-aggressive — cold storage, not deletion.** Old
+  records are not deleted; as they age past active relevance they move to cheaper/cold storage,
+  staying inspectable and recoverable rather than being destroyed. A tiering decision, not a
+  retention-policy decision. KERNEL-12's dead-letter health signal remains the correct near-term
+  watch mechanism; the cold-storage tier itself is a later per-class design, not scoped here.
 - **D-7 · Silent memory fallback in decisions writer** (`services/decisions.py:43-45`) — same
   failure class as kernel I-S4 (CW-5) but a callsite the kernel specs do not cover. **fix-code**
   (fail-loud or explicit opt-in, mirroring KERNEL-03's provider rule). Folded into the follow-up
@@ -152,9 +164,14 @@ be re-baselined after Phase 0 lands.
   linked on #2779.
 - fix-doc: retire the stale "dead audit writer" claim in the 2026-06 observability audit (D-3) —
   issue linked on #2779.
-- needs-owner-decision (D-2 object deletion semantics, D-4 session-history persistence, D-6
-  retention policy): surfaced as an owner-decision comment on epic #2778 — deliberately NOT filed
-  as ready issues.
+- D-2, D-4, D-6 were **needs-owner-decision**; all three ratified 2026-07-02 on epic #2778 (see
+  updated entries above). Resulting work:
+  - D-2 (tombstone): no code change; ratification is the deliverable. Future event-triggered-decay
+    lifecycle design is out of scope, tracked as input to RESEARCH-02/RESEARCH-04.
+  - D-4 (chat-as-artifact, note 1:N chat): feature-sized — spawned as a separate `feature-breakdown`
+    session rather than scoped inline here.
+  - D-6 (cold storage, non-aggressive): no code change now; KERNEL-12 remains the near-term watch
+    mechanism, cold-storage tiering is a later per-class design.
 
 ## Related docs
 
