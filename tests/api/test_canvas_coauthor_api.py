@@ -42,35 +42,24 @@ class _StubFacade:
         )
 
 
-class _ClassifierStubFacade:
-    """Deterministic facade returning a fixed intent classification label.
+def _classifier_completion(label: str):
+    """Deterministic raw-completion stub for the intent classifier.
 
-    Returns the given label as the JSON answer so the intent classifier
-    parses it into the appropriate ``IntentClassification``.
+    Returns the given label as the raw completion; the classifier's
+    schema-constrained utility parses and validates it into the appropriate
+    ``IntentClassification`` (or explicit UNKNOWN on validation failure).
     """
 
-    def __init__(self, label: str) -> None:
-        self._label = label
-        self.calls: list[dict[str, object]] = []
-
-    def answer(
-        self,
-        question: str,
+    def complete(
         *,
-        context: str | None = None,
-        object_ids: list[str] | None = None,
+        system: str,
+        user: str,
         trace_id: str | None = None,
-    ) -> ReasoningRun:
-        self.calls.append({"question": question, "context": context})
-        return ReasoningRun(
-            id="run-classifier-stub-1",
-            mode=ReasoningMode.ASK_ANSWER,
-            status="ok",
-            result={"answer": self._label},
-            object_uuids=[],
-            trace_id=trace_id,
-            error=None,
-        )
+        max_tokens: int | None = None,
+    ) -> str:
+        return label
+
+    return complete
 
 
 def _co_authoring_label() -> str:
@@ -86,8 +75,9 @@ def _exploratory_label() -> str:
 
 
 def _degraded_label() -> str:
-    # Degraded backend returns a MOCK_ sentinel that the classifier ignores,
-    # defaulting conservatively to CO_AUTHORING with classified=False.
+    # Degraded backend returns a MOCK_ sentinel that fails schema validation:
+    # the classifier yields the explicit UNKNOWN class (classified=False),
+    # which lands read-only with a re-ask affordance (KERNEL-07).
     return "MOCK_ASK_ANSWER: classify intent | context: ..."
 
 
@@ -134,9 +124,9 @@ def _make_client(
     )
     if classifier_label is None:
         classifier_label = _co_authoring_label()
-    classifier_facade = _ClassifierStubFacade(classifier_label)
+    classifier_complete = _classifier_completion(classifier_label)
     monkeypatch.setattr(
-        canvas_module, "_intent_classifier_facade_factory", lambda: classifier_facade
+        canvas_module, "_intent_classifier_completion", lambda: classifier_complete
     )
     return TestClient(app)
 
@@ -436,16 +426,16 @@ def test_governance_bearing_returns_handoff_reference(monkeypatch, vault: Path) 
 
 
 # ---------------------------------------------------------------------------
-# AC: degraded classifier falls through to existing generate path
+# AC: degraded classifier lands UNKNOWN read-only with a re-ask (KERNEL-07)
 # ---------------------------------------------------------------------------
 
 
-def test_classifier_degraded_falls_through(monkeypatch, vault: Path) -> None:
-    """A degraded classifier (classified=False) falls through to generate-and-apply.
+def test_classifier_degraded_lands_unknown_reask(monkeypatch, vault: Path) -> None:
+    """A degraded classifier yields explicit UNKNOWN: read-only + re-ask.
 
-    No fabricated governance routing — the path degrades gracefully to today's
-    behavior (body generated and applied in place) when the classifier is
-    unavailable.
+    No fabricated governance routing and no silent CO_AUTHORING fall-through —
+    a completion that fails schema validation must not become a body edit. The
+    surface degrades read-only and asks the user to rephrase.
     """
     generated = "# Hello\n\nBody after degraded classifier.\n"
     client = _make_client(
@@ -455,6 +445,7 @@ def test_classifier_degraded_falls_through(monkeypatch, vault: Path) -> None:
         classifier_label=_degraded_label(),
     )
     session_id = _open_session(client)
+    original = (vault / "note.md").read_text(encoding="utf-8")
 
     resp = client.post(
         f"/api/canvas/sessions/{session_id}/coauthor",
@@ -463,10 +454,11 @@ def test_classifier_degraded_falls_through(monkeypatch, vault: Path) -> None:
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["generated"] is True
-    # The degraded-classifier path falls through to the apply path — note changed.
-    note_text = (vault / "note.md").read_text(encoding="utf-8")
-    assert "Body after degraded classifier." in note_text
+    assert body["status"] == "unknown_intent_reask"
+    assert body["reask"] is True
+    # Read-only degrade: no generation was applied, the note is untouched.
+    assert (vault / "note.md").read_text(encoding="utf-8") == original
+    assert "Body after degraded classifier." not in original
 
 
 # ---------------------------------------------------------------------------
@@ -492,14 +484,15 @@ def test_coauthor_requires_canvas_enabled(monkeypatch, vault: Path) -> None:
 
 def test_coauthor_mock_generation_is_not_applied(monkeypatch, vault: Path) -> None:
     # A mock/degraded backend response from the co-authoring cognition must not
-    # be written into the note. The classifier is degraded too (mock), so it
-    # falls through — the co-author cognition raises CoAuthoringUnavailableError.
+    # be written into the note. The classifier validates a co_authoring label,
+    # so the generate path runs — and the co-author cognition raises
+    # CoAuthoringUnavailableError on the mock body.
     generated = "MOCK_ASK_ANSWER: expand the decision section | context: ..."
     client = _make_client(
         monkeypatch,
         vault,
         generated,
-        classifier_label=_degraded_label(),
+        classifier_label=_co_authoring_label(),
     )
     session_id = _open_session(client)
     original = (vault / "note.md").read_text(encoding="utf-8")

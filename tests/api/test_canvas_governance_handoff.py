@@ -51,29 +51,19 @@ class _StubFacade:
         )
 
 
-class _ClassifierStubFacade:
-    """Deterministic facade returning a fixed intent-classification label."""
+def _classifier_completion(label: str):
+    """Deterministic raw-completion stub returning a fixed classification label."""
 
-    def __init__(self, label: str) -> None:
-        self._label = label
-
-    def answer(
-        self,
-        question: str,
+    def complete(
         *,
-        context: str | None = None,
-        object_ids: list[str] | None = None,
+        system: str,
+        user: str,
         trace_id: str | None = None,
-    ) -> ReasoningRun:
-        return ReasoningRun(
-            id="run-handoff-classifier-1",
-            mode=ReasoningMode.ASK_ANSWER,
-            status="ok",
-            result={"answer": self._label},
-            object_uuids=[],
-            trace_id=trace_id,
-            error=None,
-        )
+        max_tokens: int | None = None,
+    ) -> str:
+        return label
+
+    return complete
 
 
 def _co_authoring_label() -> str:
@@ -127,9 +117,9 @@ def _make_client(
     monkeypatch.setattr(canvas_module, "_coauthor_facade_factory", lambda: facade)
     if classifier_label is None:
         classifier_label = _co_authoring_label()
-    classifier_facade = _ClassifierStubFacade(classifier_label)
+    classifier_complete = _classifier_completion(classifier_label)
     monkeypatch.setattr(
-        canvas_module, "_intent_classifier_facade_factory", lambda: classifier_facade
+        canvas_module, "_intent_classifier_completion", lambda: classifier_complete
     )
     return TestClient(app)
 

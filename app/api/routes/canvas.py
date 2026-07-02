@@ -33,6 +33,7 @@ from app.chat.intent_classifier import (
     IntentClassification,
     IntentClassifierCognition,
 )
+from app.components.llm.constrained import CompletionFn
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.api.routes.vault_resolution import (
     active_vault_root_or_selection_required,
@@ -106,14 +107,16 @@ def _coauthor_facade_factory() -> ReasoningFacade:
     return get_reasoning_facade()
 
 
-def _intent_classifier_facade_factory() -> ReasoningFacade:
-    """Reasoning facade used by the intent-classifier cognition.
+def _intent_classifier_completion() -> CompletionFn | None:
+    """Raw LLM completion override used by the intent-classifier cognition.
 
-    Indirected through a module-level function so tests can substitute a
-    deterministic stub without a live LLM provider, mirroring
-    ``_coauthor_facade_factory``.
+    ``None`` routes through the shared constrained-completion utility's real
+    provider path (schema-constrained ``ChatClient``). Indirected through a
+    module-level function so tests can substitute a deterministic completion
+    stub without a live LLM provider, mirroring ``_coauthor_facade_factory``.
+    Schema validation runs below this seam either way (KERNEL-07).
     """
-    return get_reasoning_facade()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +208,27 @@ class ExploratoryResponse(BaseModel):
     session_id: str
     detail: str = (
         "Exploratory intent — read-only response; note body left unchanged."
+    )
+
+
+class UnknownIntentReask(BaseModel):
+    """Returned when intent classification failed schema validation (UNKNOWN).
+
+    The explicit landing surface for ``IntentClass.UNKNOWN`` (KERNEL-07): the
+    request degrades to read-only handling — no body is generated, no edit is
+    applied, nothing is staged — and the response carries a re-ask affordance
+    so the surface can prompt the user to rephrase. This replaces the former
+    silent ``CO_AUTHORING`` fall-through, which converted classification
+    failures into body edits.
+    """
+
+    status: Literal["unknown_intent_reask"] = "unknown_intent_reask"
+    session_id: str
+    reask: bool = True
+    detail: str = (
+        "Could not reliably classify the intent — no edit was applied. "
+        "Please rephrase the request (for example, name the edit you want, "
+        "or ask a question about the note)."
     )
 
 
@@ -508,13 +532,23 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
     # -----------------------------------------------------------------------
     # Intent classification (Phase 4): classify the *intent* before generation.
     #
-    # Conservative degraded policy: when the classifier is unavailable or
-    # returns an untrusted response it yields ``classified=False`` defaulting
-    # to ``CO_AUTHORING``, which falls through to the existing generate path
-    # — no regression and no fabricated routing.
+    # The classification is schema-validated at the LLM boundary (KERNEL-07):
+    # an unavailable provider or an untrusted/invalid completion yields the
+    # explicit ``UNKNOWN`` class, which lands read-only with a re-ask
+    # affordance below. Only a schema-validated classification can route to a
+    # mutation-capable path.
     # -----------------------------------------------------------------------
-    classifier = IntentClassifierCognition(facade_factory=_intent_classifier_facade_factory)
+    classifier = IntentClassifierCognition(completion=_intent_classifier_completion())
     classification = classifier.classify(intent=req.intent, current_body=current_body)
+
+    if classification.intent_class is IntentClass.UNKNOWN:
+        # Explicit UNKNOWN landing surface: degrade to read-only handling plus
+        # a re-ask affordance. Never fall through to generate-and-apply — the
+        # silent CO_AUTHORING failure default is gone (audit invariant I-A2).
+        return JSONResponse(
+            status_code=200,
+            content=UnknownIntentReask(session_id=session_id).model_dump(),
+        )
 
     if classification.classified and classification.intent_class is IntentClass.GOVERNANCE_BEARING:
         # Governance-bearing intent detected at the intent level — do NOT
@@ -540,8 +574,7 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
             content=ExploratoryResponse(session_id=session_id).model_dump(),
         )
 
-    # CO_AUTHORING or degraded (classified=False) — fall through to the
-    # existing generate-and-apply path, unchanged.
+    # Schema-validated CO_AUTHORING — proceed to the generate-and-apply path.
     cognition = CoAuthoringCognition(facade_factory=_coauthor_facade_factory)
     try:
         generated = cognition.generate_body(

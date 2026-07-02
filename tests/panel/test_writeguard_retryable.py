@@ -129,31 +129,19 @@ def test_writeguard_block_keeps_proposal_staged_and_retryable(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
-class _ClassifierStubFacade:
-    """Returns a fixed intent-classification label as the JSON answer."""
+def _classifier_completion(label: str):
+    """Returns a fixed intent-classification label as the raw JSON completion."""
 
-    def __init__(self, label: str) -> None:
-        self._label = label
-
-    def answer(
-        self,
-        question: str,
+    def complete(
         *,
-        context: str | None = None,
-        object_ids: list[str] | None = None,
+        system: str,
+        user: str,
         trace_id: str | None = None,
-    ):
-        from app.reasoning.models import ReasoningMode, ReasoningRun
+        max_tokens: int | None = None,
+    ) -> str:
+        return label
 
-        return ReasoningRun(
-            id="run-classifier-stub-1",
-            mode=ReasoningMode.ASK_ANSWER,
-            status="ok",
-            result={"answer": self._label},
-            object_uuids=[],
-            trace_id=trace_id,
-            error=None,
-        )
+    return complete
 
 
 def _governance_label(action_type: str = "maturity_transition") -> str:
@@ -185,9 +173,9 @@ def _make_client(monkeypatch, vault: Path, classifier_label: str) -> TestClient:
     monkeypatch.setenv("CANVAS_ENABLED", "1")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
     monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: vault)
-    classifier_facade = _ClassifierStubFacade(classifier_label)
+    classifier_complete = _classifier_completion(classifier_label)
     monkeypatch.setattr(
-        canvas_module, "_intent_classifier_facade_factory", lambda: classifier_facade
+        canvas_module, "_intent_classifier_completion", lambda: classifier_complete
     )
     return TestClient(app)
 
