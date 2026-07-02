@@ -86,7 +86,7 @@ defaults `requires_review` to `false`, so this is a template change delivered wi
 an already-existing field. Vocabulary caveat: the triage policy expresses the posture as
 `review_state: unreviewed`, while `STATE_AXES_CONTRACT.md`'s canonical `review_state` set is
 `draft / provisional / reviewed / protected / archived`; that reconciliation is a pre-existing item
-between those two owner docs (tracked as a separate issue) — this spec mandates the *posture*, not
+between those two owner docs (tracked as issue #2793) — this spec mandates the *posture*, not
 a specific token. Human takeaways and any promotion remain human acts per triage policy §4.3.
 
 Raw and normalized artifacts are machine-side records, not vault notes; the note references them

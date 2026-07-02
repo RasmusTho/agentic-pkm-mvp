@@ -62,9 +62,10 @@ owner:
 - **Derivation fields** — where a derived artifact needs them, the fields
   `ARTIFACT_METADATA_CONTRACT.md` §11 defines (`source_refs`, `derived_from`,
   `derivation_method`, `generated_by`, `human_review`, `confidence`).
-- **Acquisition lineage** — acquisition timestamp, acquisition method (values declared per source
-  spec — consumers may weigh them differently), and plugin version; owned by
-  `REFINEMENT_PIPELINE_CONTRACT.md` §Lineage.
+- **Acquisition lineage** — acquisition timestamp, acquisition method (defined in
+  `REFINEMENT_PIPELINE_CONTRACT.md` §`normalized`; values declared per source spec — consumers may
+  weigh them differently), and plugin version; recorded per `REFINEMENT_PIPELINE_CONTRACT.md`
+  §Lineage and replay.
 
 Provenance is set at acquisition and never rewritten by later stages; stages append their own
 lineage.
