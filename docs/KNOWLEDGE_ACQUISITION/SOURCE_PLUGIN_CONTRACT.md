@@ -1,6 +1,6 @@
 State: Specification (docs-authoring; target-state framing). Not implemented; YouTube is the first planned implementation.
 Doc role: Capability contract
-Authority: Defines the source-plugin interface for the Knowledge Acquisition Platform: identity, discovery, fetch, provenance, dedup, and sync-cursor semantics. Boundary-adapter classification is owned by `docs/INTEGRATION_FABRIC_CONTRACT.md`; acquisition sources do not cleanly fit any of its ten integration classes (class 6 Parser/OCR covers content extraction, not networked acquisition with discovery/egress/auth), so per that contract's own taxonomy rule this is flagged as a candidate new integration class for its owners to decide — this contract declares the equivalent contract fields in the meantime and does not extend the fabric taxonomy itself.
+Authority: Defines the source-plugin interface for the Knowledge Acquisition Platform: identity, discovery, fetch, provenance, dedup, and sync-cursor semantics. Boundary-adapter classification is owned by `docs/INTEGRATION_FABRIC_CONTRACT.md`; this document is the instantiating contract for its **Acquisition source** integration class (class 11, added 2026-07-02 via #2794).
 
 # Source Plugin Contract
 
