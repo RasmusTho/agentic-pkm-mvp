@@ -272,11 +272,13 @@ document records only the architectural consequence:
 - file-based eventual consistency matters more than any one transport
 - device asymmetry is an operational condition, not a different ontology of artifacts
 - environment (`dev` vs `prod`) is an operational/runtime distinction, not a different ontology of artifacts or a different semantic model
+- one running stack binds one active vault; API/UI and watcher/worker processes must share that binding, and switching the active vault currently requires a process restart — the known containment and follow-up for this live in `docs/architecture/SBS_TRANSITION_DEBT.md` (D13–D14)
 
 See also:
 - `docs/HUMAN-FLOWS.md`
 - `docs/ENVIRONMENTS.md`
 - `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
+- `docs/architecture/SBS_TRANSITION_DEBT.md` (D13–D14, active-vault topology debt)
 
 ## Reading Rules
 - This document is architecture-first, not ontology-first: terms such as `object`, `store_objects`, `agent`, and `event` refer to runtime representations and execution units unless stated otherwise.
@@ -453,12 +455,14 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
   human commitment/project layer described in `docs/PROJECT_KERNEL.md` and the commitment concept
   contracts.
 <!-- commitment-first-class -->
-- Commitment-runtime surface (delivered baseline): runtime includes a bounded commitment read
+- Commitment-runtime surface (shipped read-only baseline): runtime includes a bounded commitment read
   model for `next`/`waiting` surfacing, governed transition metadata linking receipts
   (`before_state`, `after_state`, `cause`, `receipt_event_id`, `trace_id`), a receipt-governed
   APPLY gate that rejects state mutations not on the APPLY path (PR #703, issue #694), and
   optional salience/staleness signal consumption in commitment query ranking (PR #705, issue #695).
-  Commitments remain distinct from note `review_state`/`maturity` semantics.
+  Beyond that APPLY gate, commitment mutation, reminders, and automatic closure are not shipped
+  (`docs/STATUS.md` owns the delivered read-side scope). Commitments remain distinct from note
+  `review_state`/`maturity` semantics.
 - Derived / overlay metadata: system-owned overlays such as `zone`, recency, or salience are computed from signals and remain outside the core contract.
 - Agent reasoning operates on Core-6 + state axes + policy profiles (see `docs/NOTE_KIND_POLICIES.md`) + derived overlays.
 
@@ -533,7 +537,7 @@ All current runtime surfaces build on the same Store abstraction (ObjectStore, V
 | A2A | Internal schema and audit helpers are current-state contracts (`agent.request.created`, `agent.response.created`, `agent.error.created`); routed in-process agent calls exist where handlers are registered. | No production A2A transport, retry queue, dead-letter queue, or repo-wide delivery SLA is claimed. |
 | MCP/tools | Descriptor registry, registry-backed ToolProvider boundary, validation, deterministic/mock execution, internal tools, gated real `mcp.vault.append_note`, and an optional remote multiplex seam with deterministic local fallback exist. | Dynamic discovery, broader remote server integration, and richer versioning are planned. |
 | Orientation / Resurfacing / Salience | Minimal read-only runtime seams delivered: orientation frame (`app/orientation/runtime.py`, returns `leave_point`/`open_items`/`notable_change` without a query), resurfacing candidates (`app/resurfacing/runtime.py`, emits "why now" signal provenance without mutation), and opt-in derived salience/staleness signal payload on retrieval (`include_signal_payload=True`). Contracts accepted per FINDING_AND_REORIENTING spec (#392); no durable salience field is stored on any artifact. | Full interaction-surface integration (Panel/Chat consumption), relation-aware signal fusion, and resurfacing-triggered mutations remain future work outside these capability seams. |
-| Chat / Deep Agents | A read-only Chat cognition scaffold exists for planning/decomposition through the shared `ReasoningFacade`. Separately, a flag-gated canvas co-authoring slice exists behind `CANVAS_ENABLED` for direct in-place note-body edits plus governance routing (CLI/API session flow, served Companion UI region, `/coauthor` body edits, and Chat-to-Panel handoff for governance-bearing intents). | Chat is the planned canvas-shaped interaction surface; the current canvas slice is non-baseline, non-prod by default, and does not by itself establish the full future Chat surface. Any broader Chat or Deep Agent mutation remains gated through governed execution. |
+| Chat / Deep Agents | A read-only Chat cognition scaffold exists for planning/decomposition through the shared `ReasoningFacade`. Separately, canvas co-authoring (Phases 1–4, closed 2026-06-09 per `docs/CANVAS_CHAT_SURFACE/README.md`) is shipped flag-gated behind `CANVAS_ENABLED` (off by default) for direct in-place note-body edits plus governance routing (CLI/API session flow, served Companion UI region, `/coauthor` body edits, and Chat-to-Panel handoff for governance-bearing intents). | Chat is the planned canvas-shaped interaction surface; the current canvas slice is non-baseline, non-prod by default, and does not by itself establish the full future Chat surface. Any broader Chat or Deep Agent mutation remains gated through governed execution. |
 | Satellite sync | Instance/device plumbing and sync-latency validation harnesses exist. | Full satellite-sync behavior remains planned, not a current runtime claim. |
 
 ## Operational and Implementation Detail
