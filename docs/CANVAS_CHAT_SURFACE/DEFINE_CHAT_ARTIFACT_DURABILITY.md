@@ -11,7 +11,7 @@ can_parallelize_with: []
 
 State: Specification draft. Docs-only. Docs-authoring lane (no governing Issue required for this task per `AGENTS.md :: Docs authoring lane`; the follow-on implementation task is Issue-first).
 Doc role: Spec (contract extension)
-Authority: Extends `docs/CONCEPTS/RELATION_TAXONOMY.md` (adds one relation type) and `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` (adds the missing session/chat row). Does not override `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md` — see Reconciliation below.
+Authority: Specifies an extension of `docs/CONCEPTS/RELATION_TAXONOMY.md` (one new relation type) and `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` (the missing session/chat row) — **not yet landed in those owner docs as of this spec PR**; the actual table edits are this task's own deliverable, tracked as GitHub issue #2806, and are not complete until that issue merges. Until then, `RELATION_TAXONOMY.md` and `SBS_CURRENT_TO_TARGET_MAPPING.md` remain the current, unextended source of truth — a reader following those files directly will not yet find `chat_for`/`has_chats` or the session/chat row. Does not override `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CANVAS_COEDITING_MODEL.md` — see Reconciliation below.
 Owner: v6.0 architecture owner
 Last reviewed: 2026-07-02
 

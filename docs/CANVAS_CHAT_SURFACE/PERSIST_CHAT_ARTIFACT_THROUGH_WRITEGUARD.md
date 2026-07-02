@@ -28,11 +28,24 @@ the pattern the boundary rules exist to prevent. This task closes that gap and a
 
 ## What This Task Does
 
-- Adds `note_uuid: str` to `SessionLog` (currently `log_path`, `session_id`, `note_path`, `label`,
-  `vault_root`), resolved via `app.services.note_uuid.ensure_note_uuid(note_path, vault_root=...)` at
-  `open_session(...)` time — the same healing/read call every other identity-anchored artifact in this
-  system uses, so a note without a UUID yet gets one healed rather than the session silently omitting
-  the field.
+- Adds `note_uuid: str | None` to `SessionLog` (currently `log_path`, `session_id`, `note_path`,
+  `label`, `vault_root`), resolved via `app.services.note_uuid.ensure_note_uuid(note_path,
+  vault_root=...)` at `open_session(...)` time — the same healing/read call every other
+  identity-anchored artifact in this system uses, so a note without a UUID yet gets one healed rather
+  than the session silently omitting the field. Typed `| None` (not required-only) specifically so
+  `SessionStore.load()` (below) can construct a `SessionLog` from pre-upgrade JSON that lacks the
+  field without raising `KeyError`, rather than forcing a versioned on-disk schema migration for a
+  local cache file.
+- **Brings `app/chat/session_store.py`'s `SessionStore.load()` into scope for backward compatibility**
+  (narrowly — behavior/semantics of the pointer store otherwise stay out of scope, see Out of Scope).
+  `SessionStore.load()` today does `data["log_path"]`-style direct key access with no default; adding
+  a new field to `SessionLog` without touching this method would make `load()` raise `KeyError` on any
+  `.canvas-sessions/*.json` file written before this task ships — breaking CLI session resume across
+  the exact upgrade this task ships. Fix: read `note_uuid` with `data.get("note_uuid")`; when absent
+  (legacy file), self-heal by re-resolving via `ensure_note_uuid(note_path, vault_root=...)` rather
+  than leaving it `None` indefinitely, consistent with the healed-if-absent pattern used for vault
+  note UUIDs elsewhere in this codebase. `SessionStore.save()` needs no change — `asdict(session)`
+  already serializes whatever fields `SessionLog` carries.
 - Writes `note_uuid: <uuid>` into the chat-session frontmatter alongside the existing `note:
   "[[title]]"` field (both present — human-legible link kept, durable anchor added). No other
   frontmatter field from `DEFINE_CANVAS_COEDITING_MODEL.md`'s minimum set (`type`, `note`, `date`,
@@ -82,6 +95,13 @@ assert any(s.session_id == session.session_id for s in sessions)  # found via no
 # Write-blocked runtime state:
 # writer.append_turn(...) raises WritesBlockedError; the file on disk is unchanged from
 # before the call (no partial turn appended).
+
+# Upgrade scenario: a CLI session was opened and JSON-pointer-saved to .canvas-sessions/
+# *before* this task shipped (no note_uuid key in the JSON), then resumed *after* upgrade:
+store = SessionStore(vault_root=vault_root)
+resumed = store.load(pre_upgrade_session_id)
+assert resumed.note_uuid == ensure_note_uuid(resumed.note_path, vault_root=vault_root)
+# self-healed on load, not a KeyError
 ```
 
 ## Why This Matters
@@ -124,6 +144,9 @@ Two concrete failures exist today and this task closes both:
 - [ ] No existing Phase 1–4 canvas behavior regresses: the co-authoring path, governance-bearing
       routing, and the session API surface are unaffected by this change.
       Verify: `pytest -q tests/chat tests/companion_ui/test_canvas_*.py tests/api/test_canvas*.py`
+- [ ] `SessionStore.load()` reads pre-upgrade `.canvas-sessions/*.json` (no `note_uuid` key) without
+      raising, self-healing `note_uuid` via `ensure_note_uuid` rather than leaving it `None`.
+      Verify: `tests/chat/test_session_log_writer.py::test_session_store_load_heals_legacy_json_missing_note_uuid`
 
 ## How to Verify (Pre-Merge)
 
@@ -140,8 +163,10 @@ Two concrete failures exist today and this task closes both:
 - RelationIndex / `store_objects` registration (see `DEFINE_CHAT_ARTIFACT_DURABILITY.md :: Out of
   Scope` — frontmatter-only, glob-read, following the commitment precedent).
 - Cold-storage/tiering implementation (D-6 mechanism not yet designed system-wide).
-- Changing `.canvas-sessions/` JSON pointer-store behavior (`app/chat/session_store.py`) — that stays
-  local cache, untouched by this task.
+- `app/chat/session_store.py` beyond the narrow `note_uuid` backward-compatibility fix to `load()`
+  described above. `SessionStore`'s role, location, and cross-process pointer semantics stay
+  unchanged and local-cache-only — this task touches it only enough that adding a field to
+  `SessionLog` cannot break an in-flight upgrade.
 - Changing the co-authoring posture, authority split, or governance-bearing routing from Phases 1–4.
 - Backfilling `note_uuid` onto chat-session files written before this task ships. Pre-existing
   `.chats/*.md` files without `note_uuid` remain readable (the field is additive going forward);
@@ -157,9 +182,11 @@ Two concrete failures exist today and this task closes both:
   — `DEFINE_CANVAS_COEDITING_MODEL.md` explicitly scopes the session log to intent + change-summary,
   "not the full LLM response body," and this task does not reopen that scope decision.
 - **Does NOT survive restart (by design, unchanged):** `.canvas-sessions/*.json` (which session is
-  currently "open" for CLI cross-process resume) is out of scope here and remains local-cache-only;
-  losing it means the user has to re-open a session, not that any content is lost — the underlying
-  `.chats/*.md` file is untouched.
+  currently "open" for CLI cross-process resume) remains local-cache-only; losing it means the user
+  has to re-open a session, not that any content is lost — the underlying `.chats/*.md` file is
+  untouched. This task only guarantees that *reading* a pre-upgrade pointer file does not crash
+  (`SessionStore.load()` self-heals a missing `note_uuid`); it does not change what the pointer store
+  itself persists or how long it lives.
 - **Trust consequence if durability is not honored:** if `note_uuid` resolution silently failed and
   produced no relationship anchor, a renamed note's chat history would become undiscoverable by
   `load_chat_sessions_for_note` (though still present on disk, findable only by manual directory
