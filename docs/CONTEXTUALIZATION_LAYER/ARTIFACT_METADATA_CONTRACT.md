@@ -674,7 +674,7 @@ authority:
   ai_generated: true
   human_authored: false
   requires_review: true
-memory_state: candidate
+memory_state: unreviewed
 review_reason: AI-derived preference candidate; human confirmation required before activation.
 stale_after: 2026-06-18
 activation_policy: review_required
