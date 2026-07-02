@@ -25,7 +25,7 @@ pipeline ends here; triage is human territory.
   suggestion content — through WriteGuard/governed vault-write mechanics (mechanical durable,
   non-authority-bearing write).
 - **Template extension shipped here**: adds the mandated posture markers
-  (`authority.requires_review: true` + unreviewed review posture) to the template and the written
+  (`authority.requires_review: true` + `review_state: draft` per the #2793 resolution) to the template and the written
   note — see the spec's vocabulary caveat (#2793: posture required, token pending owner-doc
   reconciliation).
 - Never advances triage state; never touches any existing artifact's governance-bearing metadata.

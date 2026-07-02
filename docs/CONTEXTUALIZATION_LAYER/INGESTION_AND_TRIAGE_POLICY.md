@@ -109,7 +109,7 @@ Source-authoritative material (original scan files, email threads, legal documen
 Screenshots, personal photos, contact notes, financial records, and health records carry elevated privacy risk. They MUST NOT be silently added to shared retrieval surfaces or context bundles. Privacy-sensitive defaults: screenshots default to `privacy: review-required`; personal photos and contact notes default to `privacy: private`.
 
 **AI-generated summaries require the `requires_review` flag.**
-Any artifact with AI-generated content that has not been human-reviewed MUST carry `review_state: unreviewed` and `authority.requires_review: true`. This flag prevents the artifact from being treated as authoritative knowledge.
+Any artifact with AI-generated content that has not been human-reviewed MUST carry `review_state: draft` (the canonical not-yet-reviewed posture; vocabulary owned by `docs/CONCEPTS/STATE_AXES_CONTRACT.md`, mapping decided in #2793) and `authority.requires_review: true`. This flag prevents the artifact from being treated as authoritative knowledge.
 
 ## 4. Per-pipeline flows
 
@@ -145,7 +145,7 @@ email thread (provider) → email_summary in vault → actions / evidence / sour
 
 **Capture:** The email thread stays in the provider (Gmail, etc.). The vault receives an `email_summary` — a controlled representation, not the full thread.
 
-**email_summary contents:** Subject/participants, key points, action items, decision markers, reference pointers. AI may draft; `review_state: unreviewed` until reviewed.
+**email_summary contents:** Subject/participants, key points, action items, decision markers, reference pointers. AI may draft; `review_state: draft` until reviewed.
 
 **Triage transitions:**
 - Actions extracted → become `checklist` items, `decision_record` candidates, or project notes via explicit human review.
@@ -171,7 +171,7 @@ url → transcript / source note → AI summary → human takeaways → optional
 
 **Transcript (optional):** AI may extract or import a transcript. The transcript is non-authoritative until reviewed. `provenance.source_kind: youtube_url` plus `ai_extraction` for the transcript.
 
-**AI summary:** AI may produce a summary. Non-authoritative; `review_state: unreviewed`.
+**AI summary:** AI may produce a summary. Non-authoritative; `review_state: draft`.
 
 **Human takeaways:** The human reads/watches and writes their own takeaways inline. These are the first human-authored content in this pipeline.
 
@@ -363,7 +363,7 @@ Promotion from ephemeral or active state into durable Human Knowledge Artifact f
 
 ```
 source artifact (any class)
-    → AI drafts candidate (optional; marks review_state: queued)
+    → AI drafts candidate (optional; marks review_state: provisional)
     → human reviews
     → human creates or promotes to durable HK artifact (evergreen_note, synthesis_note, decision_record)
     → source artifact archived or retained as provenance
