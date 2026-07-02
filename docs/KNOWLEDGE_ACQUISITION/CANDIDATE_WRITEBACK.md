@@ -2,7 +2,7 @@
 name: Candidate Writeback
 description: Assemble the candidate and write the youtube_source_note companion artifact (incl. template posture extension) through governed vault mechanics
 task_id: KA-05
-source_anchor: docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Writeback
+source_anchor: "docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Writeback"
 parent_capability: Knowledge Acquisition Phase 2 vertical slice
 prerequisites: [KA-04]
 depends_on: [EXTRACTION_REGISTRY_AND_SUMMARY_EXTRACTOR.md]
@@ -52,8 +52,10 @@ invariant ("WriteGuard gates all vault writes").
 - [ ] Note carries the mandated posture markers, full provenance, and the template shape (incl.
       the extension delivered in this task); template file updated in the same PR.
       Verify: `tests/knowledge_acquisition/test_candidate_writeback.py::test_note_shape_and_posture_markers` + doc diff on `docs/examples/vault-templates/youtube-source-note.md`
-- [ ] No triage advancement and no mutation of any existing artifact.
-      Verify: `tests/knowledge_acquisition/test_candidate_writeback.py::test_no_existing_artifact_mutation`
+- [ ] The written note enters the triage workflow at its initial state `captured`
+      (`REFINEMENT_PIPELINE_CONTRACT.md` §`candidate`; slice AC6), and no triage advancement or
+      mutation of any existing artifact occurs.
+      Verify: `tests/knowledge_acquisition/test_candidate_writeback.py::test_triage_entry_is_captured_no_advancement` + `tests/knowledge_acquisition/test_candidate_writeback.py::test_no_existing_artifact_mutation`
 - [ ] A candidate whose note write is blocked (WriteGuard denial fixture) is **not terminal**: the
       failure is item-scoped, loud, and the candidate remains re-runnable.
       Verify: `tests/knowledge_acquisition/test_candidate_writeback.py::test_blocked_write_is_loud_and_retryable`

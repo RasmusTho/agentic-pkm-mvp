@@ -2,7 +2,7 @@
 name: ASR Fallback Path
 description: Captionless items fall back to the existing faster-whisper path and land as raw records differing only in acquisition_method
 task_id: KA-02
-source_anchor: docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Transcript acquisition
+source_anchor: "docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Transcript acquisition"
 parent_capability: Knowledge Acquisition Phase 2 vertical slice
 prerequisites: [KA-01]
 depends_on: [ACQUIRE_YOUTUBE_CAPTIONS.md]

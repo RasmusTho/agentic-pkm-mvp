@@ -1,8 +1,8 @@
 ---
 name: Replay and Stage Events
-description: Outbox stage events with idempotency keys, item-scoped dead-letters, and the end-to-end replay guarantee without egress
+description: Outbox stage events with idempotency keys, item-scoped dead-letters, and the end-to-end replay guarantee without source egress
 task_id: KA-06
-source_anchor: docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Stage execution model; Lineage and replay
+source_anchor: "docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Stage execution model; Lineage and replay"
 parent_capability: Knowledge Acquisition Phase 2 vertical slice
 prerequisites: [KA-05]
 depends_on: [CANDIDATE_WRITEBACK.md]
@@ -15,7 +15,7 @@ can_parallelize_with: []
 
 Close the slice: every stage transition emits a standard-envelope outbox event with a
 deterministic idempotency key, failures dead-letter loudly and item-scoped, and the whole chain
-replays from `raw` without network egress. This is the slice's proof that the architecture holds.
+replays from `raw` without source egress (extractor model calls route per `docs/LLM_ROUTING.md` — a different boundary). This is the slice's proof that the architecture holds.
 
 ## What This Task Does
 
@@ -26,16 +26,16 @@ replays from `raw` without network egress. This is the slice's proof that the ar
   do not fork delivery semantics).
 - Item-scoped dead-letter on stage failure: other items and other extractors proceed.
 - Replay: a command/receipt that deletes all derived levels for an item and reproduces equivalent
-  normalized/extracted/candidate artifacts from `raw` with egress blocked.
+  normalized/extracted/candidate artifacts from `raw` with source egress blocked.
 
 ## Concretely
 
 ```
-$ python -m app.cli acquire-replay <raw_record_id> --assert-no-egress
+$ python -m app.cli acquire-replay <raw_record_id> --assert-no-source-egress
 normalize@1 … ok (idempotent)
 summary@1  … ok (idempotent)
 candidate  … ok → note content identical
-replay receipt: equivalent=true egress=0
+replay receipt: equivalent=true source_egress=0
 ```
 
 ## Why This Matters
@@ -54,8 +54,8 @@ invariants the runtime is converging on.
 - [ ] A failing stage dead-letters that item at that stage, loudly; sibling items/extractors are
       unaffected.
       Verify: `tests/knowledge_acquisition/test_stage_events.py::test_item_scoped_dead_letter`
-- [ ] Full replay from `raw` reproduces equivalent derived artifacts with zero network egress.
-      Verify: `tests/knowledge_acquisition/test_replay.py::test_replay_from_raw_no_egress_equivalent_output`
+- [ ] Full replay from `raw` reproduces equivalent derived artifacts with zero source egress (acquisition hosts unreachable; extractor model routing unaffected).
+      Verify: `tests/knowledge_acquisition/test_replay.py::test_replay_from_raw_no_source_egress_equivalent_output`
 
 ## How to Verify (Pre-Merge)
 

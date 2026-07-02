@@ -65,8 +65,10 @@ the axis table and per-axis owners.
 6. Phase 2 implementation task specs (one file per bounded task; `PARENT_FEATURE_ISSUE.md` mirrors
    the filed issue set #2795 / #2796–#2801):
    `ACQUIRE_YOUTUBE_CAPTIONS.md` (KA-01) → { `ASR_FALLBACK_PATH.md` (KA-02) ∥
-   `NORMALIZE_TRANSCRIPT.md` (KA-03) } → `EXTRACTION_REGISTRY_AND_SUMMARY_EXTRACTOR.md` (KA-04) →
-   `CANDIDATE_WRITEBACK.md` (KA-05) → `REPLAY_AND_STAGE_EVENTS.md` (KA-06, final child).
+   `NORMALIZE_TRANSCRIPT.md` (KA-03) }; then KA-03 →
+   `EXTRACTION_REGISTRY_AND_SUMMARY_EXTRACTOR.md` (KA-04) → `CANDIDATE_WRITEBACK.md` (KA-05) →
+   `REPLAY_AND_STAGE_EVENTS.md` (KA-06, final child). KA-02 gates only parent closure (slice AC2),
+   not the KA-04..06 chain — the frontmatter `prerequisites` fields are the authoritative DAG.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -83,8 +85,10 @@ Invariants that hold *across* the Phase 2 tasks, with their partial-failure seam
   blocked or fails after candidate assembly, the candidate remains re-runnable and the failure is
   loud and item-scoped (KA-05 AC4, KA-06 dead-letter AC) — a recorded candidate with no note must
   never read as "done".
-- **Only the plugin has egress.** KA-03..06 operate exclusively on stored records; the replay path
-  (KA-06) asserts zero network egress, which fails if any later stage grew a hidden source call.
+- **Only the plugin contacts the source.** KA-03..06 operate exclusively on stored records; the
+  replay path (KA-06) asserts zero *source* egress, which fails if any later stage grew a hidden
+  source call. Extractor LLM calls (KA-04) are model-provider egress routed per
+  `docs/LLM_ROUTING.md` — a different boundary, unaffected by this invariant.
 - **Posture markers are unconditional.** Any note reaching the vault carries
   `requires_review: true` + unreviewed posture (KA-05); no ordering of stage execution or retry
   may produce a note without them.

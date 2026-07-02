@@ -2,7 +2,7 @@
 name: Acquire YouTube Captions
 description: Caption-first fetch for one explicit YouTube URL — metadata + captions into an immutable raw record with dedup identity
 task_id: KA-01
-source_anchor: docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Transcript acquisition
+source_anchor: "docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md :: Transcript acquisition"
 parent_capability: Knowledge Acquisition Phase 2 vertical slice
 prerequisites: []
 depends_on: []

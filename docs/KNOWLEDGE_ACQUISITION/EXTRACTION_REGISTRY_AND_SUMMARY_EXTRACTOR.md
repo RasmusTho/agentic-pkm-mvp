@@ -2,7 +2,7 @@
 name: Extraction Registry and Summary Extractor
 description: The open extractor registry plus one worked-example extractor (summary) with schema-validated, fail-loud output
 task_id: KA-04
-source_anchor: docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Extraction registry
+source_anchor: "docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Extraction registry"
 parent_capability: Knowledge Acquisition Phase 2 vertical slice
 prerequisites: [KA-03]
 depends_on: [NORMALIZE_TRANSCRIPT.md]

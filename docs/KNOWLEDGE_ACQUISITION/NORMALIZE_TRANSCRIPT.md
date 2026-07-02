@@ -2,7 +2,7 @@
 name: Normalize Transcript
 description: Deterministic raw→normalized stage — rolling-cue dedup, timestamps, detected language, acquisition method, quality note
 task_id: KA-03
-source_anchor: docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: normalized
+source_anchor: "docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: normalized"
 parent_capability: Knowledge Acquisition Phase 2 vertical slice
 prerequisites: [KA-01]
 depends_on: [ACQUIRE_YOUTUBE_CAPTIONS.md]
