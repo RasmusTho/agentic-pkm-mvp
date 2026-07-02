@@ -68,7 +68,7 @@ instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + 
 `LABEL_TAXONOMY.md` (canonical labels + `lane:governance` exception), `LIFECYCLE_TRUTH_MATRIX.md`
 (required Project Status per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
 `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations), and `CI_WAIT_CONTRACT.md` (how to wait
-on CI checks and the Codex verdict via REST without draining the shared API budget). A reference like
+on CI checks — and the optional `--codex` verdict path — via REST without draining the shared API budget). A reference like
 `_shared/<FILE>.md :: <section>` resolves there. `_shared/` is not a skill directory.
 
 - `agentic-pkm`

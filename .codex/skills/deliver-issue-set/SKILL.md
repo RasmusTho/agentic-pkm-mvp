@@ -86,7 +86,7 @@ Delivery rules:
 - Use `publish-pr` for branch, commit, push, and PR creation/update.
 - Use `pr-integration` only when the PR needs readiness or repair before verification.
 - Use `verification-and-closure` for merge, Issue closure, Project `Done`, dispatcher release, dependent unblocking, and post-merge owner-doc routing.
-- When coordinating autonomous delivery, do not treat an unprotected branch or absent required-status-check rule as permission to skip the process gate. `verification-and-closure` still owns the current CI/checks plus Codex-review prerequisites before merge.
+- When coordinating autonomous delivery, do not treat an unprotected branch or absent required-status-check rule as permission to skip the process gate. `verification-and-closure` still owns the current CI/checks plus local-review-gate prerequisites before merge.
 - A coordinator waits on many PRs at once — the worst case for the shared API budget. Poll per `_shared/CI_WAIT_CONTRACT.md` (REST check-runs only, ≥60–120s backoff, `scripts/await_pr_checks.sh`); never run concurrent `gh pr checks` loops, which drain the shared GraphQL bucket to zero and stall every sub-agent.
 - After every delivered issue, re-read the parent feature issue / Project state and recompute the next pickup target.
 - Stop instead of forcing delivery when an issue is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input.

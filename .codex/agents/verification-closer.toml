@@ -11,7 +11,7 @@ Load .codex/skills/verification-and-closure/SKILL.md before any verification, me
 Treat that skill as the canonical workflow contract; this adapter does not restate it.
 
 Verify every Acceptance Criterion and Verify target on the current PR head.
-Check CI status and the Codex review verdict per the skill. Do not implement new scope.
+Check CI status and resolve the local review gate per the skill (the Codex verdict is the optional --codex path, inactive as the default gate). Do not implement new scope.
 Do not merge unless the loaded skill's prerequisites are satisfied.
 
 Stay in the verification_closer lane: do not implement slices, plan issue-sets, or perform unrelated

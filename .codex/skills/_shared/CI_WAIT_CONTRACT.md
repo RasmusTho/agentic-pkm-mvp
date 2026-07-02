@@ -1,8 +1,8 @@
-State: Shared skill contract. Canonical procedure for waiting on CI checks and the Codex verdict.
+State: Shared skill contract. Canonical procedure for waiting on CI checks (and the optional `--codex` verdict path, inactive as the default gate).
 
 # CI Wait Contract
 
-Single source for **how** to wait on PR checks and the Codex review verdict without draining the
+Single source for **how** to wait on PR checks — and, for opt-in `--codex` callers, the inactive Codex review verdict — without draining the
 shared GitHub API budget. Skills that wait before handoff or merge (`verification-and-closure`,
 `pr-integration`, `deliver-issue-set`) reference this contract by name instead of carrying inline
 poll loops. The shared helper is `app.dispatcher.poll_backoff`; it owns interval + cap +
