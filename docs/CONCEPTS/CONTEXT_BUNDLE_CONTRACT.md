@@ -224,7 +224,7 @@ context_bundle:
       reason: direct evidence for the user question
       source_role: evidence
       trust_state: reviewed
-      review_state: confirmed
+      review_state: reviewed
       retrieval_score: 0.92
       provenance:
         origin: vault note

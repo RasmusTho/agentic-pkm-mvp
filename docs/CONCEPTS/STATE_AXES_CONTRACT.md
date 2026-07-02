@@ -92,6 +92,8 @@ The canonical global value set for `review_state` is:
 - inbox workflow stage,
 - general task status,
 - maturity or evergreen standing,
+- agentic-memory review grade (that is the MEM-owned `memory_state` axis — owner decision #2820,
+  2026-07-02; vocabulary in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md` §7.3),
 - or that a promotion transition has occurred.
 
 ## `maturity`
