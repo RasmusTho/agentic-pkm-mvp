@@ -105,6 +105,12 @@ GitHub state.
   not enter the audit.
 - Where the audit and an owner doc disagree, the owner doc wins; raise the divergence via issue,
   never silently resolve it in the audit text.
+- **SBS reconciliation (binding):** the audit carries an explicit SBS-reconciliation section — for
+  every structural claim, state whether it **conforms to**, **extends**, or **proposes reshaping**
+  `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (and `docs/architecture/SBS_*`). Reshape proposals route
+  through the SBS stewardship channel (CES / `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` /
+  ADR + owner decision) — a research artifact never enacts or silently assumes a reshape.
+  Precedent: `docs/architecture/runtime-semantics.md :: SBS boundary mapping`.
 - Read the live code, not memory of it — anchors reflect `origin/main` at the audit date, and the
   audit header says so.
 - Classify the pass per `issue-to-code`'s pre-implementation classification (this is Builder
