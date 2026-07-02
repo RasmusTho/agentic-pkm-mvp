@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.dispatcher.github_call_logger import is_kill_switch_active
 from app.dispatcher.sync_github import classify_github_api_failure
 
 
@@ -717,7 +718,13 @@ def main() -> int:
     # floor; event reconciles use the optional floor.
     budget = graphql_budget_remaining()
     budget_floor = GRAPHQL_SCAN_MIN_BUDGET if args.scan else GRAPHQL_OPTIONAL_MIN_BUDGET
-    if budget is not None and budget < budget_floor:
+    # The block decision also consults the SHARED GitHub-API kill switch
+    # (app/dispatcher/github_call_logger.py::is_kill_switch_active — the single
+    # enforcement point for #2746/GHAPI-C2). The kill-switch threshold lives
+    # only in that module; never duplicate its threshold/env parsing here.
+    kill_switch = is_kill_switch_active(budget)
+    budget_low = budget is not None and budget < budget_floor
+    if kill_switch or budget_low:
         target = (
             "project scan"
             if args.scan
@@ -725,18 +732,25 @@ def main() -> int:
             if args.issue
             else f"pr #{args.pr}"
         )
+        if budget_low:
+            reason = f"GraphQL budget low (remaining={budget} < {budget_floor})"
+            if kill_switch:
+                reason += "; GitHub API kill switch active"
+        else:
+            reason = f"GitHub API kill switch active (remaining={budget})"
         print(
-            f"skip {target}: GraphQL budget low (remaining={budget} < {budget_floor}) "
+            f"skip {target}: {reason} "
             "before project discovery; deferring to the next daily or manual reconcile"
         )
-        _log_event(
-            {
-                "event": "github.budget.skip",
-                "target": target,
-                "stage": "pre-discovery",
-                "remaining": budget,
-            }
-        )
+        event: dict[str, Any] = {
+            "event": "github.budget.skip",
+            "target": target,
+            "stage": "pre-discovery",
+            "remaining": budget,
+        }
+        if kill_switch:
+            event["kill_switch_active"] = True
+        _log_event(event)
         return 0
 
     try:

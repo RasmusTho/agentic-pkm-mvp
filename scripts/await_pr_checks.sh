@@ -157,8 +157,10 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
   if [ -n "$head_ts" ]; then
     codex_args+=(--head-started-at "$head_ts")
   fi
-  codex_json=$(python3 -m app.dispatcher.poll_backoff "${codex_args[@]}" 2>/dev/null)
+  codex_stderr_file=$(mktemp)
+  codex_json=$(python3 -m app.dispatcher.poll_backoff "${codex_args[@]}" 2>"$codex_stderr_file")
   codex_rc=$?
+  codex_stderr=$(cat "$codex_stderr_file" 2>/dev/null); rm -f "$codex_stderr_file"
   if [ "$codex_rc" -eq 0 ]; then
     echo "codex: $codex_json"; exit 0
   elif [ "$codex_rc" -eq 3 ]; then
@@ -168,7 +170,12 @@ if [ "$CHECK_CODEX" -eq 1 ]; then
     echo "       do NOT auto-merge on this exit code (no hard-wait — the caller owns the ambiguous call)." >&2
     exit 4
   fi
+  # Surface the helper's stderr so a GitHubKillSwitchActive skip is
+  # distinguishable from a genuinely failed query (both fail closed).
   echo "codex: combined verdict query failed — failing closed" >&2
+  if [ -n "$codex_stderr" ]; then
+    printf '%s\n' "$codex_stderr" | sed 's/^/       /' >&2
+  fi
   exit 2
 fi
 

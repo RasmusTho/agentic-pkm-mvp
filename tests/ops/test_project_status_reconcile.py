@@ -744,6 +744,60 @@ def test_scan_is_incremental_by_updated_at(monkeypatch, tmp_path) -> None:
     }
 
 
+def test_reconcile_skips_graphql_when_kill_switch_active(monkeypatch, capsys) -> None:
+    # AC1 (#2746 / GHAPI-C2): the shared GitHub-API kill switch must stop the
+    # reconcile BEFORE any `gh project` GraphQL is issued, with an explicit
+    # skip receipt (never a silent no-op).
+    def fail_discover(*_args, **_kwargs):
+        raise AssertionError("must not issue GraphQL when the kill switch is active")
+
+    monkeypatch.delenv("GITHUB_RATELIMIT_KILL_THRESHOLD", raising=False)
+    # remaining=100 is below the shared default threshold (200) -> switch active.
+    monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 100)
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fail_discover)
+    monkeypatch.setattr(
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--scan"]
+    )
+    assert reconcile_project_status.main() == 0
+    captured = capsys.readouterr()
+    assert "skip project scan" in captured.out
+    assert "kill switch active" in captured.out
+    receipts = [
+        json.loads(line)
+        for line in captured.err.splitlines()
+        if '"github.budget.skip"' in line
+    ]
+    assert len(receipts) == 1, "kill-switch skip must emit a structured receipt"
+    assert receipts[0]["kill_switch_active"] is True
+    assert receipts[0]["remaining"] == 100
+
+
+def test_budget_gate_uses_shared_kill_switch(monkeypatch, capsys) -> None:
+    # AC2 (#2746): the block decision comes from ONE source of truth —
+    # app.dispatcher.github_call_logger — at the production call site (main()).
+    # The shared threshold is raised ABOVE this script's own budget floors:
+    # remaining=700 passes both floors (500 scan / 250 optional), so the skip
+    # can only come from the shared kill switch, not duplicated local parsing.
+    def fail_discover(*_args, **_kwargs):
+        raise AssertionError("shared kill switch must gate before project discovery")
+
+    monkeypatch.setenv("GITHUB_RATELIMIT_KILL_THRESHOLD", "1000")
+    monkeypatch.setattr(reconcile_project_status, "graphql_budget_remaining", lambda: 700)
+    monkeypatch.setattr(reconcile_project_status, "discover_project", fail_discover)
+    monkeypatch.setattr(
+        sys, "argv", ["reconcile", "--repo", "RasmusTho/agentic-pkm-mvp", "--scan"]
+    )
+    assert reconcile_project_status.main() == 0
+    out = capsys.readouterr().out
+    assert "GitHub API kill switch active" in out
+
+    # No duplicated threshold/env parsing in the reconcile script itself.
+    source = Path("scripts/reconcile_project_status.py").read_text(encoding="utf-8")
+    assert "GITHUB_RATELIMIT_KILL_THRESHOLD" not in source, (
+        "kill-switch threshold must live only in app/dispatcher/github_call_logger.py"
+    )
+
+
 def test_run_gh_aborts_retry_when_reset_beyond_cap(monkeypatch) -> None:
     slept: list[float] = []
     monkeypatch.setattr(reconcile_project_status.time, "sleep", lambda s: slept.append(s))

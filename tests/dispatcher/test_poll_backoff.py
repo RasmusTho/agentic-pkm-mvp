@@ -1,6 +1,20 @@
 from __future__ import annotations
 
-from app.dispatcher.poll_backoff import PollPolicy, PollResponse, poll_until, resolve_codex_verdict
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from app.dispatcher import poll_backoff
+from app.dispatcher.poll_backoff import (
+    GitHubKillSwitchActive,
+    PollPolicy,
+    PollResponse,
+    gh_graphql,
+    poll_until,
+    resolve_codex_verdict,
+)
 
 
 def test_poll_respects_interval_cap_and_retry_after() -> None:
@@ -204,3 +218,53 @@ def test_codex_verdict_pages_nested_thread_comments() -> None:
     assert verdict.status == "blocking"
     assert len(calls) == 2
     assert calls[1][1] == {"threadId": "thread-1", "commentsCursor": "comment-page-1"}
+
+
+def test_gh_graphql_respects_kill_switch(monkeypatch, tmp_path: Path) -> None:
+    # AC3 (#2746 / GHAPI-H1): when the shared kill switch is active, gh_graphql
+    # must NOT issue the GraphQL call and must surface an explicit
+    # kill-switch-active outcome to callers (never a silent None/empty payload).
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        if "rate_limit" in args:
+            return subprocess.CompletedProcess(args, 0, stdout="50\n", stderr="")
+        raise AssertionError(
+            f"GraphQL call must not be issued when the kill switch is active: {args}"
+        )
+
+    monkeypatch.setenv("GITHUB_RATELIMIT_KILL_THRESHOLD", "200")
+    monkeypatch.setenv("GITHUB_CALL_LOG_PATH", str(tmp_path / "gh_calls.jsonl"))
+    monkeypatch.setattr(poll_backoff.subprocess, "run", fake_run)
+
+    with pytest.raises(GitHubKillSwitchActive):
+        gh_graphql("query { viewer { login } }", {})
+
+    # Only the free REST rate_limit probe ran; no GraphQL spend.
+    assert len(calls) == 1
+    assert "rate_limit" in calls[0]
+
+    # Fail-loud skip receipt in the shared structured log.
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "gh_calls.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert any("kill_switch_active" in (r.get("error") or "") for r in records)
+
+
+def test_gh_graphql_issues_call_when_kill_switch_inactive(monkeypatch, tmp_path: Path) -> None:
+    # Guard for the inactive path: healthy budget -> the call is issued and the
+    # payload is returned unchanged.
+    def fake_run(args, **_kwargs):
+        if "rate_limit" in args:
+            return subprocess.CompletedProcess(args, 0, stdout="4000\n", stderr="")
+        assert list(args)[:3] == ["gh", "api", "graphql"]
+        return subprocess.CompletedProcess(args, 0, stdout='{"data": {"ok": true}}', stderr="")
+
+    monkeypatch.setenv("GITHUB_RATELIMIT_KILL_THRESHOLD", "200")
+    monkeypatch.setenv("GITHUB_CALL_LOG_PATH", str(tmp_path / "gh_calls.jsonl"))
+    monkeypatch.setattr(poll_backoff.subprocess, "run", fake_run)
+
+    assert gh_graphql("query { viewer { login } }", {"pr": 1}) == {"data": {"ok": True}}

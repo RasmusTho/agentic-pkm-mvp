@@ -126,6 +126,13 @@ def _append_record(record: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Kill switch
 # ---------------------------------------------------------------------------
+#
+# SHARED ENFORCEMENT POINT (#2746): this is the single source of truth for the
+# GitHub-API kill-switch decision. Every development-time GitHub API consumer
+# (dispatcher pull sync, scripts/reconcile_project_status.py, the poll/wait
+# helpers in app/dispatcher/poll_backoff.py) consults ``is_kill_switch_active``
+# here. Future GitHub-API consumers must wire through it too — do not add a
+# parallel gate or re-parse GITHUB_RATELIMIT_KILL_THRESHOLD elsewhere.
 
 def is_kill_switch_active(remaining: int | None) -> bool:
     """Return True when the GitHub API kill switch should activate.
