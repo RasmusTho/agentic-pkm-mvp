@@ -22,7 +22,7 @@ authority:
   ai_generated: true
   requires_review: true
 
-review_state: draft        # draft | reviewed
+review_state: draft             # draft | reviewed
 
 created: "{{date}}"
 updated: "{{date}}"
