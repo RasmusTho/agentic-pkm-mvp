@@ -5,7 +5,7 @@ task_id: KERNEL-09
 source_anchor: "docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: §3 decomposition model, I-A4"
 parent_capability: RUNTIME_CORRECTNESS_KERNEL
 prerequisites: [KERNEL-07]
-depends_on: [KERNEL-07]
+depends_on: [STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md]
 can_parallelize_with: []
 ---
 

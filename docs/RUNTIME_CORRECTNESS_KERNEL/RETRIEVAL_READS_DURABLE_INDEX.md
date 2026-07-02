@@ -5,7 +5,7 @@ task_id: KERNEL-05
 source_anchor: "docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: CW-1, I-D3"
 parent_capability: RUNTIME_CORRECTNESS_KERNEL
 prerequisites: [KERNEL-03, KERNEL-04]
-depends_on: [KERNEL-03, KERNEL-04]
+depends_on: [SINGLE_STORE_GENERATION.md, STORE_SCHEMA_IN_MIGRATIONS.md]
 can_parallelize_with: []
 ---
 

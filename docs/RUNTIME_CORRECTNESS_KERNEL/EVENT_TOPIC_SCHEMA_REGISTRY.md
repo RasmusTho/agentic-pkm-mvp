@@ -5,7 +5,7 @@ task_id: KERNEL-08
 source_anchor: "docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: I-E5, CW-4"
 parent_capability: RUNTIME_CORRECTNESS_KERNEL
 prerequisites: [KERNEL-02]
-depends_on: [KERNEL-02]
+depends_on: [MANDATORY_OUTBOX_IDEMPOTENCY.md]
 can_parallelize_with: [TRANSFORM_PROVENANCE_STAMP]
 ---
 
