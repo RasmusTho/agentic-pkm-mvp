@@ -222,6 +222,55 @@ def write_outbox_event(
             conn.close()
 
 
+# Canonical dead-letter audit topic. Mirrors OUTBOX_EVENT_DEAD_LETTERED in
+# app/workers/outbox_worker.py; kept here so read-only health consumers do not
+# import the worker module (services must not depend on workers).
+OUTBOX_DEAD_LETTER_TOPIC = "outbox.event.dead_lettered"
+
+
+def dead_letter_stats(conn: Any = None) -> dict[str, Any] | None:
+    """Read-only dead-letter/backlog stats from the DB outbox, or None when unavailable.
+
+    Returns ``{"dead_lettered_count": int, "oldest_undelivered_age_seconds": float}``.
+    ``dead_lettered_count`` counts audit rows with the dead-letter topic;
+    ``oldest_undelivered_age_seconds`` is the age of the oldest row still
+    pending delivery (0.0 when the queue is empty). Detection only — this
+    helper never mutates the outbox (KERNEL-12 read-only invariant).
+    """
+    try:
+        conn, close = _use_conn(conn)
+    except Exception:
+        return None
+    try:
+        cur = _exec(
+            conn,
+            "select count(*) from outbox where topic = %s",
+            (OUTBOX_DEAD_LETTER_TOPIC,),
+        )
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        if row is None:
+            return None
+        dead_lettered = int(row[0])
+        cur = _exec(
+            conn,
+            "select extract(epoch from (now() - min(created_at))) from outbox where delivered_at is null",
+        )
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        oldest_age = float(row[0]) if row and row[0] is not None else 0.0
+        return {
+            "dead_lettered_count": dead_lettered,
+            "oldest_undelivered_age_seconds": max(oldest_age, 0.0),
+        }
+    except Exception:
+        return None
+    finally:
+        if close:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def count_outbox_events(conn: Any = None) -> int | None:
     """Return the total DB outbox row count, or None when the DB is unavailable."""
     try:
@@ -383,6 +432,8 @@ def ack_outbox(*args, **kwargs) -> bool:
 
 
 __all__ = [
+    "OUTBOX_DEAD_LETTER_TOPIC",
+    "dead_letter_stats",
     "write_outbox_event",
     "insert_object_and_outbox",
     "poll_outbox_one",

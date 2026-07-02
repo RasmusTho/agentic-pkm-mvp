@@ -106,6 +106,35 @@ def _check_panel_actions() -> Dict[str, Any]:
     return _result(True, detail, data={"resolved_root": resolved, "count": count})
 
 
+def _check_dead_letters() -> Dict[str, Any]:
+    """Read-only dead-letter signal reflecting the health-contract fields (KERNEL-12 / #2774).
+
+    Mirrors `dead_lettered_count` / `oldest_undelivered_age_seconds` from
+    `HealthContract.evaluate()` via the shared `dead_letter_snapshot()` helper,
+    so the CLI check and the `/healthz`-`/readyz` contract snapshot can never
+    disagree on the computation. Detection only — no auto-repair.
+    """
+    try:
+        from app.health_contract import dead_letter_snapshot
+
+        snap = dead_letter_snapshot()
+    except Exception as exc:
+        return _result(
+            True,
+            f"dead-letter signal unavailable ({_exception_kind(exc)})",
+            data={"skipped": True},
+        )
+    ok = snap["dead_letter_status"] != "warn"
+    if ok:
+        detail = "no dead-lettered outbox events above threshold"
+    else:
+        detail = (
+            f"dead-letter breach: {snap['dead_lettered_count']} dead-lettered event(s), "
+            f"oldest undelivered {snap['oldest_undelivered_age_seconds']:.1f}s"
+        )
+    return _result(ok, detail, data=dict(snap))
+
+
 def _check_outbox_path() -> Dict[str, Any]:
     path = Path(os.environ.get("INDEX_OUTBOX_PATH", "./tmp/index-outbox.jsonl")).expanduser()
     try:
@@ -582,6 +611,17 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
             }
         )
 
+    dead_letters = checks.get("dead_letters", {})
+    if dead_letters.get("ok") is False:
+        actions.append(
+            {
+                "id": "outbox_dead_letters",
+                "severity": "required",
+                "message": str(dead_letters.get("detail") or "Dead-lettered outbox events detected"),
+                "command_hint": "grep outbox.event.dead_lettered $INDEX_OUTBOX_PATH",
+            }
+        )
+
     obsidian = checks.get("obsidian", {})
     if obsidian.get("ok") is False and obsidian.get("required"):
         actions.append(
@@ -637,6 +677,10 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "ffmpeg": _annotate_required(_check_ffmpeg(), required=False),
         "yt_dlp": _annotate_required(_check_yt_dlp(), required=False),
         "index_outbox": _annotate_required(_check_outbox_path(), required=True),
+        # Alerting signal only (KERNEL-12): loud on the surface, but not a
+        # required check — a dead-letter breach must not flip the aggregate
+        # probe that drives container restarts, and never blocks writes.
+        "dead_letters": _annotate_required(_check_dead_letters(), required=False),
         "panel_actions": _annotate_required(_check_panel_actions(), required=False),
         "ollama": _annotate_required(_check_ollama(), required=_ollama_required()),
         "obsidian": _annotate_required(_check_obsidian_dependencies(), required=_obsidian_required()),
