@@ -1,5 +1,5 @@
-State: **Pre-filing draft.** Updated with the live issue number in this same PR once the parent
-feature issue is filed on GitHub.
+State: **Filed as issue #2762 (2026-07-02).** The GitHub issue is the authoritative backlog and
+validation surface; this file is the local pointer. Children: #2763–#2777.
 
 # Parent Feature Issue — Runtime Correctness Kernel
 

@@ -1,4 +1,4 @@
-State: **Specification directory (pre-filing draft).** Parent feature issue and child issues not yet filed; this line is updated in the same PR once they exist.
+State: **Specification directory (filed).** Parent feature issue **#2762** (validation hub, Backlog + `agent:blocked`); children **#2763–#2777** filed 2026-07-02 in dependency order (KERNEL-01/03/04/07/12 = `agent:ready`; the rest `agent:blocked` on prerequisites).
 
 # Runtime Correctness Kernel — Single Truth, Replay-Sound Events, Typed LLM Boundaries
 
@@ -36,21 +36,21 @@ BuilderOps records.
 
 | Task | task_id | Phase | Depends on | TCD hint (cheapest acceptable) |
 | --- | --- | --- | --- | --- |
-| [TRANSACTIONAL_VAULT_SYNC](TRANSACTIONAL_VAULT_SYNC.md) | KERNEL-01 | 0 | — | Sonnet / high |
-| [MANDATORY_OUTBOX_IDEMPOTENCY](MANDATORY_OUTBOX_IDEMPOTENCY.md) | KERNEL-02 | 0 | KERNEL-01 | Sonnet / medium |
-| [SINGLE_STORE_GENERATION](SINGLE_STORE_GENERATION.md) | KERNEL-03 | 0 | — | Sonnet / high |
-| [STORE_SCHEMA_IN_MIGRATIONS](STORE_SCHEMA_IN_MIGRATIONS.md) | KERNEL-04 | 0 | — | Opus / high (migration surface) |
-| [RETRIEVAL_READS_DURABLE_INDEX](RETRIEVAL_READS_DURABLE_INDEX.md) | KERNEL-05 | 1 | KERNEL-03, KERNEL-04 | Opus / high (hot path) |
-| [TRANSFORM_PROVENANCE_STAMP](TRANSFORM_PROVENANCE_STAMP.md) | KERNEL-06 | 1 | KERNEL-04 | Sonnet / high |
-| [STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN](STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md) | KERNEL-07 | 2 | — | Sonnet / high |
-| [EVENT_TOPIC_SCHEMA_REGISTRY](EVENT_TOPIC_SCHEMA_REGISTRY.md) | KERNEL-08 | 2 | KERNEL-02 | Sonnet / medium |
-| [PLAN_ADMISSION_VALIDATION](PLAN_ADMISSION_VALIDATION.md) | KERNEL-09 | 2 | KERNEL-07 | Sonnet / high |
-| [RUNTIME_SCOPE_PREFILTER_AND_ENVELOPE](RUNTIME_SCOPE_PREFILTER_AND_ENVELOPE.md) | KERNEL-10 | 3 | KERNEL-05 | Opus / xhigh (architecture) |
-| [HANDLER_IDEMPOTENCY_HARNESS](HANDLER_IDEMPOTENCY_HARNESS.md) | KERNEL-11 | 3 | KERNEL-02, KERNEL-08 | Sonnet / medium |
-| [DEAD_LETTER_HEALTH_SIGNAL](DEAD_LETTER_HEALTH_SIGNAL.md) | KERNEL-12 | 3 | — | Sonnet / medium |
-| [INTENT_CLASSIFICATION_GOLDEN_SET](INTENT_CLASSIFICATION_GOLDEN_SET.md) | KERNEL-13 | 4 | KERNEL-07 | Sonnet / medium |
-| [EVAL_SCORECARD_COMPARE](EVAL_SCORECARD_COMPARE.md) | KERNEL-14 | 4 | KERNEL-13 | Sonnet / medium |
-| [FAILURE_TO_EVAL_CAPTURE_LOOP](FAILURE_TO_EVAL_CAPTURE_LOOP.md) | KERNEL-15 | 4 | KERNEL-12, KERNEL-13 | Sonnet / high |
+| [TRANSACTIONAL_VAULT_SYNC](TRANSACTIONAL_VAULT_SYNC.md) | KERNEL-01 ([#2763](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2763)) | 0 | — | Sonnet / high |
+| [MANDATORY_OUTBOX_IDEMPOTENCY](MANDATORY_OUTBOX_IDEMPOTENCY.md) | KERNEL-02 ([#2764](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2764)) | 0 | KERNEL-01 ([#2763](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2763)) | Sonnet / medium |
+| [SINGLE_STORE_GENERATION](SINGLE_STORE_GENERATION.md) | KERNEL-03 ([#2765](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2765)) | 0 | — | Sonnet / high |
+| [STORE_SCHEMA_IN_MIGRATIONS](STORE_SCHEMA_IN_MIGRATIONS.md) | KERNEL-04 ([#2766](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2766)) | 0 | — | Opus / high (migration surface) |
+| [RETRIEVAL_READS_DURABLE_INDEX](RETRIEVAL_READS_DURABLE_INDEX.md) | KERNEL-05 ([#2767](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2767)) | 1 | KERNEL-03, KERNEL-04 | Opus / high (hot path) |
+| [TRANSFORM_PROVENANCE_STAMP](TRANSFORM_PROVENANCE_STAMP.md) | KERNEL-06 ([#2768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2768)) | 1 | KERNEL-04 ([#2766](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2766)) | Sonnet / high |
+| [STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN](STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.md) | KERNEL-07 ([#2769](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2769)) | 2 | — | Sonnet / high |
+| [EVENT_TOPIC_SCHEMA_REGISTRY](EVENT_TOPIC_SCHEMA_REGISTRY.md) | KERNEL-08 ([#2770](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2770)) | 2 | KERNEL-02 ([#2764](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2764)) | Sonnet / medium |
+| [PLAN_ADMISSION_VALIDATION](PLAN_ADMISSION_VALIDATION.md) | KERNEL-09 ([#2771](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2771)) | 2 | KERNEL-07 ([#2769](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2769)) | Sonnet / high |
+| [RUNTIME_SCOPE_PREFILTER_AND_ENVELOPE](RUNTIME_SCOPE_PREFILTER_AND_ENVELOPE.md) | KERNEL-10 ([#2772](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2772)) | 3 | KERNEL-05 ([#2767](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2767)) | Opus / xhigh (architecture) |
+| [HANDLER_IDEMPOTENCY_HARNESS](HANDLER_IDEMPOTENCY_HARNESS.md) | KERNEL-11 ([#2773](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2773)) | 3 | KERNEL-02, KERNEL-08 | Sonnet / medium |
+| [DEAD_LETTER_HEALTH_SIGNAL](DEAD_LETTER_HEALTH_SIGNAL.md) | KERNEL-12 ([#2774](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2774)) | 3 | — | Sonnet / medium |
+| [INTENT_CLASSIFICATION_GOLDEN_SET](INTENT_CLASSIFICATION_GOLDEN_SET.md) | KERNEL-13 ([#2775](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2775)) | 4 | KERNEL-07 ([#2769](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2769)) | Sonnet / medium |
+| [EVAL_SCORECARD_COMPARE](EVAL_SCORECARD_COMPARE.md) | KERNEL-14 ([#2776](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2776)) | 4 | KERNEL-13 ([#2775](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2775)) | Sonnet / medium |
+| [FAILURE_TO_EVAL_CAPTURE_LOOP](FAILURE_TO_EVAL_CAPTURE_LOOP.md) | KERNEL-15 ([#2777](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2777)) | 4 | KERNEL-12, KERNEL-13 | Sonnet / high |
 
 TCD hints follow `AGENTS.md :: Total Cost of Development` and are **non-binding**: `issue-to-code`
 re-derives capability from the issue's risk and artifact class. Escalate on the standard triggers
@@ -122,8 +122,8 @@ move is to stop and flag the issue contract, not to widen scope silently.
 
 ## Relationship to GitHub issues
 
-- Parent feature issue: **not yet filed** (see `PARENT_FEATURE_ISSUE.md`; updated when filed).
-- One issue per task file at filing time; a task file may later split into more issues if
+- Parent feature issue: **#2762** (live validation hub; see `PARENT_FEATURE_ISSUE.md`).
+- One issue per task file (**#2763–#2777**, filed 2026-07-02); a task file may later split into more issues if
   implementation reveals size (spec stays the source of truth).
 - KERNEL-05 **extends #2314 W4-RET-01** (the in-memory/durable reconciliation half). The #2314 epic
   is notified by comment; no parallel hub is created (epic stop-condition honored).
