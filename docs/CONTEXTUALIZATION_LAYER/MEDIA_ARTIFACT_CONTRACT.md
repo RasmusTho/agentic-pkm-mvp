@@ -259,7 +259,7 @@ authority:
 
 privacy: <privacy>                   # private | review-required | internal
 
-review_state: unreviewed             # unreviewed | reviewed | accepted
+review_state: draft                  # draft | reviewed — canonical set: docs/CONCEPTS/STATE_AXES_CONTRACT.md (#2793)
 
 created: <ISO-8601-date>
 updated: <ISO-8601-date>
@@ -311,7 +311,7 @@ authority:
   system_authoritative: false
 
 privacy: internal
-review_state: unreviewed
+review_state: draft
 created: 2026-05-18
 updated: 2026-05-18
 ---
@@ -358,7 +358,7 @@ authority:
   requires_review: true
 
 privacy: review-required
-review_state: unreviewed
+review_state: draft
 created: 2026-05-18
 updated: 2026-05-18
 ---
@@ -419,7 +419,7 @@ authority:
   requires_review: true
 
 privacy: private
-review_state: unreviewed
+review_state: draft
 created: 2026-05-18
 updated: 2026-05-18
 ---
@@ -461,7 +461,7 @@ authority:
   system_authoritative: false
 
 privacy: internal
-review_state: unreviewed
+review_state: draft
 created: 2026-05-15
 updated: 2026-05-15
 ---
@@ -501,7 +501,7 @@ authority:
   system_authoritative: false
 
 privacy: private
-review_state: unreviewed
+review_state: draft
 created: 2026-05-18
 updated: 2026-05-18
 ---

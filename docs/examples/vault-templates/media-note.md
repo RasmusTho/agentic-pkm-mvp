@@ -23,7 +23,7 @@ authority:
   system_authoritative: false
 
 privacy: private                # private | review-required | internal
-review_state: unreviewed        # unreviewed | reviewed
+review_state: draft             # draft | reviewed
 
 created: "{{date}}"
 updated: "{{date}}"

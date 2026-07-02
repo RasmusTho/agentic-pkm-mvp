@@ -80,14 +80,13 @@ frontmatter, `transcript_available`, AI summary section marked non-authoritative
 results as suggestion content.
 
 The slice **extends** the template frontmatter with the initial non-authoritative posture markers
-triage policy §3 mandates for AI-generated content: `authority.requires_review: true` plus an
-explicit unreviewed review posture. The shipped template carries no `review_state` field today and
-defaults `requires_review` to `false`, so this is a template change delivered with the slice — not
-an already-existing field. Vocabulary caveat: the triage policy expresses the posture as
-`review_state: unreviewed`, while `STATE_AXES_CONTRACT.md`'s canonical `review_state` set is
-`draft / provisional / reviewed / protected / archived`; that reconciliation is a pre-existing item
-between those two owner docs (tracked as issue #2793) — this spec mandates the *posture*, not
-a specific token. Human takeaways and any promotion remain human acts per triage policy §4.3.
+triage policy §3 mandates for AI-generated content: `authority.requires_review: true` plus
+`review_state: draft`. The shipped template carries no `review_state` field today and defaults
+`requires_review` to `false`, so this is a template change delivered with the slice — not an
+already-existing field. Vocabulary: resolved by the #2793 owner decision (2026-07-02) — the triage
+policy's former `unreviewed`/`queued` tokens map to the canonical `draft`/`provisional` values
+owned by `STATE_AXES_CONTRACT.md`. Human takeaways and any promotion remain human acts per triage
+policy §4.3.
 
 Raw and normalized artifacts are machine-side records, not vault notes; the note references them
 via provenance. **Raw retention:** `raw` records are retained as rebuildable machine-side records
@@ -111,7 +110,7 @@ Acceptance criteria (each needs a concrete `Verify:` target when issues are file
 - [ ] One extractor (e.g. `summary`) produces schema-valid output registered per the extraction
       registry; schema mismatch fails loudly.
 - [ ] Candidate written back as a `youtube_source_note` companion artifact with the mandated
-      non-authoritative posture markers (`requires_review: true` + unreviewed posture — see
+      non-authoritative posture markers (`requires_review: true` + `review_state: draft` — see
       §Writeback, including the template-frontmatter extension shipped in the same slice) and full
       provenance; triage state entry is `captured`; nothing advances triage automatically.
 - [ ] Replay: deleting all derived levels and re-running from `raw` reproduces equivalent

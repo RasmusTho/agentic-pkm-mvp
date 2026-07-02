@@ -106,7 +106,7 @@ A small set of fields can recur across artifact classes. None of them are mandat
 | `author_type` | `human`, `agent`, `system`, or `mixed`. |
 | `primary_audience` | `human`, `agent`, `system`, or `mixed`. |
 | `source_refs` | References to the artifacts this one is grounded in or derived from. |
-| `review_state` | Posture toward human review (e.g. `unreviewed`, `reviewed`, `accepted`, `rejected`). |
+| `review_state` | Posture toward human review. Canonical values owned by `docs/CONCEPTS/STATE_AXES_CONTRACT.md`: `draft`, `provisional`, `reviewed`, `protected`, `archived` (mapping decided in #2793). Agentic-memory review outcomes (`accepted`/`rejected` and friends) are a MEM-owned vocabulary pending reconciliation — see #2820. |
 | `lifecycle` | Stability and retention posture: `ephemeral`, `active`, `durable`, `archived`, `rebuildable`. |
 | `authority` | Trust and action boundary. A map or set of flags; see Section 4.1. |
 | `provenance` | Where the artifact or its claims originated. See Section 4.1 and Section 11. |
@@ -170,7 +170,7 @@ These rules apply to any field or artifact that AI has produced or may produce. 
 
 **Marking AI-generated fields.** When individual fields in an otherwise human-owned artifact are AI-generated, they should be grouped or marked as such (e.g. an `ai_generated_fields` list in the `authority` block, or by carrying those fields in a companion note rather than inline).
 
-**Promotion path.** Promotion from `ai_suggestion` or unreviewed agentic memory into a durable Human Knowledge Artifact requires explicit human review or a governed process. `review_state: queued` is the expected staging state before review; promotion produces a different artifact class, not a mutation of the suggestion in place.
+**Promotion path.** Promotion from `ai_suggestion` or unreviewed agentic memory into a durable Human Knowledge Artifact requires explicit human review or a governed process. `review_state: provisional` is the expected staging state before review (#2793 mapping); promotion produces a different artifact class, not a mutation of the suggestion in place.
 
 ## 5. Human Knowledge Artifact Metadata
 
@@ -629,7 +629,7 @@ authority:
   source_authoritative: false
   ai_generated: true
   requires_review: true
-review_state: unreviewed
+review_state: draft
 created: 2026-05-18
 ---
 ```
@@ -674,7 +674,7 @@ authority:
   ai_generated: true
   human_authored: false
   requires_review: true
-review_state: queued
+review_state: provisional
 review_reason: AI-derived preference candidate; human confirmation required before activation.
 stale_after: 2026-06-18
 activation_policy: review_required

@@ -90,7 +90,7 @@ Invariants that hold *across* the Phase 2 tasks, with their partial-failure seam
   source call. Extractor LLM calls (KA-04) are model-provider egress routed per
   `docs/LLM_ROUTING.md` — a different boundary, unaffected by this invariant.
 - **Posture markers are unconditional.** Any note reaching the vault carries
-  `requires_review: true` + unreviewed posture (KA-05); no ordering of stage execution or retry
+  `requires_review: true` + `review_state: draft` (KA-05, per the #2793 resolution); no ordering of stage execution or retry
   may produce a note without them.
 - **Events are per-stage and idempotent.** Re-running any stage (crash recovery, replay, duplicate
   delivery) must not duplicate effects or events (KA-04 version semantics, KA-06 idempotency
@@ -124,7 +124,7 @@ reconciliation to raise explicitly at that point.
 - **CAO** — extractors are non-side-effecting cognition producing proposals.
 - **HKA / SIP / PDM** — touched only through existing contracts: the candidate companion note is a
   durable but **non-authority-bearing** vault write (write class: mechanical durable, through the
-  governed vault-write mechanics — it carries `requires_review` and unreviewed posture, so it never
+  governed vault-write mechanics — it carries `requires_review: true` and `review_state: draft`, so it never
   constitutes accepted human knowledge); provenance/lineage per SIP contracts; machine-side records
   via StorePort (PDM).
 - **GOV / MEM** — untouched: promotion and memory semantics stay with their owners.

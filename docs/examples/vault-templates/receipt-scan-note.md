@@ -33,7 +33,7 @@ authority:
   requires_review: true
 
 privacy: private                 # private | review-required
-review_state: unreviewed         # unreviewed | reviewed
+review_state: draft              # draft | reviewed
 
 created: "{{date}}"
 updated: "{{date}}"
