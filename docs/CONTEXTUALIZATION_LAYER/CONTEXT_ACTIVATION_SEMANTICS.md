@@ -26,7 +26,7 @@ This document is **target-state semantics, not runtime claim**. Nothing here ass
 This document builds directly on:
 
 - `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` (§9) — the initial vocabulary for the five use rights and their default stances per artifact class.
-- `docs/CONTEXTUALIZATION_LAYER/ARTIFACT_METADATA_CONTRACT.md` (§9) — use rights as descriptive metadata hooks; per-class metadata shapes; `review_state`, `activation_policy`, `stale_after`, `validity` fields.
+- `docs/CONTEXTUALIZATION_LAYER/ARTIFACT_METADATA_CONTRACT.md` (§9) — use rights as descriptive metadata hooks; per-class metadata shapes; `review_state`/`memory_state`, `activation_policy`, `stale_after`, `validity` fields.
 - `docs/CONTEXTUALIZATION_LAYER/ARTIFACT_LIFECYCLE_MODEL.md` (§4, §8) — lifecycle state is not authority; stale vs invalidated vs archived semantics; the `activated` term deferred to this document.
 - `docs/CONTEXTUALIZATION_LAYER/COMPANION_NOTE_PATTERN.md` — companion note types, `activation_companion`, `review_companion`, human editability and managed-block rules.
 
@@ -97,13 +97,13 @@ The following invariants from the prior Contextualization Layer docs are load-be
 - The artifact holds `retrievable` (Section 4.2).
 - The artifact's lifecycle state is `activatable/current` — see Section 6.
 - The artifact's `activation_policy` permits activation (see Section 4.3.1).
-- For agentic memory artifacts: `review_state` is `reviewed` / `accepted` — an `unreviewed` or `candidate` artifact does not hold `activatable` for working context use. See Section 5.2 and Section 7.
+- For agentic memory artifacts: `memory_state` is `reviewed` / `accepted` — an `unreviewed` or `candidate` artifact does not hold `activatable` for working context use. See Section 5.2 and Section 7.
 
 **Stale artifacts and activatability:** a stale artifact is **not** activatable by default. See Section 6 for the stale-but-visible / activatable-current distinction.
 
 **Default by class:**
 - Human Knowledge Artifacts: `activatable` conditional on lifecycle state. A `settled` or `working` (non-stale) human note with no governance restriction is activatable.
-- Agentic Memory Artifacts: `activatable` only if `review_state: reviewed` or `accepted`. `candidate` and `unreviewed` artifacts are not activatable for agent working context. See Section 7.
+- Agentic Memory Artifacts: `activatable` only if `memory_state: reviewed` or `accepted`. `candidate` and `unreviewed` artifacts are not activatable for agent working context. See Section 7.
 - Bridge / Assembly Artifacts: `activatable` is inapplicable in the same sense — a bundle *is* an activation artifact. Its `assembled` / `exposed` lifecycle state and its `authority_flags` govern what the bundle may do, not the standard five use rights. See Section 8.
 - Machine Mirror Artifacts: not `activatable` in the human-knowledge / agentic-memory sense. A machine mirror is a retrieval aid; it is consumed by the retrieval surface, not by the agent's context window directly. The artifact that enters working context is the source that the mirror indexes.
 - Companion Metadata Notes: not `activatable` for agent task working context directly. A companion's content may be surfaced through the review or activation surface it serves; the companion itself does not enter agent context as a content artifact.
@@ -122,7 +122,7 @@ Illustrative policy values:
 | `review_queue_only` | Artifact may enter the review queue surface, but not agent task working context. Appropriate for `candidate` or `unreviewed` agentic memory. |
 | `blocked` | Artifact may not be retrieved or activated; suppresses both rights. |
 
-These are illustrative; additional policy values may be introduced by later contracts. The `activation_policy` supplements class-level defaults but cannot elevate an artifact above its class or `review_state` ceiling. An `unreviewed` agentic memory artifact cannot reach `activatable` by setting `activation_policy: explicit_or_contextual` — the review requirement is categorical, not overridable by policy.
+These are illustrative; additional policy values may be introduced by later contracts. The `activation_policy` supplements class-level defaults but cannot elevate an artifact above its class or `memory_state` ceiling. An `unreviewed` agentic memory artifact cannot reach `activatable` by setting `activation_policy: explicit_or_contextual` — the review requirement is categorical, not overridable by policy.
 
 ### 4.4 `instructional`
 
@@ -132,7 +132,7 @@ These are illustrative; additional policy values may be introduced by later cont
 
 **Minimum conditions to hold:**
 - The artifact holds `activatable` (Section 4.3).
-- For agentic memory artifacts: `review_state: accepted` (not merely `reviewed`). An artifact that has been reviewed but not yet promoted to `accepted` does not hold `instructional`.
+- For agentic memory artifacts: `memory_state: accepted` (not merely `reviewed`). An artifact that has been reviewed but not yet promoted to `accepted` does not hold `instructional`.
 - The artifact's governance posture (per `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md`) grants instructional authority.
 
 **Why `instructional` requires more than `activatable`:** an artifact in working context is visible to the agent and may be referenced in responses. An artifact that is instructional actively shapes the agent's behavior. A preference candidate that has not yet been accepted by the human should not quietly steer the agent. The distinction prevents retrieved-but-unconfirmed signals from functioning as behavioral directives.
@@ -166,7 +166,7 @@ These are illustrative; additional policy values may be introduced by later cont
 
 ## 5. Use-right defaults per artifact class
 
-This section summarises the default use-right posture for each artifact class. These are defaults, not enforcement claims. Specific artifacts may hold higher or lower rights based on lifecycle state, `activation_policy`, `review_state`, governance posture, and the conditions in Section 4.
+This section summarises the default use-right posture for each artifact class. These are defaults, not enforcement claims. Specific artifacts may hold higher or lower rights based on lifecycle state, `activation_policy`, `memory_state`, governance posture, and the conditions in Section 4.
 
 ### 5.1 Human Knowledge Artifacts
 
@@ -186,9 +186,9 @@ Human knowledge artifacts default to *visible* and *retrievable* because they ar
 |---|---|---|
 | `visible` | true | n/a — default (enables review) |
 | `retrievable` | true | indexed; `review_queue_only` policy restricts to review surfaces |
-| `activatable` | false | `review_state: reviewed` or `accepted`; lifecycle `current`; not `stale` |
-| `instructional` | false | `review_state: accepted`; `memory_type` carries behavioral signal; governance grant |
-| `action_authorizing` | false | `review_state: accepted`; `memory_type: policy_memory` or `preference_memory`; governance grant; not stale |
+| `activatable` | false | `memory_state: reviewed` or `accepted`; lifecycle `current`; not `stale` |
+| `instructional` | false | `memory_state: accepted`; `memory_type` carries behavioral signal; governance grant |
+| `action_authorizing` | false | `memory_state: accepted`; `memory_type: policy_memory` or `preference_memory`; governance grant; not stale |
 
 The step from `retrievable` to `activatable` is gated by human review. This is the central safety boundary of the agentic memory model. See Section 7.
 
@@ -275,7 +275,7 @@ For agentic memory specifically: re-validation of a stale artifact does not bypa
 
 This is not a style preference. It is the central safety constraint of the Contextualization Layer's agentic memory model, already stated in `docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md` §9 and `docs/CONTEXTUALIZATION_LAYER/ARTIFACT_LIFECYCLE_MODEL.md` §3.
 
-An unreviewed artifact in `candidate` or `unreviewed` `review_state` may hold:
+An unreviewed artifact in `candidate` or `unreviewed` `memory_state` may hold:
 - `visible = true` (the human can inspect it)
 - `retrievable = true` (it may appear in review queues and search results with an `unreviewed` marker)
 
@@ -296,11 +296,11 @@ An agent working with unreviewed memory as if it were reviewed memory may:
 
 The visibility and retrievability of `unreviewed` artifacts exist precisely to make review possible. Allowing them to silently become `activatable` would close the review loop before review occurs. The distinction is the difference between memory the human has confirmed and memory the system believes the human holds.
 
-### 7.3 Review state vocabulary
+### 7.3 Memory state vocabulary
 
-The `review_state` field introduced in `ARTIFACT_METADATA_CONTRACT.md` §4 carries the following values for agentic memory use rights:
+The `memory_state` field — the MEM-owned memory-review axis (decision #2820; formerly expressed through `review_state`, which now carries only the canonical STATE_AXES values) — holds the following values for agentic memory use rights:
 
-| `review_state` | Maximum use right |
+| `memory_state` | Maximum use right |
 |---|---|
 | `unreviewed` | `retrievable` (for review surfaces only) |
 | `reviewed` | `activatable` (for reading surfaces; not yet `instructional`) |
@@ -310,9 +310,9 @@ The `review_state` field introduced in `ARTIFACT_METADATA_CONTRACT.md` §4 carri
 
 These are use-right ceilings, not floors. An `accepted` artifact may still be blocked from `action_authorizing` by governance posture, staleness, or scope mismatch.
 
-### 7.4 Surfacing the review state in recall
+### 7.4 Surfacing the memory state in recall
 
-When a `reviewed` or `accepted` agentic memory artifact is activated, the activation receipt should record its `review_state` at activation time. If an artifact's `review_state` was `accepted` at the time of activation and has since been `revised` or `invalidated`, the receipt preserves the state it held at activation — this is the audit record, not a retroactive permission grant.
+When a `reviewed` or `accepted` agentic memory artifact is activated, the activation receipt should record its `memory_state` at activation time. If an artifact's `memory_state` was `accepted` at the time of activation and has since been `revised` or `invalidated`, the receipt preserves the state it held at activation — this is the audit record, not a retroactive permission grant.
 
 ## 8. Bridge artifacts — assembling context without becoming memory
 
@@ -424,7 +424,7 @@ The compact and summary forms should be derivable from the full explanation with
 | Use right applied | Minimum explanation requirements |
 |---|---|
 | `activatable` | artifact identity, lifecycle state, activation reason, bundle reference |
-| `instructional` | all of the above, plus `review_state: accepted`, memory type, behavioral claim summary |
+| `instructional` | all of the above, plus `memory_state: accepted`, memory type, behavioral claim summary |
 | `action_authorizing` | all of the above, plus explicit action scope, authority source (which accepted artifact or decision record), and receipt reference |
 
 Applying `instructional` or `action_authorizing` without recording the required fields is a violation of the recall contract — not a runtime enforcement failure (there is no enforcer yet), but a gap that the later authority/governance contract will need to close.

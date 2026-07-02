@@ -89,7 +89,7 @@ Cell values: **Y** = yes by default · **N** = no · **cond** = conditional (see
 
 1. Human knowledge is owned by the human, not governance; governance *gates system writes to it* (WriteGuard, APPLY, trust tier) but does not own its meaning.
 2. The companion note is a first-class durable system artifact (continuity/repair), **not** a cache or rebuildable projection (owner: `COMPANION_NOTE_CONTRACT.md`).
-3. Agentic memory authority is entirely gated by `review_state`: `unreviewed`→retrievable only; `reviewed`→activatable; `accepted`→instructional and conditionally action-authorizing for `policy_memory`/`preference_memory` (owner: `CONTEXT_ACTIVATION_SEMANTICS.md` §7.3). A `candidate` is proposal-like for review but is not a governance proposal object.
+3. Agentic memory authority is entirely gated by `memory_state` (the MEM-owned memory-review axis, decision #2820): `unreviewed`→retrievable only; `reviewed`→activatable; `accepted`→instructional and conditionally action-authorizing for `policy_memory`/`preference_memory` (owner: `CONTEXT_ACTIVATION_SEMANTICS.md` §7.3). A `candidate` is proposal-like for review but is not a governance proposal object.
 4. Agentic memory becomes governance-relevant at the review/promotion gate; before review it is supporting material only.
 5. Workspace state is reconstructable from the durable surface + session inputs, but it is not a contracted rebuild target like a DB mirror; treat as discardable.
 6. A proposal may be agent- or human-authored; it is editable while staged and gains a linked receipt only upon application (owner: #1371 follow-up).

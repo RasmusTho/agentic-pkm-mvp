@@ -106,7 +106,7 @@ A small set of fields can recur across artifact classes. None of them are mandat
 | `author_type` | `human`, `agent`, `system`, or `mixed`. |
 | `primary_audience` | `human`, `agent`, `system`, or `mixed`. |
 | `source_refs` | References to the artifacts this one is grounded in or derived from. |
-| `review_state` | Posture toward human review. Canonical values owned by `docs/CONCEPTS/STATE_AXES_CONTRACT.md`: `draft`, `provisional`, `reviewed`, `protected`, `archived` (mapping decided in #2793). Agentic-memory review outcomes (`accepted`/`rejected` and friends) are a MEM-owned vocabulary pending reconciliation — see #2820. |
+| `review_state` | Posture toward human review. Canonical values owned by `docs/CONCEPTS/STATE_AXES_CONTRACT.md`: `draft`, `provisional`, `reviewed`, `protected`, `archived` (mapping decided in #2793). Agentic-memory review posture is the separate MEM-owned `memory_state` axis (decision #2820); vocabulary in `CONTEXT_ACTIVATION_SEMANTICS.md` §7.3. |
 | `lifecycle` | Stability and retention posture: `ephemeral`, `active`, `durable`, `archived`, `rebuildable`. |
 | `authority` | Trust and action boundary. A map or set of flags; see Section 4.1. |
 | `provenance` | Where the artifact or its claims originated. See Section 4.1 and Section 11. |
@@ -144,7 +144,7 @@ The table below states a default field posture. "Required" means a conformant ar
 | `provenance` | Recommended | Required | Required | Optional | Recommended |
 | `work_relation` | Recommended | Recommended | Recommended | Optional | Optional |
 | `privacy` | Optional | Optional | Optional | Optional | Optional |
-| `review` / `review_state` | Optional | Required | Optional | Optional | Optional |
+| `review` / `review_state` (agentic memory uses the `memory_state` axis instead — #2820) | Optional | Required | Optional | Optional | Optional |
 | `created` / `updated` | Recommended | Required | Required | Required | Recommended |
 | `source_refs` | Optional | Required | Required | Required | Optional |
 | `memory_type` | — | Required | — | — | — |
@@ -674,7 +674,7 @@ authority:
   ai_generated: true
   human_authored: false
   requires_review: true
-review_state: provisional
+memory_state: unreviewed
 review_reason: AI-derived preference candidate; human confirmation required before activation.
 stale_after: 2026-06-18
 activation_policy: review_required
@@ -682,7 +682,7 @@ allowed_consumers: []
 ---
 ```
 
-This candidate does not enter the `activation_policy` flow until `review_state` is promoted to `accepted` by a human or governed process.
+This candidate does not enter the `activation_policy` flow until `memory_state` is promoted to `accepted` by a human or governed process.
 
 ### 12.11 Machine mirror
 
