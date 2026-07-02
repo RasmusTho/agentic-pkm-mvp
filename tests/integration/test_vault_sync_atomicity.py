@@ -128,6 +128,8 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         file_state_before = _file_state_row_count(dsn)
         outbox_before = _outbox_row_count(dsn)
 
+        real_insert_object_and_outbox = vault_sync.insert_object_and_outbox
+
         def _boom(*args, **kwargs):
             raise RuntimeError("injected fault: outbox insert failed")
 
@@ -143,7 +145,9 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         assert _outbox_row_count(dsn) == outbox_before
 
         # A rerun after the injected crash (fault removed) converges to fully-synced state.
-        monkeypatch.undo()
+        # Restore only the fault stub, not the isolated-DSN env vars set by
+        # _configure_isolated_pg_test — monkeypatch.undo() would roll those back too.
+        monkeypatch.setattr(vault_sync, "insert_object_and_outbox", real_insert_object_and_outbox)
         result = vault_sync.sync_markdown(str(note_path))
         assert result["status"] == "ok"
         assert _objects_row_count(dsn) == objects_before + 1
@@ -174,7 +178,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
 
         real_enqueue = vault_sync._enqueue
 
-        def _boom(topic, payload):
+        def _boom(topic, payload, conn=None, **kwargs):
             raise RuntimeError("injected fault: enqueue failed")
 
         monkeypatch.setattr(vault_sync, "_enqueue", _boom)
