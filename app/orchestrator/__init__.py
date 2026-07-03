@@ -1,3 +1,4 @@
+from .admission import PlanAdmissionError, admit_plan, admit_planner_payload
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
 from .handler import OrchestratorContext, handle_event
 from .runtime import Orchestrator, OrchestratorError, PlanValidationError
@@ -10,10 +11,13 @@ __all__ = [
     "StepExecutionError",
     "Orchestrator",
     "OrchestratorError",
+    "PlanAdmissionError",
     "PlanValidationError",
     "OrchestratorContext",
     "handle_event",
     "OrchestratorV2",
     "CheckpointStore",
     "Outbox",
+    "admit_plan",
+    "admit_planner_payload",
 ]

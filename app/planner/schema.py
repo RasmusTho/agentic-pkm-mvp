@@ -19,6 +19,19 @@ class ToolDescriptor(BaseModel):
         return self.schema_
 
 
+#: Admission-relevant step classes (KERNEL-09, #2771). ``step_class`` is an
+#: explicit declaration over the existing step kinds — legacy plans that do not
+#: declare a class keep their current semantics; declared classes activate the
+#: R1/R2 ordering rules in ``app/orchestrator/admission.py``.
+StepClass = Literal[
+    "llm_transform",
+    "validation",
+    "authority_check",
+    "governed_effect",
+    "receipt",
+]
+
+
 class PlanStep(BaseModel):
     id: str
     kind: Literal["agent_call", "tool_call", "decision", "note"]
@@ -32,6 +45,10 @@ class PlanStep(BaseModel):
     tool_args: Dict[str, Any] = Field(default_factory=dict)
     depends_on: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    # KERNEL-09 admission extensions (all optional; absent on legacy plans).
+    step_class: Optional[StepClass] = None
+    verify: Optional[str] = None
+    budget: Optional[float] = Field(default=None, ge=0)
 
 
 class PlanMetadata(BaseModel):
@@ -55,6 +72,9 @@ class Plan(BaseModel):
     goal: Optional[str] = None
     context: Dict[str, Any] = Field(default_factory=dict)
     tags: List[str] = Field(default_factory=list)
+    # KERNEL-09 (R4): optional plan-level budget bound; when set, the sum of
+    # per-step budgets must not exceed it (checked at admission).
+    budget: Optional[float] = Field(default=None, ge=0)
 
 
 def new_plan_id() -> str:
@@ -91,6 +111,7 @@ __all__ = [
     "PlanMetadata",
     "PlanTrigger",
     "PlanStep",
+    "StepClass",
     "ToolDescriptor",
     "new_plan_id",
     "make_simple_plan",
