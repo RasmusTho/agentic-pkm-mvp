@@ -332,7 +332,7 @@ Do not require Phase 2 gates as a prerequisite for Phase 1 baseline work.
 
 ```bash
 # 1. Confirm prod checkout is on stable ref
-git rev-parse stable
+git rev-parse origin/stable
 git rev-parse HEAD   # should match
 
 # 2. Confirm environment resolves to prod
@@ -614,7 +614,7 @@ If this acceptance follows a `prepare-promotion` / `execute-promotion` run, a pl
 
 ```bash
 # Capture stable ref
-STABLE_REF=$(git rev-parse stable 2>/dev/null || git rev-parse HEAD)
+STABLE_REF=$(git rev-parse origin/stable 2>/dev/null || git rev-parse HEAD)
 echo "stable_ref=$STABLE_REF"
 
 # Generate a promotion receipt ID
@@ -651,9 +651,9 @@ Fields that must be populated before finalizing the receipt:
 ```bash
 # 1. Confirm previous stable ref exists for rollback anchor
 git tag --list | grep stable
-git rev-parse stable 2>/dev/null && echo "stable ref OK"
+git rev-parse origin/stable 2>/dev/null && echo "stable ref OK"
 # If a stable-prev ref was recorded during execute-promotion, confirm it resolves:
-git rev-parse stable-prev 2>/dev/null && echo "stable-prev ref OK" || \
+git rev-parse origin/stable-prev 2>/dev/null && echo "stable-prev ref OK" || \
   echo "stable-prev not set; manual rollback would use the previous stable sha from ops/promotions/"
 
 # 2. Confirm the rollback skill is available
