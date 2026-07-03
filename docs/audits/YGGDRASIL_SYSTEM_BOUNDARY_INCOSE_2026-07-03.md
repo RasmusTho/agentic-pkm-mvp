@@ -47,8 +47,9 @@ Five corrections, most systemic first (blast radius × silence of failure):
    transition-debt files already record most gaps (D2, D4-D6, D8). The audit adds only what the
    register itself gets wrong: two misanchors (SIP's registered module is an embeddings/provider
    module its own charter excludes; OEF's is a latency-metrics file), a contract-name split
-   (`MemoryItem` vs `MemoryRecord`), and a documented-but-dead adapter surface
-   (`app/llm/adapter.py`) that four docs still present as canonical (§6, SBI-4).
+   (`MemoryItem` vs `MemoryRecord`), and a legacy provider surface (`app/llm/adapter.py`, dead;
+   plus `app/llm/embeddings.py`, still doc-cited as the registry) that docs present as canonical
+   while the live access layer is `app/components/llm/` (§6, SBI-4).
 
 Charter-premise corrections found while auditing (evidence discipline applies to the charter too):
 the sentence "not a supporting external system" attributed to `docs/INFRASTRUCTURE.md` exists
@@ -294,7 +295,7 @@ found at the contract level. Conform; no change recommended.
 | C4 | Charter "calls allowed" contradicts SBS Part 5 dependency table: RCA omits HKA; CAO omits HKA/SIP while SBS grants "HKA read contracts" | `docs/boundaries/RCA.md:49` vs `SYSTEM_BREAKDOWN_STRUCTURE.md:1444`; `CAO.md:47` vs `:1446` | Not self-tracked → SBI-4 |
 | C5 | Governed-write invariant absolute in charter, partial in runtime: only production EXE call site passes `decision_token=None`; MEM promotion module never touches GOV | `docs/boundaries/GOV.md:66`; `app/orchestrator/executor.py:340`; `app/agent_memory/promotion.py:1-18` | Self-tracked: D2/D5/D6 (`SBS_TRANSITION_DEBT.md:24-28`) — verify-enforcement confirms the debt register is truthful |
 | C6 | PDM storage-leak failure mode is live: direct `psycopg` + raw SQL in an API route and a vector module outside PDM ports | `app/api/routes/search.py:6,18,41-46`; `app/store/vector_store.py:5,20,27-38`; charter names exactly this at `docs/boundaries/PDM.md:82` | Self-named failure mode; no debt row → SBI-4 (add to debt register, mechanical) |
-| C7 | Docs present a dead adapter surface as canonical: `app/llm/adapter.py` has zero runtime importers; the live surface is `app/components/llm/` fabric, and an architecture test *enforces* the split the docs don't describe | `docs/LLM.md:31`, `docs/EMBEDDINGS.md:227`, `docs/INVENTORY.md:22-25` vs `docs/COMPONENTS.md:95`; `tests/architecture/test_import_rules.py:104-119` | Not self-tracked → SBI-4 |
+| C7 | Docs still present the legacy `app/llm/*` provider surface as canonical: `app/llm/adapter.py` has zero runtime importers (cited as the provider surface by `docs/INVENTORY.md:22-25`), and `docs/LLM.md:31` + `docs/EMBEDDINGS.md:227` present `app/llm/embeddings.py::PROVIDER_REGISTRY` as the adapter registry — while the live canonical access layer is `app/components/llm/` and an architecture test enforces the split the docs don't describe | `docs/INVENTORY.md:22-25`; `docs/LLM.md:31`; `docs/EMBEDDINGS.md:227` vs `docs/COMPONENTS.md:95`; `tests/architecture/test_import_rules.py:104-119` | Not self-tracked → SBI-4 |
 | C8 | WSP charter claims a single governed context binding; runtime resolves vaults independently per process | `docs/boundaries/WSP.md:18-19` vs D13/D14 (`SBS_TRANSITION_DEBT.md:35-36`) | Self-tracked |
 
 **Term-level note (seed hypothesis 4a):** the repo's "SBS" is an authority/bounded-context

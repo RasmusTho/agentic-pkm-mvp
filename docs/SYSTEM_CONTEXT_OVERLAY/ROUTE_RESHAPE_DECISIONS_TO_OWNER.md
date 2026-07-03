@@ -5,7 +5,7 @@ task_id: SBI-8
 source_anchor: "docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §3, §9, §13, §14, §15 (Q2, Q4)"
 parent_capability: SYSTEM_CONTEXT_OVERLAY
 prerequisites: [SBI-1]
-depends_on: [define-system-context-overlay.md]
+depends_on: [DEFINE_SYSTEM_CONTEXT_OVERLAY.md]
 can_parallelize_with: []
 ---
 
@@ -20,8 +20,9 @@ owner decline) — never the rename or rewording itself.
 ## Purpose
 
 Audit §13 classifies exactly two items as `Reshape — routed`: renaming
-`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` and rewording `docs/DESIGN_PRINCIPLES.md:115-119` (§9
-"System-of-Systems Thinking," which actually describes volatility isolation, not SoS). Both require
+`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` and rewording
+`docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking` (which actually describes volatility
+isolation, not SoS). Both require
 a CES/ADR + owner decision per the binding SBS-reconciliation rule
 (precedent: `docs/architecture/runtime-semantics.md :: SBS boundary mapping`) — they must not be
 enacted by an audit or by an agent acting on the audit's recommendation alone.
@@ -52,7 +53,7 @@ Once the owner decides (or explicitly declines to decide now, which is itself a 
 
 ```bash
 ls docs/adr/ | grep -i "system-of-systems\|design-principles-9"   # ADR present if owner chose to act
-grep -n "State:" docs/SYSTEM_CONTEXT_OVERLAY/route-reshape-decisions-to-owner.md   # decline recorded if not
+grep -n "State:" docs/SYSTEM_CONTEXT_OVERLAY/ROUTE_RESHAPE_DECISIONS_TO_OWNER.md   # decline recorded if not
 ```
 
 ## Why This Matters
@@ -69,22 +70,25 @@ agent from "helpfully" enacting a rename the owner never asked for.
       overlay note / explicit decline to decide), OR this file's state line records an explicit
       owner decline to decide now.
       Verify: doc writeback at `docs/adr/` (new ADR, if the owner acted) OR
-      `docs/SYSTEM_CONTEXT_OVERLAY/route-reshape-decisions-to-owner.md` (state line records decline)
+      `docs/SYSTEM_CONTEXT_OVERLAY/ROUTE_RESHAPE_DECISIONS_TO_OWNER.md` (state line records decline)
 - [ ] An ADR exists for Q4 (`DESIGN_PRINCIPLES.md` §9 rewording) recording the owner's decision
       (reword now / defer to next principles revision / explicit decline), OR this file's state
       line records an explicit owner decline to decide now.
       Verify: doc writeback at `docs/adr/` (new ADR, if the owner acted) OR
-      `docs/SYSTEM_CONTEXT_OVERLAY/route-reshape-decisions-to-owner.md` (state line records decline)
+      `docs/SYSTEM_CONTEXT_OVERLAY/ROUTE_RESHAPE_DECISIONS_TO_OWNER.md` (state line records decline)
 - [ ] No rename or rewording is performed by this task itself — only the decision record.
       Verify: `git diff --stat` for this task's PR shows no changes to
-      `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`'s filename or `docs/DESIGN_PRINCIPLES.md:115-119`'s
-      wording; any resulting rename/reword lands in a separate follow-up issue linked from the ADR
+      `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`'s filename or the wording of
+      `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking`; any resulting rename/reword
+      lands in a separate follow-up issue linked from the ADR
 
 ## How to Verify (Pre-Merge)
 
 1. Confirm no file rename occurred: `git status --porcelain docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`
    shows no rename/delete.
-2. Confirm no wording change to `docs/DESIGN_PRINCIPLES.md:115-119` landed as part of this task.
+2. Confirm no wording change to `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking` landed
+   as part of this task (`grep -A5 "^### 9. System-of-Systems Thinking" docs/DESIGN_PRINCIPLES.md`
+   matches the pre-task wording).
 3. Confirm either two ADRs exist (Proposed or Accepted) or this file's own state line documents an
    explicit decline for each of Q2/Q4 — partial (one decided, one silent) is not acceptable; both
    questions need an explicit answer, even if the answer is "not now."
@@ -104,7 +108,7 @@ agent from "helpfully" enacting a rename the owner never asked for.
 - `docs/architecture/runtime-semantics.md :: SBS boundary mapping` (precedent for the binding
   reconciliation rule)
 - `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` (owns any resulting reshape enactment)
-- `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/DESIGN_PRINCIPLES.md:115-119`
+- `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking`
 
 ## Related GitHub Issues
 

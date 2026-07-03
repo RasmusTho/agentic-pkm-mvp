@@ -6,7 +6,7 @@ source_anchor: "docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §
 parent_capability: SYSTEM_CONTEXT_OVERLAY
 prerequisites: []
 depends_on: []
-can_parallelize_with: [fix-register-and-charter-hygiene.md, complete-pending-boundary-charters.md]
+can_parallelize_with: [FIX_REGISTER_AND_CHARTER_HYGIENE.md, COMPLETE_PENDING_BOUNDARY_CHARTERS.md]
 ---
 
 # Define System Context Overlay
@@ -42,14 +42,19 @@ the audit already resolved):
    taxonomy-reconciliation paragraph (spine subsystem → SBS boundary mapping, including "Capability
    → CAO+RCA, the split no doc currently states").
 4. **SoS glossary entry + spine overlay note** (audit §3) — add a `System of Systems` entry to
-   `docs/GLOSSARY.md` (none exists today) stating: no SoS exists within the SoI boundary (the spine
-   subsystems fail every SoS taxon's independent-operability test,
-   `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26`); the internal usage is colloquial for "modular,
-   authority-separated single system," preserving ADR-0015's modularity intent; the one
-   INCOSE-defensible SoS reading is the operator's assembled environment (Yggdrasil + Obsidian +
-   iCloud, `docs/ARCHITECTURE.md:198`). Add a one-paragraph overlay note to
-   `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` linking to the new glossary entry and this overlay doc
-   — a note, not a rename (the rename is SBI-8's reshape question).
+   `docs/GLOSSARY.md` (none exists today) that is **descriptive of repo usage, not a normative
+   INCOSE ruling**. The entry records three things: (i) in this repo the term is used colloquially
+   for "modular, authority-separated single system," per ADR-0015's modularity intent; (ii) the
+   INCOSE sense requires operationally- and managerially-independent constituents and does not
+   apply to the internal decomposition (the spine subsystems fail every SoS taxon's
+   independent-operability test, `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26`) per the 2026-07-03
+   audit §3 — cited as advisory, not settling; (iii) the one INCOSE-defensible SoS reading is the
+   operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`),
+   and the doc-title question (rename `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` or keep it) is an
+   open owner decision (audit §15 Q2) — the entry links there instead of settling it. Add a
+   one-paragraph overlay note to `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` linking to the new
+   glossary entry and this overlay doc — a note, not a rename (the rename is SBI-8's reshape
+   question).
 5. **Enabling-system principle sentence** (audit §9) — one sentence, appended to
    `docs/DESIGN_PRINCIPLES.md` (or cited from the overlay doc if the principles doc's own
    maintainers prefer a pointer — pick whichever the existing doc's structure makes cheaper): a
@@ -88,9 +93,14 @@ described two incompatible ways because no doc owns the classification rule).
       functional-allocation pointer.
       Verify: doc writeback at `docs/architecture/system-context-overlay.md` (or the chosen
       filename) — presence of all five sections plus the pointer sentence
-- [ ] `docs/GLOSSARY.md` has a `System of Systems` entry matching audit §3's resolution (no SoS
-      within the SoI; one defensible environment-level reading).
-      Verify: doc writeback at `docs/GLOSSARY.md :: System of Systems`
+- [ ] `docs/GLOSSARY.md` has a `System of Systems` entry that is descriptive of repo usage, not a
+      settled normative ruling: it names the colloquial repo sense (ADR-0015 modularity intent),
+      cites the 2026-07-03 audit §3 as advisory for why the INCOSE sense does not apply to the
+      internal decomposition, and links the doc-title question to open owner decision Q2 (audit
+      §15) rather than resolving it.
+      Verify: doc writeback at `docs/GLOSSARY.md :: System of Systems` — entry present, framed as
+      descriptive (repo usage + audit-as-advisory), and links Q2 rather than declaring the doc-title
+      question settled
 - [ ] `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` carries a one-paragraph overlay note linking the new
       doc and the glossary entry, without renaming the file or rewording its existing claims.
       Verify: doc writeback at `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (new paragraph, existing

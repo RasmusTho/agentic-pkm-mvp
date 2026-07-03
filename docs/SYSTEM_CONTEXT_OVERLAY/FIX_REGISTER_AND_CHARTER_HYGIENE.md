@@ -6,7 +6,7 @@ source_anchor: "docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §
 parent_capability: SYSTEM_CONTEXT_OVERLAY
 prerequisites: []
 depends_on: []
-can_parallelize_with: [define-system-context-overlay.md, complete-pending-boundary-charters.md]
+can_parallelize_with: [DEFINE_SYSTEM_CONTEXT_OVERLAY.md, COMPLETE_PENDING_BOUNDARY_CHARTERS.md]
 ---
 
 # Fix Register And Charter Hygiene
@@ -43,25 +43,33 @@ task, or be split into sub-PRs if that is cheaper):
 - **C4** — Charter "calls allowed" contradicts the SBS Part 5 dependency table: RCA's charter omits
   HKA (`docs/boundaries/RCA.md:49` vs `SYSTEM_BREAKDOWN_STRUCTURE.md:1444`); CAO's charter omits
   HKA/SIP while SBS grants "HKA read contracts" (`docs/boundaries/CAO.md:47` vs `:1446`). Fix: sync
-  the charter "calls allowed" lists with the SBS Part 5 dependency table (the SBS dependency table
-  is more current per the audit's read — confirm against `SYSTEM_BREAKDOWN_STRUCTURE.md:1413-1483`
-  before editing which side wins).
+  direction follows `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, because its Part 4/5 dependency model and
+  ownership matrix are the declared source for boundary charters (the matrix section states it "is
+  the intended source for future architecture-fitness rules (OEF) and boundary charters (CES)").
+  Rows where the sync merely restates the SBS — RCA gaining HKA in "calls allowed" — are mechanical
+  and can be applied directly. The row that widens a charter's authority surface — CAO gaining "HKA
+  read contracts," against `CAO.md`'s own reach-around caution — must be routed through the CES
+  stewardship channel, with a one-line note in the PR, rather than silently applied.
 - **C6** — Live PDM storage-leak failure mode with no debt row: direct `psycopg` + raw SQL in
   `app/api/routes/search.py:6,18,41-46` and `app/store/vector_store.py:5,20,27-38`, a failure mode
   the PDM charter names by name (`docs/boundaries/PDM.md:82`) but that has no row in
   `SBS_TRANSITION_DEBT.md`. Fix: add one debt row (mechanical — the failure mode and its evidence
   are already fully specified by the audit; this task only records it in the register's own format).
-- **C7** — `app/llm/adapter.py` has zero runtime importers, but `docs/LLM.md:31`,
-  `docs/EMBEDDINGS.md:227`, and `docs/INVENTORY.md:22-25` present it as canonical; the live surface
-  is `app/components/llm/`, and `tests/architecture/test_import_rules.py:104-119` already enforces
-  the split the docs do not describe. Fix: mark `app/llm/adapter.py` as superseded in all three docs
-  and point them at `app/components/llm/` (`docs/COMPONENTS.md:95`).
+- **C7** — Two legacy `app/llm/*` modules, cited by different docs. `app/llm/adapter.py` has zero
+  runtime importers and is cited as the provider surface by `docs/INVENTORY.md:22-25`.
+  `app/llm/embeddings.py::PROVIDER_REGISTRY` is cited as the adapter registry by `docs/LLM.md:31`
+  and `docs/EMBEDDINGS.md:227`. The live canonical access layer for both is `app/components/llm/`,
+  and `tests/architecture/test_import_rules.py:104-119` already enforces the split the docs do not
+  describe. Fix: mark **both** legacy modules superseded in their citing docs — `app/llm/adapter.py`
+  in `docs/INVENTORY.md`; `app/llm/embeddings.py` in `docs/LLM.md` and `docs/EMBEDDINGS.md` — and
+  point all three at `app/components/llm/` (`docs/COMPONENTS.md:95`).
 
 ## Concretely
 
 ```bash
 grep -n "app/index/embeddings.py" docs/architecture/SBS_BOUNDARY_REGISTER.md   # C1: should be gone/corrected
-grep -n "app/llm/adapter.py" docs/LLM.md docs/EMBEDDINGS.md docs/INVENTORY.md  # C7: must read "superseded"
+grep -n "app/llm/adapter.py" docs/INVENTORY.md                                 # C7: must read "superseded"
+grep -n "app/llm/embeddings.py" docs/LLM.md docs/EMBEDDINGS.md                 # C7: must read "superseded"
 grep -rn "MemoryItem\|MemoryRecord" docs/boundaries/MEM.md schemas/memory-item.schema.json app/agent_memory/memory_record.py
 diff <(grep -A5 "^| RCA" docs/SYSTEM_BREAKDOWN_STRUCTURE.md) docs/boundaries/RCA.md  # C4 spot check
 grep -n "search.py\|vector_store.py" docs/architecture/SBS_TRANSITION_DEBT.md        # C6: new row present
@@ -73,7 +81,8 @@ A register or charter that misreports its own anchors is worse than one with a g
 it actively misleads the next agent that trusts it (C1/C2 would have been caught by a machine-
 checkable invariant, INV-SB2, if one existed; this task is the manual fix that invariant would
 otherwise have to catch repeatedly). C7 in particular means three docs currently point contributors
-at dead code as if it were the live surface.
+at legacy `app/llm/*` modules — one dead, one still a de facto registry — as if either were the
+live surface.
 
 ## Acceptance Criteria
 
@@ -97,17 +106,20 @@ at dead code as if it were the live surface.
       at `docs/boundaries/PDM.md:82`.
       Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md` (new row citing
       `app/api/routes/search.py` and `app/store/vector_store.py`)
-- [ ] `docs/LLM.md`, `docs/EMBEDDINGS.md`, `docs/INVENTORY.md` mark `app/llm/adapter.py` as
-      superseded and point to `app/components/llm/`.
-      Verify: `grep -rn "app/llm/adapter.py" docs/LLM.md docs/EMBEDDINGS.md docs/INVENTORY.md`
-      returns only superseded-marked references
+- [ ] `docs/INVENTORY.md` marks `app/llm/adapter.py` as superseded, and `docs/LLM.md` +
+      `docs/EMBEDDINGS.md` mark `app/llm/embeddings.py` as superseded, all pointing to
+      `app/components/llm/`.
+      Verify: `grep -n "app/llm/adapter.py" docs/INVENTORY.md` and
+      `grep -n "app/llm/embeddings.py" docs/LLM.md docs/EMBEDDINGS.md` return only
+      superseded-marked references
 
 ## How to Verify (Pre-Merge)
 
 1. `grep -n "app/index/embeddings.py" docs/architecture/SBS_BOUNDARY_REGISTER.md` — expect no match
    (or a corrected anchor).
-2. `grep -rn "app/llm/adapter.py" docs/` — every hit is annotated superseded.
-3. Manual diff of RCA/CAO charter "calls allowed" against `SYSTEM_BREAKDOWN_STRUCTURE.md:1413-1483`.
+2. `grep -rn "app/llm/adapter.py\|app/llm/embeddings.py" docs/` — every hit is annotated superseded.
+3. Manual diff of RCA/CAO charter "calls allowed" against
+   `docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Part 4 - Dependency Model`.
 4. `grep -n "search.py\|vector_store.py" docs/architecture/SBS_TRANSITION_DEBT.md` — new row present.
 5. Confirm the MEM name decision either landed consistently in all three surfaces or is logged as an
    explicit open debt row — no silent partial fix.
@@ -118,8 +130,8 @@ at dead code as if it were the live surface.
   `SBS_TRANSITION_DEBT.md` — those need no new work, they are correctly recorded already.
 - Fixing the underlying PDM storage-leak code itself (C6 only adds the debt row; the leak fix is
   separate runtime work, not a docs-hygiene task).
-- Removing `app/llm/adapter.py` from the codebase — C7 only fixes the docs that present it as
-  canonical; deletion (if warranted) is a separate code-change decision.
+- Removing `app/llm/adapter.py` or `app/llm/embeddings.py` from the codebase — C7 only fixes the
+  docs that present them as canonical; deletion (if warranted) is a separate code-change decision.
 - Any register/charter change beyond the six named divergences.
 
 ## Related Docs

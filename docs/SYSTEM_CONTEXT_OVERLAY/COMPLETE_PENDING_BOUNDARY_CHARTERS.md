@@ -6,7 +6,7 @@ source_anchor: "docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §
 parent_capability: SYSTEM_CONTEXT_OVERLAY
 prerequisites: []
 depends_on: []
-can_parallelize_with: [define-system-context-overlay.md, fix-register-and-charter-hygiene.md]
+can_parallelize_with: [DEFINE_SYSTEM_CONTEXT_OVERLAY.md, FIX_REGISTER_AND_CHARTER_HYGIENE.md]
 ---
 
 # Complete Pending Boundary Charters
@@ -14,9 +14,11 @@ can_parallelize_with: [define-system-context-overlay.md, fix-register-and-charte
 ## Purpose
 
 Charter coverage is 11/14: HIX, EBF, and DRI charters remain pending
-(`docs/architecture/traceability-matrix.md:79`, `docs/boundaries/README.md:59,64,66`). EBF's absence
-is the most consequential — it is the SoI edge this overlay's classification work attaches to, and
-both EXE and SFC charters already delegate real responsibilities to it
+(`docs/architecture/traceability-matrix.md :: Boundary charters delivered (#2540–#2543)`,
+`docs/boundaries/README.md:59,64,66`). Re-verify before starting:
+`grep -n Pending docs/boundaries/README.md` — concurrent charter work may have changed coverage.
+EBF's absence is the most consequential — it is the SoI edge this overlay's classification work
+attaches to, and both EXE and SFC charters already delegate real responsibilities to it
 (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1481`, `:522`). This is already-tracked #2533-line charter
 work; this task extends it, it is not a new hub.
 
@@ -43,8 +45,9 @@ Invariants, Failure modes, Required tests). Order matters — write EBF first:
   (COTS/rebuildable framing) for consistency, but do not block on SBI-2 landing first — DRI's
   charter is about the boundary's *responsibility*, not the infra classification.
 
-Update `docs/boundaries/README.md`'s coverage table (14/14) and remove the "pending" notes at
-`docs/architecture/traceability-matrix.md:79`.
+Update `docs/boundaries/README.md`'s coverage table (14/14) and remove the "pending" note at
+`docs/architecture/traceability-matrix.md :: boundary-charter coverage note ("HIX, EBF, and DRI
+remain pending")` (`grep -n "HIX, EBF, and DRI remain pending" docs/architecture/traceability-matrix.md`).
 
 ## Concretely
 
@@ -71,8 +74,9 @@ exist so the "port/adapter is always a SoI element" rule has an owning boundary 
       coverage table).
       Verify: doc writeback at `docs/boundaries/README.md` — coverage table has zero "Pending"
       cells
-- [ ] `docs/architecture/traceability-matrix.md`'s pending note (line ~79) is removed or updated to
-      reflect full coverage.
+- [ ] `docs/architecture/traceability-matrix.md`'s boundary-charter coverage note (found via
+      `grep -n "HIX, EBF, and DRI remain pending" docs/architecture/traceability-matrix.md`) is
+      removed or updated to reflect full coverage.
       Verify: doc writeback at `docs/architecture/traceability-matrix.md` — "HIX, EBF, and DRI
       remain pending" sentence no longer present
 - [ ] EBF's charter states the integration-lifecycle-management gap as an owned-but-not-yet-built

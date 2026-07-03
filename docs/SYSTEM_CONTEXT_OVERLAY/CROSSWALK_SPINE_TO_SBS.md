@@ -5,7 +5,7 @@ task_id: SBI-3
 source_anchor: "docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §4, §14"
 parent_capability: SYSTEM_CONTEXT_OVERLAY
 prerequisites: [SBI-1]
-depends_on: [define-system-context-overlay.md]
+depends_on: [DEFINE_SYSTEM_CONTEXT_OVERLAY.md]
 can_parallelize_with: []
 ---
 
@@ -92,7 +92,7 @@ people will derive two different answers (one landing on CAO, one on RCA, both p
 
 - `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §4`
 - `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`,
-  `docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: §63 (spine-as-bridge claim)`
+  `docs/SYSTEM_BREAKDOWN_STRUCTURE.md:63 (spine-as-bridge claim)`
 
 ## Related GitHub Issues
 

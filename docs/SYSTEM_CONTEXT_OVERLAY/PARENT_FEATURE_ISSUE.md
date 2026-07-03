@@ -24,13 +24,13 @@ item to an owner decision.
 Specification directory: `docs/SYSTEM_CONTEXT_OVERLAY/` (see `README.md` for the full task index,
 dependency order, and cross-task invariants).
 
-1. [define-system-context-overlay.md](define-system-context-overlay.md) — SBI-1
-2. [classify-deployed-infrastructure.md](classify-deployed-infrastructure.md) — SBI-2
-3. [crosswalk-spine-to-sbs.md](crosswalk-spine-to-sbs.md) — SBI-3
-4. [fix-register-and-charter-hygiene.md](fix-register-and-charter-hygiene.md) — SBI-4
-5. [index-requirements-coverage.md](index-requirements-coverage.md) — SBI-5
-6. [complete-pending-boundary-charters.md](complete-pending-boundary-charters.md) — SBI-7
-7. [route-reshape-decisions-to-owner.md](route-reshape-decisions-to-owner.md) — SBI-8 (owner-gated;
+1. [DEFINE_SYSTEM_CONTEXT_OVERLAY.md](DEFINE_SYSTEM_CONTEXT_OVERLAY.md) — SBI-1
+2. [CLASSIFY_DEPLOYED_INFRASTRUCTURE.md](CLASSIFY_DEPLOYED_INFRASTRUCTURE.md) — SBI-2
+3. [CROSSWALK_SPINE_TO_SBS.md](CROSSWALK_SPINE_TO_SBS.md) — SBI-3
+4. [FIX_REGISTER_AND_CHARTER_HYGIENE.md](FIX_REGISTER_AND_CHARTER_HYGIENE.md) — SBI-4
+5. [INDEX_REQUIREMENTS_COVERAGE.md](INDEX_REQUIREMENTS_COVERAGE.md) — SBI-5
+6. [COMPLETE_PENDING_BOUNDARY_CHARTERS.md](COMPLETE_PENDING_BOUNDARY_CHARTERS.md) — SBI-7
+7. [ROUTE_RESHAPE_DECISIONS_TO_OWNER.md](ROUTE_RESHAPE_DECISIONS_TO_OWNER.md) — SBI-8 (owner-gated;
    `agent:needs-human`, never `agent:ready`)
 
 SBI-6 is deliberately unallocated (folded into SBI-1's functional-allocation pointer; see
@@ -72,7 +72,7 @@ no new SBS boundary or subsystem is created.
 - [ ] SBI-8 produces an ADR (or explicit owner decline) for the SoS naming and
       `DESIGN_PRINCIPLES.md` §9 reshape questions.
       Verify: doc writeback at `docs/adr/` (new ADR) or an explicit decline recorded in
-      `docs/SYSTEM_CONTEXT_OVERLAY/route-reshape-decisions-to-owner.md`
+      `docs/SYSTEM_CONTEXT_OVERLAY/ROUTE_RESHAPE_DECISIONS_TO_OWNER.md`
 
 ## Verification Path
 

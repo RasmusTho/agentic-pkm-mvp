@@ -5,7 +5,7 @@ task_id: SBI-2
 source_anchor: "docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §2, §14"
 parent_capability: SYSTEM_CONTEXT_OVERLAY
 prerequisites: [SBI-1]
-depends_on: [define-system-context-overlay.md]
+depends_on: [DEFINE_SYSTEM_CONTEXT_OVERLAY.md]
 can_parallelize_with: []
 ---
 
@@ -27,8 +27,9 @@ Extend `docs/ARCHITECTURE.md :: System Context (Current)` (line ~95) with one cl
 column or subsection — one row per deployed element — using the four-class rule from SBI-1's
 overlay doc (SoI component / COTS system element / enabling system / external system). Cover, at
 minimum, every service in `docker-compose.yaml` and every host process listed in
-`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md:28-67`: db (Postgres/pgvector), Ollama, api, worker,
-watcher, companion-ui gateways, Colima, Tailscale, GitHub, iCloud.
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Environment matrix :: Current reality (verified
+2026-06-29)`: db (Postgres/pgvector), Ollama, api, worker, watcher, companion-ui gateways, Colima,
+Tailscale, GitHub, iCloud.
 
 For Ollama specifically: classify **both** bindings — COTS system element when run as the compose
 service (`docker-compose.yaml:16-31`), external system when reached as a host/remote service
@@ -69,7 +70,8 @@ integration or a security review on the wrong assumption.
 
 - [ ] `docs/ARCHITECTURE.md :: System Context (Current)` contains a classification
       column/section covering every `docker-compose.yaml` service and every host process from
-      `DEPLOYMENT_AND_ENVIRONMENTS.md:28-67`, each with exactly one of the four classes.
+      `DEPLOYMENT_AND_ENVIRONMENTS.md :: Environment matrix :: Current reality (verified
+      2026-06-29)`, each with exactly one of the four classes.
       Verify: doc writeback at `docs/ARCHITECTURE.md :: System Context (Current)` — row count
       matches `docker compose config --services` count plus the host-process list
 - [ ] Ollama's two bindings (compose service, host/remote service) are both classified, with the
@@ -89,7 +91,8 @@ integration or a security review on the wrong assumption.
 1. `grep -n "SoI component\|COTS system element\|Enabling system\|External system" docs/ARCHITECTURE.md`
    — confirm every deployed element has exactly one class.
 2. Cross-check against `docker compose -f docker-compose.yaml config --services` and
-   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md:28-67` for completeness (no element missing).
+   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Environment matrix :: Current reality
+   (verified 2026-06-29)` for completeness (no element missing).
 3. Confirm #2655 S5/S7 status and #2825 status before merge; if either changed the same doc region
    concurrently, rebase and reconcile rather than overwrite.
 4. `grep -n "docs/architecture/SBS_BOUNDARY_REGISTER.md\|docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md" docs/ARCHITECTURE.md`

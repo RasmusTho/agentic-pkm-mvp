@@ -5,7 +5,7 @@ task_id: SBI-5
 source_anchor: "docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §8, §14"
 parent_capability: SYSTEM_CONTEXT_OVERLAY
 prerequisites: [SBI-1]
-depends_on: [define-system-context-overlay.md]
+depends_on: [DEFINE_SYSTEM_CONTEXT_OVERLAY.md]
 can_parallelize_with: []
 ---
 
