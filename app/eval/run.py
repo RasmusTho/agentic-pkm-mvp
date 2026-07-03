@@ -1,15 +1,18 @@
-"""`python -m app.eval.run` — deterministic retrieval/memory metrics runner.
+"""`python -m app.eval.run` — deterministic retrieval/memory/classification metrics runner.
 
 Thin CLI entrypoint over `app.eval.golden.evaluate_bilingual_golden_set`
-(itself built on `app.eval.benchmark`'s regression-gate machinery). No new
-eval framework: this module wires the existing golden-set runner into a
+(itself built on `app.eval.benchmark`'s regression-gate machinery) plus the
+intent-classification golden set (`app.eval.classification`, KERNEL-13). No
+new eval framework: this module wires the existing golden-set runners into a
 scorecard, prints a human summary, and exits non-zero when any sliced
 metric falls below the thresholds in `config/eval_thresholds.yaml`
-(documented at `docs/eval.md :: Metrics`).
+(documented at `docs/eval.md :: Metrics`) or when the classification
+hard gate trips (mutation-side confusion — blocking, never thresholded).
 
-Runs fully offline — deterministic golden-set retrieval only, no live LLM
-calls. Ragas/DeepEval eval suites stay opt-in behind `@pytest.mark.eval`
-and are not part of this default run path.
+Runs fully offline — deterministic golden-set retrieval plus replayed
+classifier completions only, no live LLM calls. Ragas/DeepEval eval suites
+stay opt-in behind `@pytest.mark.eval` and are not part of this default run
+path.
 """
 
 from __future__ import annotations
@@ -18,10 +21,11 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Mapping
 
 import yaml
 
+from app.eval.classification import evaluate_classification_golden_set
 from app.eval.golden import MEMORY_RECALL_ROUTE_INTENTS, evaluate_bilingual_golden_set
 
 THRESHOLDS_PATH = Path("config") / "eval_thresholds.yaml"
@@ -56,17 +60,57 @@ def _check_bucket(scope: str, metrics: dict, thresholds: dict | None) -> List[Th
     return failures
 
 
-def build_scorecard(k: int | None = None, thresholds: dict | None = None) -> Dict:
+def _check_classification(
+    classification: dict, thresholds: dict | None
+) -> List[ThresholdFailure]:
+    """Threshold read-side classification metrics and enforce the hard gate.
+
+    The mutation-side hard gate (KERNEL-13) is deliberately NOT a threshold:
+    any expected exploratory/unknown case classified into an action-capable
+    class is a blocking regression regardless of configuration.
+    """
+    metrics = {
+        "macro_precision": classification["macro_precision"],
+        "macro_recall": classification["macro_recall"],
+        "pass_rate": classification["pass_rate"],
+        "answer_rate": classification["safe_fail"]["answer_rate"],
+        "unknown_safe_fail_rate": classification["unknown"]["safe_fail_rate"],
+    }
+    failures = _check_bucket("classification", metrics, thresholds)
+    for confusion in classification["mutation_side_confusions"]:
+        failures.append(
+            ThresholdFailure(
+                scope="classification:hard_gate",
+                metric=(
+                    "mutation_side_confusion:"
+                    f"{confusion['case_id']}->{confusion['predicted_intent']}"
+                ),
+                value=1.0,
+                threshold=0.0,
+            )
+        )
+    return failures
+
+
+def build_scorecard(
+    k: int | None = None,
+    thresholds: dict | None = None,
+    classification_completions: Mapping[str, str] | None = None,
+) -> Dict:
     thresholds = thresholds if thresholds is not None else load_thresholds()
     k = k if k is not None else int(thresholds.get("k", 5))
 
     result = evaluate_bilingual_golden_set(k=k)
+    classification = evaluate_classification_golden_set(
+        completions=classification_completions
+    )
 
     failures: List[ThresholdFailure] = []
     failures += _check_bucket("aggregate", result["aggregate"], thresholds.get("aggregate"))
     for lang, metrics in result["by_language"].items():
         failures += _check_bucket(f"language:{lang}", metrics, thresholds.get("per_language"))
     failures += _check_bucket("memory_recall", result["memory_recall"], thresholds.get("memory_recall"))
+    failures += _check_classification(classification, thresholds.get("classification"))
 
     scorecard = {
         "schema_version": "eval_scorecard.v1",
@@ -77,6 +121,7 @@ def build_scorecard(k: int | None = None, thresholds: dict | None = None) -> Dic
         "by_slice": result["by_slice"],
         "memory_recall": result["memory_recall"],
         "memory_recall_route_intents": sorted(MEMORY_RECALL_ROUTE_INTENTS),
+        "classification": classification,
         "queries": result["queries"],
         "regression": bool(failures),
         "failures": [
@@ -120,6 +165,37 @@ def render_summary(scorecard: dict) -> str:
         f"Memory-recall slice ({'+'.join(scorecard['memory_recall_route_intents'])}): "
         f"precision@k={mr['precision@k']:.4f} ndcg@k={mr['ndcg@k']:.4f} (n={mr['count']})"
     )
+    lines.append("")
+    cls = scorecard["classification"]
+    lines.append(f"Intent-classification slice ({cls['mode']}, n={cls['n_cases']}):")
+    for name, metrics in cls["per_class"].items():
+        lines.append(
+            f"  {name}: precision={metrics['precision']:.4f} "
+            f"recall={metrics['recall']:.4f} (support={metrics['support']})"
+        )
+    lines.append(
+        f"  macro: precision={cls['macro_precision']:.4f} recall={cls['macro_recall']:.4f} "
+        f"pass_rate={cls['pass_rate']:.4f} answer_rate={cls['safe_fail']['answer_rate']:.4f}"
+    )
+    unknown = cls["unknown"]
+    lines.append(
+        f"  unknown safe-fail: {unknown['safe_fail_hits']}/{unknown['expected']} "
+        f"(rate={unknown['safe_fail_rate']:.4f}); "
+        f"answerable safe-fails={cls['safe_fail']['count']}"
+    )
+    lines.append("  Confusion matrix (expected -> predicted):")
+    for expected, row in cls["confusion_matrix"].items():
+        cells = " ".join(f"{predicted}={count}" for predicted, count in row.items() if count)
+        lines.append(f"    {expected}: {cells or '-'}")
+    if cls["mutation_side_confusions"]:
+        lines.append("  HARD GATE VIOLATIONS (mutation-side confusion, blocking):")
+        for confusion in cls["mutation_side_confusions"]:
+            lines.append(
+                f"    - {confusion['case_id']}: expected {confusion['expected_intent']} "
+                f"-> predicted {confusion['predicted_intent']}"
+            )
+    else:
+        lines.append("  Hard gate: no mutation-side confusion.")
     lines.append("")
     if scorecard["regression"]:
         lines.append("REGRESSION DETECTED:")

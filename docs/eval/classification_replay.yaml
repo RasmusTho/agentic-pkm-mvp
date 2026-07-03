@@ -1,0 +1,95 @@
+# Replay fixture for the intent-classification golden set (KERNEL-13, #2775).
+#
+# `completions` maps every case id in docs/eval/classification_golden.yaml to
+# a RECORDED raw model completion string. Deterministic CI mode replays these
+# through the injectable completion seam of
+# app/chat/intent_classifier.py::IntentClassifierCognition, so KERNEL-07's
+# constrained-output validation layer (schema validation, explicit-UNKNOWN
+# degrade, governance action mapping) runs for real — only the network call
+# is replayed. See app/eval/classification.py and
+# docs/RUNTIME_CORRECTNESS_KERNEL/INTENT_CLASSIFICATION_GOLDEN_SET.md.
+#
+# Provenance: authored deterministic baseline (the completion a correct
+# classifier run emits for each case; expected-unknown cases carry
+# schema-INVALID outputs — prose, off-enum, wrong types, missing keys, empty —
+# so the real validation layer produces the UNKNOWN safe-fail). Refresh from
+# a live run via EVAL_LLM_MODE (opt-in @pytest.mark.eval path); scorecard
+# baseline-vs-candidate comparison is KERNEL-14.
+#
+# Coverage invariant: every golden case id must be present — a partially
+# covered dataset is a false-green (cross-task invariant #6); the loader and
+# tests/eval/test_classification_golden.py fail loud on a missing id.
+
+completions:
+  cmdstyle-en-delete-paragraph: '{"intent_class": "co_authoring", "action_type": null}'
+  cmdstyle-en-move-risks: '{"intent_class": "co_authoring", "action_type": null}'
+  cmdstyle-en-rename-heading: '{"intent_class": "co_authoring", "action_type": null}'
+  cmdstyle-sv-dop-om-rubrik: '{"intent_class": "co_authoring", "action_type": null}'
+  cmdstyle-sv-flytta-upp-risker: '{"intent_class": "co_authoring", "action_type": null}'
+  cmdstyle-sv-ta-bort-stycke: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-en-add-summary: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-en-bullets-to-prose: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-en-neutral-tone: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-en-tighten-intro: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-sv-korta-inledning: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-sv-lopande-text: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-sv-mindre-formellt: '{"intent_class": "co_authoring", "action_type": null}'
+  coauthor-sv-sammanfattning: '{"intent_class": "co_authoring", "action_type": null}'
+  explore-en-compare-vendors: '{"intent_class": "exploratory", "action_type": null}'
+  explore-en-quarter-themes: '{"intent_class": "exploratory", "action_type": null}'
+  explore-en-weekly-review: '{"intent_class": "exploratory", "action_type": null}'
+  explore-sv-beslutsprocess: '{"intent_class": "exploratory", "action_type": null}'
+  explore-sv-resonera-fordelar: '{"intent_class": "exploratory", "action_type": null}'
+  explore-sv-teman-tradgard: '{"intent_class": "exploratory", "action_type": null}'
+  gov-en-add-tags: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+  gov-en-archive-note: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  gov-en-merge-notes: '{"intent_class": "governance_bearing", "action_type": "cross_note"}'
+  gov-en-promote-evergreen: '{"intent_class": "governance_bearing", "action_type": "maturity_transition"}'
+  gov-sv-dop-om-anteckning: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  gov-sv-flytta-avsnitt: '{"intent_class": "governance_bearing", "action_type": "cross_note"}'
+  gov-sv-satt-tagg: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+  gov-sv-uppgradera-evergreen: '{"intent_class": "governance_bearing", "action_type": "maturity_transition"}'
+  govchat-en-belongs-elsewhere: '{"intent_class": "governance_bearing", "action_type": "cross_note"}'
+  govchat-en-dont-need-note: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  govchat-en-feels-evergreen: '{"intent_class": "governance_bearing", "action_type": "maturity_transition"}'
+  govchat-en-tag-it-properly: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+  govchat-sv-in-i-arkivet: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  govchat-sv-ligga-ihop: '{"intent_class": "governance_bearing", "action_type": "cross_note"}'
+  govchat-sv-markera-klar: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+  govchat-sv-raknas-som-evergreen: '{"intent_class": "governance_bearing", "action_type": "maturity_transition"}'
+  multi-en-archive-but-keep-writing: 'The request mixes two intents: {"intent_class": "governance_bearing",
+    "action_type": "note_lifecycle"}'
+  multi-en-opinion-then-shorten: '{"intent_class": "co_authoring", "action_type": null}'
+  multi-en-tighten-then-archive: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  multi-en-typos-and-tag: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+  multi-sv-arkivera-men-fortsatta: '{"intent_class": ["governance_bearing", "co_authoring"], "action_type":
+    null}'
+  multi-sv-snygga-till-och-arkivera: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  multi-sv-stavfel-och-tagg: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+  multi-sv-tycka-och-korta: '{"intent_class": "co_authoring", "action_type": null}'
+  polite-sv-hade-inte-skadat-evergreen: '{"intent_class": "governance_bearing", "action_type": "maturity_transition"}'
+  polite-sv-lamplig-tagg: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+  polite-sv-man-borde-sla-ihop: '{"intent_class": "governance_bearing", "action_type": "cross_note"}'
+  polite-sv-skulle-kunna-arkivera: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  polite-sv-vore-bra-kortare: '{"intent_class": "co_authoring", "action_type": null}'
+  polite-sv-vore-fint-sammanfattning: '{"intent_class": "co_authoring", "action_type": null}'
+  readvocab-en-hypothetical-merge: '{"intent_class": "exploratory", "action_type": null}'
+  readvocab-en-what-does-promote-do: '{"intent_class": "exploratory", "action_type": null}'
+  readvocab-en-which-archived: '{"intent_class": "exploratory", "action_type": null}'
+  readvocab-en-why-tagged: '{"intent_class": "exploratory", "action_type": null}'
+  readvocab-sv-hypotetisk-sammanslagning: '{"intent_class": "exploratory", "action_type": null}'
+  readvocab-sv-vad-innebar-promota: '{"intent_class": "exploratory", "action_type": null}'
+  readvocab-sv-varfor-taggen: '{"intent_class": "exploratory", "action_type": null}'
+  readvocab-sv-vilka-arkiverade: '{"intent_class": "exploratory", "action_type": null}'
+  vague-en-same-as-last-time: '{"intent_class": "unclear", "action_type": null}'
+  vague-en-sort-this-out: '{"intent_class": null, "action_type": null}'
+  vague-en-the-thing-we-discussed: I can't tell which action you mean — could you say what we agreed on?
+  vague-sv-det-dar-vi-pratade-om: Jag är inte säker på vad du syftar på — kan du beskriva vad som ska
+    göras?
+  vague-sv-fixa-det-dar: ''
+  vague-sv-samma-som-forra-gangen: '{"intent_class": "co_authoring"}'
+  xlang-en-promote-veckoplanering: '{"intent_class": "governance_bearing", "action_type": "maturity_transition"}'
+  xlang-sv-deleta-noten: '{"intent_class": "governance_bearing", "action_type": "note_lifecycle"}'
+  xlang-sv-merga-ihop: '{"intent_class": "governance_bearing", "action_type": "cross_note"}'
+  xlang-sv-tagga-som-done: '{"intent_class": "governance_bearing", "action_type": "frontmatter_update"}'
+schema_version: classification_replay.v1
