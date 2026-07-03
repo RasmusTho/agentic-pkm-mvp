@@ -102,10 +102,6 @@ ALLOWED_DIRECT_SIDE_EFFECTS: dict[SideEffectCall, AllowedSideEffect] = {
         1,
         "Legacy normalizer object-store write path; D6 CI rail contains growth only.",
     ),
-    SideEffectCall("app/agents/note_hygiene/fs.py", "archive_path", "pathlib.Path().mkdir"): AllowedSideEffect(
-        1,
-        "Legacy note-hygiene archive directory creation helper.",
-    ),
     SideEffectCall("app/agents/note_hygiene/agent.py", "classify_and_act", "emit"): AllowedSideEffect(
         3,
         "Legacy note-hygiene cleanup event emission.",

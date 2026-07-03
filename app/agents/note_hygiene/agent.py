@@ -6,14 +6,17 @@ from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
 from app.events.types import CLEANUP_DONE
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.services.events import emit
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 _link_re = re.compile(r"\[[^\]]+\]\([^)]+\)")
 
 def classify_and_act(
     note: Dict[str, Any],
     *,
+    archive_base_dir: str | Path | None = None,
     trace_id: str | None = None,
     reasoning_facade: Any | None = None,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
 ) -> Dict[str, Any]:
     body = note.get("body","")
     fm = note.get("fm",{})
@@ -21,8 +24,13 @@ def classify_and_act(
     title = _title_from_body(body) or fm.get("title","Note")
     tokens = len(body.split())
     if tokens == 0:
-        path = archive_path(title)
-        _write(path, body, fm)
+        if archive_base_dir is None:
+            raise ValueError(
+                "note_hygiene archive requires an explicit vault-scoped archive_base_dir; "
+                "refusing to write relative to the process CWD"
+            )
+        path = archive_path(title, archive_base_dir)
+        _write(path, body, fm, write_guard=write_guard)
         emit(CLEANUP_DONE, {"uuid": uuid, "action":"archive", "path": path})
         return {"action":"archive","body":body,"path":path}
     if tokens <= 80:
@@ -46,7 +54,8 @@ def _title_from_body(body:str)->str:
             return l.lstrip("# ").strip()
     return ""
 
-def _write(path:str, body:str, fm:Dict[str,Any])->None:
+def _write(path:str, body:str, fm:Dict[str,Any], *, write_guard: WriteGuard = DEFAULT_WRITE_GUARD)->None:
+    write_guard.assert_writes_allowed("note_hygiene.write")
     fm_lines = ["---"]
     for k,v in fm.items():
         fm_lines.append(f"{k}: {v}")
