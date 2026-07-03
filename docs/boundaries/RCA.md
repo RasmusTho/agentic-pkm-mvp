@@ -46,7 +46,7 @@ Own moment-specific finding, ranking, evidence selection, and context-bundle ass
 
 ## Calls allowed
 
-- **DRI** (projections/indexes), **MEM** (recall), **SIP** (provenance), **WSP** (scope), **GOV** (eligibility filters / `CrossScopeFlow`).
+- **DRI** (projections/indexes), **HKA** (read source anchors), **MEM** (recall), **SIP** (provenance), **WSP** (scope), **GOV** (eligibility filters / `CrossScopeFlow`).
 
 ## Calls forbidden
 

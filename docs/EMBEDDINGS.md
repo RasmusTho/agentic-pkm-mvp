@@ -75,7 +75,7 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - Changing normalization changes the embedding identity and requires rebuilding the vector index.
 - `EMBED_MAX_INPUT_CHARS`
   - Character budget for a single embedding request. The embedding layer splits input above this budget into in-budget chunks, embeds each, and mean-pools the chunk vectors before storing, so an oversized note cannot exceed the model context window and 500 the request and **no tail content is dropped** from retrieval (see *Oversized input handling*).
-  - Default: `6000` (inline default in `_embedding_max_input_chars`, `app/llm/embeddings.py`) — a conservative budget for `nomic-embed-text`'s ~2k-token context window. (The former `DEFAULT_EMBED_MAX_INPUT_CHARS` constant was removed in #2113.)
+  - Default: `6000` (inline default in `_embedding_max_input_chars`, `app/llm/embeddings.py` — superseded as the canonical registry, see note below; still the current physical implementation location) — a conservative budget for `nomic-embed-text`'s ~2k-token context window. (The former `DEFAULT_EMBED_MAX_INPUT_CHARS` constant was removed in #2113.)
   - Set to `0` (or a negative value) to disable chunking entirely.
 - `EMBED_RETRY_MAX`
   - Maximum number of attempts per object when transient embed failures occur (HTTP 5xx, EOF, connection-reset, timeout, 408, 429).
@@ -226,7 +226,15 @@ Normative call path:
 - `app.index.embeddings.llm_embed_text(...)` routes to the provider-aware embedding implementation in `app.llm.embeddings.embed_text(...)`
 - Provider logic resolves the embedding provider via `EMBED_PRIMARY_PROVIDER` (falling back to `LLM_PROVIDER`) and uses `OLLAMA_HOST` to decide how to call the backend. Adapters are dispatched through the registry in `app/llm/embeddings.py::PROVIDER_REGISTRY`.
 
-> **Note:** When `LLM_PROVIDER=ollama`, the runtime's **primary** embedding call is `${OLLAMA_URL}/api/embeddings` with `{model, prompt, dimensions}` (the `dimensions` field is included unless `OLLAMA_EMBED_DIMENSIONS` disables it). If that request fails, it **falls back** to the OpenAI-compatible `${OLLAMA_URL}/v1/embeddings` endpoint with `{model, input}`. This matches `app/llm/embeddings.py` and the endpoint table in `docs/LLM.md`.
+> **Superseded registry note.** `app/llm/embeddings.py::PROVIDER_REGISTRY` is **superseded** as the
+> documented canonical adapter registry (it remains the current physical dispatch location reached
+> internally via `app/index/embeddings.py`). The live canonical access layer for chat and embeddings
+> is `app/components/llm/` (`docs/COMPONENTS.md:95` — "LLM router + fabric"); high-level modules
+> must use `get_chat_client` / `get_embeddings_client`, and
+> `tests/architecture/test_import_rules.py::test_high_level_llm_access_uses_fabric` enforces the
+> split.
+
+> **Note:** When `LLM_PROVIDER=ollama`, the runtime's **primary** embedding call is `${OLLAMA_URL}/api/embeddings` with `{model, prompt, dimensions}` (the `dimensions` field is included unless `OLLAMA_EMBED_DIMENSIONS` disables it). If that request fails, it **falls back** to the OpenAI-compatible `${OLLAMA_URL}/v1/embeddings` endpoint with `{model, input}`. This matches `app/llm/embeddings.py` (superseded — see note above) and the endpoint table in `docs/LLM.md`.
 
 Indexer MUST NOT call deterministic/test-only helpers in production paths.
 
