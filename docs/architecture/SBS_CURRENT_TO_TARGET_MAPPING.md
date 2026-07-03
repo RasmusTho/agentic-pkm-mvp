@@ -46,16 +46,16 @@ disagree.
 | Human Surface | HIX | Direct 1:1. |
 | Knowledge & Artifact | HKA (+ SIP) | HKA is the primary owner; SIP participates as the ingestion/source-projection path onto the same durable surface. |
 | Runtime Projection | PDM + DRI | Storage mechanics (PDM) and derived/rebuildable representations (DRI) both live under this spine subsystem. |
-| Capability | CAO + RCA | **The spine's "Capability" subsystem silently splits across two SBS boundaries — orchestration-facing capability surfacing (CAO) and retrieval/context-assembly capability (RCA) — and no other doc in the repo states this split explicitly.** |
-| Agent/Orchestration | CAO | Direct 1:1. |
-| Governance/Authority | GOV | Direct 1:1. |
+| Capability | CAO + RCA | **The spine's "Capability" subsystem silently splits across two SBS boundaries — orchestration-facing capability surfacing (CAO) and retrieval/context-assembly capability (RCA) — a split named only in passing (as a parenthetical) by `docs/architecture/system-context-overlay.md` and its source audit; this row is the first place it is stated as a first-class, row-level crosswalk fact.** |
+| Agent / Orchestration | CAO | Direct 1:1. |
+| Governance / Authority | GOV | Direct 1:1. |
 | Integration Fabric | EBF | Direct 1:1. |
-| Observability/Fitness | OEF | Direct 1:1. |
+| Observability / Fitness | OEF | Direct 1:1. |
 
 WSP, SFC, MEM, and EXE have no dedicated spine ancestor in the table above — they are target-state
 refinements introduced by the SBS that the current eight-subsystem spine never named as first-class
 subsystems. This is exactly why the spine must stay a *bridge* from current runtime mental model to
-target decomposition (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:63`), not a competing decomposition: the
+target decomposition (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:67`), not a competing decomposition: the
 spine is intentionally coarser than the SBS, and this crosswalk does not attempt to force a
 one-to-one row for subsystems the spine never claimed to have.
 
