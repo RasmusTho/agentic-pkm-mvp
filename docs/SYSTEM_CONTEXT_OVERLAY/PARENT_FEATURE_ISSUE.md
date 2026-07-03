@@ -1,5 +1,6 @@
-State: **Pre-filing draft.** No GitHub issue exists yet. Update this header the moment the parent
-issue is created, per `.codex/skills/feature-breakdown/SKILL.md :: Working procedure` step 8.
+State: **Filed as [#2833](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2833) on
+2026-07-03 (children #2834–#2840).** The GitHub issue is the live contract; this file is the
+archived draft it was filed from.
 
 # Parent Feature Issue — System Context Overlay (Draft)
 

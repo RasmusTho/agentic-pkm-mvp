@@ -1,7 +1,6 @@
-State: **Specification directory (pre-filing draft).** No parent feature issue or child issues
-filed yet. Converts `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` §14 into bounded
-tasks. Update this line and `PARENT_FEATURE_ISSUE.md` together once GitHub issues exist
-(`.codex/skills/feature-breakdown/SKILL.md :: Real-life operating rules`).
+State: **Specification directory (parent feature issue #2833; children #2834–#2840, filed
+2026-07-03).** Converts `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` §14 into
+bounded tasks. GitHub issues are the live task contracts; these files are their spec source.
 
 # System Context Overlay — INCOSE / ISO-15288 Context-Layer Vocabulary
 
