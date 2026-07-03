@@ -51,7 +51,7 @@ Per `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`:
 
 - `docs/RELEASE_CHANNELS/` is present on `main` (docs capability PR merged; originally PR #602). If those docs are not on `main`, do not run this skill.
 - `make prod-up` is running and the prod Postgres container is healthy on port 15432.
-- The `stable` ref resolves without ambiguity (`git rev-parse stable` succeeds).
+- The protected `origin/stable` ref resolves without ambiguity (`git rev-parse origin/stable` succeeds).
 - The operator has specified the target commit (defaults to `HEAD` on `main` if not provided).
 - The selected prod vault is initialized for the vault-settings foundation (`python -m app.cli vault preflight --path <prod vault>` reports `initialized`). If it reports `uninitialized`, the plan must carry a `python -m app.cli vault init --path <prod vault>` step before execute (idempotent; reviews the scaffolded `paths.md`/`companion-ui.md` against the real vault).
 

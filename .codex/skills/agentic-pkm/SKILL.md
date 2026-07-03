@@ -30,7 +30,7 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 
 ## Common entry points
 
-- Code: `app/`, `api/`, `scripts/`, `run_agent.py`
+- Code: `app/`, `api/`, `scripts/`
 - Docs: `docs/`, `AGENTS.md`
 - Ops: `Makefile`, `docker-compose.yaml`
 - Tests: `tests/`
